@@ -161,6 +161,44 @@ describe("chat delegate routes", () => {
     expect(rawRun.finalSummary).toContain("get-run-secret");
   });
 
+  it("keeps Explorer SSE observation detached from durable cancellation authority", async () => {
+    const runChatDelegationStream = vi.fn(async function* () {
+      yield {
+        type: "done",
+        result: {
+          runId: "explorer-run",
+          taskId: "task-1",
+          status: "completed",
+          steps: [],
+          stitchedOutput: "done",
+          citations: [],
+        },
+      };
+    });
+    app = buildApp({ runChatDelegationStream });
+
+    const explorer = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate/stream",
+      payload: {
+        objective: "Inspect the workspace",
+        roles: ["Workspace explorer"],
+        executionProfile: "read_only_explorer",
+        policyRunId: "durable-parent",
+      },
+    });
+    expect(explorer.statusCode).toBe(200);
+    expect(runChatDelegationStream.mock.calls[0]?.[2]).toEqual({});
+
+    const standard = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate/stream",
+      payload: { objective: "Delegate normally", roles: ["QA"] },
+    });
+    expect(standard.statusCode).toBe(200);
+    expect(runChatDelegationStream.mock.calls[1]?.[2]?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
   it("maps validation, service, not-found, and Goat errors to the public route contract", async () => {
     const chatDelegate = {
       runChatDelegation: vi.fn(async () => {
@@ -216,6 +254,246 @@ describe("chat delegate routes", () => {
         payload: { objective: "accept", roles: ["QA"] },
       }),
     ).resolves.toMatchObject({ statusCode: 400 });
+  });
+
+  it.each([
+    [
+      "Windows",
+      "Explorer failed below F:\\private\\operator\\workspace\\secret.txt",
+      "Explorer failed below [outside-workspace-path] Authorization: [REDACTED]",
+    ],
+    [
+      "POSIX",
+      "Explorer failed below /home/operator/private/workspace/secret.txt",
+      "Explorer failed below [outside-workspace-path]; Authorization: [REDACTED]",
+    ],
+  ])("contains %s host paths and secrets in direct explorer errors", async (_platform, serviceMessage, safeMessage) => {
+    const chatDelegate = {
+      runChatDelegation: vi.fn(async () => {
+        throw new Error(`${serviceMessage}; Authorization: Bearer explorer-secret`);
+      }),
+    };
+    app = buildApp(chatDelegate);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate",
+      payload: {
+        objective: "Inspect the workspace",
+        roles: ["Workspace explorer"],
+        mode: "sequential",
+        executionProfile: "read_only_explorer",
+        policyRunId: "durable-parent",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: safeMessage,
+    });
+    expect(response.body).not.toContain("operator");
+    expect(response.body).not.toContain("explorer-secret");
+  });
+
+  it("lists server-owned scope candidates and accepts only opaque candidate ids", async () => {
+    const candidateId = "a".repeat(64);
+    const chatDelegate = {
+      listChatDelegatedScopeCandidates: vi.fn(async () => ({
+        runId: "run-1",
+        stepId: "step-1",
+        scopeHash: "b".repeat(64),
+        candidates: [{ candidateId, label: "docs", scopeHash: "b".repeat(64) }],
+      })),
+      requestChatDelegatedScopeExpansion: vi.fn(async () => ({
+        runId: "run-1",
+        stepId: "step-1",
+        approvalId: "approval-1",
+        waitingForApproval: true,
+      })),
+    };
+    app = buildApp(chatDelegate);
+    const base = "/api/v1/chat/sessions/sess-1/delegations/run-1/steps/step-1";
+
+    const listed = await app.inject({ method: "GET", url: `${base}/scope-candidates` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ candidates: [{ candidateId, label: "docs" }] });
+    expect(chatDelegate.listChatDelegatedScopeCandidates).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      runId: "run-1",
+      stepId: "step-1",
+    });
+
+    const rawPath = await app.inject({
+      method: "POST",
+      url: `${base}/scope-expansion`,
+      payload: { path: "C:\\private", candidateIds: [candidateId] },
+    });
+    expect(rawPath.statusCode).toBe(400);
+    expect(chatDelegate.requestChatDelegatedScopeExpansion).not.toHaveBeenCalled();
+
+    const requested = await app.inject({
+      method: "POST",
+      url: `${base}/scope-expansion`,
+      payload: { candidateIds: [candidateId] },
+    });
+    expect(requested.statusCode).toBe(200);
+    expect(requested.json()).toMatchObject({ approvalId: "approval-1", waitingForApproval: true });
+    expect(chatDelegate.requestChatDelegatedScopeExpansion).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      runId: "run-1",
+      stepId: "step-1",
+      candidateIds: [candidateId],
+    });
+  });
+
+  it.each([
+    [
+      "candidate list",
+      "Windows",
+      "GET",
+      "/scope-candidates",
+      undefined,
+      "Unable to inspect F:\\private\\operator\\workspace; Authorization: Bearer scope-secret",
+      "Unable to inspect [outside-workspace-path] Authorization: [REDACTED]",
+    ],
+    [
+      "candidate list",
+      "POSIX",
+      "GET",
+      "/scope-candidates",
+      undefined,
+      "Unable to inspect /home/operator/private/workspace; Authorization: Bearer scope-secret",
+      "Unable to inspect [outside-workspace-path]; Authorization: [REDACTED]",
+    ],
+    [
+      "expansion",
+      "Windows",
+      "POST",
+      "/scope-expansion",
+      { candidateIds: ["a".repeat(64)] },
+      "Unable to expand F:\\private\\operator\\workspace; Authorization: Bearer scope-secret",
+      "Unable to expand [outside-workspace-path] Authorization: [REDACTED]",
+    ],
+    [
+      "expansion",
+      "POSIX",
+      "POST",
+      "/scope-expansion",
+      { candidateIds: ["a".repeat(64)] },
+      "Unable to expand /home/operator/private/workspace; Authorization: Bearer scope-secret",
+      "Unable to expand [outside-workspace-path]; Authorization: [REDACTED]",
+    ],
+  ])(
+    "contains %s %s host paths and secrets in public scope errors",
+    async (_route, _platform, method, suffix, payload, serviceMessage, safeMessage) => {
+      const reject = vi.fn(async () => {
+        throw new Error(serviceMessage);
+      });
+      app = buildApp({
+        listChatDelegatedScopeCandidates: reject,
+        requestChatDelegatedScopeExpansion: reject,
+      });
+
+      const response = await app.inject({
+        method,
+        url: `/api/v1/chat/sessions/sess-1/delegations/run-1/steps/step-1${suffix}`,
+        ...(payload ? { payload } : {}),
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: safeMessage });
+      expect(response.body).not.toContain("operator");
+      expect(response.body).not.toContain("scope-secret");
+    },
+  );
+
+  it("returns the latest persisted workspace explorer report for reload recovery", async () => {
+    const getLatestChatWorkspaceExplorer = vi.fn(async () => ({
+      item: {
+        run: {
+          runId: "explorer-run",
+          parentRunId: "durable-parent",
+          sessionId: "sess-1",
+          taskId: "task-1",
+          objective: "Find the owner",
+          roles: ["workspace-explorer"],
+          mode: "sequential",
+          status: "completed",
+          workflowTemplate: "read_only_workspace_explorer",
+          stitchedOutput: "Gateway owns it.",
+          citations: [],
+          startedAt: "2026-08-12T00:00:00.000Z",
+        },
+        steps: [
+          {
+            stepId: "step-1",
+            runId: "explorer-run",
+            role: "workspace-explorer",
+            status: "completed",
+            index: 0,
+            startedAt: "2026-08-12T00:00:00.000Z",
+            scopeControl: {
+              rootPath: "F:\\code\\personal-ai",
+              requestedPaths: ["apps/gateway"],
+              resolvedPaths: ["F:\\code\\personal-ai\\apps\\gateway"],
+              approvedPaths: ["apps/gateway"],
+              scopeHash: "scope-hash",
+              dispatchGeneration: 1,
+            },
+          },
+        ],
+        explorer: {
+          profile: "read_only_explorer",
+          answer: "Gateway owns it.",
+          evidenceReferences: ["apps/gateway/src/services/gateway-service.ts"],
+          searchedScope: {
+            kind: "server_owned_delegated_scope",
+            approvedPaths: ["apps/gateway"],
+            scopeHashes: ["scope-hash"],
+          },
+          partialResult: false,
+          gaps: [],
+        },
+      },
+    }));
+    app = buildApp({ getLatestChatWorkspaceExplorer });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/delegations/latest-explorer",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getLatestChatWorkspaceExplorer).toHaveBeenCalledWith("sess-1");
+    expect(response.json()).toMatchObject({
+      item: {
+        run: { runId: "explorer-run", parentRunId: "durable-parent" },
+        explorer: { answer: "Gateway owns it." },
+        steps: [{ scopeControl: { approvedPaths: ["apps/gateway"], scopeHash: "scope-hash" } }],
+      },
+    });
+    expect(response.body).not.toContain("rootPath");
+    expect(response.body).not.toContain("resolvedPaths");
+    expect(response.body).not.toContain("F:\\\\code");
+  });
+
+  it.each([
+    ["latest explorer", "/api/v1/chat/sessions/sess-1/delegations/latest-explorer", "getLatestChatWorkspaceExplorer"],
+    ["delegation detail", "/api/v1/chat/sessions/sess-1/delegations/explorer-run", "getChatDelegationRun"],
+  ])("projects %s recovery errors without host paths or secrets", async (_label, url, method) => {
+    const reject = vi.fn(async () => {
+      throw new Error("ENOENT at F:\\private\\operator\\repo; Authorization: Bearer explorer-secret");
+    });
+    app = buildApp({ [method]: reject });
+
+    const response = await app.inject({ method: "GET", url });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: "ENOENT at [outside-workspace-path] Authorization: [REDACTED]",
+    });
+    expect(response.body).not.toContain("operator");
+    expect(response.body).not.toContain("explorer-secret");
   });
 });
 

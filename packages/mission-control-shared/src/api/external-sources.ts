@@ -18,6 +18,7 @@
 import {
   EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
   assertExternalSessionAttachment,
+  assertExternalSourceAttachmentCandidateListResponse,
   assertExternalSourceImportIntent,
   assertExternalSourceImportItem,
   assertExternalSourceImportPlan,
@@ -40,6 +41,7 @@ import {
   type ExternalSessionAttachmentResponse,
   type ExternalSessionDetachInput,
   type ExternalSessionDetachResponse,
+  type ExternalSourceAttachmentCandidateListResponse,
   type ExternalSourceCatalogListInput,
   type ExternalSourceCreateInput,
   type ExternalSourceDetailResponse,
@@ -148,6 +150,15 @@ function parseAttachmentListResponse(payload: unknown): ExternalSessionAttachmen
   for (const item of list.items) {
     assertExternalSessionAttachment(item);
   }
+  return list;
+}
+
+function parseAttachmentCandidateListResponse(payload: unknown): ExternalSourceAttachmentCandidateListResponse {
+  if (!isRecord(payload) || !Array.isArray((payload as { items?: unknown }).items)) {
+    throw new Error("External attachment candidate list response is malformed.");
+  }
+  const list = payload as unknown as ExternalSourceAttachmentCandidateListResponse;
+  assertExternalSourceAttachmentCandidateListResponse(list);
   return list;
 }
 
@@ -316,6 +327,24 @@ export async function fetchExternalSessionAttachments(
     cache: "no-store",
   });
   return parseAttachmentListResponse(payload);
+}
+
+/**
+ * Fetch bounded, content-free picker choices for one session. Only the
+ * Gateway decides eligibility; the subsequent attach repeats all checks.
+ */
+export async function fetchExternalSourceAttachmentCandidates(
+  sessionId: string,
+  workspaceId: string,
+  limit?: number,
+): Promise<ExternalSourceAttachmentCandidateListResponse> {
+  const query = new URLSearchParams({ workspaceId: requireIdentifier(workspaceId, "workspace id") });
+  if (limit !== undefined) {
+    query.set("limit", String(limit));
+  }
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(requireIdentifier(sessionId, "session id"))}/external-source-attachment-candidates`;
+  const payload = await request<unknown>(`${path}?${query.toString()}`, { cache: "no-store" });
+  return parseAttachmentCandidateListResponse(payload);
 }
 
 /**

@@ -118,6 +118,11 @@ export interface ExternalSourceKnowledgeSnapshotMaterializationResult {
   journeyEvents: GovernanceJourneyEventRecord[];
 }
 
+export interface ExternalSessionAttachmentEligibility {
+  actorId: string;
+  authActorSource: "token" | "basic" | "loopback";
+}
+
 interface ExternalSessionAttachmentRow {
   workspace_id: string;
   attachment_id: string;
@@ -181,6 +186,7 @@ export class ExternalSessionAttachmentRepository {
   private readonly updateStmt;
   private readonly sessionStmt;
   private readonly bindingStmt;
+  private readonly attachEligibilityStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -224,6 +230,46 @@ export class ExternalSessionAttachmentRepository {
       SELECT * FROM chat_external_source_attachments
       WHERE workspace_id = @workspaceId AND session_id = @sessionId
         AND import_id = @importId AND item_id = @itemId
+    `);
+    this.attachEligibilityStmt = db.prepare(`
+      SELECT source.source_id
+      FROM external_source_configs AS source
+      INNER JOIN external_source_import_intents AS intent
+        ON intent.workspace_id = source.workspace_id
+        AND intent.source_id = source.source_id
+        AND intent.import_id = @importId
+      INNER JOIN external_source_scans AS scan
+        ON scan.workspace_id = intent.workspace_id
+        AND scan.scan_id = intent.scan_id
+        AND scan.source_id = intent.source_id
+      INNER JOIN external_source_import_settlements AS settlement
+        ON settlement.workspace_id = intent.workspace_id
+        AND settlement.import_id = intent.import_id
+      INNER JOIN external_source_import_items AS item
+        ON item.workspace_id = intent.workspace_id
+        AND item.import_id = intent.import_id
+        AND item.scan_id = intent.scan_id
+        AND item.item_id = @itemId
+      WHERE source.workspace_id = @workspaceId
+        AND source.source_id = @sourceId
+        AND source.owner_actor_id = @actorId
+        AND source.auth_actor_id = @actorId
+        AND source.auth_actor_source = @authActorSource
+        AND source.status = 'active'
+        AND source.revision = intent.config_revision
+        AND source.config_sha256 = intent.config_sha256
+        AND scan.status = 'sealed'
+        AND scan.config_revision = intent.config_revision
+        AND scan.config_sha256 = intent.config_sha256
+        AND scan.manifest_sha256 = intent.manifest_sha256
+        AND scan.root_identity_sha256 = source.root_identity_sha256
+        AND scan.path_bridge_snapshot_sha256 = source.path_bridge_snapshot_sha256
+        AND scan.adapter_id = source.adapter_id
+        AND scan.adapter_version = source.adapter_version
+        AND settlement.disposition = 'applied'
+        AND settlement.artifacts_verified_at IS NOT NULL
+        AND item.normalized_artifact_sha256 = @normalizedArtifactSha256
+      ${db.dialect === "postgres" ? "FOR UPDATE OF source" : ""}
     `);
   }
 
@@ -311,9 +357,28 @@ export class ExternalSessionAttachmentRepository {
     return this.attachWithJourneyInternal(input, () => journeyEvent);
   }
 
+  /**
+   * Attaches only while the actor-owned source generation still exactly
+   * matches the immutable import/scan/item chain. PostgreSQL locks the source
+   * row and SQLite's immediate transaction owns the writer lock, so source
+   * reconfiguration cannot commit between this check and attachment commit.
+   */
+  public attachEligibleWithJourneyResolved(
+    input: ExternalSessionAttachmentRecord,
+    eligibility: ExternalSessionAttachmentEligibility,
+    journeyEvent: GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "created" | "replayed";
+  } {
+    return this.attachWithJourneyInternal(input, () => journeyEvent, eligibility);
+  }
+
   private attachWithJourneyInternal(
     input: ExternalSessionAttachmentRecord,
     buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
+    eligibility?: ExternalSessionAttachmentEligibility,
   ): {
     attachment: ExternalSessionAttachmentRecord;
     journeyEvent: GovernanceJourneyEventRecord;
@@ -327,6 +392,7 @@ export class ExternalSessionAttachmentRepository {
       });
     }
     return this.db.transaction("immediate", () => {
+      if (eligibility) this.assertCurrentAttachEligibility(input, eligibility);
       const journeys = new GovernanceJourneyEventRepository(this.db);
       const existing = this.findBySessionBinding(input.workspaceId, input.sessionId, input.importId, input.itemId);
       if (existing) {
@@ -344,6 +410,29 @@ export class ExternalSessionAttachmentRepository {
       const journeyEvent = this.createBoundJourneyEvent(journeys, attachment, buildJourneyEvent);
       return { attachment, journeyEvent, disposition: "created" as const };
     });
+  }
+
+  private assertCurrentAttachEligibility(
+    input: ExternalSessionAttachmentRecord,
+    eligibility: ExternalSessionAttachmentEligibility,
+  ): void {
+    assertIdentifier(eligibility.actorId, "actorId");
+    if (!(["token", "basic", "loopback"] as const).includes(eligibility.authActorSource)) {
+      throw new TypeError("External attachment actor source is invalid.");
+    }
+    if (input.attachedByActorId !== eligibility.actorId) {
+      throw attachmentEligibilityConflict(input.attachmentId);
+    }
+    const eligible = this.attachEligibilityStmt.get({
+      workspaceId: input.workspaceId,
+      sourceId: input.sourceId,
+      importId: input.importId,
+      itemId: input.itemId,
+      normalizedArtifactSha256: input.normalizedArtifactSha256,
+      actorId: eligibility.actorId,
+      authActorSource: eligibility.authActorSource,
+    }) as { source_id: string } | undefined;
+    if (!eligible) throw attachmentEligibilityConflict(input.attachmentId);
   }
 
   /**
@@ -1224,6 +1313,14 @@ function assertAttachmentIdentity(
       message: `External attachment ${current.attachmentId} immutable identity changed during detach.`,
     });
   }
+}
+
+function attachmentEligibilityConflict(attachmentId: string): ConflictError {
+  return new ConflictError({
+    code: "STATE_CONFLICT",
+    message: `External attachment ${attachmentId} source eligibility changed before commit.`,
+    details: { reason: "external_source_attachment_eligibility_changed" },
+  });
 }
 
 function attachmentWriteConflict(attachmentId: string, expected: number, observed?: number): ConflictError {

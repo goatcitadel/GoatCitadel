@@ -135,6 +135,7 @@ export type ApprovalEffectKind =
   | "capability_lifecycle_apply"
   | "improvement_lifecycle_apply"
   | "delegation_scope_expansion_apply"
+  | "delegation_scope_expansion_resume"
   | "engineering_learning_lifecycle_apply"
   | "approval_observability";
 

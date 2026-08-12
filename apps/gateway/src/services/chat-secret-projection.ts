@@ -5,8 +5,8 @@ import {
   type ChatGeneratedArtifactRecord,
   type ChatDelegateResponse,
   type ChatDelegateSuggestResponse,
+  type ChatDelegationRunDetail,
   type ChatDelegationRunRecord,
-  type ChatDelegationStepRecord,
   type ChatMessageRecord,
   type ChatSessionRecord,
   type ChatSessionSearchResponse,
@@ -19,6 +19,10 @@ import {
 import { projectPublicSecretValue } from "./public-secret-projection.js";
 import { projectProviderRuntimePublicValue } from "./provider-settings-public-projection.js";
 import { restoreProjectedUrlFragments } from "./integration-connection-public-projection.js";
+import {
+  collectWorkspaceExplorerScopeRoots,
+  projectWorkspaceExplorerPathValue,
+} from "./workspace-explorer-path-projection.js";
 
 const PUBLIC_MARKER = "[REDACTED]";
 const PUBLIC_MARKER_PATTERN = /\[REDACTED\]/gi;
@@ -125,15 +129,15 @@ export function projectChatGeneratedArtifactForPublic(
 }
 
 export function projectChatDelegateResponseForPublic(response: ChatDelegateResponse): ChatDelegateResponse {
-  return projectPublicSecretValue(response);
+  return projectPublicDelegationValue(response);
 }
 
-export function projectChatDelegationRunForPublic<
-  T extends ChatDelegationRunRecord | { run: ChatDelegationRunRecord; steps: ChatDelegationStepRecord[] },
->(value: T): T {
-  const projected = projectPublicSecretValue(value);
+export function projectChatDelegationRunForPublic<T extends ChatDelegationRunRecord | ChatDelegationRunDetail>(
+  value: T,
+): T {
+  const projected = projectPublicDelegationValue(value);
   if (isChatDelegationRunDetail(value)) {
-    const projectedDetail = projected as { run: ChatDelegationRunRecord; steps: ChatDelegationStepRecord[] };
+    const projectedDetail = projected as ChatDelegationRunDetail;
     return {
       ...projectedDetail,
       run: restoreDelegationOperatorInput(projectedDetail.run, value.run),
@@ -156,8 +160,43 @@ export function projectChatDelegateSuggestionForPublic(
   };
 }
 
-export function projectChatDelegationStreamValueForPublic<T>(value: T): T {
-  return projectPublicSecretValue(value);
+export function projectChatDelegationStreamValueForPublic<T>(
+  value: T,
+  options: { readOnlyExplorer?: boolean } = {},
+): T {
+  return projectPublicDelegationValue(value, options.readOnlyExplorer === true);
+}
+
+function projectPublicDelegationValue<T>(value: T, forceReadOnlyExplorer = false): T {
+  const roots = collectWorkspaceExplorerScopeRoots(value);
+  const explorerValue =
+    forceReadOnlyExplorer || containsReadOnlyExplorerMarker(value)
+      ? projectWorkspaceExplorerPathValue(value, roots)
+      : value;
+  return stripPrivateDelegationScopePaths(projectPublicSecretValue(explorerValue));
+}
+
+function containsReadOnlyExplorerMarker(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsReadOnlyExplorerMarker);
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.workflowTemplate === "read_only_workspace_explorer") return true;
+  if (record.profile === "read_only_explorer") return true;
+  return Object.values(record).some(containsReadOnlyExplorerMarker);
+}
+
+function stripPrivateDelegationScopePaths<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripPrivateDelegationScopePaths(item)) as T;
+  }
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "rootPath" || key === "projectId" || (key === "resolvedPaths" && "requestedPaths" in record)) continue;
+    projected[key] = stripPrivateDelegationScopePaths(child);
+  }
+  return projected as T;
 }
 
 export function projectChatWorkbenchExecutionForPublic<T>(value: T): T {
@@ -201,15 +240,15 @@ function restoreDelegationOperatorInput(
   return {
     ...projected,
     // The objective and requested roles are operator-authored conversation
-    // content. Keep the same raw-content rule used for user Chat messages.
-    objective: raw.objective,
+    // content. Keep the same raw-content rule used for user Chat messages,
+    // except the dedicated explorer projection cannot reintroduce a host path
+    // after its report/detail was made workspace-relative.
+    objective: raw.workflowTemplate === "read_only_workspace_explorer" ? projected.objective : raw.objective,
     roles: [...raw.roles],
   };
 }
 
-function isChatDelegationRunDetail(
-  value: unknown,
-): value is { run: ChatDelegationRunRecord; steps: ChatDelegationStepRecord[] } {
+function isChatDelegationRunDetail(value: unknown): value is ChatDelegationRunDetail {
   return Boolean(value && typeof value === "object" && "run" in value && "steps" in value);
 }
 

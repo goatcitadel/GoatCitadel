@@ -174,6 +174,10 @@ import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/present
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 import {
+  READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID,
+  projectWorkspaceExplorerPathValue,
+} from "./workspace-explorer-path-projection.js";
+import {
   IMPROVEMENT_TUNE_DEFAULTS,
   IMPROVEMENT_TUNE_SETTING_KEYS,
   resolveBlockerTemplateStrictness,
@@ -1357,20 +1361,33 @@ export class ChatTurnAgentRunner {
   }
 
   private async createToolRun(
-    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    input: Pick<
+      ChatTurnAgentRunnerInput,
+      "canonicalWriteFence" | "parentDelegationStepId" | "permissionProfileId" | "sessionId"
+    >,
     record: Parameters<Storage["chatToolRuns"]["create"]>[0],
   ): Promise<ChatToolRunRecord> {
-    return await this.runCanonicalWrite(input, async () => await this.deps.storage.chatToolRuns.create(record));
+    const rootPath = await this.resolveReadOnlyExplorerScopeRoot(input);
+    const authoritativeRecord = rootPath ? projectWorkspaceExplorerPathValue(record, [rootPath]) : record;
+    return await this.runCanonicalWrite(
+      input,
+      async () => await this.deps.storage.chatToolRuns.create(authoritativeRecord),
+    );
   }
 
   private async patchToolRun(
-    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    input: Pick<
+      ChatTurnAgentRunnerInput,
+      "canonicalWriteFence" | "parentDelegationStepId" | "permissionProfileId" | "sessionId"
+    >,
     toolRunId: string,
     patch: Parameters<Storage["chatToolRuns"]["patch"]>[1],
   ): Promise<ChatToolRunRecord> {
+    const rootPath = await this.resolveReadOnlyExplorerScopeRoot(input);
+    const authoritativePatch = rootPath ? projectWorkspaceExplorerPathValue(patch, [rootPath]) : patch;
     return await this.runCanonicalWrite(
       input,
-      async () => await this.deps.storage.chatToolRuns.patch(toolRunId, patch),
+      async () => await this.deps.storage.chatToolRuns.patch(toolRunId, authoritativePatch),
     );
   }
 
@@ -1837,6 +1854,11 @@ export class ChatTurnAgentRunner {
 
   private async *runStreamInternal(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
+    const readOnlyExplorerScopeRoot = await this.resolveReadOnlyExplorerScopeRoot(input);
+    const listProjectedToolRuns = async (): Promise<ChatToolRunRecord[]> => {
+      const rows = await this.deps.storage.chatToolRuns.listByTurn(input.turnId);
+      return readOnlyExplorerScopeRoot ? projectWorkspaceExplorerPathValue(rows, [readOnlyExplorerScopeRoot]) : rows;
+    };
     const now = new Date().toISOString();
     const normalizationProfile = input.normalizationProfile ?? "live";
     const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
@@ -2033,9 +2055,7 @@ export class ChatTurnAgentRunner {
     const canUseFilesystemListTool = toolSchema.canonicalToModel.has("fs.list");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
-    const persistedSettledToolRuns = (await this.deps.storage.chatToolRuns.listByTurn(input.turnId)).filter(
-      isSettledToolRunContinuationEvidence,
-    );
+    const persistedSettledToolRuns = (await listProjectedToolRuns()).filter(isSettledToolRunContinuationEvidence);
     const toolRuns: ChatToolRunRecord[] = [...persistedSettledToolRuns];
     let toolRunCount = persistedSettledToolRuns.reduce(
       (count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}),
@@ -3607,7 +3627,7 @@ export class ChatTurnAgentRunner {
               fallbackReason: `loop ${loop + 1}/${executionBudget.maxToolLoops}, tool_runs=${toolRunCount}`,
             },
             loopGuard: createLoopGuardTrace(loopGuardState),
-            toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+            toolRuns: await listProjectedToolRuns(),
             citations: [...citations],
           };
           yield {
@@ -3711,7 +3731,7 @@ export class ChatTurnAgentRunner {
                   // when no user-visible text was rendered.
                   streamYieldedProviderOutput = true;
                   const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
-                  if (streamed.delta && !streamed.sawToolCall) {
+                  if (streamed.delta && !streamed.sawToolCall && !readOnlyExplorerScopeRoot) {
                     streamYieldedVisibleChunk = true;
                     yield {
                       type: "delta",
@@ -3871,7 +3891,9 @@ export class ChatTurnAgentRunner {
                 type: "thinking_delta",
                 sessionId: input.sessionId,
                 turnId: input.turnId,
-                delta: reasoningText,
+                delta: readOnlyExplorerScopeRoot
+                  ? projectWorkspaceExplorerPathValue(reasoningText, [readOnlyExplorerScopeRoot])
+                  : reasoningText,
               };
             }
           }
@@ -4514,7 +4536,7 @@ export class ChatTurnAgentRunner {
                     fallbackReason: loopGuardEvent.message,
                   },
                   loopGuard: createLoopGuardTrace(loopGuardState),
-                  toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                  toolRuns: await listProjectedToolRuns(),
                   citations: [...citations],
                 },
               };
@@ -4831,7 +4853,7 @@ export class ChatTurnAgentRunner {
                 ...trace,
                 routing: routingState,
                 loopGuard: createLoopGuardTrace(loopGuardState),
-                toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                toolRuns: await listProjectedToolRuns(),
                 citations: [...citations],
               },
             };
@@ -5426,6 +5448,22 @@ export class ChatTurnAgentRunner {
     completionState = completionFailureClearing.completion;
     finalFailure = completionFailureClearing.failure;
 
+    if (readOnlyExplorerScopeRoot) {
+      assistantContent = projectWorkspaceExplorerPathValue(assistantContent, [readOnlyExplorerScopeRoot]);
+      const projectedCitations = projectWorkspaceExplorerPathValue(citations, [readOnlyExplorerScopeRoot]);
+      citations.splice(0, citations.length, ...projectedCitations);
+      completionState = projectWorkspaceExplorerPathValue(completionState, [readOnlyExplorerScopeRoot]);
+      finalFailure = finalFailure
+        ? projectWorkspaceExplorerPathValue(finalFailure, [readOnlyExplorerScopeRoot])
+        : undefined;
+      approvalPayload = approvalPayload
+        ? projectWorkspaceExplorerPathValue(approvalPayload, [readOnlyExplorerScopeRoot])
+        : undefined;
+      pendingUserInput = pendingUserInput
+        ? projectWorkspaceExplorerPathValue(pendingUserInput, [readOnlyExplorerScopeRoot])
+        : undefined;
+    }
+
     const finishedAt = new Date().toISOString();
     const finalizedCompletion = finalizeTurnCompletionState({
       completion: completionState,
@@ -5465,10 +5503,11 @@ export class ChatTurnAgentRunner {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { finishedAt }),
       ...(pendingUserInput ? { pendingUserInput } : {}),
     });
+    const hydratedToolRuns = await listProjectedToolRuns();
     const hydratedTrace = {
       ...updatedTrace,
       citations,
-      toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+      toolRuns: hydratedToolRuns,
     };
 
     if (approvalPayload) {
@@ -6194,6 +6233,27 @@ export class ChatTurnAgentRunner {
     userInputPrompt?: ChatUserInputPromptRecord;
   }> {
     const res = await this.executeToolCallInternal(input);
+    const delegatedScopeApprovalId = readDelegatedScopeExpansionApprovalId(res.record);
+    if (delegatedScopeApprovalId) {
+      const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
+        status: "approval_required",
+        ...this.buildToolEffectPatch({
+          potential: {
+            version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+            potential: "unknown",
+            sourceKind: "unknown",
+            reason: "descriptor_incomplete_or_untrusted",
+          },
+          phase: "approval_wait_after_auxiliary_dispatch",
+        }),
+        approvalId: delegatedScopeApprovalId,
+        finishedAt: new Date().toISOString(),
+      });
+      res.record = updated;
+      if (res.chunk?.type === "tool_result") {
+        res.chunk.toolRun = updated;
+      }
+    }
     if (res.record.status === "executed" && res.record.result) {
       try {
         assertNoToolOutputInjection(res.record.result);
@@ -6344,8 +6404,12 @@ export class ChatTurnAgentRunner {
         }
       }
     }
-    await this.recordOrdinaryChatToolDecision(input.input, res.record);
-    return res;
+    const explorerScopeRootPath = await this.resolveReadOnlyExplorerScopeRoot(input.input);
+    const projectedResponse = explorerScopeRootPath
+      ? projectWorkspaceExplorerPathValue(res, [explorerScopeRootPath])
+      : res;
+    await this.recordOrdinaryChatToolDecision(input.input, projectedResponse.record);
+    return projectedResponse;
   }
 
   private async recordOrdinaryChatToolDecision(
@@ -6441,6 +6505,29 @@ export class ChatTurnAgentRunner {
     }
   }
 
+  private async resolveReadOnlyExplorerScopeRoot(
+    input: Pick<ChatTurnAgentRunnerInput, "parentDelegationStepId" | "permissionProfileId" | "sessionId">,
+  ): Promise<string | undefined> {
+    if (input.permissionProfileId !== READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID) {
+      return undefined;
+    }
+    if (!input.parentDelegationStepId) {
+      throw new Error("Read-only explorer tool execution requires a canonical parent delegation step.");
+    }
+    const step = await this.deps.storage.chatDelegationSteps.get(input.parentDelegationStepId);
+    if (
+      step.childSessionId !== input.sessionId ||
+      step.role
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_]+/gu, "-") !== "workspace-explorer" ||
+      !step.scopeControl?.rootPath
+    ) {
+      throw new Error("Read-only explorer tool execution requires a current server-owned filesystem scope.");
+    }
+    return step.scopeControl.rootPath;
+  }
+
   private async executeToolCallInternal(input: {
     input: ChatTurnAgentRunnerInput;
     turnId: string;
@@ -6456,6 +6543,7 @@ export class ChatTurnAgentRunner {
     chunk?: ChatStreamChunkDraft;
     userInputPrompt?: ChatUserInputPromptRecord;
   }> {
+    const explorerScopeRootPath = await this.resolveReadOnlyExplorerScopeRoot(input.input);
     let preflight = this.preflightToolInvocation({
       toolName: input.toolName,
       rawArgs: input.rawArgs,
@@ -6879,7 +6967,7 @@ export class ChatTurnAgentRunner {
           priorToolRuns: input.priorToolRuns,
         });
       }
-      const result = await this.invokeTurnTool(
+      const rawResult = await this.invokeTurnTool(
         input.input,
         {
           toolName: preflight.toolName,
@@ -6932,6 +7020,17 @@ export class ChatTurnAgentRunner {
           onAuxiliaryEffectDispatch: markExecutorDispatchStarted,
         },
       );
+      // The child model, durable tool-run row, stream chunk, and artifact
+      // persistence all consume this one value. Explorer path projection must
+      // therefore happen here, immediately after executor settlement and
+      // before any of those sinks can observe the result.
+      const result: ToolInvokeResult =
+        explorerScopeRootPath && rawResult.result
+          ? {
+              ...rawResult,
+              result: projectWorkspaceExplorerPathValue(rawResult.result, [explorerScopeRootPath]),
+            }
+          : rawResult;
       const concreteEffectRefs = await collectConcreteToolEffectRefs(
         this.deps.storage,
         effectReceipts,
@@ -8294,6 +8393,15 @@ export class ChatTurnAgentRunner {
       parentOperationId: workerUsageAttribution?.parentOperationId,
     };
   }
+}
+
+function readDelegatedScopeExpansionApprovalId(run: ChatToolRunRecord): string | undefined {
+  if (run.toolName !== SUBMIT_WORK_RESULT_TOOL_NAME || run.status !== "executed" || !run.result) {
+    return undefined;
+  }
+  return run.result.waitingForApproval === true && typeof run.result.approvalId === "string"
+    ? run.result.approvalId.trim() || undefined
+    : undefined;
 }
 
 async function resolveDelegatedWorkerUsageAttribution(

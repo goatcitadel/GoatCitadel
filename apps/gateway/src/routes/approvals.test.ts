@@ -292,6 +292,49 @@ describe("approvals routes", () => {
     expectRawApprovalUnchanged(rawApproval);
   });
 
+  it("removes delegated scope host paths from public approval projections without mutating approval truth", async () => {
+    const rootPath = "F:\\private\\workspace";
+    const rawApproval = {
+      ...createSensitiveApproval(),
+      kind: "delegation_scope_expansion",
+      payload: {
+        schemaVersion: "delegation.scope-expansion.v1",
+        rootPath,
+        requestedPaths: ["docs"],
+        resolvedPaths: [`${rootPath}\\docs`],
+        scopeHash: "a".repeat(64),
+      },
+      preview: {
+        requestedPaths: ["docs"],
+        resolvedPaths: ["docs"],
+      },
+    };
+    const listApprovalsPage = vi.fn(() => ({ items: [rawApproval] }));
+    const built = buildApp({ listApprovalsPage });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/approvals" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      items: Array<{ payload: Record<string, unknown>; preview: Record<string, unknown> }>;
+    }>();
+    expect(body.items[0]?.payload).toMatchObject({
+      schemaVersion: "delegation.scope-expansion.v1",
+      requestedPaths: ["docs"],
+      scopeHash: "a".repeat(64),
+    });
+    expect(body.items[0]?.payload).not.toHaveProperty("rootPath");
+    expect(body.items[0]?.payload).not.toHaveProperty("resolvedPaths");
+    expect(body.items[0]?.preview).toMatchObject({ requestedPaths: ["docs"], resolvedPaths: ["docs"] });
+    expect(JSON.stringify(body)).not.toContain(rootPath);
+    expect(rawApproval.payload).toMatchObject({
+      rootPath,
+      resolvedPaths: [`${rootPath}\\docs`],
+    });
+  });
+
   it("blocks approval creation for non-loopback callers", async () => {
     const built = buildApp({
       createApproval: vi.fn(),

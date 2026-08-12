@@ -4,7 +4,11 @@ import type { DurableBackgroundTaskRailResponse } from "@goatcitadel/contracts";
 import { DurableBackgroundTaskRail } from "./DurableBackgroundTaskRail";
 import { useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
 
-vi.mock("./useDurableBackgroundTaskRail", () => ({ useDurableBackgroundTaskRail: vi.fn() }));
+vi.mock("./useDurableBackgroundTaskRail", () => ({
+  useDurableBackgroundTaskRail: vi.fn(),
+  isTerminalStatus: (status: string) =>
+    status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered",
+}));
 
 // Keep the rail test hermetic: the inline remote-worker activity is exercised in
 // its own suite. Here we only assert the rail threads scope into it (no second
@@ -69,6 +73,13 @@ const snapshot: DurableBackgroundTaskRailResponse = {
       ],
       output: { availability: "not_terminal" },
       blockers: [{ kind: "approval_required", message: "Operator approval is required." }],
+      attention: {
+        state: "foreground",
+        reason: "watcher_attached",
+        updatedAt: "2026-07-13T00:00:00.000Z",
+        required: true,
+        requiredReason: "approval_required",
+      },
       signalIntegrity: {
         observedCount: 3,
         acceptedCount: 2,
@@ -111,7 +122,13 @@ const snapshot: DurableBackgroundTaskRailResponse = {
         sha256: "a".repeat(64),
         byteCount: 26,
       },
-      blockers: [{ kind: "detached", message: "Live watcher is detached; canonical state remains available." }],
+      blockers: [],
+      attention: {
+        state: "background",
+        reason: "operator_continued_in_background",
+        updatedAt: "2026-07-13T00:00:00.000Z",
+        required: false,
+      },
       signalIntegrity: {
         observedCount: 1,
         acceptedCount: 1,
@@ -202,7 +219,7 @@ describe("DurableBackgroundTaskRail", () => {
     });
   });
 
-  it("renders live tools, blockers, terminal evidence, lineage, typed links, and detached state without raw JSON", () => {
+  it("renders live tools, blockers, terminal evidence, lineage, typed links, and attention state without raw JSON", () => {
     const onOpenSemanticLink = vi.fn();
     let renderer!: ReactTestRenderer;
     act(() => {
@@ -224,11 +241,17 @@ describe("DurableBackgroundTaskRail", () => {
     expect(text).toContain("Operator approval is required.");
     expect(text).toContain("All focused checks passed.");
     expect(text).toContain("Parent synthesis");
-    expect(text).toContain("detached");
+    expect(text).toContain("Continuing in background");
+    expect(text).toContain("execution policy and approvals are unchanged");
+    expect(text).toContain("Needs attention: approval required");
     expect(text).not.toContain('"canonicalStatus"');
     expect(renderer.root.findAll((node) => node.props["data-link-kind"] === "durable_run")).not.toHaveLength(0);
-    const detach = renderer.root.findByProps({ "aria-label": "Detach background task child-running" });
-    const reattach = renderer.root.findByProps({ "aria-label": "Reattach background task child-terminal" });
+    const detach = renderer.root.findByProps({
+      "aria-label": "Continue background task child-running in background",
+    });
+    const reattach = renderer.root.findByProps({
+      "aria-label": "Bring background task child-terminal to foreground",
+    });
     expect(detach).toBeDefined();
     expect(reattach).toBeDefined();
     act(() => detach.props.onClick());
@@ -240,6 +263,330 @@ describe("DurableBackgroundTaskRail", () => {
       expect.objectContaining({ kind: "durable_run", id: "child-running" }),
       expect.any(Array),
     );
+  });
+
+  it("releases the local explorer observer only after canonical detach succeeds and keeps the task inspectable", async () => {
+    const onContinueInBackground = vi.fn();
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="open"
+          queueLabels={[]}
+          onContinueInBackground={onContinueInBackground}
+        />,
+      );
+    });
+
+    const detach = renderer.root.findByProps({
+      "aria-label": "Continue background task child-running in background",
+    });
+    await act(async () => {
+      detach.props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(control).toHaveBeenCalledWith("watcher-running", "detach", undefined);
+    expect(onContinueInBackground).toHaveBeenCalledWith(
+      expect.objectContaining({ watcherId: "watcher-running", childRunId: "child-running" }),
+    );
+    expect(
+      renderer.root.findByProps({
+        "aria-label": "Continue background task child-running in background",
+      }),
+    ).toBeDefined();
+
+    control.mockResolvedValueOnce(false);
+    await act(async () => {
+      detach.props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onContinueInBackground).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a repaired terminal background explorer after restart without remounting the rail", async () => {
+    const onBackgroundTaskSettled = vi.fn(async () => true);
+    const explorerRecovered: DurableBackgroundTaskRailResponse = {
+      ...snapshot,
+      tasks: [
+        {
+          ...snapshot.tasks[0]!,
+          watcherState: "detached",
+          childRunId: "durable-explorer-child",
+          canonicalStatus: "completed",
+          childVersion: 8,
+          delegationRunId: "explorer-background",
+          delegationStepId: "explorer-background-step",
+          blockers: [],
+          output: {
+            availability: "available",
+            source: "delegation_step",
+            sourceId: "explorer-background-step",
+            summary: "The persisted Explorer answer.",
+            sha256: "b".repeat(64),
+            byteCount: 30,
+          },
+          attention: {
+            state: "background",
+            reason: "operator_continued_in_background",
+            updatedAt: "2026-07-13T00:01:00.000Z",
+            required: false,
+          },
+        },
+      ],
+    };
+    mockedUseRail.mockReturnValue({
+      snapshot: null,
+      loading: true,
+      refreshing: false,
+      error: null,
+      pendingWatcherId: null,
+      refresh,
+      control,
+    });
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="open"
+          queueLabels={[]}
+          onBackgroundTaskSettled={onBackgroundTaskSettled}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(onBackgroundTaskSettled).not.toHaveBeenCalled();
+
+    mockedUseRail.mockReturnValue({
+      snapshot: explorerRecovered,
+      loading: false,
+      refreshing: false,
+      error: null,
+      pendingWatcherId: null,
+      refresh,
+      control,
+    });
+    await act(async () => {
+      renderer.update(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+          onBackgroundTaskSettled={onBackgroundTaskSettled}
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(1);
+    expect(onBackgroundTaskSettled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "durable-explorer-child",
+        delegationRunId: "explorer-background",
+        delegationStepId: "explorer-background-step",
+        canonicalStatus: "completed",
+      }),
+    );
+
+    mockedUseRail.mockReturnValue({
+      snapshot: { ...explorerRecovered },
+      loading: false,
+      refreshing: false,
+      error: null,
+      pendingWatcherId: null,
+      refresh,
+      control,
+    });
+    await act(async () => {
+      renderer.update(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+          onBackgroundTaskSettled={onBackgroundTaskSettled}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds persisted-report retries when the terminal rail can no longer poll", async () => {
+    vi.useFakeTimers();
+    const onBackgroundTaskSettled = vi
+      .fn<() => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error("detail temporarily unavailable"))
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const explorerCompleted: DurableBackgroundTaskRailResponse = {
+      ...snapshot,
+      tasks: [
+        {
+          ...snapshot.tasks[1]!,
+          watcherId: "delegation-child:explorer-background-step",
+          childRunId: "durable-explorer-child",
+          delegationRunId: "explorer-background",
+          delegationStepId: "explorer-background-step",
+        },
+      ],
+    };
+    mockedUseRail.mockReturnValue({
+      snapshot: explorerCompleted,
+      loading: false,
+      refreshing: false,
+      error: null,
+      pendingWatcherId: null,
+      refresh,
+      control,
+    });
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+          onBackgroundTaskSettled={onBackgroundTaskSettled}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(1);
+
+    mockedUseRail.mockReturnValue({
+      snapshot: { ...explorerCompleted, generatedAt: "2026-07-13T00:02:00.000Z" },
+      loading: false,
+      refreshing: false,
+      error: null,
+      pendingWatcherId: null,
+      refresh,
+      control,
+    });
+    await act(async () => {
+      renderer.update(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+          onBackgroundTaskSettled={onBackgroundTaskSettled}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(3);
+    renderer.unmount();
+    vi.useRealTimers();
+  });
+
+  it("announces an in-place attention change once but not initial state after reload", () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+        />,
+      );
+    });
+    const announcement = () =>
+      instanceText(renderer.root.findByProps({ className: "mc-next-background-rail__announcement" }).children);
+    expect(announcement()).toBe("");
+
+    const backgrounded: DurableBackgroundTaskRailResponse = {
+      ...snapshot,
+      tasks: snapshot.tasks.map((task) =>
+        task.watcherId === "watcher-running"
+          ? {
+              ...task,
+              watcherState: "detached",
+              attention: {
+                state: "background",
+                reason: "operator_continued_in_background",
+                updatedAt: "2026-07-13T00:01:00.000Z",
+                required: true,
+                requiredReason: "approval_required",
+              },
+            }
+          : task,
+      ),
+    };
+    mockedUseRail.mockReturnValue({
+      snapshot: backgrounded,
+      loading: false,
+      refreshing: false,
+      error: null,
+      pendingWatcherId: null,
+      refresh,
+      control,
+    });
+    act(() => {
+      renderer.update(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+        />,
+      );
+    });
+    expect(announcement()).toContain("will continue in background");
+
+    act(() => renderer.unmount());
+    act(() => {
+      renderer = create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+        />,
+      );
+    });
+    expect(announcement()).toBe("");
   });
 
   it("requires an inline confirmation before cancelling a running child", async () => {

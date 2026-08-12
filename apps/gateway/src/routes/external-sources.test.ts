@@ -71,6 +71,10 @@ describe("HX-407 external source routes", () => {
         url: "/api/v1/chat/sessions/session-1/external-source-attachments?workspaceId=workspace-1",
       },
       {
+        method: "GET" as const,
+        url: "/api/v1/chat/sessions/session-1/external-source-attachment-candidates?workspaceId=workspace-1",
+      },
+      {
         method: "POST" as const,
         url: "/api/v1/chat/sessions/session-1/external-source-attachments",
         payload: validAttachBody(),
@@ -371,6 +375,19 @@ describe("HX-407 external source routes", () => {
     );
     expect(list.json()).toMatchObject({ sessionIncarnationId: "incarnation-1" });
 
+    const candidates = await next.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachment-candidates?workspaceId=workspace-1&limit=25",
+      headers: operatorHeaders,
+    });
+    expect(candidates.statusCode).toBe(200);
+    expect(candidates.headers["cache-control"]).toBe("no-store");
+    expect(candidates.body).not.toContain("canonicalRootPath");
+    expect(service.listSessionAttachmentCandidates).toHaveBeenCalledWith(
+      { workspaceId: "workspace-1", sessionId: "session-1", limit: 25 },
+      { actorId: "operator:request", source: "token" },
+    );
+
     const attach = await next.inject({
       method: "POST",
       url: "/api/v1/chat/sessions/session-1/external-source-attachments",
@@ -605,6 +622,26 @@ function createService(): ExternalSourceRoutePort {
       sessionId: "session-1",
       sessionIncarnationId: "incarnation-1",
       items: [attachmentRecord()],
+    })),
+    listSessionAttachmentCandidates: vi.fn(() => ({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      items: [
+        {
+          schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+          workspaceId: "workspace-1",
+          sourceId: "source-1",
+          sourceLabel: "Synthetic",
+          sourceRevision: 1,
+          importId: "import-1",
+          itemId: "item-2",
+          normalizedArtifactSha256: "8".repeat(64),
+          normalizedByteCount: 128,
+          importedAt: "2026-07-14T10:01:00.000Z",
+          artifactsVerifiedAt: "2026-07-14T10:01:30.000Z",
+        },
+      ],
     })),
     attachToSession: vi.fn(async () => ({
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,

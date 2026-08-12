@@ -176,6 +176,7 @@ function Harness(props: {
   /** HX-407 C3: success-only consumer for queue-frozen external context refs. */
   onExternalContextSent?: (item: unknown) => void;
   onTemplateInvocationSent?: (item: unknown) => void;
+  onWorkspaceSnapshotFailed?: (item: unknown) => void;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(
     props.initialThread === undefined ? makeThread() : props.initialThread,
@@ -302,11 +303,12 @@ function Harness(props: {
       ensureFreshRoutePreflight,
       isRoutePreflightAcknowledged: props.isRoutePreflightAcknowledged ?? (() => false),
     },
-    ...(props.onExternalContextSent || props.onTemplateInvocationSent
+    ...(props.onExternalContextSent || props.onTemplateInvocationSent || props.onWorkspaceSnapshotFailed
       ? {
           externalContext: {
             onExternalContextSent: props.onExternalContextSent,
             onTemplateInvocationSent: props.onTemplateInvocationSent,
+            onWorkspaceSnapshotFailed: props.onWorkspaceSnapshotFailed,
           },
         }
       : {}),
@@ -1450,6 +1452,7 @@ describe("useChatOutboundExecution", () => {
 
   it("executes local commands and reports blocked route boundaries and missing edit targets", async () => {
     const handleCommandExecution = vi.fn(async () => undefined);
+    const onWorkspaceSnapshotFailed = vi.fn();
     const blockedPreflight = vi.fn(async () => ({
       requestedProviderId: "local",
       requestedModel: "llama",
@@ -1464,7 +1467,13 @@ describe("useChatOutboundExecution", () => {
     }));
 
     await act(async () => {
-      create(<Harness handleCommandExecution={handleCommandExecution} ensureFreshRoutePreflight={blockedPreflight} />);
+      create(
+        <Harness
+          handleCommandExecution={handleCommandExecution}
+          ensureFreshRoutePreflight={blockedPreflight}
+          onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed}
+        />,
+      );
     });
     await act(async () => {
       await latest?.execute({
@@ -1473,10 +1482,17 @@ describe("useChatOutboundExecution", () => {
         content: "/plan draft rollout",
         attachments: [],
         createdAt: "2026-05-03T12:45:00.000Z",
+        workspaceSnapshot: { capture: true, requestId: "snapshot-command-request" },
       });
     });
     expect(handleCommandExecution).toHaveBeenCalledWith("session-1", "/plan draft rollout");
     expect(blockedPreflight).not.toHaveBeenCalled();
+    expect(onWorkspaceSnapshotFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "queue-command",
+        workspaceSnapshot: { capture: true, requestId: "snapshot-command-request" },
+      }),
+    );
 
     await act(async () => {
       await latest?.execute({
@@ -3376,7 +3392,16 @@ describe("useChatOutboundExecution", () => {
 
     it("streams the frozen refs on the realtime send path", async () => {
       const onExternalContextSent = vi.fn();
-      streamAgentChatMessageMock.mockResolvedValueOnce(undefined);
+      streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+        onChunk({
+          type: "message_start",
+          eventId: "evt-external-stream-start",
+          sessionId: "session-1",
+          turnId: "turn-external-stream",
+          messageId: "assistant-external-stream",
+          branchKind: "append",
+        });
+      });
       await act(async () => {
         create(<Harness streamEnabled onExternalContextSent={onExternalContextSent} />);
       });
@@ -3499,5 +3524,194 @@ describe("useChatOutboundExecution", () => {
       { originSurface: "chat" },
     );
     expect(onTemplateInvocationSent).toHaveBeenCalledWith(item);
+  });
+
+  it("forwards a one-shot workspace snapshot and restores it when send fails", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    sendAgentChatMessageMock.mockRejectedValueOnce(new Error("snapshot send failed"));
+    await act(async () => {
+      create(<Harness onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed} />);
+    });
+    const item = {
+      id: "queue-workspace-snapshot-send",
+      action: "send" as const,
+      content: "Use a workspace snapshot",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-1" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ workspaceSnapshot: item.workspaceSnapshot }),
+      { originSurface: "chat" },
+    );
+    expect(onWorkspaceSnapshotFailed).toHaveBeenCalledWith(item);
+  });
+
+  it("does not rearm a consumed workspace snapshot when post-send refresh fails", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    const loadSessionCoreState = vi.fn(async () => {
+      throw new Error("refresh unavailable after canonical send");
+    });
+    await act(async () => {
+      create(
+        <Harness loadSessionCoreState={loadSessionCoreState} onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed} />,
+      );
+    });
+    const item = {
+      id: "queue-workspace-snapshot-post-send-refresh",
+      action: "send" as const,
+      content: "Capture once",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-post-send" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(sendAgentChatMessageMock).toHaveBeenCalled();
+    expect(onWorkspaceSnapshotFailed).not.toHaveBeenCalled();
+  });
+
+  it("does not rearm a consumed workspace snapshot after a canonical stream returns", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    const loadSessionCoreState = vi.fn(async () => {
+      throw new Error("refresh unavailable after canonical stream");
+    });
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-snapshot-stream-start",
+        sessionId: "session-1",
+        turnId: "turn-snapshot-stream",
+        messageId: "assistant-snapshot-stream",
+        branchKind: "append",
+      });
+    });
+    await act(async () => {
+      create(
+        <Harness
+          streamEnabled
+          loadSessionCoreState={loadSessionCoreState}
+          onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed}
+        />,
+      );
+    });
+    const item = {
+      id: "queue-workspace-snapshot-stream-refresh",
+      action: "send" as const,
+      content: "Capture once while streaming",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-stream" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(streamAgentChatMessageMock).toHaveBeenCalled();
+    expect(onWorkspaceSnapshotFailed).not.toHaveBeenCalled();
+  });
+
+  it("rearms a workspace snapshot after a route-level stream error without a turn", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "error",
+        eventId: "evt-route-error",
+        sequence: 0,
+        sessionId: "session-1",
+        error: "route failed before turn admission",
+      });
+      throw new Error("route failed before turn admission");
+    });
+    await act(async () => {
+      create(<Harness streamEnabled onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed} />);
+    });
+    const item = {
+      id: "queue-workspace-snapshot-route-error",
+      action: "send" as const,
+      content: "Capture after route admission",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-route-error" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(onWorkspaceSnapshotFailed).toHaveBeenCalledWith(item);
+  });
+
+  it("rearms a workspace snapshot when a clean stream returns without a canonical turn", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    streamAgentChatMessageMock.mockResolvedValueOnce(undefined);
+    await act(async () => {
+      create(<Harness streamEnabled onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed} />);
+    });
+    const item = {
+      id: "queue-workspace-snapshot-empty-stream",
+      action: "send" as const,
+      content: "Capture after turn admission",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-empty-stream" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(onWorkspaceSnapshotFailed).toHaveBeenCalledWith(item);
+    expect(latest!.getSnapshot().error).toMatch(/before a canonical Chat turn/i);
+  });
+
+  it("rearms a workspace snapshot when a stream aborts before a canonical turn", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    streamAgentChatMessageMock.mockRejectedValueOnce({ name: "AbortError" });
+    await act(async () => {
+      create(<Harness streamEnabled onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed} />);
+    });
+    const item = {
+      id: "queue-workspace-snapshot-pre-turn-abort",
+      action: "send" as const,
+      content: "Capture before an aborted stream",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-pre-turn-abort" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(onWorkspaceSnapshotFailed).toHaveBeenCalledWith(item);
+  });
+
+  it("does not rearm a workspace snapshot when a stream aborts after canonical turn admission", async () => {
+    const onWorkspaceSnapshotFailed = vi.fn();
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-snapshot-abort-start",
+        sessionId: "session-1",
+        turnId: "turn-snapshot-abort",
+        messageId: "assistant-snapshot-abort",
+        branchKind: "append",
+      });
+      throw { name: "AbortError" };
+    });
+    await act(async () => {
+      create(<Harness streamEnabled onWorkspaceSnapshotFailed={onWorkspaceSnapshotFailed} />);
+    });
+    const item = {
+      id: "queue-workspace-snapshot-post-turn-abort",
+      action: "send" as const,
+      content: "Capture before an admitted stream aborts",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-post-turn-abort" },
+    };
+
+    await act(async () => latest!.execute(item));
+
+    expect(onWorkspaceSnapshotFailed).not.toHaveBeenCalled();
   });
 });

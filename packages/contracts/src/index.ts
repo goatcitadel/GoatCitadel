@@ -85,6 +85,7 @@ export * from "./ui-forms.js";
 export * from "./chat.js";
 export * from "./chat-history.js";
 export * from "./chat-capability-profile.js";
+export * from "./chat-workspace-snapshot.js";
 export * from "./work-passport.js";
 export * from "./chat-session-status.js";
 export * from "./chat-timers.js";

@@ -7,6 +7,7 @@ import { useExternalSourceAttachments, type ExternalSourceAttachmentsState } fro
 
 const apiMocks = vi.hoisted(() => ({
   fetchExternalSessionAttachments: vi.fn(),
+  fetchExternalSourceAttachmentCandidates: vi.fn(),
   attachExternalSourceToSession: vi.fn(),
   detachExternalSourceAttachment: vi.fn(),
   requestExternalSourceKnowledgeSnapshot: vi.fn(),
@@ -50,6 +51,29 @@ function listResponse(items: ExternalSessionAttachmentRecord[], sessionIncarnati
   };
 }
 
+function candidateListResponse() {
+  return {
+    schemaVersion: "goatcitadel.external-source.v1",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    items: [
+      {
+        schemaVersion: "goatcitadel.external-source.v1",
+        workspaceId: "workspace-1",
+        sourceId: "source-1",
+        sourceLabel: "Imported Codex sessions",
+        sourceRevision: 3,
+        importId: "import-2",
+        itemId: "item-picker-1",
+        normalizedArtifactSha256: hash("8"),
+        normalizedByteCount: 256,
+        importedAt: timestamp,
+        artifactsVerifiedAt: timestamp,
+      },
+    ],
+  };
+}
+
 let latest: ExternalSourceAttachmentsState | null = null;
 const pushLocalNotice = vi.fn();
 
@@ -75,12 +99,38 @@ beforeEach(() => {
   latest = null;
   pushLocalNotice.mockClear();
   apiMocks.fetchExternalSessionAttachments.mockReset();
+  apiMocks.fetchExternalSourceAttachmentCandidates.mockReset();
+  apiMocks.fetchExternalSourceAttachmentCandidates.mockResolvedValue({
+    ...candidateListResponse(),
+    items: [],
+  });
   apiMocks.attachExternalSourceToSession.mockReset();
   apiMocks.detachExternalSourceAttachment.mockReset();
   apiMocks.requestExternalSourceKnowledgeSnapshot.mockReset();
 });
 
 describe("useExternalSourceAttachments", () => {
+  it("loads server-filtered picker candidates and degrades only that picker on an older Gateway", async () => {
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
+      listResponse([attachment("attachment-1")], "incarnation-1"),
+    );
+    apiMocks.fetchExternalSourceAttachmentCandidates.mockResolvedValue(candidateListResponse());
+    const renderer = await renderHarness();
+    expect(apiMocks.fetchExternalSourceAttachmentCandidates).toHaveBeenCalledWith("session-1", "workspace-1", 100);
+    expect(latest!.candidates.map((item) => item.itemId)).toEqual(["item-picker-1"]);
+    expect(latest!.candidatesSupported).toBe(true);
+
+    apiMocks.fetchExternalSourceAttachmentCandidates.mockRejectedValue({ status: 404 });
+    await act(async () => {
+      await latest!.reload();
+    });
+    expect(latest!.supported).toBe(true);
+    expect(latest!.candidatesSupported).toBe(false);
+    expect(latest!.candidates).toEqual([]);
+    expect(latest!.error).toBeNull();
+    renderer.unmount();
+  });
+
   it("loads live attachments and exposes only attached records", async () => {
     apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
       listResponse([

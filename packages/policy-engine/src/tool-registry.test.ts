@@ -221,6 +221,24 @@ describe("tool registry", () => {
     expect(tool?.argSchema).toMatchObject({ required: ["messageId", "sequence"] });
   });
 
+  it("bounds delegated work evidence references and rejects control characters", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((item) => item.toolName === "submit_work_result");
+    const evidenceRefs = (
+      tool?.argSchema as {
+        properties?: { evidenceRefs?: { items?: Record<string, unknown> } };
+      }
+    ).properties?.evidenceRefs;
+
+    expect(evidenceRefs?.items).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 1_000,
+      pattern: "^[^\\u0000-\\u001f\\u007f]+$",
+    });
+  });
+
   it("registers schedule.manage as a danger, approval-gated tool (P1-F2)", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "schedule.manage");

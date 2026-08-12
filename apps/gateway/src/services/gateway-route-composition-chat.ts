@@ -10,6 +10,11 @@ import * as chatHistoryService from "./chat-history-service.js";
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
 import {
+  buildWorkspaceExplorerReport,
+  isReadOnlyWorkspaceExplorerRun,
+  READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+} from "./chat-delegation-service.js";
+import {
   handleChatGoalClearRequest,
   handleChatGoalSetRequest,
   handleChatGoalStatusRequest,
@@ -329,15 +334,47 @@ export function composeChatRouteDependencies(
     acceptChatDelegation: (sessionId, input) => gateway.acceptChatDelegation(sessionId, input),
     getChatDelegationRun: async (sessionId, runId) => {
       await gateway.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession?.(sessionId);
-      const run = await gateway.storage.chatDelegationRuns.get(runId);
+      let run = await gateway.storage.chatDelegationRuns.get(runId);
       if (run.sessionId !== sessionId) {
         throw new NotFoundError(`Delegation run ${runId} not found for session ${sessionId}`);
       }
+      if (isReadOnlyWorkspaceExplorerRun(run)) {
+        await gateway.reconcilePersistedWorkspaceExplorer({
+          sessionId,
+          delegationRunId: run.runId,
+        });
+        run = await gateway.storage.chatDelegationRuns.get(runId);
+      }
+      const steps = await gateway.storage.chatDelegationSteps.listByRun(runId);
       return {
         run,
-        steps: await gateway.storage.chatDelegationSteps.listByRun(runId),
+        steps,
+        ...(isReadOnlyWorkspaceExplorerRun(run) ? { explorer: buildWorkspaceExplorerReport(run, steps) } : {}),
       };
     },
+    getLatestChatWorkspaceExplorer: async (sessionId) => {
+      await gateway.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession?.(sessionId);
+      let run = await gateway.storage.chatDelegationRuns.findLatestBySessionAndWorkflowTemplate(
+        sessionId,
+        READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+      );
+      if (!run) return {};
+      await gateway.reconcilePersistedWorkspaceExplorer({
+        sessionId,
+        delegationRunId: run.runId,
+      });
+      run = await gateway.storage.chatDelegationRuns.get(run.runId);
+      const steps = await gateway.storage.chatDelegationSteps.listByRun(run.runId);
+      return {
+        item: {
+          run,
+          steps,
+          explorer: buildWorkspaceExplorerReport(run, steps),
+        },
+      };
+    },
+    listChatDelegatedScopeCandidates: (input) => gateway.listChatDelegatedScopeCandidates(input),
+    requestChatDelegatedScopeExpansion: (input) => gateway.requestChatDelegatedScopeExpansion(input),
     runChatDelegation: (sessionId, input) => gateway.runChatDelegation(sessionId, input),
     runChatDelegationStream: (sessionId, input, options) => gateway.runChatDelegationStream(sessionId, input, options),
     suggestChatDelegation: (sessionId, input) => gateway.suggestChatDelegation(sessionId, input),

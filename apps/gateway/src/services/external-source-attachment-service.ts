@@ -3,6 +3,7 @@ import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+  EXTERNAL_SOURCE_LIMITS,
   EXTERNAL_SOURCE_SCHEMA_VERSION,
   assertExternalSourceKnowledgeSnapshotApprovalPayload,
   canonicalJsonString,
@@ -15,6 +16,8 @@ import {
   type ExternalSessionAttachmentRecord,
   type ExternalSessionAttachmentResponse,
   type ExternalSessionDetachResponse,
+  type ExternalSourceAttachmentCandidateListResponse,
+  type ExternalSourceAttachmentCandidateRecord,
   type ExternalSourceImportItem,
   type ExternalSourceKnowledgeSnapshotRequestMaterial,
   type ExternalSourceRecord,
@@ -67,10 +70,17 @@ interface ExternalSourceAttachmentServiceClock {
 export interface ExternalSourceAttachmentServiceDependencies {
   configs: Pick<AsyncStorage["externalSourceConfigs"], "find">;
   scans: Pick<AsyncStorage["externalSourceScans"], "find">;
-  imports: Pick<AsyncStorage["externalSourceImports"], "getIntent" | "getItem" | "getSettlement" | "listItems">;
+  imports: Pick<
+    AsyncStorage["externalSourceImports"],
+    "getIntent" | "getItem" | "getSettlement" | "listItems" | "listAttachmentCandidateBindings"
+  >;
   attachments: Pick<
     AsyncStorage["externalSessionAttachments"],
-    "attachWithJourneyResolved" | "detachCasWithJourneyResolved" | "find" | "findBySessionBinding" | "listBySession"
+    | "attachEligibleWithJourneyResolved"
+    | "detachCasWithJourneyResolved"
+    | "find"
+    | "findBySessionBinding"
+    | "listBySession"
   >;
   sessions: { get(sessionId: string): Promise<ExternalSourceAttachmentSessionMeta | undefined> };
   artifacts: Pick<ExternalSourceArtifactStore, "read">;
@@ -152,7 +162,7 @@ export class ExternalSourceAttachmentService {
       input.importId,
       input.itemId,
     );
-    await this.assertNoIdentityDrift(source, intent.scanId);
+    await this.assertNoIdentityDrift(source, intent);
     await this.verifyManagedArtifact(item, signal);
     throwIfAborted(signal);
     const record: ExternalSessionAttachmentRecord = {
@@ -179,8 +189,9 @@ export class ExternalSourceAttachmentService {
           record.itemId,
         );
         const attachment = existing ?? record;
-        return await this.dependencies.attachments.attachWithJourneyResolved(
+        return await this.dependencies.attachments.attachEligibleWithJourneyResolved(
           record,
+          { actorId: actor.actorId, authActorSource: actor.source },
           buildExternalSourceAttachmentJourneyEvent({
             attachment,
             sessionIncarnationId: session.sessionIncarnationId,
@@ -221,6 +232,84 @@ export class ExternalSourceAttachmentService {
     } catch (error) {
       throw normalizeAttachmentFailure(error, undefined, "not_found");
     }
+  }
+
+  /**
+   * Lists content-free picker choices that the current operator could ask to
+   * attach. Only verified applied import items from active, actor-owned,
+   * identity-stable sources are projected. A binding already attached or
+   * terminally detached in this session is omitted. Attach remains the final
+   * authority and repeats every artifact, scope, and identity check.
+   */
+  public async listCandidates(
+    rawInput: unknown,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSourceAttachmentCandidateListResponse> {
+    assertActor(actor);
+    const input = normalizeExternalSessionAttachmentListInput(rawInput);
+    await this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
+    const bindings = await this.dependencies.imports.listAttachmentCandidateBindings({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      actorId: actor.actorId,
+      authActorSource: actor.source,
+      limit: input.limit ?? EXTERNAL_SOURCE_LIMITS.defaultPageSize,
+    });
+    const sources = new Map<string, ExternalSourceRecord | null>();
+    const verifiedImports = new Set<string>();
+    const items: ExternalSourceAttachmentCandidateRecord[] = [];
+    for (const binding of bindings) {
+      let source = sources.get(binding.intent.sourceId);
+      if (source === undefined) {
+        const candidate = await this.dependencies.configs.find(input.workspaceId, binding.intent.sourceId);
+        source =
+          candidate &&
+          candidate.ownerActorId === actor.actorId &&
+          candidate.authActorId === actor.actorId &&
+          candidate.authActorSource === actor.source &&
+          candidate.status === "active"
+            ? candidate
+            : null;
+        sources.set(binding.intent.sourceId, source);
+      }
+      if (!source) continue;
+      try {
+        await this.assertNoIdentityDrift(source, binding.intent);
+      } catch {
+        continue;
+      }
+      if (!verifiedImports.has(binding.intent.importId)) {
+        const importItems = await this.dependencies.imports.listItems(input.workspaceId, binding.intent.importId);
+        verifyExternalSourceImportSettlement(binding.settlement, importItems);
+        verifiedImports.add(binding.intent.importId);
+      }
+      const existing = await this.dependencies.attachments.findBySessionBinding(
+        input.workspaceId,
+        input.sessionId,
+        binding.intent.importId,
+        binding.item.itemId,
+      );
+      if (existing) continue;
+      items.push({
+        schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+        workspaceId: input.workspaceId,
+        sourceId: source.sourceId,
+        sourceLabel: source.label,
+        sourceRevision: source.revision,
+        importId: binding.intent.importId,
+        itemId: binding.item.itemId,
+        normalizedArtifactSha256: binding.item.normalizedArtifactSha256,
+        normalizedByteCount: binding.item.normalizedByteCount,
+        importedAt: binding.item.createdAt,
+        artifactsVerifiedAt: binding.settlement.artifactsVerifiedAt!,
+      });
+    }
+    return {
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      items,
+    };
   }
 
   /**
@@ -311,7 +400,7 @@ export class ExternalSourceAttachmentService {
       current.importId,
       current.itemId,
     );
-    await this.assertNoIdentityDrift(source, intent.scanId);
+    await this.assertNoIdentityDrift(source, intent);
     if (item.normalizedArtifactSha256 !== current.normalizedArtifactSha256) {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
@@ -366,7 +455,7 @@ export class ExternalSourceAttachmentService {
       input.importId,
       input.itemId,
     );
-    await this.assertNoIdentityDrift(source, intent.scanId);
+    await this.assertNoIdentityDrift(source, intent);
     if (item.normalizedArtifactSha256 !== current.normalizedArtifactSha256) {
       throw new ExternalSourceAttachmentServiceError("conflict");
     }
@@ -499,9 +588,20 @@ export class ExternalSourceAttachmentService {
    * identity chain no longer matches the import's sealed scan binding
    * invalidates live attachment use without deleting immutable imports.
    */
-  private async assertNoIdentityDrift(source: ExternalSourceRecord, scanId: string): Promise<void> {
-    const scan = await this.dependencies.scans.find(source.workspaceId, scanId);
+  /**
+   * The immutable import generation must still be the current source
+   * generation, in addition to retaining the same root/path/adapter identity.
+   * This closes the list-then-reconfigure race for direct attach requests and
+   * fails existing live reads/knowledge copies closed after reconfiguration.
+   */
+  private async assertNoIdentityDrift(
+    source: ExternalSourceRecord,
+    intent: { scanId: string; configRevision: number; configSha256: string },
+  ): Promise<void> {
+    const scan = await this.dependencies.scans.find(source.workspaceId, intent.scanId);
     if (
+      intent.configRevision !== source.revision ||
+      intent.configSha256 !== source.configSha256 ||
       !scan ||
       scan.sourceId !== source.sourceId ||
       scan.rootIdentitySha256 !== source.rootIdentitySha256 ||
@@ -540,6 +640,9 @@ function normalizeAttachmentFailure(
   if (signal?.aborted) return new ExternalSourceAttachmentServiceError("cancelled");
   if (error instanceof ExternalSourceArtifactStoreError) {
     return new ExternalSourceAttachmentServiceError(error.code === "cancelled" ? "cancelled" : "artifact_failure");
+  }
+  if (hasDetailsReason(error, "external_source_attachment_eligibility_changed")) {
+    return new ExternalSourceAttachmentServiceError("identity_drift");
   }
   if (hasCode(error, "STATE_CONFLICT") || hasCode(error, "WRITE_CONFLICT")) {
     return new ExternalSourceAttachmentServiceError("conflict");
@@ -582,6 +685,16 @@ function throwIfAborted(signal: AbortSignal): void {
 
 function hasCode(error: unknown, code: string): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code;
+}
+
+function hasDetailsReason(error: unknown, reason: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "details" in error &&
+    typeof (error as { details?: unknown }).details === "object" &&
+    (error as { details: { reason?: unknown } }).details.reason === reason
+  );
 }
 
 function digest(value: unknown): string {

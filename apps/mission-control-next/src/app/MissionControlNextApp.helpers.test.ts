@@ -187,6 +187,7 @@ describe("MissionControlNextApp shell helpers", () => {
     chatElement.props.onOpenApprovals();
     chatElement.props.onOpenPersonalitiesSettings();
     chatElement.props.onOpenLibraryArtifacts();
+    chatElement.props.onOpenLibraryImports();
     chatElement.props.onOpenOpsRuntime();
     chatElement.props.onNavigateSurface("code", {
       sessionId: "next-session",
@@ -200,6 +201,7 @@ describe("MissionControlNextApp shell helpers", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "approvals", theme: "library" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "personalities", theme: "library" });
     expect(navigate).toHaveBeenCalledWith({ area: "library", section: "artifacts", theme: "library" });
+    expect(navigate).toHaveBeenCalledWith({ area: "library", section: "knowledge", theme: "library" });
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "runtime", theme: "library" });
     expect(navigate).toHaveBeenCalledWith({
       area: "chat",

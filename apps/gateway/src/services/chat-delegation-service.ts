@@ -13,12 +13,16 @@ import type {
   ChatDelegationRunRecord,
   ChatDelegationStepRecord,
   ChatDelegationSuggestionRecord,
+  ChatWorkspaceExplorerReport,
   ChatMode,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatTurnTraceRecord,
+  DurableRunRecord,
+  DurableChatTurnRequestActorAuthority,
+  PermissionProfileRecord,
   SubagentSessionStatus,
   TaskSubagentSession,
   TaskActivityRecord,
@@ -27,9 +31,16 @@ import type {
   TaskStatus,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import { chatModeRequiresProjectBinding, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import {
+  chatModeRequiresProjectBinding,
+  isDurableRunTerminal,
+  NotFoundError,
+  readDurableChatTurnExecutionPayloadAuthority,
+  ValidationError,
+} from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import { buildDeterministicAgentDurableRunId } from "./chat-turn-entry-service.js";
 import type { ChildTimeoutLateSettleEvent } from "./subagent-budget-enforcer.js";
 import {
   buildDelegationFailureGuidance,
@@ -46,12 +57,164 @@ import {
   runWithChildTimeout,
   SubagentBudgetError,
 } from "./subagent-budget-enforcer.js";
+import {
+  READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID,
+  projectWorkspaceExplorerPathValue,
+  projectWorkspaceExplorerText,
+} from "./workspace-explorer-path-projection.js";
 
 const DEFAULT_SUBAGENT_DEFAULTS = {
   childTimeoutSeconds: 600,
   coworkChildTimeoutSeconds: null,
   maxDepth: 4,
 } as const;
+const EXPLORER_PRE_ADMISSION_LEASE_MS = 3_000;
+const EXPLORER_RECONCILIATION_POLL_MS = 25;
+
+export { READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID } from "./workspace-explorer-path-projection.js";
+export const READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE = "read_only_workspace_explorer";
+export const READ_ONLY_EXPLORER_ALLOWED_TOOLS = [
+  "fs.read",
+  "fs.list",
+  "fs.stat",
+  "file.read_range",
+  "file.find",
+  "code.search",
+  "code.search_files",
+  "submit_work_result",
+] as const;
+export const READ_ONLY_EXPLORER_DENIED_TOOLS = [
+  "session.*",
+  "notify.*",
+  "document.*",
+  "context.*",
+  "memory.*",
+  "time.*",
+  "fs.write",
+  "fs.copy",
+  "fs.move",
+  "fs.delete",
+  "http.*",
+  "shell.*",
+  "git.*",
+  "tests.*",
+  "lint.*",
+  "build.*",
+  "browser.*",
+  "local_business.*",
+  "mcp.*",
+  "schedule.*",
+  "citations.*",
+  "docs.*",
+  "embeddings.*",
+  "artifacts.*",
+  "documents.*",
+  "presentations.*",
+  "channel.*",
+  "webhook.*",
+  "gmail.*",
+  "calendar.*",
+  "discord.*",
+  "imessage.*",
+  "line.*",
+  "mattermost.*",
+  "nextcloud-talk.*",
+  "telegram.*",
+  "signal.*",
+  "whatsapp.*",
+  "slack.*",
+  "google-chat.*",
+  "teams.*",
+  "zalo.*",
+  "zalouser.*",
+  "code_mode.*",
+] as const;
+
+export const READ_ONLY_EXPLORER_PERMISSION_PROFILE: PermissionProfileRecord = Object.freeze({
+  profileId: READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID,
+  label: "Read-only workspace explorer",
+  description:
+    "Server-owned filesystem reads only; no write, execution, network, MCP, notification, or delegation tools.",
+  builtin: true,
+  status: "active",
+  scope: "global",
+  // All callable tools are bounded, side-effect-free reads except the result
+  // envelope, whose scope-expansion branch creates its own canonical approval.
+  // Requiring ordinary tool approval here would park every read and strand the
+  // parent delegation after the child wake.
+  approvalMode: "bypass",
+  legacyToolProfile: "minimal",
+  toolPatterns: [...READ_ONLY_EXPLORER_ALLOWED_TOOLS],
+  allow: [...READ_ONLY_EXPLORER_ALLOWED_TOOLS],
+  deny: [...READ_ONLY_EXPLORER_DENIED_TOOLS],
+  readAccessMode: "roots_only",
+  defaultForSurfaces: [],
+  createdBy: "system-read-only-explorer",
+  createdAt: "2026-08-12T00:00:00.000Z",
+  updatedAt: "2026-08-12T00:00:00.000Z",
+});
+
+export function buildReadOnlyExplorerPolicyContext(
+  inherited: ToolPolicyActorContext | undefined,
+  scope: Pick<ToolPolicyActorContext, "workspaceId" | "sessionId" | "taskId" | "runId">,
+): ToolPolicyActorContext {
+  return {
+    ...inherited,
+    ...scope,
+    surface: "chat",
+    permissionProfileId: READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID,
+    permissionProfile: READ_ONLY_EXPLORER_PERMISSION_PROFILE,
+    localOperatorOverrideId: undefined,
+    localOperatorOverride: undefined,
+    fullWebAccess: false,
+  };
+}
+
+const ELIGIBLE_EXPLORER_PARENT_STATUSES = new Set<DurableRunRecord["status"]>([
+  "queued",
+  "running",
+  "waiting",
+  "paused",
+  "completed",
+]);
+
+export function assertEligibleReadOnlyExplorerDurableParent(input: {
+  parentRun: DurableRunRecord | undefined;
+  sessionId: string;
+  workspaceId: string;
+}): ReturnType<typeof readDurableChatTurnExecutionPayloadAuthority> & object {
+  const parentRun = input.parentRun;
+  if (!parentRun) {
+    throw new ValidationError({ message: "Workspace exploration requires an existing durable Chat parent run." });
+  }
+  const authority = readDurableChatTurnExecutionPayloadAuthority({
+    workflowKey: parentRun.workflowKey,
+    durableRunId: parentRun.runId,
+    payload: parentRun.payload,
+  });
+  if (!authority) {
+    throw new ValidationError({
+      message: "Workspace exploration requires a canonical chat.turn.execute parent run.",
+    });
+  }
+  if (authority.sessionId !== input.sessionId) {
+    throw new ValidationError({ message: "Workspace exploration parent run belongs to a different Chat session." });
+  }
+  if (authority.workspaceId !== input.workspaceId) {
+    throw new ValidationError({ message: "Workspace exploration parent run belongs to a different workspace." });
+  }
+  if (authority.requestActor.actorKind !== "operator") {
+    throw new ValidationError({
+      message: "Workspace exploration requires an operator-owned durable Chat parent run.",
+    });
+  }
+  if (!ELIGIBLE_EXPLORER_PARENT_STATUSES.has(parentRun.status)) {
+    throw new ValidationError({
+      message: `Workspace exploration cannot attach to a ${parentRun.status} durable Chat parent run.`,
+    });
+  }
+  return authority;
+}
 
 interface ChatDelegationProgressStatusEvent {
   runId: string;
@@ -66,6 +229,29 @@ export interface ChatDelegationProgressCallbacks {
 
 export interface ChatDelegationRunOptions {
   abortSignal?: AbortSignal;
+  /** Internal durable-effect recovery seam; never accepted from the public route. */
+  persistedResume?: PersistedDelegationResumeAuthority;
+}
+
+export interface WorkspaceExplorerReconciliationOptions {
+  /**
+   * Rail reads wait only until the recovered child has a canonical durable
+   * binding and required watcher (or launch fails). The Gateway continues to
+   * own and drain the returned execution through this callback.
+   */
+  returnAfterDurableLaunch?: boolean;
+  trackExecution?: (execution: Promise<unknown>) => void;
+}
+
+interface PersistedDelegationResumeAuthority {
+  runId: string;
+  stepId: string;
+  durableRunId: string;
+  childSessionId: string;
+  childTurnId: string;
+  workspaceId: string;
+  request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext };
+  dispatchAcquired?: boolean;
 }
 
 interface NormalizedDelegationStep {
@@ -94,6 +280,15 @@ class DelegationDispatchOwnershipError extends Error {
   public constructor(stepId: string) {
     super(`Delegation step ${stepId} dispatch ownership was superseded.`);
     this.name = "DelegationDispatchOwnershipError";
+  }
+}
+
+class DelegationDurableLaunchRecoveryRequiredError extends Error {
+  public constructor(stepId: string, cause: unknown) {
+    super(
+      `Delegation step ${stepId} launched durably but its required watcher binding must be recovered: ${formatUnknownError(cause)}`,
+    );
+    this.name = "DelegationDurableLaunchRecoveryRequiredError";
   }
 }
 
@@ -200,6 +395,25 @@ export interface ChatDelegationServiceHost {
         childTurnId: string,
       ): Promise<ChatDelegationStepRecord | undefined>;
       ownsLinkedDispatch(stepId: string, childSessionId: string, dispatchToken: string): Promise<boolean>;
+      bindOwnedDurableRun(input: {
+        stepId: string;
+        expectedDispatchToken: string;
+        childSessionId: string;
+        durableRunId: string;
+      }): Promise<ChatDelegationStepRecord | undefined>;
+      extendOwnedDispatchLease(input: {
+        stepId: string;
+        expectedDispatchToken: string;
+        childSessionId: string;
+        leaseExpiresAt: string;
+      }): Promise<ChatDelegationStepRecord | undefined>;
+      recoverDurableRunBinding(input: {
+        stepId: string;
+        childSessionId: string;
+        childTurnId: string;
+        durableRunId: string;
+        releaseDispatch: boolean;
+      }): Promise<ChatDelegationStepRecord | undefined>;
       finishOwnedDispatchWithError(input: {
         stepId: string;
         expectedDispatchToken: string;
@@ -350,6 +564,7 @@ export interface ChatDelegationServiceHost {
     ): Promise<unknown>;
   };
   getSession(sessionId: string): Promise<unknown>;
+  getDurableRun(runId: string): Promise<DurableRunRecord | undefined>;
   listChatMessages(sessionId: string, limit: number): Promise<Array<{ role: string; content: string }>>;
   normalizeWorkspaceId(workspaceId?: string): string;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
@@ -361,13 +576,17 @@ export interface ChatDelegationServiceHost {
     mode?: ChatMode;
   }): Promise<ChatSessionRecord>;
   inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): Promise<void>;
-  configureReadOnlyExplorerSession?(sessionId: string): Promise<void>;
+  configureReadOnlyExplorerSession?(sessionId: string, deniedToolPatterns: readonly string[]): Promise<void>;
   ensureSessionInternalToolGrant?(sessionId: string, toolName: string, reason: string): Promise<void>;
   resolveDelegatedFilesystemScope?(
     parentSessionId: string,
     dispatchGeneration: string,
     current?: ChatDelegationStepRecord["scopeControl"],
   ): Promise<ChatDelegationStepRecord["scopeControl"] | undefined>;
+  assertDelegatedFilesystemScopeBinding?(
+    parentSessionId: string,
+    scope: NonNullable<ChatDelegationStepRecord["scopeControl"]>,
+  ): Promise<void>;
   updateChatSessionPrefs(sessionId: string, patch: Partial<ChatSessionPrefsRecord>): Promise<ChatSessionPrefsRecord>;
   resolveToolPolicyContext?(input: {
     operatorId?: string;
@@ -388,6 +607,7 @@ export interface ChatDelegationServiceHost {
       abortSignal?: AbortSignal;
       turnIdentity?: DelegationTurnIdentity;
       assertDispatchOwnership?: () => Promise<void>;
+      onChildDurableRunLaunched?: (runId: string) => Promise<void>;
     },
   ): Promise<ChatSendMessageResponse>;
   extractAndPersistLearnedMemory(
@@ -396,12 +616,17 @@ export interface ChatDelegationServiceHost {
     source: { role: "user" | "assistant"; sourceRef: string },
   ): Promise<void>;
   scheduleChatMemoryContextPrewarm(input: { sessionId: string; prompt: string; relationScope: "peer" }): void;
+  validateReadOnlyExplorerParent?(input: {
+    sessionId: string;
+    policyRunId: string;
+  }): Promise<{ workspaceId: string; requestActor: DurableChatTurnRequestActorAuthority }>;
   watchDurableChildRun?(input: {
     parentRunId: string;
     childRunId: string;
     watcherId: string;
     source: string;
     metadata: Record<string, unknown>;
+    required?: boolean;
   }): Promise<void>;
   /**
    * Runtime budgets enforced on every child delegation step. When omitted the
@@ -415,7 +640,308 @@ export interface ChatDelegationServiceHost {
 }
 
 export class ChatDelegationService {
+  private readonly explorerReconciliations = new Map<string, Promise<{ repaired: boolean; reentered: boolean }>>();
+
   public constructor(private readonly deps: ChatDelegationServiceHost) {}
+
+  /**
+   * Repairs an Explorer whose durable child outlived the request observer or
+   * Gateway process. The signed durable request is the authority for the
+   * immutable child identity; no live session preferences or grants are read.
+   */
+  public async reconcilePersistedWorkspaceExplorer(
+    input: {
+      sessionId: string;
+      delegationRunId: string;
+    },
+    options: WorkspaceExplorerReconciliationOptions = {},
+  ): Promise<{ repaired: boolean; reentered: boolean }> {
+    const key = `${input.sessionId}\u0000${input.delegationRunId}`;
+    const active = this.explorerReconciliations.get(key);
+    if (active) return await active;
+    const reconciliation = this.reconcilePersistedWorkspaceExplorerInternal(input, options);
+    this.explorerReconciliations.set(key, reconciliation);
+    try {
+      return await reconciliation;
+    } finally {
+      if (this.explorerReconciliations.get(key) === reconciliation) this.explorerReconciliations.delete(key);
+    }
+  }
+
+  private async reconcilePersistedWorkspaceExplorerInternal(
+    input: {
+      sessionId: string;
+      delegationRunId: string;
+    },
+    options: WorkspaceExplorerReconciliationOptions,
+  ): Promise<{ repaired: boolean; reentered: boolean }> {
+    const persisted = await this.deps.storage.chatDelegationRuns.get(input.delegationRunId);
+    if (
+      persisted.sessionId !== input.sessionId ||
+      persisted.workflowTemplate !== READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE ||
+      !persisted.parentRunId?.trim()
+    ) {
+      return { repaired: false, reentered: false };
+    }
+    if (!this.deps.validateReadOnlyExplorerParent) {
+      throw new Error("Workspace explorer durable-parent validation is not configured.");
+    }
+    const validatedParent = await this.deps.validateReadOnlyExplorerParent({
+      sessionId: persisted.sessionId,
+      policyRunId: persisted.parentRunId,
+    });
+    const launchActor = normalizeReadOnlyExplorerLaunchActor({}, validatedParent.requestActor, false);
+    let repaired = false;
+    let reentered = false;
+    const steps = await this.deps.storage.chatDelegationSteps.listByRun(persisted.runId);
+    for (const observedStep of steps) {
+      const expectedIdentity = buildStableDelegationTurnIdentity(persisted.runId, observedStep.stepId);
+      const inferredDurableRunId =
+        observedStep.durableRunId ?? buildDeterministicAgentDurableRunId(expectedIdentity.turnId);
+      const inferredChildRun = observedStep.childSessionId
+        ? await this.deps.getDurableRun(inferredDurableRunId)
+        : undefined;
+      if (
+        (observedStep.status === "pending" || observedStep.status === "running") &&
+        !observedStep.durableRunId &&
+        !inferredChildRun
+      ) {
+        try {
+          if (!observedStep.scopeControl || !this.deps.assertDelegatedFilesystemScopeBinding) {
+            throw new Error("Workspace Explorer frozen scope validation is unavailable.");
+          }
+          await this.deps.assertDelegatedFilesystemScopeBinding(persisted.sessionId, observedStep.scopeControl);
+        } catch {
+          const terminalized = await terminalizeUnavailableWorkspaceExplorerStep(this.deps, persisted, observedStep);
+          repaired ||= terminalized;
+          continue;
+        }
+        let currentStep = observedStep;
+        let databaseNowMs = Date.parse(await this.deps.storage.chatDelegationSteps.readDatabaseNow());
+        let dispatchClaim = await this.deps.storage.chatDelegationSteps.getDispatchClaim(observedStep.stepId);
+        if (!Number.isFinite(databaseNowMs)) {
+          throw new Error("Database did not return a valid Workspace Explorer reconciliation clock.");
+        }
+        if (!isDelegationStepDispatchRecoverable(currentStep, dispatchClaim, expectedIdentity.turnId, databaseNowMs)) {
+          const waitMs = dispatchClaim
+            ? Math.max(
+                0,
+                Math.min(EXPLORER_PRE_ADMISSION_LEASE_MS, Date.parse(dispatchClaim.expiresAt) - databaseNowMs),
+              )
+            : 0;
+          if (waitMs > 0) await waitForExplorerPreAdmissionLease(waitMs);
+          currentStep = await this.deps.storage.chatDelegationSteps.get(observedStep.stepId);
+          databaseNowMs = Date.parse(await this.deps.storage.chatDelegationSteps.readDatabaseNow());
+          dispatchClaim = await this.deps.storage.chatDelegationSteps.getDispatchClaim(observedStep.stepId);
+          if (
+            !isDelegationStepDispatchRecoverable(currentStep, dispatchClaim, expectedIdentity.turnId, databaseNowMs)
+          ) {
+            continue;
+          }
+        }
+        let recovered = currentStep;
+        for (let launchAttempt = 0; launchAttempt < 2 && !recovered.durableRunId; launchAttempt += 1) {
+          let releaseLaunchWait!: () => void;
+          let launchWaitReleased = false;
+          const launchWait = new Promise<void>((resolve) => {
+            releaseLaunchWait = () => {
+              if (launchWaitReleased) return;
+              launchWaitReleased = true;
+              resolve();
+            };
+          });
+          const execution = this.runChatDelegation(
+            persisted.sessionId,
+            {
+              objective: persisted.objective,
+              roles: persisted.roles,
+              mode: persisted.mode,
+              providerId: persisted.providerId,
+              model: persisted.model,
+              ...launchActor,
+              policyRunId: persisted.parentRunId,
+              policyTaskId: persisted.taskId,
+              executionProfile: "read_only_explorer",
+            },
+            {
+              onStep: (step) => {
+                if (step.stepId === observedStep.stepId && step.durableRunId) releaseLaunchWait();
+              },
+            },
+          );
+          const observedExecution = execution.then(
+            (response) => {
+              releaseLaunchWait();
+              return response;
+            },
+            (error: unknown) => {
+              releaseLaunchWait();
+              throw error;
+            },
+          );
+          if (options.returnAfterDurableLaunch) {
+            if (!options.trackExecution) {
+              throw new Error("Early Workspace Explorer reconciliation requires a Gateway-owned execution tracker.");
+            }
+            options.trackExecution(observedExecution);
+            await launchWait;
+          } else {
+            await observedExecution;
+          }
+          recovered = await waitForExplorerStepAdmission(this.deps, observedStep.stepId);
+        }
+        repaired ||= Boolean(
+          recovered.childSessionId || recovered.durableRunId || recovered.status !== observedStep.status,
+        );
+        reentered ||= repaired;
+        continue;
+      }
+      if (observedStep.status !== "running" || !observedStep.childSessionId) continue;
+      const durableRunId = inferredDurableRunId;
+      const childRun = inferredChildRun ?? (await this.deps.getDurableRun(durableRunId));
+      if (!childRun) continue;
+      const authority = readDurableChatTurnExecutionPayloadAuthority({
+        workflowKey: childRun.workflowKey,
+        durableRunId: childRun.runId,
+        payload: childRun.payload,
+      });
+      if (
+        !authority ||
+        authority.requestActor.actorKind !== "operator" ||
+        authority.sessionId !== observedStep.childSessionId ||
+        authority.turnId !== expectedIdentity.turnId ||
+        authority.userMessageId !== expectedIdentity.userMessageId ||
+        authority.assistantMessageId !== expectedIdentity.assistantMessageId ||
+        authority.request.parentDelegationStepId !== observedStep.stepId ||
+        authority.request.policyRunId !== persisted.runId ||
+        authority.request.policyTaskId !== persisted.taskId
+      ) {
+        throw new Error(
+          `Workspace Explorer ${persisted.runId} durable authority does not match step ${observedStep.stepId}.`,
+        );
+      }
+      const terminal = isDurableRunTerminal(childRun.status);
+      const bound = await this.deps.storage.runImmediateTransaction(async () => {
+        const recovered = await this.deps.storage.chatDelegationSteps.recoverDurableRunBinding({
+          stepId: observedStep.stepId,
+          childSessionId: observedStep.childSessionId!,
+          childTurnId: expectedIdentity.turnId,
+          durableRunId,
+          releaseDispatch: terminal,
+        });
+        if (!recovered) return undefined;
+        await attachDelegationChildWatcher(this.deps, {
+          parentRunId: persisted.parentRunId,
+          childRunId: durableRunId,
+          required: true,
+          watcherId: `delegation-child:${observedStep.stepId}`,
+          delegationRunId: persisted.runId,
+          stepId: observedStep.stepId,
+          childSessionId: observedStep.childSessionId!,
+          childTurnId: expectedIdentity.turnId,
+        });
+        return recovered;
+      });
+      if (!bound) continue;
+      repaired = true;
+      if (terminal) {
+        const resumed = await this.resumePersistedChatDelegation({
+          delegationRunId: persisted.runId,
+          stepId: observedStep.stepId,
+          durableRunId,
+        });
+        reentered ||= resumed.reenteredPersistedStep;
+      }
+    }
+    return { repaired, reentered };
+  }
+
+  public async resumePersistedChatDelegation(input: {
+    delegationRunId: string;
+    stepId: string;
+    durableRunId: string;
+  }): Promise<ChatDelegateResponse & { reenteredPersistedStep: boolean }> {
+    const persisted = await this.deps.storage.chatDelegationRuns.get(input.delegationRunId);
+    if (!persisted.parentRunId?.trim()) {
+      throw new Error(`Delegation scope resume ${input.stepId} has no durable parent binding.`);
+    }
+    const persistedSteps = await this.deps.storage.chatDelegationSteps.listByRun(persisted.runId);
+    const resumeStep = persistedSteps.find((step) => step.stepId === input.stepId);
+    if (
+      !resumeStep ||
+      resumeStep.runId !== persisted.runId ||
+      resumeStep.status !== "running" ||
+      resumeStep.durableRunId !== input.durableRunId ||
+      !resumeStep.childSessionId ||
+      !resumeStep.childTurnId
+    ) {
+      throw new Error(`Delegation scope resume ${input.stepId} has no exact active child binding.`);
+    }
+    const childRun = await this.deps.getDurableRun(input.durableRunId);
+    const authority = childRun
+      ? readDurableChatTurnExecutionPayloadAuthority({
+          workflowKey: childRun.workflowKey,
+          durableRunId: childRun.runId,
+          payload: childRun.payload,
+        })
+      : undefined;
+    const expectedIdentity = buildStableDelegationTurnIdentity(persisted.runId, resumeStep.stepId);
+    if (
+      !authority ||
+      authority.requestActor.actorKind !== "operator" ||
+      authority.sessionId !== resumeStep.childSessionId ||
+      authority.turnId !== resumeStep.childTurnId ||
+      authority.turnId !== expectedIdentity.turnId ||
+      authority.userMessageId !== expectedIdentity.userMessageId ||
+      authority.assistantMessageId !== expectedIdentity.assistantMessageId ||
+      authority.request.parentDelegationStepId !== resumeStep.stepId ||
+      authority.request.policyRunId !== persisted.runId ||
+      authority.request.policyTaskId !== persisted.taskId
+    ) {
+      throw new Error(`Delegation scope resume ${input.stepId} durable authority does not match its persisted step.`);
+    }
+    const request = restorePersistedDelegationRequest(authority.request, authority.requestActor);
+    const persistedResume: PersistedDelegationResumeAuthority = {
+      runId: persisted.runId,
+      stepId: resumeStep.stepId,
+      durableRunId: input.durableRunId,
+      childSessionId: resumeStep.childSessionId,
+      childTurnId: resumeStep.childTurnId,
+      workspaceId: authority.workspaceId,
+      request,
+    };
+    const response = await this.runChatDelegation(
+      persisted.sessionId,
+      {
+        objective: persisted.objective,
+        roles: persisted.roles,
+        mode: persisted.mode,
+        providerId: asOptionalTrimmedString(request.providerId) ?? persisted.providerId,
+        model: asOptionalTrimmedString(request.model) ?? persisted.model,
+        steps: persistedSteps.map((step) => ({
+          stepId: step.stepId,
+          index: step.index,
+          role: step.role,
+          parallelizable: Boolean(step.parallelizable),
+          dependsOnStepIds: [...(step.dependsOnStepIds ?? [])],
+        })),
+        operatorId: request.operatorId,
+        authActorId: request.authActorId,
+        authActorSource: request.authActorSource,
+        permissionProfileId: request.permissionProfileId,
+        localOperatorOverrideId: request.localOperatorOverrideId,
+        policyRunId: persisted.parentRunId,
+        policyTaskId: persisted.taskId,
+        fullWebAccess: request.fullWebAccess,
+        ...(persisted.workflowTemplate === READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE
+          ? { executionProfile: "read_only_explorer" as const }
+          : {}),
+      },
+      undefined,
+      { persistedResume },
+    );
+    return { ...response, reenteredPersistedStep: persistedResume.dispatchAcquired === true };
+  }
 
   public async runChatDelegation(
     sessionId: string,
@@ -424,11 +950,6 @@ export class ChatDelegationService {
     options: ChatDelegationRunOptions = {},
   ): Promise<ChatDelegateResponse> {
     const deps = this.deps;
-    const parentSession = (await deps.getSession(sessionId)) as { origin?: string } | undefined;
-    // Prompt-pack sessions are headless evals: children must inherit the
-    // eval-integrity profile or they could park on approvals forever.
-    const inheritedNormalizationProfile =
-      parentSession?.origin === "prompt_pack" ? ("prompt_pack_harness" as const) : undefined;
     const objective = input.objective.trim();
     if (!objective) {
       throw new Error("objective is required");
@@ -439,44 +960,85 @@ export class ChatDelegationService {
     }
     const requestedMode = input.mode ?? "sequential";
     const explorerProfile = input.executionProfile === "read_only_explorer";
+    if (explorerProfile && !input.policyRunId?.trim()) {
+      throw new ValidationError({
+        message: "Workspace exploration requires a durable parent run for progress and recovery.",
+      });
+    }
     if (
       explorerProfile &&
       (requestedMode !== "sequential" ||
         roles.length !== 1 ||
-        input.steps?.length ||
-        roles[0]?.toLowerCase() !== "workspace explorer")
+        (input.steps?.length && !options.persistedResume) ||
+        roles[0] !== "workspace-explorer")
     ) {
       throw new ValidationError({ message: "Workspace exploration requires one sequential delegated child." });
     }
+    let validatedExplorerWorkspaceId: string | undefined;
+    let validatedExplorerActor: Pick<ChatDelegateRequest, "operatorId" | "authActorId" | "authActorSource"> | undefined;
+    if (explorerProfile) {
+      if (!deps.validateReadOnlyExplorerParent) {
+        throw new Error("Workspace explorer durable-parent validation is not configured.");
+      }
+      const validatedParent = await deps.validateReadOnlyExplorerParent({
+        sessionId,
+        policyRunId: input.policyRunId!.trim(),
+      });
+      validatedExplorerWorkspaceId = validatedParent.workspaceId;
+      validatedExplorerActor = normalizeReadOnlyExplorerLaunchActor(input, validatedParent.requestActor, true);
+    }
+    const parentSession = (await deps.getSession(sessionId)) as { origin?: string } | undefined;
+    // Prompt-pack sessions are headless evals: children must inherit the
+    // eval-integrity profile or they could park on approvals forever.
+    const inheritedNormalizationProfile =
+      parentSession?.origin === "prompt_pack" ? ("prompt_pack_harness" as const) : undefined;
     const mode = requestedMode;
     const requestedDelegationSteps = normalizeDelegationSteps({
       roles,
       mode,
       steps: input.steps,
     });
-    const prefs = await deps.ensureChatSessionModelDefaults(
+    const basePrefs = await deps.ensureChatSessionModelDefaults(
       sessionId,
       await deps.storage.chatSessionPrefs.ensure(sessionId),
     );
+    const prefs = options.persistedResume
+      ? restorePersistedDelegationPreferences(basePrefs, options.persistedResume.request)
+      : explorerProfile
+        ? buildReadOnlyExplorerSessionPrefs(basePrefs)
+        : basePrefs;
     const executionMode: ChatMode = "chat";
     const providerId = input.providerId ?? prefs.providerId;
     const model = input.model ?? prefs.model;
-    const sessionWorkspaceId = deps.normalizeWorkspaceId(
-      (await deps.storage.chatSessionMeta.ensure(sessionId)).workspaceId,
-    );
+    const sessionWorkspaceId =
+      validatedExplorerWorkspaceId ??
+      deps.normalizeWorkspaceId((await deps.storage.chatSessionMeta.ensure(sessionId)).workspaceId);
+    if (options.persistedResume && options.persistedResume.workspaceId !== sessionWorkspaceId) {
+      throw new Error(`Delegation scope resume ${options.persistedResume.stepId} workspace binding changed.`);
+    }
     const parentProjectId = (await deps.storage.chatSessionProjects.get(sessionId))?.projectId;
     if (chatModeRequiresProjectBinding(executionMode) && !parentProjectId) {
       throw new ValidationError({ message: "Code delegation requires a project-bound parent session." });
     }
     throwIfChatDelegationAborted(options.abortSignal);
 
-    let stableParentRun = await findStableParentDelegationRun(deps, {
-      sessionId,
-      policyRunId: input.policyRunId,
-      objective,
-      mode,
-      roles,
-    });
+    let stableParentRun = options.persistedResume
+      ? await loadExplicitDelegationResumeRun(deps, {
+          runId: options.persistedResume.runId,
+          sessionId,
+          objective,
+          mode,
+          roles,
+          workflowTemplate: explorerProfile ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE : undefined,
+        })
+      : await findStableParentDelegationRun(deps, {
+          sessionId,
+          policyRunId: input.policyRunId,
+          objective,
+          mode,
+          roles,
+          workflowTemplate: explorerProfile ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE : undefined,
+        });
     let repairStableParentBeforeDispatch = false;
     const stablePolicyRunId = input.policyRunId?.trim();
     const runId =
@@ -487,6 +1049,29 @@ export class ChatDelegationService {
       ? stabilizeDelegationPlan(runId, requestedDelegationSteps)
       : requestedDelegationSteps;
     let delegationSteps = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
+    let frozenExplorerScope = explorerProfile ? existingSteps[0]?.scopeControl : undefined;
+    if (explorerProfile && stableParentRun && !frozenExplorerScope) {
+      throw new Error(`Workspace Explorer ${stableParentRun.runId} has no frozen filesystem scope.`);
+    }
+    if (explorerProfile && frozenExplorerScope) {
+      if (!deps.assertDelegatedFilesystemScopeBinding) {
+        throw new Error("Workspace explorer scope-binding validation is not configured.");
+      }
+      await deps.assertDelegatedFilesystemScopeBinding(sessionId, frozenExplorerScope);
+      if (parentProjectId !== frozenExplorerScope.projectId) {
+        throw new ValidationError({ message: "Workspace exploration project binding changed." });
+      }
+    }
+    if (explorerProfile && !stableParentRun) {
+      const initialStep = delegationSteps[0]!;
+      const scopeGeneration = buildStableDelegationId("explorer-scope", runId, initialStep.stepId);
+      frozenExplorerScope = await deps.resolveDelegatedFilesystemScope?.(sessionId, scopeGeneration);
+      if (!frozenExplorerScope || !frozenExplorerScope.projectId || frozenExplorerScope.projectId !== parentProjectId) {
+        throw new ValidationError({
+          message: "Workspace exploration requires a verified project-bound filesystem scope.",
+        });
+      }
+    }
     if (stableParentRun && stableParentRun.status !== "running") {
       const terminalReplay = await resolveStableTerminalDelegationReplay(
         deps,
@@ -511,6 +1096,18 @@ export class ChatDelegationService {
           stitchedOutput: terminalReplay.projection.stitchedOutput,
           citations: terminalReplay.projection.citations,
           trace: stableParentRun.trace,
+          ...(explorerProfile
+            ? {
+                explorer: buildWorkspaceExplorerReport(
+                  {
+                    ...stableParentRun,
+                    status: terminalReplay.projection.status,
+                    stitchedOutput: terminalReplay.projection.stitchedOutput,
+                  },
+                  terminalReplay.persistedSteps,
+                ),
+              }
+            : {}),
         };
       }
       repairStableParentBeforeDispatch = true;
@@ -584,6 +1181,7 @@ export class ChatDelegationService {
           providerId,
           model,
           status: "running",
+          ...(explorerProfile ? { workflowTemplate: READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE } : {}),
           citations: [],
         });
       }
@@ -602,6 +1200,7 @@ export class ChatDelegationService {
           status: "pending",
           parallelizable: step.parallelizable,
           dependsOnStepIds: step.dependsOnStepIds,
+          ...(explorerProfile && step.index === 0 ? { scopeControl: frozenExplorerScope } : {}),
           startedAt: plannedAt,
         });
       }
@@ -619,6 +1218,7 @@ export class ChatDelegationService {
         objective,
         mode,
         roles,
+        workflowTemplate: explorerProfile ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE : undefined,
       });
       if (!concurrentRun || concurrentRun.runId !== runId || concurrentRun.taskId !== task.taskId) {
         throw error;
@@ -665,18 +1265,34 @@ export class ChatDelegationService {
     const childDepth = computeChildDepth(parentDepth);
     let inheritedPolicyContext: ToolPolicyActorContext | undefined;
     try {
-      inheritedPolicyContext = await deps.resolveToolPolicyContext?.({
-        operatorId: input.operatorId,
-        authActorId: input.authActorId,
-        authActorSource: input.authActorSource,
-        workspaceId: sessionWorkspaceId,
-        sessionId,
-        taskId: task.taskId,
-        runId,
-        surface: executionMode,
-        permissionProfileId: input.permissionProfileId,
-        localOperatorOverrideId: input.localOperatorOverrideId,
-      });
+      inheritedPolicyContext = options.persistedResume
+        ? restorePersistedDelegationPolicyContext(options.persistedResume.request, {
+            workspaceId: sessionWorkspaceId,
+            sessionId,
+            taskId: task.taskId,
+            runId,
+          })
+        : explorerProfile
+          ? {
+              ...validatedExplorerActor,
+              workspaceId: sessionWorkspaceId,
+              sessionId,
+              taskId: task.taskId,
+              runId,
+              surface: executionMode,
+            }
+          : await deps.resolveToolPolicyContext?.({
+              operatorId: input.operatorId,
+              authActorId: input.authActorId,
+              authActorSource: input.authActorSource,
+              workspaceId: sessionWorkspaceId,
+              sessionId,
+              taskId: task.taskId,
+              runId,
+              surface: executionMode,
+              permissionProfileId: input.permissionProfileId,
+              localOperatorOverrideId: input.localOperatorOverrideId,
+            });
     } catch (error) {
       const finishedAt = new Date().toISOString();
       const message = formatUnknownError(error);
@@ -720,7 +1336,6 @@ export class ChatDelegationService {
       }
       throw error;
     }
-
     const executeDelegationStep = async (step: NormalizedDelegationStep): Promise<DelegationStepExecutionResult> => {
       const startedAt = await deps.storage.chatDelegationSteps.readDatabaseNow();
       const childRunId = `${runId}:${step.stepId}`;
@@ -754,7 +1369,9 @@ export class ChatDelegationService {
           stepId: step.stepId,
           turnIdentity,
           startedAt,
-          leaseDurationMs: Math.max(60_000, (childTimeoutSeconds + 60) * 1000),
+          leaseDurationMs: explorerProfile
+            ? EXPLORER_PRE_ADMISSION_LEASE_MS
+            : Math.max(60_000, (childTimeoutSeconds + 60) * 1000),
         });
         if (!dispatchLease) {
           const current = await deps.storage.chatDelegationSteps.get(step.stepId);
@@ -809,21 +1426,58 @@ export class ChatDelegationService {
         await callbacks?.onStep?.(runningStep);
         registeredAgentSessionId = agentSessionId;
         childSessionId = agentSessionId;
-        await deps.inheritDelegatedSessionToolGrants(sessionId, agentSessionId);
-        if (explorerProfile) {
-          await deps.configureReadOnlyExplorerSession?.(agentSessionId);
+        const persistedResumeStep =
+          options.persistedResume?.stepId === step.stepId ? options.persistedResume : undefined;
+        if (
+          persistedResumeStep &&
+          (persistedResumeStep.runId !== runId ||
+            persistedResumeStep.childSessionId !== agentSessionId ||
+            persistedResumeStep.childTurnId !== turnIdentity.turnId ||
+            persistedResumeStep.durableRunId !== runningStep.durableRunId)
+        ) {
+          throw new Error(`Delegation scope resume ${step.stepId} lost its immutable child binding.`);
         }
-        const delegatedScope = await deps.resolveDelegatedFilesystemScope?.(
-          sessionId,
-          dispatchLease.dispatchMarker,
-          runningStep.scopeControl,
-        );
+        if (persistedResumeStep) {
+          persistedResumeStep.dispatchAcquired = true;
+        }
+        if (!explorerProfile && !options.persistedResume) {
+          await deps.inheritDelegatedSessionToolGrants(sessionId, agentSessionId);
+        }
+        if (explorerProfile && !persistedResumeStep) {
+          await deps.configureReadOnlyExplorerSession?.(agentSessionId, READ_ONLY_EXPLORER_DENIED_TOOLS);
+        }
+        const explorerPolicyContext = explorerProfile
+          ? buildReadOnlyExplorerPolicyContext(inheritedPolicyContext, {
+              workspaceId: sessionWorkspaceId,
+              sessionId: agentSessionId,
+              taskId: task.taskId,
+              runId,
+            })
+          : undefined;
+        const delegatedScope = persistedResumeStep
+          ? runningStep.scopeControl
+          : explorerProfile
+            ? runningStep.scopeControl
+            : await deps.resolveDelegatedFilesystemScope?.(
+                sessionId,
+                dispatchLease.dispatchMarker,
+                runningStep.scopeControl,
+              );
         if (explorerProfile && !delegatedScope) {
           throw new ValidationError({
             message: "Workspace exploration requires a verified server-owned filesystem scope.",
           });
         }
-        if (delegatedScope) {
+        if (explorerProfile && delegatedScope) {
+          if (!deps.assertDelegatedFilesystemScopeBinding) {
+            throw new Error("Workspace explorer scope-binding validation is not configured.");
+          }
+          await deps.assertDelegatedFilesystemScopeBinding(sessionId, delegatedScope);
+          if (parentProjectId !== delegatedScope.projectId) {
+            throw new ValidationError({ message: "Workspace exploration project binding changed." });
+          }
+        }
+        if (delegatedScope && !persistedResumeStep) {
           // The durable patch is the authority; its returned projection is intentionally unused after scope setup.
           await deps.storage.chatDelegationSteps.patch(step.stepId, { scopeControl: delegatedScope });
           await deps.ensureSessionInternalToolGrant?.(
@@ -832,28 +1486,30 @@ export class ChatDelegationService {
             "delegated-work-result-envelope",
           );
         }
-        await deps.updateChatSessionPrefs(agentSessionId, {
-          mode: executionMode,
-          planningMode: "off",
-          providerId,
-          model,
-          webMode: explorerProfile ? "off" : prefs.webMode,
-          memoryMode: prefs.memoryMode,
-          thinkingLevel: prefs.thinkingLevel,
-          speedMode: prefs.speedMode,
-          subagentPolicy: "off",
-          toolAutonomy: explorerProfile ? "manual" : prefs.toolAutonomy,
-          orchestrationEnabled: false,
-          orchestrationIntensity: "minimal",
-          orchestrationVisibility: "explicit",
-          orchestrationProviderPreference: prefs.orchestrationProviderPreference,
-          orchestrationReviewDepth: prefs.orchestrationReviewDepth,
-          orchestrationParallelism: "sequential",
-          codeAutoApply: prefs.codeAutoApply,
-          proactiveMode: "off",
-          retrievalMode: prefs.retrievalMode,
-          reflectionMode: "off",
-        });
+        if (!persistedResumeStep) {
+          await deps.updateChatSessionPrefs(agentSessionId, {
+            mode: executionMode,
+            planningMode: "off",
+            providerId,
+            model,
+            webMode: explorerProfile ? "off" : prefs.webMode,
+            memoryMode: explorerProfile ? "off" : prefs.memoryMode,
+            thinkingLevel: prefs.thinkingLevel,
+            speedMode: prefs.speedMode,
+            subagentPolicy: "off",
+            toolAutonomy: explorerProfile ? "safe_auto" : prefs.toolAutonomy,
+            orchestrationEnabled: false,
+            orchestrationIntensity: "minimal",
+            orchestrationVisibility: "explicit",
+            orchestrationProviderPreference: prefs.orchestrationProviderPreference,
+            orchestrationReviewDepth: prefs.orchestrationReviewDepth,
+            orchestrationParallelism: "sequential",
+            codeAutoApply: prefs.codeAutoApply,
+            proactiveMode: "off",
+            retrievalMode: explorerProfile ? "standard" : prefs.retrievalMode,
+            reflectionMode: "off",
+          });
+        }
         const existingSubagent = await deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
         if (!existingSubagent) {
           await deps.taskLifecycleService.registerTaskSubagent(task.taskId, {
@@ -911,6 +1567,33 @@ export class ChatDelegationService {
               // The canonical timeout outcome is already committed; diagnostics stay best-effort.
             });
         };
+        const delegatedRequest = persistedResumeStep
+          ? persistedResumeStep.request
+          : buildDelegatedChatSendRequest({
+              content: taskFirstMessage,
+              parentDelegationStepId: step.stepId,
+              providerId,
+              model,
+              mode: executionMode,
+              webMode: explorerProfile ? "off" : prefs.webMode,
+              memoryMode: explorerProfile ? "off" : prefs.memoryMode,
+              thinkingLevel: prefs.thinkingLevel,
+              speedMode: prefs.speedMode,
+              subagentPolicy: "off",
+              retrievalMode: explorerProfile ? "standard" : (prefs.retrievalMode ?? "standard"),
+              toolAutonomy: explorerProfile ? "safe_auto" : prefs.toolAutonomy,
+              normalizationProfile: inheritedNormalizationProfile,
+              operatorId: validatedExplorerActor?.operatorId ?? input.operatorId,
+              authActorId: validatedExplorerActor?.authActorId ?? input.authActorId,
+              authActorSource: validatedExplorerActor?.authActorSource ?? input.authActorSource,
+              permissionProfileId:
+                explorerPolicyContext?.permissionProfileId ?? inheritedPolicyContext?.permissionProfileId,
+              localOperatorOverrideId: explorerProfile ? undefined : inheritedPolicyContext?.localOperatorOverrideId,
+              policyRunId: runId,
+              policyTaskId: task.taskId,
+              fullWebAccess: explorerProfile ? false : input.fullWebAccess,
+              policyContext: explorerPolicyContext,
+            });
         const response = await runWithChildTimeout<ChatSendMessageResponse>({
           timeoutSeconds: childTimeoutSeconds,
           onLateSettle: (event) => {
@@ -924,43 +1607,69 @@ export class ChatDelegationService {
             scheduleLateSettleRecord?.(event);
           },
           run: async (signal) =>
-            deps.agentSendChatMessage(
-              agentSessionId,
-              buildDelegatedChatSendRequest({
-                content: taskFirstMessage,
-                parentDelegationStepId: step.stepId,
-                providerId,
-                model,
-                mode: executionMode,
-                webMode: explorerProfile ? "off" : prefs.webMode,
-                memoryMode: prefs.memoryMode,
-                thinkingLevel: prefs.thinkingLevel,
-                speedMode: prefs.speedMode,
-                subagentPolicy: "off",
-                retrievalMode: prefs.retrievalMode ?? "standard",
-                toolAutonomy: explorerProfile ? "manual" : prefs.toolAutonomy,
-                normalizationProfile: inheritedNormalizationProfile,
-                operatorId: input.operatorId,
-                authActorId: input.authActorId,
-                authActorSource: input.authActorSource,
-                permissionProfileId: inheritedPolicyContext?.permissionProfileId,
-                localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
-                policyRunId: runId,
-                policyTaskId: task.taskId,
-                fullWebAccess: input.fullWebAccess,
-              }),
-              {
-                abortSignal: composeChatDelegationAbortSignal(signal, options.abortSignal),
-                turnIdentity,
-                assertDispatchOwnership: async () =>
-                  await assertDelegationDispatchOwnership(
-                    deps,
-                    step.stepId,
-                    agentSessionId,
-                    dispatchLease.dispatchMarker,
-                  ),
+            deps.agentSendChatMessage(agentSessionId, delegatedRequest, {
+              // Explorer transport disconnects are observation-only. The
+              // server-owned timeout still bounds execution, while standard
+              // delegation keeps its existing caller-cancellation behavior.
+              abortSignal: composeChatDelegationAbortSignal(signal, explorerProfile ? undefined : options.abortSignal),
+              turnIdentity,
+              assertDispatchOwnership: async () =>
+                await assertDelegationDispatchOwnership(
+                  deps,
+                  step.stepId,
+                  agentSessionId,
+                  dispatchLease.dispatchMarker,
+                ),
+              onChildDurableRunLaunched: async (durableRunId) => {
+                let bound: ChatDelegationStepRecord;
+                try {
+                  bound = await deps.storage.runImmediateTransaction(async () => {
+                    const owned = await deps.storage.chatDelegationSteps.bindOwnedDurableRun({
+                      stepId: step.stepId,
+                      expectedDispatchToken: dispatchLease.dispatchMarker,
+                      childSessionId: agentSessionId,
+                      durableRunId,
+                    });
+                    if (!owned) {
+                      throw new DelegationDispatchOwnershipError(step.stepId);
+                    }
+                    if (explorerProfile) {
+                      const extended = await deps.storage.chatDelegationSteps.extendOwnedDispatchLease({
+                        stepId: step.stepId,
+                        expectedDispatchToken: dispatchLease.dispatchMarker,
+                        childSessionId: agentSessionId,
+                        leaseExpiresAt: new Date(
+                          Date.parse(await deps.storage.chatDelegationSteps.readDatabaseNow()) +
+                            Math.max(60_000, (childTimeoutSeconds + 60) * 1000),
+                        ).toISOString(),
+                      });
+                      if (!extended) {
+                        throw new DelegationDispatchOwnershipError(step.stepId);
+                      }
+                    }
+                    await attachDelegationChildWatcher(deps, {
+                      parentRunId: input.policyRunId,
+                      childRunId: durableRunId,
+                      ...(explorerProfile ? { required: true } : {}),
+                      watcherId: `delegation-child:${step.stepId}`,
+                      delegationRunId: runId,
+                      stepId: step.stepId,
+                      childSessionId: agentSessionId,
+                      childTurnId: turnIdentity.turnId,
+                    });
+                    return owned;
+                  });
+                } catch (error) {
+                  if (error instanceof DelegationDispatchOwnershipError || !explorerProfile) throw error;
+                  // The child admission is already canonical. Keep the step
+                  // recoverable instead of terminally failing an active,
+                  // deterministic durable child whose watcher write rolled
+                  // back with the binding transaction.
+                  throw new DelegationDurableLaunchRecoveryRequiredError(step.stepId, error);
+                }
+                await callbacks?.onStep?.(bound);
               },
-            ),
+            }),
         });
         const responseTurnId = response.turnId?.trim();
         if (!responseTurnId) {
@@ -968,6 +1677,10 @@ export class ChatDelegationService {
         }
         const traceStatus = response.trace?.status;
         const latestStep = await deps.storage.chatDelegationSteps.get(step.stepId);
+        const responseDurableRunId = response.trace?.durable?.runId?.trim();
+        if (latestStep.durableRunId && responseDurableRunId && latestStep.durableRunId !== responseDurableRunId) {
+          throw new Error(`Delegation step ${step.stepId} returned a different durable child binding.`);
+        }
         const submittedWorkResult = latestStep.workResult;
         const currentScopedWorkResult =
           !latestStep.scopeControl ||
@@ -998,7 +1711,7 @@ export class ChatDelegationService {
             : failed
               ? "failed"
               : "completed";
-        const output =
+        const rawOutput =
           response.assistantMessage?.content?.trim() ||
           response.trace?.failure?.message?.trim() ||
           (waitingForApproval
@@ -1010,6 +1723,16 @@ export class ChatDelegationService {
                   ? "Delegate is still waiting on a tool result."
                   : "Delegate turn is still running."
                 : "(delegate returned no output)");
+        const output = explorerProfile
+          ? projectWorkspaceExplorerText(rawOutput, [delegatedScope!.rootPath])
+          : rawOutput;
+        const responseCitations = explorerProfile
+          ? projectWorkspaceExplorerPathValue(response.citations ?? [], [delegatedScope!.rootPath])
+          : (response.citations ?? []);
+        const authoritativeWorkResult =
+          explorerProfile && submittedWorkResult
+            ? projectWorkspaceExplorerPathValue(submittedWorkResult, [delegatedScope!.rootPath])
+            : submittedWorkResult;
         const observedAt = new Date().toISOString();
         const responseCommitInput = {
           stepId: step.stepId,
@@ -1025,14 +1748,21 @@ export class ChatDelegationService {
           error: missingScopedTerminalResult
             ? "Delegated code work ended without a current submit_work_result completion envelope."
             : incomplete
-              ? (response.trace?.failure?.message ?? output)
+              ? explorerProfile
+                ? projectWorkspaceExplorerText(response.trace?.failure?.message ?? output, [delegatedScope!.rootPath])
+                : (response.trace?.failure?.message ?? output)
               : undefined,
           failureGuidance: incomplete
-            ? buildIncompleteDelegatedTraceFailureGuidance(traceFailure, output, step.role)
+            ? explorerProfile
+              ? projectWorkspaceExplorerText(
+                  buildIncompleteDelegatedTraceFailureGuidance(traceFailure, output, step.role),
+                  [delegatedScope!.rootPath],
+                )
+              : buildIncompleteDelegatedTraceFailureGuidance(traceFailure, output, step.role)
             : undefined,
           durableRunId: response.trace?.durable?.runId,
-          citations: response.citations ?? [],
-          workResult: submittedWorkResult,
+          citations: responseCitations,
+          workResult: authoritativeWorkResult,
           ...(waiting
             ? {}
             : {
@@ -1105,15 +1835,18 @@ export class ChatDelegationService {
             if (!waitingStep) {
               return undefined;
             }
-            await attachDelegationChildWatcher(deps, {
-              parentRunId: input.policyRunId,
-              childRunId: response.trace?.durable?.runId,
-              watcherId: `delegation-child:${step.stepId}`,
-              delegationRunId: runId,
-              stepId: step.stepId,
-              childSessionId: agentSessionId,
-              childTurnId: responseTurnId,
-            });
+            if (latestStep.durableRunId !== response.trace?.durable?.runId) {
+              await attachDelegationChildWatcher(deps, {
+                parentRunId: input.policyRunId,
+                childRunId: response.trace?.durable?.runId,
+                ...(explorerProfile ? { required: true } : {}),
+                watcherId: `delegation-child:${step.stepId}`,
+                delegationRunId: runId,
+                stepId: step.stepId,
+                childSessionId: agentSessionId,
+                childTurnId: responseTurnId,
+              });
+            }
             const releasedStep = await deps.storage.chatDelegationSteps.releaseOwnedWaitingDispatch({
               stepId: step.stepId,
               expectedDispatchToken: dispatchLease.dispatchMarker,
@@ -1181,15 +1914,18 @@ export class ChatDelegationService {
             if (!terminalStep) {
               return undefined;
             }
-            await attachDelegationChildWatcher(deps, {
-              parentRunId: input.policyRunId,
-              childRunId: response.trace?.durable?.runId,
-              watcherId: `delegation-child:${step.stepId}`,
-              delegationRunId: runId,
-              stepId: step.stepId,
-              childSessionId: agentSessionId,
-              childTurnId: responseTurnId,
-            });
+            if (latestStep.durableRunId !== response.trace?.durable?.runId) {
+              await attachDelegationChildWatcher(deps, {
+                parentRunId: input.policyRunId,
+                childRunId: response.trace?.durable?.runId,
+                ...(explorerProfile ? { required: true } : {}),
+                watcherId: `delegation-child:${step.stepId}`,
+                delegationRunId: runId,
+                stepId: step.stepId,
+                childSessionId: agentSessionId,
+                childTurnId: responseTurnId,
+              });
+            }
             const subagentProjection = await deps.taskLifecycleService.persistDelegationSubagentProjection(
               agentSessionId,
               subagentPatch,
@@ -1247,7 +1983,7 @@ export class ChatDelegationService {
         return {
           step: completedStep,
           output,
-          citations: response.citations ?? [],
+          citations: responseCitations,
           trace: completionRouting,
           completed: !incomplete && !waiting,
         };
@@ -1264,7 +2000,10 @@ export class ChatDelegationService {
           }
           throw error;
         }
-        if (error instanceof DelegationDispatchOwnershipError) {
+        if (
+          error instanceof DelegationDispatchOwnershipError ||
+          error instanceof DelegationDurableLaunchRecoveryRequiredError
+        ) {
           const current = await deps.storage.chatDelegationSteps.get(step.stepId);
           return {
             step: current,
@@ -1607,13 +2346,13 @@ export class ChatDelegationService {
     const stitchedOutput = parent.stitchedOutput ?? projection.stitchedOutput;
     const citations = parent.citations.length > 0 ? parent.citations : projection.citations;
     const status = parent.status;
-    if (ownsAnyOutcome) {
+    if (!explorerProfile && ownsAnyOutcome) {
       await deps.extractAndPersistLearnedMemory(sessionId, objective, {
         role: "user",
         sourceRef: runId,
       });
     }
-    if (ownsTerminalSummary && status === "completed" && stitchedOutput.trim()) {
+    if (!explorerProfile && ownsTerminalSummary && status === "completed" && stitchedOutput.trim()) {
       await deps.extractAndPersistLearnedMemory(sessionId, stitchedOutput, {
         role: "assistant",
         sourceRef: runId,
@@ -1633,16 +2372,7 @@ export class ChatDelegationService {
       stitchedOutput,
       citations,
       trace: parent.trace ?? trace,
-      ...(explorerProfile
-        ? {
-            explorer: {
-              profile: "read_only_explorer" as const,
-              searchedScope: "server_owned_delegated_scope" as const,
-              gapsExplicit: true,
-              evidenceRefs: persistedSteps.flatMap((step) => step.workResult?.evidenceRefs ?? []),
-            },
-          }
-        : {}),
+      ...(explorerProfile ? { explorer: buildWorkspaceExplorerReport(parent, persistedSteps) } : {}),
     };
   }
 
@@ -2220,6 +2950,50 @@ function deriveDelegationAggregate(
   };
 }
 
+export function buildWorkspaceExplorerReport(
+  run: ChatDelegationRunRecord,
+  steps: readonly ChatDelegationStepRecord[],
+): ChatWorkspaceExplorerReport | undefined {
+  if (!isReadOnlyWorkspaceExplorerRun(run)) return undefined;
+  const rootPaths = dedupeStrings(steps.flatMap((step) => (step.scopeControl ? [step.scopeControl.rootPath] : [])));
+  return projectWorkspaceExplorerPathValue(
+    {
+      profile: "read_only_explorer",
+      answer: run.stitchedOutput ?? "",
+      evidenceReferences: dedupeStrings(steps.flatMap((step) => step.workResult?.evidenceRefs ?? [])),
+      searchedScope: {
+        kind: "server_owned_delegated_scope",
+        approvedPaths: dedupeStrings(steps.flatMap((step) => step.scopeControl?.approvedPaths ?? [])),
+        scopeHashes: dedupeStrings(steps.flatMap((step) => (step.scopeControl ? [step.scopeControl.scopeHash] : []))),
+      },
+      partialResult: run.status !== "completed",
+      gaps: buildExplorerGaps(steps, run.status),
+    } satisfies ChatWorkspaceExplorerReport,
+    rootPaths,
+  );
+}
+
+export function isReadOnlyWorkspaceExplorerRun(run: ChatDelegationRunRecord): boolean {
+  return run.workflowTemplate === READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE;
+}
+
+function buildExplorerGaps(
+  steps: readonly ChatDelegationStepRecord[],
+  status: ChatDelegateResponse["status"],
+): string[] {
+  const gaps = dedupeStrings(
+    steps.flatMap((step) => {
+      const blockedSummary = step.workResult?.disposition === "blocked" ? step.workResult.summary : undefined;
+      const waitingReason = step.status === "running" ? (step.output ?? step.summary) : undefined;
+      return [step.error, blockedSummary, waitingReason].filter((value): value is string => Boolean(value?.trim()));
+    }),
+  );
+  if (status !== "completed" && gaps.length === 0) {
+    gaps.push(`Workspace exploration is ${status}; its result is incomplete.`);
+  }
+  return gaps;
+}
+
 function computeDelegationSuggestionConfidence(objective: string, roles: string[]): number {
   let score = roles.length >= 3 ? 0.84 : roles.length >= 2 ? 0.72 : 0.58;
   if (/\b(prd|architecture|implement|qa|ops|handoff)\b/i.test(objective)) {
@@ -2624,6 +3398,7 @@ async function findStableParentDelegationRun(
     objective: string;
     mode: "sequential" | "parallel";
     roles: string[];
+    workflowTemplate?: string;
   },
 ): Promise<ChatDelegationRunRecord | undefined> {
   const parentRunId = input.policyRunId?.trim();
@@ -2644,6 +3419,7 @@ async function findStableParentDelegationRun(
   if (
     existing.objective !== input.objective ||
     existing.mode !== input.mode ||
+    existing.workflowTemplate !== input.workflowTemplate ||
     existing.roles.length !== expectedRoles.length ||
     existing.roles.some((role, index) => role !== expectedRoles[index])
   ) {
@@ -2652,6 +3428,32 @@ async function findStableParentDelegationRun(
     );
   }
   return existing;
+}
+
+async function loadExplicitDelegationResumeRun(
+  deps: ChatDelegationServiceHost,
+  input: {
+    runId: string;
+    sessionId: string;
+    objective: string;
+    mode: ChatDelegateRequest["mode"];
+    roles: string[];
+    workflowTemplate?: string;
+  },
+): Promise<ChatDelegationRunRecord> {
+  const run = await deps.storage.chatDelegationRuns.get(input.runId.trim());
+  const expectedRoles = dedupeStrings(input.roles);
+  if (
+    run.sessionId !== input.sessionId ||
+    run.objective !== input.objective ||
+    run.mode !== input.mode ||
+    run.workflowTemplate !== input.workflowTemplate ||
+    run.roles.length !== expectedRoles.length ||
+    run.roles.some((role, index) => role !== expectedRoles[index])
+  ) {
+    throw new Error(`Delegation ${run.runId} cannot resume from drifted persisted input.`);
+  }
+  return run;
 }
 
 async function attachDelegationChildWatcher(
@@ -2664,10 +3466,14 @@ async function attachDelegationChildWatcher(
     stepId: string;
     childSessionId: string;
     childTurnId: string;
+    required?: boolean;
   },
 ): Promise<void> {
   const parentRunId = input.parentRunId?.trim();
   const childRunId = input.childRunId?.trim();
+  if (input.required && (!deps.watchDurableChildRun || !parentRunId || !childRunId)) {
+    throw new Error("Workspace explorer requires durable parent/child watcher attachment.");
+  }
   if (!deps.watchDurableChildRun || !parentRunId || !childRunId) {
     return;
   }
@@ -2676,6 +3482,7 @@ async function attachDelegationChildWatcher(
     childRunId,
     watcherId: input.watcherId,
     source: "chat_delegation",
+    ...(input.required ? { required: true } : {}),
     metadata: {
       delegationRunId: input.delegationRunId,
       stepId: input.stepId,
@@ -2989,6 +3796,243 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function asOptionalTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeReadOnlyExplorerLaunchActor(
+  request: Pick<ChatDelegateRequest, "operatorId" | "authActorId" | "authActorSource">,
+  parentActor: DurableChatTurnRequestActorAuthority,
+  requireExactRequestMatch: boolean,
+): Pick<ChatDelegateRequest, "operatorId" | "authActorId" | "authActorSource"> {
+  if (parentActor.actorKind !== "operator") {
+    throw new ValidationError({
+      message: "Workspace exploration requires an operator-owned durable Chat parent run.",
+    });
+  }
+  const actorId = asOptionalTrimmedString(parentActor.actorId);
+  const operatorId = asOptionalTrimmedString(parentActor.operatorId) ?? actorId;
+  const authActorId = asOptionalTrimmedString(parentActor.authActorId) ?? actorId;
+  const authActorSource = readChatAuthActorSource(parentActor.authActorSource);
+  if (!actorId || !operatorId || !authActorId || (parentActor.authActorSource !== undefined && !authActorSource)) {
+    throw new ValidationError({ message: "Workspace exploration parent actor authority is invalid." });
+  }
+  if (
+    requireExactRequestMatch &&
+    (asOptionalTrimmedString(request.operatorId) !== operatorId ||
+      asOptionalTrimmedString(request.authActorId) !== authActorId ||
+      request.authActorSource !== authActorSource)
+  ) {
+    throw new ValidationError({
+      message: "Workspace exploration actor must match the durable Chat parent actor.",
+    });
+  }
+  return {
+    operatorId,
+    authActorId,
+    ...(authActorSource ? { authActorSource } : {}),
+  };
+}
+
+function buildReadOnlyExplorerSessionPrefs(base: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
+  return {
+    ...base,
+    mode: "chat",
+    planningMode: "off",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "standard",
+    speedMode: "standard",
+    subagentPolicy: "off",
+    toolAutonomy: "safe_auto",
+    orchestrationEnabled: false,
+    orchestrationIntensity: "minimal",
+    orchestrationVisibility: "explicit",
+    orchestrationProviderPreference: "balanced",
+    orchestrationReviewDepth: "standard",
+    orchestrationParallelism: "sequential",
+    codeAutoApply: "manual",
+    proactiveMode: "off",
+    retrievalMode: "standard",
+    reflectionMode: "off",
+  };
+}
+
+function restorePersistedDelegationRequest(
+  frozenRequest: Readonly<Record<string, unknown>>,
+  actor: {
+    actorKind: "operator" | "external_companion" | "system";
+    actorId: string;
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: string;
+  },
+): ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext } {
+  const content = asOptionalTrimmedString(frozenRequest.content);
+  if (!content) {
+    throw new Error("Persisted delegated Chat request has no canonical content.");
+  }
+  const authActorSource = readChatAuthActorSource(actor.authActorSource);
+  const operatorId = actor.operatorId ?? (actor.actorKind === "operator" ? actor.actorId : undefined);
+  return {
+    ...(frozenRequest as unknown as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }),
+    content,
+    ...(operatorId ? { operatorId } : {}),
+    ...(actor.authActorId ? { authActorId: actor.authActorId } : {}),
+    ...(authActorSource ? { authActorSource } : {}),
+  };
+}
+
+function restorePersistedDelegationPreferences(
+  base: ChatSessionPrefsRecord,
+  request: ChatSendMessageRequest,
+): ChatSessionPrefsRecord {
+  const override =
+    request.prefsOverride && typeof request.prefsOverride === "object" ? request.prefsOverride : undefined;
+  const webMode = readEnumValue(request.webMode, ["auto", "off", "quick", "deep"] as const);
+  const memoryMode = readEnumValue(request.memoryMode, ["auto", "on", "off"] as const);
+  const thinkingLevel = readEnumValue(request.thinkingLevel, [
+    "off",
+    "minimal",
+    "standard",
+    "extended",
+    "deep",
+    "max",
+    "ultra",
+  ] as const);
+  const toolAutonomy = readEnumValue(override?.toolAutonomy, ["safe_auto", "manual"] as const);
+  const retrievalMode = readEnumValue(override?.retrievalMode, ["standard", "layered"] as const);
+  if (!webMode || !memoryMode || !thinkingLevel || !toolAutonomy || !retrievalMode) {
+    throw new Error("Persisted delegated Chat request is missing its frozen execution posture.");
+  }
+  return {
+    ...base,
+    providerId: asOptionalTrimmedString(request.providerId),
+    model: asOptionalTrimmedString(request.model),
+    webMode,
+    memoryMode,
+    thinkingLevel,
+    speedMode: readEnumValue(request.speedMode, ["standard", "fast"] as const),
+    subagentPolicy: readEnumValue(request.subagentPolicy, ["off", "ask_when_useful", "auto_when_useful"] as const),
+    toolAutonomy,
+    retrievalMode,
+    // The signed child request does not carry this session-only preference.
+    // Resume fail-closed instead of inheriting a later live auto-apply choice.
+    codeAutoApply: "manual",
+  };
+}
+
+function restorePersistedDelegationPolicyContext(
+  request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext },
+  binding: Pick<ToolPolicyActorContext, "workspaceId" | "sessionId" | "taskId" | "runId">,
+): ToolPolicyActorContext {
+  const embedded = request.policyContext;
+  if (
+    embedded &&
+    (embedded.permissionProfileId !== request.permissionProfileId ||
+      embedded.localOperatorOverrideId !== request.localOperatorOverrideId ||
+      embedded.fullWebAccess !== request.fullWebAccess)
+  ) {
+    throw new Error("Persisted delegated Chat policy context conflicts with its frozen request posture.");
+  }
+  return {
+    ...embedded,
+    operatorId: request.operatorId,
+    authActorId: request.authActorId,
+    authActorSource: request.authActorSource,
+    permissionProfileId: request.permissionProfileId,
+    localOperatorOverrideId: request.localOperatorOverrideId,
+    fullWebAccess: request.fullWebAccess,
+    surface: "chat",
+    ...binding,
+  };
+}
+
+function readChatAuthActorSource(value: unknown): ChatSendMessageRequest["authActorSource"] | undefined {
+  return readEnumValue(value, [
+    "none",
+    "token",
+    "basic",
+    "loopback",
+    "sse",
+    "device",
+    "companion",
+    "a2a_peer",
+    "mesh_node",
+  ] as const);
+}
+
+function readEnumValue<const T extends readonly string[]>(value: unknown, allowed: T): T[number] | undefined {
+  return typeof value === "string" && allowed.includes(value) ? (value as T[number]) : undefined;
+}
+
+async function waitForExplorerPreAdmissionLease(waitMs: number): Promise<void> {
+  const deadline = Date.now() + Math.max(0, waitMs);
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(EXPLORER_RECONCILIATION_POLL_MS, deadline - Date.now())),
+    );
+  }
+}
+
+async function waitForExplorerStepAdmission(
+  deps: ChatDelegationServiceHost,
+  stepId: string,
+): Promise<ChatDelegationStepRecord> {
+  const wallDeadline = Date.now() + EXPLORER_PRE_ADMISSION_LEASE_MS + EXPLORER_RECONCILIATION_POLL_MS;
+  while (true) {
+    const step = await deps.storage.chatDelegationSteps.get(stepId);
+    if (step.durableRunId || (step.status !== "pending" && step.status !== "running")) return step;
+    const claim = await deps.storage.chatDelegationSteps.getDispatchClaim(stepId);
+    const databaseNowMs = Date.parse(await deps.storage.chatDelegationSteps.readDatabaseNow());
+    if (!claim || !Number.isFinite(databaseNowMs) || Date.parse(claim.expiresAt) <= databaseNowMs) return step;
+    if (Date.now() >= wallDeadline) return step;
+    await waitForExplorerPreAdmissionLease(
+      Math.max(1, Math.min(EXPLORER_RECONCILIATION_POLL_MS, Date.parse(claim.expiresAt) - databaseNowMs)),
+    );
+  }
+}
+
+async function terminalizeUnavailableWorkspaceExplorerStep(
+  deps: ChatDelegationServiceHost,
+  run: ChatDelegationRunRecord,
+  observedStep: ChatDelegationStepRecord,
+): Promise<boolean> {
+  const current = await waitForExplorerStepAdmission(deps, observedStep.stepId);
+  if (current.durableRunId || (current.status !== "pending" && current.status !== "running")) {
+    return false;
+  }
+  const finishedAt = await deps.storage.chatDelegationSteps.readDatabaseNow();
+  const error = "Workspace exploration is unavailable because its verified project or filesystem scope changed.";
+  const committed = await deps.storage.runImmediateTransaction(async () => {
+    const locks = await lockDelegationAggregateTruth(deps, run.runId, run.taskId);
+    const failedStep = await deps.storage.chatDelegationSteps.finishUnclaimedPendingWithError({
+      stepId: current.stepId,
+      status: "failed",
+      label: current.role,
+      summary: "Workspace exploration unavailable.",
+      error,
+      failureGuidance: "Start a new workspace exploration turn after verifying the current project binding.",
+      finishedAt,
+      durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(current.startedAt)),
+    });
+    if (!failedStep) return undefined;
+    return await persistDelegationAggregateFromLockedTruth(
+      deps,
+      {
+        runId: run.runId,
+        taskId: run.taskId,
+        trace: run.trace,
+        observedAt: finishedAt,
+      },
+      locks,
+    );
+  });
+  if (!committed) return false;
+  await publishDelegationAggregateCommit(deps, committed);
+  return true;
 }
 
 function formatUnknownError(error: unknown): string {

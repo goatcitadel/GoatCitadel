@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Chat message admission keeps send, retry, edit, and stream request schemas with their shared route registration so turn-policy validation cannot drift. */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   MOBILE_NATIVE_CAPABILITY_IDS,
@@ -156,6 +157,9 @@ const routeDecisionSchema = z.object({
 
 const mobileCapabilityIdSchema = z.enum(MOBILE_NATIVE_CAPABILITY_IDS);
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
+const workspaceSnapshotRequestSchema = z
+  .object({ capture: z.literal(true), requestId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u) })
+  .strict();
 
 const sideChatContextSchema = z.object({
   parentSessionId: z.string().min(1),
@@ -189,6 +193,7 @@ const mobileContextSchema = z.object({
 
 const sendMessageSchema = z.object({
   content: z.string().min(1),
+  workspaceSnapshot: workspaceSnapshotRequestSchema.optional(),
   templateInvocation: z
     .object({
       ownerKind: z.enum(["prompt_pack", "agent_preset"]),
@@ -292,11 +297,12 @@ const sendMessageSchema = z.object({
   sideChatContext: sideChatContextSchema.optional(),
 });
 
-const retryTurnSchema = sendMessageSchema.omit({ templateInvocation: true }).partial().extend({
-  content: z.string().optional(),
-});
+const retryTurnSchema = sendMessageSchema
+  .omit({ templateInvocation: true, workspaceSnapshot: true })
+  .partial()
+  .extend({ content: z.string().optional() });
 
-const editTurnSchema = sendMessageSchema.omit({ templateInvocation: true });
+const editTurnSchema = sendMessageSchema.omit({ templateInvocation: true, workspaceSnapshot: true });
 
 function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>>(
   request: FastifyRequest,
@@ -314,6 +320,7 @@ const routePreflightSchema = z.object({
   action: z.enum(["send", "retry", "edit"]),
   turnId: z.string().optional(),
   content: z.string().optional(),
+  workspaceSnapshot: workspaceSnapshotRequestSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   mode: chatOnlyModeSchema.optional(),
@@ -1005,6 +1012,7 @@ async function requireFreshRouteDecision(
     action: input.action,
     turnId: input.turnId,
     content: input.body.content,
+    workspaceSnapshot: input.body.workspaceSnapshot,
     providerId: shouldReplayManualSelection ? decision.requestedProviderId : undefined,
     model: shouldReplayManualSelection ? decision.requestedModel : undefined,
     mode: input.body.mode,

@@ -88,6 +88,8 @@ function buildProps(overrides: Partial<any> = {}) {
     currentWebMode: "auto",
     currentReviewDepth: "off",
     modelCouncilEnabled: false,
+    workspaceSnapshotRequest: undefined,
+    delegatedScopeControls: null,
     fullWebAccess: false,
     routePreflight: null,
     routePreflightLoading: false,
@@ -113,6 +115,8 @@ function buildProps(overrides: Partial<any> = {}) {
     onToggleResearchMode: vi.fn(),
     onToggleReviewMode: vi.fn(),
     onToggleModelCouncil: vi.fn(),
+    onToggleWorkspaceSnapshot: vi.fn(),
+    onRefreshWorkspaceSnapshot: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
     onApprovePending: vi.fn(),
@@ -388,6 +392,147 @@ describe("ThreadedComposer", () => {
 
     await click(findButton(renderer.root, "Send"));
     expect(callbacks.onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms a one-shot point-in-time workspace snapshot and exposes refresh only while armed", async () => {
+    const onToggleWorkspaceSnapshot = vi.fn();
+    const onRefreshWorkspaceSnapshot = vi.fn();
+    const unarmed = await renderComposer({ onToggleWorkspaceSnapshot, onRefreshWorkspaceSnapshot });
+    expect(collectText(unarmed.root)).toContain("Workspace snapshot for next turn");
+    expect(findButtons(unarmed.root, "Refresh snapshot")).toHaveLength(0);
+    await click(findButton(unarmed.root, "Workspace snapshot for next turn"));
+    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(1);
+    unarmed.unmount();
+
+    const armed = await renderComposer({
+      workspaceSnapshotRequest: { capture: true, requestId: "snapshot-request-1" },
+      onToggleWorkspaceSnapshot,
+      onRefreshWorkspaceSnapshot,
+    });
+    const text = collectText(armed.root);
+    expect(text).toContain("Point-in-time");
+    expect(text).toContain("It grants no folder access");
+    expect(findSuggestionButton(armed.root, "Attach context").props["aria-pressed"]).toBe(true);
+    await click(findButton(armed.root, "Refresh snapshot"));
+    await click(findButton(armed.root, "Remove snapshot"));
+    expect(onRefreshWorkspaceSnapshot).toHaveBeenCalledTimes(1);
+    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(2);
+    armed.unmount();
+  });
+
+  it("requests only a selected server-owned delegated scope candidate", async () => {
+    const onRequest = vi.fn();
+    const onReload = vi.fn();
+    const renderer = await renderComposer({
+      delegatedScopeControls: {
+        stepLabel: "Workspace explorer",
+        candidates: [
+          { candidateId: "a".repeat(64), label: "docs", scopeHash: "1".repeat(64) },
+          { candidateId: "b".repeat(64), label: "packages", scopeHash: "1".repeat(64) },
+        ],
+        loading: false,
+        requesting: false,
+        error: null,
+        onReload,
+        onRequest,
+      },
+    });
+
+    const text = collectText(renderer.root);
+    expect(text).toContain("Request additional scope for");
+    expect(text).toContain("Workspace explorer");
+    expect(text).toContain("server-owned workspace path");
+    expect(text).toContain("cannot grant arbitrary host-folder access");
+    expect(renderer.root.findAllByProps({ "aria-label": "Host folder path" })).toHaveLength(0);
+    const select = renderer.root.findByProps({ "aria-label": "Eligible workspace path" });
+    await act(async () => select.props.onChange({ target: { value: "b".repeat(64) } }));
+    await click(findButton(renderer.root, "Request additional scope"));
+    expect(onRequest).toHaveBeenCalledWith("b".repeat(64));
+    expect(onRequest).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+  });
+
+  it("keeps governed scope expansion actionable during a live delegation stream but not through blockers", async () => {
+    const candidate = { candidateId: "a".repeat(64), label: "docs", scopeHash: "1".repeat(64) };
+    const onRequest = vi.fn();
+    const controls = {
+      stepLabel: "Workspace explorer",
+      candidates: [candidate],
+      loading: false,
+      requesting: false,
+      error: null,
+      onReload: vi.fn(),
+      onRequest,
+    };
+    const streaming = await renderComposer({
+      sending: true,
+      hasActiveStream: true,
+      delegatedScopeControls: controls,
+    });
+    expect(streaming.root.findByProps({ "aria-label": "Eligible workspace path" }).props.disabled).toBe(false);
+    expect(findButton(streaming.root, "Request additional scope").props.disabled).toBe(false);
+    await click(findButton(streaming.root, "Request additional scope"));
+    expect(onRequest).toHaveBeenCalledWith(candidate.candidateId);
+    streaming.unmount();
+
+    const blocked = await renderComposer({
+      sending: true,
+      delegatedScopeControls: controls,
+      pendingApproval: {
+        approvalId: "approval-existing",
+        kind: "tool_call",
+        reason: "Resolve the current approval first.",
+      },
+    });
+    expect(blocked.root.findByProps({ "aria-label": "Eligible workspace path" }).props.disabled).toBe(true);
+    expect(findButton(blocked.root, "Request additional scope").props.disabled).toBe(true);
+    blocked.unmount();
+
+    const historical = await renderComposer({ historicalReadOnly: true, delegatedScopeControls: controls });
+    expect(findButton(historical.root, "Request additional scope").props.disabled).toBe(true);
+    historical.unmount();
+
+    const requesting = await renderComposer({
+      delegatedScopeControls: { ...controls, requesting: true },
+    });
+    expect(requesting.root.findByProps({ "aria-label": "Eligible workspace path" }).props.disabled).toBe(true);
+    expect(findButton(requesting.root, "Requesting…").props.disabled).toBe(true);
+    requesting.unmount();
+  });
+
+  it("shows canonical approval wait and unavailable scope states without a raw path field", async () => {
+    const pending = await renderComposer({
+      delegatedScopeControls: {
+        stepLabel: "Coder",
+        candidates: [],
+        loading: false,
+        requesting: false,
+        pendingApprovalId: "approval-1",
+        error: null,
+        onReload: vi.fn(),
+        onRequest: vi.fn(),
+      },
+    });
+    expect(collectText(pending.root)).toContain("Waiting for the canonical scope-expansion approval decision");
+    expect(findButtons(pending.root, "Request additional scope")).toHaveLength(0);
+    expect(pending.root.findAllByProps({ "aria-label": "Eligible workspace path" })).toHaveLength(0);
+    pending.unmount();
+
+    const unavailable = await renderComposer({
+      delegatedScopeControls: {
+        stepLabel: "Coder",
+        candidates: [],
+        loading: false,
+        requesting: false,
+        error: "Eligible scope is unavailable.",
+        onReload: vi.fn(),
+        onRequest: vi.fn(),
+      },
+    });
+    expect(collectText(unavailable.root)).toContain("No additional eligible workspace paths are available");
+    expect(collectText(unavailable.root)).toContain("Eligible scope is unavailable");
+    expect(unavailable.root.findAllByProps({ "aria-label": "Host folder path" })).toHaveLength(0);
+    unavailable.unmount();
   });
 
   it("renders the active personality presence when runtime truth is available", () => {
@@ -1492,6 +1637,23 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
   function externalControls(overrides: Partial<Record<string, unknown>> = {}) {
     return {
       attachments: [externalAttachment("attachment-1")],
+      candidates: [
+        {
+          schemaVersion: "goatcitadel.external-source.v1",
+          workspaceId: "default",
+          sourceId: "source-2",
+          sourceLabel: "Imported Codex sessions",
+          sourceRevision: 4,
+          importId: "import-2",
+          itemId: "item-picker-1",
+          normalizedArtifactSha256: "b".repeat(64),
+          normalizedByteCount: 512,
+          importedAt: "2026-07-14T08:00:00.000Z",
+          artifactsVerifiedAt: "2026-07-14T08:01:00.000Z",
+        },
+      ],
+      candidatesSupported: true,
+      loading: false,
       selectedAttachmentIds: [],
       busyAttachmentId: null,
       canMutate: true,
@@ -1499,6 +1661,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
       onToggleSelect: vi.fn(),
       onClearSelection: vi.fn(),
       onAttach: vi.fn(),
+      onReload: vi.fn(),
       onDetach: vi.fn(),
       onRequestKnowledgeSnapshot: vi.fn(),
       ...overrides,
@@ -1577,22 +1740,38 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     renderer.unmount();
   });
 
-  it("routes imported-source discovery to Library and never renders raw identifier fields", async () => {
+  it("attaches a server-filtered imported item from the picker and never renders raw identifier fields", async () => {
     const controls = externalControls({ attachments: [] });
-    const onOpenLibraryArtifacts = vi.fn();
-    const renderer = await renderComposer({ externalSourceControls: controls, onOpenLibraryArtifacts });
+    const onOpenLibraryImports = vi.fn();
+    const renderer = await renderComposer({ externalSourceControls: controls, onOpenLibraryImports });
 
     expect(
       renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
     ).toHaveLength(1);
     await click(findButton(renderer.root, "Attach imported item"));
-    expect(collectText(renderer.root)).toContain("Chat never accepts raw source, import, or item identifiers.");
+    expect(collectText(renderer.root)).toContain("Choose a verified applied import");
+    expect(collectText(renderer.root)).toContain("Imported Codex sessions");
     expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(
       0,
     );
-    await click(findButton(renderer.root, "Open Library imports"));
-    expect(onOpenLibraryArtifacts).toHaveBeenCalledTimes(1);
-    expect(controls.onAttach).not.toHaveBeenCalled();
+    await click(findButton(renderer.root, "Attach read-only"));
+    expect(controls.onAttach).toHaveBeenCalledWith({
+      sourceId: "source-2",
+      importId: "import-2",
+      itemId: "item-picker-1",
+    });
+    await click(findButton(renderer.root, "Manage Library imports"));
+    expect(onOpenLibraryImports).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+  });
+
+  it("shows an honest unavailable picker state and keeps Library as the recovery route", async () => {
+    const controls = externalControls({ candidates: [], candidatesSupported: false });
+    const renderer = await renderComposer({ externalSourceControls: controls });
+    await click(findButton(renderer.root, "Attach imported item"));
+    expect(collectText(renderer.root)).toContain("does not expose the governed import picker yet");
+    await click(findButton(renderer.root, "Refresh imports"));
+    expect(controls.onReload).toHaveBeenCalledTimes(1);
     renderer.unmount();
   });
 

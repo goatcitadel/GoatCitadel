@@ -314,7 +314,16 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
         disposition: { type: "string", enum: ["completed", "blocked", "scope_expansion"] },
         summary: { type: "string", maxLength: 8_000 },
         changedFiles: { type: "array", maxItems: 1_000, items: { type: "string" } },
-        evidenceRefs: { type: "array", maxItems: 1_000, items: { type: "string" } },
+        evidenceRefs: {
+          type: "array",
+          maxItems: 1_000,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 1_000,
+            pattern: "^[^\\u0000-\\u001f\\u007f]+$",
+          },
+        },
         scopeExpansion: {
           type: "object",
           properties: {

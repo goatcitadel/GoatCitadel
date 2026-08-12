@@ -9,7 +9,30 @@ const MARKER = "[REDACTED]";
 /** Creates a detached public projection using the canonical structured redactor plus credential-aware URL paths. */
 export function projectPublicSecretValue<T>(value: T): T {
   const projected = redactStructuredSecrets(value, { redactEnvAssignmentsAsWhole: true }).value;
-  return projectCredentialUrls(projected) as T;
+  return omitDelegationScopeExpansionHostPaths(projectCredentialUrls(projected)) as T;
+}
+
+/** Delegated scope approvals retain absolute paths internally for execution, never in public projections. */
+function omitDelegationScopeExpansionHostPaths(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(omitDelegationScopeExpansionHostPaths);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const projected = Object.fromEntries(
+    Object.entries(record).map(([key, item]) => [key, omitDelegationScopeExpansionHostPaths(item)]),
+  );
+  if (record.kind !== "delegation_scope_expansion" || !record.payload || typeof record.payload !== "object") {
+    return projected;
+  }
+
+  const publicPayload = { ...(projected.payload as Record<string, unknown>) };
+  delete publicPayload.rootPath;
+  delete publicPayload.resolvedPaths;
+  return { ...projected, payload: publicPayload };
 }
 
 /**

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Delegation-step persistence keeps cross-dialect dispatch leases, scope control, and CAS transitions in one audited repository boundary. */
 import type { DatabaseClient } from "./db.js";
 import type {
   ChatCitationRecord,
@@ -72,6 +73,9 @@ export class ChatDelegationStepRepository {
   private readonly reclaimLinkedDispatchStmt;
   private readonly finalizeLinkedDispatchStmt;
   private readonly ownsLinkedDispatchStmt;
+  private readonly bindOwnedDurableRunStmt;
+  private readonly extendOwnedDispatchLeaseStmt;
+  private readonly recoverDurableRunBindingStmt;
   private readonly finishOwnedDispatchWithErrorStmt;
   private readonly finishOwnedDispatchWithResponseStmt;
   private readonly releaseOwnedWaitingDispatchStmt;
@@ -246,6 +250,52 @@ export class ChatDelegationStepRepository {
         }
       LIMIT 1
     `);
+    this.bindOwnedDurableRunStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          UPDATE chat_delegation_steps
+          SET durable_run_id = CAST(@durableRunId AS TEXT)
+          WHERE step_id = @stepId
+            AND status = 'running'
+            AND child_session_id = @childSessionId
+            AND dispatch_claim_token = @expectedDispatchToken
+            AND dispatch_claim_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()
+            AND (durable_run_id IS NULL OR durable_run_id = CAST(@durableRunId AS TEXT))
+        `
+        : `
+          UPDATE chat_delegation_steps
+          SET durable_run_id = @durableRunId
+          WHERE step_id = @stepId
+            AND status = 'running'
+            AND child_session_id = @childSessionId
+            AND dispatch_claim_token = @expectedDispatchToken
+            AND dispatch_claim_expires_at IS NOT NULL
+            AND julianday(dispatch_claim_expires_at) > julianday('now')
+            AND (durable_run_id IS NULL OR durable_run_id = @durableRunId)
+        `,
+    );
+    this.extendOwnedDispatchLeaseStmt = db.prepare(`
+      UPDATE chat_delegation_steps
+      SET dispatch_claim_expires_at = @leaseExpiresAt
+      WHERE step_id = @stepId
+        AND status = 'running'
+        AND child_session_id = @childSessionId
+        AND dispatch_claim_token = @expectedDispatchToken
+        AND durable_run_id IS NOT NULL
+    `);
+    this.recoverDurableRunBindingStmt = db.prepare(`
+      UPDATE chat_delegation_steps
+      SET durable_run_id = @durableRunId,
+          child_turn_id = @childTurnId,
+          dispatch_claim_token = CASE WHEN @releaseDispatch = 1 THEN NULL ELSE dispatch_claim_token END,
+          dispatch_claim_expires_at = CASE WHEN @releaseDispatch = 1 THEN NULL ELSE dispatch_claim_expires_at END
+      WHERE step_id = @stepId
+        AND status = 'running'
+        AND child_session_id = @childSessionId
+        AND (durable_run_id IS NULL OR durable_run_id = @durableRunId)
+        AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
+    `);
     this.finishOwnedDispatchWithErrorStmt = db.prepare(
       db.dialect === "postgres"
         ? `
@@ -373,22 +423,55 @@ export class ChatDelegationStepRepository {
             AND julianday(dispatch_claim_expires_at) > julianday('now')
         `,
     );
-    this.finishUnclaimedPendingWithErrorStmt = db.prepare(`
-      UPDATE chat_delegation_steps
-      SET status = @status,
-          label = @label,
-          summary = @summary,
-          error = @error,
-          failure_guidance = @failureGuidance,
-          finished_at = @finishedAt,
-          duration_ms = @durationMs
-      WHERE step_id = @stepId
-        AND status = 'pending'
-        AND dispatch_claim_token IS NULL
-        AND dispatch_claim_expires_at IS NULL
-        AND child_session_id IS NULL
-        AND child_turn_id IS NULL
-    `);
+    this.finishUnclaimedPendingWithErrorStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          UPDATE chat_delegation_steps
+          SET status = @status,
+              label = @label,
+              summary = @summary,
+              error = @error,
+              failure_guidance = @failureGuidance,
+              finished_at = @finishedAt,
+              duration_ms = @durationMs,
+              dispatch_claim_token = NULL,
+              dispatch_claim_expires_at = NULL
+          WHERE step_id = @stepId
+            AND status IN ('pending', 'running')
+            AND durable_run_id IS NULL
+            AND child_turn_id IS NULL
+            AND (
+              (dispatch_claim_token IS NULL AND dispatch_claim_expires_at IS NULL)
+              OR (
+                dispatch_claim_expires_at IS NOT NULL
+                AND gc_try_parse_timestamptz(dispatch_claim_expires_at) <= clock_timestamp()
+              )
+            )
+        `
+        : `
+          UPDATE chat_delegation_steps
+          SET status = @status,
+              label = @label,
+              summary = @summary,
+              error = @error,
+              failure_guidance = @failureGuidance,
+              finished_at = @finishedAt,
+              duration_ms = @durationMs,
+              dispatch_claim_token = NULL,
+              dispatch_claim_expires_at = NULL
+          WHERE step_id = @stepId
+            AND status IN ('pending', 'running')
+            AND durable_run_id IS NULL
+            AND child_turn_id IS NULL
+            AND (
+              (dispatch_claim_token IS NULL AND dispatch_claim_expires_at IS NULL)
+              OR (
+                dispatch_claim_expires_at IS NOT NULL
+                AND julianday(dispatch_claim_expires_at) <= julianday('now')
+              )
+            )
+        `,
+    );
   }
 
   public get(stepId: string): ChatDelegationStepRecord {
@@ -747,6 +830,51 @@ export class ChatDelegationStepRepository {
   }
 
   /**
+   * Persists a launched durable child while the exact delegation dispatch still
+   * owns the step, before the child response settles.
+   */
+  public bindOwnedDurableRun(input: {
+    stepId: string;
+    expectedDispatchToken: string;
+    childSessionId: string;
+    durableRunId: string;
+  }): ChatDelegationStepRecord | undefined {
+    const result = this.bindOwnedDurableRunStmt.run(input);
+    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+  }
+
+  /** Extends the short pre-admission lease only after its durable child binding is canonical. */
+  public extendOwnedDispatchLease(input: {
+    stepId: string;
+    expectedDispatchToken: string;
+    childSessionId: string;
+    leaseExpiresAt: string;
+  }): ChatDelegationStepRecord | undefined {
+    const result = this.extendOwnedDispatchLeaseStmt.run(input);
+    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+  }
+
+  /**
+   * Repairs the immutable child binding after the signed durable child has
+   * already been admitted. The caller must verify the durable request
+   * authority before using this recovery CAS. A terminal child may also
+   * release the abandoned dispatch so the persisted turn can be replayed.
+   */
+  public recoverDurableRunBinding(input: {
+    stepId: string;
+    childSessionId: string;
+    childTurnId: string;
+    durableRunId: string;
+    releaseDispatch: boolean;
+  }): ChatDelegationStepRecord | undefined {
+    const result = this.recoverDurableRunBindingStmt.run({
+      ...input,
+      releaseDispatch: input.releaseDispatch ? 1 : 0,
+    });
+    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+  }
+
+  /**
    * Atomically records an owned dispatch failure/cancellation only while the
    * exact dispatch token still has a live lease according to the database.
    */
@@ -830,7 +958,10 @@ export class ChatDelegationStepRepository {
     return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
   }
 
-  /** Atomically records a pre-dispatch error only while no worker owns the step. */
+  /**
+   * Atomically records a pre-admission error only while no live worker owns
+   * the step and no durable child or canonical child turn has been admitted.
+   */
   public finishUnclaimedPendingWithError(input: {
     stepId: string;
     status: "failed" | "cancelled" | "skipped";

@@ -19,10 +19,14 @@ import {
   shouldHydrateTraceDelegationRun,
   useChatDelegationPolicyActions,
 } from "./useChatDelegationPolicyActions";
+import { useChatDelegatedScopeControls, type ThreadedDelegatedScopeControls } from "./useChatDelegatedScopeControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fetchChatDelegationRunMock = vi.fn();
+const fetchLatestChatWorkspaceExplorerMock = vi.fn();
+const fetchChatDelegatedScopeCandidatesMock = vi.fn();
+const requestChatDelegatedScopeExpansionMock = vi.fn();
 const runChatDelegationMock = vi.fn();
 const runChatResearchMock = vi.fn();
 const streamChatDelegationMock = vi.fn();
@@ -45,6 +49,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   ApiRequestError: ApiRequestErrorMock,
   fetchChatProactiveStatus: (...args: unknown[]) => fetchChatProactiveStatusMock(...args),
   fetchChatDelegationRun: (...args: unknown[]) => fetchChatDelegationRunMock(...args),
+  fetchLatestChatWorkspaceExplorer: (...args: unknown[]) => fetchLatestChatWorkspaceExplorerMock(...args),
+  fetchChatDelegatedScopeCandidates: (...args: unknown[]) => fetchChatDelegatedScopeCandidatesMock(...args),
+  requestChatDelegatedScopeExpansion: (...args: unknown[]) => requestChatDelegatedScopeExpansionMock(...args),
   runChatDelegation: (...args: unknown[]) => runChatDelegationMock(...args),
   runChatResearch: (...args: unknown[]) => runChatResearchMock(...args),
   streamChatDelegation: (...args: unknown[]) => streamChatDelegationMock(...args),
@@ -64,6 +71,7 @@ type HarnessSnapshot = {
   proactiveRuns: any[];
   sending: boolean;
   loadSidebar: ReturnType<typeof vi.fn>;
+  delegatedScopeControls: ThreadedDelegatedScopeControls | null;
 };
 
 let latestHarness: HarnessSnapshot | null = null;
@@ -172,6 +180,12 @@ function makeThreadWithoutDelegatedSteps(): ChatThreadResponse {
   } as ChatThreadResponse;
 }
 
+function makeThreadWithDurableParent(): ChatThreadResponse {
+  const thread = makeThreadWithoutDelegatedSteps();
+  thread.turns[0]!.trace.durable = { runId: "durable-parent-1", status: "completed" };
+  return thread;
+}
+
 function makePrefs(patch: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPrefsRecord {
   return {
     sessionId: "session-1",
@@ -190,6 +204,13 @@ function makePrefs(patch: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPref
 }
 
 function setupApiDefaults() {
+  fetchLatestChatWorkspaceExplorerMock.mockResolvedValue(null);
+  fetchChatDelegatedScopeCandidatesMock.mockResolvedValue({
+    runId: "run-stream",
+    stepId: "step-stream",
+    scopeHash: "scope-stream",
+    candidates: [],
+  });
   fetchChatDelegationRunMock.mockResolvedValue({
     run: {
       runId: "run-existing",
@@ -355,6 +376,11 @@ function Harness(props: {
     lastLocalPrefMutationAtRef,
     runtimeBlockerActiveRef,
   });
+  const delegatedScopeControls = useChatDelegatedScopeControls({
+    sessionId: selectedSession?.sessionId ?? null,
+    delegationRun: result.activeDelegationRun,
+    pushLocalNotice,
+  });
 
   latestHarness = {
     result,
@@ -365,6 +391,7 @@ function Harness(props: {
     proactiveRuns,
     sending,
     loadSidebar,
+    delegatedScopeControls,
   };
   return null;
 }
@@ -439,6 +466,741 @@ describe("useChatDelegationPolicyActions", () => {
       model: "claude-4",
       surface: "chat",
     });
+  });
+
+  it("does not synthesize an explorer report from a role-only standard run", async () => {
+    fetchChatDelegationRunMock.mockResolvedValueOnce({
+      run: {
+        runId: "run-existing",
+        taskId: "task-standard-role-only",
+        objective: "Inspect without the explorer profile",
+        roles: ["workspace-explorer"],
+        mode: "sequential",
+        status: "completed",
+        stitchedOutput: "Standard delegation output.",
+      },
+      steps: [
+        {
+          stepId: "standard-role-only-step",
+          runId: "run-existing",
+          role: "workspace-explorer",
+          status: "completed",
+          index: 0,
+        },
+      ],
+    });
+
+    await act(async () => {
+      create(<Harness thread={makeThread(true)} />);
+      await flushEffects();
+    });
+
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "run-existing",
+      label: "Delegation",
+    });
+    expect(latestHarness?.result.activeDelegationRun?.explorer).toBeUndefined();
+  });
+
+  it("recovers the latest canonical explorer report after reload", async () => {
+    fetchLatestChatWorkspaceExplorerMock.mockResolvedValueOnce({
+      run: {
+        runId: "explorer-recovered",
+        parentRunId: "durable-parent-1",
+        sessionId: "session-1",
+        taskId: "task-explorer",
+        objective: "Find the runtime owner",
+        roles: ["workspace-explorer"],
+        mode: "sequential",
+        status: "completed",
+        workflowTemplate: "read_only_workspace_explorer",
+        stitchedOutput: "The Gateway owns runtime truth.",
+        citations: [],
+        startedAt: "2026-08-12T00:00:00.000Z",
+      },
+      steps: [
+        {
+          stepId: "explorer-step",
+          runId: "explorer-recovered",
+          role: "workspace-explorer",
+          status: "completed",
+          index: 0,
+          startedAt: "2026-08-12T00:00:00.000Z",
+          durableRunId: "durable-explorer-child",
+        },
+      ],
+      explorer: {
+        profile: "read_only_explorer",
+        answer: "The Gateway owns runtime truth.",
+        evidenceReferences: ["apps/gateway/src/services/gateway-service.ts"],
+        searchedScope: {
+          kind: "server_owned_delegated_scope",
+          approvedPaths: ["apps/gateway"],
+          scopeHashes: ["scope-hash"],
+        },
+        partialResult: false,
+        gaps: [],
+      },
+    });
+
+    await act(async () => {
+      create(
+        <Harness
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+
+    expect(fetchLatestChatWorkspaceExplorerMock).toHaveBeenCalledWith("session-1");
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-recovered",
+      attachedTurnId: "turn-1",
+      label: "Workspace exploration",
+      explorer: { answer: "The Gateway owns runtime truth.", partialResult: false },
+    });
+  });
+
+  it("binds direct explorer work to the selected durable turn for the existing background rail", async () => {
+    runChatDelegationMock.mockResolvedValueOnce({
+      runId: "explorer-direct",
+      taskId: "task-explorer",
+      status: "completed",
+      steps: [
+        {
+          stepId: "explorer-step",
+          runId: "explorer-direct",
+          role: "workspace-explorer",
+          status: "completed",
+          index: 0,
+        },
+      ],
+      stitchedOutput: "Found it.",
+      citations: [],
+      explorer: {
+        profile: "read_only_explorer",
+        answer: "Found it.",
+        evidenceReferences: [],
+        searchedScope: { kind: "server_owned_delegated_scope", approvedPaths: [], scopeHashes: [] },
+        partialResult: false,
+        gaps: [],
+      },
+    });
+    await act(async () => {
+      create(
+        <Harness
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleExploreWorkspace();
+    });
+
+    expect(streamChatDelegationMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        executionProfile: "read_only_explorer",
+        policyRunId: "durable-parent-1",
+        roles: ["Workspace explorer"],
+      }),
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.any(Object) }),
+    );
+    expect(runChatDelegationMock).not.toHaveBeenCalled();
+  });
+
+  it("exposes governed scope controls from a waiting explorer stream before the done chunk", async () => {
+    const scopeHash = "c".repeat(64);
+    const candidate = { candidateId: "d".repeat(64), label: "packages", scopeHash };
+    let releaseStream!: () => void;
+    let doneEmitted = false;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    fetchChatDelegatedScopeCandidatesMock.mockResolvedValueOnce({
+      runId: "explorer-stream",
+      stepId: "explorer-stream-step",
+      scopeHash,
+      candidates: [candidate],
+    });
+    streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, onChunk) => {
+      onChunk({ type: "status", runId: "explorer-stream", taskId: "task-explorer-stream" });
+      onChunk({
+        type: "step",
+        runId: "explorer-stream",
+        taskId: "task-explorer-stream",
+        step: {
+          stepId: "explorer-stream-step",
+          runId: "explorer-stream",
+          role: "workspace-explorer",
+          status: "running",
+          index: 0,
+          startedAt: "2026-08-12T12:00:00.000Z",
+          scopeControl: {
+            rootPath: "F:\\private\\workspace",
+            resolvedPaths: ["F:\\private\\workspace\\src"],
+            approvedPaths: ["src"],
+            scopeHash,
+            dispatchGeneration: "dispatch-stream",
+            updatedAt: "2026-08-12T12:00:00.000Z",
+          },
+        },
+      });
+      await streamGate;
+      doneEmitted = true;
+      onChunk({
+        type: "done",
+        result: {
+          runId: "explorer-stream",
+          taskId: "task-explorer-stream",
+          status: "running",
+          steps: [
+            {
+              stepId: "explorer-stream-step",
+              runId: "explorer-stream",
+              role: "workspace-explorer",
+              status: "running",
+              index: 0,
+              startedAt: "2026-08-12T12:00:00.000Z",
+              scopeControl: {
+                rootPath: "F:\\private\\workspace",
+                approvedPaths: ["src"],
+                scopeHash,
+                dispatchGeneration: "dispatch-stream",
+                updatedAt: "2026-08-12T12:00:00.000Z",
+              },
+            },
+          ],
+          stitchedOutput: "Waiting for additional governed scope.",
+          citations: [],
+        },
+      });
+    });
+
+    let renderer: ReturnType<typeof create> | undefined;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          streamEnabled
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+    let exploration: Promise<void> | undefined;
+    await act(async () => {
+      exploration = latestHarness?.result.handleExploreWorkspace();
+      await flushEffects(8);
+    });
+
+    expect(doneEmitted).toBe(false);
+    expect(fetchChatDelegatedScopeCandidatesMock).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      runId: "explorer-stream",
+      stepId: "explorer-stream-step",
+    });
+    expect(latestHarness?.delegatedScopeControls?.candidates).toEqual([candidate]);
+    expect(latestHarness?.delegatedScopeControls?.stepLabel).toBe("Workspace explorer");
+    const streamedScope = latestHarness?.result.activeDelegationRun?.steps.find(
+      (step) => step.stepId === "explorer-stream-step",
+    )?.scopeControl;
+    expect(streamedScope).toEqual({
+      approvedPaths: ["src"],
+      scopeHash,
+      dispatchGeneration: "dispatch-stream",
+      updatedAt: "2026-08-12T12:00:00.000Z",
+    });
+    expect(streamedScope).not.toHaveProperty("rootPath");
+    expect(streamedScope).not.toHaveProperty("resolvedPaths");
+
+    releaseStream();
+    await act(async () => {
+      await exploration;
+      await flushEffects();
+    });
+    renderer?.unmount();
+  });
+
+  it("hands an active explorer observer to background attention without cancelling or wedging later work", async () => {
+    let releaseExplorer!: () => void;
+    let releaseResearch!: () => void;
+    const explorerGate = new Promise<void>((resolve) => {
+      releaseExplorer = resolve;
+    });
+    const researchGate = new Promise<void>((resolve) => {
+      releaseResearch = resolve;
+    });
+    let explorerSignal: AbortSignal | undefined;
+    streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, onChunk, options) => {
+      explorerSignal = options?.signal;
+      onChunk({ type: "status", runId: "explorer-background", taskId: "task-explorer-background" });
+      onChunk({
+        type: "step",
+        runId: "explorer-background",
+        taskId: "task-explorer-background",
+        step: {
+          stepId: "explorer-background-step",
+          runId: "explorer-background",
+          role: "workspace-explorer",
+          status: "running",
+          index: 0,
+          startedAt: "2026-08-12T12:00:00.000Z",
+        },
+      });
+      // Deliberately ignore abort until released. This models a late transport
+      // completion and proves it cannot overwrite a newer foreground action.
+      await explorerGate;
+      onChunk({
+        type: "done",
+        result: {
+          runId: "explorer-background",
+          taskId: "task-explorer-background",
+          status: "completed",
+          steps: [
+            {
+              stepId: "explorer-background-step",
+              runId: "explorer-background",
+              role: "workspace-explorer",
+              status: "completed",
+              index: 0,
+            },
+          ],
+          stitchedOutput: "Late foreground payload that must be ignored.",
+          citations: [],
+        },
+      });
+    });
+    runChatResearchMock.mockImplementationOnce(async () => {
+      await researchGate;
+      return { summary: "New foreground work completed", sources: [] };
+    });
+
+    let renderer: ReturnType<typeof create> | undefined;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          streamEnabled
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+
+    let exploration: Promise<void> | undefined;
+    await act(async () => {
+      exploration = latestHarness?.result.handleExploreWorkspace();
+      await flushEffects(8);
+    });
+    expect(latestHarness?.sending).toBe(true);
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "running",
+    });
+
+    let handedOff = false;
+    act(() => {
+      handedOff =
+        latestHarness?.result.continueActiveExplorerInBackground({
+          parentRunId: "durable-parent-1",
+          watcherId: "delegation-child:explorer-background-step",
+        }) ?? false;
+    });
+    expect(handedOff).toBe(true);
+    expect(explorerSignal?.aborted).toBe(true);
+    expect(latestHarness?.sending).toBe(false);
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "running",
+    });
+
+    let research: Promise<void> | undefined;
+    await act(async () => {
+      research = latestHarness?.result.handleRunQuickResearch();
+      await flushEffects();
+    });
+    expect(latestHarness?.sending).toBe(true);
+
+    releaseExplorer();
+    await act(async () => {
+      await exploration;
+      await flushEffects();
+    });
+    expect(latestHarness?.sending).toBe(true);
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "running",
+    });
+    expect(latestHarness?.errors).not.toContain("Workspace explorer observation continued in background.");
+
+    releaseResearch();
+    await act(async () => {
+      await research;
+      await flushEffects();
+    });
+    expect(latestHarness?.sending).toBe(false);
+    renderer?.unmount();
+  });
+
+  it("streams explorer observation for background handoff when Chat streaming is disabled", async () => {
+    let explorerSignal: AbortSignal | undefined;
+    streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, onChunk, options) => {
+      explorerSignal = options?.signal;
+      onChunk({ type: "status", runId: "explorer-stream-disabled", taskId: "task-explorer-stream-disabled" });
+      onChunk({
+        type: "step",
+        runId: "explorer-stream-disabled",
+        taskId: "task-explorer-stream-disabled",
+        step: {
+          stepId: "explorer-stream-disabled-step",
+          runId: "explorer-stream-disabled",
+          role: "workspace-explorer",
+          status: "running",
+          index: 0,
+          startedAt: "2026-08-12T12:00:00.000Z",
+        },
+      });
+      await new Promise<void>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new Error("local observation detached")), {
+          once: true,
+        });
+      });
+    });
+
+    let renderer: ReturnType<typeof create> | undefined;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+
+    let exploration: Promise<void> | undefined;
+    await act(async () => {
+      exploration = latestHarness?.result.handleExploreWorkspace();
+      await flushEffects(8);
+    });
+
+    expect(streamChatDelegationMock).toHaveBeenCalledOnce();
+    expect(runChatDelegationMock).not.toHaveBeenCalled();
+    expect(explorerSignal).toBeDefined();
+    expect(latestHarness?.sending).toBe(true);
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-stream-disabled",
+      status: "running",
+    });
+
+    act(() => {
+      expect(
+        latestHarness?.result.continueActiveExplorerInBackground({
+          parentRunId: "durable-parent-1",
+          watcherId: "delegation-child:explorer-stream-disabled-step",
+        }),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await exploration;
+      await flushEffects();
+    });
+
+    expect(explorerSignal?.aborted).toBe(true);
+    expect(latestHarness?.sending).toBe(false);
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-stream-disabled",
+      status: "running",
+    });
+    expect(latestHarness?.errors).toEqual([]);
+    renderer?.unmount();
+  });
+
+  it("rehydrates the persisted explorer report when the background rail observes terminal work", async () => {
+    let rejectExplorer!: (reason?: unknown) => void;
+    streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, onChunk, options) => {
+      onChunk({ type: "status", runId: "explorer-background", taskId: "task-explorer-background" });
+      onChunk({
+        type: "step",
+        runId: "explorer-background",
+        taskId: "task-explorer-background",
+        step: {
+          stepId: "explorer-background-step",
+          runId: "explorer-background",
+          role: "workspace-explorer",
+          status: "running",
+          index: 0,
+          startedAt: "2026-08-12T12:00:00.000Z",
+        },
+      });
+      await new Promise<void>((_resolve, reject) => {
+        rejectExplorer = reject;
+        options?.signal?.addEventListener("abort", () => reject(new Error("local observation detached")), {
+          once: true,
+        });
+      });
+    });
+
+    let renderer: ReturnType<typeof create> | undefined;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          streamEnabled
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+
+    let exploration: Promise<void> | undefined;
+    await act(async () => {
+      exploration = latestHarness?.result.handleExploreWorkspace();
+      await flushEffects(8);
+    });
+    expect(rejectExplorer).toBeTypeOf("function");
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "running",
+    });
+
+    act(() => {
+      expect(
+        latestHarness?.result.continueActiveExplorerInBackground({
+          parentRunId: "durable-parent-1",
+          watcherId: "delegation-child:explorer-background-step",
+        }),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await exploration;
+      await flushEffects();
+    });
+    expect(latestHarness?.sending).toBe(false);
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "running",
+    });
+
+    const persistedExplorerDetail = {
+      run: {
+        runId: "explorer-background",
+        parentRunId: "durable-parent-1",
+        sessionId: "session-1",
+        taskId: "task-explorer-background",
+        objective: "Explore the workspace",
+        roles: ["workspace-explorer"],
+        mode: "sequential",
+        status: "completed",
+        workflowTemplate: "read_only_workspace_explorer",
+        stitchedOutput: "The persisted Explorer answer.",
+        citations: [],
+        startedAt: "2026-08-12T12:00:00.000Z",
+        finishedAt: "2026-08-12T12:01:00.000Z",
+      },
+      steps: [
+        {
+          stepId: "explorer-background-step",
+          runId: "explorer-background",
+          role: "workspace-explorer",
+          status: "completed",
+          index: 0,
+          durableRunId: "durable-explorer-background-child",
+          startedAt: "2026-08-12T12:00:00.000Z",
+          finishedAt: "2026-08-12T12:01:00.000Z",
+        },
+      ],
+      explorer: {
+        profile: "read_only_explorer",
+        answer: "The persisted Explorer answer.",
+        evidenceReferences: ["apps/gateway/src/services/gateway-service.ts"],
+        searchedScope: {
+          kind: "server_owned_delegated_scope",
+          approvedPaths: ["apps/gateway"],
+          scopeHashes: ["scope-hash"],
+        },
+        partialResult: false,
+        gaps: [],
+      },
+    };
+    fetchChatDelegationRunMock.mockResolvedValue(persistedExplorerDetail);
+    fetchChatDelegationRunMock.mockResolvedValueOnce({
+      ...persistedExplorerDetail,
+      run: { ...persistedExplorerDetail.run, sessionId: "different-session" },
+    });
+
+    await act(async () => {
+      expect(
+        await latestHarness?.result.rehydrateBackgroundExplorerReport({
+          parentRunId: "durable-parent-1",
+          delegationRunId: "explorer-background",
+          delegationStepId: "explorer-background-step",
+          childRunId: "durable-explorer-background-child",
+        }),
+      ).toBe(false);
+      expect(
+        await latestHarness?.result.rehydrateBackgroundExplorerReport({
+          parentRunId: "different-parent",
+          delegationRunId: "explorer-background",
+          delegationStepId: "explorer-background-step",
+          childRunId: "durable-explorer-background-child",
+        }),
+      ).toBe(false);
+      expect(
+        await latestHarness?.result.rehydrateBackgroundExplorerReport({
+          parentRunId: "durable-parent-1",
+          delegationRunId: "different-delegation",
+          delegationStepId: "explorer-background-step",
+          childRunId: "durable-explorer-background-child",
+        }),
+      ).toBe(false);
+      expect(
+        await latestHarness?.result.rehydrateBackgroundExplorerReport({
+          parentRunId: "durable-parent-1",
+          delegationRunId: "explorer-background",
+          delegationStepId: "different-step",
+          childRunId: "durable-explorer-background-child",
+        }),
+      ).toBe(false);
+      expect(
+        await latestHarness?.result.rehydrateBackgroundExplorerReport({
+          parentRunId: "durable-parent-1",
+          delegationRunId: "explorer-background",
+          delegationStepId: "explorer-background-step",
+          childRunId: "different-child",
+        }),
+      ).toBe(false);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "running",
+    });
+    expect(latestHarness?.result.activeDelegationRun?.explorer).toBeUndefined();
+
+    let rehydrated = false;
+    await act(async () => {
+      rehydrated =
+        (await latestHarness?.result.rehydrateBackgroundExplorerReport({
+          parentRunId: "durable-parent-1",
+          delegationRunId: "explorer-background",
+          delegationStepId: "explorer-background-step",
+          childRunId: "durable-explorer-background-child",
+        })) ?? false;
+      await flushEffects();
+    });
+
+    expect(rehydrated).toBe(true);
+    expect(fetchChatDelegationRunMock).toHaveBeenLastCalledWith("session-1", "explorer-background");
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "explorer-background",
+      status: "completed",
+      stitchedOutput: "The persisted Explorer answer.",
+      explorer: {
+        answer: "The persisted Explorer answer.",
+        evidenceReferences: ["apps/gateway/src/services/gateway-service.ts"],
+        partialResult: false,
+      },
+    });
+
+    let resolveStaleDetail!: (value: typeof persistedExplorerDetail) => void;
+    fetchChatDelegationRunMock.mockImplementationOnce(
+      () =>
+        new Promise<typeof persistedExplorerDetail>((resolve) => {
+          resolveStaleDetail = resolve;
+        }),
+    );
+    const staleRefresh = latestHarness?.result.rehydrateBackgroundExplorerReport({
+      parentRunId: "durable-parent-1",
+      delegationRunId: "explorer-background",
+      delegationStepId: "explorer-background-step",
+      childRunId: "durable-explorer-background-child",
+    });
+    await act(async () => {
+      renderer?.update(
+        <Harness
+          streamEnabled
+          thread={makeThreadWithDurableParent()}
+          selectedSession={{ ...makeSession(), sessionId: "session-2", projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+    resolveStaleDetail({
+      ...persistedExplorerDetail,
+      explorer: { ...persistedExplorerDetail.explorer, answer: "Stale report that must not cross sessions." },
+    });
+    await act(async () => {
+      expect(await staleRefresh).toBe(false);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.activeDelegationRun).toBeNull();
+    renderer?.unmount();
+  });
+
+  it("does not launch untracked exploration without project scope and a durable parent", async () => {
+    await act(async () => {
+      create(<Harness thread={makeThreadWithoutDelegatedSteps()} prefs={makePrefs({ subagentPolicy: "off" })} />);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.workspaceExplorerEligible).toBe(false);
+    await act(async () => {
+      await latestHarness?.result.handleExploreWorkspace();
+    });
+    expect(latestHarness?.errors).toContain(
+      "Bind this Chat to a project before exploring its governed workspace scope.",
+    );
+
+    await act(async () => {
+      create(
+        <Harness
+          thread={makeThreadWithoutDelegatedSteps()}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(latestHarness?.result.workspaceExplorerEligible).toBe(false);
+    await act(async () => {
+      await latestHarness?.result.handleExploreWorkspace();
+    });
+    expect(latestHarness?.errors).toContain(
+      "Send a Chat turn first so workspace exploration can attach to durable progress and recovery.",
+    );
+
+    const delegatedParent = makeThread(true);
+    delegatedParent.turns[0]!.trace.durable = { runId: "durable-parent-with-delegation", status: "completed" };
+    await act(async () => {
+      create(
+        <Harness
+          thread={delegatedParent}
+          selectedSession={{ ...makeSession(), projectId: "project-1" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(latestHarness?.result.workspaceExplorerEligible).toBe(false);
+    await act(async () => {
+      await latestHarness?.result.handleExploreWorkspace();
+    });
+    expect(latestHarness?.errors).toContain(
+      "This Chat turn already owns delegated work. Send a new turn before exploring the workspace.",
+    );
+    expect(runChatDelegationMock).not.toHaveBeenCalled();
   });
 
   it("does not start quick research while a runtime blocker is active", async () => {

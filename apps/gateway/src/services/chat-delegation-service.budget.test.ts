@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgenticSubagentMetadata,
   AgenticTaskContext,
@@ -5,12 +6,18 @@ import type {
   ChatDelegationStepRecord,
   ChatSendMessageResponse,
   ChatSessionPrefsRecord,
+  DurableRunRecord,
   TaskActivityRecord,
   TaskSubagentSession,
 } from "@goatcitadel/contracts";
+import { canonicalJsonString } from "@goatcitadel/contracts";
 import { ModelUsageSettlementError } from "@goatcitadel/gateway-core";
 import { describe, expect, it, vi } from "vitest";
-import { ChatDelegationService, type ChatDelegationServiceHost } from "./chat-delegation-service.js";
+import {
+  assertEligibleReadOnlyExplorerDurableParent,
+  ChatDelegationService,
+  type ChatDelegationServiceHost,
+} from "./chat-delegation-service.js";
 
 function buildPrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPrefsRecord {
   return {
@@ -39,6 +46,53 @@ function buildPrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessio
   };
 }
 
+function buildExplorerParentRun(
+  input: {
+    runId?: string;
+    sessionId?: string;
+    workspaceId?: string;
+    workflowKey?: string;
+    status?: DurableRunRecord["status"];
+  } = {},
+): DurableRunRecord {
+  const runId = input.runId ?? "durable-parent-explorer";
+  const request = { content: "Prepare the workspace explorer parent." };
+  const admissionMaterialSha256 = createHash("sha256")
+    .update(canonicalJsonString({ version: 2, request }), "utf8")
+    .digest("hex");
+  return {
+    runId,
+    workflowKey: input.workflowKey ?? "chat.turn.execute",
+    status: input.status ?? "completed",
+    attemptCount: 1,
+    maxAttempts: 3,
+    version: 1,
+    payload: {
+      version: "chat.turn.execute.v2",
+      admissionId: "admission-explorer-parent",
+      sessionIncarnationId: "incarnation-explorer-parent",
+      admissionMaterialSha256,
+      workspaceId: input.workspaceId ?? "default",
+      admissionAggregateRevision: 1,
+      admissionControllerGeneration: 1,
+      effectiveRequestMaterialSha256: createHash("sha256")
+        .update(canonicalJsonString({ version: 1, admissionMaterialSha256, request }), "utf8")
+        .digest("hex"),
+      policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId },
+      requestActor: { actorKind: "operator", actorId: "operator-1" },
+      sessionId: input.sessionId ?? "sess-1",
+      turnId: "turn-explorer-parent",
+      userMessageId: "user-explorer-parent",
+      assistantMessageId: "assistant-explorer-parent",
+      branchKind: "append",
+      threadEventType: "chat_thread_turn_appended",
+      request,
+    },
+    createdAt: "2026-08-12T00:00:00.000Z",
+    updatedAt: "2026-08-12T00:00:01.000Z",
+  };
+}
+
 function createStepRecord(
   input: Partial<ChatDelegationStepRecord> &
     Pick<ChatDelegationStepRecord, "stepId" | "runId" | "role" | "index" | "startedAt">,
@@ -63,6 +117,8 @@ function createStepRecord(
     childSessionId: input.childSessionId,
     childTurnId: input.childTurnId,
     citations: input.citations,
+    workResult: input.workResult,
+    scopeControl: input.scopeControl,
   };
 }
 
@@ -139,6 +195,8 @@ function createHarness(
     projectId?: string;
     subagentDefaults?: { childTimeoutSeconds: number; coworkChildTimeoutSeconds?: number | null; maxDepth: number };
     callerSubagentRecord?: TaskSubagentSession;
+    explorerParentRun?: DurableRunRecord | null;
+    explorerWorkspaceId?: string;
   } = {},
 ) {
   const prefs = options.prefs ?? buildPrefs();
@@ -160,6 +218,10 @@ function createHarness(
 
   const deps = {
     getSession: vi.fn(() => ({ sessionId: "sess-1" })),
+    getDurableRun: vi.fn((runId: string) => {
+      const parent = options.explorerParentRun;
+      return parent && parent.runId === runId ? parent : undefined;
+    }),
     listChatMessages: vi.fn(async () => []),
     normalizeWorkspaceId: vi.fn((workspaceId?: string) => workspaceId ?? "default"),
     ensureChatSessionModelDefaults: vi.fn((_sessionId: string, nextPrefs: ChatSessionPrefsRecord) => nextPrefs),
@@ -171,10 +233,33 @@ function createHarness(
       };
     }),
     inheritDelegatedSessionToolGrants: vi.fn(),
+    configureReadOnlyExplorerSession: vi.fn(),
+    ensureSessionInternalToolGrant: vi.fn(),
+    resolveDelegatedFilesystemScope: vi.fn(async () => undefined),
+    assertDelegatedFilesystemScopeBinding: vi.fn(),
     updateChatSessionPrefs: vi.fn(),
-    agentSendChatMessage: vi.fn(async (childSessionId: string) => createChatResponse(childSessionId)),
+    agentSendChatMessage: vi.fn(
+      async (
+        childSessionId: string,
+        _request: ChatSendMessageRequest,
+        launchOptions?: { onChildDurableRunLaunched?: (runId: string) => Promise<void> },
+      ) => {
+        await launchOptions?.onChildDurableRunLaunched?.(`durable-${childSessionId}`);
+        return createChatResponse(childSessionId);
+      },
+    ),
     extractAndPersistLearnedMemory: vi.fn(),
     scheduleChatMemoryContextPrewarm: vi.fn(),
+    validateReadOnlyExplorerParent: vi.fn(async ({ sessionId, policyRunId }) => {
+      const workspaceId = options.explorerWorkspaceId ?? "default";
+      const parentRun =
+        options.explorerParentRun === undefined
+          ? buildExplorerParentRun({ runId: policyRunId, sessionId, workspaceId })
+          : (options.explorerParentRun ?? undefined);
+      const authority = assertEligibleReadOnlyExplorerDurableParent({ parentRun, sessionId, workspaceId });
+      return { workspaceId, requestActor: authority.requestActor };
+    }),
+    watchDurableChildRun: vi.fn(),
     gatewaySql: {
       prepare: vi.fn(() => ({
         get: vi.fn(() => undefined),
@@ -446,6 +531,69 @@ function createHarness(
             Date.parse(claim.expiresAt) > Date.parse(databaseNowIso),
           );
         }),
+        bindOwnedDurableRun: vi.fn(
+          (input: { stepId: string; expectedDispatchToken: string; childSessionId: string; durableRunId: string }) => {
+            const current = steps.get(input.stepId);
+            const claim = dispatchClaims.get(input.stepId);
+            if (
+              !current ||
+              current.status !== "running" ||
+              current.childSessionId !== input.childSessionId ||
+              claim?.token !== input.expectedDispatchToken ||
+              Date.parse(claim.expiresAt) <= Date.parse(databaseNowIso) ||
+              (current.durableRunId !== undefined && current.durableRunId !== input.durableRunId)
+            ) {
+              return undefined;
+            }
+            const next = { ...current, durableRunId: input.durableRunId };
+            steps.set(input.stepId, next);
+            return next;
+          },
+        ),
+        extendOwnedDispatchLease: vi.fn(
+          (input: {
+            stepId: string;
+            expectedDispatchToken: string;
+            childSessionId: string;
+            leaseExpiresAt: string;
+          }) => {
+            const current = steps.get(input.stepId);
+            const claim = dispatchClaims.get(input.stepId);
+            if (
+              !current ||
+              current.childSessionId !== input.childSessionId ||
+              claim?.token !== input.expectedDispatchToken ||
+              !current.durableRunId
+            )
+              return undefined;
+            dispatchClaims.set(input.stepId, { token: claim.token, expiresAt: input.leaseExpiresAt });
+            return current;
+          },
+        ),
+        recoverDurableRunBinding: vi.fn(
+          (input: {
+            stepId: string;
+            childSessionId: string;
+            childTurnId: string;
+            durableRunId: string;
+            releaseDispatch: boolean;
+          }) => {
+            const current = steps.get(input.stepId);
+            if (
+              !current ||
+              current.status !== "running" ||
+              current.childSessionId !== input.childSessionId ||
+              (current.childTurnId !== undefined && current.childTurnId !== input.childTurnId) ||
+              (current.durableRunId !== undefined && current.durableRunId !== input.durableRunId)
+            ) {
+              return undefined;
+            }
+            const next = { ...current, childTurnId: input.childTurnId, durableRunId: input.durableRunId };
+            steps.set(input.stepId, next);
+            if (input.releaseDispatch) dispatchClaims.delete(input.stepId);
+            return next;
+          },
+        ),
         finishOwnedDispatchWithError: vi.fn(
           (input: {
             stepId: string;
@@ -614,6 +762,267 @@ function createHarness(
 }
 
 describe("ChatDelegationService subagent budget enforcement", () => {
+  it("rejects an unparented explorer request before durable or child side effects", async () => {
+    const { deps, service } = createHarness();
+
+    await expect(
+      service.runChatDelegation("sess-1", {
+        objective: "Inspect only the approved workspace files",
+        roles: ["Workspace explorer"],
+        executionProfile: "read_only_explorer",
+      }),
+    ).rejects.toThrow(/requires a durable parent run/);
+
+    expect(deps.storage.chatSessionPrefs.ensure).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.createTask).not.toHaveBeenCalled();
+    expect(deps.createChatSession).not.toHaveBeenCalled();
+    expect(deps.updateChatSessionPrefs).not.toHaveBeenCalled();
+    expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing, foreign, unrelated, and ineligible explorer parents before child side effects", async () => {
+    const scenarios: Array<{ label: string; parentRun: DurableRunRecord | null; message: RegExp }> = [
+      { label: "missing", parentRun: null, message: /existing durable Chat parent run/ },
+      {
+        label: "foreign session",
+        parentRun: buildExplorerParentRun({ sessionId: "sess-foreign" }),
+        message: /different Chat session/,
+      },
+      {
+        label: "foreign workspace",
+        parentRun: buildExplorerParentRun({ workspaceId: "workspace-foreign" }),
+        message: /different workspace/,
+      },
+      {
+        label: "unrelated workflow",
+        parentRun: buildExplorerParentRun({ workflowKey: "approval.wait" }),
+        message: /canonical chat\.turn\.execute parent run/,
+      },
+      {
+        label: "failed parent",
+        parentRun: buildExplorerParentRun({ status: "failed" }),
+        message: /cannot attach to a failed durable Chat parent run/,
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { deps, service } = createHarness({ explorerParentRun: scenario.parentRun });
+      await expect(
+        service.runChatDelegation("sess-1", {
+          objective: `Inspect only the approved workspace files (${scenario.label})`,
+          roles: ["Workspace explorer"],
+          executionProfile: "read_only_explorer",
+          policyRunId: "durable-parent-explorer",
+        }),
+      ).rejects.toThrow(scenario.message);
+
+      expect(deps.storage.chatSessionPrefs.ensure, scenario.label).not.toHaveBeenCalled();
+      expect(deps.taskLifecycleService.createTask, scenario.label).not.toHaveBeenCalled();
+      expect(deps.createChatSession, scenario.label).not.toHaveBeenCalled();
+      expect(deps.updateChatSessionPrefs, scenario.label).not.toHaveBeenCalled();
+      expect(deps.agentSendChatMessage, scenario.label).not.toHaveBeenCalled();
+      expect(deps.watchDurableChildRun, scenario.label).not.toHaveBeenCalled();
+    }
+  });
+
+  it("turns off memory context and learned-memory hooks for the filesystem-only explorer child", async () => {
+    const { deps, service } = createHarness({ prefs: buildPrefs({ memoryMode: "auto", retrievalMode: "layered" }) });
+    deps.resolveDelegatedFilesystemScope.mockResolvedValue({
+      rootPath: process.cwd(),
+      projectId: "project-1",
+      workingPath: ".",
+      approvedPaths: ["."],
+      scopeHash: "a".repeat(64),
+      dispatchGeneration: "dispatch-explorer",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+
+    await service.runChatDelegation("sess-1", {
+      objective: "Inspect only the approved workspace files",
+      roles: ["Workspace explorer"],
+      executionProfile: "read_only_explorer",
+      policyRunId: "durable-parent-explorer",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+    });
+
+    expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith(
+      "delegate-session-1",
+      // retrievalMode selects standard vs layered strategy; memoryMode is the
+      // contract-owned enable gate, so the inert standard selector remains valid.
+      expect.objectContaining({
+        webMode: "off",
+        memoryMode: "off",
+        retrievalMode: "standard",
+        toolAutonomy: "safe_auto",
+      }),
+    );
+    expect(deps.agentSendChatMessage).toHaveBeenCalledWith(
+      "delegate-session-1",
+      expect.objectContaining({
+        webMode: "off",
+        memoryMode: "off",
+        prefsOverride: expect.objectContaining({ retrievalMode: "standard", toolAutonomy: "safe_auto" }),
+      }),
+      expect.any(Object),
+    );
+    expect(deps.inheritDelegatedSessionToolGrants).not.toHaveBeenCalled();
+    expect(deps.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+    expect(deps.scheduleChatMemoryContextPrewarm).not.toHaveBeenCalled();
+    expect(deps.validateReadOnlyExplorerParent).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      policyRunId: "durable-parent-explorer",
+    });
+    expect(deps.watchDurableChildRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentRunId: "durable-parent-explorer",
+        childRunId: "durable-delegate-session-1",
+        required: true,
+      }),
+    );
+  });
+
+  it("binds and watches an active explorer child before completion while client attention may detach", async () => {
+    const { deps, service, steps } = createHarness();
+    deps.resolveDelegatedFilesystemScope.mockResolvedValue({
+      rootPath: process.cwd(),
+      projectId: "project-1",
+      workingPath: ".",
+      approvedPaths: ["."],
+      scopeHash: "b".repeat(64),
+      dispatchGeneration: "dispatch-explorer-active",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+    let releaseChild!: () => void;
+    const childHeld = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    let launched!: () => void;
+    const durableLaunched = new Promise<void>((resolve) => {
+      launched = resolve;
+    });
+    let observedChildSignal: AbortSignal | undefined;
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        _request: unknown,
+        options?: {
+          abortSignal?: AbortSignal;
+          onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+        },
+      ) => {
+        observedChildSignal = options?.abortSignal;
+        await options?.onChildDurableRunLaunched?.(`durable-${childSessionId}`);
+        const active = [...steps.values()].find((step) => step.childSessionId === childSessionId)!;
+        steps.set(active.stepId, {
+          ...active,
+          workResult: {
+            disposition: "completed",
+            summary: "Workspace inspection completed.",
+            changedFiles: [],
+            evidenceRefs: ["apps/gateway"],
+            scopeHash: "b".repeat(64),
+            dispatchGeneration: "dispatch-explorer-active",
+          },
+        });
+        launched();
+        await childHeld;
+        return createChatResponse(childSessionId);
+      },
+    ) as never;
+    const parentAttention = new AbortController();
+    const onStep = vi.fn();
+
+    const resultPromise = service.runChatDelegation(
+      "sess-1",
+      {
+        objective: "Inspect the active workspace durably",
+        roles: ["Workspace explorer"],
+        executionProfile: "read_only_explorer",
+        policyRunId: "durable-parent-explorer",
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+      },
+      { onStep },
+      { abortSignal: parentAttention.signal },
+    );
+
+    await durableLaunched;
+    const activeStep = [...steps.values()][0]!;
+    expect(activeStep).toMatchObject({
+      status: "running",
+      childSessionId: "delegate-session-1",
+      durableRunId: "durable-delegate-session-1",
+    });
+    expect(deps.watchDurableChildRun).toHaveBeenCalledTimes(1);
+    expect(deps.watchDurableChildRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentRunId: "durable-parent-explorer",
+        childRunId: "durable-delegate-session-1",
+        required: true,
+      }),
+    );
+    expect(onStep).toHaveBeenLastCalledWith(expect.objectContaining({ durableRunId: "durable-delegate-session-1" }));
+
+    parentAttention.abort(new Error("explorer_sse_observer_disconnected"));
+    expect(observedChildSignal?.aborted).toBe(false);
+    releaseChild();
+    await expect(resultPromise).resolves.toMatchObject({ status: "completed" });
+    expect(deps.watchDurableChildRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an explorer step recoverable when required watcher attachment rolls back", async () => {
+    const { deps, dispatchClaims, service, steps } = createHarness();
+    deps.resolveDelegatedFilesystemScope.mockResolvedValue({
+      rootPath: process.cwd(),
+      projectId: "project-1",
+      workingPath: ".",
+      approvedPaths: ["."],
+      scopeHash: "c".repeat(64),
+      dispatchGeneration: "dispatch-explorer-watcher-failure",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+    deps.watchDurableChildRun.mockRejectedValue(new Error("simulated watcher persistence failure"));
+    deps.storage.runImmediateTransaction = vi.fn(async <T>(callback: () => T | Promise<T>) => {
+      const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
+      const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
+      try {
+        return await callback();
+      } catch (error) {
+        steps.clear();
+        for (const [key, value] of stepSnapshot) steps.set(key, value);
+        dispatchClaims.clear();
+        for (const [key, value] of claimSnapshot) dispatchClaims.set(key, value);
+        throw error;
+      }
+    }) as never;
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        _request: unknown,
+        options?: { onChildDurableRunLaunched?: (runId: string) => Promise<void> },
+      ) => {
+        await options?.onChildDurableRunLaunched?.(`durable-${childSessionId}`);
+        return createChatResponse(childSessionId);
+      },
+    ) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Inspect despite a transient watcher failure",
+      roles: ["Workspace explorer"],
+      executionProfile: "read_only_explorer",
+      policyRunId: "durable-parent-explorer",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+    });
+
+    expect(result.status).toBe("running");
+    expect(result.steps[0]).toMatchObject({ status: "running", childSessionId: "delegate-session-1" });
+    expect(result.steps[0]?.durableRunId).toBeUndefined();
+    expect(deps.storage.chatDelegationSteps.finishOwnedDispatchWithError).not.toHaveBeenCalled();
+    expect(deps.watchDurableChildRun).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects max_depth_exceeded before child side effects while preserving failed step evidence", async () => {
     const { deps, service } = createHarness({
       subagentDefaults: { childTimeoutSeconds: 600, maxDepth: 2 },

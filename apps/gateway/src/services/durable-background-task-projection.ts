@@ -356,6 +356,7 @@ async function projectTask(
   const canonicalStatus = verified ? (child?.status ?? "missing") : child ? "unknown" : "missing";
   const signalIntegrity = normalizeDurableBackgroundTaskSignals(parentEvents, watcher.watcherId, parentSignalsComplete);
   const blockers = buildBlockers({ watcher, child, approvals, output, verified, signalIntegrity, toolCoverage });
+  const attention = projectAttention(watcher, blockers);
   const terminal = child ? isDurableRunTerminal(child.status) : false;
   const label =
     publicPreviewText(verified ? (step?.label ?? step?.summary ?? step?.role) : undefined, 96) ??
@@ -391,11 +392,17 @@ async function projectTask(
     approvals,
     output,
     blockers,
+    attention,
     signalIntegrity,
     controls: {
       detach: {
-        enabled: watcher.state === "attached",
-        reason: watcher.state === "attached" ? undefined : `Watcher is ${watcher.state}.`,
+        enabled: watcher.state === "attached" && !terminal,
+        reason:
+          watcher.state !== "attached"
+            ? `Watcher is ${watcher.state}.`
+            : terminal && child
+              ? `Child run is already ${child.status}.`
+              : undefined,
       },
       reattach: {
         enabled: watcher.state === "detached",
@@ -529,11 +536,10 @@ function buildBlockers(input: {
   if (!input.child) blockers.push({ kind: "missing_child", message: "Canonical child run is missing." });
   if (!input.verified)
     blockers.push({ kind: "scope_unverified", message: "Child workspace or lineage could not be verified." });
-  if (input.watcher.state === "detached") {
-    blockers.push({ kind: "detached", message: "Live watcher is detached; canonical state remains available." });
-  }
   if (input.verified && input.child?.status === "waiting")
     blockers.push({ kind: "waiting", message: "Child run is waiting." });
+  if (input.verified && input.child?.status === "paused")
+    blockers.push({ kind: "paused", message: "Child run is paused and requires operator attention." });
   if (input.verified && input.child?.status === "failed")
     blockers.push({ kind: "failed", message: "Child run failed." });
   if (input.verified && input.child?.status === "cancelled")
@@ -580,6 +586,53 @@ function buildBlockers(input: {
     });
   }
   return blockers;
+}
+
+const OPERATOR_ATTENTION_BLOCKER_PRIORITY: readonly DurableBackgroundTaskBlocker["kind"][] = [
+  "approval_required",
+  "paused",
+  "waiting",
+  "failed",
+  "dead_lettered",
+  "missing_child",
+  "scope_unverified",
+  "signal_integrity",
+  "projection_incomplete",
+  "missing_output",
+];
+
+function projectAttention(
+  watcher: DurableChildWatcherRecord,
+  blockers: readonly DurableBackgroundTaskBlocker[],
+): DurableBackgroundTaskItem["attention"] {
+  const requiredReason = OPERATOR_ATTENTION_BLOCKER_PRIORITY.find((kind) =>
+    blockers.some((blocker) => blocker.kind === kind),
+  );
+  if (watcher.state === "detached") {
+    return {
+      state: "background",
+      reason: "operator_continued_in_background",
+      updatedAt: watcher.detachedAt ?? watcher.updatedAt,
+      required: requiredReason !== undefined,
+      ...(requiredReason ? { requiredReason } : {}),
+    };
+  }
+  if (watcher.state === "closed") {
+    return {
+      state: "stopped",
+      reason: "watcher_closed",
+      updatedAt: watcher.closedAt ?? watcher.updatedAt,
+      required: requiredReason !== undefined,
+      ...(requiredReason ? { requiredReason } : {}),
+    };
+  }
+  return {
+    state: "foreground",
+    reason: "watcher_attached",
+    updatedAt: watcher.reattachedAt ?? watcher.createdAt,
+    required: requiredReason !== undefined,
+    ...(requiredReason ? { requiredReason } : {}),
+  };
 }
 
 function buildLineageEntry(task: DurableBackgroundTaskItem): DurableBackgroundTaskLineageEntry[] {

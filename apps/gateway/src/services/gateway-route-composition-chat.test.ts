@@ -194,7 +194,24 @@ function createGateway() {
         })),
       },
       chatDelegationRuns: {
-        get: fn((runId: string) => ({ runId, sessionId: runId === "foreign-run" ? "other-session" : "session-1" })),
+        get: fn((runId: string) =>
+          runId === "explorer-run"
+            ? {
+                runId,
+                parentRunId: "durable-parent",
+                sessionId: "session-1",
+                taskId: "task-explorer",
+                objective: "Inspect",
+                roles: ["workspace-explorer"],
+                mode: "sequential",
+                status: "running",
+                workflowTemplate: "read_only_workspace_explorer",
+                citations: [],
+                startedAt: "2026-08-12T00:00:00.000Z",
+              }
+            : { runId, sessionId: runId === "foreign-run" ? "other-session" : "session-1" },
+        ),
+        findLatestBySessionAndWorkflowTemplate: fn(() => undefined),
       },
       chatDelegationSteps: {
         listByRun: fn((runId: string) => [{ runId, stepId: "step-1" }]),
@@ -370,6 +387,7 @@ function createGateway() {
     hydrateChatPrefsWithAutonomy: fn((sessionId: string, prefs: unknown) => ({ sessionId, prefs, hydrated: true })),
     patchSessionAutonomyPrefs: fn((sessionId: string, patch: unknown) => ({ sessionId, patch })),
     acceptChatDelegation: fn((sessionId: string, input: unknown) => ({ sessionId, input, accepted: true })),
+    reconcilePersistedWorkspaceExplorer: fn(() => ({ repaired: true, reentered: true })),
     runChatDelegation: fn((sessionId: string, input: unknown) => ({ sessionId, input, run: true })),
     runChatDelegationStream: fn((sessionId: string, input: unknown, options?: unknown) => ({
       sessionId,
@@ -686,6 +704,21 @@ describe("composeChatRouteDependencies", () => {
     expect(await deps.chatDelegate.getChatDelegationRun("session-1", "run-1")).toMatchObject({
       run: { runId: "run-1" },
       steps: [{ stepId: "step-1" }],
+    });
+    expect(await deps.chatDelegate.getLatestChatWorkspaceExplorer("session-1")).toEqual({});
+    expect(gateway.storage.chatDelegationRuns.findLatestBySessionAndWorkflowTemplate).toHaveBeenCalledWith(
+      "session-1",
+      "read_only_workspace_explorer",
+    );
+    gateway.storage.chatDelegationRuns.findLatestBySessionAndWorkflowTemplate.mockResolvedValue(
+      await gateway.storage.chatDelegationRuns.get("explorer-run"),
+    );
+    expect(await deps.chatDelegate.getLatestChatWorkspaceExplorer("session-1")).toMatchObject({
+      item: { run: { runId: "explorer-run" }, explorer: { partialResult: true } },
+    });
+    expect(gateway.reconcilePersistedWorkspaceExplorer).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      delegationRunId: "explorer-run",
     });
     await expect(deps.chatDelegate.getChatDelegationRun("session-1", "foreign-run")).rejects.toThrow(NotFoundError);
     expect(await deps.chatDelegate.runChatDelegation("session-1", { goal: "ship" })).toMatchObject({ run: true });

@@ -60,6 +60,7 @@ export interface DurableBackgroundTaskOutputEvidence {
 
 export type DurableBackgroundTaskBlockerKind =
   | "approval_required"
+  | "paused"
   | "waiting"
   | "failed"
   | "cancelled"
@@ -86,6 +87,18 @@ export interface DurableBackgroundTaskSignalIntegrity {
   highestAcceptedSequence?: number;
   observationComplete: boolean;
   posture: "clean" | "degraded" | "unobserved";
+}
+
+/**
+ * Operator attention is presentation state only. It never changes the child
+ * run, its tool grants, approval requirements, recovery, or scheduling.
+ */
+export interface DurableBackgroundTaskAttention {
+  state: "foreground" | "background" | "stopped";
+  reason: "watcher_attached" | "operator_continued_in_background" | "watcher_closed";
+  updatedAt: string;
+  required: boolean;
+  requiredReason?: DurableBackgroundTaskBlockerKind;
 }
 
 export interface DurableBackgroundTaskControls {
@@ -118,6 +131,7 @@ export interface DurableBackgroundTaskItem {
   approvals: DurableBackgroundTaskApprovalState[];
   output: DurableBackgroundTaskOutputEvidence;
   blockers: DurableBackgroundTaskBlocker[];
+  attention: DurableBackgroundTaskAttention;
   signalIntegrity: DurableBackgroundTaskSignalIntegrity;
   controls: DurableBackgroundTaskControls;
   links: DurableBackgroundTaskSemanticLink[];

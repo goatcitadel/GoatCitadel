@@ -15,7 +15,9 @@ import type {
   ChatThreadResponse,
   ChatUserInputPromptResponse,
   ChatWebMode,
+  ChatWorkspaceSnapshotRequest,
   ExternalSessionAttachmentRecord,
+  ExternalSourceAttachmentCandidateRecord,
   RoutingPreflightResult,
   SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
@@ -30,6 +32,7 @@ import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/compo
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
 import type { CoworkAgenticControlItem } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
+import type { ThreadedDelegatedScopeControls } from "./useChatDelegatedScopeControls";
 import type { OptimisticChatUserMessage, PendingUserInputState } from "./useChatOutboundExecution";
 import type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
@@ -64,6 +67,11 @@ export interface ThreadedPersonalityPresence {
 export interface ThreadedExternalSourceControls {
   /** Live read-only attachments (content-free records; no transcript bytes). */
   attachments: readonly ExternalSessionAttachmentRecord[];
+  /** Server-filtered verified applied items eligible to attach to this session. */
+  candidates: readonly ExternalSourceAttachmentCandidateRecord[];
+  /** False only when the bounded picker endpoint is absent on an older Gateway. */
+  candidatesSupported: boolean | null;
+  loading: boolean;
   /** Explicit per-turn selection (attachment ids) frozen into the next send. */
   selectedAttachmentIds: readonly string[];
   busyAttachmentId: string | null;
@@ -73,6 +81,7 @@ export interface ThreadedExternalSourceControls {
   onToggleSelect: (attachmentId: string) => void;
   onClearSelection: () => void;
   onAttach: (seed: { sourceId: string; importId: string; itemId: string }) => void;
+  onReload: () => void;
   onDetach: (attachmentId: string) => void;
   onRequestKnowledgeSnapshot: (attachmentId: string) => void;
 }
@@ -196,6 +205,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
   onOpenPersonalitiesSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
+  onOpenLibraryImports?: () => void;
   onOpenOpsRuntime?: () => void;
   onAcceptDelegation: () => Promise<void>;
   onDismissDelegationSuggestion: () => void;
@@ -229,6 +239,20 @@ export interface MissionControlActiveSessionSurfaceProps {
   threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
   /** HX-407 C3: absent/null until C4 composes the Chat attachment routes. */
   externalSourceControls?: ThreadedExternalSourceControls | null;
+  /** Governed server-owned scope candidates for the active explorer/code child. */
+  delegatedScopeControls?: ThreadedDelegatedScopeControls | null;
+  /**
+   * Release only the local foreground observer after the durable watcher has
+   * successfully moved to background attention. Canonical execution is not cancelled.
+   */
+  onContinueExplorerInBackground?: (input: { parentRunId: string; watcherId: string }) => boolean;
+  /** Rehydrate a terminal background Explorer from its exact persisted delegation identity. */
+  onBackgroundExplorerSettled?: (input: {
+    parentRunId: string;
+    delegationRunId: string;
+    delegationStepId: string;
+    childRunId: string;
+  }) => Promise<boolean>;
   presetOptions?: Array<{
     value: string;
     label: string;
@@ -249,6 +273,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   currentWebMode: ChatWebMode;
   currentReviewDepth: ChatOrchestrationReviewDepth;
   modelCouncilEnabled?: boolean;
+  /** One-shot, point-in-time workspace context captured by the Gateway for the next send. */
+  workspaceSnapshotRequest?: ChatWorkspaceSnapshotRequest;
+  onToggleWorkspaceSnapshot: () => void;
+  onRefreshWorkspaceSnapshot: () => void;
   fullWebAccess: boolean;
   currentThinkingLevel: ChatThinkingLevel;
   currentSpeedMode: "standard" | "fast";

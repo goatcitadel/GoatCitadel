@@ -97,6 +97,18 @@
   color: color-mix(in oklab, var(--risk-danger) 62%, var(--fg-primary));
 }
 
+.mc-next-background-rail__announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .mc-next-background-rail__tasks {
   display: grid;
   gap: 10px;

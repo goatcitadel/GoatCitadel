@@ -7,6 +7,8 @@ import {
   projectChatDelegationRunForPublic,
   projectChatDelegationStreamValueForPublic,
 } from "../services/chat-secret-projection.js";
+import { projectPublicErrorValue } from "../services/public-secret-projection.js";
+import { projectWorkspaceExplorerText } from "../services/workspace-explorer-path-projection.js";
 import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
@@ -40,6 +42,19 @@ const delegationRunParamsSchema = z.object({
   sessionId: z.string().min(1),
   runId: z.string().min(1),
 });
+
+const delegationScopeParamsSchema = delegationRunParamsSchema.extend({
+  stepId: z.string().min(1),
+});
+
+const delegationScopeExpansionSchema = z
+  .object({
+    candidateIds: z
+      .array(z.string().regex(/^[a-f0-9]{64}$/u))
+      .min(1)
+      .max(8),
+  })
+  .strict();
 
 const delegateSuggestSchema = z.object({
   objective: z.string().optional(),
@@ -97,7 +112,12 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return reply.code(400).send({
+        error:
+          body.data.executionProfile === "read_only_explorer"
+            ? projectWorkspaceExplorerError(error)
+            : (error as Error).message,
+      });
     }
   });
 
@@ -115,6 +135,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
 
     const raw = reply.raw;
     const controller = new AbortController();
+    const observationOnly = body.data.executionProfile === "read_only_explorer";
     let closed = false;
     let finished = false;
     const cleanup = () => {
@@ -122,7 +143,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         return;
       }
       closed = true;
-      if (!controller.signal.aborted) {
+      if (!observationOnly && !controller.signal.aborted) {
         controller.abort(new Error("chat_delegation_client_disconnected"));
       }
     };
@@ -159,12 +180,16 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       for await (const chunk of fastify.services.chatDelegate.runChatDelegationStream(
         params.data.sessionId,
         stampDelegateOperatorContext(request, body.data),
-        { abortSignal: controller.signal },
+        observationOnly ? {} : { abortSignal: controller.signal },
       )) {
         if (controller.signal.aborted) {
           break;
         }
-        const wrote = await send(projectChatDelegationStreamValueForPublic(chunk));
+        const wrote = await send(
+          projectChatDelegationStreamValueForPublic(chunk, {
+            readOnlyExplorer: body.data.executionProfile === "read_only_explorer",
+          }),
+        );
         if (!wrote) {
           break;
         }
@@ -186,6 +211,23 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     }
   });
 
+  fastify.get("/api/v1/chat/sessions/:sessionId/delegations/latest-explorer", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const response = await fastify.services.chatDelegate.getLatestChatWorkspaceExplorer(params.data.sessionId);
+      return reply.send({
+        ...response,
+        ...(response.item ? { item: projectChatDelegationRunForPublic(response.item) } : {}),
+      });
+    } catch (error) {
+      const statusCode = isGoatError(error) ? error.httpStatus : 400;
+      return reply.code(statusCode).send({ error: projectWorkspaceExplorerError(error) });
+    }
+  });
+
   fastify.get("/api/v1/chat/sessions/:sessionId/delegations/:runId", async (request, reply) => {
     const params = delegationRunParamsSchema.safeParse(request.params);
     if (!params.success) {
@@ -198,14 +240,60 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         ),
       );
     } catch (error) {
-      if (isGoatError(error)) {
-        return reply.code(error.httpStatus).send(error.toJSON());
-      }
       const message = (error as Error).message;
-      const statusCode = message.toLowerCase().includes("not found") ? 404 : 400;
-      return reply.code(statusCode).send({ error: message });
+      const statusCode = isGoatError(error)
+        ? error.httpStatus
+        : message.toLowerCase().includes("not found")
+          ? 404
+          : 400;
+      return reply.code(statusCode).send({ error: projectWorkspaceExplorerError(error) });
     }
   });
+
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/delegations/:runId/steps/:stepId/scope-candidates",
+    async (request, reply) => {
+      const params = delegationScopeParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+      try {
+        return reply.send(await fastify.services.chatDelegate.listChatDelegatedScopeCandidates(params.data));
+      } catch (error) {
+        const message = (error as Error).message;
+        const statusCode = message.toLowerCase().includes("not found") ? 404 : 400;
+        return reply.code(statusCode).send({ error: projectWorkspaceExplorerError(error) });
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/chat/sessions/:sessionId/delegations/:runId/steps/:stepId/scope-expansion",
+    async (request, reply) => {
+      const params = delegationScopeParamsSchema.safeParse(request.params);
+      const body = delegationScopeExpansionSchema.safeParse(request.body);
+      if (!params.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply.send(
+          await fastify.services.chatDelegate.requestChatDelegatedScopeExpansion({
+            ...params.data,
+            candidateIds: body.data.candidateIds,
+          }),
+        );
+      } catch (error) {
+        const message = (error as Error).message;
+        const statusCode = message.toLowerCase().includes("not found") ? 404 : 400;
+        return reply.code(statusCode).send({ error: projectWorkspaceExplorerError(error) });
+      }
+    },
+  );
 
   fastify.post("/api/v1/chat/sessions/:sessionId/delegate/suggest", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
@@ -253,4 +341,10 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
+}
+
+function projectWorkspaceExplorerError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const projected = projectPublicErrorValue({ error: message }).error;
+  return projectWorkspaceExplorerText(projected, []);
 }

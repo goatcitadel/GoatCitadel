@@ -55,6 +55,13 @@ describe("durable background-task API", () => {
           { kind: "cancelled", message: "Child run was cancelled." },
           { kind: "missing_output", message: "Terminal child has no concrete output to cite." },
         ],
+        attention: {
+          state: "foreground",
+          reason: "watcher_attached",
+          updatedAt: "2026-07-13T00:00:00.000Z",
+          required: true,
+          requiredReason: "missing_output",
+        },
         signalIntegrity: {
           observedCount: 0,
           acceptedCount: 0,

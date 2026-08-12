@@ -2,6 +2,7 @@ import type {
   ChatRoutedContextInspection,
   ChatTurnCapabilityProfilePreview,
   ChatTurnCapabilityProfileRecord,
+  ChatWorkspaceSnapshotRecord,
   WorkPassportBaseline,
   WorkPassportDomain,
   WorkPassportRecord,
@@ -73,6 +74,7 @@ export function ChatCapabilityProfilePreflight({
           onBaselineUpdated={onBaselineUpdated}
         />
       ) : null}
+      {profile.workspaceSnapshot ? <WorkspaceSnapshotReceipt snapshot={profile.workspaceSnapshot} /> : null}
       <details className="mc-next-capability-profile-disclosure">
         <summary>Inspect proposed profile</summary>
         <div className="mc-next-capability-profile-detail">
@@ -211,6 +213,9 @@ function VerifiedCapabilityProfile({
         </StatusChip>
       </div>
       {profile.selection.workPassport ? <WorkPassportPanel passport={profile.selection.workPassport} /> : null}
+      {profile.selection.workspaceSnapshot ? (
+        <WorkspaceSnapshotReceipt snapshot={profile.selection.workspaceSnapshot} />
+      ) : null}
       {routedContext ? <RoutedContextReceipt routedContext={routedContext} /> : null}
       <details className="mc-next-capability-profile-disclosure">
         <summary>Inspect frozen selections and governance</summary>
@@ -311,6 +316,63 @@ function VerifiedCapabilityProfile({
           </section>
         </div>
       </details>
+    </section>
+  );
+}
+
+function WorkspaceSnapshotReceipt({ snapshot }: { snapshot: ChatWorkspaceSnapshotRecord }) {
+  const captured = snapshot.status === "captured" && Boolean(snapshot.git && snapshot.project);
+  return (
+    <section
+      className="mc-next-capability-profile-subsection"
+      aria-label="Workspace snapshot"
+      data-workspace-snapshot-status={snapshot.status}
+    >
+      <div className="mc-next-capability-profile-head">
+        <div>
+          <p className="mc-next-panel-kicker">Workspace snapshot</p>
+          <h5>Point-in-time context</h5>
+        </div>
+        <StatusChip tone={captured ? "success" : "warning"}>{captured ? "Captured" : "Unavailable"}</StatusChip>
+      </div>
+      {captured ? (
+        <dl className="mc-next-capability-profile-facts">
+          <div>
+            <dt>Project</dt>
+            <dd>
+              {snapshot.project!.projectId} · revision {snapshot.project!.projectRevision}
+            </dd>
+          </div>
+          <div>
+            <dt>Git HEAD</dt>
+            <dd title={snapshot.git!.headSha}>{shortHash(snapshot.git!.headSha)}</dd>
+          </div>
+          <div>
+            <dt>Branch</dt>
+            <dd>{snapshot.git!.branch ?? "detached or unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Tracked changes</dt>
+            <dd>{snapshot.git!.trackedChangeCount}</dd>
+          </div>
+          <div>
+            <dt>Untracked changes</dt>
+            <dd>{snapshot.git!.untrackedChangeCount}</dd>
+          </div>
+          <div>
+            <dt>Captured</dt>
+            <dd>{snapshot.capturedAt}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p role="status">
+          Snapshot unavailable ({formatLabel(snapshot.reasonCode ?? "unknown")}). Repository health was not inferred.
+        </p>
+      )}
+      <p>
+        This immutable receipt describes one turn only. It contains no file content, grants no folder authority, and a
+        refresh applies only to a new turn.
+      </p>
     </section>
   );
 }

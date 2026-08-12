@@ -13,6 +13,7 @@ import type {
   ChatSessionRecord,
   ChatThreadResponse,
   ChatThreadTurnRecord,
+  DelegatedFilesystemScopePublicProjection,
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
@@ -87,7 +88,7 @@ export interface ActiveChatDelegationStep {
   childSessionId?: string;
   childTurnId?: string;
   workResult?: ChatDelegationStepRecord["workResult"];
-  scopeControl?: ChatDelegationStepRecord["scopeControl"];
+  scopeControl?: DelegatedFilesystemScopePublicProjection;
 }
 
 export interface ActiveChatDelegationRun {
@@ -123,7 +124,20 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
     childSessionId: step.childSessionId,
     childTurnId: step.childTurnId,
     workResult: step.workResult,
-    scopeControl: step.scopeControl,
+    scopeControl: toActiveDelegationScopeControl(step.scopeControl),
+  };
+}
+
+function toActiveDelegationScopeControl(
+  scope: DelegatedFilesystemScopePublicProjection | undefined,
+): ActiveChatDelegationStep["scopeControl"] {
+  if (!scope) return undefined;
+  return {
+    ...(scope.workingPath ? { workingPath: scope.workingPath } : {}),
+    approvedPaths: [...scope.approvedPaths],
+    scopeHash: scope.scopeHash,
+    dispatchGeneration: scope.dispatchGeneration,
+    updatedAt: scope.updatedAt,
   };
 }
 
@@ -529,6 +543,7 @@ export function useChatDelegationPolicyActions(input: {
               output: chunk.step.output,
               error: chunk.step.error,
               failureGuidance: chunk.step.failureGuidance,
+              scopeControl: toActiveDelegationScopeControl(chunk.step.scopeControl),
             };
             setActiveDelegationRun((current) => {
               if (!current) {

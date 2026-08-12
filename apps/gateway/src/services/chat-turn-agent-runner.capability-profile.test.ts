@@ -7,6 +7,7 @@ import {
   type ChatCompletionRequest,
   type ChatTurnCapabilityProfileRecord,
   type SkillLifecycleRecord,
+  type ToolCatalogEntry,
 } from "@goatcitadel/contracts";
 import { sealChatTurnCapabilityProfile } from "@goatcitadel/storage";
 import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
@@ -65,6 +66,111 @@ const TOOL_CATALOG_ENTRY: CapabilityCatalogEntry = {
   callable: true,
   toolName: "browser.search",
 };
+
+const EXPLORER_READ_DEFINITION = {
+  type: "function",
+  function: {
+    name: "fs_read",
+    description: "Read one file inside the approved delegated scope.",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const EXPLORER_READ_CAPABILITY: CapabilityCatalogEntry = {
+  capabilityId: "tool:fs.read",
+  kind: "tool",
+  category: "built_in",
+  title: "Read file",
+  summary: "Read one approved workspace file.",
+  callable: true,
+  toolName: "fs.read",
+};
+
+function buildExplorerProfile(): {
+  profile: ChatTurnCapabilityProfileRecord;
+  snapshot: CapabilityCatalogSnapshotRecord;
+} {
+  const snapshot: CapabilityCatalogSnapshotRecord = {
+    snapshotId: "snapshot-explorer-read-only",
+    inspectableEntries: [EXPLORER_READ_CAPABILITY],
+    callableEntries: [EXPLORER_READ_CAPABILITY],
+    createdAt: "2026-08-12T00:00:00.000Z",
+  };
+  const profile = sealChatTurnCapabilityProfile({
+    profileId: "chat-capability-profile-explorer-read-only",
+    schemaVersion: "chat.turn.capability-profile.v1",
+    identity: {
+      turnId: "turn-explorer-read-only",
+      sessionId: "session-explorer-read-only",
+      workspaceId: "workspace-frozen",
+      citadelId: "citadel-frozen",
+      operatorId: "operator-frozen",
+      authActorId: "operator-frozen",
+      authActorSource: "token",
+    },
+    source: { channel: "chat", account: "default" },
+    catalog: {
+      snapshotId: snapshot.snapshotId,
+      inspectableHash: digest(snapshot.inspectableEntries),
+      callableHash: digest(snapshot.callableEntries),
+      inspectableCount: 1,
+      callableCount: 1,
+    },
+    selection: {
+      contentHash: digest("Inspect the approved file."),
+      effectiveProviderId: "provider-a",
+      effectiveModel: "model-a",
+      allowedFallbacks: [],
+      mode: "chat",
+      webMode: "off",
+      memory: {
+        mode: "off",
+        retrievalMode: "standard",
+        workspaceId: "workspace-frozen",
+        sessionId: "session-explorer-read-only",
+        contextManifestRef: `chat-memory-scope:${"d".repeat(64)}`,
+        writeApprovalRequired: true,
+      },
+      thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "off",
+      toolAutonomy: "safe_auto",
+      tools: [
+        {
+          canonicalName: "fs.read",
+          modelName: "fs_read",
+          definitionHash: digest(EXPLORER_READ_DEFINITION),
+          providerDefinition: EXPLORER_READ_DEFINITION,
+        },
+      ],
+      modelNameAllowMap: [{ modelName: "fs_read", canonicalName: "fs.read" }],
+      trustedSkills: [],
+    },
+    governance: {
+      activeGrants: [],
+      permission: {
+        profileId: "read-only-workspace-explorer",
+        approvalMode: "bypass",
+        profileHash: "e".repeat(64),
+      },
+      policyDecisions: [{ toolName: "fs.read", allowed: true, requiresApproval: false, reasonCodes: ["frozen_allow"] }],
+      authReadiness: [
+        { kind: "provider", ref: "provider-a", status: "ready", reasonCodes: [] },
+        { kind: "channel", ref: "channel-frozen", status: "ready", reasonCodes: [] },
+        { kind: "tool", ref: "fs.read", status: "ready", reasonCodes: [] },
+      ],
+      approval: { mode: "bypass", selectedToolCount: 1, toolsRequiringApproval: [], approvalGranted: false },
+    },
+    preflightFingerprint: "f".repeat(64),
+    createdAt: "2026-08-12T00:00:00.000Z",
+  });
+  return { profile, snapshot };
+}
 
 const INSPECTABLE_ONLY_ENTRY: CapabilityCatalogEntry = {
   capabilityId: "skill:candidate",
@@ -312,6 +418,97 @@ function buildHeartbeatInput(profile: ChatTurnCapabilityProfileRecord) {
 }
 
 describe("ChatTurnAgentRunner frozen capability profiles", () => {
+  it("executes an explorer provider read under safe_auto while ignoring an unfrozen tool call", async () => {
+    const { profile, snapshot } = buildExplorerProfile();
+    const storage = createMockStorage() as ReturnType<typeof createMockStorage> & {
+      capabilityCatalogSnapshots: { get(snapshotId: string): CapabilityCatalogSnapshotRecord };
+      skillLifecycle: { list(): SkillLifecycleRecord[] };
+    };
+    storage.capabilityCatalogSnapshots = {
+      get: vi.fn((snapshotId: string) => {
+        expect(snapshotId).toBe(snapshot.snapshotId);
+        return snapshot;
+      }),
+    };
+    storage.skillLifecycle = { list: vi.fn(() => []) };
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("fs.read", { path: "apps/gateway/package.json" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("session.status", {}))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "Read-only inspection complete." } }],
+      });
+    const invokeTool = vi.fn(async (request) => ({
+      outcome: "executed" as const,
+      policyReason: "allowed",
+      auditEventId: "audit-explorer-read",
+      result: { path: request.args.path, content: "{}" },
+    }));
+    const toolCatalog: ToolCatalogEntry[] = [
+      {
+        toolName: "fs.read",
+        category: "filesystem",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Read one approved file.",
+        argSchema: EXPLORER_READ_DEFINITION.function.parameters,
+        examples: [],
+        pack: "core",
+      },
+      {
+        toolName: "session.status",
+        category: "ops",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Inspect session state.",
+        argSchema: { type: "object", properties: {}, additionalProperties: false },
+        examples: [],
+        pack: "core",
+      },
+    ];
+    const runner = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => toolCatalog,
+      listCapabilityCatalog: () => [EXPLORER_READ_CAPABILITY],
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+
+    const result = await runner.run({
+      sessionId: "session-explorer-read-only",
+      turnId: "turn-explorer-read-only",
+      userMessageId: "message-explorer-read-only",
+      content: "Inspect the approved file.",
+      mode: "chat",
+      providerId: "provider-a",
+      model: "model-a",
+      webMode: "off",
+      memoryMode: "off",
+      retrievalMode: "standard",
+      thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "off",
+      toolAutonomy: "safe_auto",
+      operatorId: "operator-frozen",
+      authActorId: "operator-frozen",
+      authActorSource: "token",
+      permissionProfileId: "read-only-workspace-explorer",
+      historyMessages: [{ role: "user", content: "Inspect the approved file." }],
+      capabilityProfile: profile,
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "fs.read" }));
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(createChatCompletion.mock.calls[0]?.[0].tools)).toContain("fs_read");
+    expect(JSON.stringify(createChatCompletion.mock.calls[0]?.[0].tools)).not.toContain("session_status");
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([expect.objectContaining({ toolName: "fs.read", status: "executed" })]),
+    );
+  });
+
   it("sends only the frozen definitions even when live catalog/grants gain a new tool", async () => {
     const completionRequests: ChatCompletionRequest[] = [];
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {

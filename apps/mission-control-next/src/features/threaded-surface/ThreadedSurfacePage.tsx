@@ -1750,6 +1750,31 @@ function UtilityBackgroundTasksPanel({
       queuedCount={activeProps.queuedCount}
       streamStatus={activeProps.streamStatus}
       queueLabels={activeProps.queueItems.map((item) => item.label)}
+      onContinueInBackground={(task) => {
+        const parentRunId = activeProps.selectedTurn?.trace.durable?.runId;
+        if (parentRunId) {
+          activeProps.onContinueExplorerInBackground?.({ parentRunId, watcherId: task.watcherId });
+        }
+      }}
+      onBackgroundTaskSettled={(task) => {
+        const parentRunId = activeProps.selectedTurn?.trace.durable?.runId;
+        if (
+          !parentRunId ||
+          !task.delegationRunId ||
+          !task.delegationStepId ||
+          activeProps.delegationRun?.runId !== task.delegationRunId
+        ) {
+          return false;
+        }
+        return (
+          activeProps.onBackgroundExplorerSettled?.({
+            parentRunId,
+            delegationRunId: task.delegationRunId,
+            delegationStepId: task.delegationStepId,
+            childRunId: task.childRunId,
+          }) ?? false
+        );
+      }}
       onOpenApprovals={activeProps.onOpenApprovals}
       onOpenTasks={onOpenTasks}
       onOpenSemanticLink={(link, relatedLinks) => {

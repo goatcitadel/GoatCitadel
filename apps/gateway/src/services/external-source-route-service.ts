@@ -3,6 +3,7 @@ import type {
   ExternalSessionAttachmentListResponse,
   ExternalSessionAttachmentResponse,
   ExternalSessionDetachResponse,
+  ExternalSourceAttachmentCandidateListResponse,
   ExternalSourceCatalogListInput,
   ExternalSourceCreateInput,
   ExternalSourceDetailResponse,
@@ -104,6 +105,10 @@ export interface ExternalSourceRoutePort {
     input: unknown,
     actor: ExternalSourceRequestActor,
   ): Promise<ExternalSessionAttachmentListResponse>;
+  listSessionAttachmentCandidates(
+    input: unknown,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSourceAttachmentCandidateListResponse>;
   attachToSession(
     input: unknown,
     actor: ExternalSourceRequestActor,
@@ -217,6 +222,13 @@ export class ExternalSourceRouteService implements ExternalSourceRoutePort {
     actor: ExternalSourceRequestActor,
   ): Promise<ExternalSessionAttachmentListResponse> {
     return this.requireChat().attachments.list(input, actor);
+  }
+
+  public listSessionAttachmentCandidates(
+    input: unknown,
+    actor: ExternalSourceRequestActor,
+  ): Promise<ExternalSourceAttachmentCandidateListResponse> {
+    return this.requireChat().attachments.listCandidates(input, actor);
   }
 
   public attachToSession(

@@ -281,6 +281,25 @@ export interface ExternalSessionAttachmentRecord {
   detachedAt?: string;
 }
 
+/**
+ * Content-free picker projection for one immutable, verified applied import
+ * item that may be attached to the current Chat session. The final attach
+ * mutation still revalidates the complete source/import/item identity chain.
+ */
+export interface ExternalSourceAttachmentCandidateRecord {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  workspaceId: string;
+  sourceId: string;
+  sourceLabel: string;
+  sourceRevision: number;
+  importId: string;
+  itemId: string;
+  normalizedArtifactSha256: string;
+  normalizedByteCount: number;
+  importedAt: string;
+  artifactsVerifiedAt: string;
+}
+
 export interface ExternalSourceKnowledgeLinkRecord {
   schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
   linkId: string;
@@ -462,6 +481,14 @@ export interface ExternalSessionAttachmentListResponse {
    */
   sessionIncarnationId?: string;
   items: ExternalSessionAttachmentRecord[];
+}
+
+/** Bounded, session-scoped picker choices; no external content bytes or paths. */
+export interface ExternalSourceAttachmentCandidateListResponse {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  workspaceId: string;
+  sessionId: string;
+  items: ExternalSourceAttachmentCandidateRecord[];
 }
 
 export interface ExternalSessionDetachResponse {
@@ -1425,6 +1452,57 @@ export function assertExternalSessionAttachment(value: ExternalSessionAttachment
     assertIso(value.detachedAt);
     assertText(value.detachedByActorId, "detachedByActorId", 256);
   }
+  assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
+}
+
+export function assertExternalSourceAttachmentCandidate(value: ExternalSourceAttachmentCandidateRecord): void {
+  assertRecord(value, "external attachment candidate");
+  assertExactKeys(
+    value,
+    [
+      "schemaVersion",
+      "workspaceId",
+      "sourceId",
+      "sourceLabel",
+      "sourceRevision",
+      "importId",
+      "itemId",
+      "normalizedArtifactSha256",
+      "normalizedByteCount",
+      "importedAt",
+      "artifactsVerifiedAt",
+    ],
+    new Set(),
+  );
+  assertVersion(value.schemaVersion);
+  for (const [name, input] of [
+    ["workspaceId", value.workspaceId],
+    ["sourceId", value.sourceId],
+    ["importId", value.importId],
+    ["itemId", value.itemId],
+  ] as const)
+    assertText(input, name, 256);
+  assertText(value.sourceLabel, "sourceLabel", 512);
+  assertPositiveInteger(value.sourceRevision, "sourceRevision");
+  assertSha256(value.normalizedArtifactSha256);
+  if (!Number.isSafeInteger(value.normalizedByteCount) || value.normalizedByteCount < 0)
+    throw new Error("External attachment candidate byte count is invalid.");
+  assertIso(value.importedAt);
+  assertIso(value.artifactsVerifiedAt);
+  assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
+}
+
+export function assertExternalSourceAttachmentCandidateListResponse(
+  value: ExternalSourceAttachmentCandidateListResponse,
+): void {
+  assertRecord(value, "external attachment candidate list");
+  assertExactKeys(value, ["schemaVersion", "workspaceId", "sessionId", "items"], new Set());
+  assertVersion(value.schemaVersion);
+  assertText(value.workspaceId, "workspaceId", 256);
+  assertText(value.sessionId, "sessionId", 256);
+  if (!Array.isArray(value.items) || value.items.length > EXTERNAL_SOURCE_LIMITS.maxPageSize)
+    throw new Error("External attachment candidate list item count is invalid.");
+  value.items.forEach(assertExternalSourceAttachmentCandidate);
   assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
 }
 

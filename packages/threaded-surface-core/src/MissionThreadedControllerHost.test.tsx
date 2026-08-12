@@ -3629,6 +3629,63 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat).toBeUndefined();
   });
 
+  it("keeps a recovered explorer report visible when its older parent turn is selected", async () => {
+    const newerTurn = {
+      ...selectedTurn,
+      turnId: "turn-2",
+      trace: {
+        ...selectedTurn.trace,
+        durable: { runId: "durable-2" },
+      },
+    };
+    const threadWithNewActiveLeaf = {
+      ...thread,
+      selectedTurnId: "turn-1",
+      activeLeafTurnId: "turn-2",
+      turns: [selectedTurn, newerTurn],
+    } as ChatThreadResponse;
+    useChatSessionDataMock.mockReturnValue({
+      ...useChatSessionDataMock(),
+      thread: threadWithNewActiveLeaf,
+    });
+    mockSelectedTurn = selectedTurn;
+    useChatDockWorkbenchControllerMock.mockReturnValue({
+      ...useChatDockWorkbenchControllerMock(),
+      activeWorkflowTurn: newerTurn,
+    });
+    const explorerRun = {
+      runId: "explorer-recovered",
+      taskId: "explorer-task",
+      attachedTurnId: "turn-1",
+      label: "Workspace exploration",
+      objective: "Find the runtime owner",
+      mode: "sequential",
+      status: "completed",
+      steps: [],
+      explorer: {
+        profile: "read_only_explorer",
+        answer: "The Gateway owns runtime truth.",
+        evidenceReferences: ["apps/gateway/src/services/gateway-service.ts"],
+        searchedScope: {
+          kind: "server_owned_delegated_scope",
+          approvedPaths: ["apps/gateway"],
+          scopeHashes: ["scope-hash"],
+        },
+        partialResult: false,
+        gaps: [],
+      },
+    };
+    useChatContextActionsMock.mockReturnValue({
+      ...useChatContextActionsMock(),
+      activeDelegationRun: explorerRun,
+    });
+
+    await renderHost();
+    await selectDefaultSession();
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.delegationRun).toBe(explorerRun);
+  });
+
   it("covers final host edge callbacks and state fallbacks", async () => {
     setupMocks();
     const setThreadKnowledgeAttachments = vi.fn((next: null | ((current: null) => null)) => {

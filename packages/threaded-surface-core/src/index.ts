@@ -46,6 +46,7 @@ export {
   type ComposerPaletteSourceId,
 } from "./chat/composer-palette";
 export type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat/chat-streaming-preview";
+export type { ThreadedDelegatedScopeControls } from "./chat/useChatDelegatedScopeControls";
 export {
   verifyChatCapabilityProfileAgainstTurn,
   type ChatCapabilityProfileInspection,

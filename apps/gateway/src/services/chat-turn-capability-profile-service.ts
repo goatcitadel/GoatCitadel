@@ -16,6 +16,8 @@ import {
   type ChatThinkingLevel,
   type ChatTurnCapabilityProfilePreview,
   type ChatTurnCapabilityProfileRecord,
+  type ChatWorkspaceSnapshotRecord,
+  type ChatWorkspaceSnapshotRequest,
   type ChatTurnCapabilityToolMeshPublicationBinding,
   type ChatTurnCapabilityToolRuntimeOwnerBinding,
   type ChatWebMode,
@@ -83,6 +85,7 @@ export interface ChatTurnCapabilityProfileResolveInput {
   policyContext?: ToolPolicyActorContext;
   durableRunId?: string;
   createdAt?: string;
+  workspaceSnapshotRequest?: ChatWorkspaceSnapshotRequest;
 }
 
 export interface ChatTurnCapabilityProfileResolveDeps {
@@ -174,6 +177,13 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     manifestSha256: string;
     publisherGeneration: number;
   }): Promise<ChatTurnCapabilityToolMeshPublicationBinding | undefined>;
+  /** Bounded Gateway owner; callers cannot supply paths or Git claims. */
+  resolveWorkspaceSnapshot?(input: {
+    sessionId: string;
+    turnId: string;
+    workspaceId: string;
+    request: ChatWorkspaceSnapshotRequest;
+  }): Promise<ChatWorkspaceSnapshotRecord>;
 }
 
 export interface ChatTurnCapabilityProfileResolution {
@@ -389,6 +399,14 @@ export async function resolveChatTurnCapabilityProfile(
   const source = buildChatTurnCapabilityProfileSourceScope(input.route);
   const contentHash = digest(input.content);
   const workPassport = await deps.classifyWorkPassport?.(input.workspaceId, input.content);
+  const workspaceSnapshot = input.workspaceSnapshotRequest
+    ? await requireWorkspaceSnapshotResolver(deps)({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        workspaceId: input.workspaceId,
+        request: input.workspaceSnapshotRequest,
+      })
+    : undefined;
   const memory = {
     mode: input.memoryMode,
     retrievalMode: input.retrievalMode,
@@ -424,6 +442,7 @@ export async function resolveChatTurnCapabilityProfile(
     trustedSkills,
     ...(activatedSkills.length > 0 ? { activatedSkills } : {}),
     ...(workPassport ? { workPassport } : {}),
+    ...(workspaceSnapshot ? { workspaceSnapshot } : {}),
   } satisfies ChatTurnCapabilityProfileRecord["selection"];
   const governance = {
     activeGrants,
@@ -511,8 +530,18 @@ export async function resolveChatTurnCapabilityProfile(
     authReadiness: governance.authReadiness,
     blockedReasons,
     ...(workPassport ? { workPassport } : {}),
+    ...(workspaceSnapshot ? { workspaceSnapshot } : {}),
   };
   return { profile, catalogSnapshot, preview };
+}
+
+function requireWorkspaceSnapshotResolver(
+  deps: ChatTurnCapabilityProfileResolveDeps,
+): NonNullable<ChatTurnCapabilityProfileResolveDeps["resolveWorkspaceSnapshot"]> {
+  if (!deps.resolveWorkspaceSnapshot) {
+    throw new Error("Workspace snapshot capture is unavailable in this Gateway composition.");
+  }
+  return deps.resolveWorkspaceSnapshot;
 }
 
 function buildProviderReadiness(

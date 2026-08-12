@@ -105,6 +105,7 @@ const blocker = z
   .object({
     kind: z.enum([
       "approval_required",
+      "paused",
       "waiting",
       "failed",
       "cancelled",
@@ -120,6 +121,27 @@ const blocker = z
     link: semanticLink.optional(),
   })
   .strict();
+const attention = z
+  .object({
+    state: z.enum(["foreground", "background", "stopped"]),
+    reason: z.enum(["watcher_attached", "operator_continued_in_background", "watcher_closed"]),
+    updatedAt: isoTimestamp,
+    required: z.boolean(),
+    requiredReason: blocker.shape.kind.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.required !== (value.requiredReason !== undefined)) {
+      context.addIssue({ code: "custom", message: "Attention requirement is inconsistent" });
+    }
+    if (
+      (value.state === "foreground" && value.reason !== "watcher_attached") ||
+      (value.state === "background" && value.reason !== "operator_continued_in_background") ||
+      (value.state === "stopped" && value.reason !== "watcher_closed")
+    ) {
+      context.addIssue({ code: "custom", message: "Attention state and reason are inconsistent" });
+    }
+  });
 const signalIntegrity = z
   .object({
     observedCount: z.number().int().nonnegative(),
@@ -159,6 +181,7 @@ const task = z
     approvals: z.array(approval).max(200),
     output,
     blockers: z.array(blocker).max(32),
+    attention,
     signalIntegrity,
     controls: z.object({ detach: controlState, reattach: controlState, cancel: controlState }).strict(),
     links: z.array(semanticLink).max(12),
@@ -247,7 +270,15 @@ export function parseDurableBackgroundTaskRail(
   const watchers = new Map(rail.tasks.map((item) => [item.watcherId, item]));
   if (
     watchers.size !== rail.tasks.length ||
-    rail.tasks.some((item) => item.scope.workspaceId !== expected.workspaceId)
+    rail.tasks.some(
+      (item) =>
+        item.scope.workspaceId !== expected.workspaceId ||
+        (item.watcherState === "attached" && item.attention.state !== "foreground") ||
+        (item.watcherState === "detached" && item.attention.state !== "background") ||
+        (item.watcherState === "closed" && item.attention.state !== "stopped") ||
+        (item.attention.requiredReason !== undefined &&
+          !item.blockers.some((blockerItem) => blockerItem.kind === item.attention.requiredReason)),
+    )
   ) {
     throw invalidRail();
   }

@@ -9,6 +9,8 @@ import {
 import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
 import { projectDurableRouteResponse } from "../services/durable-public-projection.js";
+import { projectPublicErrorValue } from "../services/public-secret-projection.js";
+import { projectWorkspaceExplorerText } from "../services/workspace-explorer-path-projection.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const listQuerySchema = z.object({
@@ -94,6 +96,11 @@ function hasAsciiControlCharacter(value: string): boolean {
 
 function isBoundedScopeId(value: string): boolean {
   return Buffer.byteLength(value, "utf8") <= 200 && !hasAsciiControlCharacter(value);
+}
+
+function projectDurableBackgroundTaskError(message: string): string {
+  const projected = projectPublicErrorValue({ error: message }).error;
+  return projectWorkspaceExplorerText(projected, []);
 }
 
 const watchChildBodySchema = z
@@ -328,7 +335,9 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Background-task rail failed";
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
+      return reply
+        .code(notFound ? 404 : 409)
+        .send(projectDurableRouteResponse({ error: projectDurableBackgroundTaskError(message) }));
     }
   });
 

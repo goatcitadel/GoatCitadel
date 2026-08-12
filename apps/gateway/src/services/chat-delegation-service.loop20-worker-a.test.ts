@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgenticTaskContext,
   ChatDelegateResponse,
@@ -6,11 +7,18 @@ import type {
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionPrefsRecord,
+  DurableRunRecord,
   TaskActivityRecord,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { canonicalJsonString, NotFoundError } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { ChatDelegationService, type ChatDelegationServiceHost } from "./chat-delegation-service.js";
+import {
+  assertEligibleReadOnlyExplorerDurableParent,
+  ChatDelegationService,
+  READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+  type ChatDelegationServiceHost,
+} from "./chat-delegation-service.js";
+import { buildDeterministicAgentDurableRunId } from "./chat-turn-entry-service.js";
 
 function buildPrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPrefsRecord {
   return {
@@ -65,6 +73,8 @@ function createStepRecord(
     childSessionId: input.childSessionId,
     childTurnId: input.childTurnId,
     citations: input.citations,
+    workResult: input.workResult,
+    scopeControl: input.scopeControl,
   };
 }
 
@@ -146,9 +156,123 @@ function createIdentifiedChatResponse(
   };
 }
 
+function buildPersistedChildDurableRun(input: {
+  runId: string;
+  sessionId: string;
+  workspaceId: string;
+  identity: TestAgentTurnIdentity;
+  request: ChatSendMessageRequest & { policyContext?: unknown };
+}): DurableRunRecord {
+  const {
+    signal: _signal,
+    operatorId,
+    authActorId,
+    authActorSource,
+    contextRefs: _contextRefs,
+    ...serializable
+  } = input.request;
+  const request = JSON.parse(canonicalJsonString({ ...serializable, content: input.request.content.trim() })) as Record<
+    string,
+    unknown
+  >;
+  const admissionMaterialSha256 = createHash("sha256")
+    .update(canonicalJsonString({ version: 2, request }), "utf8")
+    .digest("hex");
+  return {
+    runId: input.runId,
+    workflowKey: "chat.turn.execute",
+    status: "completed",
+    attemptCount: 1,
+    maxAttempts: 3,
+    version: 1,
+    payload: {
+      version: "chat.turn.execute.v2",
+      admissionId: `admission-${input.identity.turnId}`,
+      sessionIncarnationId: `incarnation-${input.sessionId}`,
+      admissionMaterialSha256,
+      workspaceId: input.workspaceId,
+      admissionAggregateRevision: 1,
+      admissionControllerGeneration: 1,
+      effectiveRequestMaterialSha256: createHash("sha256")
+        .update(canonicalJsonString({ version: 1, admissionMaterialSha256, request }), "utf8")
+        .digest("hex"),
+      requestActor: {
+        actorKind: "operator",
+        actorId: authActorId ?? operatorId ?? "operator:local",
+        ...(operatorId ? { operatorId } : {}),
+        ...(authActorId ? { authActorId } : {}),
+        ...(authActorSource ? { authActorSource } : {}),
+      },
+      sessionId: input.sessionId,
+      turnId: input.identity.turnId,
+      userMessageId: input.identity.userMessageId,
+      assistantMessageId: input.identity.assistantMessageId,
+      branchKind: "append",
+      threadEventType: "chat_thread_turn_appended",
+      request,
+    },
+    createdAt: "2026-07-11T00:00:00.000Z",
+    updatedAt: "2026-07-11T00:00:01.000Z",
+  };
+}
+
+function buildExplorerParentDurableRun(
+  input: {
+    runId?: string;
+    operatorId?: string;
+  } = {},
+): DurableRunRecord {
+  const runId = input.runId ?? "durable-parent-explorer";
+  const operatorId = input.operatorId ?? "operator-1";
+  const request = { content: "Prepare a bounded workspace exploration." };
+  const admissionMaterialSha256 = createHash("sha256")
+    .update(canonicalJsonString({ version: 2, request }), "utf8")
+    .digest("hex");
+  return {
+    runId,
+    workflowKey: "chat.turn.execute",
+    status: "completed",
+    attemptCount: 1,
+    maxAttempts: 3,
+    version: 1,
+    payload: {
+      version: "chat.turn.execute.v2",
+      admissionId: `admission-${runId}`,
+      sessionIncarnationId: "incarnation-sess-1",
+      admissionMaterialSha256,
+      workspaceId: "default",
+      admissionAggregateRevision: 1,
+      admissionControllerGeneration: 1,
+      effectiveRequestMaterialSha256: createHash("sha256")
+        .update(canonicalJsonString({ version: 1, admissionMaterialSha256, request }), "utf8")
+        .digest("hex"),
+      policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId },
+      requestActor: { actorKind: "operator", actorId: operatorId, operatorId },
+      sessionId: "sess-1",
+      turnId: `turn-${runId}`,
+      userMessageId: `user-${runId}`,
+      assistantMessageId: `assistant-${runId}`,
+      branchKind: "append",
+      threadEventType: "chat_thread_turn_appended",
+      request,
+    },
+    createdAt: "2026-08-12T00:00:00.000Z",
+    updatedAt: "2026-08-12T00:00:01.000Z",
+  };
+}
+
+function buildStableTestDelegationId(prefix: string, ...parts: string[]): string {
+  const digest = createHash("sha256")
+    .update(parts.map((part) => `${part.length}:${part}`).join("|"))
+    .digest("hex")
+    .slice(0, 32);
+  return `${prefix}-${digest}`;
+}
+
 function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: string } = {}) {
   const prefs = options.prefs ?? buildPrefs();
   const runs = new Map<string, ChatDelegationRunRecord>();
+  const durableRuns = new Map<string, DurableRunRecord>();
   const steps = new Map<string, ChatDelegationStepRecord>();
   const dispatchClaims = new Map<string, { token: string; expiresAt: string }>();
   const tasks = new Map<
@@ -172,6 +296,7 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
 
   const deps = {
     getSession: vi.fn(() => ({ sessionId: "sess-1" })),
+    getDurableRun: vi.fn((runId: string) => durableRuns.get(runId)),
     listChatMessages: vi.fn(async () => [
       { role: "assistant", content: "Previous answer" },
       { role: "user", content: "Need architecture, implementation, QA, ops, and handoff coverage." },
@@ -196,11 +321,30 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
       return created;
     }),
     inheritDelegatedSessionToolGrants: vi.fn(),
+    ensureSessionInternalToolGrant: vi.fn(),
+    resolveDelegatedFilesystemScope: vi.fn(async () => undefined),
+    assertDelegatedFilesystemScopeBinding: vi.fn(),
     updateChatSessionPrefs: vi.fn(),
     resolveToolPolicyContext: undefined,
     agentSendChatMessage: vi.fn(async (childSessionId: string) => createChatResponse(childSessionId)),
     extractAndPersistLearnedMemory: vi.fn(),
     scheduleChatMemoryContextPrewarm: vi.fn(),
+    validateReadOnlyExplorerParent: vi.fn(async ({ sessionId, policyRunId }) => {
+      const parentRun = durableRuns.get(policyRunId);
+      if (parentRun) {
+        const authority = assertEligibleReadOnlyExplorerDurableParent({
+          parentRun,
+          sessionId,
+          workspaceId: "default",
+        });
+        return { workspaceId: "default", requestActor: authority.requestActor };
+      }
+      return {
+        workspaceId: "default",
+        requestActor: { actorKind: "operator" as const, actorId: "operator-1" },
+      };
+    }),
+    watchDurableChildRun: vi.fn(),
     gatewaySql: {
       prepare: vi.fn(() => ({
         get: vi.fn(() => undefined),
@@ -565,6 +709,74 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
             Date.parse(claim.expiresAt) > Date.parse(databaseNowIso),
           );
         }),
+        bindOwnedDurableRun: vi.fn(
+          (input: { stepId: string; expectedDispatchToken: string; childSessionId: string; durableRunId: string }) => {
+            const current = steps.get(input.stepId);
+            const claim = dispatchClaims.get(input.stepId);
+            if (
+              !current ||
+              current.status !== "running" ||
+              current.childSessionId !== input.childSessionId ||
+              claim?.token !== input.expectedDispatchToken ||
+              Date.parse(claim.expiresAt) <= Date.parse(databaseNowIso) ||
+              (current.durableRunId !== undefined && current.durableRunId !== input.durableRunId)
+            ) {
+              return undefined;
+            }
+            const next = { ...current, durableRunId: input.durableRunId };
+            steps.set(input.stepId, next);
+            return next;
+          },
+        ),
+        extendOwnedDispatchLease: vi.fn(
+          (input: {
+            stepId: string;
+            expectedDispatchToken: string;
+            childSessionId: string;
+            leaseExpiresAt: string;
+          }) => {
+            const current = steps.get(input.stepId);
+            const claim = dispatchClaims.get(input.stepId);
+            if (
+              !current ||
+              current.childSessionId !== input.childSessionId ||
+              claim?.token !== input.expectedDispatchToken ||
+              !current.durableRunId
+            ) {
+              return undefined;
+            }
+            dispatchClaims.set(input.stepId, { token: claim.token, expiresAt: input.leaseExpiresAt });
+            return current;
+          },
+        ),
+        recoverDurableRunBinding: vi.fn(
+          (input: {
+            stepId: string;
+            childSessionId: string;
+            childTurnId: string;
+            durableRunId: string;
+            releaseDispatch: boolean;
+          }) => {
+            const current = steps.get(input.stepId);
+            if (
+              !current ||
+              current.status !== "running" ||
+              current.childSessionId !== input.childSessionId ||
+              (current.childTurnId !== undefined && current.childTurnId !== input.childTurnId) ||
+              (current.durableRunId !== undefined && current.durableRunId !== input.durableRunId)
+            ) {
+              return undefined;
+            }
+            const next = {
+              ...current,
+              childTurnId: input.childTurnId,
+              durableRunId: input.durableRunId,
+            };
+            steps.set(input.stepId, next);
+            if (input.releaseDispatch) dispatchClaims.delete(input.stepId);
+            return next;
+          },
+        ),
         finishOwnedDispatchWithError: vi.fn(
           (input: {
             stepId: string;
@@ -723,6 +935,7 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
     deps,
     service: new ChatDelegationService(deps),
     runs,
+    durableRuns,
     steps,
     dispatchClaims,
     tasks,
@@ -752,6 +965,715 @@ function createAcceptHarness(argsJson: string | undefined) {
 }
 
 describe("ChatDelegationService loop 20 coverage", () => {
+  it("recovers a persisted pre-launch Explorer exactly once across two fresh Gateway services", async () => {
+    const { deps, durableRuns, runs, service, stableChildSessions, steps } = createHarness();
+    durableRuns.set("durable-parent-explorer", buildExplorerParentDurableRun());
+    deps.resolveDelegatedFilesystemScope.mockImplementation(async (_sessionId, dispatchGeneration) => ({
+      rootPath: "F:\\code\\personal-ai",
+      projectId: "project-1",
+      approvedPaths: ["apps/gateway"],
+      scopeHash: "scope-prelaunch-crash",
+      dispatchGeneration,
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    }));
+    const request = {
+      objective: "Recover exploration after pre-launch process loss",
+      roles: ["Workspace explorer"],
+      executionProfile: "read_only_explorer" as const,
+      policyRunId: "durable-parent-explorer",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+    };
+    await expect(
+      service.runChatDelegation("sess-1", request, {
+        onStatus: () => {
+          throw new Error("simulated process stop after plan commit");
+        },
+      }),
+    ).rejects.toThrow("simulated process stop after plan commit");
+    const persistedRun = [...runs.values()][0]!;
+    const persistedStep = [...steps.values()][0]!;
+    expect(persistedStep).toMatchObject({
+      status: "pending",
+      scopeControl: expect.objectContaining({
+        projectId: "project-1",
+        scopeHash: "scope-prelaunch-crash",
+      }),
+    });
+
+    let releaseChild!: () => void;
+    const childHeld = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        childRequest: ChatSendMessageRequest & { policyContext?: unknown },
+        options?: {
+          turnIdentity?: TestAgentTurnIdentity;
+          onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+        },
+      ) => {
+        const identity = options!.turnIdentity!;
+        const durableRunId = buildDeterministicAgentDurableRunId(identity.turnId);
+        await options?.onChildDurableRunLaunched?.(durableRunId);
+        await childHeld;
+        const active = steps.get(persistedStep.stepId)!;
+        steps.set(active.stepId, {
+          ...active,
+          workResult: {
+            disposition: "completed",
+            summary: "Recovered bounded workspace evidence.",
+            changedFiles: [],
+            evidenceRefs: ["apps/gateway"],
+            scopeHash: active.scopeControl!.scopeHash,
+            dispatchGeneration: active.scopeControl!.dispatchGeneration,
+          },
+        });
+        return createIdentifiedChatResponse(childSessionId, identity, {
+          trace: {
+            ...createIdentifiedChatResponse(childSessionId, identity).trace!,
+            durable: { runId: durableRunId, status: "completed" },
+          },
+        });
+      },
+    ) as never;
+    const tracked: Promise<unknown>[] = [];
+    const recoveryOptions = {
+      returnAfterDurableLaunch: true,
+      trackExecution: (execution: Promise<unknown>) => tracked.push(execution),
+    };
+    const recoveries = await Promise.all([
+      new ChatDelegationService(deps).reconcilePersistedWorkspaceExplorer(
+        { sessionId: "sess-1", delegationRunId: persistedRun.runId },
+        recoveryOptions,
+      ),
+      new ChatDelegationService(deps).reconcilePersistedWorkspaceExplorer(
+        { sessionId: "sess-1", delegationRunId: persistedRun.runId },
+        recoveryOptions,
+      ),
+    ]);
+
+    expect(recoveries).toEqual([
+      { repaired: true, reentered: true },
+      { repaired: true, reentered: true },
+    ]);
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+    expect(stableChildSessions.size).toBe(1);
+    expect(steps.get(persistedStep.stepId)?.durableRunId).toMatch(/^durable-chat-/);
+    expect(deps.watchDurableChildRun).toHaveBeenCalledTimes(1);
+    releaseChild();
+    await Promise.all(tracked);
+    expect(steps.get(persistedStep.stepId)?.status).toBe("completed");
+  });
+
+  it.each(["unlinked", "linked"] as const)(
+    "waits out and recovers an active short %s Explorer pre-admission lease after restart",
+    async (crashPoint) => {
+      const { deps, dispatchClaims, durableRuns, runs, service, setDatabaseNow, stableChildSessions, steps } =
+        createHarness();
+      durableRuns.set("durable-parent-explorer", buildExplorerParentDurableRun());
+      deps.resolveDelegatedFilesystemScope.mockImplementation(async (_sessionId, dispatchGeneration) => ({
+        rootPath: "F:\\code\\personal-ai",
+        projectId: "project-1",
+        approvedPaths: ["apps/gateway"],
+        scopeHash: `scope-${crashPoint}-crash`,
+        dispatchGeneration,
+        updatedAt: "2026-08-12T00:00:00.000Z",
+      }));
+      await expect(
+        service.runChatDelegation(
+          "sess-1",
+          {
+            objective: `Recover ${crashPoint} Explorer admission`,
+            roles: ["Workspace explorer"],
+            executionProfile: "read_only_explorer",
+            policyRunId: "durable-parent-explorer",
+            operatorId: "operator-1",
+            authActorId: "operator-1",
+          },
+          { onStatus: () => Promise.reject(new Error("simulated plan-only process stop")) },
+        ),
+      ).rejects.toThrow("simulated plan-only process stop");
+      const persistedRun = [...runs.values()][0]!;
+      const pending = [...steps.values()][0]!;
+      const turnId = buildStableTestDelegationId("delegation-turn", persistedRun.runId, pending.stepId);
+      const expiresAt = "2026-07-11T00:00:00.010Z";
+      let childSessionId: string | undefined;
+      if (crashPoint === "linked") {
+        const stableKey = `chat-delegation:${persistedRun.runId}:${pending.stepId}`;
+        childSessionId = deps.createChatSession({ stableKey, title: "Delegate · Workspace Explorer" }).sessionId;
+      }
+      steps.set(pending.stepId, { ...pending, status: "running", ...(childSessionId ? { childSessionId } : {}) });
+      dispatchClaims.set(pending.stepId, {
+        token: `delegation-${childSessionId ? "dispatch" : "claim"}:v1:${Date.parse(expiresAt)}:${turnId}:dead-process`,
+        expiresAt,
+      });
+      deps.agentSendChatMessage = vi.fn(
+        async (
+          activeChildSessionId: string,
+          _request: ChatSendMessageRequest,
+          options?: {
+            turnIdentity?: TestAgentTurnIdentity;
+            onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+          },
+        ) => {
+          const identity = options!.turnIdentity!;
+          const durableRunId = buildDeterministicAgentDurableRunId(identity.turnId);
+          await options?.onChildDurableRunLaunched?.(durableRunId);
+          const active = steps.get(pending.stepId)!;
+          steps.set(active.stepId, {
+            ...active,
+            workResult: {
+              disposition: "completed",
+              summary: "Recovered after short admission lease.",
+              changedFiles: [],
+              evidenceRefs: ["apps/gateway"],
+              scopeHash: active.scopeControl!.scopeHash,
+              dispatchGeneration: active.scopeControl!.dispatchGeneration,
+            },
+          });
+          return createIdentifiedChatResponse(activeChildSessionId, identity, {
+            trace: {
+              ...createIdentifiedChatResponse(activeChildSessionId, identity).trace!,
+              durable: { runId: durableRunId, status: "completed" },
+            },
+          });
+        },
+      ) as never;
+      setTimeout(() => setDatabaseNow("2026-07-11T00:00:01.000Z"), 5);
+
+      await expect(
+        new ChatDelegationService(deps).reconcilePersistedWorkspaceExplorer({
+          sessionId: "sess-1",
+          delegationRunId: persistedRun.runId,
+        }),
+      ).resolves.toEqual({ repaired: true, reentered: true });
+      expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+      expect(steps.get(pending.stepId)?.status).toBe("completed");
+      expect(stableChildSessions.size).toBe(1);
+      if (childSessionId) expect(steps.get(pending.stepId)?.childSessionId).toBe(childSessionId);
+    },
+  );
+
+  it("atomically terminalizes project drift and retries after aggregate persistence rolls back", async () => {
+    const { deps, durableRuns, runs, service, steps, tasks } = createHarness();
+    durableRuns.set("durable-parent-explorer", buildExplorerParentDurableRun());
+    deps.resolveDelegatedFilesystemScope.mockImplementation(async (_sessionId, dispatchGeneration) => ({
+      rootPath: "F:\\private\\old-project",
+      projectId: "project-1",
+      approvedPaths: ["apps/gateway"],
+      scopeHash: "scope-project-1",
+      dispatchGeneration,
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    }));
+    await expect(
+      service.runChatDelegation(
+        "sess-1",
+        {
+          objective: "Detect a rebound project before Explorer recovery",
+          roles: ["Workspace explorer"],
+          executionProfile: "read_only_explorer",
+          policyRunId: "durable-parent-explorer",
+          operatorId: "operator-1",
+          authActorId: "operator-1",
+        },
+        { onStatus: () => Promise.reject(new Error("simulated plan-only process stop")) },
+      ),
+    ).rejects.toThrow("simulated plan-only process stop");
+    const persistedRun = [...runs.values()][0]!;
+    deps.storage.chatSessionProjects.get.mockReturnValue({ projectId: "project-2" });
+    deps.assertDelegatedFilesystemScopeBinding.mockImplementation(async (_sessionId, scope) => {
+      const currentProject = await deps.storage.chatSessionProjects.get("sess-1");
+      if (currentProject?.projectId !== scope.projectId) {
+        throw new Error(`realpath failed for ${scope.rootPath}`);
+      }
+    });
+    deps.storage.runImmediateTransaction = vi.fn(async <T>(callback: () => T | Promise<T>) => {
+      const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
+      const runSnapshot = new Map([...runs].map(([key, value]) => [key, { ...value }]));
+      const taskSnapshot = new Map([...tasks].map(([key, value]) => [key, { ...value }]));
+      try {
+        return await callback();
+      } catch (error) {
+        steps.clear();
+        for (const [key, value] of stepSnapshot) steps.set(key, value);
+        runs.clear();
+        for (const [key, value] of runSnapshot) runs.set(key, value);
+        tasks.clear();
+        for (const [key, value] of taskSnapshot) tasks.set(key, value);
+        throw error;
+      }
+    }) as never;
+    deps.storage.chatDelegationRuns.patch.mockImplementationOnce(() => {
+      throw new Error("simulated aggregate persistence crash");
+    });
+    deps.taskLifecycleService.publishDelegationAggregateTask.mockClear();
+
+    await expect(
+      new ChatDelegationService(deps).reconcilePersistedWorkspaceExplorer({
+        sessionId: "sess-1",
+        delegationRunId: persistedRun.runId,
+      }),
+    ).rejects.toThrow("simulated aggregate persistence crash");
+    expect([...steps.values()][0]).toMatchObject({ status: "pending", error: undefined });
+    expect(runs.get(persistedRun.runId)?.status).toBe("running");
+    expect(tasks.get(persistedRun.taskId)?.status).toBe("in_progress");
+    expect(deps.taskLifecycleService.publishDelegationAggregateTask).not.toHaveBeenCalled();
+
+    await expect(
+      new ChatDelegationService(deps).reconcilePersistedWorkspaceExplorer({
+        sessionId: "sess-1",
+        delegationRunId: persistedRun.runId,
+      }),
+    ).resolves.toEqual({ repaired: true, reentered: false });
+    const failedStep = [...steps.values()][0]!;
+    expect(failedStep).toMatchObject({
+      status: "failed",
+      summary: "Workspace exploration unavailable.",
+      error: "Workspace exploration is unavailable because its verified project or filesystem scope changed.",
+    });
+    expect(failedStep.error).not.toContain("F:\\private");
+    expect(runs.get(persistedRun.runId)?.status).toBe("failed");
+    expect(tasks.get(persistedRun.taskId)?.status).toBe("blocked");
+    expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("repairs and re-enters a terminal explorer child left running after process interruption", async () => {
+    const { deps, durableRuns, service, steps } = createHarness();
+    deps.resolveDelegatedFilesystemScope.mockResolvedValue({
+      rootPath: "F:\\code\\personal-ai",
+      projectId: "project-1",
+      approvedPaths: ["apps/gateway"],
+      scopeHash: "scope-explorer-crash",
+      dispatchGeneration: "dispatch-explorer-crash",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+    let frozenRequest: (ChatSendMessageRequest & { policyContext?: unknown }) | undefined;
+    let frozenIdentity: TestAgentTurnIdentity | undefined;
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        request: ChatSendMessageRequest & { policyContext?: unknown },
+        options?: {
+          turnIdentity?: TestAgentTurnIdentity;
+          onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+        },
+      ) => {
+        const identity = options?.turnIdentity;
+        if (!identity) {
+          throw new Error("Expected a frozen Explorer turn identity.");
+        }
+        if (deps.agentSendChatMessage.mock.calls.length === 1) {
+          frozenRequest = request;
+          frozenIdentity = identity;
+          await options?.onChildDurableRunLaunched?.("durable-child-explorer-crash");
+          const waiting = createIdentifiedChatResponse(childSessionId, identity);
+          return {
+            ...waiting,
+            assistantMessage: undefined,
+            trace: {
+              ...waiting.trace!,
+              status: "running",
+              durable: { runId: "durable-child-explorer-crash", status: "running" },
+            },
+          };
+        }
+        expect(request).toEqual(frozenRequest);
+        const completed = createIdentifiedChatResponse(childSessionId, identity);
+        return {
+          ...completed,
+          trace: {
+            ...completed.trace!,
+            durable: { runId: "durable-child-explorer-crash", status: "completed" },
+          },
+        };
+      },
+    ) as never;
+
+    const interrupted = await service.runChatDelegation("sess-1", {
+      objective: "Inspect the workspace after a durable restart",
+      roles: ["Workspace explorer"],
+      executionProfile: "read_only_explorer",
+      policyRunId: "durable-parent-explorer",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+    });
+    expect(interrupted.status).toBe("running");
+    const interruptedStep = steps.get(interrupted.steps[0]!.stepId)!;
+    expect(interruptedStep).toMatchObject({
+      status: "running",
+      childSessionId: "delegate-session-1",
+      childTurnId: frozenIdentity!.turnId,
+      durableRunId: "durable-child-explorer-crash",
+    });
+
+    steps.set(interruptedStep.stepId, {
+      ...interruptedStep,
+      workResult: {
+        disposition: "completed",
+        summary: "Workspace evidence recovered.",
+        changedFiles: [],
+        evidenceRefs: ["apps/gateway/src/services/chat-delegation-service.ts"],
+        scopeHash: "scope-explorer-crash",
+        dispatchGeneration: "dispatch-explorer-crash",
+      },
+    });
+    durableRuns.set(
+      "durable-child-explorer-crash",
+      buildPersistedChildDurableRun({
+        runId: "durable-child-explorer-crash",
+        sessionId: "delegate-session-1",
+        workspaceId: "default",
+        identity: frozenIdentity!,
+        request: frozenRequest!,
+      }),
+    );
+
+    const restartedService = new ChatDelegationService(deps);
+    await expect(
+      restartedService.reconcilePersistedWorkspaceExplorer({
+        sessionId: "sess-1",
+        delegationRunId: interrupted.runId,
+      }),
+    ).resolves.toEqual({ repaired: true, reentered: true });
+    expect(steps.get(interruptedStep.stepId)).toMatchObject({
+      status: "completed",
+      childTurnId: frozenIdentity!.turnId,
+      durableRunId: "durable-child-explorer-crash",
+      output: expect.stringContaining("delegate-session-1 output"),
+    });
+    expect(deps.watchDurableChildRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentRunId: "durable-parent-explorer",
+        childRunId: "durable-child-explorer-crash",
+        required: true,
+      }),
+    );
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("derives and repairs the durable Explorer child when launch binding and watcher roll back together", async () => {
+    const { deps, dispatchClaims, durableRuns, service, steps } = createHarness();
+    deps.resolveDelegatedFilesystemScope.mockResolvedValue({
+      rootPath: "F:\\code\\personal-ai",
+      projectId: "project-1",
+      approvedPaths: ["apps/gateway"],
+      scopeHash: "scope-explorer-atomic-rollback",
+      dispatchGeneration: "dispatch-explorer-atomic-rollback",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+    const originalTransaction = deps.storage.runImmediateTransaction;
+    deps.storage.runImmediateTransaction = vi.fn(async <T>(callback: () => T | Promise<T>) => {
+      const stepSnapshot = new Map([...steps].map(([key, value]) => [key, { ...value }]));
+      const claimSnapshot = new Map([...dispatchClaims].map(([key, value]) => [key, { ...value }]));
+      try {
+        return await callback();
+      } catch (error) {
+        steps.clear();
+        for (const [key, value] of stepSnapshot) steps.set(key, value);
+        dispatchClaims.clear();
+        for (const [key, value] of claimSnapshot) dispatchClaims.set(key, value);
+        throw error;
+      }
+    }) as never;
+    deps.watchDurableChildRun.mockRejectedValueOnce(new Error("simulated atomic watcher failure"));
+    let frozenIdentity: TestAgentTurnIdentity | undefined;
+    let frozenRequest: (ChatSendMessageRequest & { policyContext?: unknown }) | undefined;
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        request: ChatSendMessageRequest & { policyContext?: unknown },
+        options?: {
+          turnIdentity?: TestAgentTurnIdentity;
+          onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+        },
+      ) => {
+        const identity = options?.turnIdentity;
+        if (!identity) {
+          throw new Error("Expected a frozen Explorer turn identity.");
+        }
+        if (deps.agentSendChatMessage.mock.calls.length === 1) {
+          frozenIdentity = identity;
+          frozenRequest = request;
+          const active = [...steps.values()].find((step) => step.childSessionId === childSessionId)!;
+          steps.set(active.stepId, {
+            ...active,
+            workResult: {
+              disposition: "completed",
+              summary: "Recovered after atomic watcher rollback.",
+              changedFiles: [],
+              evidenceRefs: ["apps/gateway"],
+              scopeHash: "scope-explorer-atomic-rollback",
+              dispatchGeneration: "dispatch-explorer-atomic-rollback",
+            },
+          });
+          const childRunId = buildDeterministicAgentDurableRunId(identity.turnId);
+          durableRuns.set(
+            childRunId,
+            buildPersistedChildDurableRun({
+              runId: childRunId,
+              sessionId: childSessionId,
+              workspaceId: "default",
+              identity,
+              request,
+            }),
+          );
+          await options?.onChildDurableRunLaunched?.(childRunId);
+        }
+        expect(request).toEqual(frozenRequest);
+        const completed = createIdentifiedChatResponse(childSessionId, identity);
+        return {
+          ...completed,
+          trace: {
+            ...completed.trace!,
+            durable: { runId: buildDeterministicAgentDurableRunId(identity.turnId), status: "completed" },
+          },
+        };
+      },
+    ) as never;
+
+    const interrupted = await service.runChatDelegation("sess-1", {
+      objective: "Recover the explorer launch atomically",
+      roles: ["Workspace explorer"],
+      executionProfile: "read_only_explorer",
+      policyRunId: "durable-parent-explorer",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+    });
+    const interruptedStep = steps.get(interrupted.steps[0]!.stepId)!;
+    expect(interrupted).toMatchObject({ status: "running" });
+    expect(interruptedStep).toMatchObject({ status: "running", childSessionId: "delegate-session-1" });
+    expect(interruptedStep.durableRunId).toBeUndefined();
+    expect(interruptedStep.childTurnId).toBeUndefined();
+    expect(dispatchClaims.has(interruptedStep.stepId)).toBe(true);
+
+    deps.storage.runImmediateTransaction = originalTransaction;
+    const restartedService = new ChatDelegationService(deps);
+    await expect(
+      restartedService.reconcilePersistedWorkspaceExplorer({
+        sessionId: "sess-1",
+        delegationRunId: interrupted.runId,
+      }),
+    ).resolves.toEqual({ repaired: true, reentered: true });
+    expect(steps.get(interruptedStep.stepId)).toMatchObject({
+      status: "completed",
+      childTurnId: frozenIdentity!.turnId,
+      durableRunId: buildDeterministicAgentDurableRunId(frozenIdentity!.turnId),
+    });
+    expect(dispatchClaims.has(interruptedStep.stepId)).toBe(false);
+  });
+
+  it("resumes the exact persisted child authority and custom step graph without widening posture", async () => {
+    const originalPrefs = buildPrefs({
+      webMode: "off",
+      memoryMode: "off",
+      toolAutonomy: "manual",
+      retrievalMode: "standard",
+    });
+    const { deps, dispatchClaims, durableRuns, service, steps } = createHarness({ prefs: originalPrefs });
+    deps.resolveToolPolicyContext = vi.fn((input) => ({
+      ...input,
+      permissionProfileId: "profile-restricted",
+      localOperatorOverrideId: "override-frozen",
+      fullWebAccess: false,
+    }));
+
+    let frozenChildRequest: (ChatSendMessageRequest & { policyContext?: unknown }) | undefined;
+    let frozenIdentity: TestAgentTurnIdentity | undefined;
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        request: ChatSendMessageRequest & { policyContext?: unknown },
+        options?: { turnIdentity?: TestAgentTurnIdentity },
+      ) => {
+        const identity = options?.turnIdentity;
+        if (!identity) {
+          throw new Error("Expected a frozen Explorer turn identity.");
+        }
+        const call = deps.agentSendChatMessage.mock.calls.length;
+        const response = createIdentifiedChatResponse(childSessionId, identity);
+        if (call === 1) {
+          frozenChildRequest = request;
+          frozenIdentity = identity;
+          const active = [...steps.values()].find((step) => step.childSessionId === childSessionId)!;
+          steps.set(active.stepId, {
+            ...active,
+            scopeControl: {
+              rootPath: "F:\\code\\personal-ai",
+              approvedPaths: ["apps/gateway"],
+              scopeHash: "scope-original",
+              dispatchGeneration: "dispatch-original",
+              updatedAt: "2026-07-11T00:00:00.000Z",
+            },
+            workResult: {
+              disposition: "scope_expansion",
+              summary: "Need tests too.",
+              changedFiles: [],
+              evidenceRefs: [],
+              scopeHash: "scope-original",
+              dispatchGeneration: "dispatch-original",
+              scopeExpansion: {
+                requestedPaths: ["apps/gateway", "packages/storage"],
+                reason: "Need tests too.",
+                scopeHash: "scope-original",
+                approvalId: "approval-scope-1",
+                requestedAt: "2026-07-11T00:00:00.000Z",
+              },
+            },
+          });
+          return {
+            ...response,
+            trace: {
+              ...response.trace!,
+              status: "waiting_for_approval",
+              durable: { runId: "durable-child-scope-1", status: "waiting" },
+            },
+          };
+        }
+        if (call === 2) {
+          expect(childSessionId).toBe("delegate-session-1");
+          expect(request).toEqual(frozenChildRequest);
+          const active = [...steps.values()].find((step) => step.childSessionId === childSessionId)!;
+          steps.set(active.stepId, {
+            ...active,
+            workResult: {
+              disposition: "completed",
+              summary: "Coder completed after scope approval.",
+              changedFiles: [],
+              evidenceRefs: ["apps/gateway/src/services/chat-delegation-service.ts"],
+              scopeHash: "scope-expanded",
+              dispatchGeneration: "dispatch-expanded",
+            },
+          });
+          return {
+            ...response,
+            trace: {
+              ...response.trace!,
+              durable: { runId: "durable-child-scope-1", status: "completed" },
+            },
+          };
+        }
+        expect(childSessionId).toBe("delegate-session-2");
+        expect(request).toMatchObject({
+          webMode: "off",
+          memoryMode: "off",
+          fullWebAccess: false,
+          permissionProfileId: "profile-restricted",
+          localOperatorOverrideId: "override-frozen",
+          prefsOverride: expect.objectContaining({ toolAutonomy: "manual", retrievalMode: "standard" }),
+        });
+        return response;
+      },
+    ) as never;
+
+    const request = {
+      objective: "Implement then verify the scoped change",
+      roles: ["Coder", "QA"],
+      mode: "sequential" as const,
+      steps: [
+        { stepId: "implementation", role: "Coder", index: 0, parallelizable: false },
+        {
+          stepId: "verification",
+          role: "QA",
+          index: 1,
+          parallelizable: false,
+          dependsOnStepIds: ["implementation"],
+        },
+      ],
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "token" as const,
+      permissionProfileId: "profile-restricted",
+      localOperatorOverrideId: "override-frozen",
+      policyRunId: "durable-parent-custom-plan",
+      fullWebAccess: false,
+    };
+    const waiting = await service.runChatDelegation("sess-1", request);
+    expect(waiting.status).toBe("running");
+    expect(waiting.steps).toHaveLength(2);
+    expect(waiting.steps[1]?.dependsOnStepIds).toEqual([waiting.steps[0]!.stepId]);
+
+    const scopeStep = steps.get(waiting.steps[0]!.stepId)!;
+    steps.set(scopeStep.stepId, {
+      ...scopeStep,
+      scopeControl: {
+        ...scopeStep.scopeControl!,
+        approvedPaths: ["apps/gateway", "packages/storage"],
+        scopeHash: "scope-expanded",
+        dispatchGeneration: "dispatch-expanded",
+        updatedAt: "2026-07-11T00:00:01.000Z",
+      },
+      workResult: {
+        ...scopeStep.workResult!,
+        scopeExpansion: {
+          ...scopeStep.workResult!.scopeExpansion!,
+          decision: "approved",
+          resolvedAt: "2026-07-11T00:00:01.000Z",
+        },
+      },
+    });
+    durableRuns.set(
+      "durable-child-scope-1",
+      buildPersistedChildDurableRun({
+        runId: "durable-child-scope-1",
+        sessionId: "delegate-session-1",
+        workspaceId: "default",
+        identity: frozenIdentity!,
+        request: frozenChildRequest!,
+      }),
+    );
+
+    deps.storage.chatSessionPrefs.ensure.mockResolvedValue(
+      buildPrefs({
+        webMode: "deep",
+        memoryMode: "auto",
+        toolAutonomy: "safe_auto",
+        retrievalMode: "layered",
+        codeAutoApply: "aggressive_auto",
+      }),
+    );
+    deps.resolveToolPolicyContext.mockClear();
+    deps.resolveToolPolicyContext.mockRejectedValue(new Error("live policy must not be recomputed"));
+    deps.inheritDelegatedSessionToolGrants.mockClear();
+    deps.updateChatSessionPrefs.mockClear();
+    const dispatchExpiry = "2026-07-11T01:00:00.000Z";
+    dispatchClaims.set(scopeStep.stepId, {
+      token: `delegation-dispatch:v1:${Date.parse(dispatchExpiry)}:${frozenIdentity!.turnId}:existing-owner`,
+      expiresAt: dispatchExpiry,
+    });
+    const noOp = await service.resumePersistedChatDelegation({
+      delegationRunId: waiting.runId,
+      stepId: scopeStep.stepId,
+      durableRunId: "durable-child-scope-1",
+    });
+    expect(noOp.reenteredPersistedStep).toBe(false);
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+
+    dispatchClaims.delete(scopeStep.stepId);
+    const resumed = await service.resumePersistedChatDelegation({
+      delegationRunId: waiting.runId,
+      stepId: scopeStep.stepId,
+      durableRunId: "durable-child-scope-1",
+    });
+    expect(resumed.reenteredPersistedStep).toBe(true);
+    expect(resumed.status).toBe("completed");
+    expect(resumed.steps.map((step) => step.role)).toEqual(["coder", "qa"]);
+    expect(resumed.steps[1]?.dependsOnStepIds).toEqual([resumed.steps[0]!.stepId]);
+    expect(deps.resolveToolPolicyContext).not.toHaveBeenCalled();
+    expect(deps.inheritDelegatedSessionToolGrants).not.toHaveBeenCalled();
+    expect(deps.updateChatSessionPrefs).toHaveBeenCalledTimes(1);
+    expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith(
+      "delegate-session-2",
+      expect.objectContaining({
+        webMode: "off",
+        memoryMode: "off",
+        toolAutonomy: "manual",
+        codeAutoApply: "manual",
+      }),
+    );
+  });
+
   it("suggests delegation from the latest user message and falls back to default roles for blank explicit roles", async () => {
     const { deps, service } = createHarness();
 
@@ -1447,6 +2369,49 @@ describe("ChatDelegationService loop 20 coverage", () => {
       expect.objectContaining({ objective: winnerRequest.objective, roles: ["coder"], taskId: winner.taskId }),
     );
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps stable durable reuse fenced by the persisted explorer workflow in both directions", async () => {
+    const request = {
+      objective: "Inspect the canonical workspace",
+      roles: ["workspace-explorer"],
+      mode: "sequential" as const,
+      policyRunId: "durable-parent-profile-fence",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+    };
+    const standardHarness = createHarness();
+    await standardHarness.service.runChatDelegation("sess-1", request);
+
+    await expect(
+      standardHarness.service.runChatDelegation("sess-1", {
+        ...request,
+        executionProfile: "read_only_explorer",
+      }),
+    ).rejects.toThrow(/different persisted plan/);
+    expect([...standardHarness.runs.values()]).toHaveLength(1);
+    expect([...standardHarness.runs.values()][0]?.workflowTemplate).toBeUndefined();
+
+    const explorerHarness = createHarness();
+    explorerHarness.runs.set("persisted-explorer-run", {
+      runId: "persisted-explorer-run",
+      parentRunId: request.policyRunId,
+      sessionId: "sess-1",
+      taskId: "persisted-explorer-task",
+      objective: request.objective,
+      roles: request.roles,
+      mode: request.mode,
+      status: "running",
+      workflowTemplate: READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+      citations: [],
+      startedAt: "2026-08-12T00:00:00.000Z",
+    });
+
+    await expect(explorerHarness.service.runChatDelegation("sess-1", request)).rejects.toThrow(
+      /different persisted plan/,
+    );
+    expect(explorerHarness.deps.taskLifecycleService.createTask).not.toHaveBeenCalled();
+    expect(explorerHarness.deps.agentSendChatMessage).not.toHaveBeenCalled();
   });
 
   it("fails a durable wake closed when the canonical dependency topology or parallelism changes", async () => {

@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatRoutedContextRef, ExternalSessionAttachmentRecord } from "@goatcitadel/contracts";
+import type {
+  ChatRoutedContextRef,
+  ExternalSessionAttachmentRecord,
+  ExternalSourceAttachmentCandidateRecord,
+} from "@goatcitadel/contracts";
 import {
   attachExternalSourceToSession,
   detachExternalSourceAttachment,
   fetchExternalSessionAttachments,
+  fetchExternalSourceAttachmentCandidates,
   isExternalSourceCapabilityAbsent,
   requestExternalSourceKnowledgeSnapshot,
 } from "@goatcitadel/mission-control-shared/api/external-sources";
@@ -57,6 +62,10 @@ export interface ExternalSourceAttachmentsState {
   error: string | null;
   /** Live read-only attachments (status "attached") for the selected session. */
   attachments: readonly ExternalSessionAttachmentRecord[];
+  /** Content-free, server-filtered applied import items eligible for this session. */
+  candidates: readonly ExternalSourceAttachmentCandidateRecord[];
+  /** False when the candidate-list endpoint is absent while legacy attachment routes remain live. */
+  candidatesSupported: boolean | null;
   /** Explicit per-turn selection, in toggle order. */
   selectedAttachmentIds: readonly string[];
   /** Attachment id with an in-flight mutation, if any. */
@@ -86,6 +95,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<readonly ExternalSessionAttachmentRecord[]>([]);
+  const [candidates, setCandidates] = useState<readonly ExternalSourceAttachmentCandidateRecord[]>([]);
+  const [candidatesSupported, setCandidatesSupported] = useState<boolean | null>(null);
   const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<readonly string[]>([]);
   const [busyAttachmentId, setBusyAttachmentId] = useState<string | null>(null);
   // C4 activation seam: the durable reload response is the sanctioned place
@@ -117,6 +128,25 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         const next = current.filter((id) => liveIds.has(id));
         return next.length === current.length ? current : next;
       });
+      try {
+        const candidateList = await fetchExternalSourceAttachmentCandidates(sessionId, workspaceId, 100);
+        if (loadSequenceRef.current !== loadId) {
+          return;
+        }
+        setCandidates(candidateList.items);
+        setCandidatesSupported(true);
+      } catch (candidateError) {
+        if (loadSequenceRef.current !== loadId) {
+          return;
+        }
+        setCandidates([]);
+        if (isExternalSourceCapabilityAbsent(candidateError)) {
+          setCandidatesSupported(false);
+        } else {
+          setCandidatesSupported(true);
+          setError("Eligible imported external items are unavailable right now.");
+        }
+      }
     } catch (loadError) {
       if (loadSequenceRef.current !== loadId) {
         return;
@@ -126,6 +156,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         setSupported(false);
         setError(null);
         setAttachments([]);
+        setCandidates([]);
+        setCandidatesSupported(false);
         setListSessionIncarnationId(null);
         setSelectedAttachmentIds((current) => (current.length === 0 ? current : []));
       } else {
@@ -143,6 +175,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     setSupported(null);
     setError(null);
     setAttachments([]);
+    setCandidates([]);
+    setCandidatesSupported(null);
     setSelectedAttachmentIds([]);
     setBusyAttachmentId(null);
     setListSessionIncarnationId(null);
@@ -328,6 +362,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       loading,
       error,
       attachments,
+      candidates,
+      candidatesSupported,
       selectedAttachmentIds,
       busyAttachmentId,
       canMutate,
@@ -346,6 +382,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       loading,
       error,
       attachments,
+      candidates,
+      candidatesSupported,
       selectedAttachmentIds,
       busyAttachmentId,
       canMutate,

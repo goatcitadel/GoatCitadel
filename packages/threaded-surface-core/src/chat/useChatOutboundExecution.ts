@@ -86,6 +86,7 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
 export interface UseChatOutboundExternalContext {
   onExternalContextSent?: (item: OutboundQueueItem) => void;
   onTemplateInvocationSent?: (item: OutboundQueueItem) => void;
+  onWorkspaceSnapshotFailed?: (item: OutboundQueueItem) => void;
 }
 
 export interface OptimisticChatUserMessage {
@@ -145,6 +146,8 @@ export function useChatOutboundExecution(
   onExternalContextSentRef.current = input.externalContext?.onExternalContextSent;
   const onTemplateInvocationSentRef = useRef(input.externalContext?.onTemplateInvocationSent);
   onTemplateInvocationSentRef.current = input.externalContext?.onTemplateInvocationSent;
+  const onWorkspaceSnapshotFailedRef = useRef(input.externalContext?.onWorkspaceSnapshotFailed);
+  onWorkspaceSnapshotFailedRef.current = input.externalContext?.onWorkspaceSnapshotFailed;
   const { selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } = sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
   const { sending, error, queuedOutbound, thread, messages } = stateConfig;
@@ -442,6 +445,9 @@ export function useChatOutboundExecution(
       const externalContextOptIn = externalContextRefs ? { contextRefs: externalContextRefs } : {};
       const templateInvocationOptIn =
         item.action === "send" && item.templateInvocation ? { templateInvocation: item.templateInvocation } : {};
+      const workspaceSnapshotOptIn =
+        item.action === "send" && item.workspaceSnapshot ? { workspaceSnapshot: item.workspaceSnapshot } : {};
+      let canonicalTurnAccepted = false;
       const currentPrefs = prefsRef.current;
       const requestPrefs =
         item.requestPrefs ??
@@ -566,6 +572,11 @@ export function useChatOutboundExecution(
           });
           await handleCommandExecution(session.sessionId, trimmedContent);
           await loadSidebar(undefined, { bypassCache: true, preferredSessionId: session.sessionId });
+          if (item.action === "send" && item.workspaceSnapshot) {
+            // Local commands do not create a Chat turn, so the one-shot snapshot
+            // remains armed for the next actual outbound turn.
+            onWorkspaceSnapshotFailedRef.current?.(item);
+          }
           return;
         }
         const routePreflight = await ensureFreshRoutePreflight({
@@ -574,6 +585,7 @@ export function useChatOutboundExecution(
           turnId: item.targetTurnId,
           content: trimmedContent,
           requestPrefs,
+          workspaceSnapshot: item.workspaceSnapshot,
           force: true,
         });
         if (routePreflight?.blockedReason) {
@@ -670,6 +682,13 @@ export function useChatOutboundExecution(
               selectedSessionIdRef.current !== session!.sessionId
             ) {
               return;
+            }
+            // Only a server-authored turn identity proves this request crossed
+            // the canonical turn boundary. Route-level error chunks may omit
+            // turnId, so treating every chunk as acceptance would consume a
+            // one-shot workspace snapshot before any turn existed.
+            if (typeof chunk.turnId === "string" && chunk.turnId.trim().length > 0) {
+              canonicalTurnAccepted = true;
             }
             // Any chunk that survives the identity guard above proves the
             // stream connection is alive, even one the dedupe guard below
@@ -921,6 +940,7 @@ export function useChatOutboundExecution(
                     attachments: attachmentIds,
                     ...externalContextOptIn,
                     ...templateInvocationOptIn,
+                    ...workspaceSnapshotOptIn,
                     ...outboundPrefs,
                     mode: shouldAutoRoute ? undefined : effectiveMode,
                     ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
@@ -958,6 +978,9 @@ export function useChatOutboundExecution(
               }
               resumeAttempts += 1;
             }
+          }
+          if (!canonicalTurnAccepted) {
+            throw new Error("Streaming request ended before a canonical Chat turn was accepted.");
           }
           const finalizedStreamMessage = finalizedStreamMessageRef.current;
           const missingFinalizedMessage =
@@ -1011,6 +1034,7 @@ export function useChatOutboundExecution(
                       attachments: attachmentIds,
                       ...externalContextOptIn,
                       ...templateInvocationOptIn,
+                      ...workspaceSnapshotOptIn,
                       ...outboundPrefs,
                       mode: shouldAutoRoute ? undefined : effectiveMode,
                       ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
@@ -1022,6 +1046,7 @@ export function useChatOutboundExecution(
                     },
                     { originSurface: effectiveMode },
                   );
+          canonicalTurnAccepted = true;
           if (sent.trace) {
             setCapabilitySuggestions(sent.trace.capabilityUpgradeSuggestions ?? []);
             setSpecialistSuggestions(sent.trace.specialistCandidateSuggestions ?? []);
@@ -1073,6 +1098,9 @@ export function useChatOutboundExecution(
         });
       } catch (err) {
         if (isAbortError(err)) {
+          if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {
+            onWorkspaceSnapshotFailedRef.current?.(item);
+          }
           if (session) {
             promoteStreamingPreviewToThread(session.sessionId, "abort");
           }
@@ -1100,6 +1128,9 @@ export function useChatOutboundExecution(
         if (item.action !== "retry") {
           setDraft((current) => (current.trim().length > 0 ? current : item.content));
           setPendingAttachments((current) => (current.length > 0 ? current : attachmentsSnapshot));
+          if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {
+            onWorkspaceSnapshotFailedRef.current?.(item);
+          }
           if (item.action === "edit" && item.targetTurnId) {
             setEditingTurnId(item.targetTurnId);
           }

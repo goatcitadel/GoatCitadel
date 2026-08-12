@@ -8,6 +8,7 @@ import {
   assertExternalSourceImportPlan,
   assertExternalSourceImportSettlement,
   canonicalJsonString,
+  type ExternalSourceAuthActorSource,
   type ExternalSourceCatalogItem,
   type ExternalSourceImportIntent,
   type ExternalSourceImportItem,
@@ -106,6 +107,28 @@ interface ExternalSourceImportSettlementRow {
   settled_at: string;
 }
 
+interface ExternalSourceAppliedImportItemRow {
+  intent_record_json: string;
+  item_record_json: string;
+  settlement_record_json: string;
+}
+
+/** Verified, immutable import evidence used to build content-free Chat picker choices. */
+export interface ExternalSourceAppliedImportItemBinding {
+  intent: ExternalSourceImportIntent;
+  item: ExternalSourceImportItem;
+  settlement: ExternalSourceImportSettlement;
+}
+
+/** Server-owned scope used to select already-imported Chat attachment choices. */
+export interface ExternalSourceAttachmentCandidateBindingListInput {
+  workspaceId: string;
+  sessionId: string;
+  actorId: string;
+  authActorSource: Extract<ExternalSourceAuthActorSource, "token" | "basic" | "loopback">;
+  limit?: number;
+}
+
 interface ExternalSourceAdmissionWorkspaceRow {
   lifecycle_status: string;
 }
@@ -132,6 +155,7 @@ export class ExternalSourceImportRepository {
   private readonly listUnsettledIntentsStmt;
   private readonly insertItemStmt;
   private readonly listItemsStmt;
+  private readonly listAttachmentCandidateBindingsStmt;
   private readonly insertSettlementStmt;
   private readonly getSettlementStmt;
 
@@ -209,6 +233,54 @@ export class ExternalSourceImportRepository {
       SELECT * FROM external_source_import_items
       WHERE workspace_id = @workspaceId AND import_id = @importId
       ORDER BY ordinal ASC, item_id ASC
+    `);
+    this.listAttachmentCandidateBindingsStmt = db.prepare(`
+      SELECT
+        intent.record_json AS intent_record_json,
+        item.record_json AS item_record_json,
+        settlement.record_json AS settlement_record_json
+      FROM external_source_import_intents AS intent
+      INNER JOIN external_source_configs AS source
+        ON source.workspace_id = intent.workspace_id
+        AND source.source_id = intent.source_id
+      INNER JOIN external_source_scans AS scan
+        ON scan.workspace_id = intent.workspace_id
+        AND scan.scan_id = intent.scan_id
+        AND scan.source_id = intent.source_id
+      INNER JOIN external_source_import_settlements AS settlement
+        ON settlement.workspace_id = intent.workspace_id
+        AND settlement.import_id = intent.import_id
+      INNER JOIN external_source_import_items AS item
+        ON item.workspace_id = intent.workspace_id
+        AND item.import_id = intent.import_id
+        AND item.scan_id = intent.scan_id
+      WHERE intent.workspace_id = @workspaceId
+        AND settlement.disposition = 'applied'
+        AND settlement.artifacts_verified_at IS NOT NULL
+        AND source.owner_actor_id = @actorId
+        AND source.auth_actor_id = @actorId
+        AND source.auth_actor_source = @authActorSource
+        AND source.status = 'active'
+        AND source.revision = intent.config_revision
+        AND source.config_sha256 = intent.config_sha256
+        AND scan.status = 'sealed'
+        AND scan.config_revision = intent.config_revision
+        AND scan.config_sha256 = intent.config_sha256
+        AND scan.manifest_sha256 = intent.manifest_sha256
+        AND scan.root_identity_sha256 = source.root_identity_sha256
+        AND scan.path_bridge_snapshot_sha256 = source.path_bridge_snapshot_sha256
+        AND scan.adapter_id = source.adapter_id
+        AND scan.adapter_version = source.adapter_version
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_external_source_attachments AS attachment
+          WHERE attachment.workspace_id = intent.workspace_id
+            AND attachment.session_id = @sessionId
+            AND attachment.import_id = intent.import_id
+            AND attachment.item_id = item.item_id
+        )
+      ORDER BY settlement.settled_at DESC, intent.import_id DESC, item.ordinal ASC, item.item_id ASC
+      LIMIT @limit
     `);
     this.insertSettlementStmt = db.prepare(`
       INSERT INTO external_source_import_settlements (
@@ -427,6 +499,62 @@ export class ExternalSourceImportRepository {
     return (this.listItemsStmt.all({ workspaceId, importId }) as ExternalSourceImportItemRow[]).map(
       mapAndVerifyImportItemRow,
     );
+  }
+
+  public listAttachmentCandidateBindings(
+    input: ExternalSourceAttachmentCandidateBindingListInput,
+  ): ExternalSourceAppliedImportItemBinding[] {
+    assertIdentifier(input.workspaceId, "workspaceId");
+    assertIdentifier(input.sessionId, "sessionId");
+    assertIdentifier(input.actorId, "actorId");
+    if (
+      input.authActorSource !== "token" &&
+      input.authActorSource !== "basic" &&
+      input.authActorSource !== "loopback"
+    ) {
+      throw new TypeError("External source attachment candidate actor source is invalid.");
+    }
+    const limit = input.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new TypeError("External source attachment candidate limit must be an integer from 1 through 100.");
+    }
+    return (
+      this.listAttachmentCandidateBindingsStmt.all({
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        authActorSource: input.authActorSource,
+        limit,
+      }) as ExternalSourceAppliedImportItemRow[]
+    ).map((row) => {
+      const intent = parseCanonicalRecord<ExternalSourceImportIntent>(
+        row.intent_record_json,
+        "External source applied-item intent",
+      );
+      const item = parseCanonicalRecord<ExternalSourceImportItem>(
+        row.item_record_json,
+        "External source applied import item",
+      );
+      const settlement = parseCanonicalRecord<ExternalSourceImportSettlement>(
+        row.settlement_record_json,
+        "External source applied-item settlement",
+      );
+      verifyExternalSourceImportIntent(intent);
+      verifyExternalSourceImportItem(item);
+      assertExternalSourceImportSettlement(settlement);
+      if (
+        intent.workspaceId !== input.workspaceId ||
+        item.workspaceId !== input.workspaceId ||
+        settlement.workspaceId !== input.workspaceId ||
+        item.importId !== intent.importId ||
+        settlement.importId !== intent.importId ||
+        settlement.disposition !== "applied" ||
+        !settlement.artifactsVerifiedAt
+      ) {
+        throw new Error("External source applied item binding is inconsistent.");
+      }
+      return { intent, item, settlement };
+    });
   }
 
   public getItem(workspaceId: string, importId: string, itemId: string): ExternalSourceImportItem {

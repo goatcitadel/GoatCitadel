@@ -1,13 +1,162 @@
 import { describe, expect, it } from "vitest";
-import type { ChatGeneratedArtifactRecord, ChatMessageRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import type {
+  ChatDelegateResponse,
+  ChatGeneratedArtifactRecord,
+  ChatMessageRecord,
+  ChatSessionRecord,
+} from "@goatcitadel/contracts";
 import {
   preserveChatSessionSecretsForPublicUpdate,
+  projectChatDelegateResponseForPublic,
+  projectChatDelegationRunForPublic,
+  projectChatDelegationStreamValueForPublic,
   projectChatGeneratedArtifactForPublic,
   projectChatMessageForPublic,
   projectChatSessionForPublic,
 } from "./chat-secret-projection.js";
 
 describe("chat secret projection", () => {
+  it("removes server-owned delegated root and resolved host paths from public responses", () => {
+    const response: ChatDelegateResponse = {
+      runId: "delegation-1",
+      taskId: "task-1",
+      status: "running",
+      steps: [
+        {
+          stepId: "step-1",
+          runId: "delegation-1",
+          role: "workspace-explorer",
+          index: 0,
+          status: "running",
+          scopeControl: {
+            rootPath: "F:\\private\\workspace",
+            approvedPaths: ["src"],
+            scopeHash: "a".repeat(64),
+            dispatchGeneration: "dispatch-1",
+            updatedAt: "2026-08-12T00:00:00.000Z",
+          },
+          workResult: {
+            disposition: "scope_expansion",
+            summary: "Need docs.",
+            changedFiles: [],
+            evidenceRefs: [],
+            scopeExpansion: {
+              requestedPaths: ["docs"],
+              resolvedPaths: ["F:\\private\\workspace\\docs"],
+              reason: "Need docs.",
+              scopeHash: "a".repeat(64),
+              requestedAt: "2026-08-12T00:00:00.000Z",
+            },
+          },
+        },
+      ],
+      stitchedOutput: "Waiting for scope.",
+      citations: [],
+    };
+
+    const projected = projectChatDelegateResponseForPublic(response);
+
+    expect(JSON.stringify(projected)).not.toContain("F:\\private");
+    expect(projected.steps[0]?.scopeControl?.approvedPaths).toEqual(["src"]);
+    expect(projected.steps[0]?.workResult?.scopeExpansion?.requestedPaths).toEqual(["docs"]);
+  });
+
+  it("contains legacy explorer host paths across public detail, report, and stream projections", () => {
+    const detail = {
+      run: {
+        runId: "explorer-run",
+        sessionId: "session-1",
+        taskId: "task-1",
+        objective: "Inspect F:\\private\\workspace",
+        roles: ["workspace-explorer"],
+        mode: "sequential" as const,
+        status: "completed" as const,
+        workflowTemplate: "read_only_workspace_explorer",
+        stitchedOutput: "Owner F:\\private\\workspace\\src\\owner.ts; private C:\\Users\\operator\\secret.txt",
+        citations: [],
+        startedAt: "2026-08-12T00:00:00.000Z",
+      },
+      steps: [
+        {
+          stepId: "explorer-step",
+          runId: "explorer-run",
+          role: "workspace-explorer",
+          index: 0,
+          status: "completed" as const,
+          output: "Read F:\\private\\workspace\\src\\owner.ts",
+          startedAt: "2026-08-12T00:00:00.000Z",
+          scopeControl: {
+            rootPath: "F:\\private\\workspace",
+            approvedPaths: ["src"],
+            scopeHash: "scope-hash",
+            dispatchGeneration: "dispatch-1",
+            updatedAt: "2026-08-12T00:00:00.000Z",
+          },
+          workResult: {
+            disposition: "completed" as const,
+            summary: "Found F:\\private\\workspace\\src\\owner.ts",
+            changedFiles: [],
+            evidenceRefs: ["F:\\private\\workspace\\src\\owner.ts"],
+          },
+        },
+      ],
+      explorer: {
+        profile: "read_only_explorer" as const,
+        answer: "Owner F:\\private\\workspace\\src\\owner.ts",
+        evidenceReferences: ["F:\\private\\workspace\\src\\owner.ts"],
+        searchedScope: {
+          kind: "server_owned_delegated_scope" as const,
+          approvedPaths: ["src"],
+          scopeHashes: ["scope-hash"],
+        },
+        partialResult: false,
+        gaps: ["Could not inspect /home/operator/private"],
+      },
+    };
+
+    const projectedDetail = projectChatDelegationRunForPublic(detail);
+    const projectedStream = projectChatDelegationStreamValueForPublic(
+      {
+        type: "step",
+        step: detail.steps[0],
+        message: "Reading F:\\private\\workspace\\src\\owner.ts",
+      },
+      { readOnlyExplorer: true },
+    );
+
+    const serializedDetail = JSON.stringify(projectedDetail);
+    const serializedStream = JSON.stringify(projectedStream);
+    for (const serialized of [serializedDetail, serializedStream]) {
+      expect(serialized).not.toContain("F:\\\\private");
+      expect(serialized).not.toContain("C:\\\\Users");
+      expect(serialized).not.toContain("/home/operator");
+      expect(serialized).not.toContain("rootPath");
+    }
+    expect(projectedDetail.explorer?.answer).toBe("Owner src\\owner.ts");
+    expect(projectedDetail.run.objective).toBe("Inspect .");
+    expect(projectedDetail.explorer?.evidenceReferences).toEqual(["src/owner.ts"]);
+    expect(projectedDetail.explorer?.gaps).toEqual(["Could not inspect [outside-workspace-path]"]);
+    expect(projectedStream).toMatchObject({
+      message: "Reading src\\owner.ts",
+      step: {
+        output: "Read src\\owner.ts",
+        workResult: { evidenceRefs: ["src/owner.ts"] },
+      },
+    });
+  });
+
+  it("does not path-project ordinary delegation output", () => {
+    const ordinary = {
+      type: "step",
+      step: {
+        role: "Researcher",
+        output: "Operator asked about F:\\private\\workspace\\src\\owner.ts",
+      },
+    };
+
+    expect(projectChatDelegationStreamValueForPublic(ordinary)).toEqual(ordinary);
+  });
+
   it("projects legacy generated-artifact content without changing canonical content or hash truth", () => {
     const artifact: ChatGeneratedArtifactRecord = {
       artifactId: "artifact-1",

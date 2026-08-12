@@ -4,6 +4,7 @@ import type {
   ChatRoutedContextRef,
   ChatSessionPrefsRecord,
   ChatThreadResponse,
+  ChatWorkspaceSnapshotRequest,
   RunTemplateInvocation,
 } from "@goatcitadel/contracts";
 import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
@@ -61,6 +62,8 @@ export interface OutboundQueueItem {
   externalContextRefs?: readonly ChatRoutedContextRef[];
   /** Structured template invocation frozen with the exact resolved draft. */
   templateInvocation?: RunTemplateInvocation;
+  /** One-shot, path-free intent frozen with this exact outbound turn. */
+  workspaceSnapshot?: ChatWorkspaceSnapshotRequest;
 }
 
 export interface OutboundRequestPrefsSnapshot {
@@ -126,6 +129,7 @@ export function useChatSurfaceOrchestration(input: {
    */
   captureOutboundExternalContextRefs?: () => readonly ChatRoutedContextRef[];
   captureOutboundTemplateInvocation?: () => RunTemplateInvocation | undefined;
+  consumeWorkspaceSnapshotRequest?: () => ChatWorkspaceSnapshotRequest | undefined;
   loadSessionCoreStateRef: RefObject<
     (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
   >;
@@ -179,6 +183,7 @@ export function useChatSurfaceOrchestration(input: {
     // the selection itself is cleared later by the execution success path.
     const externalContextRefs = action === "send" ? (input.captureOutboundExternalContextRefs?.() ?? []) : [];
     const templateInvocation = action === "send" ? input.captureOutboundTemplateInvocation?.() : undefined;
+    const workspaceSnapshot = action === "send" ? input.consumeWorkspaceSnapshotRequest?.() : undefined;
     const nextItem: OutboundQueueItem = {
       id: createQueueItemId(),
       action,
@@ -192,6 +197,7 @@ export function useChatSurfaceOrchestration(input: {
       ...(modelCouncil ? { modelCouncil } : {}),
       ...(externalContextRefs.length > 0 ? { externalContextRefs } : {}),
       ...(templateInvocation ? { templateInvocation } : {}),
+      ...(workspaceSnapshot ? { workspaceSnapshot } : {}),
     };
     input.setDraft("");
     input.setPendingAttachments([]);

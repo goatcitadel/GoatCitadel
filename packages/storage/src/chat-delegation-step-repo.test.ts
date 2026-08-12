@@ -470,6 +470,34 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(linked?.childSessionId, "child-stable");
     assert.equal(linked?.childTurnId, undefined);
     assert.equal(repo.getDispatchClaim("step-dispatch")?.token, "delegation-dispatch:v1:2000:turn-stable:owner-a");
+    assert.equal(
+      competingRepo.bindOwnedDurableRun({
+        stepId: "step-dispatch",
+        expectedDispatchToken: "delegation-dispatch:v1:2000:turn-stable:owner-b",
+        childSessionId: "child-stable",
+        durableRunId: "durable-child-stable",
+      }),
+      undefined,
+    );
+    assert.equal(
+      repo.bindOwnedDurableRun({
+        stepId: "step-dispatch",
+        expectedDispatchToken: "delegation-dispatch:v1:2000:turn-stable:owner-a",
+        childSessionId: "child-stable",
+        durableRunId: "durable-child-stable",
+      })?.durableRunId,
+      "durable-child-stable",
+    );
+    assert.equal(
+      repo.bindOwnedDurableRun({
+        stepId: "step-dispatch",
+        expectedDispatchToken: "delegation-dispatch:v1:2000:turn-stable:owner-a",
+        childSessionId: "child-stable",
+        durableRunId: "durable-conflicting",
+      }),
+      undefined,
+    );
+    assert.equal(repo.get("step-dispatch").durableRunId, "durable-child-stable");
 
     assert.equal(
       repo.reclaimLinkedDispatch(
@@ -521,6 +549,7 @@ describe("ChatDelegationStepRepository", () => {
       "turn-stable",
     );
     assert.equal(finalized?.childTurnId, "turn-stable");
+    assert.equal(finalized?.durableRunId, "durable-child-stable");
     assert.equal(competingRepo.getDispatchClaim("step-dispatch"), undefined);
     assert.equal(
       competingRepo.ownsLinkedDispatch(
@@ -578,6 +607,29 @@ describe("ChatDelegationStepRepository", () => {
         activeExpiresAt,
         "2026-03-26T00:00:03.000Z",
       ),
+      undefined,
+    );
+    assert.equal(
+      competingRepo.recoverDurableRunBinding({
+        stepId: "step-linked-without-turn",
+        childSessionId: "child-linked",
+        childTurnId: "turn-linked",
+        durableRunId: "durable-linked",
+        releaseDispatch: true,
+      })?.durableRunId,
+      "durable-linked",
+    );
+    assert.equal(repo.get("step-linked-without-turn").childTurnId, "turn-linked");
+    assert.equal(repo.get("step-linked-without-turn").durableRunId, "durable-linked");
+    assert.equal(repo.getDispatchClaim("step-linked-without-turn"), undefined);
+    assert.equal(
+      repo.recoverDurableRunBinding({
+        stepId: "step-linked-without-turn",
+        childSessionId: "child-linked",
+        childTurnId: "turn-conflict",
+        durableRunId: "durable-linked",
+        releaseDispatch: true,
+      }),
       undefined,
     );
   });
@@ -818,7 +870,7 @@ describe("ChatDelegationStepRepository", () => {
   });
 
   it("terminalizes a pre-claim error only while the step is still unowned and pending", () => {
-    const { repo } = createStore();
+    const { db, repo } = createStore();
     repo.create({
       stepId: "step-preclaim-race",
       runId: "run-preclaim-race",
@@ -871,6 +923,60 @@ describe("ChatDelegationStepRepository", () => {
       durationMs: 2_000,
     });
     assert.equal(cancelled?.status, "cancelled");
+
+    repo.create({
+      stepId: "step-expired-pre-admission",
+      runId: "run-preclaim-race",
+      role: "Researcher",
+      index: 2,
+      status: "running",
+      childSessionId: "stable-explorer-child",
+      startedAt: "2026-03-26T00:00:00.000Z",
+    });
+    db.prepare(
+      `
+        UPDATE chat_delegation_steps
+        SET dispatch_claim_token = 'expired-explorer-owner',
+            dispatch_claim_expires_at = '2000-01-01T00:00:00.000Z'
+        WHERE step_id = 'step-expired-pre-admission'
+      `,
+    ).run();
+    const unavailable = repo.finishUnclaimedPendingWithError({
+      stepId: "step-expired-pre-admission",
+      status: "failed",
+      label: "Researcher",
+      summary: "Workspace exploration unavailable.",
+      error: "Workspace exploration scope changed.",
+      failureGuidance: "Start a new exploration.",
+      finishedAt: "2026-03-26T00:00:02.000Z",
+      durationMs: 2_000,
+    });
+    assert.equal(unavailable?.status, "failed");
+    assert.equal(unavailable?.childSessionId, "stable-explorer-child");
+    assert.equal(repo.getDispatchClaim("step-expired-pre-admission"), undefined);
+
+    repo.create({
+      stepId: "step-admitted-child",
+      runId: "run-preclaim-race",
+      role: "Researcher",
+      index: 3,
+      status: "running",
+      childSessionId: "admitted-explorer-child",
+      childTurnId: "admitted-explorer-turn",
+      durableRunId: "admitted-explorer-run",
+      startedAt: "2026-03-26T00:00:00.000Z",
+    });
+    assert.equal(
+      repo.finishUnclaimedPendingWithError({
+        stepId: "step-admitted-child",
+        status: "failed",
+        error: "stale recovery failure",
+        finishedAt: "2026-03-26T00:00:02.000Z",
+        durationMs: 2_000,
+      }),
+      undefined,
+    );
+    assert.equal(repo.get("step-admitted-child").status, "running");
   });
 
   it("maps latest parent delegation runs for child sessions with workspace filtering", () => {

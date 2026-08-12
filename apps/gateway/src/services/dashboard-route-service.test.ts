@@ -491,15 +491,19 @@ describe("dashboard route service", () => {
         },
       ],
     };
+    const approvalRootPath = "F:\\private\\workspace";
     const rawApproval = {
       approvalId: "approval-secret-projection",
-      kind: "tool.invoke",
+      kind: "delegation_scope_expansion",
       riskLevel: "danger",
       reason: "Inspect the tool request.",
       status: "pending",
       payload: {
         DATABASE_PASSWORD: "approval-db-secret",
         secretRef: "vault:approval",
+        rootPath: approvalRootPath,
+        requestedPaths: ["docs"],
+        resolvedPaths: [`${approvalRootPath}\\docs`],
       },
       createdAt: "2026-05-30T00:00:02.000Z",
       expiresAt: "2026-05-30T01:00:02.000Z",
@@ -560,6 +564,9 @@ describe("dashboard route service", () => {
     expect(JSON.stringify(trace)).not.toContain("heartbeatDecisionRawOutput");
     expect(JSON.stringify(exported)).not.toContain("heartbeatDecisionRawOutput");
     expect(JSON.stringify(exportContent)).not.toContain("heartbeatDecisionRawOutput");
+    expect(JSON.stringify(trace)).not.toContain(approvalRootPath);
+    expect(JSON.stringify(exported)).not.toContain(approvalRootPath);
+    expect(JSON.stringify(exportContent)).not.toContain(approvalRootPath);
     expect(trace).toMatchObject({
       run: {
         runId: rawRun.runId,
@@ -598,7 +605,11 @@ describe("dashboard route service", () => {
           {
             approvalId: rawApproval.approvalId,
             status: "pending",
-            payload: { DATABASE_PASSWORD: "[REDACTED]", secretRef: "vault:approval" },
+            payload: {
+              DATABASE_PASSWORD: "[REDACTED]",
+              secretRef: "vault:approval",
+              requestedPaths: ["docs"],
+            },
           },
         ],
       },
@@ -632,6 +643,10 @@ describe("dashboard route service", () => {
     expect(rawTimeline.payload.DATABASE_PASSWORD).toBe("timeline-db-secret");
     expect(rawLifecycle.toolRuns[0]?.result.authorization).toBe("Bearer tool-result-secret");
     expect(rawApproval.payload.DATABASE_PASSWORD).toBe("approval-db-secret");
+    expect(rawApproval.payload).toMatchObject({
+      rootPath: approvalRootPath,
+      resolvedPaths: [`${approvalRootPath}\\docs`],
+    });
     expect(rawMemory.context.authorization).toBe("Bearer memory-context-secret");
     expect(rawArtifact.title).toBe("password: artifact-title-secret");
     expect(rawArtifact.content).toBe("DATABASE_PASSWORD=artifact-content-secret");

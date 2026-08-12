@@ -439,7 +439,7 @@ function ExternalSourceStrip({
           aria-expanded={attachFormOpen}
           onClick={() => setAttachFormOpen((current) => !current)}
         >
-          {attachFormOpen ? "Close attach form" : "Attach imported item"}
+          {attachFormOpen ? "Close picker" : "Attach imported item"}
         </button>
       </div>
       {controls.error ? (
@@ -451,8 +451,71 @@ function ExternalSourceStrip({
       {attachFormOpen ? (
         <div className="mc-next-composer-external-attach-form">
           <p className="mc-next-composer-external-hint">
-            Choose an eligible imported item in Library. Chat never accepts raw source, import, or item identifiers.
+            Choose a verified applied import. Chat receives only its immutable binding; external content stays
+            read-only.
           </p>
+          {controls.loading ? (
+            <p className="mc-next-composer-external-hint" role="status">
+              Refreshing eligible imports…
+            </p>
+          ) : controls.candidatesSupported === false ? (
+            <p className="mc-next-composer-external-hint">
+              This Gateway does not expose the governed import picker yet. Manage imports in Library.
+            </p>
+          ) : controls.candidates.length === 0 ? (
+            <p className="mc-next-composer-external-hint">
+              No unattached verified imports are eligible for this session.
+            </p>
+          ) : (
+            <ul role="list" className="mc-next-composer-external-list" aria-label="Eligible imported items">
+              {controls.candidates.map((candidate) => {
+                const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
+                return (
+                  <li
+                    key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`}
+                    className="mc-next-composer-external-chip"
+                  >
+                    <div className="mc-next-composer-external-chip-body">
+                      <strong>{candidate.itemId}</strong>
+                      <p
+                        className="mc-next-composer-external-meta"
+                        title={`Immutable source ${candidate.sourceId} · import ${candidate.importId} · item ${candidate.itemId}`}
+                      >
+                        {candidate.sourceLabel} · source rev {candidate.sourceRevision} · verified{" "}
+                        {candidate.artifactsVerifiedAt.slice(0, 10)}
+                      </p>
+                    </div>
+                    <div className="mc-next-composer-external-chip-actions">
+                      <StatusChip tone="muted">Read-only</StatusChip>
+                      <button
+                        type="button"
+                        className="mc-next-composer-inline-button"
+                        disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
+                        onClick={() =>
+                          controls.onAttach({
+                            sourceId: candidate.sourceId,
+                            importId: candidate.importId,
+                            itemId: candidate.itemId,
+                          })
+                        }
+                        aria-label={`Attach ${candidate.itemId} from ${candidate.sourceLabel} read-only`}
+                      >
+                        {busy ? "Attaching…" : "Attach read-only"}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <button
+            type="button"
+            className="mc-next-composer-inline-button"
+            disabled={disabled || controls.loading}
+            onClick={controls.onReload}
+          >
+            Refresh imports
+          </button>
           {onOpenLibrary ? (
             <button
               type="button"
@@ -460,7 +523,7 @@ function ExternalSourceStrip({
               disabled={disabled}
               onClick={onOpenLibrary}
             >
-              Open Library imports
+              Manage Library imports
             </button>
           ) : null}
         </div>
@@ -571,6 +634,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const composerPaletteVisible = commandSuggestionsOpen || Boolean(props.composerPalette?.globalOpen);
   const paletteSearchRef = useRef<HTMLInputElement | null>(null);
   const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
+  const [scopeCandidateId, setScopeCandidateId] = useState("");
   const [projectSwitchCandidate, setProjectSwitchCandidate] = useState<
     (typeof props.commandSuggestions)[number] | null
   >(null);
@@ -596,6 +660,14 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   useEffect(() => {
     if (props.composerPalette?.globalOpen) paletteSearchRef.current?.focus();
   }, [props.composerPalette?.globalOpen]);
+  useEffect(() => {
+    const candidates = props.delegatedScopeControls?.candidates ?? [];
+    setScopeCandidateId((current) =>
+      current && candidates.some((candidate) => candidate.candidateId === current)
+        ? current
+        : (candidates[0]?.candidateId ?? ""),
+    );
+  }, [props.delegatedScopeControls?.candidates, props.delegatedScopeControls?.pendingApprovalId]);
   const applyComposerPaletteItem = (item: (typeof props.commandSuggestions)[number]) => {
     if (item.action?.type === "switch_project") {
       setProjectSwitchCandidate(item);
@@ -655,14 +727,25 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const capabilityUseChips = getComposerCapabilityUseChips(props);
   const runtimeBlockerActive = Boolean(props.pendingApproval || props.pendingUserInput);
   const composerActionDisabled = props.sending || runtimeBlockerActive || props.historicalReadOnly;
+  // A delegated child can request more governed scope while its stream is
+  // still open. `sending` locks new composer work, but must not lock this
+  // server-candidate-only approval request.
+  const delegatedScopeActionDisabled =
+    runtimeBlockerActive ||
+    props.approvalPending ||
+    props.userInputPending ||
+    props.historicalReadOnly ||
+    Boolean(props.delegatedScopeControls?.pendingApprovalId);
   const researchArmed = props.currentWebMode === "quick" || props.currentWebMode === "deep";
   const reviewArmed = props.currentReviewDepth !== "off";
+  const workspaceSnapshotArmed = Boolean(props.workspaceSnapshotRequest);
   const contextArmed = Boolean(
     props.contextSelection ||
     props.outboundContext ||
     props.pendingAttachments.length > 0 ||
     threadKnowledgeAttachments.length > 0 ||
-    (props.externalSourceControls?.selectedAttachmentIds.length ?? 0) > 0,
+    (props.externalSourceControls?.selectedAttachmentIds.length ?? 0) > 0 ||
+    workspaceSnapshotArmed,
   );
   const personality = getComposerPersonality(props);
   const plusActions = [
@@ -769,6 +852,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       disabled: composerActionDisabled,
       onSelect: props.onRunQuickResearch,
     },
+    {
+      label: "Workspace snapshot for next turn",
+      disabled: composerActionDisabled,
+      active: workspaceSnapshotArmed,
+      onSelect: props.onToggleWorkspaceSnapshot,
+    },
     ...(props.onReviewRunDetails
       ? [
           {
@@ -871,6 +960,96 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             Acknowledge fallback
           </button>
         </div>
+      ) : null}
+
+      {props.workspaceSnapshotRequest ? (
+        <div className="mc-next-composer-banner info" aria-label="Workspace snapshot for next turn">
+          <StatusChip tone="muted">Point-in-time</StatusChip>
+          <p>
+            <strong>Workspace snapshot for next turn.</strong> The Gateway captures verified workspace and project
+            identity plus a bounded Git summary during capability preflight, then freezes that point-in-time record for
+            this turn. It grants no folder access.
+          </p>
+          <div className="mc-next-composer-action-row">
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              disabled={composerActionDisabled}
+              onClick={props.onRefreshWorkspaceSnapshot}
+            >
+              Refresh snapshot
+            </button>
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              disabled={composerActionDisabled}
+              onClick={props.onToggleWorkspaceSnapshot}
+            >
+              Remove snapshot
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {props.delegatedScopeControls ? (
+        <section className="mc-next-composer-banner info" aria-label="Request additional delegated scope">
+          <StatusChip tone={props.delegatedScopeControls.pendingApprovalId ? "warning" : "muted"}>
+            Governed scope
+          </StatusChip>
+          <div>
+            <strong>Request additional scope for {props.delegatedScopeControls.stepLabel}.</strong>
+            <p>
+              Choose an eligible server-owned workspace path. Approval expands only this delegated run&apos;s frozen
+              scope; Chat cannot grant arbitrary host-folder access.
+            </p>
+            {props.delegatedScopeControls.pendingApprovalId ? (
+              <p role="status">Waiting for the canonical scope-expansion approval decision.</p>
+            ) : props.delegatedScopeControls.loading ? (
+              <p role="status">Loading eligible workspace paths…</p>
+            ) : props.delegatedScopeControls.candidates.length > 0 ? (
+              <div className="mc-next-composer-action-row">
+                <label>
+                  Eligible workspace path
+                  <select
+                    aria-label="Eligible workspace path"
+                    value={scopeCandidateId}
+                    disabled={props.delegatedScopeControls.requesting || delegatedScopeActionDisabled}
+                    onChange={(event) => setScopeCandidateId(event.target.value)}
+                  >
+                    {props.delegatedScopeControls.candidates.map((candidate) => (
+                      <option key={candidate.candidateId} value={candidate.candidateId}>
+                        {candidate.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="mc-next-composer-inline-button primary"
+                  disabled={
+                    !scopeCandidateId || props.delegatedScopeControls.requesting || delegatedScopeActionDisabled
+                  }
+                  onClick={() => props.delegatedScopeControls?.onRequest(scopeCandidateId)}
+                >
+                  {props.delegatedScopeControls.requesting ? "Requesting…" : "Request additional scope"}
+                </button>
+              </div>
+            ) : (
+              <p role="status">No additional eligible workspace paths are available.</p>
+            )}
+            {props.delegatedScopeControls.error ? <p role="alert">{props.delegatedScopeControls.error}</p> : null}
+            {!props.delegatedScopeControls.pendingApprovalId ? (
+              <button
+                type="button"
+                className="mc-next-composer-inline-button"
+                disabled={props.delegatedScopeControls.loading || props.delegatedScopeControls.requesting}
+                onClick={props.delegatedScopeControls.onReload}
+              >
+                Refresh eligible paths
+              </button>
+            ) : null}
+          </div>
+        </section>
       ) : null}
 
       <ComposerBlockingPrompt props={props} />
@@ -1235,7 +1414,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           controls={props.externalSourceControls}
           disabled={composerActionDisabled}
           openAttachFormToken={externalSourceOpenToken}
-          onOpenLibrary={props.onOpenLibraryArtifacts}
+          onOpenLibrary={props.onOpenLibraryImports}
         />
       ) : null}
 

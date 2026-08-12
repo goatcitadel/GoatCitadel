@@ -115,6 +115,58 @@ export interface DurableRunServiceLogger {
   error(data: unknown, msg: string): void;
 }
 
+export interface DurableBackgroundAttentionNotificationInput {
+  eventId: string;
+  workspaceId: string;
+  sessionId: string;
+  watcherId: string;
+  childRunId: string;
+  title: string;
+  message: string;
+}
+
+function buildDurableBackgroundAttentionEventId(task: DurableBackgroundTaskRailResponse["tasks"][number]): string {
+  const material = canonicalJsonString({
+    version: 1,
+    watcherId: task.watcherId,
+    watcherRevision: task.watcherRevision,
+    childRunId: task.childRunId,
+    childVersion: task.childVersion ?? null,
+    canonicalStatus: task.canonicalStatus,
+    attentionReason: task.attention.requiredReason ?? null,
+    approvals: task.approvals
+      .map((approval) => ({ approvalId: approval.approvalId, status: approval.status }))
+      .sort((left, right) => left.approvalId.localeCompare(right.approvalId)),
+    tools: task.tools
+      .map((tool) => ({
+        toolRunId: tool.toolRunId,
+        status: tool.status,
+        approvalId: tool.approvalId ?? null,
+      }))
+      .sort((left, right) => left.toolRunId.localeCompare(right.toolRunId)),
+  });
+  return `durable-attention:${createHash("sha256").update(material, "utf8").digest("hex")}`;
+}
+
+function isBackgroundAttentionCandidateEvent(eventType: DurableRunTimelineEvent["eventType"]): boolean {
+  return [
+    "run_waiting",
+    "run_paused",
+    "run_failed",
+    "run_cancelled",
+    "run_dead_lettered",
+    "run_retry_budget_exhausted",
+    "run_incomplete_worker_exit",
+  ].includes(eventType);
+}
+
+function readBoundedPayloadId(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= 200 ? normalized : undefined;
+}
+
 // The lease must survive sustained event-loop starvation: a single native
 // browser navigation or repo-wide search can stall the loop for 60-90s on a
 // loaded workstation, and a 15s TTL caused the reaper to fail healthy runs at
@@ -123,6 +175,7 @@ const DURABLE_LEASE_TTL_MS = 120_000;
 const DURABLE_WORKER_POLL_MIN_MS = 750;
 const DURABLE_WORKER_POLL_JITTER_MS = 500;
 const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
+const DETACHED_WATCHER_NOTIFICATION_BATCH_SIZE = 100;
 // Transient lease-renewal errors (storage contention, CAS retry exhaustion)
 // should not abort an in-flight run; only repeated consecutive failures may.
 const DURABLE_LEASE_HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3;
@@ -638,6 +691,7 @@ export class DurableRunService {
   private readonly workerId = buildDurableLocalProcessLeaseOwnerId();
   private readonly activeRunAbortControllers = new Map<string, { controller: AbortController; leaseOwnerId: string }>();
   private readonly generalChatPostCommitInFlight = new Map<string, GeneralChatPostCommitInFlight>();
+  private readonly deliveredBackgroundAttentionEvents = new Set<string>();
   private lastEventLoopLagMs = 0;
   private lastEventLoopLagAt: string | undefined;
   private leaseAcquisitionPausedUntilMs = 0;
@@ -652,6 +706,13 @@ export class DurableRunService {
         "executeWorkflow" | "isWorkflowRecoverable" | "markWorkflowUnrecoverable"
       >;
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
+      onBackgroundAttentionRequired?: (
+        input: DurableBackgroundAttentionNotificationInput,
+      ) => Promise<boolean | void> | boolean | void;
+      beforeBackgroundTaskRailProjection?: (
+        parentRunId: string,
+        input: { workspaceId: string; sessionId: string },
+      ) => Promise<void> | void;
       onAutonomousChatPostCommit?: (
         run: DurableRunRecord,
         context: AutonomousChatPostCommitContext,
@@ -810,7 +871,55 @@ export class DurableRunService {
   ): Promise<DurableBackgroundTaskRailResponse> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherRunIdBounds(parentRunId);
-    return await projectDurableBackgroundTaskRail(this.ctx.storage, { parentRunId, ...input });
+    await this.deps?.beforeBackgroundTaskRailProjection?.(parentRunId, input);
+    const rail = await projectDurableBackgroundTaskRail(this.ctx.storage, { parentRunId, ...input });
+    // Notification routing is advisory and may perform external I/O. Never let
+    // it delay or decide the canonical rail/control response.
+    void this.notifyBackgroundAttentionSafely(rail).catch(() => undefined);
+    return rail;
+  }
+
+  private async notifyBackgroundAttentionSafely(rail: DurableBackgroundTaskRailResponse): Promise<void> {
+    const notify = this.deps?.onBackgroundAttentionRequired;
+    if (!notify) return;
+    for (const task of rail.tasks) {
+      if (task.attention.state !== "background" || !task.attention.required || !task.attention.requiredReason) {
+        continue;
+      }
+      const eventId = buildDurableBackgroundAttentionEventId(task);
+      if (this.deliveredBackgroundAttentionEvents.has(eventId)) continue;
+      if (this.deliveredBackgroundAttentionEvents.size >= 5_000) {
+        const oldest = this.deliveredBackgroundAttentionEvents.values().next().value as string | undefined;
+        if (oldest) this.deliveredBackgroundAttentionEvents.delete(oldest);
+      }
+      this.deliveredBackgroundAttentionEvents.add(eventId);
+      try {
+        const accepted = await notify({
+          eventId,
+          workspaceId: rail.scope.workspaceId,
+          sessionId: rail.scope.sessionId,
+          watcherId: task.watcherId,
+          childRunId: task.childRunId,
+          title: "Background task needs attention",
+          message: `${task.label} needs attention: ${task.attention.requiredReason.replaceAll("_", " ")}.`,
+        });
+        if (accepted === false) this.deliveredBackgroundAttentionEvents.delete(eventId);
+      } catch {
+        // A later projection may retry the same stable event ID. The
+        // notification repository's event/delivery idempotency prevents a
+        // successful earlier side effect from being duplicated.
+        this.deliveredBackgroundAttentionEvents.delete(eventId);
+        this.ctx.logger?.warn(
+          {
+            watcherId: task.watcherId,
+            childRunId: task.childRunId,
+            eventId,
+            error: "Notification delivery failed.",
+          },
+          "background attention notification failed without changing durable execution",
+        );
+      }
+    }
   }
 
   async controlDurableBackgroundTask(
@@ -3300,6 +3409,9 @@ export class DurableRunService {
       assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {}, retryPolicy);
       return existing;
     }
+    if (status === "waiting") {
+      this.scheduleCommittedBackgroundAttention(run.runId, "run_waiting");
+    }
     if (options.publishRealtime !== false) {
       await this.publishDurableRealtimeSafely(run.runId, {
         type: "durable_run_created",
@@ -3612,6 +3724,7 @@ export class DurableRunService {
     if (!transitioned) {
       return next;
     }
+    this.scheduleCommittedBackgroundAttention(runId, "run_cancelled");
     await this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`, "cancelled");
     await this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_cancelled",
@@ -3795,6 +3908,7 @@ export class DurableRunService {
     result: Awaited<ReturnType<DurableRunService["persistDurableRunRetry"]>>,
   ): Promise<void> {
     if (result.outcome === "terminal_finalization_pending") {
+      this.scheduleCommittedBackgroundAttention(result.run.runId, "run_retry_budget_exhausted");
       await this.publishDurableRealtimeSafely(result.run.runId, {
         type: "durable_run_failed",
         runId: result.run.runId,
@@ -3805,6 +3919,7 @@ export class DurableRunService {
       return;
     }
     if (result.outcome === "dead_lettered") {
+      this.scheduleCommittedBackgroundAttention(result.run.runId, "run_dead_lettered");
       await this.publishDurableRealtimeSafely(result.run.runId, {
         type: "durable_run_dead_lettered",
         runId: result.run.runId,
@@ -4125,6 +4240,70 @@ export class DurableRunService {
     return appended;
   }
 
+  /**
+   * Notification routing is external I/O and must only begin after the caller's
+   * canonical durable transaction has committed. Call this from post-commit
+   * transition seams, never from recordDurableTimelineEvent itself.
+   */
+  private scheduleCommittedBackgroundAttention(
+    childRunId: string,
+    eventType: DurableRunTimelineEvent["eventType"],
+  ): void {
+    if (!isBackgroundAttentionCandidateEvent(eventType) || !this.deps?.onBackgroundAttentionRequired) return;
+    void this.notifyDetachedWatchersForChild(childRunId).catch((error) => {
+      try {
+        this.ctx.logger?.warn(
+          {
+            childRunId,
+            eventType,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "background attention notification scan failed after durable commit",
+        );
+      } catch {
+        // Best-effort notification observability cannot take ownership of
+        // durable state.
+      }
+    });
+  }
+
+  private async notifyDetachedWatchersForChild(childRunId: string): Promise<void> {
+    if (!this.deps?.onBackgroundAttentionRequired) return;
+    let afterParentRunId = "";
+    while (true) {
+      const rows = await this.ctx.storage.gatewaySql
+        .prepare(
+          `SELECT DISTINCT parent_run_id
+           FROM durable_child_watchers
+           WHERE child_run_id = ? AND state = 'detached' AND parent_run_id > ?
+           ORDER BY parent_run_id ASC
+           LIMIT ?`,
+        )
+        .all<{ parent_run_id: string }>(childRunId, afterParentRunId, DETACHED_WATCHER_NOTIFICATION_BATCH_SIZE);
+      for (const row of rows) {
+        try {
+          const parent = await this.ctx.storage.durableRuns.getRun(row.parent_run_id);
+          const sessionId = readBoundedPayloadId(parent.payload, "sessionId");
+          if (!sessionId) continue;
+          const session = await this.ctx.storage.chatSessionMeta.get(sessionId);
+          if (!session) continue;
+          await this.notifyBackgroundAttentionSafely(
+            await projectDurableBackgroundTaskRail(this.ctx.storage, {
+              parentRunId: parent.runId,
+              workspaceId: session.workspaceId ?? "default",
+              sessionId,
+            }),
+          );
+        } catch {
+          // Intentionally ignore projection or notification failure here; it
+          // cannot affect the canonical child event.
+        }
+      }
+      if (rows.length < DETACHED_WATCHER_NOTIFICATION_BATCH_SIZE) return;
+      afterParentRunId = rows.at(-1)!.parent_run_id;
+    }
+  }
+
   private async recordDurableTimelineEventSafely(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
@@ -4391,6 +4570,7 @@ export class DurableRunService {
     if (!transitioned) {
       return undefined;
     }
+    this.scheduleCommittedBackgroundAttention(failed.runId, "run_failed");
     await this.publishDurableRealtimeSafely(failed.runId, {
       type: "durable_run_failed",
       runId: failed.runId,
@@ -4891,6 +5071,9 @@ export class DurableRunService {
         });
       }
     });
+    if (shouldBlock) {
+      this.scheduleCommittedBackgroundAttention(run.runId, blockedEventType);
+    }
     await this.publishDurableRealtimeSafely(run.runId, {
       type: "durable_continuation_gate",
       runId: run.runId,
@@ -5011,6 +5194,7 @@ export class DurableRunService {
     if (waiting.status !== "waiting") {
       return;
     }
+    this.scheduleCommittedBackgroundAttention(waiting.runId, "run_waiting");
     await this.publishDurableRealtimeSafely(waiting.runId, {
       type: "durable_run_waiting",
       runId: waiting.runId,
@@ -5067,6 +5251,7 @@ export class DurableRunService {
     if (waiting.status !== "waiting") {
       return;
     }
+    this.scheduleCommittedBackgroundAttention(waiting.runId, "run_waiting");
     await this.publishDurableRealtimeSafely(waiting.runId, {
       type: "durable_run_waiting",
       runId: waiting.runId,
@@ -5372,6 +5557,7 @@ export class DurableRunService {
     if (!failed) {
       return false;
     }
+    this.scheduleCommittedBackgroundAttention(failed.runId, "run_failed");
     await this.publishDurableRealtimeSafely(failed.runId, {
       type: "durable_run_failed",
       runId: failed.runId,
@@ -5596,6 +5782,7 @@ export class DurableRunService {
       }
       return false;
     }
+    this.scheduleCommittedBackgroundAttention(failed.runId, "run_failed");
     await this.publishDurableRealtimeSafely(failed.runId, {
       type: "durable_run_failed",
       runId: failed.runId,

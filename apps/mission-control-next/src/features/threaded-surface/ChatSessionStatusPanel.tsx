@@ -75,16 +75,30 @@ export function ChatSessionStatusPanel({ panel }: { panel: PanelState }) {
             }}
           </StatusSection>
           <StatusSection title="Attention" section={status.attention}>
-            {(value) => (
-              <>
-                <strong>
-                  {value.pendingApprovals.length} approval{value.pendingApprovals.length === 1 ? "" : "s"}
-                </strong>
-                <span>
-                  {value.pendingUserInputs.length} input request{value.pendingUserInputs.length === 1 ? "" : "s"}
-                </span>
-              </>
-            )}
+            {(value) => {
+              const backgroundAttentionRequired = value.backgroundTasks.filter((task) => task.attention.required);
+              return (
+                <>
+                  <strong>
+                    {value.pendingApprovals.length} approval{value.pendingApprovals.length === 1 ? "" : "s"} ·{" "}
+                    {value.pendingUserInputs.length} input request{value.pendingUserInputs.length === 1 ? "" : "s"}
+                  </strong>
+                  <span>
+                    {value.backgroundTasks.length} background task{value.backgroundTasks.length === 1 ? "" : "s"} ·{" "}
+                    {backgroundAttentionRequired.length} need attention
+                  </span>
+                  {backgroundAttentionRequired[0] ? (
+                    <span role="status">
+                      {backgroundAttentionRequired[0].label}:{" "}
+                      {label(backgroundAttentionRequired[0].attention.requiredReason ?? "waiting")}
+                    </span>
+                  ) : null}
+                  {!value.backgroundTaskProjection.complete ? (
+                    <span>Some background status is unavailable: {value.backgroundTaskProjection.reason}</span>
+                  ) : null}
+                </>
+              );
+            }}
           </StatusSection>
           <StatusSection title="Orchestration" section={status.orchestration}>
             {(value) => {

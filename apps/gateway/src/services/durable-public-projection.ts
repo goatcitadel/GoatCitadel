@@ -1,9 +1,9 @@
-import { redactStructuredSecrets } from "@goatcitadel/contracts";
+import { projectPublicSecretValue } from "./public-secret-projection.js";
 
 const INTERNAL_DURABLE_EVIDENCE_KEYS = new Set(["heartbeatDecisionRawOutput"]);
 
 export function projectDurableRouteResponse<T>(value: T): T {
-  return omitInternalDurableEvidence(redactStructuredSecrets(value).value) as T;
+  return omitInternalDurableEvidence(projectPublicSecretValue(value)) as T;
 }
 
 /**

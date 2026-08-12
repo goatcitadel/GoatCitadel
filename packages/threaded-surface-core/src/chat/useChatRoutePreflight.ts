@@ -3,6 +3,7 @@ import type {
   RoutingPreflightAction,
   RoutingPreflightRequest,
   RoutingPreflightResult,
+  ChatWorkspaceSnapshotRequest,
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { preflightChatRoute } from "@goatcitadel/mission-control-shared/api/client";
@@ -22,6 +23,7 @@ function buildPreflightRequest(input: {
   surfaceMode?: ChatSessionPrefsRecord["mode"];
   fullWebAccess?: boolean;
   requestPrefs?: OutboundRequestPrefsSnapshot;
+  workspaceSnapshot?: ChatWorkspaceSnapshotRequest;
 }): RoutingPreflightRequest {
   const prefsOverride = input.requestPrefs
     ? {
@@ -51,6 +53,7 @@ function buildPreflightRequest(input: {
     action: input.action,
     turnId: input.turnId ?? undefined,
     content: input.content?.trim() || undefined,
+    workspaceSnapshot: input.workspaceSnapshot,
     prefsOverride,
     ...(fullWebAccess ? { fullWebAccess: true } : {}),
   };
@@ -65,8 +68,19 @@ export function useChatRoutePreflight(input: {
   displayAction: RoutingPreflightAction;
   displayTurnId?: string | null;
   enabled?: boolean;
+  workspaceSnapshot?: ChatWorkspaceSnapshotRequest;
 }) {
-  const { sessionId, prefs, content, surfaceMode, fullWebAccess, displayAction, displayTurnId, enabled = true } = input;
+  const {
+    sessionId,
+    prefs,
+    content,
+    surfaceMode,
+    fullWebAccess,
+    displayAction,
+    displayTurnId,
+    enabled = true,
+    workspaceSnapshot,
+  } = input;
   const cacheRef = useRef(new Map<string, { fetchedAt: number; result: RoutingPreflightResult }>());
   const [result, setResult] = useState<RoutingPreflightResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -81,9 +95,10 @@ export function useChatRoutePreflight(input: {
             prefs,
             surfaceMode,
             fullWebAccess,
+            workspaceSnapshot,
           })
         : null,
-    [content, displayAction, displayTurnId, fullWebAccess, prefs, sessionId, surfaceMode],
+    [content, displayAction, displayTurnId, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
   );
   const displayKey = useMemo(
     () => (sessionId && displayRequest ? `${sessionId}:${stableHash(displayRequest)}` : null),
@@ -162,6 +177,7 @@ export function useChatRoutePreflight(input: {
       content?: string;
       sessionId?: string | null;
       requestPrefs?: OutboundRequestPrefsSnapshot;
+      workspaceSnapshot?: ChatWorkspaceSnapshotRequest;
       force?: boolean;
     }) => {
       const targetSessionId = override.sessionId ?? sessionId;
@@ -176,6 +192,7 @@ export function useChatRoutePreflight(input: {
         surfaceMode,
         fullWebAccess,
         requestPrefs: override.requestPrefs,
+        workspaceSnapshot: override.workspaceSnapshot ?? (override.action === "send" ? workspaceSnapshot : undefined),
       });
       const cacheKey = `${targetSessionId}:${stableHash(request)}`;
       const cached = cacheRef.current.get(cacheKey);
@@ -187,7 +204,7 @@ export function useChatRoutePreflight(input: {
       }
       return next;
     },
-    [displayKey, fetchPreflight, fullWebAccess, prefs, sessionId, surfaceMode],
+    [displayKey, fetchPreflight, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
   );
 
   const resultHash = useMemo(() => (result ? stableHash(result) : null), [result]);

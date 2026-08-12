@@ -359,7 +359,9 @@ describe("gateway service host guard", () => {
     // Bumped to 174 for the Gateway-owned Chat session status read service.
     // Bumped to 178 for server-owned timer, fork, typed-variable, and document-proposal boundaries.
     // Bumped to 179 for exact terminal Chat post-commit reconciliation.
-    expect(portMemberCount).toBeLessThanOrEqual(179);
+    // Bumped to 182 for delegated scope discovery/approval and persisted
+    // Workspace Explorer recovery through the explicit route port.
+    expect(portMemberCount).toBeLessThanOrEqual(182);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

@@ -238,6 +238,62 @@ describe("ChatDelegationRunRepository", () => {
     );
   });
 
+  it("finds the latest matching workflow before applying its one-row boundary", () => {
+    const { repo } = createStore();
+    repo.create({
+      runId: "explorer-old",
+      parentRunId: "parent-a",
+      sessionId: "session-a",
+      taskId: "task-explorer-old",
+      objective: "Explore",
+      roles: ["workspace-explorer"],
+      mode: "sequential",
+      workflowTemplate: "read_only_workspace_explorer",
+      startedAt: "2026-08-12T00:00:00.000Z",
+    });
+    for (let index = 0; index < 101; index += 1) {
+      repo.create({
+        runId: `ordinary-${String(index).padStart(3, "0")}`,
+        sessionId: "session-a",
+        taskId: `task-ordinary-${index}`,
+        objective: "Ordinary delegation",
+        roles: ["qa"],
+        mode: "sequential",
+        workflowTemplate: "ordinary_workflow",
+        startedAt: `2026-08-12T01:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+      });
+    }
+    repo.create({
+      runId: "explorer-other-session",
+      parentRunId: "parent-a",
+      sessionId: "session-b",
+      taskId: "task-other",
+      objective: "Other session explorer",
+      roles: ["workspace-explorer"],
+      mode: "sequential",
+      workflowTemplate: "read_only_workspace_explorer",
+      startedAt: "2026-08-12T23:00:00.000Z",
+    });
+
+    assert.equal(
+      repo.listBySession("session-a", 100).some((run) => run.runId === "explorer-old"),
+      false,
+    );
+    assert.equal(
+      repo.findLatestBySessionAndWorkflowTemplate("session-a", "read_only_workspace_explorer")?.runId,
+      "explorer-old",
+    );
+    assert.equal(
+      repo.findLatestBySessionParentAndWorkflowTemplate("session-a", "parent-a", "read_only_workspace_explorer")?.runId,
+      "explorer-old",
+    );
+    assert.equal(
+      repo.findLatestBySessionParentAndWorkflowTemplate("session-a", "parent-missing", "read_only_workspace_explorer"),
+      undefined,
+    );
+    assert.equal(repo.findLatestBySessionAndWorkflowTemplate("session-a", "missing"), undefined);
+  });
+
   it("filters malformed persisted rows and coerces malformed JSON payloads", () => {
     const { db, repo } = createStore();
     repo.create({

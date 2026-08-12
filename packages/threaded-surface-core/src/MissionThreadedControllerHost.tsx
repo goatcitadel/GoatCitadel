@@ -34,6 +34,7 @@ import type {
   ChatSessionWorkbenchTreeResponse,
   ChatSessionPrefsPatch,
   ChatThreadResponse,
+  ChatWorkspaceSnapshotRequest,
   RunTemplateInvocation,
   RunVariableBindings,
   RunVariableSchema,
@@ -195,6 +196,7 @@ import {
   type OutboundRequestPrefsSnapshot,
 } from "./chat/useChatSurfaceOrchestration";
 import { useExternalSourceAttachments } from "./chat/useExternalSourceAttachments";
+import { useChatDelegatedScopeControls } from "./chat/useChatDelegatedScopeControls";
 import { useChatThreadController } from "./chat/useChatThreadController";
 import { detectImageGenerationIntent } from "./chat/chat-image-intent";
 import { useChatMultimodalControls } from "./chat/useChatMultimodalControls";
@@ -247,6 +249,7 @@ const MAX_HYDRATED_ATTACHMENTS = 16;
 const MAX_HYDRATED_MESSAGE_CHARS = 64 * 1024;
 const MAX_HYDRATED_ATTACHMENT_TEXT_CHARS = 64 * 1024;
 const MAX_HYDRATED_ATTACHMENT_SIZE_BYTES = 1024 * 1024 * 1024;
+const WORKSPACE_SNAPSHOT_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SAFE_STORAGE_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9._ -]{0,255}$/iu;
 const WINDOWS_RESERVED_SEGMENT_PATTERN = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
@@ -286,6 +289,25 @@ function hasOnlyKeys(record: UnknownRecord, allowed: readonly string[]): boolean
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function createWorkspaceSnapshotRequest(): ChatWorkspaceSnapshotRequest {
+  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  return { capture: true, requestId: `workspace-snapshot-${suffix}` };
+}
+
+function parseHydratedWorkspaceSnapshotRequest(value: unknown, action: unknown): ChatWorkspaceSnapshotRequest | null {
+  if (
+    action !== "send" ||
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, ["capture", "requestId"]) ||
+    value.capture !== true ||
+    typeof value.requestId !== "string" ||
+    !WORKSPACE_SNAPSHOT_REQUEST_ID.test(value.requestId)
+  ) {
+    return null;
+  }
+  return Object.freeze({ capture: true, requestId: value.requestId });
 }
 
 function isBoundedString(value: unknown, maxLength: number, allowEmpty = false): value is string {
@@ -593,6 +615,7 @@ export function parseHydratedOutboundQueue(
           "requestPrefs",
           "externalContextRefs",
           "templateInvocation",
+          "workspaceSnapshot",
         ]) ||
         !isSafeIdentifier(candidate.id) ||
         queueIds.has(candidate.id) ||
@@ -645,6 +668,12 @@ export function parseHydratedOutboundQueue(
       if (hasOwn(candidate, "templateInvocation") && !templateInvocation) {
         return [];
       }
+      const workspaceSnapshot = hasOwn(candidate, "workspaceSnapshot")
+        ? parseHydratedWorkspaceSnapshotRequest(candidate.workspaceSnapshot, candidate.action)
+        : undefined;
+      if (hasOwn(candidate, "workspaceSnapshot") && !workspaceSnapshot) {
+        return [];
+      }
       queueIds.add(candidate.id);
       parsed.push(
         Object.freeze({
@@ -661,6 +690,7 @@ export function parseHydratedOutboundQueue(
           requestPrefs,
           ...(externalContextRefs ? { externalContextRefs } : {}),
           ...(templateInvocation ? { templateInvocation } : {}),
+          ...(workspaceSnapshot ? { workspaceSnapshot } : {}),
         }) as OutboundQueueItem,
       );
     }
@@ -848,6 +878,7 @@ export function MissionThreadedControllerHost({
   onOpenStartHere = () => undefined,
   onOpenPersonalitiesSettings = () => undefined,
   onOpenLibraryArtifacts = () => undefined,
+  onOpenLibraryImports = () => undefined,
   onOpenOpsRuntime = () => undefined,
   onNavigateSurface,
   onResolvedModeChange,
@@ -878,6 +909,7 @@ export function MissionThreadedControllerHost({
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
+  onOpenLibraryImports?: () => void;
   onOpenOpsRuntime?: () => void;
   onNavigateSurface?: (
     surface: ChatMode,
@@ -941,6 +973,24 @@ export function MissionThreadedControllerHost({
     modelCouncilEnabledRef.current = false;
     setModelCouncilEnabled(false);
     return enabled ? ({ enabled: true } as const) : undefined;
+  }, []);
+  const [workspaceSnapshotRequest, setWorkspaceSnapshotRequest] = useState<ChatWorkspaceSnapshotRequest>();
+  const workspaceSnapshotRequestRef = useRef<ChatWorkspaceSnapshotRequest | undefined>(undefined);
+  const replaceWorkspaceSnapshotRequest = useCallback(() => {
+    const next = createWorkspaceSnapshotRequest();
+    workspaceSnapshotRequestRef.current = next;
+    setWorkspaceSnapshotRequest(next);
+  }, []);
+  const consumeWorkspaceSnapshotRequest = useCallback(() => {
+    const request = workspaceSnapshotRequestRef.current;
+    workspaceSnapshotRequestRef.current = undefined;
+    setWorkspaceSnapshotRequest(undefined);
+    return request;
+  }, []);
+  const restoreWorkspaceSnapshotRequest = useCallback((request: ChatWorkspaceSnapshotRequest | undefined) => {
+    if (!request || workspaceSnapshotRequestRef.current) return;
+    workspaceSnapshotRequestRef.current = request;
+    setWorkspaceSnapshotRequest(request);
   }, []);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<ChatErrorSource | null>(null);
@@ -1762,6 +1812,7 @@ export function MissionThreadedControllerHost({
       }
       return pendingTemplateInvocation.invocation;
     },
+    consumeWorkspaceSnapshotRequest,
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
@@ -1845,7 +1896,12 @@ export function MissionThreadedControllerHost({
     projects: composerPaletteProjects,
     knowledgeAttachments: composerPaletteKnowledge,
     externalSourcesAvailable: externalSourceAttachments.supported === true,
-    workspaceExplorerAvailable: Boolean(selectedSession?.projectId),
+    workspaceExplorerAvailable: Boolean(
+      selectedSession?.projectId &&
+      (thread?.turns.find((turn) => turn.turnId === selectedTurnId) ?? thread?.turns.at(-1))?.trace?.durable?.runId &&
+      !(thread?.turns.find((turn) => turn.turnId === selectedTurnId) ?? thread?.turns.at(-1))?.trace?.orchestration
+        ?.runId,
+    ),
     typedRunVariablesEnabled,
     documentEditingEnabled,
     sessionId: selectedSessionId ?? undefined,
@@ -1879,6 +1935,7 @@ export function MissionThreadedControllerHost({
     displayAction: editingTurnId ? "edit" : "send",
     displayTurnId: editingTurnId,
     enabled: Boolean(selectedSessionId),
+    workspaceSnapshot: editingTurnId ? undefined : workspaceSnapshotRequest,
   });
   const [acknowledgedRoutePreflightHashes, setAcknowledgedRoutePreflightHashes] = useState<Record<string, true>>({});
   const currentRoutePreflight = routePreflight.result;
@@ -2089,6 +2146,8 @@ export function MissionThreadedControllerHost({
     handleAcceptDelegation,
     handleRunCodeDelegation,
     handleExploreWorkspace,
+    continueActiveExplorerInBackground,
+    rehydrateBackgroundExplorerReport,
     handleMemoryStatusUpdate,
     handleRebuildLearnedMemory,
     handleCreateSpecialistDraft,
@@ -2162,6 +2221,7 @@ export function MissionThreadedControllerHost({
         }
       },
       onTemplateInvocationSent: () => setPendingTemplateInvocation(null),
+      onWorkspaceSnapshotFailed: (item) => restoreWorkspaceSnapshotRequest(item.workspaceSnapshot),
     },
   });
   const {
@@ -2636,12 +2696,23 @@ export function MissionThreadedControllerHost({
   const selectionSourceSummary = currentRoutePreflight
     ? formatSelectionSourceSummary(currentRoutePreflight.selectionSource)
     : selectionSourceLabel;
+  const selectedExplorerParent = Boolean(
+    activeDelegationRun?.explorer &&
+    activeDelegationRun.attachedTurnId &&
+    activeDelegationRun.attachedTurnId === selectedTurn?.turnId,
+  );
   const visibleDelegationRun =
     activeDelegationRun?.attachedTurnId &&
     activeWorkflowTurn &&
-    activeDelegationRun.attachedTurnId !== activeWorkflowTurn.turnId
+    activeDelegationRun.attachedTurnId !== activeWorkflowTurn.turnId &&
+    !selectedExplorerParent
       ? null
       : activeDelegationRun;
+  const delegatedScopeControls = useChatDelegatedScopeControls({
+    sessionId: selectedSessionId,
+    delegationRun: visibleDelegationRun,
+    pushLocalNotice,
+  });
   const visibleRunStateLabel = formatThreadedRunStateLabel(activeWorkflowTurn, visibleDelegationRun);
   const visibleRunStateSummary = formatThreadedRunStateSummary(activeWorkflowTurn, visibleDelegationRun);
   const backgroundHandoffRunStateSummary = formatAgenticBackgroundHandoffSummary(agenticRunTree, visibleDelegationRun);
@@ -4364,6 +4435,7 @@ export function MissionThreadedControllerHost({
         },
         onOpenPersonalitiesSettings,
         onOpenLibraryArtifacts,
+        onOpenLibraryImports,
         onOpenOpsRuntime,
         onAcceptDelegation: async () => {
           if (!blockHistoricalMutation()) await handleAcceptDelegation();
@@ -4419,6 +4491,9 @@ export function MissionThreadedControllerHost({
           externalSourceAttachments.supported === true
             ? {
                 attachments: externalSourceAttachments.attachments,
+                candidates: externalSourceAttachments.candidates,
+                candidatesSupported: externalSourceAttachments.candidatesSupported,
+                loading: externalSourceAttachments.loading,
                 selectedAttachmentIds: externalSourceAttachments.selectedAttachmentIds,
                 busyAttachmentId: externalSourceAttachments.busyAttachmentId,
                 canMutate: externalSourceAttachments.canMutate && !historicalModeActive,
@@ -4428,6 +4503,9 @@ export function MissionThreadedControllerHost({
                 onAttach: (seed) => {
                   if (!blockHistoricalMutation()) void externalSourceAttachments.attach(seed);
                 },
+                onReload: () => {
+                  if (!blockHistoricalMutation()) void externalSourceAttachments.reload();
+                },
                 onDetach: (attachmentId) => {
                   if (!blockHistoricalMutation()) void externalSourceAttachments.detach(attachmentId);
                 },
@@ -4436,6 +4514,9 @@ export function MissionThreadedControllerHost({
                 },
               }
             : null,
+        delegatedScopeControls: historicalModeActive ? null : delegatedScopeControls,
+        onContinueExplorerInBackground: continueActiveExplorerInBackground,
+        onBackgroundExplorerSettled: rehydrateBackgroundExplorerReport,
         presetOptions,
         selectedPresetId,
         presetApplyWarning,
@@ -4446,6 +4527,7 @@ export function MissionThreadedControllerHost({
         currentWebMode: prefs?.webMode ?? "auto",
         currentReviewDepth: prefs?.orchestrationReviewDepth ?? "off",
         modelCouncilEnabled,
+        workspaceSnapshotRequest,
         fullWebAccess,
         currentThinkingLevel: prefs?.thinkingLevel ?? "standard",
         currentSpeedMode: prefs?.speedMode ?? "standard",
@@ -4520,6 +4602,18 @@ export function MissionThreadedControllerHost({
             modelCouncilEnabledRef.current = next;
             setModelCouncilEnabled(next);
           }
+        },
+        onToggleWorkspaceSnapshot: () => {
+          if (blockHistoricalMutation()) return;
+          if (workspaceSnapshotRequestRef.current) {
+            workspaceSnapshotRequestRef.current = undefined;
+            setWorkspaceSnapshotRequest(undefined);
+          } else {
+            replaceWorkspaceSnapshotRequest();
+          }
+        },
+        onRefreshWorkspaceSnapshot: () => {
+          if (!blockHistoricalMutation()) replaceWorkspaceSnapshotRequest();
         },
         onSetDeepMode: () => {
           if (!blockHistoricalMutation()) handleSetDeepMode();

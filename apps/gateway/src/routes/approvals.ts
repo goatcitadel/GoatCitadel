@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
-import { redactStructuredSecrets } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
+import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -303,7 +303,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
 };
 
 function projectApprovalPublicResponse<T>(value: T): T {
-  return redactStructuredSecrets(value).value;
+  return projectPublicSecretValue(value);
 }
 
 function isLoopbackRequest(request: {

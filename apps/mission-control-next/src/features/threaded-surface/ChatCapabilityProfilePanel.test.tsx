@@ -236,6 +236,88 @@ describe("ChatCapabilityProfilePanel", () => {
     act(() => renderer.unmount());
   });
 
+  it("labels a preflight workspace snapshot as immutable point-in-time context", () => {
+    const profile = preview();
+    profile.workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1",
+      snapshotId: "snapshot-workspace-1",
+      requestId: "request-workspace-1",
+      workspaceId: "workspace-1",
+      project: { projectId: "project-1", projectRevision: 7 },
+      status: "captured",
+      pathBinding: {
+        verificationId: "verified-1",
+        fingerprintSha256: "1".repeat(64),
+        gitIdentitySha256: "2".repeat(64),
+      },
+      git: {
+        headSha: "3".repeat(40),
+        branch: "feature/governed-snapshot",
+        trackedChangeCount: 2,
+        untrackedChangeCount: 0,
+        dirty: true,
+      },
+      capturedAt: "2026-08-12T12:00:00.000Z",
+      snapshotHash: "4".repeat(64),
+    };
+
+    const renderer = render(<ChatCapabilityProfilePreflight profile={profile} />);
+    const text = renderedText(renderer);
+    expect(text).toContain("Workspace snapshot");
+    expect(text).toContain("Point-in-time context");
+    expect(text).toContain("project-1");
+    expect(text).toContain("feature/governed-snapshot");
+    expect(text).toContain("grants no folder authority");
+    act(() => renderer.unmount());
+  });
+
+  it("labels captured and unavailable workspace receipts as point-in-time context", () => {
+    const captured = preview();
+    captured.workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1",
+      snapshotId: "snapshot-workspace-1",
+      requestId: "request-workspace-1",
+      workspaceId: "workspace-1",
+      project: { projectId: "project-1", projectRevision: 3 },
+      status: "captured",
+      pathBinding: {
+        verificationId: "verification-1",
+        fingerprintSha256: "1".repeat(64),
+        gitIdentitySha256: "2".repeat(64),
+      },
+      git: {
+        headSha: "3".repeat(40),
+        branch: "main",
+        trackedChangeCount: 2,
+        untrackedChangeCount: 0,
+        dirty: true,
+      },
+      capturedAt: "2026-08-12T18:00:00.000Z",
+      snapshotHash: "4".repeat(64),
+    };
+    const capturedRenderer = render(<ChatCapabilityProfilePreflight profile={captured} />);
+    expect(renderedText(capturedRenderer)).toContain("Point-in-time context");
+    expect(renderedText(capturedRenderer)).toContain("project-1");
+    expect(renderedText(capturedRenderer)).toContain("grants no folder authority");
+    act(() => capturedRenderer.unmount());
+
+    const unavailable = preview();
+    unavailable.workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1",
+      snapshotId: "snapshot-workspace-2",
+      requestId: "request-workspace-2",
+      workspaceId: "workspace-1",
+      status: "unavailable",
+      reasonCode: "git_unavailable",
+      capturedAt: "2026-08-12T18:00:00.000Z",
+      snapshotHash: "5".repeat(64),
+    };
+    const unavailableRenderer = render(<ChatCapabilityProfilePreflight profile={unavailable} />);
+    expect(renderedText(unavailableRenderer)).toContain("Unavailable");
+    expect(renderedText(unavailableRenderer)).toContain("Repository health was not inferred");
+    act(() => unavailableRenderer.unmount());
+  });
+
   it("renders persisted detail only after exact hash and selection verification", () => {
     const inspection: ChatCapabilityProfileInspection = {
       status: "verified",
@@ -263,6 +345,38 @@ describe("ChatCapabilityProfilePanel", () => {
     expect(text).not.toContain("C:\\\\private");
     expect(text).not.toContain("providerDefinition");
     expect(renderer.root.findByProps({ "data-integrity-status": "verified" })).toBeTruthy();
+    act(() => renderer.unmount());
+  });
+
+  it("renders an unavailable persisted snapshot without inferring repository health", () => {
+    const profile = persistedProfile();
+    profile.selection.workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1",
+      snapshotId: "snapshot-workspace-unavailable",
+      requestId: "request-workspace-unavailable",
+      workspaceId: "workspace-1",
+      project: { projectId: "project-1", projectRevision: 8 },
+      status: "unavailable",
+      reasonCode: "path_identity_changed",
+      capturedAt: "2026-08-12T12:05:00.000Z",
+      snapshotHash: "5".repeat(64),
+    };
+    const renderer = render(
+      <ChatCapabilityProfileRunDetail
+        inspection={{
+          status: "verified",
+          profile,
+          expectedProfileId: "profile-1",
+          expectedProfileHash: HASH,
+          mismatchFields: [],
+        }}
+      />,
+    );
+    const text = renderedText(renderer);
+    expect(text).toContain("Snapshot unavailable");
+    expect(text).toContain("path identity changed");
+    expect(text).toContain("Repository health was not inferred");
+    expect(renderer.root.findByProps({ "data-workspace-snapshot-status": "unavailable" })).toBeTruthy();
     act(() => renderer.unmount());
   });
 

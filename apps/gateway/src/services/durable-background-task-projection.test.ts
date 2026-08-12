@@ -165,7 +165,71 @@ describe("durable background-task projection", () => {
       observationComplete: true,
       posture: "degraded",
     });
+    expect(result.tasks[0]?.attention).toMatchObject({
+      state: "foreground",
+      reason: "watcher_attached",
+      required: true,
+      requiredReason: "signal_integrity",
+    });
     expect(result.tasks[0]?.blockers.some((item) => item.kind === "signal_integrity")).toBe(true);
+  });
+
+  it("projects persisted background attention separately from canonical waiting state", async () => {
+    const detachedWatcher = {
+      ...watcher,
+      revision: 2,
+      state: "detached" as const,
+      detachedAt: "2026-07-13T00:00:02.000Z",
+      updatedAt: "2026-07-13T00:00:02.000Z",
+    };
+    const waitingChild = { ...child, status: "waiting" as const, version: 8 };
+    const storage = createStorage({
+      durableChildWatchers: { listByParent: vi.fn(() => [detachedWatcher]) },
+      durableRuns: { getRun: vi.fn((runId: string) => (runId === parent.runId ? parent : waitingChild)) },
+    });
+
+    const result = await project(storage);
+
+    expect(result.tasks[0]?.attention).toEqual({
+      state: "background",
+      reason: "operator_continued_in_background",
+      updatedAt: "2026-07-13T00:00:02.000Z",
+      required: true,
+      requiredReason: "waiting",
+    });
+    expect(result.tasks[0]?.canonicalStatus).toBe("waiting");
+    expect(result.tasks[0]?.blockers).toContainEqual({ kind: "waiting", message: "Child run is waiting." });
+    expect(result.tasks[0]?.blockers.some((item) => item.kind === "detached")).toBe(false);
+  });
+
+  it("projects a paused detached child as explicit required operator attention", async () => {
+    const detachedWatcher = {
+      ...watcher,
+      revision: 2,
+      state: "detached" as const,
+      detachedAt: "2026-07-13T00:00:02.000Z",
+      updatedAt: "2026-07-13T00:00:02.000Z",
+    };
+    const pausedChild = { ...child, status: "paused" as const, version: 8 };
+    const storage = createStorage({
+      durableChildWatchers: { listByParent: vi.fn(() => [detachedWatcher]) },
+      durableRuns: { getRun: vi.fn((runId: string) => (runId === parent.runId ? parent : pausedChild)) },
+    });
+
+    const result = await project(storage);
+
+    expect(result.tasks[0]?.canonicalStatus).toBe("paused");
+    expect(result.tasks[0]?.attention).toEqual({
+      state: "background",
+      reason: "operator_continued_in_background",
+      updatedAt: "2026-07-13T00:00:02.000Z",
+      required: true,
+      requiredReason: "paused",
+    });
+    expect(result.tasks[0]?.blockers).toContainEqual({
+      kind: "paused",
+      message: "Child run is paused and requires operator attention.",
+    });
   });
 
   it("redacts public previews while hashing and counting the exact terminal output bytes", async () => {

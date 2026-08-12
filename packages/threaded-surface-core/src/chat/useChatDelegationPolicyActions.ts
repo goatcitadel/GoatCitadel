@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Delegation actions keep launch, streaming observation, background attention, and report rehydration in one hook so their generation fences stay aligned. */
 import type {
   ChatDelegateRequest,
   ChatDelegateResponse,
@@ -14,6 +15,7 @@ import type {
   ChatSessionRecord,
   ChatThreadResponse,
   ChatThreadTurnRecord,
+  DelegatedFilesystemScopePublicProjection,
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
@@ -22,6 +24,7 @@ import {
   ApiRequestError,
   fetchChatProactiveStatus,
   fetchChatDelegationRun,
+  fetchLatestChatWorkspaceExplorer,
   runChatDelegation,
   runChatResearch,
   streamChatDelegation,
@@ -102,7 +105,7 @@ export interface ActiveChatDelegationStep {
   childSessionId?: string;
   childTurnId?: string;
   workResult?: ChatDelegationStepRecord["workResult"];
-  scopeControl?: ChatDelegationStepRecord["scopeControl"];
+  scopeControl?: DelegatedFilesystemScopePublicProjection;
 }
 
 export interface ActiveChatDelegationRun {
@@ -116,6 +119,23 @@ export interface ActiveChatDelegationRun {
   status: ChatDelegationRunStatus;
   steps: ActiveChatDelegationStep[];
   stitchedOutput?: string;
+  explorer?: ChatDelegateResponse["explorer"];
+}
+
+interface ActiveExplorerObservation {
+  controller: AbortController;
+  generation: number;
+  sessionId: string;
+  parentRunId: string;
+  stepIds: Set<string>;
+  handoffRequested: boolean;
+}
+
+class ExplorerObservationDetachedError extends Error {
+  public constructor() {
+    super("Workspace explorer observation continued in background.");
+    this.name = "ExplorerObservationDetachedError";
+  }
 }
 
 function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDelegationStep {
@@ -136,7 +156,20 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
     childSessionId: step.childSessionId,
     childTurnId: step.childTurnId,
     workResult: step.workResult,
-    scopeControl: step.scopeControl,
+    scopeControl: toActiveDelegationScopeControl(step.scopeControl),
+  };
+}
+
+function toActiveDelegationScopeControl(
+  scope: DelegatedFilesystemScopePublicProjection | undefined,
+): ActiveChatDelegationStep["scopeControl"] {
+  if (!scope) return undefined;
+  return {
+    ...(scope.workingPath ? { workingPath: scope.workingPath } : {}),
+    approvedPaths: [...scope.approvedPaths],
+    scopeHash: scope.scopeHash,
+    dispatchGeneration: scope.dispatchGeneration,
+    updatedAt: scope.updatedAt,
   };
 }
 
@@ -396,11 +429,25 @@ export function useChatDelegationPolicyActions(input: {
   const [proactivePolicyDraft, setProactivePolicyDraft] = useState<ChatProactivePolicyPatch | null>(null);
   const [proactivePolicyConflict, setProactivePolicyConflict] = useState(false);
   const subagentRecommendationKeyRef = useRef<string>("");
+  const directDelegationGenerationRef = useRef(0);
+  const activeExplorerObservationRef = useRef<ActiveExplorerObservation | null>(null);
+  const explorerAttentionGenerationRef = useRef(0);
   const selectedTurn = useMemo(
     () => resolveSelectedTurn(input.thread, input.selectedTurnId),
     [input.selectedTurnId, input.thread],
   );
+  const selectedSessionIdRef = useRef(selectedSession?.sessionId);
+  const selectedDurableParentRunIdRef = useRef(selectedTurn?.trace.durable?.runId);
+  selectedSessionIdRef.current = selectedSession?.sessionId;
+  selectedDurableParentRunIdRef.current = selectedTurn?.trace.durable?.runId;
   const activeWorkflowTurn = useMemo(() => resolveActiveWorkflowTurn(input.thread), [input.thread]);
+  const selectedTurnHasDelegation = Boolean(
+    selectedTurn?.trace.orchestration?.runId ||
+    (activeDelegationRun?.runId && activeDelegationRun.attachedTurnId === selectedTurn?.turnId),
+  );
+  const workspaceExplorerEligible = Boolean(
+    selectedSession?.projectId && selectedTurn?.trace.durable?.runId && !selectedTurnHasDelegation,
+  );
   const activeDelegationRunId = activeDelegationRun?.runId;
   const activeDelegationAttachedTurnId = activeDelegationRun?.attachedTurnId;
   const activeDelegationStatus = activeDelegationRun?.status;
@@ -434,7 +481,7 @@ export function useChatDelegationPolicyActions(input: {
     }
     let cancelled = false;
     void fetchChatDelegationRun(sessionId, runId)
-      .then(({ run, steps }) => {
+      .then(({ run, steps, explorer }) => {
         if (cancelled) {
           return;
         }
@@ -456,6 +503,7 @@ export function useChatDelegationPolicyActions(input: {
             status: run.status,
             steps: steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
             stitchedOutput: run.stitchedOutput,
+            explorer,
           };
         });
       })
@@ -475,6 +523,64 @@ export function useChatDelegationPolicyActions(input: {
     activeWorkflowTurn?.trace.orchestration?.runId,
     activeWorkflowTurn?.turnId,
     input.thread?.sessionId,
+    selectedSession?.sessionId,
+  ]);
+
+  useEffect(() => {
+    const sessionId = selectedSession?.sessionId;
+    if (!sessionId || input.thread?.sessionId !== sessionId) return;
+    const requestGeneration = directDelegationGenerationRef.current;
+    let cancelled = false;
+    void fetchLatestChatWorkspaceExplorer(sessionId)
+      .then((detail) => {
+        if (cancelled || requestGeneration !== directDelegationGenerationRef.current || !detail) return;
+        const attachedTurn = detail.run.parentRunId
+          ? input.thread?.turns.find((turn) => turn.trace.durable?.runId === detail.run.parentRunId)
+          : undefined;
+        const attachedTurnId = attachedTurn?.turnId ?? null;
+        const traceDelegationRunId = activeWorkflowTurn?.trace.orchestration?.runId;
+        const explorerBelongsToActiveParent =
+          Boolean(detail.run.parentRunId) && detail.run.parentRunId === activeWorkflowTurn?.trace.durable?.runId;
+        setActiveDelegationRun((current) => {
+          if (traceDelegationRunId && !explorerBelongsToActiveParent) return current;
+          if (
+            current?.runId &&
+            current.runId !== detail.run.runId &&
+            !(current.runId === traceDelegationRunId && explorerBelongsToActiveParent)
+          ) {
+            return current;
+          }
+          return {
+            runId: detail.run.runId,
+            taskId: detail.run.taskId,
+            executionPlanId: detail.run.executionPlanId,
+            attachedTurnId,
+            label: "Workspace exploration",
+            objective: detail.run.objective,
+            mode: detail.run.mode,
+            status: detail.run.status,
+            steps: detail.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
+            stitchedOutput: detail.run.stitchedOutput,
+            explorer: detail.explorer,
+          };
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled || activeWorkflowTurn?.trace.orchestration?.runId) return;
+        const failureKind = error instanceof Error ? error.name : "UnknownError";
+        pushLocalNotice(
+          `Workspace explorer history is temporarily unavailable (${failureKind}); current Chat turns are unchanged.`,
+          "warning",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeWorkflowTurn?.trace.durable?.runId,
+    activeWorkflowTurn?.trace.orchestration?.runId,
+    input.thread,
+    pushLocalNotice,
     selectedSession?.sessionId,
   ]);
 
@@ -634,6 +740,7 @@ export function useChatDelegationPolicyActions(input: {
 
   const runDelegationAction = useCallback(
     async (sessionId: string, request: ChatDelegateRequest, label: string) => {
+      const delegationGeneration = ++directDelegationGenerationRef.current;
       const attachedTurnId = selectedTurn?.turnId ?? null;
       const mode = resolveDelegationMode(request.mode);
       setActiveDelegationRun({
@@ -645,7 +752,8 @@ export function useChatDelegationPolicyActions(input: {
         steps: createSeedDelegationSteps(request),
       });
 
-      if (!streamEnabled) {
+      const observeAsStream = streamEnabled || request.executionProfile === "read_only_explorer";
+      if (!observeAsStream) {
         const result = await runChatDelegation(sessionId, request);
         setActiveDelegationRun({
           runId: result.runId,
@@ -658,14 +766,32 @@ export function useChatDelegationPolicyActions(input: {
           status: inferDelegationRunStatus(result.steps.map(toActiveDelegationStep)),
           steps: result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
           stitchedOutput: result.stitchedOutput,
+          explorer: result.explorer,
         });
         return result;
       }
 
       let finalResult: ChatDelegateResponse | null = null;
       const expectedSteps = request.steps?.length ?? request.roles.length;
+      const explorerObservation =
+        request.executionProfile === "read_only_explorer" && request.policyRunId
+          ? {
+              controller: new AbortController(),
+              generation: delegationGeneration,
+              sessionId,
+              parentRunId: request.policyRunId,
+              stepIds: new Set<string>(),
+              handoffRequested: false,
+            }
+          : null;
+      if (explorerObservation) {
+        activeExplorerObservationRef.current = explorerObservation;
+      }
       try {
-        await streamChatDelegation(sessionId, request, (chunk) => {
+        const handleChunk: Parameters<typeof streamChatDelegation>[2] = (chunk) => {
+          if (delegationGeneration !== directDelegationGenerationRef.current) {
+            return;
+          }
           if (chunk.type === "status") {
             setActiveDelegationRun((current) => applyDelegationStatusChunk(current, chunk));
             if (chunk.message) {
@@ -674,6 +800,7 @@ export function useChatDelegationPolicyActions(input: {
             return;
           }
           if (chunk.type === "step" && chunk.step) {
+            explorerObservation?.stepIds.add(chunk.step.stepId);
             const nextStep: ActiveChatDelegationStep = {
               stepId: chunk.step.stepId,
               runId: chunk.step.runId,
@@ -687,6 +814,7 @@ export function useChatDelegationPolicyActions(input: {
               summary: chunk.step.summary,
               output: chunk.step.output,
               error: chunk.step.error,
+              scopeControl: toActiveDelegationScopeControl(chunk.step.scopeControl),
             };
             setActiveDelegationRun((current) => applyDelegationStepChunk(current, chunk, nextStep));
             if (chunk.step.status === "running") {
@@ -727,20 +855,137 @@ export function useChatDelegationPolicyActions(input: {
               status: inferDelegationRunStatus(steps),
               steps,
               stitchedOutput: chunk.result!.stitchedOutput,
+              explorer: chunk.result!.explorer,
             }));
           }
-        });
+        };
+        if (explorerObservation) {
+          await streamChatDelegation(sessionId, request, handleChunk, {
+            signal: explorerObservation.controller.signal,
+          });
+        } else {
+          await streamChatDelegation(sessionId, request, handleChunk);
+        }
       } catch (error) {
-        setActiveDelegationRun((current) => applyDelegationStreamFailure(current));
+        if (explorerObservation?.handoffRequested && explorerObservation.controller.signal.aborted) {
+          throw new ExplorerObservationDetachedError();
+        }
+        if (delegationGeneration === directDelegationGenerationRef.current) {
+          setActiveDelegationRun((current) => applyDelegationStreamFailure(current));
+        }
         throw error;
+      } finally {
+        if (activeExplorerObservationRef.current === explorerObservation) {
+          activeExplorerObservationRef.current = null;
+        }
       }
 
+      if (explorerObservation?.handoffRequested && explorerObservation.controller.signal.aborted) {
+        throw new ExplorerObservationDetachedError();
+      }
       if (!finalResult) {
         throw new Error(`${label} finished without a final result payload.`);
       }
       return finalResult;
     },
     [pushLocalNotice, selectedTurn?.turnId, streamEnabled],
+  );
+
+  const continueActiveExplorerInBackground = useCallback(
+    (input: { parentRunId: string; watcherId: string }): boolean => {
+      const observation = activeExplorerObservationRef.current;
+      const stepId = input.watcherId.startsWith("delegation-child:")
+        ? input.watcherId.slice("delegation-child:".length)
+        : "";
+      if (
+        !observation ||
+        observation.sessionId !== selectedSession?.sessionId ||
+        observation.parentRunId !== input.parentRunId ||
+        !stepId ||
+        !observation.stepIds.has(stepId) ||
+        observation.controller.signal.aborted
+      ) {
+        return false;
+      }
+      observation.handoffRequested = true;
+      if (directDelegationGenerationRef.current === observation.generation) {
+        directDelegationGenerationRef.current += 1;
+      }
+      explorerAttentionGenerationRef.current += 1;
+      setSending(false);
+      observation.controller.abort();
+      return true;
+    },
+    [selectedSession?.sessionId, setSending],
+  );
+
+  const rehydrateBackgroundExplorerReport = useCallback(
+    async (input: {
+      parentRunId: string;
+      delegationRunId: string;
+      delegationStepId: string;
+      childRunId: string;
+    }): Promise<boolean> => {
+      const sessionId = selectedSession?.sessionId;
+      const attachedTurnId = selectedTurn?.turnId ?? null;
+      const requestGeneration = directDelegationGenerationRef.current;
+      if (
+        !sessionId ||
+        selectedDurableParentRunIdRef.current !== input.parentRunId ||
+        activeDelegationRun?.runId !== input.delegationRunId ||
+        activeDelegationRun.label !== "Workspace exploration"
+      ) {
+        return false;
+      }
+      try {
+        const detail = await fetchChatDelegationRun(sessionId, input.delegationRunId);
+        if (
+          requestGeneration !== directDelegationGenerationRef.current ||
+          selectedSessionIdRef.current !== sessionId ||
+          selectedDurableParentRunIdRef.current !== input.parentRunId ||
+          detail.run.runId !== input.delegationRunId ||
+          detail.run.sessionId !== sessionId ||
+          detail.run.parentRunId !== input.parentRunId ||
+          detail.run.status === "running" ||
+          !detail.explorer
+        ) {
+          return false;
+        }
+        const settledStep = detail.steps.find((step) => step.stepId === input.delegationStepId);
+        if (!settledStep || settledStep.durableRunId !== input.childRunId) {
+          return false;
+        }
+        setActiveDelegationRun((current) => {
+          if (
+            requestGeneration !== directDelegationGenerationRef.current ||
+            current?.runId !== detail.run.runId ||
+            current.attachedTurnId !== attachedTurnId ||
+            current.label !== "Workspace exploration"
+          ) {
+            return current;
+          }
+          return {
+            runId: detail.run.runId,
+            taskId: detail.run.taskId,
+            executionPlanId: detail.run.executionPlanId,
+            attachedTurnId,
+            label: "Workspace exploration",
+            objective: detail.run.objective,
+            mode: detail.run.mode,
+            status: detail.run.status,
+            steps: detail.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
+            stitchedOutput: detail.run.stitchedOutput,
+            explorer: detail.explorer,
+          };
+        });
+        return true;
+      } catch {
+        // The durable rail remains canonical and will offer another refresh
+        // snapshot; a transient report read must not change execution state.
+        return false;
+      }
+    },
+    [activeDelegationRun?.label, activeDelegationRun?.runId, selectedSession?.sessionId, selectedTurn?.turnId],
   );
 
   const buildDelegationRequest = useCallback(
@@ -861,11 +1106,25 @@ export function useChatDelegationPolicyActions(input: {
 
   const handleExploreWorkspace = useCallback(async () => {
     if (!selectedSession || sending) return;
+    if (!selectedSession.projectId) {
+      setError("Bind this Chat to a project before exploring its governed workspace scope.");
+      return;
+    }
+    const durableParentRunId = selectedTurn?.trace.durable?.runId;
+    if (!durableParentRunId) {
+      setError("Send a Chat turn first so workspace exploration can attach to durable progress and recovery.");
+      return;
+    }
+    if (selectedTurnHasDelegation) {
+      setError("This Chat turn already owns delegated work. Send a new turn before exploring the workspace.");
+      return;
+    }
     const objective = draft.trim();
     if (!objective) {
       setError("Write what you want to find, then choose Explore workspace.");
       return;
     }
+    const attentionGeneration = ++explorerAttentionGenerationRef.current;
     setSending(true);
     try {
       const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
@@ -879,19 +1138,26 @@ export function useChatDelegationPolicyActions(input: {
           providerId: route.providerId,
           model: route.model,
           executionProfile: "read_only_explorer",
+          policyRunId: durableParentRunId,
         },
         "Workspace exploration",
       );
-      const gaps = result.explorer?.gapsExplicit ? " Gaps and partial results are called out in the report." : "";
+      const gaps = result.explorer
+        ? ` ${result.explorer.partialResult ? "Partial result" : "Complete result"}; ${result.explorer.gaps.length} explicit gap${result.explorer.gaps.length === 1 ? "" : "s"}.`
+        : "";
       pushLocalNotice(
         `Workspace exploration ${result.status}.${gaps}`,
         result.status === "failed" ? "warning" : "success",
       );
       await loadSidebar();
     } catch (err) {
-      setError((err as Error).message);
+      if (!(err instanceof ExplorerObservationDetachedError)) {
+        setError((err as Error).message);
+      }
     } finally {
-      setSending(false);
+      if (explorerAttentionGenerationRef.current === attentionGeneration) {
+        setSending(false);
+      }
     }
   }, [
     draft,
@@ -902,6 +1168,8 @@ export function useChatDelegationPolicyActions(input: {
     selectedModel,
     selectedProviderId,
     selectedSession,
+    selectedTurnHasDelegation,
+    selectedTurn,
     sending,
     setError,
     setSending,
@@ -1008,5 +1276,8 @@ export function useChatDelegationPolicyActions(input: {
     handleAcceptDelegation,
     handleRunCodeDelegation,
     handleExploreWorkspace,
+    continueActiveExplorerInBackground,
+    rehydrateBackgroundExplorerReport,
+    workspaceExplorerEligible,
   };
 }

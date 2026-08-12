@@ -1,4 +1,6 @@
 import type {
+  ChatSessionStatusAttention,
+  ChatSessionStatusBackgroundTask,
   ChatSessionStatusCapabilities,
   ChatSessionStatusContext,
   ChatSessionStatusModel,
@@ -11,6 +13,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { CHAT_SESSION_STATUS_VERSION, NotFoundError } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
 
 const ACTIVE_TURN_STATUSES = [
   "queued",
@@ -19,6 +22,8 @@ const ACTIVE_TURN_STATUSES = [
   "waiting_for_approval",
   "waiting_for_user_input",
 ] as const satisfies readonly ChatTurnLifecycleStatus[];
+
+const BACKGROUND_TASK_PARENT_LIMIT = 25;
 
 export interface ChatSessionStatusServiceDependencies {
   storage: Storage;
@@ -88,6 +93,11 @@ export class ChatSessionStatusService {
         (delegationStepsByRunId.get(run.runId) ?? []).map((step) => step.durableRunId),
       ),
     ];
+    const backgroundTaskAttention = await this.resolveBackgroundTaskAttention(
+      durableRunIds,
+      session.workspaceId,
+      sessionId,
+    );
     const durableRunsById = await this.dependencies.storage.durableRuns.getRunsByIds(durableRunIds);
     const durableRuns = [...durableRunsById.values()].map((run) => ({
       runId: run.runId,
@@ -132,7 +142,7 @@ export class ChatSessionStatusService {
         ) as Record<(typeof ACTIVE_TURN_STATUSES)[number], number>,
         durableRuns,
       }),
-      attention: available({ pendingApprovals, pendingUserInputs }),
+      attention: available({ pendingApprovals, pendingUserInputs, ...backgroundTaskAttention }),
       orchestration: available({ runs: orchestrationRuns }),
       capabilities,
       usage: available(usage),
@@ -177,6 +187,12 @@ export class ChatSessionStatusService {
           ? available({
               pendingApprovalCount: status.attention.value.pendingApprovals.length,
               pendingUserInputCount: status.attention.value.pendingUserInputs.length,
+              backgroundTaskCount: status.attention.value.backgroundTasks.length,
+              backgroundAttentionRequiredCount: status.attention.value.backgroundTasks.filter(
+                (task) => task.attention.required,
+              ).length,
+              backgroundAttention: status.attention.value.backgroundTasks.map((task) => task.attention),
+              backgroundTaskProjectionComplete: status.attention.value.backgroundTaskProjection.complete,
             })
           : status.attention,
       orchestration:
@@ -292,6 +308,55 @@ export class ChatSessionStatusService {
         createdAt: approval.createdAt,
       }));
     return [...canonical, ...inline];
+  }
+
+  private async resolveBackgroundTaskAttention(
+    durableRunIds: Array<string | undefined>,
+    workspaceId: string,
+    sessionId: string,
+  ): Promise<Pick<ChatSessionStatusAttention, "backgroundTasks" | "backgroundTaskProjection">> {
+    const uniqueParentRunIds = [...new Set(durableRunIds.filter((runId): runId is string => Boolean(runId)))];
+    const selectedParentRunIds = uniqueParentRunIds.slice(0, BACKGROUND_TASK_PARENT_LIMIT);
+    const results = await Promise.allSettled(
+      selectedParentRunIds.map((parentRunId) =>
+        projectDurableBackgroundTaskRail(this.dependencies.storage, { parentRunId, workspaceId, sessionId }),
+      ),
+    );
+    const tasks = new Map<string, ChatSessionStatusBackgroundTask>();
+    let complete = uniqueParentRunIds.length <= BACKGROUND_TASK_PARENT_LIMIT;
+    const reasons: string[] = [];
+    if (!complete) {
+      reasons.push(`Background-task parent coverage reached the ${BACKGROUND_TASK_PARENT_LIMIT} run boundary.`);
+    }
+    for (const result of results) {
+      if (result.status === "rejected") {
+        complete = false;
+        reasons.push("At least one background-task projection was unavailable.");
+        continue;
+      }
+      if (!result.value.coverage.watchers.complete || !result.value.coverage.parentSignals.complete) {
+        complete = false;
+        reasons.push("At least one background-task projection reached its bounded evidence limit.");
+      }
+      for (const task of result.value.tasks) {
+        tasks.set(task.watcherId, {
+          watcherId: task.watcherId,
+          childRunId: task.childRunId,
+          label: task.label,
+          canonicalStatus: task.canonicalStatus,
+          attention: task.attention,
+          blockers: task.blockers,
+          links: task.links,
+        });
+      }
+    }
+    return {
+      backgroundTasks: [...tasks.values()],
+      backgroundTaskProjection: {
+        complete,
+        ...(!complete ? { reason: [...new Set(reasons)].join(" ") || "Background-task status is incomplete." } : {}),
+      },
+    };
   }
 }
 

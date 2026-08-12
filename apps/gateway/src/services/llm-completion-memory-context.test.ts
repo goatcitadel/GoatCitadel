@@ -34,6 +34,18 @@ function buildRequest(sessionId: string): ChatCompletionRequest {
 }
 
 describe("composeChatCompletionMemoryContext workspace scoping (Finding 1)", () => {
+  it("does not compose retrieval context when the turn disables memory", async () => {
+    const composeContext = vi.fn();
+    const host = buildHost({ composeContext, resolveWorkspaceId: () => "workspace-b" });
+    const request = {
+      ...buildRequest("sess-memory-off"),
+      memory: { enabled: false, mode: "off", sessionId: "sess-memory-off" },
+    } as ChatCompletionRequest;
+
+    await expect(composeChatCompletionMemoryContext(host, request, request.memory)).resolves.toBeUndefined();
+    expect(composeContext).not.toHaveBeenCalled();
+  });
+
   it("forwards the resolved workspaceId into composeContext", async () => {
     const composeContext = vi.fn().mockResolvedValue({ contextText: "", citations: [], placement: undefined });
     const host = buildHost({ composeContext, resolveWorkspaceId: () => "workspace-b" });

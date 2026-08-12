@@ -12,6 +12,7 @@ import type { ToolApprovalMode } from "./policy.js";
 import type { CapabilityCategory, SkillLifecycleState } from "./capabilities.js";
 import type { McpRequesterResolutionBinding } from "./mcp.js";
 import type { WorkPassportRecord } from "./work-passport.js";
+import type { ChatWorkspaceSnapshotRecord } from "./chat-workspace-snapshot.js";
 
 export const CHAT_TURN_CAPABILITY_PROFILE_VERSION = "chat.turn.capability-profile.v1" as const;
 
@@ -185,6 +186,8 @@ export interface ChatTurnCapabilityProfileSelection {
   activatedSkills?: ChatTurnCapabilityActivatedSkill[];
   /** Frozen task-boundary and review contract. It never grants capabilities. */
   workPassport?: WorkPassportRecord;
+  /** One-turn, content-free workspace/Git context. It never grants path authority. */
+  workspaceSnapshot?: ChatWorkspaceSnapshotRecord;
 }
 
 export interface ChatTurnCapabilityGrantSnapshot {
@@ -276,6 +279,7 @@ export interface ChatTurnCapabilityProfilePreview {
   authReadiness: ChatTurnCapabilityAuthReadiness[];
   blockedReasons: string[];
   workPassport?: WorkPassportRecord;
+  workspaceSnapshot?: ChatWorkspaceSnapshotRecord;
   /** Stable provider/model/capability-selection dimension used for history compaction. */
   compactionDimensionHash?: string;
 }

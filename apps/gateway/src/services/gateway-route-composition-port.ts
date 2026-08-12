@@ -127,6 +127,12 @@ export interface GatewayRouteCompositionPort {
   readonly taskLifecycleService: TaskLifecycleService;
   readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   acceptChatDelegation: RouteDependencyMethod<"chatDelegate", "acceptChatDelegation">;
+  reconcilePersistedWorkspaceExplorer(input: {
+    sessionId: string;
+    delegationRunId: string;
+  }): Promise<{ repaired: boolean; reentered: boolean }>;
+  listChatDelegatedScopeCandidates: RouteDependencyMethod<"chatDelegate", "listChatDelegatedScopeCandidates">;
+  requestChatDelegatedScopeExpansion: RouteDependencyMethod<"chatDelegate", "requestChatDelegatedScopeExpansion">;
   acceptInboundChannelEvent: RouteDependencyMethod<"integrationWebhooks", "acceptInboundChannelEvent">;
   acceptInboundChannelEvents: RouteDependencyMethod<"integrationWebhooks", "acceptInboundChannelEvents">;
   approvePhase: RouteDependencyMethod<"orchestration", "approvePhase">;
@@ -356,6 +362,9 @@ export function createGatewayRouteCompositionPort(
     steerService: gateway.steerService,
     storage: gateway.storage,
     acceptChatDelegation: gateway.acceptChatDelegation.bind(gateway),
+    reconcilePersistedWorkspaceExplorer: gateway.reconcilePersistedWorkspaceExplorer.bind(gateway),
+    listChatDelegatedScopeCandidates: gateway.listChatDelegatedScopeCandidates.bind(gateway),
+    requestChatDelegatedScopeExpansion: gateway.requestChatDelegatedScopeExpansion.bind(gateway),
     acceptInboundChannelEvent: gateway.acceptInboundChannelEvent.bind(gateway),
     acceptInboundChannelEvents: gateway.acceptInboundChannelEvents.bind(gateway),
     approvePhase: gateway.approvePhase.bind(gateway),

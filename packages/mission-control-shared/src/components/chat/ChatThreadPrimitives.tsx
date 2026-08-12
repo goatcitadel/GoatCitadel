@@ -1,12 +1,13 @@
 import { memo, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   isChatTurnActiveStatus,
+  type ChatDelegateResponse,
   type ChatMode,
   type ChatStreamingPreview,
   type ChatThreadSystemNoticeRecord,
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
-import type { DelegatedFilesystemScopeControl, DelegatedWorkResult } from "@goatcitadel/contracts";
+import type { DelegatedFilesystemScopePublicProjection, DelegatedWorkResult } from "@goatcitadel/contracts";
 import { Badge } from "../ui";
 import { AssistantMessageRenderer, type AssistantStreamPresentationMode } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
@@ -51,7 +52,7 @@ export interface ChatDelegationStepView {
   childSessionId?: string;
   childTurnId?: string;
   workResult?: DelegatedWorkResult;
-  scopeControl?: DelegatedFilesystemScopeControl;
+  scopeControl?: DelegatedFilesystemScopePublicProjection;
 }
 
 export interface ChatDelegationRunView {
@@ -65,6 +66,7 @@ export interface ChatDelegationRunView {
   status: string;
   steps: ChatDelegationStepView[];
   stitchedOutput?: string;
+  explorer?: ChatDelegateResponse["explorer"];
 }
 
 export const THREAD_WINDOW_THRESHOLD = 80;
@@ -870,7 +872,11 @@ export function ChatThreadDelegationSummary({
                 />
               ))}
             </ol>
-            {delegationRun.stitchedOutput ? <p>{describeDelegationStitchedOutput(delegationRun.status)}</p> : null}
+            {delegationRun.explorer ? (
+              <WorkspaceExplorerReport report={delegationRun.explorer} />
+            ) : delegationRun.stitchedOutput ? (
+              <p>{describeDelegationStitchedOutput(delegationRun.status)}</p>
+            ) : null}
           </div>
         </details>
       </section>
@@ -907,10 +913,50 @@ export function ChatThreadDelegationSummary({
             />
           ))}
         </ol>
-        {delegationRun.stitchedOutput ? (
+        {delegationRun.explorer ? (
+          <WorkspaceExplorerReport report={delegationRun.explorer} />
+        ) : delegationRun.stitchedOutput ? (
           <AssistantMessageRenderer role="assistant" content={delegationRun.stitchedOutput} />
         ) : null}
       </div>
+    </section>
+  );
+}
+
+function WorkspaceExplorerReport({ report }: { report: NonNullable<ChatDelegateResponse["explorer"]> }) {
+  return (
+    <section aria-label="Workspace exploration report" className="mc-next-thread-step-output-details">
+      <h4>Workspace exploration report</h4>
+      <h5>Answer</h5>
+      {report.answer ? (
+        <AssistantMessageRenderer role="assistant" content={report.answer} />
+      ) : (
+        <p>No answer returned.</p>
+      )}
+      <dl className="mc-next-thread-subagent-evidence-grid">
+        <div>
+          <dt>Result</dt>
+          <dd>{report.partialResult ? "Partial" : "Complete"}</dd>
+        </div>
+        <div>
+          <dt>Searched scope</dt>
+          <dd>{report.searchedScope.approvedPaths.join(", ") || "No approved paths reported"}</dd>
+        </div>
+        <div>
+          <dt>Evidence references</dt>
+          <dd>{report.evidenceReferences.join(", ") || "None reported"}</dd>
+        </div>
+      </dl>
+      <h5>Gaps</h5>
+      {report.gaps.length > 0 ? (
+        <ul>
+          {report.gaps.map((gap) => (
+            <li key={gap}>{gap}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>No gaps reported.</p>
+      )}
     </section>
   );
 }

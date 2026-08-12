@@ -8,8 +8,11 @@ import type {
   ChatDelegateResponse,
   ChatDelegateSuggestRequest,
   ChatDelegateSuggestResponse,
-  ChatDelegationRunRecord,
-  ChatDelegationStepRecord,
+  ChatDelegatedScopeCandidatesResponse,
+  ChatDelegatedScopeExpansionRequest,
+  ChatDelegatedScopeExpansionResponse,
+  ChatDelegationRunDetail,
+  ChatLatestWorkspaceExplorerResponse,
   ChatGeneratedArtifactKind,
   ChatGeneratedArtifactRecord,
   ChatGeneratedArtifactSourceSurface,
@@ -59,6 +62,7 @@ import type {
   CreateGeneratedArtifactVersionRequest,
   DocumentPatchProposalListResponse,
   DocumentPatchProposalRecord,
+  DelegatedFilesystemScopePublicProjection,
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
@@ -1600,6 +1604,8 @@ export async function runChatDelegation(sessionId: string, input: ChatDelegateRe
   });
 }
 
+export type ChatDelegationStreamScopeControl = DelegatedFilesystemScopePublicProjection;
+
 export interface ChatDelegationStreamChunk {
   type: "status" | "step" | "done" | "error";
   runId?: string;
@@ -1619,6 +1625,8 @@ export interface ChatDelegationStreamChunk {
     output?: string;
     error?: string;
     failureGuidance?: string;
+    /** Public delegated-scope projection; canonical host paths stay Gateway-owned. */
+    scopeControl?: ChatDelegationStreamScopeControl;
   };
   result?: ChatDelegateResponse;
   error?: string;
@@ -1628,6 +1636,7 @@ export async function streamChatDelegation(
   sessionId: string,
   input: ChatDelegateRequest,
   onChunk: (chunk: ChatDelegationStreamChunk) => void,
+  options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/stream`;
   const correlationId = createCorrelationId();
@@ -1638,6 +1647,7 @@ export async function streamChatDelegation(
       ...originSurfaceHeader({ originSurface: input.surfaceMode }),
     }),
     body: JSON.stringify(input),
+    signal: options.signal,
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
@@ -1657,14 +1667,43 @@ export async function streamChatDelegation(
   }
 }
 
-export async function fetchChatDelegationRun(
-  sessionId: string,
-  runId: string,
-): Promise<{
-  run: ChatDelegationRunRecord;
-  steps: ChatDelegationStepRecord[];
-}> {
-  return request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegations/${encodeURIComponent(runId)}`);
+export async function fetchChatDelegationRun(sessionId: string, runId: string): Promise<ChatDelegationRunDetail> {
+  return request<ChatDelegationRunDetail>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegations/${encodeURIComponent(runId)}`,
+  );
+}
+
+export async function fetchLatestChatWorkspaceExplorer(sessionId: string): Promise<ChatDelegationRunDetail | null> {
+  const response = await request<ChatLatestWorkspaceExplorerResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegations/latest-explorer`,
+  );
+  return response.item ?? null;
+}
+
+export async function fetchChatDelegatedScopeCandidates(input: {
+  sessionId: string;
+  runId: string;
+  stepId: string;
+}): Promise<ChatDelegatedScopeCandidatesResponse> {
+  return request<ChatDelegatedScopeCandidatesResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/delegations/${encodeURIComponent(input.runId)}/steps/${encodeURIComponent(input.stepId)}/scope-candidates`,
+  );
+}
+
+export async function requestChatDelegatedScopeExpansion(
+  input: {
+    sessionId: string;
+    runId: string;
+    stepId: string;
+  } & ChatDelegatedScopeExpansionRequest,
+): Promise<ChatDelegatedScopeExpansionResponse> {
+  return request<ChatDelegatedScopeExpansionResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/delegations/${encodeURIComponent(input.runId)}/steps/${encodeURIComponent(input.stepId)}/scope-expansion`,
+    {
+      method: "POST",
+      body: JSON.stringify({ candidateIds: input.candidateIds }),
+    },
+  );
 }
 
 export async function steerChatSession(sessionId: string, input: ChatSteerRequest): Promise<ChatSteerResponse> {

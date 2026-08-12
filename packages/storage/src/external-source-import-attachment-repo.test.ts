@@ -292,11 +292,32 @@ describe("HX-407 external source import, attachment, and knowledge-link reposito
   it("settles exactly once, publishes the selected order, and returns canonical retry results", () => {
     const db = createStore();
     const { fixture, imports } = seedImport(db);
+    const candidateQuery = {
+      workspaceId: fixture.intent.workspaceId,
+      sessionId: "session-1",
+      actorId: "operator-1",
+      authActorSource: "token" as const,
+    };
 
+    assert.deepEqual(imports.listAttachmentCandidateBindings(candidateQuery), []);
     assert.deepEqual(imports.settle(fixture.settlement, fixture.importItems), fixture.settlement);
     assert.deepEqual(
       imports.listItems(fixture.intent.workspaceId, fixture.intent.importId).map((item) => item.itemId),
       fixture.plan.selectedItemIds,
+    );
+    assert.deepEqual(
+      imports.listAttachmentCandidateBindings(candidateQuery).map(({ intent, item, settlement }) => ({
+        sourceId: intent.sourceId,
+        importId: intent.importId,
+        itemId: item.itemId,
+        disposition: settlement.disposition,
+      })),
+      fixture.importItems.map((item) => ({
+        sourceId: fixture.intent.sourceId,
+        importId: fixture.intent.importId,
+        itemId: item.itemId,
+        disposition: "applied",
+      })),
     );
 
     const { resultSha256: _resultSha256, ...settlementDraft } = fixture.settlement;
@@ -334,6 +355,27 @@ describe("HX-407 external source import, attachment, and knowledge-link reposito
     assert.throws(
       () => db.prepare("DELETE FROM external_source_import_items WHERE import_id = ?").run(fixture.intent.importId),
       /immutable/u,
+    );
+  });
+
+  it("applies attachment-candidate eligibility before the bounded limit", () => {
+    const db = createStore();
+    const { fixture, imports } = seedImport(db);
+    imports.settle(fixture.settlement, fixture.importItems);
+    insertSyntheticChatSession(db);
+    new ExternalSessionAttachmentRepository(db).attach(fixture.attachment);
+
+    assert.deepEqual(
+      imports
+        .listAttachmentCandidateBindings({
+          workspaceId: fixture.intent.workspaceId,
+          sessionId: fixture.attachment.sessionId,
+          actorId: fixture.config.ownerActorId,
+          authActorSource: "token",
+          limit: 1,
+        })
+        .map(({ item }) => item.itemId),
+      [fixture.importItems[1]!.itemId],
     );
   });
 

@@ -40,6 +40,8 @@ export class ChatDelegationRunRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
+  private readonly findLatestBySessionAndWorkflowTemplateStmt;
+  private readonly findLatestBySessionParentAndWorkflowTemplateStmt;
   private readonly listRecentStmt;
   private readonly activeStepCountStmt;
 
@@ -81,6 +83,20 @@ export class ChatDelegationRunRepository {
       WHERE session_id = @sessionId
       ORDER BY started_at DESC
       LIMIT @limit
+    `);
+    this.findLatestBySessionAndWorkflowTemplateStmt = db.prepare(`
+      SELECT * FROM chat_delegation_runs
+      WHERE session_id = @sessionId AND workflow_template = @workflowTemplate
+      ORDER BY started_at DESC, run_id DESC
+      LIMIT 1
+    `);
+    this.findLatestBySessionParentAndWorkflowTemplateStmt = db.prepare(`
+      SELECT * FROM chat_delegation_runs
+      WHERE session_id = @sessionId
+        AND parent_run_id = @parentRunId
+        AND workflow_template = @workflowTemplate
+      ORDER BY started_at DESC, run_id DESC
+      LIMIT 1
     `);
     const optionalFilter = (column: string, param: string): string =>
       buildOptionalTextFilterSql(db.dialect, column, param);
@@ -229,6 +245,51 @@ export class ChatDelegationRunRepository {
       return mapped;
     });
     return rows.map(mapRow);
+  }
+
+  public findLatestBySessionAndWorkflowTemplate(
+    sessionId: string,
+    workflowTemplate: string,
+  ): ChatDelegationRunRecord | undefined {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedWorkflowTemplate = workflowTemplate.trim();
+    if (!normalizedSessionId || !normalizedWorkflowTemplate) return undefined;
+    const raw = this.findLatestBySessionAndWorkflowTemplateStmt.get({
+      sessionId: normalizedSessionId,
+      workflowTemplate: normalizedWorkflowTemplate,
+    });
+    if (!raw) return undefined;
+    const row = toChatDelegationRunRow(raw);
+    if (!row) {
+      throw new Error(
+        `Latest ${normalizedWorkflowTemplate} delegation run for session ${normalizedSessionId} is corrupt`,
+      );
+    }
+    return mapRow(row);
+  }
+
+  public findLatestBySessionParentAndWorkflowTemplate(
+    sessionId: string,
+    parentRunId: string,
+    workflowTemplate: string,
+  ): ChatDelegationRunRecord | undefined {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedParentRunId = parentRunId.trim();
+    const normalizedWorkflowTemplate = workflowTemplate.trim();
+    if (!normalizedSessionId || !normalizedParentRunId || !normalizedWorkflowTemplate) return undefined;
+    const raw = this.findLatestBySessionParentAndWorkflowTemplateStmt.get({
+      sessionId: normalizedSessionId,
+      parentRunId: normalizedParentRunId,
+      workflowTemplate: normalizedWorkflowTemplate,
+    });
+    if (!raw) return undefined;
+    const row = toChatDelegationRunRow(raw);
+    if (!row) {
+      throw new Error(
+        `Latest ${normalizedWorkflowTemplate} delegation run for session ${normalizedSessionId} and parent ${normalizedParentRunId} is corrupt`,
+      );
+    }
+    return mapRow(row);
   }
 
   public listRecent(

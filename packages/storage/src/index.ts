@@ -205,6 +205,8 @@ export {
   verifyExternalSourceImportItem,
   verifyExternalSourceImportPlan,
   verifyExternalSourceImportSettlement,
+  type ExternalSourceAppliedImportItemBinding,
+  type ExternalSourceAttachmentCandidateBindingListInput,
 } from "./external-source-import-repo.js";
 export {
   EXTERNAL_SOURCE_KNOWLEDGE_DOCUMENT_PROVENANCE_KIND,
@@ -216,6 +218,7 @@ export {
   verifyExternalSourceKnowledgeLink,
   type ExternalSourceKnowledgeDocumentBinding,
   type ExternalSourceKnowledgeDocumentBindingInput,
+  type ExternalSessionAttachmentEligibility,
 } from "./external-session-attachment-repo.js";
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
 import { SkillEvaluationRunRepository } from "./skill-evaluation-run-repo.js";

@@ -248,6 +248,29 @@ describe("durable routes additional coverage", () => {
     }
   });
 
+  it.each([
+    "Unable to reopen F:\\private\\operator\\repo; Authorization: Bearer rail-secret",
+    "Unable to reopen /home/operator/private/repo; Authorization: Bearer rail-secret",
+  ])("projects background-task reconciliation errors without host paths or secrets", async (message) => {
+    app = buildApp({
+      getBackgroundTaskRail: vi.fn(async () => {
+        throw new Error(message);
+      }),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/durable/runs/parent-1/background-tasks?workspaceId=workspace-a&sessionId=session-a",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: expect.stringContaining("[outside-workspace-path]"),
+    });
+    expect(response.body).not.toContain("operator");
+    expect(response.body).not.toContain("rail-secret");
+  });
+
   it("keeps background-task projection and controls behind operator authentication", async () => {
     const durable = createDurableService();
     app = buildApp(durable, async (_request, reply) => {

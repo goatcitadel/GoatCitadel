@@ -3,6 +3,9 @@ import { createRouteService, type RoutePort, type RouteService } from "./route-s
 export const chatDelegateRouteMethods = [
   "acceptChatDelegation",
   "getChatDelegationRun",
+  "getLatestChatWorkspaceExplorer",
+  "listChatDelegatedScopeCandidates",
+  "requestChatDelegatedScopeExpansion",
   "runChatDelegation",
   "runChatDelegationStream",
   "suggestChatDelegation",

@@ -25,6 +25,7 @@ export function ThreadedSurfaceRoute({
   onOpenStartHere,
   onOpenPersonalitiesSettings,
   onOpenLibraryArtifacts,
+  onOpenLibraryImports,
   onOpenOpsRuntime,
   onOpenUniversalRunDetail,
   onNavigateSurface,
@@ -46,6 +47,7 @@ export function ThreadedSurfaceRoute({
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
+  onOpenLibraryImports?: () => void;
   onOpenOpsRuntime?: () => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
   onNavigateSurface?: (
@@ -71,6 +73,7 @@ export function ThreadedSurfaceRoute({
       onOpenStartHere={onOpenStartHere}
       onOpenPersonalitiesSettings={onOpenPersonalitiesSettings}
       onOpenLibraryArtifacts={onOpenLibraryArtifacts}
+      onOpenLibraryImports={onOpenLibraryImports}
       onOpenOpsRuntime={onOpenOpsRuntime}
       onNavigateSurface={onNavigateSurface}
       onResolvedModeChange={onResolvedModeChange}

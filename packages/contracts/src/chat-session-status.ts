@@ -1,4 +1,9 @@
 import type { ChatMemoryMode, ChatRetrievalMode, ChatTurnLifecycleStatus, ChatUserInputPromptKind } from "./chat.js";
+import type {
+  DurableBackgroundTaskAttention,
+  DurableBackgroundTaskBlocker,
+  DurableBackgroundTaskSemanticLink,
+} from "./durable-background-tasks.js";
 import type { DurableRecoveryState, DurableRunStatus, DurableWorkerHealth } from "./durable.js";
 import type { ModelUsageMetricAvailability } from "./model-usage.js";
 import type { RuntimeBuildIdentity } from "./review-readiness.js";
@@ -70,9 +75,24 @@ export interface ChatSessionStatusUserInput {
   question: string;
 }
 
+export interface ChatSessionStatusBackgroundTask {
+  watcherId: string;
+  childRunId: string;
+  label: string;
+  canonicalStatus: DurableRunStatus | "missing" | "unknown";
+  attention: DurableBackgroundTaskAttention;
+  blockers: DurableBackgroundTaskBlocker[];
+  links: DurableBackgroundTaskSemanticLink[];
+}
+
 export interface ChatSessionStatusAttention {
   pendingApprovals: ChatSessionStatusApproval[];
   pendingUserInputs: ChatSessionStatusUserInput[];
+  backgroundTasks: ChatSessionStatusBackgroundTask[];
+  backgroundTaskProjection: {
+    complete: boolean;
+    reason?: string;
+  };
 }
 
 export interface ChatSessionStatusOrchestrationRun {
@@ -139,7 +159,14 @@ export interface ChatSessionStatusModelProjection {
     turnCounts: ChatSessionStatusWork["turnCounts"];
     durableRuns: Array<Pick<ChatSessionStatusDurableRun, "status" | "workerHealth" | "recoveryState">>;
   }>;
-  attention: ChatSessionStatusSection<{ pendingApprovalCount: number; pendingUserInputCount: number }>;
+  attention: ChatSessionStatusSection<{
+    pendingApprovalCount: number;
+    pendingUserInputCount: number;
+    backgroundTaskCount: number;
+    backgroundAttentionRequiredCount: number;
+    backgroundAttention: DurableBackgroundTaskAttention[];
+    backgroundTaskProjectionComplete: boolean;
+  }>;
   orchestration: ChatSessionStatusSection<{
     activeRunCount: number;
     activeStepCount: number;

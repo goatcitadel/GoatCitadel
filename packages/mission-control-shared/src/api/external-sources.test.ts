@@ -358,6 +358,44 @@ describe("external-sources Library client", () => {
 });
 
 describe("external-sources Chat client", () => {
+  it("lists validated content-free attachment candidates for the picker", async () => {
+    apiMocks.request.mockResolvedValue({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      items: [
+        {
+          schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+          workspaceId: "workspace-1",
+          sourceId: "source-1",
+          sourceLabel: "Synthetic Codex source",
+          sourceRevision: 1,
+          importId: "import-1",
+          itemId: "item-1",
+          normalizedArtifactSha256: hash("8"),
+          normalizedByteCount: 128,
+          importedAt: timestamp,
+          artifactsVerifiedAt: timestamp,
+        },
+      ],
+    });
+    const list = await externalSources.fetchExternalSourceAttachmentCandidates("session-1", "workspace-1", 50);
+    expect(list.items[0]).toMatchObject({ sourceLabel: "Synthetic Codex source", itemId: "item-1" });
+    const [path, init] = lastCall();
+    expect(path).toBe(
+      "/api/v1/chat/sessions/session-1/external-source-attachment-candidates?workspaceId=workspace-1&limit=50",
+    );
+    expect(init?.method ?? "GET").toBe("GET");
+
+    apiMocks.request.mockResolvedValue({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      items: [{ itemId: "unvalidated", content: "must not pass" }],
+    });
+    await expect(externalSources.fetchExternalSourceAttachmentCandidates("session-1", "workspace-1")).rejects.toThrow();
+  });
+
   it("lists session attachments against the C4 packet route path", async () => {
     apiMocks.request.mockResolvedValue({
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,

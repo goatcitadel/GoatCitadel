@@ -7,6 +7,7 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatThreadResponse,
   RoutingPreflightResult,
+  ChatWorkspaceSnapshotRequest,
 } from "@goatcitadel/contracts";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { ChatErrorSource } from "./chat-error-copy";
@@ -104,6 +105,7 @@ export interface UseChatOutboundRouting {
     turnId?: string | null;
     content?: string;
     requestPrefs?: OutboundRequestPrefsSnapshot;
+    workspaceSnapshot?: ChatWorkspaceSnapshotRequest;
     force?: boolean;
   }) => Promise<RoutingPreflightResult | null>;
   isRoutePreflightAcknowledged: (hash: string) => boolean;

@@ -381,6 +381,35 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     }
   });
 
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/external-source-attachment-candidates",
+    operatorRead,
+    async (request, reply) => {
+      const actor = resolveSpecificOperator(request, reply);
+      if (!actor) return reply;
+      const params = sessionParamsSchema.safeParse(request.params);
+      const query = attachmentListQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        return reply.code(400).send({ error: "Invalid external attachment candidate list query." });
+      }
+      let input;
+      try {
+        input = normalizeExternalSessionAttachmentListInput({
+          workspaceId: query.data.workspaceId,
+          sessionId: params.data.sessionId,
+          ...(query.data.limit === undefined ? {} : { limit: query.data.limit }),
+        });
+      } catch {
+        return reply.code(400).send({ error: "Invalid external attachment candidate list query." });
+      }
+      try {
+        return reply.send(await options.service.listSessionAttachmentCandidates(input, actor));
+      } catch (error) {
+        return sendExternalSourceError(error, request, reply);
+      }
+    },
+  );
+
   fastify.post(
     "/api/v1/chat/sessions/:sessionId/external-source-attachments",
     operatorMutation,

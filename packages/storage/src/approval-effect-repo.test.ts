@@ -640,6 +640,60 @@ describe("ApprovalEffectRepository", () => {
     );
   });
 
+  it("keeps delegated scope wake and resume behind the atomic scope-apply effect", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-scope-before-resume");
+    const createdAt = "2026-08-12T00:00:00.000Z";
+    const scopeApply = repo.upsert({
+      approvalId: "approval-scope-before-resume",
+      effectKind: "delegation_scope_expansion_apply",
+      targetKind: "delegation_step",
+      targetId: "step-scope-before-resume",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const resume = repo.upsert({
+      approvalId: "approval-scope-before-resume",
+      effectKind: "delegation_scope_expansion_resume",
+      targetKind: "delegation_step",
+      targetId: "step-scope-before-resume",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const wake = repo.upsert({
+      approvalId: "approval-scope-before-resume",
+      effectKind: "approval_wait_wake",
+      targetKind: "durable_run",
+      targetId: "durable-scope-before-resume",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const applyClaim = repo.claimNextPendingEffect("scope-worker", createdAt, "2026-08-12T00:05:00.000Z");
+    assert.equal(applyClaim?.effectId, scopeApply.effectId);
+    assert.equal(repo.claimNextPendingEffect("continuation-worker", createdAt, "2026-08-12T00:05:00.000Z"), undefined);
+
+    assert.equal(
+      repo.completeEffect(scopeApply.effectId, "scope-worker", applyClaim!.version, { result: { applied: true } })
+        ?.status,
+      "completed",
+    );
+    assert.equal(
+      repo.claimNextPendingEffect("continuation-worker", createdAt, "2026-08-12T00:05:00.000Z")?.effectId,
+      wake.effectId,
+    );
+    const claimedWake = repo.get(wake.effectId);
+    assert.equal(
+      repo.completeEffect(wake.effectId, "continuation-worker", claimedWake.version, { result: { woke: true } })
+        ?.status,
+      "completed",
+    );
+    assert.equal(
+      repo.claimNextPendingEffect("resume-worker", createdAt, "2026-08-12T00:05:00.000Z")?.effectId,
+      resume.effectId,
+    );
+  });
+
   it("keeps observability on an independent filtered claim lane", () => {
     const { repo, db } = createRepoWithDb();
     insertApproval(db, "approval-observability");

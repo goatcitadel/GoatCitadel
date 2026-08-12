@@ -114,6 +114,7 @@ import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from
 import {
   DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND,
   DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+  DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
   hashDelegatedScope,
 } from "./delegated-work-result-service.js";
 import {
@@ -353,6 +354,11 @@ export interface ApprovalEffectsServiceDeps {
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
   ): Promise<DurableWakeResult>;
   requestRunProcessing(runId: string): void;
+  resumeDelegatedScopeExpansion?(input: { delegationRunId: string; stepId: string; durableRunId: string }): Promise<{
+    runId: string;
+    status: ChatDelegationRunStatus;
+    reenteredPersistedStep: boolean;
+  }>;
   findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
@@ -740,6 +746,7 @@ export class ApprovalEffectsService {
     }
     if (approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND) {
       enqueued.push(await this.enqueueDelegationScopeExpansionApply(approval, input, options));
+      enqueued.push(await this.enqueueDelegationScopeExpansionResume(approval));
     }
     if (approval.kind === ENGINEERING_LEARNING_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(await this.enqueueEngineeringLearningLifecycleApply(approval));
@@ -780,13 +787,23 @@ export class ApprovalEffectsService {
 
     const approvalWaitRunId = await this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
     if (approvalWaitRunId) {
+      const delegatedScopeChildTurnId =
+        approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
+          ? asOptionalString(approval.payload.childTurnId)
+          : undefined;
       enqueued.push(
         await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "approval_wait_wake",
           targetKind: "durable_run",
           targetId: approvalWaitRunId,
-          payload: wakePayload,
+          payload: delegatedScopeChildTurnId
+            ? {
+                ...wakePayload,
+                delegatedScopeChildTurnId,
+                delegatedScopeDurableRunId: asOptionalString(approval.payload.durableRunId),
+              }
+            : wakePayload,
         }),
       );
     }
@@ -803,7 +820,10 @@ export class ApprovalEffectsService {
       );
     }
 
-    const linkedTurn = await this.resolveLinkedTurnWakeTarget(approval);
+    const linkedTurn =
+      approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
+        ? undefined
+        : await this.resolveLinkedTurnWakeTarget(approval);
     if (linkedTurn) {
       enqueued.push(
         await this.ctx.storage.approvalEffects.upsert({
@@ -837,7 +857,9 @@ export class ApprovalEffectsService {
       );
     }
 
-    for (const parentTurn of await this.resolveDelegationParentWakeTargets(approval)) {
+    for (const parentTurn of approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
+      ? []
+      : await this.resolveDelegationParentWakeTargets(approval)) {
       enqueued.push(
         await this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
@@ -1149,6 +1171,31 @@ export class ApprovalEffectsService {
     });
   }
 
+  private async enqueueDelegationScopeExpansionResume(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
+    const stepId = asOptionalString(approval.payload.stepId);
+    const delegationRunId = asOptionalString(approval.payload.delegationRunId);
+    const childTurnId = asOptionalString(approval.payload.childTurnId);
+    const durableRunId = asOptionalString(approval.payload.durableRunId);
+    if (!stepId || !delegationRunId || !childTurnId || !durableRunId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} has no canonical delegated durable-resume binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
+      targetKind: "delegation_step",
+      targetId: stepId,
+      payload: {
+        stepId,
+        delegationRunId,
+        childTurnId,
+        durableRunId,
+      },
+    });
+  }
+
   private async enqueueEngineeringLearningLifecycleApply(approval: ApprovalRequest): Promise<ApprovalEffectRecord> {
     const learningId = asOptionalString(approval.payload.learningId);
     const action = asOptionalString(approval.payload.action);
@@ -1428,6 +1475,9 @@ export class ApprovalEffectsService {
       case DELEGATION_SCOPE_EXPANSION_EFFECT_KIND:
         await this.handleDelegationScopeExpansionApply(effect);
         return;
+      case DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND:
+        await this.handleDelegationScopeExpansionResume(effect);
+        return;
       case ENGINEERING_LEARNING_EFFECT_KIND:
         await this.handleEngineeringLearningLifecycleApply(effect);
         return;
@@ -1669,81 +1719,317 @@ export class ApprovalEffectsService {
       return;
     }
     try {
-      const step = await this.ctx.storage.chatDelegationSteps.get(stepId);
-      const scope = step.scopeControl;
-      const request = step.workResult?.scopeExpansion;
-      const stale =
-        !scope ||
-        !request ||
-        request.approvalId !== effect.approvalId ||
-        scope.dispatchGeneration !== expectedGeneration ||
-        scope.scopeHash !== expectedScopeHash ||
-        request.scopeHash !== expectedScopeHash;
-      const resolvedAt = new Date().toISOString();
-      if (stale || decision !== "approved") {
-        const terminalDecision = stale ? "rejected" : decision;
-        await this.ctx.storage.chatDelegationSteps.patch(stepId, {
-          status: "failed",
-          error: stale
-            ? "Delegated scope expansion approval became stale before it could be applied."
-            : `Delegated scope expansion was ${terminalDecision}.`,
-          finishedAt: resolvedAt,
-          workResult: {
-            disposition: "blocked",
-            summary: stale
-              ? "Scope expansion was blocked because its dispatch generation or scope hash changed."
-              : `Scope expansion was ${terminalDecision}; the original filesystem scope was retained.`,
-            changedFiles: step.workResult?.changedFiles ?? [],
-            evidenceRefs: step.workResult?.evidenceRefs ?? [],
-            ...(request ? { scopeExpansion: { ...request, decision: terminalDecision, resolvedAt } } : {}),
-          },
-        });
-        const completed = await this.ctx.storage.approvalEffects.completeEffect(
-          effect.effectId,
-          this.workerId,
-          effect.version,
-          { result: { applied: false, stale, decision: terminalDecision, stepId } },
-        );
-        if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
-        return;
-      }
-      const approvedPaths = [...new Set([...scope.approvedPaths, ...requestedPaths])].sort();
-      const nextScope = {
-        ...scope,
-        approvedPaths,
-        scopeHash: hashDelegatedScope({
-          rootPath: scope.rootPath,
-          approvedPaths,
-          dispatchGeneration: scope.dispatchGeneration,
-        }),
-        updatedAt: resolvedAt,
-      };
-      await this.ctx.storage.chatDelegationSteps.patch(stepId, {
-        scopeControl: nextScope,
-        workResult: {
-          ...step.workResult!,
-          scopeExpansion: { ...request, decision: "approved", resolvedAt },
-        },
-      });
-      const completed = await this.ctx.storage.approvalEffects.completeEffect(
-        effect.effectId,
+      const settlement = await runClaimedApprovalEffectTransaction(
+        this.ctx.storage,
+        effect,
         this.workerId,
-        effect.version,
-        { result: { applied: true, decision: "approved", stepId, scopeHash: nextScope.scopeHash, approvedPaths } },
+        async () => {
+          const step = await this.ctx.storage.chatDelegationSteps.getForUpdate(stepId);
+          const scope = step.scopeControl;
+          const request = step.workResult?.scopeExpansion;
+          const resolvedAt = new Date().toISOString();
+          const currentScopeHash = scope
+            ? hashDelegatedScope({
+                rootPath: scope.rootPath,
+                projectId: scope.projectId,
+                workingPath: scope.workingPath,
+                approvedPaths: scope.approvedPaths,
+                dispatchGeneration: scope.dispatchGeneration,
+              })
+            : undefined;
+          const legacyCurrentScopeHash = scope
+            ? hashDelegatedScope({
+                rootPath: scope.rootPath,
+                projectId: scope.projectId,
+                approvedPaths: scope.approvedPaths,
+                dispatchGeneration: scope.dispatchGeneration,
+              })
+            : undefined;
+          const requestPathsMatch =
+            request !== undefined &&
+            canonicalJsonString([...request.requestedPaths].sort()) === canonicalJsonString([...requestedPaths].sort());
+          // Recover a pre-atomic worker crash only when the persisted step proves
+          // this exact approval already widened this generation and the current
+          // scope still hashes to its own canonical material.
+          const alreadyApplied = Boolean(
+            scope &&
+            request &&
+            request.approvalId === effect.approvalId &&
+            request.scopeHash === expectedScopeHash &&
+            requestPathsMatch &&
+            request.decision === "approved" &&
+            scope.dispatchGeneration === expectedGeneration &&
+            (scope.scopeHash === currentScopeHash || scope.scopeHash === legacyCurrentScopeHash) &&
+            requestedPaths.every((requestedPath) => scope.approvedPaths.includes(requestedPath)),
+          );
+          const stale =
+            !scope ||
+            !request ||
+            request.approvalId !== effect.approvalId ||
+            scope.dispatchGeneration !== expectedGeneration ||
+            request.scopeHash !== expectedScopeHash ||
+            (scope.scopeHash !== expectedScopeHash && !alreadyApplied);
+          if (stale || decision !== "approved") {
+            const terminalDecision = stale ? "rejected" : decision;
+            await this.ctx.storage.chatDelegationSteps.patch(stepId, {
+              status: "failed",
+              error: stale
+                ? "Delegated scope expansion approval became stale before it could be applied."
+                : `Delegated scope expansion was ${terminalDecision}.`,
+              finishedAt: resolvedAt,
+              workResult: {
+                disposition: "blocked",
+                summary: stale
+                  ? "Scope expansion was blocked because its dispatch generation or scope hash changed."
+                  : `Scope expansion was ${terminalDecision}; the original filesystem scope was retained.`,
+                changedFiles: step.workResult?.changedFiles ?? [],
+                evidenceRefs: step.workResult?.evidenceRefs ?? [],
+                ...(request ? { scopeExpansion: { ...request, decision: terminalDecision, resolvedAt } } : {}),
+              },
+            });
+            const completed = await this.ctx.storage.approvalEffects.completeEffect(
+              effect.effectId,
+              this.workerId,
+              effect.version,
+              { result: { applied: false, stale, decision: terminalDecision, stepId } },
+            );
+            if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
+            return { applied: false as const };
+          }
+          if (alreadyApplied) {
+            await this.materializeDelegationScopeApprovalToolResult({
+              approvalId: effect.approvalId,
+              scopeHash: scope.scopeHash,
+              resolvedAt,
+              resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
+            });
+            const completed = await this.ctx.storage.approvalEffects.completeEffect(
+              effect.effectId,
+              this.workerId,
+              effect.version,
+              {
+                result: {
+                  applied: true,
+                  replayed: true,
+                  decision: "approved",
+                  stepId,
+                  scopeHash: scope.scopeHash,
+                  approvedPaths: scope.approvedPaths,
+                },
+              },
+            );
+            if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
+            return { applied: true as const, scopeHash: scope.scopeHash };
+          }
+          const approvedPaths = [...new Set([...scope.approvedPaths, ...requestedPaths])].sort();
+          const nextScope = {
+            ...scope,
+            approvedPaths,
+            scopeHash: hashDelegatedScope({
+              rootPath: scope.rootPath,
+              projectId: scope.projectId,
+              workingPath: scope.workingPath,
+              approvedPaths,
+              dispatchGeneration: scope.dispatchGeneration,
+            }),
+            updatedAt: resolvedAt,
+          };
+          await this.ctx.storage.chatDelegationSteps.patch(stepId, {
+            scopeControl: nextScope,
+            workResult: {
+              ...step.workResult!,
+              scopeExpansion: { ...request, decision: "approved", resolvedAt },
+            },
+          });
+          await this.materializeDelegationScopeApprovalToolResult({
+            approvalId: effect.approvalId,
+            scopeHash: nextScope.scopeHash,
+            resolvedAt,
+            resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
+          });
+          const completed = await this.ctx.storage.approvalEffects.completeEffect(
+            effect.effectId,
+            this.workerId,
+            effect.version,
+            { result: { applied: true, decision: "approved", stepId, scopeHash: nextScope.scopeHash, approvedPaths } },
+          );
+          if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
+          return { applied: true as const, scopeHash: nextScope.scopeHash };
+        },
       );
-      if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
+      if (!settlement.applied) return;
       await this.ctx.storage.audit.append("approvals", {
         event: "delegation.scope_expansion_resolved",
         approvalId: effect.approvalId,
         stepId,
         decision: "approved",
-        scopeHash: nextScope.scopeHash,
+        scopeHash: settlement.scopeHash,
       });
     } catch (error) {
       if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        stepId,
+        decision,
+      });
+    }
+  }
+
+  private async materializeDelegationScopeApprovalToolResult(input: {
+    approvalId: string;
+    scopeHash: string;
+    resolvedAt: string;
+    resolvedBy: string;
+  }): Promise<void> {
+    const inlineApproval = await this.ctx.storage.chatInlineApprovals.get(input.approvalId);
+    if (!inlineApproval) return;
+    const toolRun = (await this.ctx.storage.chatToolRuns.listByTurn(inlineApproval.turnId)).find(
+      (candidate) => candidate.approvalId === input.approvalId,
+    );
+    if (toolRun?.status === "approval_required") {
+      const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "completed" });
+      await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
+        status: "executed",
+        effectPotential: "unknown",
+        effectDisposition: settlement.disposition,
+        effectOutcomeKind: settlement.outcomeKind,
+        effectEvidence: settlement.evidence,
+        result: {
+          ...(toolRun.result ?? {}),
+          waitingForApproval: false,
+          scopeExpansion: {
+            decision: "approved",
+            scopeHash: input.scopeHash,
+          },
+        },
+        finishedAt: input.resolvedAt,
+      });
+    }
+    await this.ctx.storage.chatInlineApprovals.upsert({
+      approvalId: inlineApproval.approvalId,
+      sessionId: inlineApproval.sessionId,
+      turnId: inlineApproval.turnId,
+      kind: inlineApproval.kind,
+      toolName: inlineApproval.toolName,
+      status: "approved",
+      reason: inlineApproval.reason,
+      riskLevel: inlineApproval.riskLevel,
+      details: inlineApproval.details,
+      expiresAt: inlineApproval.expiresAt,
+      resolvedBy: input.resolvedBy,
+      resolvedAt: input.resolvedAt,
+    });
+  }
+
+  private async handleDelegationScopeExpansionResume(effect: ApprovalEffectRecord): Promise<void> {
+    const stepId = asOptionalString(effect.payload.stepId);
+    const delegationRunId = asOptionalString(effect.payload.delegationRunId);
+    const durableRunId = asOptionalString(effect.payload.durableRunId);
+    if (!stepId || !delegationRunId || !durableRunId) {
       await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
-        lastError: error instanceof Error ? error.message : String(error),
-        result: { stepId, decision },
+        lastError: "Delegation scope resume effect is missing its immutable child binding.",
+        result: { stepId, delegationRunId, durableRunId },
+      });
+      return;
+    }
+    try {
+      const scopeEffect = (await this.ctx.storage.approvalEffects.listByApproval(effect.approvalId)).find(
+        (candidate) => candidate.effectKind === DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+      );
+      if (!scopeEffect || scopeEffect.status === "pending" || scopeEffect.status === "running") {
+        await this.deferClaimedEffectForRetry(
+          effect,
+          this.workerId,
+          new Error("Delegated scope authority has not committed before delegation resume."),
+          { deliveryState: "retry_scheduled", stepId, delegationRunId, durableRunId },
+          APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+        );
+        return;
+      }
+      if (scopeEffect.status !== "completed" || scopeEffect.result?.applied !== true) {
+        const skipped = await this.ctx.storage.approvalEffects.skipEffect(
+          effect.effectId,
+          this.workerId,
+          effect.version,
+          {
+            result: {
+              resumed: false,
+              reason: "scope_not_approved",
+              stepId,
+              delegationRunId,
+              durableRunId,
+            },
+          },
+        );
+        if (!skipped) throw new Error(`Delegation scope resume effect ${effect.effectId} lost its rejection lease.`);
+        return;
+      }
+      const childRun = await this.ctx.storage.durableRuns.getRun(durableRunId);
+      if (!isTerminalDurableRunStatus(childRun.status)) {
+        this.deps.requestRunProcessing(durableRunId);
+        await this.deferClaimedEffectForRetry(
+          effect,
+          this.workerId,
+          new Error(`Delegated child run ${durableRunId} has not settled after approval wake.`),
+          {
+            deliveryState: "retry_scheduled",
+            reason: "child_not_terminal",
+            childRunStatus: childRun.status,
+            stepId,
+            delegationRunId,
+            durableRunId,
+          },
+          APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+        );
+        return;
+      }
+      const resume = this.deps.resumeDelegatedScopeExpansion;
+      if (!resume) throw new Error("Delegated scope resume executor is not configured.");
+      const resumed = await resume({ delegationRunId, stepId, durableRunId });
+      const resumedStep = await this.ctx.storage.chatDelegationSteps.get(stepId);
+      const stillWaitingOnSameApproval =
+        resumedStep.status === "running" &&
+        resumedStep.workResult?.disposition === "scope_expansion" &&
+        resumedStep.workResult.scopeExpansion?.approvalId === effect.approvalId;
+      if (!resumed.reenteredPersistedStep || stillWaitingOnSameApproval) {
+        await this.deferClaimedEffectForRetry(
+          effect,
+          this.workerId,
+          new Error(`Delegation scope resume ${stepId} did not acquire its persisted dispatch.`),
+          {
+            deliveryState: "retry_scheduled",
+            reason: resumed.reenteredPersistedStep ? "delegation_did_not_progress" : "delegation_not_reentered",
+            stepId,
+            delegationRunId,
+            durableRunId,
+          },
+          APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+        );
+        return;
+      }
+      const completed = await this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            resumed: true,
+            stepId,
+            delegationRunId: resumed.runId,
+            durableRunId,
+            delegationStatus: resumed.status,
+            reenteredPersistedStep: true,
+          },
+        },
+      );
+      if (!completed) throw new Error(`Delegation scope resume effect ${effect.effectId} lost its completion lease.`);
+    } catch (error) {
+      if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        stepId,
+        delegationRunId,
+        durableRunId,
       });
     }
   }
@@ -1998,6 +2284,9 @@ export class ApprovalEffectsService {
     if (resolveApprovalWait && (await this.deferApprovalWaitWakeUntilMaterialized(effect))) {
       return;
     }
+    if (resolveApprovalWait && (await this.settleDelegationScopeExpansionWakeDecision(effect))) {
+      return;
+    }
     if (await this.deferOrchestrationParentWakeUntilChildTerminal(effect)) {
       return;
     }
@@ -2014,6 +2303,11 @@ export class ApprovalEffectsService {
         (wakeResult.outcome === "woke" ||
           buildRecoveredWakeResult(wakeResult, buildWakeResultRecord(wakeResult, effect)))
       ) {
+        const delegatedScopeChildTurnId = asOptionalString(payload.delegatedScopeChildTurnId);
+        const delegatedScopeDurableRunId = asOptionalString(payload.delegatedScopeDurableRunId);
+        if (delegatedScopeChildTurnId && delegatedScopeDurableRunId === effect.targetId) {
+          await this.markLinkedChatTurnResumed(delegatedScopeChildTurnId, effect.targetId);
+        }
         await this.ctx.storage.approvalWaitRuns.markResolved(effect.approvalId, new Date().toISOString());
       }
       const wakeResultRecord = buildWakeResultRecord(wakeResult, effect);
@@ -2103,6 +2397,49 @@ export class ApprovalEffectsService {
         },
       },
     );
+  }
+
+  private async settleDelegationScopeExpansionWakeDecision(effect: ApprovalEffectRecord): Promise<boolean> {
+    const sibling = (await this.ctx.storage.approvalEffects.listByApproval(effect.approvalId)).find(
+      (candidate) => candidate.effectKind === DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+    );
+    if (!sibling) return false;
+    if (sibling.status === "pending" || sibling.status === "running") {
+      await this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        new Error("Delegated scope authority has not committed before its durable wake."),
+        {
+          deliveryState: "retry_scheduled",
+          approvalId: effect.approvalId,
+          runId: effect.targetId,
+          reason: "delegated_scope_not_settled",
+        },
+        APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+      );
+      return true;
+    }
+    if (sibling.status === "completed" && sibling.result?.applied === true) {
+      return false;
+    }
+    await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+      await this.ctx.storage.approvalWaitRuns.markResolved(effect.approvalId, new Date().toISOString());
+      const skipped = await this.ctx.storage.approvalEffects.skipEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            approvalId: effect.approvalId,
+            runId: effect.targetId,
+            wakeOutcome: "skipped_scope_not_approved",
+            scopeEffectStatus: sibling.status,
+          },
+        },
+      );
+      if (!skipped) throw new Error(`Approval wake effect ${effect.effectId} lost its rejection settlement lease.`);
+    });
+    return true;
   }
 
   private async handleApprovalWaitMaterialization(effect: ApprovalEffectRecord): Promise<void> {

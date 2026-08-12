@@ -440,6 +440,14 @@ describe("chat API origin surface headers", () => {
       await chat.fetchChatResearchRun(sessionId, "run 1");
       await chat.runChatDelegation(sessionId, { task: "Plan", surfaceMode: "cowork" } as never);
       await chat.fetchChatDelegationRun(sessionId, "run 1");
+      await chat.fetchLatestChatWorkspaceExplorer(sessionId);
+      await chat.fetchChatDelegatedScopeCandidates({ sessionId, runId: "run 1", stepId: "step 1" });
+      await chat.requestChatDelegatedScopeExpansion({
+        sessionId,
+        runId: "run 1",
+        stepId: "step 1",
+        candidateIds: ["a".repeat(64)],
+      });
 
       expect(downloaded.fileName).toBe("note.txt");
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/projects?"))).toBe(true);
@@ -500,6 +508,26 @@ describe("chat API origin surface headers", () => {
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/chat/sessions/session%201/status")),
       ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).endsWith("/api/v1/chat/sessions/session%201/delegations/run%201/steps/step%201/scope-candidates"),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).endsWith("/api/v1/chat/sessions/session%201/delegations/latest-explorer"),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith(
+              "/api/v1/chat/sessions/session%201/delegations/run%201/steps/step%201/scope-expansion",
+            ) &&
+            init?.method === "POST" &&
+            String(init.body) === JSON.stringify({ candidateIds: ["a".repeat(64)] }),
+        ),
+      ).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true);
     },
@@ -556,6 +584,23 @@ describe("chat API origin surface headers", () => {
     },
     CHAT_API_TEST_TIMEOUT_MS,
   );
+
+  it("passes an observation-only abort signal to the delegation stream request", async () => {
+    const chat = await import("./chat");
+    const fetchMock = vi.fn(async () => sseResponse({ type: "status", runId: "run-observed" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await chat.streamChatDelegation(
+      "session-1",
+      { objective: "Explore", roles: ["Workspace explorer"], surfaceMode: "chat" } as never,
+      () => undefined,
+      { signal: controller.signal },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
 
   it(
     "covers chat stream failures, delegation stream errors, and FileReader attachment encoding",

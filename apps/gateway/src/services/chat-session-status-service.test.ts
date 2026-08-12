@@ -111,8 +111,76 @@ describe("ChatSessionStatusService", () => {
     expect(projection.context).toMatchObject({ availability: "available", value: { contextWindowTokens: 128_000 } });
     expect(projection.attention).toEqual({
       availability: "available",
-      value: { pendingApprovalCount: 0, pendingUserInputCount: 0 },
+      value: {
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        backgroundTaskCount: 0,
+        backgroundAttentionRequiredCount: 0,
+        backgroundAttention: [],
+        backgroundTaskProjectionComplete: true,
+      },
     });
+  });
+
+  it("projects persisted background-attention state and blocker reason without changing the child run", async () => {
+    const { storage, service } = harness();
+    storage.chatTurnTraces.create({
+      turnId: "turn-background",
+      sessionId: "session-1",
+      userMessageId: "message-background",
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      status: "running",
+      routing: {},
+      durable: { runId: "parent-background", status: "running" },
+      startedAt: "2026-07-27T00:30:00.000Z",
+    });
+    storage.chatSessionMeta.ensure("child-session", "2026-07-27T00:30:00.000Z", "workspace-1");
+    storage.durableRuns.createRun({
+      runId: "parent-background",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      payload: { sessionId: "session-1", turnId: "turn-background" },
+    });
+    storage.durableRuns.createRun({
+      runId: "child-background",
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      payload: { sessionId: "child-session", turnId: "child-turn" },
+    });
+    const watcher = storage.durableChildWatchers.create({
+      watcherId: "watcher-background",
+      parentRunId: "parent-background",
+      childRunId: "child-background",
+      metadata: { childSessionId: "child-session", childTurnId: "child-turn" },
+    });
+    storage.durableChildWatchers.detach(watcher.watcherId, "2026-07-27T00:45:00.000Z");
+
+    const before = storage.durableRuns.getRun("child-background");
+    const status = await service.getOperatorStatus("session-1");
+    const after = storage.durableRuns.getRun("child-background");
+
+    expect(status.attention).toMatchObject({
+      availability: "available",
+      value: {
+        backgroundTaskProjection: { complete: true },
+        backgroundTasks: [
+          {
+            watcherId: "watcher-background",
+            childRunId: "child-background",
+            attention: {
+              state: "background",
+              reason: "operator_continued_in_background",
+              required: true,
+              requiredReason: "waiting",
+            },
+          },
+        ],
+      },
+    });
+    expect(after).toEqual(before);
   });
 
   it("denies unknown sessions", async () => {

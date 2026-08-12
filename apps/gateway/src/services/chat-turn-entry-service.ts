@@ -791,7 +791,7 @@ function assertDeterministicUserMessage(
   }
 }
 
-function buildDeterministicAgentDurableRunId(turnId: string): string {
+export function buildDeterministicAgentDurableRunId(turnId: string): string {
   const digest = createHash("sha256").update(`agent-turn:${turnId}`).digest("hex").slice(0, 32);
   return `durable-chat-${digest}`;
 }

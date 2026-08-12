@@ -290,6 +290,65 @@ function configureSafeRead(deps: ChatTurnCapabilityProfileResolveDeps): void {
 }
 
 describe("resolveChatTurnCapabilityProfile", () => {
+  it("freezes one server-owned workspace snapshot into preview and immutable selection", async () => {
+    const { deps } = buildDeps();
+    const workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1" as const,
+      snapshotId: "chat-workspace-snapshot-1",
+      requestId: "request-1",
+      workspaceId: "workspace-1",
+      project: { projectId: "project-1", projectRevision: 3 },
+      status: "captured" as const,
+      pathBinding: {
+        verificationId: "path-proof-1",
+        fingerprintSha256: "1".repeat(64),
+        gitIdentitySha256: "2".repeat(64),
+      },
+      git: {
+        headSha: "3".repeat(40),
+        branch: "main",
+        trackedChangeCount: 0,
+        untrackedChangeCount: 0,
+        dirty: false,
+      },
+      capturedAt: "2026-08-12T00:00:00.000Z",
+      snapshotHash: "4".repeat(64),
+    };
+    // The storage verifier owns the hash check, so seal the exact fixture
+    // through the same canonical digest used by the server owner.
+    const { snapshotHash: _ignored, ...material } = workspaceSnapshot;
+    workspaceSnapshot.snapshotHash = createHash("sha256").update(canonicalJsonString(material)).digest("hex");
+    deps.resolveWorkspaceSnapshot = vi.fn(async () => workspaceSnapshot);
+
+    const resolution = await resolveChatTurnCapabilityProfile(deps, {
+      ...buildInput(),
+      workspaceSnapshotRequest: { capture: true, requestId: "request-1" },
+    });
+
+    expect(deps.resolveWorkspaceSnapshot).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+      request: { capture: true, requestId: "request-1" },
+    });
+    expect(resolution.profile.selection.workspaceSnapshot).toEqual(workspaceSnapshot);
+    expect(resolution.preview.workspaceSnapshot).toEqual(workspaceSnapshot);
+    expect(() => verifyChatTurnCapabilityProfile(resolution.profile)).not.toThrow();
+    const tampered = structuredClone(resolution.profile);
+    tampered.selection.workspaceSnapshot!.git!.trackedChangeCount = 1;
+    expect(() => verifyChatTurnCapabilityProfile(tampered)).toThrow();
+  });
+
+  it("fails closed when snapshot intent is present without the bounded owner", async () => {
+    const { deps } = buildDeps();
+    await expect(
+      resolveChatTurnCapabilityProfile(deps, {
+        ...buildInput(),
+        workspaceSnapshotRequest: { capture: true, requestId: "request-1" },
+      }),
+    ).rejects.toThrow(/capture is unavailable/u);
+  });
+
   it("freezes the Work Passport into preview, selection, and integrity verification", async () => {
     const { deps } = buildDeps();
     const workPassport: WorkPassportRecord = {

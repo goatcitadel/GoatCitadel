@@ -41,4 +41,38 @@ describe("projectDurableRouteResponse", () => {
     expect(canonical.metadata.nested[0]?.heartbeatDecisionRawOutput).toContain("private");
     expect(canonical.checkpoints[0]?.state.heartbeatDecisionRawOutput).toBe('{"notify":false}');
   });
+
+  it("omits delegated scope host paths from nested approval evidence without mutating canonical truth", () => {
+    const rootPath = "F:\\private\\workspace";
+    const canonical = {
+      approvals: {
+        items: [
+          {
+            approvalId: "approval-scope-expansion",
+            kind: "delegation_scope_expansion",
+            payload: {
+              schemaVersion: "delegation.scope-expansion.v1",
+              rootPath,
+              requestedPaths: ["docs"],
+              resolvedPaths: [`${rootPath}\\docs`],
+              scopeHash: "a".repeat(64),
+            },
+          },
+        ],
+      },
+    };
+
+    const projected = projectDurableRouteResponse(canonical);
+
+    expect(projected.approvals.items[0]?.payload).toEqual({
+      schemaVersion: "delegation.scope-expansion.v1",
+      requestedPaths: ["docs"],
+      scopeHash: "a".repeat(64),
+    });
+    expect(JSON.stringify(projected)).not.toContain(rootPath);
+    expect(canonical.approvals.items[0]?.payload).toMatchObject({
+      rootPath,
+      resolvedPaths: [`${rootPath}\\docs`],
+    });
+  });
 });

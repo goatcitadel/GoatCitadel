@@ -1703,6 +1703,19 @@ export interface ChatDelegateRequest {
   parentSubagentDepth?: number;
 }
 
+export interface ChatWorkspaceExplorerReport {
+  profile: "read_only_explorer";
+  answer: string;
+  evidenceReferences: string[];
+  searchedScope: {
+    kind: "server_owned_delegated_scope";
+    approvedPaths: string[];
+    scopeHashes: string[];
+  };
+  partialResult: boolean;
+  gaps: string[];
+}
+
 export interface ChatDelegateResponse {
   runId: string;
   taskId: string;
@@ -1712,12 +1725,18 @@ export interface ChatDelegateResponse {
   stitchedOutput: string;
   citations: ChatCitationRecord[];
   trace?: ChatTurnTraceRecord["routing"];
-  explorer?: {
-    profile: "read_only_explorer";
-    searchedScope: "server_owned_delegated_scope";
-    gapsExplicit: true;
-    evidenceRefs: string[];
-  };
+  explorer?: ChatWorkspaceExplorerReport;
+}
+
+/** Canonical persisted delegation detail used to recover direct explorer work after reload. */
+export interface ChatDelegationRunDetail {
+  run: ChatDelegationRunRecord;
+  steps: ChatDelegationStepRecord[];
+  explorer?: ChatWorkspaceExplorerReport;
+}
+
+export interface ChatLatestWorkspaceExplorerResponse {
+  item?: ChatDelegationRunDetail;
 }
 
 export interface ChatDelegationSuggestionRecord {
@@ -1869,6 +1888,8 @@ export interface ChatSendMessageRequest {
   parts?: ChatInputPart[];
   /** Structured Gateway-resolved refs. Raw file paths, URLs, git refs, and shell expressions are not accepted. */
   contextRefs?: import("./routed-context.js").ChatRoutedContextRef[];
+  /** One-shot request for a server-verified, content-free workspace snapshot. */
+  workspaceSnapshot?: import("./chat-workspace-snapshot.js").ChatWorkspaceSnapshotRequest;
   templateInvocation?: import("./run-variables.js").RunTemplateInvocation;
   /** Server-stamped after revalidation; clients cannot submit this field. */
   runVariableEvidence?: import("./run-variables.js").RunVariableEvidence;
@@ -1933,6 +1954,8 @@ export interface RoutingPreflightRequest {
   turnId?: string;
   /** Current draft content used to resolve the exact capability upper bound. */
   content?: string;
+  /** Must match the eventual send so preflight and turn freeze share one capture. */
+  workspaceSnapshot?: import("./chat-workspace-snapshot.js").ChatWorkspaceSnapshotRequest;
   providerId?: string;
   model?: string;
   mode?: ChatMode;

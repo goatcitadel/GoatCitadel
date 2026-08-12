@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The canonical shell keeps route selection, global overlays, and shared workspace state in one owner while route pages remain lazily split. */
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 import { fetchWorkspaces, getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/shell-client";
@@ -1018,6 +1019,7 @@ export function renderRouteContent(input: {
   const openPersonalitiesSettings = () =>
     input.navigate({ area: "settings", section: "personalities", theme: route.theme });
   const openLibraryArtifacts = () => input.navigate({ area: "library", section: "artifacts", theme: route.theme });
+  const openLibraryImports = () => input.navigate({ area: "library", section: "knowledge", theme: route.theme });
   const openOpsRuntime = () => input.navigate({ area: "ops", section: "runtime", theme: route.theme });
   if (route.area === "chat") {
     return (
@@ -1038,6 +1040,7 @@ export function renderRouteContent(input: {
         onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenPersonalitiesSettings={openPersonalitiesSettings}
         onOpenLibraryArtifacts={openLibraryArtifacts}
+        onOpenLibraryImports={openLibraryImports}
         onOpenOpsRuntime={openOpsRuntime}
         onOpenUniversalRunDetail={(runId) =>
           input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })

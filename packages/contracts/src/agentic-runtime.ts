@@ -163,10 +163,47 @@ export interface DelegatedScopeExpansionRequest {
 
 export interface DelegatedFilesystemScopeControl {
   rootPath: string;
+  /** Server-owned project binding frozen with the initial delegated scope. */
+  projectId?: string;
+  /** Frozen workspace-relative base for resolving the child's relative tool paths. */
+  workingPath?: string;
   approvedPaths: string[];
   scopeHash: string;
   dispatchGeneration: string;
   updatedAt: string;
+}
+
+/** Content-free client projection; canonical host paths remain server-owned. */
+export type DelegatedFilesystemScopePublicProjection = Omit<DelegatedFilesystemScopeControl, "rootPath" | "projectId">;
+
+/**
+ * A content-free, server-selected path option that can be submitted from Chat.
+ * The client receives a workspace-relative display label and opaque id, never
+ * a host path and never authority to name a different path.
+ */
+export interface ChatDelegatedScopeCandidateRecord {
+  candidateId: string;
+  label: string;
+  scopeHash: string;
+}
+
+export interface ChatDelegatedScopeCandidatesResponse {
+  runId: string;
+  stepId: string;
+  scopeHash: string;
+  candidates: ChatDelegatedScopeCandidateRecord[];
+  pendingApprovalId?: string;
+}
+
+export interface ChatDelegatedScopeExpansionRequest {
+  candidateIds: string[];
+}
+
+export interface ChatDelegatedScopeExpansionResponse {
+  runId: string;
+  stepId: string;
+  approvalId: string;
+  waitingForApproval: true;
 }
 
 export interface DelegatedWorkResult {

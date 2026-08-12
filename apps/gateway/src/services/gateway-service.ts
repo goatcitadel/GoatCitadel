@@ -596,7 +596,9 @@ import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery
 import { recoverInterruptedChatSecureConfigurations } from "./chat-secure-configuration-recovery-service.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
+  assertEligibleReadOnlyExplorerDurableParent,
   ChatDelegationService,
+  READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
   type ChatDelegationProgressCallbacks,
   type ChatDelegationRunOptions,
 } from "./chat-delegation-service.js";
@@ -626,6 +628,7 @@ import {
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
+import { ChatWorkspaceSnapshotService } from "./chat-workspace-snapshot-service.js";
 import { buildDelegatedFilesystemScopeControl, DelegatedWorkResultService } from "./delegated-work-result-service.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
@@ -1342,6 +1345,7 @@ export class GatewayService {
   public readonly mcpRequesterScopedRuntime: McpRequesterScopedComposedRuntime;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
+  private readonly chatWorkspaceSnapshotService: ChatWorkspaceSnapshotService;
   private readonly delegatedWorkResultService: DelegatedWorkResultService;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
@@ -1588,6 +1592,10 @@ export class GatewayService {
       workspaceDir: config.assistant.workspaceDir,
       dataDir: config.assistant.dataDir,
       writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
+    });
+    this.chatWorkspaceSnapshotService = new ChatWorkspaceSnapshotService({
+      resolveSessionBinding: (sessionId) => this.workspacePathBridgeRuntime.resolveSessionBinding(sessionId),
+      verifyWorkspacePath: this.workspacePathBridgeRuntime.executionResolver.resolve,
     });
     this.delegatedWorkResultService = new DelegatedWorkResultService({
       storage: this.storage,
@@ -2116,6 +2124,61 @@ export class GatewayService {
           message,
         });
       },
+      onBackgroundAttentionRequired: async (input) => {
+        if (!(await this.isFeatureEnabled("notificationRoutingV1Enabled"))) return false;
+        const [rules, targets] = await Promise.all([
+          this.storage.notificationRouting.listRules(input.workspaceId),
+          this.storage.notificationRouting.listTargets(input.workspaceId),
+        ]);
+        const activeTargetIds = new Set(
+          targets.filter((target) => target.lifecycleState === "active").map((target) => target.targetId),
+        );
+        const hasConfiguredRoute = rules.some(
+          (rule) =>
+            rule.lifecycleState === "active" &&
+            rule.eventTypes.includes("durable.attention_required") &&
+            rule.targetIds.some((targetId) => activeTargetIds.has(targetId)),
+        );
+        if (!hasConfiguredRoute) return false;
+        const result = await createNotificationRoutingServiceForGateway(this.getRouteCompositionPort()).dispatch(
+          input.workspaceId,
+          {
+            eventId: input.eventId,
+            eventType: "durable.attention_required",
+            sessionId: input.sessionId,
+            title: input.title,
+            message: input.message,
+            source: "durable.background_task",
+          },
+        );
+        return result.status !== "no_targets";
+      },
+      beforeBackgroundTaskRailProjection: async (parentRunId, input) => {
+        const explorer = await this.storage.chatDelegationRuns.findLatestBySessionParentAndWorkflowTemplate(
+          input.sessionId,
+          parentRunId,
+          READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+        );
+        if (!explorer) return;
+        const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
+        assertEligibleReadOnlyExplorerDurableParent({
+          parentRun: await this.findDurableRunMaybe(parentRunId),
+          sessionId: input.sessionId,
+          workspaceId,
+        });
+        await this.chatDelegationService.reconcilePersistedWorkspaceExplorer(
+          {
+            sessionId: input.sessionId,
+            delegationRunId: explorer.runId,
+          },
+          {
+            returnAfterDurableLaunch: true,
+            trackExecution: (execution) => {
+              this.registerBackgroundTask(Promise.resolve(execution).then(() => undefined));
+            },
+          },
+        );
+      },
       onAutonomousChatPostCommit: (run, context) =>
         durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, context),
       onGeneralChatPostCommit: (run, progress) =>
@@ -2235,6 +2298,14 @@ export class GatewayService {
       // trace and re-park the newly queued run.
       wakeDurableRun: (runId, event) => this.durableOperatorService.wakeRun(runId, event, { deferProcessing: true }),
       requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      resumeDelegatedScopeExpansion: async (input) => {
+        const resumed = await this.chatDelegationService.resumePersistedChatDelegation(input);
+        return {
+          runId: resumed.runId,
+          status: resumed.status,
+          reenteredPersistedStep: resumed.reenteredPersistedStep,
+        };
+      },
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
       executeCodeModePendingApproval: async (approvalId, signal) =>
         await this.executeCodeModePendingApproval(approvalId, signal),
@@ -2370,6 +2441,7 @@ export class GatewayService {
       gatewaySql: this.gatewaySql,
       taskLifecycleService: this.taskLifecycleService,
       getSession: async (sessionId) => await this.getSession(sessionId),
+      getDurableRun: async (runId) => await this.findDurableRunMaybe(runId),
       listChatMessages: async (sessionId, limit) => await this.listChatMessages(sessionId, limit),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
@@ -2383,11 +2455,28 @@ export class GatewayService {
           : this.createChatSession(input),
       inheritDelegatedSessionToolGrants: async (parentSessionId, childSessionId) =>
         await this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
-      configureReadOnlyExplorerSession: async (sessionId) => await this.configureReadOnlyExplorerSession(sessionId),
+      configureReadOnlyExplorerSession: async (sessionId, deniedToolPatterns) =>
+        await this.configureReadOnlyExplorerSession(sessionId, deniedToolPatterns),
       ensureSessionInternalToolGrant: async (sessionId, toolName, reason) =>
         await this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       resolveDelegatedFilesystemScope: async (parentSessionId, dispatchGeneration, current) =>
         await this.resolveDelegatedFilesystemScope(parentSessionId, dispatchGeneration, current),
+      assertDelegatedFilesystemScopeBinding: async (parentSessionId, scope) => {
+        try {
+          const rebound = await this.resolveDelegatedFilesystemScope(parentSessionId, scope.dispatchGeneration, scope);
+          if (
+            !rebound ||
+            rebound.projectId !== scope.projectId ||
+            rebound.rootPath !== scope.rootPath ||
+            rebound.workingPath !== scope.workingPath ||
+            rebound.scopeHash !== scope.scopeHash
+          ) {
+            throw new Error("binding_changed");
+          }
+        } catch {
+          throw new ValidationError({ message: "Workspace exploration project or filesystem scope binding changed." });
+        }
+      },
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
       resolveToolPolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       agentSendChatMessage: (sessionId, input, options) =>
@@ -2395,12 +2484,26 @@ export class GatewayService {
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      validateReadOnlyExplorerParent: async ({ sessionId, policyRunId }) => {
+        const sessionMeta = await this.storage.chatSessionMeta.get(sessionId);
+        if (!sessionMeta) {
+          throw new ValidationError({ message: "Workspace exploration requires a current Chat session binding." });
+        }
+        const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
+        const authority = assertEligibleReadOnlyExplorerDurableParent({
+          parentRun: await this.findDurableRunMaybe(policyRunId),
+          sessionId,
+          workspaceId,
+        });
+        return { workspaceId, requestActor: authority.requestActor };
+      },
       watchDurableChildRun: async (input) => {
         // Some compatibility callers use policyRunId as a non-durable scope
-        // token. Only bind a watcher when both canonical durable runs exist.
+        // token. Explorers mark this attachment required and must fail closed;
+        // compatibility delegations retain their prior best-effort behavior.
         if (
-          !(await this.findDurableRunMaybe(input.parentRunId)) ||
-          !(await this.findDurableRunMaybe(input.childRunId))
+          !input.required &&
+          (!(await this.findDurableRunMaybe(input.parentRunId)) || !(await this.findDurableRunMaybe(input.childRunId)))
         ) {
           return;
         }
@@ -2459,7 +2562,7 @@ export class GatewayService {
           DEFAULT_WORKSPACE_ID;
         const normalizedRequest = await this.enrichToolPolicyContext(
           this.applyRuntimeBrowserBackendDefaults(
-            this.resolveToolInvokeRequestPaths({
+            await this.resolveToolInvokeRequestPaths({
               ...request,
               workspaceId: resolvedWorkspaceId,
               // Resolve the parent Citadel from the workspace so Citadel Wards always
@@ -5819,8 +5922,11 @@ export class GatewayService {
   }
 
   /** Deny-wins fence for the dedicated read-only workspace explorer profile. */
-  public async configureReadOnlyExplorerSession(sessionId: string): Promise<void> {
-    for (const toolPattern of ["fs.write*", "shell*", "browser*", "mcp*", "network*", "delegate*"]) {
+  public async configureReadOnlyExplorerSession(
+    sessionId: string,
+    deniedToolPatterns: readonly string[],
+  ): Promise<void> {
+    for (const toolPattern of deniedToolPatterns) {
       await this.createToolGrant({
         toolPattern,
         decision: "deny",
@@ -5907,6 +6013,14 @@ export class GatewayService {
     return this.chatDelegationService.runChatDelegation(sessionId, input, callbacks);
   }
 
+  /** @internal Route/read-model recovery for a persisted Workspace Explorer. */
+  public async reconcilePersistedWorkspaceExplorer(input: {
+    sessionId: string;
+    delegationRunId: string;
+  }): Promise<{ repaired: boolean; reentered: boolean }> {
+    return await this.chatDelegationService.reconcilePersistedWorkspaceExplorer(input);
+  }
+
   public async *runChatDelegationStream(
     sessionId: string,
     input: ChatDelegateRequest,
@@ -5921,6 +6035,19 @@ export class GatewayService {
     error?: string;
   }> {
     yield* this.chatDelegationService.runChatDelegationStream(sessionId, input, options);
+  }
+
+  public listChatDelegatedScopeCandidates(input: { sessionId: string; runId: string; stepId: string }) {
+    return this.delegatedWorkResultService.listChatScopeExpansionCandidates(input);
+  }
+
+  public requestChatDelegatedScopeExpansion(input: {
+    sessionId: string;
+    runId: string;
+    stepId: string;
+    candidateIds: string[];
+  }) {
+    return this.delegatedWorkResultService.requestChatScopeExpansion(input);
   }
 
   public async triggerChatSessionProactive(
@@ -6332,6 +6459,7 @@ export class GatewayService {
         // `undefined` makes the profile freeze fail closed.
         resolveMeshPublicationBinding: (hookInput) =>
           this.meshCapabilityActivationService.resolveProfileBinding(hookInput),
+        resolveWorkspaceSnapshot: (snapshotInput) => this.chatWorkspaceSnapshotService.capture(snapshotInput),
         getProviderReadiness: (providerId) => {
           const provider = runtime.providers.find((candidate) => candidate.providerId === providerId);
           if (!provider) {
@@ -6390,6 +6518,7 @@ export class GatewayService {
         policyRunId: serverOwnedPolicyContext?.runId ?? input.request.policyRunId,
         policyTaskId: serverOwnedPolicyContext?.taskId ?? input.request.policyTaskId,
         fullWebAccess: input.request.fullWebAccess,
+        workspaceSnapshotRequest: input.request.workspaceSnapshot,
         ...(serverOwnedPolicyContext ? { policyContext: serverOwnedPolicyContext } : {}),
       },
     );
@@ -6541,6 +6670,7 @@ export class GatewayService {
       operatorId: input.operatorId,
       authActorId: input.authActorId,
       authActorSource: input.authActorSource,
+      workspaceSnapshot: input.workspaceSnapshot,
     };
     const normalized = normalizeAgentInputFromSend(request);
     const state = await this.loadChatTurnSessionState(sessionId);
@@ -8045,13 +8175,13 @@ export class GatewayService {
     });
   }
 
-  private resolveToolInvokeRequestPaths(request: ToolInvokeRequest): ToolInvokeRequest {
-    return this.resolveToolRequestPathsForSession(request);
+  private async resolveToolInvokeRequestPaths(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
+    return await this.resolveToolRequestPathsForSession(request);
   }
 
-  private resolveToolRequestPathsForSession<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
+  private async resolveToolRequestPathsForSession<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
     request: TRequest,
-  ): TRequest {
+  ): Promise<TRequest> {
     const rootDir =
       typeof this.config.rootDir === "string" && this.config.rootDir.trim() ? this.config.rootDir : process.cwd();
     const workspaceDir =
@@ -8059,14 +8189,23 @@ export class GatewayService {
         ? this.config.assistant.workspaceDir
         : "workspace";
     const workspaceRoot = path.resolve(rootDir, workspaceDir);
-    const chatSessionProjects = this.storage.chatSessionProjects as
-      | { get?: (sessionId: string) => { projectId?: string } | undefined }
-      | undefined;
-    const chatProjects = this.storage.chatProjects as
-      | { get?: (projectId: string) => { workspacePath?: string } | undefined }
-      | undefined;
-    const projectId = chatSessionProjects?.get?.(request.sessionId)?.projectId;
-    const project = projectId ? chatProjects?.get?.(projectId) : undefined;
+    const projectId = (await this.storage.chatSessionProjects.get(request.sessionId))?.projectId;
+    const project = projectId ? await this.storage.chatProjects.find(projectId) : undefined;
+    const delegatedParent = (
+      await this.storage.chatDelegationSteps.listParentsByChildSessionIds([request.sessionId])
+    ).get(request.sessionId);
+    const delegatedScope = delegatedParent
+      ? (await this.storage.chatDelegationSteps.get(delegatedParent.stepId)).scopeControl
+      : undefined;
+    if (delegatedScope) {
+      return resolveToolRequestPathsForContext(request, {
+        workspaceRoot,
+        projectRoot: path.resolve(
+          delegatedScope.rootPath,
+          delegatedScope.workingPath ?? delegatedScope.approvedPaths[0] ?? ".",
+        ),
+      });
+    }
     const projectRoot = resolveProjectRootForToolContext({
       workspaceRoot,
       repoRoot: rootDir,
@@ -8170,7 +8309,7 @@ export class GatewayService {
     const citadelId = input.citadelId ?? (await this.storage.workspaces?.find(workspaceId))?.citadelId;
     return await this.enrichToolPolicyContext(
       this.applyRuntimeBrowserBackendDefaults(
-        this.resolveToolRequestPathsForSession({
+        await this.resolveToolRequestPathsForSession({
           ...input,
           workspaceId,
           citadelId,
@@ -11018,6 +11157,8 @@ export class GatewayService {
     const sameRoot = current && path.resolve(current.rootPath).toLowerCase() === path.resolve(rootPath).toLowerCase();
     return buildDelegatedFilesystemScopeControl({
       rootPath,
+      projectId: project.projectId,
+      workingPath: sourceScope,
       approvedPaths: sameRoot ? current.approvedPaths : [sourceScope],
       dispatchGeneration: createHash("sha256").update(dispatchMarker, "utf8").digest("hex"),
     });

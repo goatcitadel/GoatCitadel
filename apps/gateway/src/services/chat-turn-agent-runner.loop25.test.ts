@@ -194,12 +194,59 @@ describe("ChatTurnAgentRunner loop 25 runtime preflight coverage", () => {
       status: "executed",
     });
   });
+
+  it("parks a delegated scope request returned by submit_work_result on its canonical approval", async () => {
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-loop25-delegated-scope",
+      result: {
+        recorded: true,
+        disposition: "scope_expansion",
+        waitingForApproval: true,
+        approvalId: "approval-delegated-scope",
+      },
+    });
+    const executeToolCall = createExecuteToolCall({ invokeTool });
+
+    const result = await executeToolCall({
+      input: turnInput({
+        content: "Inspect the requested tests folder before completing delegated work.",
+        policyRunId: "durable-child-scope",
+      }),
+      turnId: "turn-loop25-delegated-scope",
+      toolName: "submit_work_result",
+      rawArgs: {
+        disposition: "scope_expansion",
+        summary: "Need the tests folder.",
+        changedFiles: [],
+        evidenceRefs: [],
+        scopeExpansion: { requestedPaths: ["tests"], reason: "Need focused proof." },
+      },
+    });
+
+    expect(result.record).toMatchObject({
+      toolName: "submit_work_result",
+      status: "approval_required",
+      approvalId: "approval-delegated-scope",
+      effectPotential: "unknown",
+      effectOutcomeKind: "uncertain",
+      effectEvidence: expect.objectContaining({ reason: "approval_wait_after_auxiliary_dispatch" }),
+    });
+    expect(result.chunk).toMatchObject({
+      type: "tool_result",
+      toolRun: expect.objectContaining({
+        status: "approval_required",
+        approvalId: "approval-delegated-scope",
+      }),
+    });
+  });
 });
 
 function createExecuteToolCall(input: { invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult> }) {
   return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
-    toolNames: ["browser.search", "browser.navigate", "fs.stat", "fs.copy", "time.now"],
+    toolNames: ["browser.search", "browser.navigate", "fs.stat", "fs.copy", "time.now", "submit_work_result"],
   });
 }
 

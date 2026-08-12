@@ -446,6 +446,12 @@ export function buildChatCompactionDimension(input: {
               bytes: module.bytes,
             })),
           })),
+          workspaceSnapshot: input.profile.selection.workspaceSnapshot
+            ? {
+                snapshotHash: input.profile.selection.workspaceSnapshot.snapshotHash,
+                status: input.profile.selection.workspaceSnapshot.status,
+              }
+            : undefined,
         },
         governance: {
           permissionProfileHash: input.profile.governance?.permission?.profileHash ?? "legacy-missing-permission-hash",
@@ -1427,7 +1433,12 @@ export function upsertChatCapabilityProfileSystemInstruction(
   const skillIds = profile.selection.trustedSkills.map((skill) => skill.skillId);
   const passport = profile.selection.workPassport;
   const instruction = [
-    `Server-owned capability profile: ${profile.profileId} (${profile.hashes.profileHash}).`,
+    [
+      `Server-owned capability profile: ${profile.profileId} (${profile.hashes.profileHash}).`,
+      formatWorkspaceSnapshotInstruction(profile),
+    ]
+      .filter(Boolean)
+      .join("\n"),
     `Callable tools for this turn: ${toolNames.length > 0 ? toolNames.join(", ") : "none"}.`,
     `Trusted skills for this turn: ${skillIds.length > 0 ? skillIds.join(", ") : "none"}.`,
     `Memory scope: ${profile.selection.memory.mode}/${profile.selection.memory.retrievalMode}.`,
@@ -1444,6 +1455,25 @@ export function upsertChatCapabilityProfileSystemInstruction(
   const next = [...withoutPriorBinding];
   next.splice(insertionIndex < 0 ? next.length : insertionIndex, 0, { role: "system", content: instruction });
   return next;
+}
+
+function formatWorkspaceSnapshotInstruction(profile: ChatTurnCapabilityProfileRecord): string | undefined {
+  const snapshot = profile.selection.workspaceSnapshot;
+  if (!snapshot) return undefined;
+  if (snapshot.status !== "captured" || !snapshot.project || !snapshot.git) {
+    return `Point-in-time workspace snapshot requested at ${snapshot.capturedAt}, but unavailable (${snapshot.reasonCode ?? "unknown"}). Do not infer repository health or state.`;
+  }
+  const divergence =
+    snapshot.git.ahead !== undefined && snapshot.git.behind !== undefined
+      ? `, ahead=${snapshot.git.ahead}, behind=${snapshot.git.behind}`
+      : "";
+  return (
+    `Point-in-time workspace snapshot captured at ${snapshot.capturedAt}: ` +
+    `workspace=${snapshot.workspaceId}, project=${snapshot.project.projectId}@${snapshot.project.projectRevision}, ` +
+    `HEAD=${snapshot.git.headSha}${snapshot.git.branch ? `, branch=${snapshot.git.branch}` : ""}, ` +
+    `trackedChanges=${snapshot.git.trackedChangeCount}, untrackedChanges=${snapshot.git.untrackedChangeCount}${divergence}. ` +
+    "This context grants no filesystem authority; refresh only on a new turn."
+  );
 }
 
 export function upsertChatActivatedSkillSystemInstruction(

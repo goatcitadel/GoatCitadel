@@ -6,8 +6,11 @@ import type {
   DurableBackgroundTaskRailResponse,
   DurableBackgroundTaskSemanticLink,
 } from "@goatcitadel/contracts";
-import { useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
+import { isTerminalStatus, useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
 import { RemoteWorkerInlineActivity } from "./RemoteWorkerInlineActivity";
+
+const BACKGROUND_REPORT_REFRESH_RETRY_MS = 1_000;
+const BACKGROUND_REPORT_REFRESH_MAX_ATTEMPTS = 3;
 
 export interface DurableBackgroundTaskRailProps {
   parentRunId?: string;
@@ -19,6 +22,8 @@ export interface DurableBackgroundTaskRailProps {
   queueLabels: string[];
   onOpenApprovals?: () => void;
   onOpenTasks?: () => void;
+  onContinueInBackground?: (task: DurableBackgroundTaskItem) => void;
+  onBackgroundTaskSettled?: (task: DurableBackgroundTaskItem) => boolean | Promise<boolean>;
   onOpenSemanticLink?: (
     link: DurableBackgroundTaskSemanticLink,
     relatedLinks: DurableBackgroundTaskSemanticLink[],
@@ -28,6 +33,15 @@ export interface DurableBackgroundTaskRailProps {
 export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps) {
   const rail = useDurableBackgroundTaskRail(props);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const attentionAnnouncement = useAttentionAnnouncement(
+    rail.snapshot,
+    `${props.parentRunId ?? ""}\u0000${props.sessionId ?? ""}`,
+  );
+  useBackgroundTaskSettledRefresh(
+    rail.snapshot,
+    `${props.parentRunId ?? ""}\u0000${props.sessionId ?? ""}`,
+    props.onBackgroundTaskSettled,
+  );
 
   if (!props.parentRunId || !props.sessionId) {
     return <FallbackQueueState {...props} />;
@@ -60,6 +74,9 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
         <span>{rail.snapshot?.tasks.filter((task) => task.blockers.length > 0).length ?? 0} blocked</span>
         <span>{rail.snapshot?.parent.status ?? props.streamStatus}</span>
       </div>
+      <p className="mc-next-background-rail__announcement" role="status" aria-live="polite" aria-atomic="true">
+        {attentionAnnouncement}
+      </p>
 
       {rail.error ? (
         <div className="mc-next-background-rail__notice danger" role="alert">
@@ -94,7 +111,10 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
                 action,
                 action === "cancel" ? "Operator cancelled from Chat" : undefined,
               );
-              if (applied) setConfirmCancelId(null);
+              if (applied) {
+                setConfirmCancelId(null);
+                if (action === "detach") props.onContinueInBackground?.(task);
+              }
             }}
             onOpenApprovals={props.onOpenApprovals}
             onOpenSemanticLink={props.onOpenSemanticLink}
@@ -122,6 +142,86 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
       ) : null}
     </section>
   );
+}
+
+function useBackgroundTaskSettledRefresh(
+  snapshot: DurableBackgroundTaskRailResponse | null,
+  scopeKey: string,
+  onBackgroundTaskSettled: DurableBackgroundTaskRailProps["onBackgroundTaskSettled"],
+): void {
+  type RefreshAttempt = {
+    count: number;
+    task: DurableBackgroundTaskItem;
+    timer?: ReturnType<typeof setTimeout>;
+  };
+  const callbackRef = useRef(onBackgroundTaskSettled);
+  callbackRef.current = onBackgroundTaskSettled;
+  const attempts = useRef<{ scopeKey: string; entries: Map<string, RefreshAttempt> }>({
+    scopeKey,
+    entries: new Map(),
+  });
+
+  useEffect(() => {
+    if (attempts.current.scopeKey !== scopeKey) {
+      for (const entry of attempts.current.entries.values()) {
+        if (entry.timer) clearTimeout(entry.timer);
+      }
+      attempts.current = { scopeKey, entries: new Map() };
+    }
+    return () => {
+      if (attempts.current.scopeKey !== scopeKey) return;
+      for (const entry of attempts.current.entries.values()) {
+        if (entry.timer) clearTimeout(entry.timer);
+      }
+      attempts.current = { scopeKey: "", entries: new Map() };
+    };
+  }, [scopeKey]);
+
+  useEffect(() => {
+    if (!snapshot || !callbackRef.current) return;
+    for (const task of snapshot.tasks) {
+      if (task.attention.state !== "background" || !isTerminalStatus(task.canonicalStatus)) continue;
+      const attemptKey = [task.watcherId, task.childRunId, task.childVersion ?? "", task.canonicalStatus].join(
+        "\u0000",
+      );
+      const existing = attempts.current.entries.get(attemptKey);
+      if (existing) {
+        existing.task = task;
+        continue;
+      }
+      const entry: RefreshAttempt = { count: 0, task };
+      attempts.current.entries.set(attemptKey, entry);
+      const refreshReport = (): void => {
+        const activeEntry = attempts.current.entries.get(attemptKey);
+        if (attempts.current.scopeKey !== scopeKey || activeEntry !== entry) return;
+        entry.timer = undefined;
+        entry.count += 1;
+        const callback = callbackRef.current;
+        if (!callback) return;
+        void Promise.resolve(callback(entry.task))
+          .then((accepted) => {
+            if (
+              !accepted &&
+              entry.count < BACKGROUND_REPORT_REFRESH_MAX_ATTEMPTS &&
+              attempts.current.scopeKey === scopeKey &&
+              attempts.current.entries.get(attemptKey) === entry
+            ) {
+              entry.timer = setTimeout(refreshReport, BACKGROUND_REPORT_REFRESH_RETRY_MS);
+            }
+          })
+          .catch(() => {
+            if (
+              entry.count < BACKGROUND_REPORT_REFRESH_MAX_ATTEMPTS &&
+              attempts.current.scopeKey === scopeKey &&
+              attempts.current.entries.get(attemptKey) === entry
+            ) {
+              entry.timer = setTimeout(refreshReport, BACKGROUND_REPORT_REFRESH_RETRY_MS);
+            }
+          });
+      };
+      refreshReport();
+    }
+  }, [scopeKey, snapshot]);
 }
 
 function BackgroundTaskCard({
@@ -170,12 +270,19 @@ function BackgroundTaskCard({
       </div>
 
       <div className="mc-next-background-task__facts">
-        <span>
-          {task.watcherState === "detached" ? <Unplug size={13} /> : <Link2 size={13} />} {task.watcherState}
+        <span data-attention-state={task.attention.state}>
+          {task.attention.state === "background" ? <Unplug size={13} /> : <Link2 size={13} />}{" "}
+          {attentionStateCopy(task)}
         </span>
         <span>{task.workerHealth ?? "worker unknown"}</span>
         {task.recoveryState && task.recoveryState !== "none" ? <span>{task.recoveryState}</span> : null}
       </div>
+      <p className="mc-next-background-task__muted" data-attention-reason={task.attention.reason}>
+        {attentionReasonCopy(task)}
+        {task.attention.required && task.attention.requiredReason
+          ? ` Needs attention: ${formatStatus(task.attention.requiredReason)}.`
+          : ""}
+      </p>
 
       {task.tools.length > 0 ? (
         <section className="mc-next-background-task__section" aria-label="Live tool execution">
@@ -267,7 +374,7 @@ function BackgroundTaskCard({
             type="button"
             disabled={pending}
             onClick={() => void onControl("reattach")}
-            aria-label={`Reattach background task ${task.childRunId}`}
+            aria-label={`Bring background task ${task.childRunId} to foreground`}
           >
             Bring to foreground
           </button>
@@ -418,6 +525,54 @@ function outputAvailabilityCopy(availability: DurableBackgroundTaskItem["output"
   if (availability === "missing") return "No concrete terminal output is available.";
   if (availability === "unknown") return "Output cannot be trusted until scope and lineage are verified.";
   return "Output is available.";
+}
+
+function attentionStateCopy(task: DurableBackgroundTaskItem): string {
+  if (task.attention.state === "background") return "Continuing in background";
+  if (task.attention.state === "stopped") return "Attention tracking stopped";
+  return "Foreground updates";
+}
+
+function attentionReasonCopy(task: DurableBackgroundTaskItem): string {
+  if (task.attention.reason === "operator_continued_in_background") {
+    return "Background delivery was selected by the operator; execution policy and approvals are unchanged.";
+  }
+  if (task.attention.reason === "watcher_closed") {
+    return "Attention delivery stopped because the durable watcher is closed.";
+  }
+  return "This task remains attached to Chat for foreground updates.";
+}
+
+function useAttentionAnnouncement(snapshot: DurableBackgroundTaskRailResponse | null, scopeKey: string): string {
+  const previous = useRef<{
+    scopeKey: string;
+    states: Map<string, DurableBackgroundTaskItem["attention"]["state"]>;
+  } | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+
+  useEffect(() => {
+    if (!snapshot) return;
+    const nextStates = new Map(snapshot.tasks.map((task) => [task.watcherId, task.attention.state]));
+    if (!previous.current || previous.current.scopeKey !== scopeKey) {
+      previous.current = { scopeKey, states: nextStates };
+      setAnnouncement("");
+      return;
+    }
+    const changed = snapshot.tasks.find(
+      (task) => previous.current?.states.get(task.watcherId) !== task.attention.state,
+    );
+    previous.current = { scopeKey, states: nextStates };
+    if (!changed) return;
+    setAnnouncement(
+      changed.attention.state === "background"
+        ? `${changed.label} will continue in background. Execution policy and approvals are unchanged.`
+        : changed.attention.state === "foreground"
+          ? `${changed.label} is back in the foreground.`
+          : `${changed.label} attention tracking stopped.`,
+    );
+  }, [scopeKey, snapshot]);
+
+  return announcement;
 }
 
 function shortId(value: string): string {

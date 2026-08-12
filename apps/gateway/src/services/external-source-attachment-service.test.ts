@@ -75,7 +75,7 @@ interface Harness {
   attachInput: (overrides?: Record<string, unknown>) => Record<string, unknown>;
 }
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(options: { publishArtifacts?: boolean } = {}): Promise<Harness> {
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
   const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => storage.close());
@@ -278,8 +278,10 @@ async function createHarness(): Promise<Harness> {
     ),
     importItems,
   );
-  for (const [index, body] of bodies.entries()) {
-    await artifacts.publish({ bytes: body, expectedSha256: artifactShas[index]!, signal: signal() });
+  if (options.publishArtifacts !== false) {
+    for (const [index, body] of bodies.entries()) {
+      await artifacts.publish({ bytes: body, expectedSha256: artifactShas[index]!, signal: signal() });
+    }
   }
 
   const sessionMeta = storage.chatSessionMeta.ensure(SESSION_ID, TS, WORKSPACE_ID);
@@ -326,6 +328,103 @@ async function expectServiceError(promise: Promise<unknown>, code: string): Prom
 }
 
 describe("ExternalSourceAttachmentService", () => {
+  it("lists only content-free verified applied candidates and omits terminal session bindings", async () => {
+    const harness = await createHarness({ publishArtifacts: false });
+    const initial = await harness.service.listCandidates({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
+    expect(initial.items.map((item) => item.itemId)).toEqual(["item-1", "item-2"]);
+    expect(initial.items[0]).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      sourceId: harness.source.sourceId,
+      sourceLabel: harness.source.label,
+      sourceRevision: harness.source.revision,
+      importId: harness.importId,
+      normalizedArtifactSha256: harness.artifactShas[0],
+    });
+    const serialized = JSON.stringify(initial);
+    expect(serialized).not.toContain(CANARY_TEXT);
+    expect(serialized).not.toContain(harness.source.canonicalRootPath);
+    expect(serialized).not.toContain("artifactRelativeKey");
+    expect(serialized).not.toContain("rawSha256");
+
+    const attached = harness.storage.externalSessionAttachments.attach({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      attachmentId: deriveExternalSessionAttachmentId({
+        workspaceId: WORKSPACE_ID,
+        sessionId: SESSION_ID,
+        importId: harness.importId,
+        itemId: "item-1",
+      }),
+      workspaceId: WORKSPACE_ID,
+      sessionId: SESSION_ID,
+      sourceId: harness.source.sourceId,
+      importId: harness.importId,
+      itemId: "item-1",
+      normalizedArtifactSha256: harness.artifactShas[0]!,
+      mode: "read_only_external",
+      status: "attached",
+      revision: 1,
+      attachedByActorId: ACTOR.actorId,
+      attachedAt: TS,
+    });
+    const afterAttach = await harness.service.listCandidates(
+      { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID },
+      ACTOR,
+    );
+    expect(afterAttach.items.map((item) => item.itemId)).toEqual(["item-2"]);
+    harness.storage.externalSessionAttachments.detachCas(
+      {
+        ...attached,
+        status: "detached",
+        revision: 2,
+        detachedByActorId: ACTOR.actorId,
+        detachedAt: "2026-07-14T08:30:00.000Z",
+      },
+      1,
+    );
+    const afterDetach = await harness.service.listCandidates(
+      { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID },
+      ACTOR,
+    );
+    expect(afterDetach.items.map((item) => item.itemId)).toEqual(["item-2"]);
+    const foreignActor = await harness.service.listCandidates(
+      { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID },
+      { actorId: "operator-other", source: "token" },
+    );
+    expect(foreignActor.items).toEqual([]);
+
+    const { configSha256: _configSha256, ...sourceDraft } = harness.source;
+    const revisedSource = sealExternalSourceRecord({
+      ...sourceDraft,
+      label: "Reconfigured source",
+      revision: harness.source.revision + 1,
+      updatedAt: "2026-07-14T08:31:00.000Z",
+    });
+    const revisedService = new ExternalSourceAttachmentService({
+      configs: { find: async () => revisedSource },
+      scans: harness.asyncStorage.externalSourceScans,
+      imports: harness.asyncStorage.externalSourceImports,
+      attachments: harness.asyncStorage.externalSessionAttachments,
+      sessions: { get: (sessionId) => harness.asyncStorage.chatSessionMeta.get(sessionId) },
+      artifacts: harness.artifacts,
+      runImmediateTransaction: harness.asyncStorage.runImmediateTransaction,
+    });
+    const revised = await revisedService.listCandidates({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
+    expect(revised.items).toEqual([]);
+    await expectServiceError(
+      revisedService.attach(
+        {
+          ...harness.attachInput(),
+          sourceId: initial.items[0]!.sourceId,
+          importId: initial.items[0]!.importId,
+          itemId: initial.items[0]!.itemId,
+        },
+        ACTOR,
+        signal(),
+      ),
+      "identity_drift",
+    );
+  });
+
   it("attaches read-only with same-transaction content-free Journey evidence and exact replay", async () => {
     const harness = await createHarness();
     const attached = await harness.service.attach(harness.attachInput(), ACTOR, signal());
@@ -383,6 +482,49 @@ describe("ExternalSourceAttachmentService", () => {
     const listed = await harness.service.list({ workspaceId: WORKSPACE_ID, sessionId: SESSION_ID }, ACTOR);
     expect(listed.items).toEqual([attached.attachment]);
     expect(JSON.stringify(listed)).not.toContain("lobster-matrix-7f3a");
+  });
+
+  it("rejects source reconfiguration after initial validation but before the attachment commit", async () => {
+    const harness = await createHarness();
+    const { configSha256: _configSha256, ...sourceDraft } = harness.source;
+    const revisedSource = sealExternalSourceRecord({
+      ...sourceDraft,
+      label: "Reconfigured during attach",
+      revision: 2,
+      updatedAt: "2026-07-14T08:45:00.000Z",
+    });
+    let reconfigured = false;
+    const racedService = new ExternalSourceAttachmentService({
+      configs: harness.asyncStorage.externalSourceConfigs,
+      scans: harness.asyncStorage.externalSourceScans,
+      imports: harness.asyncStorage.externalSourceImports,
+      attachments: harness.asyncStorage.externalSessionAttachments,
+      sessions: { get: (sessionId) => harness.asyncStorage.chatSessionMeta.get(sessionId) },
+      artifacts: {
+        read: async (input) => {
+          if (!reconfigured) {
+            harness.storage.externalSourceConfigs.updateCas(revisedSource, 1, 16);
+            reconfigured = true;
+          }
+          return await harness.artifacts.read(input);
+        },
+      },
+      runImmediateTransaction: harness.asyncStorage.runImmediateTransaction,
+      clock: { nowMs: () => NOW_MS },
+    });
+
+    await expectServiceError(racedService.attach(harness.attachInput(), ACTOR, signal()), "identity_drift");
+
+    expect(reconfigured).toBe(true);
+    expect(harness.storage.externalSourceConfigs.get(WORKSPACE_ID, harness.source.sourceId).revision).toBe(2);
+    const attachmentCount = harness.storage.db
+      .prepare("SELECT COUNT(*) AS count FROM chat_external_source_attachments")
+      .get() as { count: number };
+    const journeyCount = harness.storage.db
+      .prepare("SELECT COUNT(*) AS count FROM governance_journey_events WHERE subject_kind = ?")
+      .get("external_session_attachment") as { count: number };
+    expect(Number(attachmentCount.count)).toBe(0);
+    expect(Number(journeyCount.count)).toBe(0);
   });
 
   it("denies cross-workspace attach without leaking existence", async () => {

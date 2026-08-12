@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import {
   CHAT_TURN_CAPABILITY_PROFILE_VERSION,
+  CHAT_WORKSPACE_SNAPSHOT_VERSION,
   assertWorkPassportRecord,
   assertMcpRequesterResolutionBinding,
   canonicalJsonString,
@@ -15,6 +16,7 @@ import {
   type ChatTurnCapabilityProfileEnvelope,
   type ChatTurnCapabilityProfileHashes,
   type ChatTurnCapabilityProfileRecord,
+  type ChatWorkspaceSnapshotRecord,
   type CapabilityCatalogEntry,
   type CapabilityCatalogSnapshotRecord,
   type SkillLifecycleRecord,
@@ -508,6 +510,9 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
   if (input.selection.workPassport !== undefined) {
     assertWorkPassportRecord(input.selection.workPassport);
   }
+  if (input.selection.workspaceSnapshot !== undefined) {
+    assertChatWorkspaceSnapshot(input.selection.workspaceSnapshot, input.identity.workspaceId);
+  }
   assertSafeString(input.selection.memory.retrievalMode, "selection.memory.retrievalMode", 128);
   if (!(["standard", "layered"] as const).includes(input.selection.memory.retrievalMode)) {
     throw new Error("Capability profile memory retrieval mode is invalid.");
@@ -836,6 +841,86 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
     assertHash(hash, "hashes");
   }
   assertSecretFree(input);
+}
+
+function assertChatWorkspaceSnapshot(snapshot: ChatWorkspaceSnapshotRecord, workspaceId: string): void {
+  if (snapshot.schemaVersion !== CHAT_WORKSPACE_SNAPSHOT_VERSION) {
+    throw new Error("Capability profile workspace snapshot has an unsupported schema version.");
+  }
+  assertSafeId(snapshot.snapshotId, "selection.workspaceSnapshot.snapshotId");
+  assertSafeId(snapshot.requestId, "selection.workspaceSnapshot.requestId");
+  assertSafeId(snapshot.workspaceId, "selection.workspaceSnapshot.workspaceId");
+  if (snapshot.workspaceId !== workspaceId) {
+    throw new Error("Capability profile workspace snapshot is outside the turn workspace.");
+  }
+  if (
+    typeof snapshot.capturedAt !== "string" ||
+    !Number.isFinite(Date.parse(snapshot.capturedAt)) ||
+    new Date(snapshot.capturedAt).toISOString() !== snapshot.capturedAt
+  ) {
+    throw new Error("Capability profile workspace snapshot capture time is invalid.");
+  }
+  assertHash(snapshot.snapshotHash, "selection.workspaceSnapshot.snapshotHash");
+  const { snapshotHash: _snapshotHash, ...hashMaterial } = snapshot;
+  if (digest(hashMaterial) !== snapshot.snapshotHash) {
+    throw new Error("Capability profile workspace snapshot hash is invalid.");
+  }
+  if (snapshot.project) {
+    assertSafeId(snapshot.project.projectId, "selection.workspaceSnapshot.project.projectId");
+    if (!Number.isSafeInteger(snapshot.project.projectRevision) || snapshot.project.projectRevision < 1) {
+      throw new Error("Capability profile workspace snapshot project revision is invalid.");
+    }
+  }
+  if (snapshot.status === "captured") {
+    if (!snapshot.project || !snapshot.pathBinding || !snapshot.git || snapshot.reasonCode !== undefined) {
+      throw new Error("Captured workspace snapshot evidence is incomplete.");
+    }
+    assertSafeId(snapshot.pathBinding.verificationId, "selection.workspaceSnapshot.pathBinding.verificationId");
+    assertHash(snapshot.pathBinding.fingerprintSha256, "selection.workspaceSnapshot.pathBinding.fingerprintSha256");
+    assertHash(snapshot.pathBinding.gitIdentitySha256, "selection.workspaceSnapshot.pathBinding.gitIdentitySha256");
+    if (!/^[a-f0-9]{40,64}$/u.test(snapshot.git.headSha)) {
+      throw new Error("Capability profile workspace snapshot HEAD is invalid.");
+    }
+    if (snapshot.git.branch !== undefined) {
+      assertSafeString(snapshot.git.branch, "selection.workspaceSnapshot.git.branch", 256);
+      if (containsAsciiControlCharacter(snapshot.git.branch)) {
+        throw new Error("Capability profile workspace snapshot branch is invalid.");
+      }
+    }
+    assertNonNegativeInteger(snapshot.git.trackedChangeCount, "selection.workspaceSnapshot.git.trackedChangeCount");
+    assertNonNegativeInteger(snapshot.git.untrackedChangeCount, "selection.workspaceSnapshot.git.untrackedChangeCount");
+    if (
+      typeof snapshot.git.dirty !== "boolean" ||
+      snapshot.git.dirty !== snapshot.git.trackedChangeCount + snapshot.git.untrackedChangeCount > 0
+    ) {
+      throw new Error("Capability profile workspace snapshot dirty posture is inconsistent.");
+    }
+    if (snapshot.git.ahead !== undefined) {
+      assertNonNegativeInteger(snapshot.git.ahead, "selection.workspaceSnapshot.git.ahead");
+    }
+    if (snapshot.git.behind !== undefined) {
+      assertNonNegativeInteger(snapshot.git.behind, "selection.workspaceSnapshot.git.behind");
+    }
+    return;
+  }
+  const unavailableReasons = new Set([
+    "workspace_unavailable",
+    "project_unbound",
+    "path_verification_failed",
+    "path_identity_changed",
+    "git_unavailable",
+    "git_not_repository",
+    "git_summary_failed",
+  ]);
+  if (
+    snapshot.status !== "unavailable" ||
+    !snapshot.reasonCode ||
+    !unavailableReasons.has(snapshot.reasonCode) ||
+    snapshot.pathBinding !== undefined ||
+    snapshot.git !== undefined
+  ) {
+    throw new Error("Unavailable workspace snapshot evidence is malformed.");
+  }
 }
 
 function assertBoundedProfile(input: ChatTurnCapabilityProfileRecord, profileJson: string): void {

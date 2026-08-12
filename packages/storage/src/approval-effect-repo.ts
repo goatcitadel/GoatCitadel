@@ -162,15 +162,23 @@ export class ApprovalEffectRepository {
         AND effect_kind <> 'approval_observability'
         -- Priority is only a scheduling hint: another worker may already own
         -- the approved action while this worker scans for the linked Chat wake.
-        -- Keep the wake unclaimable until the same-approval action effect has
-        -- committed its terminal result and continuation evidence.
+        -- Keep continuation effects unclaimable until the same-approval
+        -- authority/action effect has committed its terminal result and
+        -- continuation evidence.
         AND NOT (
-          approval_effects.effect_kind = 'linked_chat_turn_wake'
+          approval_effects.effect_kind IN (
+            'approval_wait_wake',
+            'linked_chat_turn_wake',
+            'delegation_scope_expansion_resume'
+          )
           AND EXISTS (
             SELECT 1
             FROM approval_effects AS action_effect
             WHERE action_effect.approval_id = approval_effects.approval_id
-              AND action_effect.effect_kind = 'pending_action_execute'
+              AND action_effect.effect_kind IN (
+                'pending_action_execute',
+                'delegation_scope_expansion_apply'
+              )
               AND action_effect.status IN ('pending', 'running')
           )
         )
@@ -182,6 +190,7 @@ export class ApprovalEffectRepository {
           WHEN 'engineering_learning_lifecycle_apply' THEN 2
           WHEN 'pending_action_execute' THEN 3
           WHEN 'approval_wait_wake' THEN 4
+          WHEN 'delegation_scope_expansion_resume' THEN 5
           WHEN 'proactive_run_wake' THEN 5
           WHEN 'linked_chat_turn_wake' THEN 6
           WHEN 'orchestration_parent_wake' THEN 7

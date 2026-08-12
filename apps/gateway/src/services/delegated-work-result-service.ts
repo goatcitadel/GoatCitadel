@@ -5,15 +5,21 @@ import { execFileSync } from "node:child_process";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
+  ChatDelegatedScopeCandidatesResponse,
+  ChatDelegatedScopeExpansionResponse,
+  ChatDelegationRunRecord,
+  ChatDelegationStepRecord,
   DelegatedFilesystemScopeControl,
   DelegatedWorkResult,
   ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { assertWritePathInJail, SUBMIT_WORK_RESULT_TOOL_NAME } from "@goatcitadel/policy-engine";
+import { projectWorkspaceExplorerText } from "./workspace-explorer-path-projection.js";
 
 export const DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND = "delegation_scope_expansion" as const;
 export const DELEGATION_SCOPE_EXPANSION_EFFECT_KIND = "delegation_scope_expansion_apply" as const;
+export const DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND = "delegation_scope_expansion_resume" as const;
 
 interface DelegatedWorkResultServiceDependencies {
   storage: Storage;
@@ -25,6 +31,105 @@ interface DelegatedWorkResultServiceDependencies {
 
 export class DelegatedWorkResultService {
   public constructor(private readonly deps: DelegatedWorkResultServiceDependencies) {}
+
+  /**
+   * Lists only bounded, server-discovered workspace-relative paths. The caller
+   * cannot provide a path and the response never includes the delegated host
+   * root, so this route is discoverability rather than filesystem authority.
+   */
+  public async listChatScopeExpansionCandidates(input: {
+    sessionId: string;
+    runId: string;
+    stepId: string;
+  }): Promise<ChatDelegatedScopeCandidatesResponse> {
+    if (!(await this.deps.isEnabled())) {
+      throw new Error("Delegated scope expansion is disabled.");
+    }
+    const { run, step, scope } = await this.resolveActiveChatScope(input);
+    const scopeExpansion =
+      step.workResult?.disposition === "scope_expansion" ? step.workResult.scopeExpansion : undefined;
+    const pendingApprovalId = scopeExpansion?.decision === undefined ? scopeExpansion?.approvalId : undefined;
+    return {
+      runId: run.runId,
+      stepId: step.stepId,
+      scopeHash: scope.scopeHash,
+      candidates: pendingApprovalId ? [] : listServerOwnedScopeCandidates(scope, this.deps.writeJailRoots),
+      ...(pendingApprovalId ? { pendingApprovalId } : {}),
+    };
+  }
+
+  /**
+   * Resolves opaque candidate ids against a fresh server-owned listing, then
+   * enters the same submit_work_result approval/resume path used by delegated
+   * workers. Unknown or stale ids fail closed.
+   */
+  public async requestChatScopeExpansion(input: {
+    sessionId: string;
+    runId: string;
+    stepId: string;
+    candidateIds: string[];
+  }): Promise<ChatDelegatedScopeExpansionResponse> {
+    const candidateIds = [...new Set(input.candidateIds.map((value) => value.trim()))];
+    if (
+      candidateIds.length < 1 ||
+      candidateIds.length > 8 ||
+      candidateIds.some((value) => !/^[a-f0-9]{64}$/u.test(value))
+    ) {
+      throw new Error("Scope expansion requires 1..8 valid server candidate ids.");
+    }
+    const listed = await this.listChatScopeExpansionCandidates(input);
+    if (listed.pendingApprovalId) {
+      throw new Error("This delegated step already has a scope-expansion approval pending.");
+    }
+    const byId = new Map(listed.candidates.map((candidate) => [candidate.candidateId, candidate]));
+    const selected = candidateIds.map((candidateId) => byId.get(candidateId));
+    if (selected.some((candidate) => !candidate)) {
+      throw new Error("A scope candidate is stale or is not eligible for this delegated step.");
+    }
+    const { run, step, scope } = await this.resolveActiveChatScope(input);
+    if (scope.scopeHash !== listed.scopeHash) {
+      throw new Error("The delegated scope changed while the request was being prepared. Refresh the candidates.");
+    }
+    if (!step.childSessionId) {
+      throw new Error("The delegated step has no active child session.");
+    }
+    const workspaceId = (await this.deps.storage.chatSessionMeta.get(input.sessionId))?.workspaceId;
+    if (!workspaceId) {
+      throw new Error("The parent Chat session has no workspace binding.");
+    }
+    const result = await this.execute({
+      toolName: SUBMIT_WORK_RESULT_TOOL_NAME,
+      args: {
+        disposition: "scope_expansion",
+        summary: "Operator requested additional governed scope from Chat.",
+        changedFiles: [],
+        evidenceRefs: [],
+        scopeExpansion: {
+          requestedPaths: selected.map((candidate) => candidate!.label),
+          reason: "Operator selected additional server-discovered workspace scope from Chat.",
+        },
+      },
+      agentId: "chat-operator-scope-request",
+      sessionId: step.childSessionId,
+      workspaceId,
+      taskId: run.taskId,
+      runId: step.durableRunId,
+      surface: "chat",
+      consentContext: {
+        source: "ui",
+        reason: "Operator selected a server-owned delegated scope candidate.",
+      },
+    });
+    if (result.waitingForApproval !== true || typeof result.approvalId !== "string" || result.approvalId.length < 1) {
+      throw new Error("Delegated scope expansion did not enter the canonical approval wait.");
+    }
+    return {
+      runId: run.runId,
+      stepId: step.stepId,
+      approvalId: result.approvalId,
+      waitingForApproval: true,
+    };
+  }
 
   public async assertToolRequestWithinApprovedScope(request: ToolInvokeRequest): Promise<void> {
     if (!(await this.deps.isEnabled()) || request.toolName === SUBMIT_WORK_RESULT_TOOL_NAME) {
@@ -46,15 +151,15 @@ export class DelegatedWorkResultService {
         if (typeof raw !== "string" || !raw.trim()) {
           throw new Error("Delegated git.add paths must be non-empty strings.");
         }
-        assertResolvedPathWithinDelegatedScope(scope, path.resolve(scope.rootPath, raw));
+        assertResolvedPathWithinDelegatedScope(scope, raw);
       }
       return;
     }
-    const pathKeys = delegatedMutationPathKeys(request.toolName);
+    const pathKeys = delegatedToolPathKeys(request.toolName);
     for (const key of pathKeys) {
       const raw = request.args?.[key];
       if (typeof raw !== "string" || !raw.trim()) {
-        throw new Error(`Delegated mutation ${request.toolName} requires a server-resolved ${key} inside scope.`);
+        throw new Error(`Delegated tool ${request.toolName} requires a server-resolved ${key} inside scope.`);
       }
       assertResolvedPathWithinDelegatedScope(scope, raw);
     }
@@ -75,8 +180,9 @@ export class DelegatedWorkResultService {
       throw new Error("Delegated work result cannot update an inactive or superseded step.");
     }
     const parsed = parseDelegatedWorkResult(request.args ?? {});
+    const explorerProfile = isWorkspaceExplorerRole(step.role);
     if (parsed.disposition !== "scope_expansion") {
-      const verified = this.verifyTerminalWorkResult(step.scopeControl, parsed);
+      const verified = this.verifyTerminalWorkResult(step.scopeControl, parsed, explorerProfile);
       await this.deps.storage.chatDelegationSteps.patch(step.stepId, { workResult: verified });
       await this.deps.appendAudit?.({
         event: "delegation.work_result_submitted",
@@ -90,6 +196,10 @@ export class DelegatedWorkResultService {
     const scope = step.scopeControl;
     if (!scope) {
       throw new Error("Delegated scope expansion requires a server-owned filesystem/worktree scope.");
+    }
+    const durableRunId = request.runId?.trim();
+    if (!durableRunId) {
+      throw new Error("Delegated scope expansion requires the active durable child run for governed resume.");
     }
     const requested = normalizeDelegatedScopeExpansionPaths({
       rootPath: scope.rootPath,
@@ -113,13 +223,21 @@ export class DelegatedWorkResultService {
       };
     }
     const requestedAt = new Date().toISOString();
+    const projectedSummary = explorerProfile
+      ? projectWorkspaceExplorerText(parsed.summary, [scope.rootPath])
+      : parsed.summary;
+    const projectedReason = explorerProfile
+      ? projectWorkspaceExplorerText(parsed.scopeExpansion!.reason, [scope.rootPath])
+      : parsed.scopeExpansion!.reason;
+    const evidenceRefs = normalizeScopedEvidenceRefs(scope, parsed.evidenceRefs);
     const approval = await this.deps.createApproval({
       kind: DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND,
       riskLevel: "danger",
       linkage: {
         sessionId: request.sessionId,
+        turnId: request.turnId ?? step.childTurnId,
         runId: step.runId,
-        durableRunId: request.runId,
+        durableRunId,
         workspaceId: request.workspaceId,
         taskId: request.taskId,
         actionType: DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND,
@@ -129,18 +247,19 @@ export class DelegatedWorkResultService {
         stepId: step.stepId,
         delegationRunId: step.runId,
         childSessionId: request.sessionId,
-        durableRunId: request.runId,
+        childTurnId: request.turnId ?? step.childTurnId,
+        durableRunId,
         dispatchGeneration: scope.dispatchGeneration,
         scopeHash: scope.scopeHash,
         rootPath: scope.rootPath,
         currentApprovedPaths: scope.approvedPaths,
         requestedPaths: requested.relativePaths,
         resolvedPaths: requested.resolvedPaths,
-        reason: parsed.scopeExpansion!.reason,
+        reason: projectedReason,
       },
       preview: {
         title: "Expand delegated filesystem scope",
-        summary: parsed.scopeExpansion!.reason,
+        summary: projectedReason,
         requestedPaths: parsed.scopeExpansion!.requestedPaths,
         resolvedPaths: requested.relativePaths,
         currentApprovedPaths: scope.approvedPaths,
@@ -151,15 +270,15 @@ export class DelegatedWorkResultService {
     });
     const workResult: DelegatedWorkResult = {
       disposition: "scope_expansion",
-      summary: parsed.summary,
+      summary: projectedSummary,
       changedFiles: [],
-      evidenceRefs: parsed.evidenceRefs,
+      evidenceRefs,
       scopeHash: scope.scopeHash,
       dispatchGeneration: scope.dispatchGeneration,
       scopeExpansion: {
         requestedPaths: requested.relativePaths,
         resolvedPaths: requested.resolvedPaths,
-        reason: parsed.scopeExpansion!.reason,
+        reason: projectedReason,
         scopeHash: scope.scopeHash,
         approvalId: approval.approvalId,
         requestedAt,
@@ -187,12 +306,16 @@ export class DelegatedWorkResultService {
   private verifyTerminalWorkResult(
     scope: DelegatedFilesystemScopeControl | undefined,
     result: DelegatedWorkResult,
+    explorerProfile: boolean,
   ): DelegatedWorkResult {
     if (!scope) {
       return result;
     }
+    const evidenceRefs = normalizeScopedEvidenceRefs(scope, result.evidenceRefs);
     const authoritativeResult: DelegatedWorkResult = {
       ...result,
+      summary: explorerProfile ? projectWorkspaceExplorerText(result.summary, [scope.rootPath]) : result.summary,
+      evidenceRefs,
       scopeHash: scope.scopeHash,
       dispatchGeneration: scope.dispatchGeneration,
     };
@@ -211,15 +334,56 @@ export class DelegatedWorkResultService {
       disposition: "blocked",
       summary: `Verification quarantined an out-of-scope delegated diff: ${outOfScope.join(", ")}`,
       changedFiles,
-      evidenceRefs: [...result.evidenceRefs, `quarantine:delegation-diff:${diffHash}`],
+      evidenceRefs: [...evidenceRefs, `quarantine:delegation-diff:${diffHash}`],
       scopeHash: scope.scopeHash,
       dispatchGeneration: scope.dispatchGeneration,
     };
   }
+
+  private async resolveActiveChatScope(input: { sessionId: string; runId: string; stepId: string }): Promise<{
+    run: ChatDelegationRunRecord;
+    step: ChatDelegationStepRecord;
+    scope: DelegatedFilesystemScopeControl;
+  }> {
+    const run = await this.deps.storage.chatDelegationRuns.get(input.runId);
+    if (run.sessionId !== input.sessionId || run.status !== "running") {
+      throw new Error("Delegated scope can be expanded only for an active run in this Chat session.");
+    }
+    if (!run.roles.some(isChatScopeExpandableRole)) {
+      throw new Error("Chat scope expansion is available only for explorer or code delegation work.");
+    }
+    const step = await this.deps.storage.chatDelegationSteps.get(input.stepId);
+    if (step.runId !== run.runId || step.status !== "running" || !isChatScopeExpandableRole(step.role)) {
+      throw new Error("Delegated scope can be expanded only for an active step in this run.");
+    }
+    if (!step.scopeControl) {
+      throw new Error("This delegated step has no server-owned filesystem scope.");
+    }
+    return { run, step, scope: step.scopeControl };
+  }
+}
+
+function isChatScopeExpandableRole(role: string): boolean {
+  const normalized = role
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/gu, "-");
+  return normalized === "coder" || normalized === "workspace-explorer";
+}
+
+function isWorkspaceExplorerRole(role: string): boolean {
+  return (
+    role
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_]+/gu, "-") === "workspace-explorer"
+  );
 }
 
 export function buildDelegatedFilesystemScopeControl(input: {
   rootPath: string;
+  projectId?: string;
+  workingPath?: string;
   approvedPaths: string[];
   dispatchGeneration: string;
   updatedAt?: string;
@@ -233,11 +397,23 @@ export function buildDelegatedFilesystemScopeControl(input: {
   if (!dispatchGeneration) {
     throw new Error("Delegated filesystem scope requires a dispatch generation.");
   }
+  const workingPath = normalizeInitialApprovedPath(input.workingPath ?? approvedPaths[0]!);
+  if (!isWithinApprovedScope(workingPath, approvedPaths)) {
+    throw new Error("Delegated filesystem working path must be inside the approved scope.");
+  }
   return {
     rootPath,
+    ...(input.projectId?.trim() ? { projectId: input.projectId.trim() } : {}),
+    workingPath,
     approvedPaths,
     dispatchGeneration,
-    scopeHash: hashDelegatedScope({ rootPath, approvedPaths, dispatchGeneration }),
+    scopeHash: hashDelegatedScope({
+      rootPath,
+      projectId: input.projectId?.trim(),
+      workingPath,
+      approvedPaths,
+      dispatchGeneration,
+    }),
     updatedAt: input.updatedAt ?? new Date().toISOString(),
   };
 }
@@ -277,8 +453,58 @@ export function normalizeDelegatedScopeExpansionPaths(input: {
   return { relativePaths: relativePaths.sort(), resolvedPaths: resolvedPaths.sort() };
 }
 
+function listServerOwnedScopeCandidates(
+  scope: DelegatedFilesystemScopeControl,
+  writeJailRoots: string[],
+): ChatDelegatedScopeCandidatesResponse["candidates"] {
+  const discovered = new Set<string>();
+  for (const approvedPath of scope.approvedPaths) {
+    let parent = path.posix.dirname(approvedPath.replaceAll("\\", "/"));
+    while (parent && parent !== "." && parent !== "/") {
+      discovered.add(parent);
+      const next = path.posix.dirname(parent);
+      if (next === parent) break;
+      parent = next;
+    }
+  }
+  for (const entry of fs
+    .readdirSync(scope.rootPath, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith(".") || entry.name === "node_modules") {
+      continue;
+    }
+    discovered.add(entry.name);
+  }
+
+  const candidates: ChatDelegatedScopeCandidatesResponse["candidates"] = [];
+  for (const relativePath of discovered) {
+    try {
+      const normalized = normalizeDelegatedScopeExpansionPaths({
+        rootPath: scope.rootPath,
+        requestedPaths: [relativePath],
+        currentApprovedPaths: scope.approvedPaths,
+        writeJailRoots,
+      }).relativePaths[0];
+      if (!normalized) continue;
+      candidates.push({
+        candidateId: createHash("sha256").update(`${scope.scopeHash}\0${normalized}`, "utf8").digest("hex"),
+        label: normalized,
+        scopeHash: scope.scopeHash,
+      });
+    } catch {
+      // Intentionally ignore a discovered entry that no longer resolves,
+      // crosses a symlink, or is outside the configured jail; it is not
+      // eligible for Chat selection.
+    }
+    if (candidates.length >= 64) break;
+  }
+  return candidates.sort((left, right) => left.label.localeCompare(right.label));
+}
+
 export function hashDelegatedScope(input: {
   rootPath: string;
+  projectId?: string;
+  workingPath?: string;
   approvedPaths: string[];
   dispatchGeneration: string;
 }): string {
@@ -286,6 +512,8 @@ export function hashDelegatedScope(input: {
     .update(
       JSON.stringify({
         rootPath: path.resolve(input.rootPath),
+        projectId: input.projectId?.trim() || undefined,
+        workingPath: input.workingPath ?? input.approvedPaths[0],
         approvedPaths: [...input.approvedPaths].sort(),
         dispatchGeneration: input.dispatchGeneration,
       }),
@@ -304,7 +532,7 @@ function parseDelegatedWorkResult(args: Record<string, unknown>): DelegatedWorkR
     throw new Error("submit_work_result requires a summary of at most 8,000 characters.");
   }
   const changedFiles = readStringArray(args.changedFiles, 1_000).map(normalizeWorkspaceRelativePath);
-  const evidenceRefs = readStringArray(args.evidenceRefs, 1_000);
+  const evidenceRefs = readEvidenceRefArray(args.evidenceRefs);
   if (disposition !== "scope_expansion") {
     return { disposition, summary, changedFiles, evidenceRefs } as DelegatedWorkResult;
   }
@@ -342,6 +570,55 @@ function readStringArray(value: unknown, maxItems: number): string[] {
     }
     return item.trim();
   });
+}
+
+function containsAsciiControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codeUnit = character.charCodeAt(0);
+    return codeUnit <= 0x1f || codeUnit === 0x7f;
+  });
+}
+
+function readEvidenceRefArray(value: unknown): string[] {
+  return readStringArray(value, 1_000).map((item) => {
+    if (item.length > 1_000) {
+      throw new Error("Delegated evidence references must be at most 1,000 characters each.");
+    }
+    if (containsAsciiControlCharacter(item)) {
+      throw new Error("Delegated evidence references cannot contain control characters.");
+    }
+    return item;
+  });
+}
+
+function normalizeScopedEvidenceRefs(scope: DelegatedFilesystemScopeControl, evidenceRefs: string[]): string[] {
+  return evidenceRefs.map((evidenceRef) => {
+    if (/^file:/iu.test(evidenceRef)) {
+      throw new Error("Delegated evidence references cannot use file URLs.");
+    }
+    if (!isAbsoluteFilesystemReference(evidenceRef)) {
+      return evidenceRef;
+    }
+    if (!path.isAbsolute(evidenceRef)) {
+      throw new Error("Delegated evidence reference uses an absolute path for another host platform.");
+    }
+
+    const resolvedPath = path.resolve(evidenceRef);
+    assertInsideRoot(scope.rootPath, resolvedPath);
+    const existingParent = nearestExistingParent(resolvedPath);
+    assertInsideRoot(scope.rootPath, fs.realpathSync(existingParent));
+    const relativePath = normalizeWorkspaceRelativePath(
+      path.relative(scope.rootPath, resolvedPath).replaceAll("\\", "/") || ".",
+    );
+    if (!isWithinApprovedScope(relativePath, scope.approvedPaths)) {
+      throw new Error("Delegated evidence reference is outside the approved scope.");
+    }
+    return relativePath;
+  });
+}
+
+function isAbsoluteFilesystemReference(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
 }
 
 function normalizeScopeExpansionPath(raw: string): string {
@@ -444,15 +721,22 @@ function sameStringSet(left: string[], right: string[]): boolean {
   return JSON.stringify(left.map(normalize).sort()) === JSON.stringify(right.map(normalize).sort());
 }
 
-function delegatedMutationPathKeys(toolName: string): string[] {
+function delegatedToolPathKeys(toolName: string): string[] {
   switch (toolName) {
+    case "fs.read":
+    case "fs.list":
+    case "fs.stat":
+    case "file.read_range":
+    case "file.find":
+    case "code.search":
+    case "code.search_files":
     case "fs.write":
     case "fs.delete":
     case "git.worktree.create":
     case "git.worktree.remove":
       return ["path"];
     case "fs.copy":
-      return ["to"];
+      return ["from", "to"];
     case "fs.move":
       return ["from", "to"];
     case "shell.exec":
@@ -467,13 +751,15 @@ function delegatedMutationPathKeys(toolName: string): string[] {
 }
 
 function assertResolvedPathWithinDelegatedScope(scope: DelegatedFilesystemScopeControl, rawPath: string): void {
-  const candidate = path.resolve(rawPath);
+  const candidate = path.isAbsolute(rawPath)
+    ? path.resolve(rawPath)
+    : path.resolve(scope.rootPath, scope.workingPath ?? scope.approvedPaths[0] ?? ".", rawPath);
   assertInsideRoot(scope.rootPath, candidate);
   const existingParent = nearestExistingParent(candidate);
   const realParent = fs.realpathSync(existingParent);
   assertInsideRoot(scope.rootPath, realParent);
   const relative = path.relative(scope.rootPath, candidate).replaceAll("\\", "/") || ".";
   if (!isWithinApprovedScope(relative, scope.approvedPaths)) {
-    throw new Error(`Delegated mutation path is outside the approved scope: ${relative}`);
+    throw new Error(`Delegated tool path is outside the approved scope: ${relative}`);
   }
 }
