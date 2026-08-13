@@ -390,6 +390,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               ]}
             />
             <LibraryActionList
+              ariaLabel="Recovered external snapshots"
               items={recoveredSnapshots.map((event) => formatRecoveredSnapshotItem(event))}
               emptyLabel="No recovered external snapshots yet. Approved knowledge-copy requests appear here."
               maxHeight="min(32vh, 18rem)"

@@ -64,6 +64,12 @@ function activeTask(watcherId: string): DurableBackgroundTaskItem {
     approvals: [],
     output: { availability: "not_terminal" },
     blockers: [],
+    attention: {
+      state: "foreground",
+      reason: "watcher_attached",
+      updatedAt: "2026-07-13T00:00:00.000Z",
+      required: false,
+    },
     signalIntegrity: {
       observedCount: 1,
       acceptedCount: 1,
