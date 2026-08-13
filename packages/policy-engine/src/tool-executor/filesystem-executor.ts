@@ -28,6 +28,11 @@ export interface FilesystemToolExecutorDeps {
   ) => Promise<void>;
 }
 
+export const FILESYSTEM_READ_MAX_BYTES = 64 * 1024;
+export const FILE_READ_RANGE_MAX_BYTES = 4 * 1024 * 1024;
+export const FILE_READ_RANGE_MAX_OUTPUT_BYTES = 64 * 1024;
+const FILESYSTEM_READ_CHUNK_BYTES = 64 * 1024;
+
 export function isFilesystemToolName(toolName: string): boolean {
   return FILESYSTEM_TOOL_NAMES.has(toolName);
 }
@@ -75,8 +80,9 @@ async function fsRead(
   const args = request.args;
   const p = required(args.path, "path");
   await deps.assertReadPathAllowedForRequest(p, request, config, storage);
-  const content = await fs.readFile(path.resolve(p), "utf8");
-  return { path: path.resolve(p), bytes: content.length, content };
+  const full = path.resolve(p);
+  const { content, bytes } = await readUtf8FileBounded(full, FILESYSTEM_READ_MAX_BYTES);
+  return { path: full, bytes, content };
 }
 
 async function fileReadRange(
@@ -89,17 +95,17 @@ async function fileReadRange(
   const p = required(args.path, "path");
   await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
-  const content = await fs.readFile(full, "utf8");
-  const lines = content.split(/\r?\n/);
-  const startLine = clampInt(args.startLine, 1, 1, Math.max(lines.length, 1));
-  const endLine = clampInt(args.endLine, startLine, startLine, Math.max(lines.length, startLine));
-  const selected = lines.slice(startLine - 1, endLine);
+  const { content } = await readUtf8FileBounded(full, FILE_READ_RANGE_MAX_BYTES);
+  const selected = selectLineRange(content, args.startLine, args.endLine);
+  if (Buffer.byteLength(selected.content, "utf8") > FILE_READ_RANGE_MAX_OUTPUT_BYTES) {
+    throw new Error(`Filesystem line range exceeds the ${FILE_READ_RANGE_MAX_OUTPUT_BYTES} byte output limit: ${full}`);
+  }
   return {
     path: full,
-    startLine,
-    endLine,
-    lineCount: selected.length,
-    content: selected.join("\n"),
+    startLine: selected.startLine,
+    endLine: selected.endLine,
+    lineCount: selected.lineCount,
+    content: selected.content,
   };
 }
 
@@ -334,11 +340,19 @@ async function searchFileContents(input: {
   }> = [];
   const pending = [fullRoot];
   let skippedDirs = 0;
+  let skippedLinks = 0;
   let skippedOversizeFiles = 0;
 
   while (pending.length > 0 && matches.length < input.limit) {
     const current = pending.pop() as string;
-    const stat = await fs.stat(current);
+    const stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) {
+      skippedLinks += 1;
+      continue;
+    }
+    if (!stat.isDirectory() && !stat.isFile()) {
+      continue;
+    }
     if (stat.isDirectory()) {
       const entries = await fs.readdir(current, { withFileTypes: true });
       for (const entry of entries) {
@@ -395,12 +409,93 @@ async function searchFileContents(input: {
     count: matches.length,
     matches,
     ...(skippedDirs > 0 ? { skippedDirs } : {}),
+    ...(skippedLinks > 0 ? { skippedLinks } : {}),
     ...(skippedOversizeFiles > 0
       ? {
           skippedOversizeFiles,
           skippedOversizeNote: `files larger than ${SEARCH_MAX_CONTENT_FILE_BYTES} bytes were not content-searched; use file.read_range for those`,
         }
       : {}),
+  };
+}
+
+async function readUtf8FileBounded(fullPath: string, maxBytes: number): Promise<{ content: string; bytes: number }> {
+  const handle = await fs.open(fullPath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Filesystem read requires a regular file: ${fullPath}`);
+    }
+    if (stat.size > maxBytes) {
+      throw filesystemReadLimitError(fullPath, maxBytes);
+    }
+
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    while (bytes <= maxBytes) {
+      const remaining = maxBytes + 1 - bytes;
+      const chunk = Buffer.allocUnsafe(Math.min(FILESYSTEM_READ_CHUNK_BYTES, remaining));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      bytes += bytesRead;
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+
+    if (bytes > maxBytes) {
+      throw filesystemReadLimitError(fullPath, maxBytes);
+    }
+    return {
+      content: Buffer.concat(chunks, bytes).toString("utf8"),
+      bytes,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function filesystemReadLimitError(fullPath: string, maxBytes: number): Error {
+  return new Error(`Filesystem read exceeds the ${maxBytes} byte limit: ${fullPath}`);
+}
+
+function selectLineRange(
+  content: string,
+  requestedStartLine: unknown,
+  requestedEndLine: unknown,
+): { startLine: number; endLine: number; lineCount: number; content: string } {
+  let totalLines = 1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      totalLines += 1;
+    }
+  }
+
+  const startLine = clampInt(requestedStartLine, 1, 1, totalLines);
+  const endLine = clampInt(requestedEndLine, startLine, startLine, totalLines);
+  let startOffset = startLine === 1 ? 0 : content.length;
+  let endOffset = content.length;
+  let currentLine = 1;
+
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) !== 10) {
+      continue;
+    }
+    if (currentLine === endLine) {
+      endOffset = index > 0 && content.charCodeAt(index - 1) === 13 ? index - 1 : index;
+      break;
+    }
+    currentLine += 1;
+    if (currentLine === startLine) {
+      startOffset = index + 1;
+    }
+  }
+
+  return {
+    startLine,
+    endLine,
+    lineCount: endLine - startLine + 1,
+    content: content.slice(startOffset, endOffset).replace(/\r\n/g, "\n"),
   };
 }
 

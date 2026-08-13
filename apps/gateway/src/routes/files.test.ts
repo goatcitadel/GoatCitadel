@@ -116,6 +116,37 @@ describe("files routes", () => {
     });
   });
 
+  it.each([
+    ["workspace/report.html", "text/html", "<script src='/payload.js'></script>"],
+    ["workspace/payload.js", "application/javascript", "globalThis.compromised = true"],
+    ["workspace/vector.svg", "image/svg+xml", "<svg onload='globalThis.compromised=true'></svg>"],
+  ])("forces browser-active raw files to download as inert content: %s", async (relativePath, contentType, content) => {
+    const downloadWorkspaceFile = vi.fn(async () => ({
+      relativePath,
+      fullPath: `./${relativePath}`,
+      size: Buffer.byteLength(content),
+      modifiedAt: "2026-03-04T18:00:00.000Z",
+      contentType,
+      isText: true,
+      content,
+    }));
+    app = Fastify();
+    app.decorate("services", { files: { downloadWorkspaceFile } } as never);
+    await app.register(filesRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/files/download?relativePath=${encodeURIComponent(relativePath)}&raw=true`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/octet-stream");
+    expect(response.headers["content-disposition"]).toContain("attachment;");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-security-policy"]).toContain("script-src 'none'");
+    expect(response.body).toBe(content);
+  });
+
   it("uses the HTML preview cap and tight preview CSP", async () => {
     const downloadWorkspaceFile = vi.fn(async () => ({
       relativePath: "workspace/report.html",

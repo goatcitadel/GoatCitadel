@@ -1523,6 +1523,7 @@ describe("GatewayService low-hanging facade delegation", () => {
           { envName: "LOOP35_GATEWAY_SECRET" },
           "direct",
           "envName",
+          "test.loop35-gateway",
         ),
       ).toBe("from-env");
       expect(

@@ -554,12 +554,22 @@ function isCredentialFileCheckSummary(value: unknown): boolean {
 function isA2APeerCredentialHealthSummary(value: unknown): boolean {
   return (
     isPlainStructuredRecord(value) &&
-    hasOnlyStructuredKeys(value, ["peerId", "label", "status", "scopes", "expiresAt", "revokedAt", "checkedAt"]) &&
+    hasOnlyStructuredKeys(value, [
+      "peerId",
+      "label",
+      "status",
+      "scopes",
+      "allowedWorkspaceIds",
+      "expiresAt",
+      "revokedAt",
+      "checkedAt",
+    ]) &&
     typeof value.peerId === "string" &&
     isSafeOpaqueIdentifier(value.peerId) &&
     isOptionalSafeString(value.label) &&
     /^(?:configured|missing_secret|expired|revoked)$/.test(String(value.status ?? "")) &&
     isSafeStringArray(value.scopes) &&
+    (value.allowedWorkspaceIds === undefined || isSafeStringArray(value.allowedWorkspaceIds)) &&
     isOptionalSafeString(value.expiresAt) &&
     isOptionalSafeString(value.revokedAt) &&
     typeof value.checkedAt === "string" &&

@@ -8,6 +8,17 @@ import {
 import { sendRouteError } from "./_error-handler.js";
 
 const MAX_UPLOAD_BODY_BYTES = Math.ceil(MAX_FILE_UPLOAD_BYTES * 1.05) + 4096;
+const FILE_CONTENT_SECURITY_POLICY =
+  "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'none'; style-src 'self'; img-src data: blob:; font-src 'none'; connect-src 'none'";
+const BROWSER_ACTIVE_CONTENT_TYPES = new Set([
+  "application/javascript",
+  "application/pdf",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "text/html",
+  "text/javascript",
+  "text/xml",
+]);
 
 const uploadSchema = z.object({
   relativePath: z.string().min(1).max(2048),
@@ -122,8 +133,15 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       if (parsed.data.raw) {
-        reply.header("Content-Type", file.contentType);
+        const activeContent = isBrowserActiveContentType(file.contentType);
+        reply.header("Content-Type", activeContent ? "application/octet-stream" : file.contentType);
         reply.header("Content-Length", String(file.size));
+        reply.header("X-Content-Type-Options", "nosniff");
+        reply.header("Content-Security-Policy", FILE_CONTENT_SECURITY_POLICY);
+        if (activeContent) {
+          const fileName = file.relativePath.split(/[\\/]/u).at(-1) || "download";
+          reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+        }
         return reply.send(file.content);
       }
 
@@ -161,13 +179,14 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
       }
       reply.header("Content-Type", "text/html; charset=utf-8");
       reply.header("X-Content-Type-Options", "nosniff");
-      reply.header(
-        "Content-Security-Policy",
-        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'none'; style-src 'self'; img-src data: blob:; font-src 'none'; connect-src 'none'",
-      );
+      reply.header("Content-Security-Policy", FILE_CONTENT_SECURITY_POLICY);
       return reply.send(file.content);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 };
+
+function isBrowserActiveContentType(contentType: string): boolean {
+  return BROWSER_ACTIVE_CONTENT_TYPES.has(contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "");
+}

@@ -316,6 +316,7 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         slackInstallId: readString(draft.draft, "slackInstallId") ?? readLegacyString(draft, "slackInstallId"),
         slackTeamId: readString(draft.draft, "slackTeamId") ?? readLegacyString(draft, "slackTeamId"),
         slackTeamName: readString(draft.draft, "slackTeamName") ?? readLegacyString(draft, "slackTeamName"),
+        slackAppId: readString(draft.draft, "slackAppId") ?? readLegacyString(draft, "slackAppId"),
         slackBotUserId: readString(draft.draft, "slackBotUserId") ?? readLegacyString(draft, "slackBotUserId"),
         slackScopes: readString(draft.draft, "slackScopes") ?? readLegacyString(draft, "slackScopes"),
         targets,

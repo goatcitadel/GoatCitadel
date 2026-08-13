@@ -49,6 +49,18 @@ describe("assertWritePathInJail", () => {
     expect(() => assertWritePathInJail(attemptedWritePath, [jailRoot])).toThrow(/outside write jail/i);
   });
 
+  it("blocks a missing configured jail root beneath an escaping symlink ancestor", () => {
+    const fixture = createSymlinkFixture();
+    if (!fixture) {
+      return;
+    }
+
+    const jailRoot = path.join(fixture.jailRoot, "link-out", "missing-jail");
+    const attemptedWritePath = path.join(jailRoot, "verification", "proof.md");
+
+    expect(() => assertWritePathInJail(attemptedWritePath, [jailRoot])).toThrow(/outside write jail/i);
+  });
+
   it("blocks writes through symlink escape paths", () => {
     const fixture = createSymlinkFixture();
     if (!fixture) {

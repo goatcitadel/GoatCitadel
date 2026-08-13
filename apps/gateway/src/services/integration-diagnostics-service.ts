@@ -44,7 +44,12 @@ export interface IntegrationDiagnosticsPort {
   ): Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag"> | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
-  resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
+  resolveConnectionSecret(
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+    catalogId: string,
+  ): string | undefined;
 }
 
 export class IntegrationDiagnosticsService {
@@ -528,11 +533,11 @@ export async function runIntegrationConnectionLiveChecks(
     return { checks: [] };
   }
   const config = connection.config;
+  const resolveSecret = (directKey: string, envKey: string) =>
+    deps.resolveConnectionSecret(config, directKey, envKey, connection.catalogId);
   switch (connection.key) {
     case "slack": {
-      const token =
-        deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-        deps.resolveConnectionSecret(config, "token", "tokenEnv");
+      const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!token) {
         return {
           checks: [
@@ -559,9 +564,7 @@ export async function runIntegrationConnectionLiveChecks(
     case "discord":
       return runDiscordConnectionLiveChecks(deps, connection, options);
     case "telegram": {
-      const token =
-        deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-        deps.resolveConnectionSecret(config, "token", "tokenEnv");
+      const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!token) {
         return { checks: [] };
       }
@@ -583,7 +586,7 @@ export async function runIntegrationConnectionLiveChecks(
       return runNtfyLiveChecks({
         baseUrl,
         topic,
-        token: deps.resolveConnectionSecret(config, "token", "tokenEnv"),
+        token: resolveSecret("token", "tokenEnv"),
         priority: deps.readConnectionConfigValue(config, "priority"),
         dryRun: readBoolean(config.dryRun),
         includeSandboxSend: options.includeSandboxSend,
@@ -591,9 +594,7 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "whatsapp": {
-      const accessToken =
-        deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-        deps.resolveConnectionSecret(config, "token", "tokenEnv");
+      const accessToken = resolveSecret("accessToken", "accessTokenEnv") ?? resolveSecret("token", "tokenEnv");
       const phoneNumberId =
         deps.readConnectionConfigValue(config, "phoneNumberId") ?? deps.readConnectionConfigValue(config, "senderId");
       if (!accessToken || !phoneNumberId) {
@@ -641,9 +642,7 @@ export async function runIntegrationConnectionLiveChecks(
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     case "mattermost": {
-      const token =
-        deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-        deps.resolveConnectionSecret(config, "token", "tokenEnv");
+      const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       const serverUrl =
         deps.readConnectionConfigValue(config, "serverUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
       if (!token || !serverUrl) {
@@ -675,9 +674,7 @@ export async function runIntegrationConnectionLiveChecks(
         deps.readConnectionConfigValue(config, "bridgeUrl") ??
         deps.readConnectionConfigValue(config, "baseUrl") ??
         deps.readConnectionConfigValue(config, "serverUrl");
-      const password =
-        deps.resolveConnectionSecret(config, "password", "passwordEnv") ??
-        deps.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
+      const password = resolveSecret("password", "passwordEnv") ?? resolveSecret("apiPassword", "apiPasswordEnv");
       if (!bridgeUrl || !password) {
         return { checks: [] };
       }
@@ -693,9 +690,9 @@ export async function runIntegrationConnectionLiveChecks(
     }
     case "line": {
       const channelAccessToken =
-        deps.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv") ??
-        deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-        deps.resolveConnectionSecret(config, "token", "tokenEnv");
+        resolveSecret("channelAccessToken", "channelAccessTokenEnv") ??
+        resolveSecret("accessToken", "accessTokenEnv") ??
+        resolveSecret("token", "tokenEnv");
       if (!channelAccessToken) {
         return { checks: [] };
       }
@@ -707,9 +704,7 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "zalo": {
-      const accessToken =
-        deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-        deps.resolveConnectionSecret(config, "token", "tokenEnv");
+      const accessToken = resolveSecret("accessToken", "accessTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!accessToken) {
         return { checks: [] };
       }
@@ -730,7 +725,7 @@ export async function runIntegrationConnectionLiveChecks(
       }
       return runZaloUserBridgeLiveChecks({
         baseUrl,
-        authorizationHeader: resolveZaloUserConnectionAuthorizationHeader(deps, config),
+        authorizationHeader: resolveZaloUserConnectionAuthorizationHeader(deps, config, connection.catalogId),
         profile: deps.readConnectionConfigValue(config, "profile"),
         defaultTarget: resolveChannelConfigTarget(connection.key, config),
         includeSandboxSend: options.includeSandboxSend,
@@ -767,18 +762,19 @@ function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): 
 function resolveZaloUserConnectionAuthorizationHeader(
   deps: IntegrationDiagnosticsPort,
   config: Record<string, unknown>,
+  catalogId: string,
 ): string | undefined {
-  const explicit = deps.resolveConnectionSecret(config, "authorization", "authorizationEnv");
+  const explicit = deps.resolveConnectionSecret(config, "authorization", "authorizationEnv", catalogId);
   if (explicit) {
     return explicit;
   }
   const bearer =
-    deps.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
-    deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
+    deps.resolveConnectionSecret(config, "authToken", "authTokenEnv", catalogId) ??
+    deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv", catalogId);
   if (bearer) {
     return `Bearer ${bearer}`;
   }
-  const basic = deps.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv");
+  const basic = deps.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv", catalogId);
   if (basic) {
     return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
   }
@@ -804,8 +800,8 @@ async function runDiscordConnectionLiveChecks(
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const config = connection.config;
   const token =
-    deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-    deps.resolveConnectionSecret(config, "token", "tokenEnv");
+    deps.resolveConnectionSecret(config, "botToken", "botTokenEnv", connection.catalogId) ??
+    deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId);
   const runtimeMode = deps.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
   return runDiscordBotLiveChecks({
     token,

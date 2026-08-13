@@ -77,7 +77,12 @@ export interface IntegrationChannelPort {
       signal?: AbortSignal,
     ): Promise<ChannelTypingResult>;
   };
-  resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
+  resolveConnectionSecret(
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+    catalogId: string,
+  ): string | undefined;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
@@ -601,8 +606,8 @@ export async function emitTelegramTypingImpl(
   input: ChannelTypingInput,
 ): Promise<ChannelTypingResult> {
   const token =
-    deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv") ??
-    deps.resolveConnectionSecret(connection.config, "token", "tokenEnv");
+    deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId) ??
+    deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
   const chatId = input.target.trim() || resolveChannelConfigTarget("telegram", connection.config);
   if (!token) {
     return {

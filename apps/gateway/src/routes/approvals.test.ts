@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import { approvalsRoutes, resolveApprovalActorId } from "./approvals.js";
 
@@ -245,12 +246,13 @@ describe("approvals routes", () => {
     const createApproval = vi.fn(async () => rawApproval);
     const built = buildApp({ createApproval });
     app = built.app;
+    installCompanionIdentity(app);
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/approvals",
-      headers: { "idempotency-key": "approval-secret-projection-create" },
+      headers: { "idempotency-key": "approval-secret-projection-create", "x-auth-source": "loopback" },
       payload: {
         kind: rawApproval.kind,
         riskLevel: rawApproval.riskLevel,
@@ -359,9 +361,32 @@ describe("approvals routes", () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it("does not treat a raw loopback socket as approval-creation authority without authenticated loopback identity", async () => {
+    const createApproval = vi.fn();
+    const built = buildApp({ createApproval });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: { "idempotency-key": "approval-create-untrusted-loopback" },
+      payload: {
+        kind: "tool.invoke",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["Forwarded", { forwarded: "for=100.64.0.9;proto=https" }],
     ["empty X-Forwarded-For", { "x-forwarded-for": "" }],
+    ["X-Real-IP", { "x-real-ip": "100.64.0.9" }],
   ])("does not treat proxy-marked loopback approval creation as local: %s", async (_label, headers) => {
     const createApproval = vi.fn();
     const built = buildApp({
@@ -590,6 +615,50 @@ describe("approvals routes", () => {
       connectorId: "browser:mission-control",
     });
     expect(built.requireOperatorAuth).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized remote action tokens before service lookup", async () => {
+    const resolveApprovalWithRemoteToken = vi.fn();
+    const built = buildApp({ resolveApprovalWithRemoteToken });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/remote-resolve",
+      payload: { token: "x".repeat(4097), decision: "approve" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+  });
+
+  it("enforces the public remote-resolution limit even when a global allowlist would exempt the caller", async () => {
+    const resolveApprovalWithRemoteToken = vi.fn(async () => ({ approval: { approvalId: APPROVAL_ID } }));
+    const built = buildApp({ resolveApprovalWithRemoteToken });
+    app = built.app;
+    await app.register(rateLimit, {
+      global: false,
+      allowList: () => true,
+    });
+    await app.register(approvalsRoutes);
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/remote-resolve",
+        payload: { token: "grat_token", decision: "approve" },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/remote-resolve",
+      payload: { token: "grat_token", decision: "approve" },
+    });
+
+    expect(limited.statusCode).toBe(429);
+    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledTimes(20);
   });
 
   it("projects remote approval resolution responses while preserving internal executable truth", async () => {

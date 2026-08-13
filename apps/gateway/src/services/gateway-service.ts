@@ -1552,8 +1552,8 @@ export class GatewayService {
       fetchWithTimeout: async (url, init) => await this.fetchWithDiagnosticsTimeout(url, init),
       transcribeVoice: (input) => this.mediaVoiceService.transcribeVoice(input),
       isConnectionUrlAllowlisted: (urlValue) => this.isConnectionUrlAllowlisted(urlValue),
-      resolveConnectionSecret: (connectionConfig, directKey, envKey) =>
-        this.resolveConnectionSecret(connectionConfig, directKey, envKey),
+      resolveConnectionSecret: (connectionConfig, directKey, envKey, catalogId) =>
+        this.resolveConnectionSecret(connectionConfig, directKey, envKey, catalogId),
     });
     this.eventIngestService = new EventIngestService(this.storage);
     this.inboundChannelEventService = new InboundChannelEventService({
@@ -10863,6 +10863,7 @@ export class GatewayService {
     config: Record<string, unknown>,
     directKey: string,
     envKey: string,
+    catalogId?: string,
   ): string | undefined {
     const direct = this.readConnectionConfigValue(config, directKey);
     if (direct) {
@@ -10878,13 +10879,14 @@ export class GatewayService {
     // Matrix connection with `authTokenEnv: "OPENAI_API_KEY"` and then
     // trigger an action/diagnostic that sent `Authorization: Bearer
     // <OPENAI_API_KEY>` to an attacker-controlled URL. Until per-catalog
-    // schemas land (PR-3 follow-up), refuse env-var names known to hold
-    // LLM provider credentials or other broadly-scoped gateway secrets.
-    if (!isPermittedIntegrationSecretEnvVarName(envName)) {
-      log.warn("Refusing to resolve integration secret from forbidden env var name (codex finding #13/#23).", {
+    // schemas land (PR-3 follow-up), bind env-var names to the connection's
+    // catalog convention and refuse broadly-scoped gateway/infra secrets.
+    if (!isPermittedIntegrationSecretEnvVarName(envName, catalogId)) {
+      log.warn("Refusing to resolve integration secret from an unbound env var name (codex finding #13/#23).", {
         envName,
         directKey,
         envKey,
+        catalogId,
       });
       return undefined;
     }

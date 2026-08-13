@@ -160,7 +160,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         await markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
-        return reply.code(400).send({
+        const statusCode =
+          error && typeof error === "object" && "statusCode" in error && error.statusCode === 429 ? 429 : 400;
+        return reply.code(statusCode).send({
           error: (error as Error).message,
         });
       }

@@ -19,6 +19,8 @@ import { canonicalJsonString } from "@goatcitadel/contracts";
 /** Exporter label/length pinned by the Gateway listener; both sides must agree exactly. */
 export const WORKER_TLS_EXPORTER_LABEL = "EXPORTER-GoatCitadel-Remote-Worker-v1";
 export const WORKER_TLS_EXPORTER_BYTES = 32;
+export const WORKER_WIRE_MAX_RESPONSE_BYTES = 1024 * 1024;
+export const WORKER_WIRE_ABSOLUTE_TIMEOUT_MS = 45_000;
 
 export const WORKER_PROTOCOL_HEADERS = Object.freeze({
   authorization: "authorization",
@@ -119,6 +121,7 @@ export class WorkerWireClient {
   public async post(request: WorkerWireRequest): Promise<WorkerWireResponse> {
     return await new Promise<WorkerWireResponse>((resolve, reject) => {
       const chunks: Buffer[] = [];
+      let responseBytes = 0;
       let settled = false;
       const socket: TLSSocket = tlsConnect({
         host: this.material.host,
@@ -133,6 +136,7 @@ export class WorkerWireClient {
       const finish = (error?: Error): void => {
         if (settled) return;
         settled = true;
+        if (absoluteTimeout) clearTimeout(absoluteTimeout);
         socket.destroy();
         if (error !== undefined) {
           reject(error);
@@ -144,8 +148,18 @@ export class WorkerWireClient {
           reject(parseError instanceof Error ? parseError : new WorkerWireClientError(String(parseError)));
         }
       };
+      const absoluteTimeout = setTimeout(
+        () => finish(new WorkerWireClientError("Worker request exceeded its absolute deadline.")),
+        WORKER_WIRE_ABSOLUTE_TIMEOUT_MS,
+      );
       socket.setTimeout(30_000, () => finish(new WorkerWireClientError("Worker request timed out.")));
-      socket.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      socket.on("data", (chunk: Buffer) => {
+        try {
+          responseBytes = appendBoundedResponseChunk(chunks, chunk, responseBytes);
+        } catch (error) {
+          finish(error instanceof Error ? error : new WorkerWireClientError(String(error)));
+        }
+      });
       socket.once("end", () => finish());
       socket.once("close", () => finish());
       socket.once("error", (error) => finish(error));
@@ -249,6 +263,15 @@ function parseHttpResponse(response: Buffer): WorkerWireResponse {
   return Object.freeze({ status, body: Object.freeze(parsed as Record<string, unknown>) });
 }
 
+function appendBoundedResponseChunk(chunks: Buffer[], chunk: Buffer, currentBytes: number): number {
+  const nextBytes = currentBytes + chunk.byteLength;
+  if (!Number.isSafeInteger(nextBytes) || nextBytes > WORKER_WIRE_MAX_RESPONSE_BYTES) {
+    throw new WorkerWireClientError("Worker response exceeded the maximum allowed size.");
+  }
+  chunks.push(Buffer.from(chunk));
+  return nextBytes;
+}
+
 function randomNonce(): string {
   return randomBytes(32).toString("base64url");
 }
@@ -258,3 +281,8 @@ function sha256(value: Buffer | Uint8Array | string): string {
     .update(typeof value === "string" ? Buffer.from(value, "utf8") : value)
     .digest("hex");
 }
+
+export const __internal = {
+  appendBoundedResponseChunk,
+  parseHttpResponse,
+};

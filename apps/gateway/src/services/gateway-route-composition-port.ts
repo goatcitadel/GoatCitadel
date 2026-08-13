@@ -149,7 +149,7 @@ export interface GatewayRouteCompositionPort {
   commsActivity: RouteDependencyMethod<"comms", "commsActivity">;
   commsReply: RouteDependencyMethod<"comms", "commsReply">;
   commsSend: RouteDependencyMethod<"comms", "commsSend">;
-  createApproval: RouteDependencyMethod<"devVerification", "createApproval">;
+  createApproval: ApprovalRuntimeService["createApproval"];
   listCuratorStatus: RouteDependencyMethod<"curator", "listCuratorStatus">;
   archiveCuratorSkill: RouteDependencyMethod<"curator", "archiveCuratorSkill">;
   pruneCuratorSkill: RouteDependencyMethod<"curator", "pruneCuratorSkill">;

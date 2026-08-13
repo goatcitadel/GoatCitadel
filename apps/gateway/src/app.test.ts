@@ -286,6 +286,18 @@ describe("gateway app config helpers", () => {
         ips: ["127.0.0.1", "203.0.113.5"],
       }),
     ).toBe(false);
+    expect(
+      __internal.isLoopbackRateLimitAllowlisted("127.0.0.1", {
+        headers: { "x-real-ip": "" },
+        ips: [],
+      }),
+    ).toBe(false);
+    expect(
+      __internal.isLoopbackRateLimitAllowlisted("127.0.0.1", {
+        headers: { "x-forwarded-for": "" },
+        ips: [],
+      }),
+    ).toBe(false);
   });
 });
 

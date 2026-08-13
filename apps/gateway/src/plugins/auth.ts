@@ -179,8 +179,8 @@ export const authPlugin = fp(async (fastify) => {
 
     const remoteAddress = request.raw.socket.remoteAddress ?? request.ip;
     // SECURITY (codex finding #19): Treat a request as loopback only when
-    // it carries NO proxy provenance at all — neither `X-Forwarded-For` nor
-    // `Forwarded`. A reverse proxy that bridges remote clients to a
+    // it carries NO proxy provenance at all — neither `X-Forwarded-For`,
+    // `Forwarded`, nor `X-Real-IP`. A reverse proxy that bridges remote clients to a
     // 127.0.0.1-bound gateway can strip proxy headers (intentionally or by
     // misconfig), in which case `request.raw.socket.remoteAddress === 127.0.0.1`
     // and a remote attacker would otherwise satisfy `loopbackRequest`. We
@@ -193,31 +193,12 @@ export const authPlugin = fp(async (fastify) => {
     // a proxy boundary, even though `Boolean("") === false`.
     const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
     const hasProxyProvenance =
-      "x-forwarded-for" in request.headers || "forwarded" in request.headers || proxyHopCount > 1;
+      "x-forwarded-for" in request.headers ||
+      "forwarded" in request.headers ||
+      "x-real-ip" in request.headers ||
+      proxyHopCount > 1;
     const loopbackRequest = !hasProxyProvenance && isLoopbackAddress(remoteAddress);
     if (auth.allowLoopbackBypass && loopbackRequest) {
-      setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
-      return;
-    }
-
-    // The onboarding-recovery bypass is the only way for a fresh install
-    // (no token, no basic credentials yet) to authenticate the first
-    // operator without manual file edits. Keep it independent of
-    // `auth.allowLoopbackBypass` so first-run onboarding still works when
-    // the operator disables the broader loopback shortcut.
-    //
-    // SECURITY (codex finding #19): The reverse-proxy attack scenario the
-    // finding describes is already neutralised above by the much stricter
-    // `hasProxyProvenance` check — any request with `X-Forwarded-For`,
-    // `Forwarded`, or `request.ips.length > 1` is no longer treated as a
-    // loopback request, even if `request.raw.socket.remoteAddress` looks
-    // like 127.0.0.1.
-    if (
-      loopbackRequest &&
-      isOnboardingRecoveryRoute(request.url) &&
-      isAuthMisconfigured(auth) &&
-      !isOnboardingComplete(fastify)
-    ) {
       setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
       return;
     }
@@ -395,17 +376,6 @@ export const authPlugin = fp(async (fastify) => {
   });
 });
 
-function isOnboardingRecoveryRoute(url: string): boolean {
-  const pathname = url.split("?", 1)[0];
-  return (
-    pathname === "/api/v1/onboarding/startup" ||
-    pathname === "/api/v1/onboarding/state" ||
-    pathname === "/api/v1/onboarding/bootstrap" ||
-    pathname === "/api/v1/auth/plan" ||
-    pathname === "/api/v1/auth/install-token"
-  );
-}
-
 function getSseTokenScopeForPath(url: string): "events:stream" | "dev:diagnostics:stream" | null {
   const pathname = url.split("?", 1)[0];
   if (pathname === "/api/v1/events/stream") {
@@ -415,33 +385,6 @@ function getSseTokenScopeForPath(url: string): "events:stream" | "dev:diagnostic
     return "dev:diagnostics:stream";
   }
   return null;
-}
-
-function isAuthMisconfigured(auth: {
-  mode: "none" | "token" | "basic";
-  token: { value?: string };
-  basic: { username?: string; password?: string };
-}): boolean {
-  if (auth.mode === "token") {
-    return !auth.token.value?.trim();
-  }
-  if (auth.mode === "basic") {
-    return !auth.basic.username?.trim() || !auth.basic.password?.trim();
-  }
-  return false;
-}
-
-function isOnboardingComplete(fastify: FastifyInstance): boolean {
-  try {
-    return Boolean(fastify.gatewayAuth.getOnboardingStartupState().completed);
-  } catch (error) {
-    // Safe default: "complete" disables the onboarding recovery bypass and keeps auth enforced.
-    fastify.log.warn(
-      { err: error },
-      "Failed to inspect onboarding startup state; treating onboarding as complete to keep auth restrictive.",
-    );
-    return true;
-  }
 }
 
 function hasOperatorControlPlaneAccess(fastify: FastifyInstance, source: FastifyRequest["authActorSource"]): boolean {

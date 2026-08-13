@@ -65,6 +65,40 @@ export function verifyWhatsAppWebhookSignature(
   return timingSafeStringEqual(expected, signature);
 }
 
+export type WhatsAppWebhookConnectionBindingResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "missing_connection_identity" | "missing_payload_identity" | "identity_mismatch";
+    };
+
+export function verifyWhatsAppWebhookConnectionBinding(input: {
+  payload: unknown;
+  expectedPhoneNumberId?: string;
+}): WhatsAppWebhookConnectionBindingResult {
+  const expectedPhoneNumberId = input.expectedPhoneNumberId?.trim();
+  if (!expectedPhoneNumberId) {
+    return { ok: false, reason: "missing_connection_identity" };
+  }
+  const root = asRecord(input.payload);
+  for (const entry of records(asArray(root.entry))) {
+    for (const change of records(asArray(entry.changes))) {
+      const value = asRecord(change.value);
+      if (asArray(value.messages).length === 0) {
+        continue;
+      }
+      const phoneNumberId = asString(asRecord(value.metadata).phone_number_id);
+      if (!phoneNumberId) {
+        return { ok: false, reason: "missing_payload_identity" };
+      }
+      if (phoneNumberId !== expectedPhoneNumberId) {
+        return { ok: false, reason: "identity_mismatch" };
+      }
+    }
+  }
+  return { ok: true };
+}
+
 export function deriveWhatsAppWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
   const messageId = firstMessageId(payload);
   if (messageId) {

@@ -35,7 +35,7 @@ export async function invokeActivepiecesRunStatusAction(
       "activepieces_api_base_url_missing",
     );
   }
-  const apiToken = host.resolveConnectionSecret(connection.config, "apiToken", "apiTokenEnv");
+  const apiToken = host.resolveConnectionSecret(connection.config, "apiToken", "apiTokenEnv", connection.catalogId);
   if (!apiToken) {
     return blocked(
       connection,

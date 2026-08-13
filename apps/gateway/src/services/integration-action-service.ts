@@ -50,7 +50,12 @@ export interface IntegrationActionHost {
   } & IntegrationDryRunApprovalStores;
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
-  resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
+  resolveConnectionSecret(
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+    catalogId: string,
+  ): string | undefined;
   publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): Promise<unknown>;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   mutationStore?: MutationIdempotencyStore;
@@ -175,7 +180,7 @@ async function invokeLocalBridgeAction(
       "bridge_url_missing",
     );
   }
-  const authHeader = resolveBearerAuth(host, connection.config);
+  const authHeader = resolveBearerAuth(host, connection);
   const candidates = buildLocalBridgeActionTargets(
     bridgeUrl,
     host.readConnectionConfigValue(connection.config, "actionRoute"),
@@ -380,7 +385,7 @@ export function buildActivepiecesTriggerWebhookRunInput(
     };
   }
   const target = parseHttpUrl(webhookUrl, "Activepieces webhook URL");
-  const authHeader = resolveBearerAuth(host, connection.config);
+  const authHeader = resolveBearerAuth(host, connection);
   const { checkedAt, flowId, payload, idempotencyKey, actorScope } = options;
   return {
     target,
@@ -497,8 +502,8 @@ async function invokeTrelloAction(
   checkedAt: string,
   ward?: IntegrationWardContext,
 ): Promise<IntegrationActionInvokeResult> {
-  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv");
-  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv");
+  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv", connection.catalogId);
+  const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
   if (!apiKey || !token) {
     return blocked(
       connection,
@@ -510,7 +515,7 @@ async function invokeTrelloAction(
   }
 
   if (actionId === "read") {
-    const url = new URL("/1/members/me/boards", resolveTrelloApiBaseUrl());
+    const url = new URL("/1/members/me/boards", trelloApiBaseUrl());
     url.searchParams.set("fields", "name,url,closed");
     url.searchParams.set("key", apiKey);
     url.searchParams.set("token", token);
@@ -551,7 +556,7 @@ async function invokeTrelloAction(
         "trello_list_missing",
       );
     }
-    const url = new URL("/1/cards", resolveTrelloApiBaseUrl());
+    const url = new URL("/1/cards", trelloApiBaseUrl());
     url.searchParams.set("key", apiKey);
     url.searchParams.set("token", token);
     url.searchParams.set("idList", listId);
@@ -633,7 +638,7 @@ async function invokeGmailAction(
   checkedAt: string,
   ward?: IntegrationWardContext,
 ): Promise<IntegrationActionInvokeResult> {
-  const token = host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv");
+  const token = host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId);
   if (!token) {
     return blocked(
       connection,
@@ -645,7 +650,7 @@ async function invokeGmailAction(
   }
 
   if (actionId === "read") {
-    const url = new URL("/gmail/v1/users/me/messages", resolveGmailApiBaseUrl());
+    const url = new URL("/gmail/v1/users/me/messages", gmailApiBaseUrl());
     const query = readStringInput(request.input, "query");
     if (query) {
       url.searchParams.set("q", query);
@@ -699,7 +704,7 @@ async function invokeGmailAction(
       "",
       bodyText,
     ].join("\r\n");
-    const gmailSendUrl = new URL("/gmail/v1/users/me/messages/send", resolveGmailApiBaseUrl()).toString();
+    const gmailSendUrl = new URL("/gmail/v1/users/me/messages/send", gmailApiBaseUrl()).toString();
     const replayRun = await runWardGatedExternalSideEffect(
       host,
       ward,
@@ -981,11 +986,11 @@ function sanitizeReturnedWorkflowUrl(value: string | undefined): string | undefi
   }
 }
 
-function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {
+function resolveBearerAuth(host: IntegrationActionHost, connection: IntegrationConnection): string | undefined {
   const token =
-    host.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
-    host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-    host.resolveConnectionSecret(config, "token", "tokenEnv");
+    host.resolveConnectionSecret(connection.config, "authToken", "authTokenEnv", connection.catalogId) ??
+    host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId) ??
+    host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
   return token ? `Bearer ${token}` : undefined;
 }
 
@@ -1058,13 +1063,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function resolveTrelloApiBaseUrl(): string {
-  return resolveApiBaseUrl("GOATCITADEL_TRELLO_API_BASE_URL", "https://api.trello.com");
-}
+const trelloApiBaseUrl = () => resolveApiBaseUrl("GOATCITADEL_TRELLO_API_BASE_URL", "https://api.trello.com");
 
-function resolveGmailApiBaseUrl(): string {
-  return resolveApiBaseUrl("GOATCITADEL_GMAIL_API_BASE_URL", "https://gmail.googleapis.com");
-}
+const gmailApiBaseUrl = () => resolveApiBaseUrl("GOATCITADEL_GMAIL_API_BASE_URL", "https://gmail.googleapis.com");
 
 function resolveApiBaseUrl(envKey: string, fallback: string): string {
   const override = process.env[envKey]?.trim();

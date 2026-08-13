@@ -84,6 +84,9 @@ describe("files routes additional coverage", () => {
     expect(raw.statusCode).toBe(200);
     expect(raw.headers["content-type"]).toContain("text/plain");
     expect(raw.headers["content-length"]).toBe("4");
+    expect(raw.headers["content-disposition"]).toBeUndefined();
+    expect(raw.headers["x-content-type-options"]).toBe("nosniff");
+    expect(raw.headers["content-security-policy"]).toContain("script-src 'none'");
     expect(raw.body).toBe("raw!");
   });
 

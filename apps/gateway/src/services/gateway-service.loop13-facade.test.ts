@@ -1554,6 +1554,7 @@ describe("GatewayService Loop 13 workspace and runtime helpers", () => {
         { tokenEnv: " LOOP13_SECRET " },
         "token",
         "tokenEnv",
+        "test.loop13",
       ),
     ).toBe("resolved-secret");
     expect(

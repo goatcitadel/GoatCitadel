@@ -93,7 +93,12 @@ import {
   type CapabilityLifecycleApprovalBindingV1,
   type SkillGovernanceSystemAuthority,
 } from "./skill-governance-journey-producer.js";
-import type { CapabilityRuntimeConfig, CodeModeDockerBackendConfig, FeatureFlagsConfig } from "../config.js";
+import type {
+  CapabilityRuntimeConfig,
+  CodeModeAiderAdapterConfig,
+  CodeModeDockerBackendConfig,
+  FeatureFlagsConfig,
+} from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
 import {
@@ -106,6 +111,8 @@ import {
   buildCodeModeExecutionBackends,
   buildCodeModeRunExecutionBackendRef,
 } from "./code-mode-execution-backends.js";
+import { CODE_MODE_AIDER_DEFAULT_COMMAND } from "./code-mode-aider-adapter-plan.js";
+import { CODE_MODE_DOCKER_DEFAULT_COMMAND, isDigestPinnedImageRef } from "./code-mode-docker-launch.js";
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
@@ -128,6 +135,20 @@ const CODE_MODE_RECOVERY_ERRORS_MAX_ENTRIES = 32;
 const CODE_MODE_RECOVERY_ERRORS_TOTAL_LIMIT_BYTES = 24 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
+
+interface FrozenCodeModeAiderExecution {
+  version: 1;
+  aiderAdapter: {
+    enabled: true;
+    image: string;
+    command: string;
+    model?: string;
+  };
+  dockerBackend: {
+    enabled: true;
+    dockerCommand: string;
+  };
+}
 const CODE_MODE_ENV_PASSTHROUGH_KEYS = [
   "SystemRoot",
   "SYSTEMROOT",
@@ -1643,7 +1664,6 @@ export class CapabilitySystemService {
     const wrapperManifestHash = sha256Text(JSON.stringify(wrapperManifest));
     const runId = `code-run-${randomUUID()}`;
     const runInput = request.input ?? {};
-    const runInputHash = sha256Text(JSON.stringify(runInput));
     const sandbox = this.resolveCurrentSandboxMetadata();
     let executionBackend: CodeModeRunExecutionBackendRef;
     try {
@@ -1660,6 +1680,20 @@ export class CapabilitySystemService {
     if (executionBackend.backendId === CODE_MODE_AIDER_ADAPTER_ID && !request.aider?.requestMarkdown?.trim()) {
       throw new ValidationError({ message: "Aider Code Mode runs require aider.requestMarkdown." });
     }
+    const normalizedAiderRequest =
+      executionBackend.backendId === CODE_MODE_AIDER_ADAPTER_ID ? readPendingAiderRunRequest(request.aider) : undefined;
+    let frozenAiderExecution: FrozenCodeModeAiderExecution | undefined;
+    if (normalizedAiderRequest) {
+      try {
+        frozenAiderExecution = buildFrozenCodeModeAiderExecution(
+          this.options.runtimeConfig.codeModeAiderAdapter,
+          this.options.runtimeConfig.codeModeDockerBackend,
+        );
+      } catch (error) {
+        throw new ValidationError({ message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const runInputHash = hashCodeModeInputBinding(runInput, normalizedAiderRequest, frozenAiderExecution);
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
@@ -1720,6 +1754,8 @@ export class CapabilitySystemService {
       codeModePermissionContext: serializePolicyContext(policyContext),
       codeModeInput: runInput,
       codeModeInputHash: runInputHash,
+      ...(normalizedAiderRequest ? { codeModeAiderRequest: normalizedAiderRequest } : {}),
+      ...(frozenAiderExecution ? { codeModeAiderExecution: frozenAiderExecution } : {}),
       codeModeAutonomousActivation: autonomousActivation,
     };
     const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
@@ -1764,6 +1800,8 @@ export class CapabilitySystemService {
       permissionProfileLabel: policyContext?.permissionProfile?.label,
       localOperatorOverrideId: policyContext?.localOperatorOverrideId,
       executionBackend,
+      aiderRequest: normalizedAiderRequest,
+      aiderExecution: frozenAiderExecution,
       autonomousActivation,
     });
     const approvalLinkage = buildCodeModeApprovalLinkage({
@@ -1919,7 +1957,7 @@ export class CapabilitySystemService {
         request: {
           runId: stored.runId,
           input: runInput,
-          aider: request.aider,
+          aider: normalizedAiderRequest,
           originSurface,
           workspaceId,
           operatorId: request.operatorId,
@@ -2505,7 +2543,14 @@ export class CapabilitySystemService {
         localOperatorOverrideId: finalRun.localOperatorOverrideId,
       });
       assertLiveCodeModePolicyContextMatchesStoredRun(finalRun, livePolicyContext);
-      const runInput = readFrozenCodeModeInput(policySnapshot, pending.request.input, finalRun.codeModeInputHash);
+      const inputBinding = readFrozenCodeModeInputBinding(
+        policySnapshot,
+        pending.request.input,
+        pending.request.aider,
+        finalRun.codeModeInputHash,
+        finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID,
+      );
+      const runInput = inputBinding.input;
       const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
       const compiledSource = transpileGuestSource(finalRun.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
@@ -2550,7 +2595,8 @@ export class CapabilitySystemService {
               executionBackend: finalRun.executionBackend,
               language: finalRun.language,
               source,
-              pendingAiderRequest: pending.request.aider,
+              pendingAiderRequest: inputBinding.aiderRequest,
+              frozenAiderExecution: inputBinding.aiderExecution,
               beforeExecutionDispatch,
               onExecutionDispatchFailed,
               signal,
@@ -3709,6 +3755,7 @@ export class CapabilitySystemService {
     language: CodeModeLanguage;
     source: string;
     pendingAiderRequest: unknown;
+    frozenAiderExecution?: FrozenCodeModeAiderExecution;
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -3723,14 +3770,43 @@ export class CapabilitySystemService {
     stderr: BoundedCaptureState;
   }> {
     const aider = readPendingAiderRunRequest(input.pendingAiderRequest);
+    const frozenAiderExecution = input.frozenAiderExecution;
+    if (!frozenAiderExecution) {
+      throw new ConflictError({
+        message: "Code Mode Aider execution snapshot is missing; re-approval is required before execution.",
+      });
+    }
+    let currentAiderExecution: FrozenCodeModeAiderExecution;
+    try {
+      currentAiderExecution = buildFrozenCodeModeAiderExecution(
+        this.options.runtimeConfig.codeModeAiderAdapter,
+        this.options.runtimeConfig.codeModeDockerBackend,
+      );
+    } catch (error) {
+      throw new ConflictError({
+        message: `Code Mode Aider execution configuration is no longer valid: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
+    if (canonicalJsonString(currentAiderExecution) !== canonicalJsonString(frozenAiderExecution)) {
+      throw new ConflictError({
+        message: "Code Mode Aider execution configuration changed after approval; re-approval is required.",
+      });
+    }
     const runTempRoot = path.join(this.tempRoot, input.runId);
+    const frozenDockerBackend: CodeModeDockerBackendConfig = {
+      ...frozenAiderExecution.dockerBackend,
+      requireDigestPin: false,
+    };
+    const frozenAiderAdapter: CodeModeAiderAdapterConfig = { ...frozenAiderExecution.aiderAdapter };
     const backendRunner = createCodeModeExecutionBackendRunner({
       sandbox: input.sandbox,
       sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
       executionBackend: input.executionBackend,
-      dockerLaunch: buildCodeModeDockerLaunchOptions(this.options.runtimeConfig.codeModeDockerBackend),
-      dockerBackendConfig: this.options.runtimeConfig.codeModeDockerBackend,
-      aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
+      dockerLaunch: buildCodeModeDockerLaunchOptions(frozenDockerBackend),
+      dockerBackendConfig: frozenDockerBackend,
+      aiderAdapter: frozenAiderAdapter,
     });
     if (backendRunner.mode !== "aider_audit" || !backendRunner.executeAiderAdapter) {
       throw new Error("Selected Code Mode backend does not support Aider adapter execution.");
@@ -5545,22 +5621,114 @@ function sameSandboxCheckList(left: readonly string[], right: readonly string[])
   return left.every((value, index) => value === right[index]);
 }
 
-function readFrozenCodeModeInput(
+function readFrozenCodeModeInputBinding(
   policySnapshot: Record<string, unknown>,
   legacyPendingInput: unknown,
+  _legacyPendingAiderRequest: unknown,
   expectedInputHash?: string,
-): Record<string, unknown> {
+  requireFrozenAiderRequest = false,
+): {
+  input: Record<string, unknown>;
+  aiderRequest?: ReturnType<typeof readPendingAiderRunRequest>;
+  aiderExecution?: FrozenCodeModeAiderExecution;
+} {
   const frozenInput = isRecord(policySnapshot.codeModeInput) ? policySnapshot.codeModeInput : undefined;
   const runInput = frozenInput ?? (isRecord(legacyPendingInput) ? legacyPendingInput : {});
+  const hasFrozenAiderRequest = Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderRequest");
+  if (requireFrozenAiderRequest && !hasFrozenAiderRequest) {
+    throw new ConflictError({
+      message: "Code Mode Aider request snapshot is missing; re-approval is required before execution.",
+    });
+  }
+  const aiderRequest = hasFrozenAiderRequest
+    ? readPendingAiderRunRequest(policySnapshot.codeModeAiderRequest)
+    : undefined;
+  const hasFrozenAiderExecution = Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderExecution");
+  if (requireFrozenAiderRequest && !hasFrozenAiderExecution) {
+    throw new ConflictError({
+      message: "Code Mode Aider execution snapshot is missing; re-approval is required before execution.",
+    });
+  }
+  const aiderExecution = hasFrozenAiderExecution
+    ? readFrozenCodeModeAiderExecution(policySnapshot.codeModeAiderExecution)
+    : undefined;
   const inputHash = asOptionalString(policySnapshot.codeModeInputHash);
-  const computedInputHash = sha256Text(JSON.stringify(runInput));
+  const computedInputHash = hashCodeModeInputBinding(
+    runInput,
+    hasFrozenAiderRequest ? aiderRequest : undefined,
+    hasFrozenAiderExecution ? aiderExecution : undefined,
+  );
   if (inputHash && computedInputHash !== inputHash) {
     throw new ConflictError({ message: "Code Mode input snapshot hash mismatch; refusing to execute run." });
   }
   if (expectedInputHash && computedInputHash !== expectedInputHash) {
     throw new ConflictError({ message: "Code Mode stored input hash mismatch; refusing to execute run." });
   }
-  return runInput;
+  return { input: runInput, aiderRequest, aiderExecution };
+}
+
+function hashCodeModeInputBinding(
+  input: Record<string, unknown>,
+  aiderRequest?: ReturnType<typeof readPendingAiderRunRequest>,
+  aiderExecution?: FrozenCodeModeAiderExecution,
+): string {
+  return sha256Text(JSON.stringify(aiderRequest ? { input, aiderRequest, aiderExecution } : input));
+}
+
+function buildFrozenCodeModeAiderExecution(
+  aiderAdapter: CodeModeAiderAdapterConfig,
+  dockerBackend: CodeModeDockerBackendConfig,
+): FrozenCodeModeAiderExecution {
+  const aiderImage = aiderAdapter.image?.trim();
+  if (!aiderAdapter.enabled || !aiderImage) {
+    throw new Error("Aider execution requires an enabled adapter and configured image.");
+  }
+  if (!dockerBackend.enabled) {
+    throw new Error("Aider execution requires an enabled Docker backend.");
+  }
+  if (!isDigestPinnedImageRef(aiderImage)) {
+    throw new Error("Aider adapter image must be pinned by digest (name@sha256:...).");
+  }
+  return {
+    version: 1,
+    aiderAdapter: {
+      enabled: true,
+      image: aiderImage,
+      command: aiderAdapter.command?.trim() || CODE_MODE_AIDER_DEFAULT_COMMAND,
+      ...(aiderAdapter.model?.trim() ? { model: aiderAdapter.model.trim() } : {}),
+    },
+    dockerBackend: {
+      enabled: true,
+      dockerCommand: dockerBackend.dockerCommand?.trim() || CODE_MODE_DOCKER_DEFAULT_COMMAND,
+    },
+  };
+}
+
+function readFrozenCodeModeAiderExecution(value: unknown): FrozenCodeModeAiderExecution {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.aiderAdapter) || !isRecord(value.dockerBackend)) {
+    throw new ConflictError({ message: "Code Mode Aider execution snapshot is invalid; refusing to execute run." });
+  }
+  const aiderAdapter = value.aiderAdapter;
+  const dockerBackend = value.dockerBackend;
+  try {
+    return buildFrozenCodeModeAiderExecution(
+      {
+        enabled: aiderAdapter.enabled === true,
+        image: asOptionalString(aiderAdapter.image),
+        command: asOptionalString(aiderAdapter.command),
+        model: asOptionalString(aiderAdapter.model),
+      },
+      {
+        enabled: dockerBackend.enabled === true,
+        dockerCommand: asOptionalString(dockerBackend.dockerCommand),
+        requireDigestPin: false,
+      },
+    );
+  } catch (error) {
+    throw new ConflictError({
+      message: `Code Mode Aider execution snapshot is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
 }
 
 function buildCodeModeWrapperPolicyContext(
@@ -5780,6 +5948,12 @@ function buildCodeModeApprovalPayload(input: {
   originSurface?: CodeModeOriginSurface;
   sandbox: CodeModeSandboxMetadata;
   executionBackend: CodeModeRunExecutionBackendRef;
+  aiderRequest?: {
+    requestMarkdown: string;
+    repositoryRootRelPath?: string;
+    model?: string;
+  };
+  aiderExecution?: FrozenCodeModeAiderExecution;
   autonomousActivation?: CodeModeAutonomousActivationEvidence;
   permissionProfileId?: string;
   permissionProfileLabel?: string;
@@ -5805,6 +5979,8 @@ function buildCodeModeApprovalPayload(input: {
     saveCandidateOnSuccess: input.saveCandidateOnSuccess,
     sandbox: input.sandbox,
     executionBackend: input.executionBackend,
+    aiderRequest: input.aiderRequest,
+    aiderExecution: input.aiderExecution,
     autonomousActivation: input.autonomousActivation,
     permissionProfileId: input.permissionProfileId,
     permissionProfileLabel: input.permissionProfileLabel,
@@ -6459,6 +6635,7 @@ export const __internal = {
   createCodeModeChildStreamError,
   normalizeCodeModeIpcError,
   buildCodeModeFinalTranscriptContent,
+  readFrozenCodeModeInputBinding,
   // Exposed for tests asserting the single execution chokepoint: a self-authored
   // skill must be non-callable while `candidate` and callable only once a
   // governed activation flips it to `approved`/`trusted`.

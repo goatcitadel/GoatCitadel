@@ -121,12 +121,19 @@ describe("auth loopback recovery hardening (codex #19)", () => {
     }
   });
 
-  // The fresh-install onboarding flow still has to work when
-  // allowLoopbackBypass is false — operators do not have to flip that
-  // flag just to install their first token. The codex #19 attack is
-  // closed by the proxy-header check below, not by an extra flag.
-  it("permits the recovery bypass on clean loopback when allowLoopbackBypass is false", async () => {
+  it("rejects socket-derived recovery when allowLoopbackBypass is false", async () => {
     app = await buildApp({ allowLoopbackBypass: false });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/install-token",
+      remoteAddress: "127.0.0.1",
+      payload: { generateWhenMissing: true },
+    });
+    expect(response.statusCode).toBe(503);
+  });
+
+  it("permits explicit loopback recovery when allowLoopbackBypass is true", async () => {
+    app = await buildApp({ allowLoopbackBypass: true });
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/auth/install-token",
@@ -138,7 +145,7 @@ describe("auth loopback recovery hardening (codex #19)", () => {
   });
 
   it("rejects the recovery bypass when X-Forwarded-For is present (even empty)", async () => {
-    app = await buildApp({ allowLoopbackBypass: false });
+    app = await buildApp({ allowLoopbackBypass: true });
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/auth/install-token",
@@ -150,12 +157,24 @@ describe("auth loopback recovery hardening (codex #19)", () => {
   });
 
   it("rejects the recovery bypass when the Forwarded header is present", async () => {
-    app = await buildApp({ allowLoopbackBypass: false });
+    app = await buildApp({ allowLoopbackBypass: true });
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/auth/install-token",
       remoteAddress: "127.0.0.1",
       headers: { forwarded: "for=192.0.2.1" },
+      payload: { generateWhenMissing: true },
+    });
+    expect(response.statusCode).toBe(503);
+  });
+
+  it("rejects the recovery bypass when X-Real-IP is present (even empty)", async () => {
+    app = await buildApp({ allowLoopbackBypass: true });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/install-token",
+      remoteAddress: "127.0.0.1",
+      headers: { "x-real-ip": "" },
       payload: { generateWhenMissing: true },
     });
     expect(response.statusCode).toBe(503);
@@ -169,6 +188,18 @@ describe("auth loopback recovery hardening (codex #19)", () => {
       url: "/protected",
       remoteAddress: "127.0.0.1",
       headers: { "x-forwarded-for": "203.0.113.5" },
+    });
+    expect([401, 503]).toContain(response.statusCode);
+  });
+
+  it("rejects the loopback bypass on /protected when X-Real-IP is present", async () => {
+    app = await buildApp({ allowLoopbackBypass: true });
+    app.get("/protected", async (request) => ({ ok: true, source: request.authActorSource }));
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      remoteAddress: "127.0.0.1",
+      headers: { "x-real-ip": "203.0.113.5" },
     });
     expect([401, 503]).toContain(response.statusCode);
   });

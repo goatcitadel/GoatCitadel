@@ -20,6 +20,7 @@ import {
 } from "@goatcitadel/contracts";
 import {
   createDeviceAccessRequest,
+  DEVICE_ACCESS_PENDING_REQUEST_LIMIT,
   expireDeviceAccessRequestIfNeeded,
   expirePendingDeviceAccessRequests,
   exchangeCompanionSessionFromDeviceGrant,
@@ -53,10 +54,13 @@ import {
   COMPANION_ACCESS_TOKEN_TTL_MS,
   COMPANION_REFRESH_TOKEN_TTL_MS,
   COMPANION_REQUEST_CLOCK_SKEW_MS,
+  DEVICE_ACCESS_APPROVAL_KIND,
   DEVICE_ACCESS_REQUEST_TTL_MS,
   DEVICE_ACCESS_TOKEN_TTL_MS,
 } from "./device-access-helpers.js";
 import { DeviceTokenVault } from "./device-token-vault.js";
+import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
+import type { ApprovalObservabilityEffectInput } from "./approval-resolution-effects-service.js";
 import {
   preserveSettingsSecretsForPublicUpdate,
   projectProviderRuntimePublicValue,
@@ -264,6 +268,23 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
   const realtimeEvents: AuthHarness["realtimeEvents"] = [];
   const deviceTokenVault = new DeviceTokenVault();
   const asyncStorage = createLocalAsyncStorage(storage);
+  const recordObservabilityEffects = (items: readonly ApprovalObservabilityEffectInput[]) => {
+    for (const item of items) {
+      if (item.delivery.kind === "audit") {
+        auditRecords.push({
+          timestamp: new Date().toISOString(),
+          ...item.delivery.payload,
+        });
+      } else {
+        realtimeEvents.push({
+          eventType: item.delivery.eventType,
+          source: item.delivery.source,
+          payload: item.delivery.payload,
+          options: item.delivery.options as Record<string, unknown> | undefined,
+        });
+      }
+    }
+  };
   const deps: SettingsAuthRuntimeDependencies = {
     config: {
       assistant: {
@@ -289,30 +310,22 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
         list: vi.fn(async () => [...auditRecords]),
       },
     } as never,
-    createApproval: vi.fn(async (input: ApprovalCreateInput) => {
-      const approval = await asyncStorage.approvals.create(input);
-      return { approvalId: approval.approvalId };
+    createApproval: vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => {
+      return await asyncStorage.runImmediateTransaction(async () => {
+        const approval = await asyncStorage.approvals.create(input);
+        const extension = await onCreated?.(approval);
+        if (Array.isArray(extension)) {
+          recordObservabilityEffects(extension);
+        }
+        return { approvalId: approval.approvalId };
+      });
     }),
     resolveApproval: vi.fn(async (approvalId: string, input: ApprovalResolveInput) =>
       asyncStorage.approvals.resolve(approvalId, input),
     ),
     enqueueApprovalResolutionEffects: vi.fn(() => []),
     enqueueApprovalObservabilityEffects: vi.fn((_approvalId, items) => {
-      for (const item of items) {
-        if (item.delivery.kind === "audit") {
-          auditRecords.push({
-            timestamp: new Date().toISOString(),
-            ...item.delivery.payload,
-          });
-        } else {
-          realtimeEvents.push({
-            eventType: item.delivery.eventType,
-            source: item.delivery.source,
-            payload: item.delivery.payload,
-            options: item.delivery.options as Record<string, unknown> | undefined,
-          });
-        }
-      }
+      recordObservabilityEffects(items);
       return [];
     }),
     listApprovalEffects: vi.fn(() => []),
@@ -1652,6 +1665,53 @@ describe("settings-auth-service device access lifecycle", () => {
     },
   );
 
+  it("atomically caps pending public device requests and frees capacity after expiry", async () => {
+    const harness = buildAuthHarness();
+    const attempts = await Promise.allSettled(
+      Array.from({ length: DEVICE_ACCESS_PENDING_REQUEST_LIMIT + 5 }, (_, index) =>
+        createDeviceAccessRequest(
+          harness.deps,
+          { deviceType: "browser", deviceLabel: `Browser ${index}` },
+          { requestedIp: `203.0.113.${index + 1}` },
+        ),
+      ),
+    );
+    const fulfilled = attempts.filter((attempt) => attempt.status === "fulfilled");
+    const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+
+    expect(fulfilled).toHaveLength(DEVICE_ACCESS_PENDING_REQUEST_LIMIT);
+    expect(rejected).toHaveLength(5);
+    for (const attempt of rejected) {
+      expect(attempt.reason).toMatchObject({ name: "DeviceAccessRequestCapacityError", statusCode: 429 });
+    }
+    expect(
+      harness.storage.gatewaySql.prepare("SELECT COUNT(*) AS count FROM auth_device_requests").get<{ count: number }>()
+        ?.count,
+    ).toBe(DEVICE_ACCESS_PENDING_REQUEST_LIMIT);
+    expect(
+      harness.storage.gatewaySql
+        .prepare("SELECT COUNT(*) AS count FROM approvals WHERE kind = @kind")
+        .get<{ count: number }>({ kind: DEVICE_ACCESS_APPROVAL_KIND })?.count,
+    ).toBe(DEVICE_ACCESS_PENDING_REQUEST_LIMIT);
+    expect(harness.auditRecords.filter((record) => record.event === "auth.device_request.create")).toHaveLength(
+      DEVICE_ACCESS_PENDING_REQUEST_LIMIT,
+    );
+    expect(harness.realtimeEvents.filter((event) => event.eventType === "auth_device_request_created")).toHaveLength(
+      DEVICE_ACCESS_PENDING_REQUEST_LIMIT,
+    );
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt")
+      .run({ expiresAt: "2000-01-01T00:00:00.000Z" });
+    await expect(
+      createDeviceAccessRequest(
+        harness.deps,
+        { deviceType: "browser", deviceLabel: "Replacement browser" },
+        { requestedIp: "203.0.113.250" },
+      ),
+    ).resolves.toMatchObject({ status: "pending" });
+  });
+
   it.each(["2099-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"])(
     "issues device grants and secure handoff TTLs from database time under a %s host clock",
     async (hostClock) => {
@@ -1964,12 +2024,16 @@ describe("settings-auth-service device access lifecycle", () => {
       "sqlite write failed",
     );
 
-    const approvalId = vi.mocked(harness.deps.createApproval).mock.results[0]?.value
-      ? (await vi.mocked(harness.deps.createApproval).mock.results[0].value).approvalId
-      : undefined;
-    expect(approvalId).toBeDefined();
     expect(vi.mocked(harness.deps.resolveApproval)).not.toHaveBeenCalled();
-    expect(harness.storage.approvals.get(approvalId!).status).toBe("rejected");
+    expect(
+      harness.storage.gatewaySql.prepare("SELECT COUNT(*) AS count FROM auth_device_requests").get<{ count: number }>()
+        ?.count,
+    ).toBe(0);
+    expect(
+      harness.storage.gatewaySql
+        .prepare("SELECT COUNT(*) AS count FROM approvals WHERE kind = @kind")
+        .get<{ count: number }>({ kind: DEVICE_ACCESS_APPROVAL_KIND })?.count,
+    ).toBe(0);
     expect(harness.auditRecords.map((record) => record.event)).not.toContain("auth.device_request.create");
   });
 
@@ -2169,8 +2233,16 @@ describe("settings-auth-service device access lifecycle", () => {
     await expect(createDeviceAccessRequest(cleanupHarness.deps, { deviceType: "desktop" }, {})).rejects.toThrow(
       "sqlite write failed",
     );
-    const cleanupApprovalId = (await vi.mocked(cleanupHarness.deps.createApproval).mock.results[0]!.value).approvalId;
-    expect(cleanupHarness.storage.approvals.get(cleanupApprovalId).status).toBe("rejected");
+    expect(
+      cleanupHarness.storage.gatewaySql
+        .prepare("SELECT COUNT(*) AS count FROM auth_device_requests")
+        .get<{ count: number }>()?.count,
+    ).toBe(0);
+    expect(
+      cleanupHarness.storage.gatewaySql
+        .prepare("SELECT COUNT(*) AS count FROM approvals WHERE kind = @kind")
+        .get<{ count: number }>({ kind: DEVICE_ACCESS_APPROVAL_KIND })?.count,
+    ).toBe(0);
 
     const grantHarness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(grantHarness);

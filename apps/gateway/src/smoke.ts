@@ -711,19 +711,34 @@ async function smokeApprovals(app: Awaited<ReturnType<typeof buildApp>>): Promis
   });
   assert.equal(invalidList.statusCode, 400);
 
-  const created = await postJson(
-    app,
-    "/api/v1/approvals",
-    {
-      kind: "shell.exec",
-      riskLevel: "danger",
-      payload: { command: "dir" },
-      preview: { command: "dir" },
-    },
-    {
-      "Idempotency-Key": smokeIdempotencyKey("smoke-approval-create-1"),
-    },
-  );
+  const smokeApprovalCreateToken = "smoke-scoped-approval-create-token";
+  const previousApprovalCreateToken = process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN;
+  process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN = smokeApprovalCreateToken;
+  let created: Awaited<ReturnType<typeof postJson>>;
+  try {
+    created = await postJson(
+      app,
+      "/api/v1/approvals",
+      {
+        kind: "shell.exec",
+        riskLevel: "danger",
+        payload: { command: "dir" },
+        preview: { command: "dir" },
+        sourceConnectorId: "smoke-runner",
+        sourceTraceId: "smoke-approval-create-1",
+      },
+      {
+        "Idempotency-Key": smokeIdempotencyKey("smoke-approval-create-1"),
+        "x-goatcitadel-approval-create-token": smokeApprovalCreateToken,
+      },
+    );
+  } finally {
+    if (previousApprovalCreateToken === undefined) {
+      delete process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN;
+    } else {
+      process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN = previousApprovalCreateToken;
+    }
+  }
   assert.equal(created.statusCode, 201);
   const approval = created.body as { approvalId: string; status: string };
   assert.equal(approval.status, "pending");

@@ -163,11 +163,19 @@ export function buildPeerCredentialHealth(
       label: credential.label,
       status: resolvePeerCredentialStatus(credential, token, checkedAt),
       scopes: credential.scopes ?? ["a2a:jsonrpc"],
+      allowedWorkspaceIds: normalizeAllowedWorkspaceIds(credential.allowedWorkspaceIds),
       expiresAt: credential.expiresAt,
       revokedAt: credential.revokedAt,
       checkedAt,
     };
   });
+}
+
+export function normalizeAllowedWorkspaceIds(workspaceIds: string[] | undefined): string[] {
+  if (!workspaceIds) {
+    return [];
+  }
+  return [...new Set(workspaceIds.map((workspaceId) => workspaceId.trim()).filter(Boolean))];
 }
 
 export function buildA2ABridgeGovernance(

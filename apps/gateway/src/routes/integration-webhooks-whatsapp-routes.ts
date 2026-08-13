@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   deriveWhatsAppWebhookEventIdempotencyKey,
   normalizeWhatsAppWebhookPayloads,
+  verifyWhatsAppWebhookConnectionBinding,
   verifyWhatsAppWebhookSignature,
 } from "../services/whatsapp-webhook.js";
 import {
@@ -9,7 +10,7 @@ import {
   resolveWhatsAppAppSecret,
   resolveWhatsAppVerifyToken,
 } from "./integration-webhooks-shared.js";
-import { timingSafeStringEqual } from "../services/webhook-json-helpers.js";
+import { asString, timingSafeStringEqual } from "../services/webhook-json-helpers.js";
 import {
   createIgnoredWebhookReply,
   createWebhookHandler,
@@ -103,6 +104,21 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
             statusCode: 401,
             error: "Invalid WhatsApp webhook signature",
             logReason: "signature_mismatch",
+          };
+        }
+        const binding = verifyWhatsAppWebhookConnectionBinding({
+          payload: request.body,
+          expectedPhoneNumberId: asString(connection.config.phoneNumberId) ?? asString(connection.config.senderId),
+        });
+        if (!binding.ok) {
+          const missingConnectionIdentity = binding.reason === "missing_connection_identity";
+          return {
+            ok: false as const,
+            statusCode: missingConnectionIdentity ? 400 : 403,
+            error: missingConnectionIdentity
+              ? "WhatsApp connection is missing its expected phone number identity"
+              : "WhatsApp webhook does not match this connection",
+            logReason: `connection_binding_${binding.reason}`,
           };
         }
         return { ok: true as const };

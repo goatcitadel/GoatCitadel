@@ -12,8 +12,12 @@ describe("previewHostsMatch (codex #25a, #30)", () => {
     expect(previewHostsMatch("https://api.openai.com/v1", "https://api.openai.com/v1/models")).toBe(true);
   });
 
-  it("returns true when only the path/query/port differs but host matches", () => {
+  it("returns true when only the path/query/default port differs but origin matches", () => {
     expect(previewHostsMatch("https://api.openai.com/v1", "https://api.openai.com:443/anything")).toBe(true);
+  });
+
+  it("returns false when only the scheme differs", () => {
+    expect(previewHostsMatch("https://api.openai.com/v1", "http://api.openai.com/v1")).toBe(false);
   });
 
   it("returns false when the host differs", () => {

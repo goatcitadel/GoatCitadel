@@ -72,10 +72,10 @@ const remoteTokenSchema = z.object({
 });
 
 const remoteResolveSchema = z.object({
-  token: z.string().min(1),
+  token: z.string().trim().min(1).max(4096),
   decision: z.enum(["approve", "reject", "edit"]),
   editedPayload: z.record(z.unknown()).optional(),
-  resolutionNote: z.string().optional(),
+  resolutionNote: z.string().max(4096).optional(),
 });
 
 const listQuerySchema = z.object({
@@ -124,13 +124,6 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       if (ingress.kind === "remote" && (!parsed.data.sourceConnectorId || !parsed.data.sourceTraceId)) {
         return reply.code(400).send({
           error: "Remote approval creation requires sourceConnectorId and sourceTraceId.",
-        });
-      }
-
-      if (ingress.kind !== "remote" && !isLoopbackRequest(request) && !isOperatorAuthenticatedRequest(request)) {
-        return reply.code(403).send({
-          error:
-            "Approval creation is restricted to loopback, operator-authenticated, or scoped remote-connector callers.",
         });
       }
 
@@ -266,24 +259,36 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/approvals/remote-resolve", withRouteAccess(fastify, "public"), async (request, reply) => {
-    const parsed = remoteResolveSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
+  fastify.post(
+    "/api/v1/approvals/remote-resolve",
+    withRouteAccess(fastify, "public", {
+      bodyLimit: 64 * 1024,
+      config: {
+        rateLimit: {
+          max: 20,
+          allowList: () => false,
+        },
+      },
+    }),
+    async (request, reply) => {
+      const parsed = remoteResolveSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
 
-    try {
-      const result = await approvals.resolveApprovalWithRemoteToken({
-        ...parsed.data,
-        connectorId: "browser:mission-control",
-      });
-      await markMutationCommitted(request);
-      return reply.send(projectApprovalPublicResponse(result));
-    } catch (error) {
-      await markMutationCommittedFromError(request, error);
-      return sendRouteError(reply, error, request.log);
-    }
-  });
+      try {
+        const result = await approvals.resolveApprovalWithRemoteToken({
+          ...parsed.data,
+          connectorId: "browser:mission-control",
+        });
+        await markMutationCommitted(request);
+        return reply.send(projectApprovalPublicResponse(result));
+      } catch (error) {
+        await markMutationCommittedFromError(request, error);
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
   fastify.get("/api/v1/approvals/:approvalId/replay", operatorOnly, async (request, reply) => {
     const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
@@ -306,23 +311,6 @@ function projectApprovalPublicResponse<T>(value: T): T {
   return projectPublicSecretValue(value);
 }
 
-function isLoopbackRequest(request: {
-  ip?: string;
-  ips?: string[];
-  raw: { socket: { remoteAddress?: string | null } };
-  headers: Record<string, unknown>;
-}): boolean {
-  const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
-  const hasProxyProvenance =
-    "x-forwarded-for" in request.headers || "forwarded" in request.headers || proxyHopCount > 1;
-  if (hasProxyProvenance) {
-    return false;
-  }
-  const remoteAddress = request.raw.socket.remoteAddress ?? request.ip ?? "";
-  const normalized = remoteAddress.replace("::ffff:", "").trim().toLowerCase();
-  return normalized === "127.0.0.1" || normalized === "::1";
-}
-
 function isOperatorAuthenticatedRequest(request: { authActorSource?: string }): boolean {
   return (
     request.authActorSource === "token" || request.authActorSource === "basic" || request.authActorSource === "loopback"
@@ -339,9 +327,6 @@ function validateApprovalCreateIngress(
   },
   input: { sourceConnectorId?: string; sourceTraceId?: string },
 ): { ok: true; kind: "local" | "operator" | "remote" } | { ok: false; statusCode: 401 | 403; error: string } {
-  if (isLoopbackRequest(request)) {
-    return { ok: true, kind: "local" };
-  }
   if (isOperatorAuthenticatedRequest(request)) {
     return { ok: true, kind: "operator" };
   }

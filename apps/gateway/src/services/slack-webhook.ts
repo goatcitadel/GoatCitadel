@@ -68,6 +68,32 @@ export function verifySlackSignature(input: {
   return timingSafeStringEqual(expected, signature);
 }
 
+export type SlackWebhookConnectionBindingResult =
+  | { ok: true }
+  | { ok: false; reason: "missing_connection_identity" | "missing_envelope_identity" | "identity_mismatch" };
+
+export function verifySlackWebhookConnectionBinding(input: {
+  payload: unknown;
+  expectedTeamId?: string;
+  expectedAppId?: string;
+}): SlackWebhookConnectionBindingResult {
+  const expectedTeamId = input.expectedTeamId?.trim();
+  const expectedAppId = input.expectedAppId?.trim();
+  if (!expectedTeamId || !expectedAppId) {
+    return { ok: false, reason: "missing_connection_identity" };
+  }
+  const root = asRecord(input.payload);
+  const teamId = asString(root.team_id);
+  const appId = asString(root.api_app_id);
+  if (!teamId || !appId) {
+    return { ok: false, reason: "missing_envelope_identity" };
+  }
+  if (teamId !== expectedTeamId || appId !== expectedAppId) {
+    return { ok: false, reason: "identity_mismatch" };
+  }
+  return { ok: true };
+}
+
 export function deriveSlackWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
   const root = asRecord(payload);
   const eventId = asString(root.event_id);

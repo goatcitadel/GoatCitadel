@@ -117,6 +117,7 @@ import {
   type ApprovalResolutionEffectEnqueueOptions,
 } from "./approval-resolution-effects-service.js";
 import { buildApprovalResolutionObservabilityEffects } from "./approval-observability.js";
+import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import type { ApprovalResolutionContext } from "./approval-types.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { DeviceTokenVault } from "./device-token-vault.js";
@@ -159,7 +160,7 @@ export interface SettingsAuthRuntimeDependencies {
    * and the device's first status poll.
    */
   readonly deviceTokenVault: DeviceTokenVault;
-  createApproval(input: ApprovalCreateInput): Promise<{ approvalId: string }>;
+  createApproval(input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook): Promise<{ approvalId: string }>;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   enqueueApprovalResolutionEffects(
     approval: ApprovalRequest,
@@ -1402,6 +1403,17 @@ export async function expirePendingDeviceAccessRequests(
 // Device access runtime
 // ---------------------------------------------------------------------------
 
+export const DEVICE_ACCESS_PENDING_REQUEST_LIMIT = 25;
+
+class DeviceAccessRequestCapacityError extends Error {
+  public readonly statusCode = 429;
+
+  public constructor() {
+    super("Too many device access requests are already pending. Wait for an existing request to expire.");
+    this.name = "DeviceAccessRequestCapacityError";
+  }
+}
+
 export async function createDeviceAccessRequest(
   deps: SettingsAuthRuntimeDependencies,
   input: DeviceAccessRequestCreateInput,
@@ -1434,35 +1446,33 @@ export async function createDeviceAccessRequest(
   const correlationId = normalizeOptionalDeviceAccessText(context.correlationId, 128);
   const traceId = normalizeOptionalDeviceAccessText(context.traceId, 128);
   const originSurface = normalizeOptionalDeviceAccessText(context.originSurface, 120);
+  const { createdAt, expiresAt } = await deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_REQUEST_TTL_MS);
 
-  const approval = await deps.createApproval({
-    kind: DEVICE_ACCESS_APPROVAL_KIND,
-    riskLevel: "danger",
-    payload: {
-      requestId,
-      deviceLabel,
-      deviceType,
-      platform,
-      requestedOrigin,
-      requestedIp,
-      userAgent,
+  const approval = await deps.createApproval(
+    {
+      kind: DEVICE_ACCESS_APPROVAL_KIND,
+      riskLevel: "danger",
+      payload: {
+        requestId,
+        deviceLabel,
+        deviceType,
+        platform,
+        requestedOrigin,
+        requestedIp,
+        userAgent,
+      },
+      preview: {
+        title: "Allow new device access",
+        requestId,
+        deviceLabel,
+        deviceType,
+        platform,
+        requestedOrigin,
+        requestedIp,
+      },
     },
-    preview: {
-      title: "Allow new device access",
-      requestId,
-      deviceLabel,
-      deviceType,
-      platform,
-      requestedOrigin,
-      requestedIp,
-    },
-  });
-
-  let createdAt = "";
-  let expiresAt = "";
-  try {
-    ({ createdAt, expiresAt } = await deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_REQUEST_TTL_MS));
-    await deps.storage.runImmediateTransaction(async () => {
+    async (createdApproval) => {
+      await assertDeviceAccessRequestCapacity(deps, createdAt);
       await (
         await deps.gatewaySql.prepare(
           `
@@ -1477,7 +1487,7 @@ export async function createDeviceAccessRequest(
         )
       ).run({
         requestId,
-        approvalId: approval.approvalId,
+        approvalId: createdApproval.approvalId,
         requestSecretHash: hashSensitiveToken(requestSecret),
         deviceLabel,
         deviceType,
@@ -1489,7 +1499,7 @@ export async function createDeviceAccessRequest(
         createdAt,
         expiresAt,
       });
-      await deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+      return [
         {
           operationId: `auth.device_request.create.audit:${requestId}`,
           delivery: {
@@ -1498,7 +1508,7 @@ export async function createDeviceAccessRequest(
             payload: {
               event: "auth.device_request.create",
               requestId,
-              approvalId: approval.approvalId,
+              approvalId: createdApproval.approvalId,
               deviceLabel,
               deviceType,
               platform,
@@ -1518,7 +1528,7 @@ export async function createDeviceAccessRequest(
             source: "auth",
             payload: {
               requestId,
-              approvalId: approval.approvalId,
+              approvalId: createdApproval.approvalId,
               deviceLabel,
               deviceType,
               platform,
@@ -1534,22 +1544,15 @@ export async function createDeviceAccessRequest(
               eventClass: "domain_fact",
               eventAuthority: "retained_stream",
               links: {
-                approvalId: approval.approvalId,
+                approvalId: createdApproval.approvalId,
               },
-              correlationId: approval.approvalId,
+              correlationId: createdApproval.approvalId,
             },
           },
         },
-      ]);
-    });
-  } catch (error) {
-    try {
-      await rejectOrphanedDeviceAccessApproval(deps, approval.approvalId);
-    } catch {
-      // Best effort cleanup only.
-    }
-    throw error;
-  }
+      ] satisfies readonly ApprovalObservabilityEffectInput[];
+    },
+  );
 
   return {
     requestId,
@@ -1562,47 +1565,28 @@ export async function createDeviceAccessRequest(
   };
 }
 
-async function rejectOrphanedDeviceAccessApproval(
+async function assertDeviceAccessRequestCapacity(
   deps: SettingsAuthRuntimeDependencies,
-  approvalId: string,
+  databaseNow: string,
 ): Promise<void> {
-  const input: ApprovalResolveInput = {
-    decision: "reject",
-    resolvedBy: "system:auth-device-request",
-    resolutionNote: "Device request registration failed.",
-  };
-  const commitRejection = async (includeEffects: boolean) => {
-    const current = await deps.storage.approvals.get(approvalId);
-    if (current.status !== "pending") {
-      return;
-    }
-    const approval = await deps.storage.approvals.resolve(approvalId, input);
-    await deps.storage.approvalEvents.append({
-      approvalId,
-      eventType: "resolved",
-      actorId: input.resolvedBy,
-      payload: {
-        decision: input.decision,
-        status: approval.status,
-        orphanCleanup: true,
-        degraded: !includeEffects,
-      },
-    });
-    if (includeEffects) {
-      await deps.enqueueApprovalResolutionEffects(approval, input);
-      await deps.enqueueApprovalObservabilityEffects(
-        approvalId,
-        buildApprovalResolutionObservabilityEffects(approval, input),
-      );
-    }
-  };
-  try {
-    await deps.storage.runImmediateTransaction(() => commitRejection(true));
-  } catch {
-    // A device approval without its request row is permanently unusable. Keep
-    // the terminal approval/event even if an auxiliary effect store is down;
-    // the creation observability envelope remains durable for reconciliation.
-    await deps.storage.runImmediateTransaction(() => commitRejection(false));
+  if (deps.gatewaySql.dialect === "postgres") {
+    // SQLite's BEGIN IMMEDIATE already serializes writers. PostgreSQL needs an
+    // explicit table lock so concurrent nodes cannot both observe spare room.
+    await (await deps.gatewaySql.prepare("LOCK TABLE auth_device_requests IN SHARE ROW EXCLUSIVE MODE")).run();
+  }
+  const activeExpirySql =
+    deps.gatewaySql.dialect === "postgres"
+      ? "gc_try_parse_timestamptz(expires_at) > gc_try_parse_timestamptz(@databaseNow)"
+      : "julianday(expires_at) > julianday(@databaseNow)";
+  const row = await (
+    await deps.gatewaySql.prepare(
+      `SELECT COUNT(*) AS count
+       FROM auth_device_requests
+       WHERE status = 'pending' AND ${activeExpirySql}`,
+    )
+  ).get<{ count: number | string }>({ databaseNow });
+  if (Number(row?.count ?? 0) >= DEVICE_ACCESS_PENDING_REQUEST_LIMIT) {
+    throw new DeviceAccessRequestCapacityError();
   }
 }
 

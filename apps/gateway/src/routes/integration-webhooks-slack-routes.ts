@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   deriveSlackWebhookIdempotencyKey,
   normalizeSlackWebhookPayload,
+  verifySlackWebhookConnectionBinding,
   verifySlackSignature,
 } from "../services/slack-webhook.js";
 import { createWebhookRouteOptions, readConfigSecret } from "./integration-webhooks-shared.js";
@@ -59,6 +60,22 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
             statusCode: 401,
             error: "Invalid Slack webhook signature",
             logReason: "signature_mismatch",
+          };
+        }
+        const binding = verifySlackWebhookConnectionBinding({
+          payload: request.body,
+          expectedTeamId: asString(connection.config.slackTeamId),
+          expectedAppId: asString(connection.config.slackAppId),
+        });
+        if (!binding.ok) {
+          const missingConnectionIdentity = binding.reason === "missing_connection_identity";
+          return {
+            ok: false as const,
+            statusCode: missingConnectionIdentity ? 400 : 403,
+            error: missingConnectionIdentity
+              ? "Slack connection is missing its expected team or app identity"
+              : "Slack webhook does not match this connection",
+            logReason: `connection_binding_${binding.reason}`,
           };
         }
         return { ok: true as const };

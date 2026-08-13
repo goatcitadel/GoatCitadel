@@ -4,6 +4,7 @@ import {
   deriveSlackWebhookIdempotencyKey,
   isSlackWebhookPath,
   normalizeSlackWebhookPayload,
+  verifySlackWebhookConnectionBinding,
   verifySlackSignature,
 } from "./slack-webhook.js";
 
@@ -79,6 +80,35 @@ describe("slack webhook helpers", () => {
         nowMs: Date.UTC(2026, 2, 31, 12, 6, 0),
       }),
     ).toBe(false);
+  });
+
+  it("binds Slack envelopes to the configured team and app", () => {
+    const payload = { type: "event_callback", team_id: "T123", api_app_id: "A123" };
+    expect(
+      verifySlackWebhookConnectionBinding({
+        payload,
+        expectedTeamId: "T123",
+        expectedAppId: "A123",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      verifySlackWebhookConnectionBinding({
+        payload: { ...payload, team_id: "T999" },
+        expectedTeamId: "T123",
+        expectedAppId: "A123",
+      }),
+    ).toEqual({ ok: false, reason: "identity_mismatch" });
+    expect(verifySlackWebhookConnectionBinding({ payload, expectedTeamId: "T123" })).toEqual({
+      ok: false,
+      reason: "missing_connection_identity",
+    });
+    expect(
+      verifySlackWebhookConnectionBinding({
+        payload: { type: "event_callback", team_id: "T123" },
+        expectedTeamId: "T123",
+        expectedAppId: "A123",
+      }),
+    ).toEqual({ ok: false, reason: "missing_envelope_identity" });
   });
 
   it("normalizes url verification challenges", () => {

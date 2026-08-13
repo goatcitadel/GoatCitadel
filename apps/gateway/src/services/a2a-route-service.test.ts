@@ -32,7 +32,93 @@ describe("A2ARouteService", () => {
     ).toMatchObject({
       peerId: "peer-1",
       scopes: ["a2a:jsonrpc"],
+      allowedWorkspaceIds: [],
     });
+  });
+
+  it("fails closed for legacy peer credentials without workspace grants", async () => {
+    const harness = createService();
+    const peer = harness.service.authenticatePeerRequest({
+      headers: { authorization: "Bearer peer-token" },
+    });
+    expect("statusCode" in peer).toBe(false);
+
+    const response = await harness.service.handleJsonRpc(peer as never, {
+      jsonrpc: "2.0",
+      id: "legacy-workspace-denied",
+      method: "SendMessage",
+      params: { messageId: "legacy-workspace-denied", text: "must not dispatch" },
+    });
+
+    expect(response).toMatchObject({
+      error: {
+        code: -32022,
+        message: "A2A peer credential does not authorize the requested workspace.",
+      },
+    });
+    expect(harness.tasks.createTask).not.toHaveBeenCalled();
+    expect(harness.chatTurnRuntime.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows an explicitly granted peer workspace", async () => {
+    const harness = createService({ allowedWorkspaceIds: [" workspace-a ", "workspace-a"] });
+    const peer = harness.service.authenticatePeerRequest({
+      headers: { authorization: "Bearer peer-token" },
+    });
+    expect(peer).toMatchObject({ allowedWorkspaceIds: ["workspace-a"] });
+
+    const response = await harness.service.handleJsonRpc(peer as never, {
+      jsonrpc: "2.0",
+      id: "allowed-workspace",
+      method: "SendMessage",
+      params: { workspaceId: "workspace-a", messageId: "allowed-workspace", text: "dispatch" },
+    });
+
+    expect(response).toHaveProperty("result");
+    expect(harness.tasks.createTask).toHaveBeenCalledTimes(1);
+    expect(harness.chatTurnRuntime.agentSendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("enforces transport scopes before A2A dispatch", async () => {
+    const harness = createService({ bindings: ["JSONRPC", "HTTP_JSON"] });
+    const wrongJsonRpcScope = await harness.service.handleJsonRpc(
+      { peerId: "peer-1", scopes: ["a2a:http-json"], allowedWorkspaceIds: ["default"] },
+      {
+        jsonrpc: "2.0",
+        id: "wrong-jsonrpc-scope",
+        method: "SendMessage",
+        params: { messageId: "wrong-jsonrpc-scope", text: "must not dispatch" },
+      },
+    );
+
+    expect(wrongJsonRpcScope).toMatchObject({ error: { code: -32022 } });
+    await expect(
+      harness.service.sendHttpJsonMessage(
+        { peerId: "peer-1", scopes: ["a2a:jsonrpc"], allowedWorkspaceIds: ["default"] },
+        { messageId: "wrong-http-scope", text: "must not dispatch" },
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, reason: "a2a_peer_scope_forbidden" });
+    expect(harness.tasks.createTask).not.toHaveBeenCalled();
+    expect(harness.chatTurnRuntime.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects an attacker-selected workspace before creating A2A resources", async () => {
+    const harness = createService();
+    const response = await harness.service.handleJsonRpc(
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      {
+        jsonrpc: "2.0",
+        id: "wrong-workspace",
+        method: "SendMessage",
+        params: { workspaceId: "workspace-b", messageId: "wrong-workspace", text: "must not dispatch" },
+      },
+    );
+
+    expect(response).toMatchObject({ error: { code: -32022 } });
+    expect(harness.storage.a2aTaskBindings.listByPeer("peer-1")).toHaveLength(0);
+    expect(harness.createChatSession).not.toHaveBeenCalled();
+    expect(harness.tasks.createTask).not.toHaveBeenCalled();
+    expect(harness.chatTurnRuntime.agentSendChatMessage).not.toHaveBeenCalled();
   });
 
   it("binds duplicate inbound SendMessage calls to the existing local task", async () => {
@@ -166,7 +252,7 @@ describe("A2ARouteService", () => {
     };
 
     const first = await harness.service.handleJsonRpc(
-      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"], allowedWorkspaceIds: ["default"] },
       request,
       "2026-06-01T00:00:00.000Z",
     );
@@ -186,7 +272,7 @@ describe("A2ARouteService", () => {
       },
     });
     const retried = await harness.service.handleJsonRpc(
-      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"], allowedWorkspaceIds: ["default"] },
       { ...request, id: "rpc-missing-durable-truth-retry" },
       "2026-06-01T00:02:00.000Z",
     );
@@ -674,8 +760,9 @@ describe("A2ARouteService", () => {
 
   it("routes A2A cancellation through the linked canonical run with a stable generation controlId", async () => {
     const harness = createService();
+    const peer = { peerId: "peer-1", scopes: ["a2a:jsonrpc"], allowedWorkspaceIds: ["workspace-a"] };
     const created = await harness.service.handleJsonRpc(
-      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      peer,
       {
         jsonrpc: "2.0",
         id: "rpc-create-cancel",
@@ -694,12 +781,12 @@ describe("A2ARouteService", () => {
     harness.tasks.appendTaskActivity.mockClear();
 
     const cancelled = await harness.service.handleJsonRpc(
-      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      peer,
       { jsonrpc: "2.0", id: "rpc-cancel", method: "CancelTask", params: { taskId } },
       "2026-06-01T00:00:01.000Z",
     );
     const replay = await harness.service.handleJsonRpc(
-      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      peer,
       { jsonrpc: "2.0", id: "rpc-cancel-replay", method: "CancelTask", params: { taskId } },
       "2026-06-01T00:00:02.000Z",
     );
@@ -1378,6 +1465,7 @@ describe("A2ARouteService", () => {
       pushDeliveryFetch?: A2ARouteServiceDependencies["pushDeliveryFetch"];
       networkAllowlist?: string[];
       deliverables?: TaskDeliverableRecord[];
+      allowedWorkspaceIds?: string[];
     } = {},
   ) {
     storage = new Storage({
@@ -1537,7 +1625,13 @@ describe("A2ARouteService", () => {
             bindings: options.bindings ?? ["JSONRPC"],
             inbound: {
               enabled: true,
-              peerCredentials: [{ peerId: "peer-1", token: "peer-token" }],
+              peerCredentials: [
+                {
+                  peerId: "peer-1",
+                  token: "peer-token",
+                  ...(options.allowedWorkspaceIds ? { allowedWorkspaceIds: options.allowedWorkspaceIds } : {}),
+                },
+              ],
             },
             outbound: {
               enabled: false,

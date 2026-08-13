@@ -30,6 +30,8 @@ export interface A2APeerCredentialConfig {
   token?: string;
   tokenEnv?: string;
   scopes?: string[];
+  /** Workspaces this peer may create or access A2A tasks in. Missing is deny-all. */
+  allowedWorkspaceIds?: string[];
   expiresAt?: string;
   revokedAt?: string;
 }
@@ -39,6 +41,7 @@ export interface A2APeerCredentialHealth {
   label?: string;
   status: A2APeerCredentialStatus;
   scopes: string[];
+  allowedWorkspaceIds: string[];
   expiresAt?: string;
   revokedAt?: string;
   checkedAt: string;

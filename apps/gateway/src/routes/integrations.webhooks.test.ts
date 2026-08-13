@@ -157,6 +157,8 @@ describe("integration provider webhook routes", () => {
       config: {
         botToken: "xoxb-slack-token",
         signingSecret: "slack-signing-secret",
+        slackTeamId: "T111",
+        slackAppId: "A111",
         defaultChannel: "#ops-sandbox",
       },
     }));
@@ -181,6 +183,7 @@ describe("integration provider webhook routes", () => {
       type: "event_callback",
       event_id: "Ev123Slack",
       team_id: "T111",
+      api_app_id: "A111",
       event: {
         type: "message",
         user: "U111",
@@ -259,6 +262,20 @@ describe("integration provider webhook routes", () => {
         eventType: "message",
       }),
     );
+
+    const mismatchedPayload = payload.replace('"team_id":"T111"', '"team_id":"T999"');
+    const mismatchedResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/slack/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-slack-request-timestamp": timestamp,
+        "x-slack-signature": buildSlackSignature(timestamp, mismatchedPayload, "slack-signing-secret"),
+      },
+      payload: mismatchedPayload,
+    });
+    expect(mismatchedResponse.statusCode).toBe(403);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
   });
 
   it("accepts Telegram webhooks without standard auth or idempotency headers", async () => {
@@ -1327,6 +1344,22 @@ describe("integration provider webhook routes", () => {
         eventType: "text",
       }),
     );
+
+    const mismatchedPayload = payload.replace(
+      '"phone_number_id":"123456789012345"',
+      '"phone_number_id":"999999999999999"',
+    );
+    const mismatchedResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": buildWhatsAppWebhookSignature(mismatchedPayload, "whatsapp-app-secret"),
+      },
+      payload: mismatchedPayload,
+    });
+    expect(mismatchedResponse.statusCode).toBe(403);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
   });
 
   it("rejects unsigned WhatsApp webhooks", async () => {
@@ -1538,6 +1571,8 @@ describe("integration provider webhook routes", () => {
     const timestamp = String(Math.floor(nowMs / 1000));
     const payload = JSON.stringify({
       type: "url_verification",
+      team_id: "T111",
+      api_app_id: "A111",
       challenge: "challenge-token",
     });
     const signature = buildSlackSignature(timestamp, payload, "slack-signing-secret");
@@ -1549,7 +1584,11 @@ describe("integration provider webhook routes", () => {
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
         key: "slack",
-        config: { signingSecret: "slack-signing-secret" },
+        config: {
+          signingSecret: "slack-signing-secret",
+          slackTeamId: "T111",
+          slackAppId: "A111",
+        },
       })),
       ingestChannelMessage,
     });

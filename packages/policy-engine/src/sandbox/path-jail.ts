@@ -92,6 +92,9 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
       const realExisting = fs.realpathSync(probe);
       if (rootGuard) {
         if (!isWithinAnyRoot(realExisting, rootGuard.roots) && canCreateMissingJailRoot(probe, lexicalRoots)) {
+          if (!sameFilesystemPath(realExisting, probe)) {
+            throw new Error(`Path is outside ${rootGuard.scope}: ${realExisting}`);
+          }
           return absoluteTarget;
         }
         assertWithinRoots(realExisting, rootGuard.roots, rootGuard.scope);
@@ -122,4 +125,12 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
 
 function canCreateMissingJailRoot(existingAncestor: string, lexicalRoots: string[]): boolean {
   return lexicalRoots.some((root) => !isWithin(root, existingAncestor) && isWithin(existingAncestor, root));
+}
+
+function sameFilesystemPath(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const resolved = path.normalize(path.resolve(value));
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
 }

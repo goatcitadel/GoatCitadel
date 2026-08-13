@@ -520,7 +520,7 @@ describe("auth plugin", () => {
     });
   });
 
-  it("allows query-bearing loopback onboarding recovery when token auth is enabled without a token", async () => {
+  it("rejects implicit loopback onboarding recovery when loopback bypass is disabled", async () => {
     app = await buildApp({
       mode: "token",
       allowLoopbackBypass: false,
@@ -533,10 +533,7 @@ describe("auth plugin", () => {
       remoteAddress: "127.0.0.1",
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      actorSource: "loopback",
-    });
+    expect(response.statusCode).toBe(503);
   });
 
   it("keeps non-recovery routes blocked when token auth is enabled without a token", async () => {

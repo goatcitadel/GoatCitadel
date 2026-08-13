@@ -73,6 +73,11 @@ vi.mock("./browser-tools.js", () => ({
 }));
 
 import { executeTool } from "./tool-executor.js";
+import {
+  FILESYSTEM_READ_MAX_BYTES,
+  FILE_READ_RANGE_MAX_BYTES,
+  FILE_READ_RANGE_MAX_OUTPUT_BYTES,
+} from "./tool-executor/filesystem-executor.js";
 
 describe("tool executor loop 20 branch tails", () => {
   let tempRoot = "";
@@ -184,6 +189,94 @@ describe("tool executor loop 20 branch tails", () => {
     expect(fileRootMatch.matches).toEqual([expect.objectContaining({ name: "index.ts", type: "file" })]);
   });
 
+  it("does not let file.find follow a symlinked directory outside its allowed root", async () => {
+    const allowedRoot = path.join(tempRoot, "file-find-allowed");
+    const outsideRoot = path.join(tempRoot, "file-find-outside");
+    await fs.mkdir(allowedRoot, { recursive: true });
+    await fs.mkdir(outsideRoot, { recursive: true });
+    await fs.writeFile(path.join(outsideRoot, "secret.txt"), "outside-search-needle\n", "utf8");
+    const linked = await createDirectoryLink(outsideRoot, path.join(allowedRoot, "link-out"));
+    if (!linked) {
+      return;
+    }
+
+    const result = await executeTool(
+      request("file.find", { path: allowedRoot, pattern: "outside-search-needle", limit: 20 }),
+      createConfig(allowedRoot),
+      storageStub(),
+    );
+
+    expect(result).toMatchObject({ count: 0, matches: [], skippedLinks: 1 });
+  });
+
+  it("does not let code.search follow a symlinked directory outside its allowed root", async () => {
+    const allowedRoot = path.join(tempRoot, "code-search-allowed");
+    const outsideRoot = path.join(tempRoot, "code-search-outside");
+    await fs.mkdir(allowedRoot, { recursive: true });
+    await fs.mkdir(outsideRoot, { recursive: true });
+    await fs.writeFile(path.join(outsideRoot, "secret.ts"), "export const outsideCodeNeedle = true;\n", "utf8");
+    const linked = await createDirectoryLink(outsideRoot, path.join(allowedRoot, "link-out.ts"));
+    if (!linked) {
+      return;
+    }
+
+    const result = await executeTool(
+      request("code.search", { path: allowedRoot, query: "outsideCodeNeedle", limit: 20 }),
+      createConfig(allowedRoot),
+      storageStub(),
+    );
+
+    expect(result).toMatchObject({ count: 0, matches: [], skippedLinks: 1 });
+  });
+
+  it("allows fs.read at the byte limit and rejects an oversized file", async () => {
+    const exactPath = path.join(tempRoot, "fs-read-exact.txt");
+    const oversizedPath = path.join(tempRoot, "fs-read-oversized.txt");
+    const exactContent = Buffer.alloc(FILESYSTEM_READ_MAX_BYTES, 0x20);
+    exactContent.write("plain text\n", 0, "utf8");
+    await fs.writeFile(exactPath, exactContent);
+    await fs.writeFile(oversizedPath, "", "utf8");
+    await fs.truncate(oversizedPath, FILESYSTEM_READ_MAX_BYTES + 1);
+
+    const exact = await executeTool(request("fs.read", { path: exactPath }), config, storageStub());
+    expect(exact.bytes).toBe(FILESYSTEM_READ_MAX_BYTES);
+    expect((exact.content as string).length).toBe(FILESYSTEM_READ_MAX_BYTES);
+
+    await expect(executeTool(request("fs.read", { path: oversizedPath }), config, storageStub())).rejects.toThrow(
+      `${FILESYSTEM_READ_MAX_BYTES} byte limit`,
+    );
+  });
+
+  it("allows file.read_range at the byte limit and rejects an oversized file", async () => {
+    const exactPath = path.join(tempRoot, "range-read-exact.txt");
+    const oversizedPath = path.join(tempRoot, "range-read-oversized.txt");
+    const oversizedOutputPath = path.join(tempRoot, "range-read-oversized-output.txt");
+    const exactContent = Buffer.alloc(FILE_READ_RANGE_MAX_BYTES, 0x61);
+    exactContent.write("first\r\nsecond\n", 0, "utf8");
+    await fs.writeFile(exactPath, exactContent);
+    await fs.writeFile(oversizedPath, "", "utf8");
+    await fs.truncate(oversizedPath, FILE_READ_RANGE_MAX_BYTES + 1);
+    await fs.writeFile(oversizedOutputPath, Buffer.alloc(FILE_READ_RANGE_MAX_OUTPUT_BYTES + 1, 0x61));
+
+    const exact = await executeTool(
+      request("file.read_range", { path: exactPath, startLine: 1, endLine: 1 }),
+      config,
+      storageStub(),
+    );
+    expect(exact).toMatchObject({ startLine: 1, endLine: 1, lineCount: 1, content: "first" });
+
+    await expect(
+      executeTool(request("file.read_range", { path: oversizedPath, startLine: 1, endLine: 1 }), config, storageStub()),
+    ).rejects.toThrow(`${FILE_READ_RANGE_MAX_BYTES} byte limit`);
+    await expect(
+      executeTool(
+        request("file.read_range", { path: oversizedOutputPath, startLine: 1, endLine: 1 }),
+        config,
+        storageStub(),
+      ),
+    ).rejects.toThrow(`${FILE_READ_RANGE_MAX_OUTPUT_BYTES} byte output limit`);
+  });
+
   it("lists directories and files with the default filesystem list path", async () => {
     await fs.mkdir(path.join(tempRoot, "child-dir"));
     await fs.writeFile(path.join(tempRoot, "child-file.txt"), "content", "utf8");
@@ -285,6 +378,19 @@ function storageStub(): Storage & AsyncStorage {
       listActiveBySession: vi.fn(() => []),
     },
   } as unknown as Storage & AsyncStorage;
+}
+
+async function createDirectoryLink(targetPath: string, linkPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(targetPath, linkPath, "junction");
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function channelStorageStub(connection: {

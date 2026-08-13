@@ -87,6 +87,24 @@ describe("A2A gRPC transport", () => {
     expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { agent: 0, worker: 0 } });
   });
 
+  it("rejects gRPC ingress when the peer credential only authorizes JSON-RPC", async () => {
+    const harness = createService({ bindings: ["GRPC"], peerScopes: ["a2a:jsonrpc"] });
+    const handle = await startA2AGrpcServer({ config: harness.config, a2a: harness.service });
+    grpcHandles.push(handle);
+
+    await expect(
+      new A2AGrpcClient().call({
+        grpcUrl: handle.address!,
+        method: "SendMessage",
+        params: { messageId: "wrong-grpc-scope", text: "must not dispatch" },
+        peer: { token: "peer-token" },
+        allowlist: ["127.0.0.1"],
+      }),
+    ).rejects.toMatchObject({ code: 7 });
+    expect(harness.tasks.createTask).not.toHaveBeenCalled();
+    expect(harness.chatTurnRuntime.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
   it.each(["SendMessage", "SubscribeToTask"] as const)(
     "rejects late %s ingress with retryable UNAVAILABLE after admission closes",
     async (method) => {
@@ -439,6 +457,7 @@ describe("A2A gRPC transport", () => {
       outboundEnabled?: boolean;
       outboundPeers?: A2AOutboundPeerConfig[];
       deliverables?: TaskDeliverableRecord[];
+      peerScopes?: string[];
     } = {},
   ) {
     storage = new Storage({
@@ -503,7 +522,14 @@ describe("A2A gRPC transport", () => {
               host: "127.0.0.1",
               port: 0,
             },
-            peerCredentials: [{ peerId: "peer-1", token: "peer-token" }],
+            peerCredentials: [
+              {
+                peerId: "peer-1",
+                token: "peer-token",
+                scopes: options.peerScopes ?? ["a2a:grpc"],
+                allowedWorkspaceIds: ["default"],
+              },
+            ],
           },
           outbound: {
             enabled: options.outboundEnabled ?? false,

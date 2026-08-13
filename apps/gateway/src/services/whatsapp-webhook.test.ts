@@ -9,6 +9,7 @@ import {
   isWhatsAppWebhookPath,
   normalizeWhatsAppWebhookPayload,
   normalizeWhatsAppWebhookPayloads,
+  verifyWhatsAppWebhookConnectionBinding,
   verifyWhatsAppWebhookSignature,
 } from "./whatsapp-webhook.js";
 
@@ -26,6 +27,39 @@ describe("whatsapp webhook helpers", () => {
     expect(verifyWhatsAppWebhookSignature("sha256=deadbeef", rawBody, "whatsapp-app-secret")).toBe(false);
     expect(verifyWhatsAppWebhookSignature(undefined, rawBody, "whatsapp-app-secret")).toBe(false);
     expect(verifyWhatsAppWebhookSignature(signature.toUpperCase(), rawBody, "whatsapp-app-secret")).toBe(true);
+  });
+
+  it("binds every message-bearing change to the configured phone number", () => {
+    const change = (phoneNumberId?: string) => ({
+      value: {
+        metadata: phoneNumberId ? { phone_number_id: phoneNumberId } : {},
+        messages: [{ id: `message-${phoneNumberId ?? "missing"}` }],
+      },
+    });
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [{ changes: [change("phone-1"), change("phone-1")] }],
+    };
+
+    expect(verifyWhatsAppWebhookConnectionBinding({ payload, expectedPhoneNumberId: "phone-1" })).toEqual({
+      ok: true,
+    });
+    expect(
+      verifyWhatsAppWebhookConnectionBinding({
+        payload: { ...payload, entry: [{ changes: [change("phone-1"), change("phone-2")] }] },
+        expectedPhoneNumberId: "phone-1",
+      }),
+    ).toEqual({ ok: false, reason: "identity_mismatch" });
+    expect(
+      verifyWhatsAppWebhookConnectionBinding({
+        payload: { ...payload, entry: [{ changes: [change()] }] },
+        expectedPhoneNumberId: "phone-1",
+      }),
+    ).toEqual({ ok: false, reason: "missing_payload_identity" });
+    expect(verifyWhatsAppWebhookConnectionBinding({ payload })).toEqual({
+      ok: false,
+      reason: "missing_connection_identity",
+    });
   });
 
   it("normalizes inbound text messages", () => {
@@ -479,7 +513,7 @@ describe("whatsapp webhook route negative paths", () => {
     const first = await signedInboundRequest(buildInboundMessagePayload("wamid.replayed"));
     const second = await signedInboundRequest(buildInboundMessagePayload("wamid.replayed"));
 
-    expect(first.statusCode).toBe(200);
+    expect(first.statusCode, first.body).toBe(200);
     expect(first.json()).toMatchObject({
       accepted: true,
       durableAccepted: true,
@@ -579,6 +613,7 @@ describe("whatsapp webhook route negative paths", () => {
     const services = createIntegrationWebhooksMock({
       config: {
         appSecret,
+        phoneNumberId: "123456789012345",
         webhookVerifyToken: "verify-token",
         inboundAccessMode: "allowlist",
         allowedSenders: ["15550001111"],
@@ -740,6 +775,7 @@ describe("whatsapp webhook route negative paths", () => {
       status: "connected" as const,
       config: overrides.config ?? {
         appSecret,
+        phoneNumberId: "123456789012345",
         webhookVerifyToken: "verify-token",
         inboundAccessMode: "allowlist" as const,
         allowedSenders: ["15558675309"],

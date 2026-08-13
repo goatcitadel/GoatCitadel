@@ -455,6 +455,8 @@ describe("channel setup definitions", () => {
         config: {
           tokenEnv: "SLACK_BOT_TOKEN",
           defaultChannel: "#ops-sandbox",
+          slackTeamId: "T123",
+          slackAppId: "A123",
         },
       }),
     );
@@ -468,6 +470,8 @@ describe("channel setup definitions", () => {
       expect.objectContaining({
         botTokenEnv: "SLACK_BOT_TOKEN",
         defaultChannel: "#ops-sandbox",
+        slackTeamId: "T123",
+        slackAppId: "A123",
       }),
     );
   });

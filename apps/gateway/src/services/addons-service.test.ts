@@ -72,10 +72,14 @@ describe("AddonsService", () => {
     const originalOpenAi = process.env.OPENAI_API_KEY;
     const originalAuthToken = process.env.GOATCITADEL_AUTH_TOKEN;
     const originalPostgresPassword = process.env.GOATCITADEL_POSTGRES_PASSWORD;
+    const originalNpmUserConfig = process.env.NPM_CONFIG_USERCONFIG;
+    const originalNpmRegistry = process.env.NPM_CONFIG_REGISTRY;
     try {
       process.env.OPENAI_API_KEY = "sk-secret";
       process.env.GOATCITADEL_AUTH_TOKEN = "operator-token";
       process.env.GOATCITADEL_POSTGRES_PASSWORD = "postgres-secret";
+      process.env.NPM_CONFIG_USERCONFIG = "C:\\Users\\operator\\.npmrc";
+      process.env.NPM_CONFIG_REGISTRY = "https://user:secret@registry.example.test";
 
       const env = __internal.buildAddonChildEnv({
         ARENA_PORT: "3099",
@@ -85,6 +89,8 @@ describe("AddonsService", () => {
       expect(env.OPENAI_API_KEY).toBeUndefined();
       expect(env.GOATCITADEL_AUTH_TOKEN).toBeUndefined();
       expect(env.GOATCITADEL_POSTGRES_PASSWORD).toBeUndefined();
+      expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
+      expect(env.NPM_CONFIG_REGISTRY).toBeUndefined();
       expect(env.ARENA_PORT).toBe("3099");
       expect(env.GOATCITADEL_BASE_URL).toBe("http://127.0.0.1:8787");
     } finally {
@@ -102,6 +108,16 @@ describe("AddonsService", () => {
         delete process.env.GOATCITADEL_POSTGRES_PASSWORD;
       } else {
         process.env.GOATCITADEL_POSTGRES_PASSWORD = originalPostgresPassword;
+      }
+      if (originalNpmUserConfig === undefined) {
+        delete process.env.NPM_CONFIG_USERCONFIG;
+      } else {
+        process.env.NPM_CONFIG_USERCONFIG = originalNpmUserConfig;
+      }
+      if (originalNpmRegistry === undefined) {
+        delete process.env.NPM_CONFIG_REGISTRY;
+      } else {
+        process.env.NPM_CONFIG_REGISTRY = originalNpmRegistry;
       }
     }
   });
@@ -185,10 +201,11 @@ describe("AddonsService", () => {
     await expect(fs.stat(addonPath)).resolves.toBeDefined();
   });
 
-  it("rolls back addon updates when install or build fails after pull", async () => {
+  it("leaves the installed add-on untouched when a staged update build fails", async () => {
     const addonsRoot = path.join(goatHome, "addons");
     const addonPath = path.join(addonsRoot, "arena");
     await fs.mkdir(addonPath, { recursive: true });
+    await fs.writeFile(path.join(addonPath, "existing-install.txt"), "preserve me", "utf8");
     await fs.writeFile(
       path.join(addonsRoot, "manifest.json"),
       `${JSON.stringify(
@@ -221,16 +238,13 @@ describe("AddonsService", () => {
 
     execFileSyncMock.mockImplementation((cmd: string, args?: string[]) => {
       if (cmd === "git" && args?.includes("rev-parse")) {
-        return "abc123\n";
+        return `${__internal.ARENA_REPO_REF}\n`;
       }
       const joined = (args ?? []).join(" ");
       if ((cmd === "corepack" || cmd.endsWith("node.exe")) && joined.includes("pnpm install --frozen-lockfile")) {
         throw new Error("pnpm install failed");
       }
-      if (cmd === "git" && args?.includes("pull")) {
-        return "";
-      }
-      if (cmd === "git" && args?.includes("reset")) {
+      if (cmd === "git" && args?.includes("fetch")) {
         return "";
       }
       return "";
@@ -240,11 +254,17 @@ describe("AddonsService", () => {
 
     await expect(service.update("arena")).rejects.toThrow("pnpm install failed");
 
-    expect(execFileSyncMock).toHaveBeenCalledWith(
-      "git",
-      expect.arrayContaining(["reset", "--hard", "abc123"]),
-      expect.objectContaining({ cwd: addonPath }),
+    await expect(fs.readFile(path.join(addonPath, "existing-install.txt"), "utf8")).resolves.toBe("preserve me");
+    expect(execFileSyncMock.mock.calls.some(([command, args]) => command === "git" && args?.includes("reset"))).toBe(
+      false,
     );
+    const installCall = execFileSyncMock.mock.calls.find(
+      ([command, args]) =>
+        (command === "corepack" || String(command).endsWith("node.exe")) &&
+        Array.isArray(args) &&
+        args.join(" ").includes("pnpm install --frozen-lockfile"),
+    );
+    expect(installCall?.[2]).toEqual(expect.objectContaining({ cwd: expect.stringContaining(".arena-staging-") }));
 
     const manifest = JSON.parse(await fs.readFile(path.join(addonsRoot, "manifest.json"), "utf8")) as {
       items: Record<string, { installRef?: string; lastError?: string }>;
@@ -252,6 +272,106 @@ describe("AddonsService", () => {
     expect(manifest.items.arena).toBeDefined();
     expect(manifest.items.arena!.installRef).toBe("abc123");
     expect(manifest.items.arena!.lastError).toContain("pnpm install failed");
+  });
+
+  it("moves Arena SQLite state into durable add-on data storage", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "arena");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.writeFile(path.join(addonPath, "arena.db"), "database", "utf8");
+    await fs.writeFile(path.join(addonPath, "arena.db-wal"), "wal", "utf8");
+
+    const databasePath = await __internal.prepareArenaDataPath(addonPath, addonsRoot);
+
+    expect(databasePath).toBe(path.join(addonsRoot, "data", "arena", "arena.db"));
+    await expect(fs.readFile(databasePath, "utf8")).resolves.toBe("database");
+    await expect(fs.readFile(`${databasePath}-wal`, "utf8")).resolves.toBe("wal");
+    await expect(fs.stat(path.join(addonPath, "arena.db"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("restores the previous add-on when a staged swap was interrupted before manifest commit", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "arena");
+    const backupPath = path.join(addonsRoot, ".arena-update-backup");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.mkdir(backupPath, { recursive: true });
+    await fs.writeFile(path.join(addonPath, "new.txt"), "new", "utf8");
+    await fs.writeFile(path.join(backupPath, "old.txt"), "old", "utf8");
+    execFileSyncMock.mockImplementation((_command: string, args?: string[]) =>
+      args?.[1] === backupPath ? "old-ref\n" : "new-ref\n",
+    );
+
+    await __internal.recoverInterruptedAddonUpdate({
+      installedPath: addonPath,
+      backupDir: backupPath,
+      manifestInstallRef: "old-ref",
+      addonsRootDir: addonsRoot,
+    });
+
+    await expect(fs.readFile(path.join(addonPath, "old.txt"), "utf8")).resolves.toBe("old");
+    await expect(fs.stat(path.join(addonPath, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the committed add-on and removes its backup after interrupted cleanup", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "arena");
+    const backupPath = path.join(addonsRoot, ".arena-update-backup");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.mkdir(backupPath, { recursive: true });
+    await fs.writeFile(path.join(addonPath, "new.txt"), "new", "utf8");
+    await fs.writeFile(path.join(backupPath, "old.txt"), "old", "utf8");
+    execFileSyncMock.mockImplementation((_command: string, args?: string[]) =>
+      args?.[1] === addonPath ? "new-ref\n" : "old-ref\n",
+    );
+
+    await __internal.recoverInterruptedAddonUpdate({
+      installedPath: addonPath,
+      backupDir: backupPath,
+      manifestInstallRef: "new-ref",
+      addonsRootDir: addonsRoot,
+    });
+
+    await expect(fs.readFile(path.join(addonPath, "new.txt"), "utf8")).resolves.toBe("new");
+    await expect(fs.stat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("conservatively restores the backup for an interrupted legacy update without a manifest ref", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "arena");
+    const backupPath = path.join(addonsRoot, ".arena-update-backup");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.mkdir(backupPath, { recursive: true });
+    await fs.writeFile(path.join(addonPath, "new.txt"), "new", "utf8");
+    await fs.writeFile(path.join(backupPath, "old.txt"), "old", "utf8");
+    execFileSyncMock.mockReturnValue("unknown-ref\n");
+
+    await __internal.recoverInterruptedAddonUpdate({
+      installedPath: addonPath,
+      backupDir: backupPath,
+      addonsRootDir: addonsRoot,
+    });
+
+    await expect(fs.readFile(path.join(addonPath, "old.txt"), "utf8")).resolves.toBe("old");
+    await expect(fs.stat(path.join(addonPath, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("restores a lone update backup when the install rename was interrupted", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "arena");
+    const backupPath = path.join(addonsRoot, ".arena-update-backup");
+    await fs.mkdir(backupPath, { recursive: true });
+    await fs.writeFile(path.join(backupPath, "old.txt"), "old", "utf8");
+
+    await __internal.recoverInterruptedAddonUpdate({
+      installedPath: addonPath,
+      backupDir: backupPath,
+      manifestInstallRef: "old-ref",
+      addonsRootDir: addonsRoot,
+    });
+
+    await expect(fs.readFile(path.join(addonPath, "old.txt"), "utf8")).resolves.toBe("old");
+    await expect(fs.stat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("publishes Arena as an external local app with a launch URL", () => {
@@ -264,6 +384,74 @@ describe("AddonsService", () => {
         launchUrl: "http://127.0.0.1:3099/",
       }),
     ]);
+    expect(service.listCatalog()[0]?.installCommands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "git",
+          args: [
+            "-C",
+            "<install-dir>",
+            "fetch",
+            "--depth",
+            "1",
+            "--no-tags",
+            "https://github.com/spurnout/goatcitadel-arena",
+            __internal.ARENA_REPO_REF,
+          ],
+        }),
+        expect.objectContaining({
+          command: "git",
+          args: ["-C", "<install-dir>", "checkout", "--detach", __internal.ARENA_REPO_REF],
+        }),
+      ]),
+    );
+  });
+
+  it("refuses to run package or build commands when the pinned checkout does not match", async () => {
+    execFileSyncMock.mockImplementation((command: string, args?: string[]) => {
+      if (command === "git" && args?.includes("rev-parse")) {
+        return `${"f".repeat(40)}\n`;
+      }
+      return "";
+    });
+    const service = new AddonsService(tempDir);
+
+    await expect(service.install("arena", { confirmRepoDownload: true })).rejects.toThrow(
+      "Arena checkout integrity mismatch",
+    );
+    expect(
+      execFileSyncMock.mock.calls.some(
+        ([command, args]) =>
+          (command === "corepack" || String(command).endsWith("node.exe")) &&
+          Array.isArray(args) &&
+          args.includes("pnpm"),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses to build a pinned checkout containing unexpected untracked state", async () => {
+    execFileSyncMock.mockImplementation((command: string, args?: string[]) => {
+      if (command === "git" && args?.includes("rev-parse")) {
+        return `${__internal.ARENA_REPO_REF}\n`;
+      }
+      if (command === "git" && args?.includes("status")) {
+        return "?? .npmrc\n";
+      }
+      return "";
+    });
+    const service = new AddonsService(tempDir);
+
+    await expect(service.install("arena", { confirmRepoDownload: true })).rejects.toThrow(
+      "Arena checkout is not clean",
+    );
+    expect(
+      execFileSyncMock.mock.calls.some(
+        ([command, args]) =>
+          (command === "corepack" || String(command).endsWith("node.exe")) &&
+          Array.isArray(args) &&
+          args.includes("pnpm"),
+      ),
+    ).toBe(false);
   });
 
   it("launches Arena with the local web origin and persists the launch URL when uiReady is true", async () => {
@@ -273,6 +461,7 @@ describe("AddonsService", () => {
     await fs.mkdir(path.join(addonPath, "apps", "web", "dist"), { recursive: true });
     await fs.writeFile(path.join(addonPath, "apps", "server", "dist", "index.js"), "console.log('arena');\n", "utf8");
     await fs.writeFile(path.join(addonPath, "apps", "web", "dist", "index.html"), "<!doctype html>\n", "utf8");
+    await fs.writeFile(path.join(addonPath, "arena.db"), "database", "utf8");
     await fs.writeFile(
       path.join(addonsRoot, "manifest.json"),
       `${JSON.stringify(
@@ -344,13 +533,18 @@ describe("AddonsService", () => {
           ARENA_PORT: "3099",
           CORS_ORIGIN: "http://127.0.0.1:3099",
           GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
+          ARENA_DB_PATH: path.join(addonsRoot, "data", "arena", "arena.db"),
         }),
       }),
     );
+    await expect(fs.readFile(path.join(addonsRoot, "data", "arena", "arena.db"), "utf8")).resolves.toBe("database");
+    await expect(fs.stat(path.join(addonPath, "arena.db"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps new add-ons disabled until enabled and registers dashboard slots on enable", async () => {
-    execFileSyncMock.mockImplementation(() => "abc123\n");
+    execFileSyncMock.mockImplementation((command: string, args?: string[]) =>
+      command === "git" && args?.includes("rev-parse") ? `${__internal.ARENA_REPO_REF}\n` : "",
+    );
     fetchMock.mockImplementation(
       async () =>
         new Response(JSON.stringify({ status: "ok", uiReady: true, uiEntryPath: "/" }), {
@@ -431,7 +625,9 @@ describe("AddonsService", () => {
   });
 
   it("does not throw on install or uninstall when no slot service is provided", async () => {
-    execFileSyncMock.mockImplementation(() => "abc123\n");
+    execFileSyncMock.mockImplementation((command: string, args?: string[]) =>
+      command === "git" && args?.includes("rev-parse") ? `${__internal.ARENA_REPO_REF}\n` : "",
+    );
     fetchMock.mockImplementation(
       async () =>
         new Response(JSON.stringify({ status: "ok", uiReady: true, uiEntryPath: "/" }), {

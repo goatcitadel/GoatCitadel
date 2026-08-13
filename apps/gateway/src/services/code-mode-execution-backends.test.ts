@@ -7,6 +7,8 @@ import {
 } from "./code-mode-execution-backends.js";
 
 describe("code-mode-execution-backends", () => {
+  const digestPinnedAiderImage =
+    "ghcr.io/goatcitadel/aider-adapter@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   it("keeps Docker preview-only without explicit enablement and image config", () => {
     const response = buildCodeModeExecutionBackends({
       codeModeEnabled: true,
@@ -61,7 +63,7 @@ describe("code-mode-execution-backends", () => {
         image: "ghcr.io/goatcitadel/code-mode-runner:preview",
         requireDigestPin: false,
       },
-      aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview", command: "aider" },
+      aiderAdapter: { enabled: true, image: digestPinnedAiderImage, command: "aider" },
       env: {},
     });
 
@@ -83,7 +85,7 @@ describe("code-mode-execution-backends", () => {
           image: "ghcr.io/goatcitadel/code-mode-runner:preview",
           requireDigestPin: false,
         },
-        aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+        aiderAdapter: { enabled: true, image: digestPinnedAiderImage },
         env: {},
       }),
     ).toMatchObject({
@@ -91,6 +93,39 @@ describe("code-mode-execution-backends", () => {
       kind: "aider_adapter",
       isolationProfile: "docker/aider-audit/no_operator_workspace",
     });
+  });
+
+  it("blocks mutable tag-only Aider adapter images", () => {
+    const response = buildCodeModeExecutionBackends({
+      codeModeEnabled: true,
+      sandbox: sandboxMetadata(),
+      dockerBackend: {
+        enabled: true,
+        image:
+          "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+      aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+      env: {},
+    });
+
+    expect(response.items.find((item) => item.backendId === CODE_MODE_AIDER_ADAPTER_ID)).toMatchObject({
+      status: "blocked",
+      runtimeSupport: "not_available",
+      callable: false,
+      blockers: expect.arrayContaining(["Aider adapter requires a digest-pinned image (name@sha256:<64 hex chars>)."]),
+    });
+    expect(() =>
+      buildCodeModeRunExecutionBackendRef(sandboxMetadata(), {
+        requestedBackendId: CODE_MODE_AIDER_ADAPTER_ID,
+        dockerBackend: {
+          enabled: true,
+          image:
+            "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+        env: {},
+      }),
+    ).toThrow("Aider adapter requires a digest-pinned image");
   });
 
   it("blocks Docker and dependent Aider catalog entries when digest pinning is required but the image is tag-only", () => {

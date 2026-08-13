@@ -492,6 +492,7 @@ export const AssistantConfigInputSchema = z
                     token: z.string().optional(),
                     tokenEnv: z.string().optional(),
                     scopes: z.array(z.string()).optional(),
+                    allowedWorkspaceIds: z.array(z.string().trim().min(1)).optional(),
                     expiresAt: z.string().optional(),
                     revokedAt: z.string().optional(),
                   })

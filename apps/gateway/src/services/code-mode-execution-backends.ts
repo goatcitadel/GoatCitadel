@@ -212,14 +212,15 @@ function buildAiderAdapter(
   const envFlag = "GOATCITADEL_CODE_MODE_AIDER_ADAPTER_ENABLED";
   const enabled = aiderAdapter?.enabled ?? isTruthyEnv(env[envFlag]);
   const image = aiderAdapter?.image?.trim();
+  const digestPinBlocked = Boolean(enabled && image && !isDigestPinnedImageRef(image));
   const blockedByDocker = Boolean(codeModeEnabled && enabled && image && docker.status === "blocked");
-  const callable = codeModeEnabled && enabled && docker.callable && Boolean(image);
+  const callable = codeModeEnabled && enabled && docker.callable && Boolean(image) && !digestPinBlocked;
   return {
     backendId: CODE_MODE_AIDER_ADAPTER_ID,
     kind: "aider_adapter",
     label: "Aider CLI adapter",
-    status: blockedByDocker ? "blocked" : callable ? "available" : "preview",
-    runtimeSupport: blockedByDocker ? "not_available" : callable ? "active_runner" : "preview_only",
+    status: blockedByDocker || digestPinBlocked ? "blocked" : callable ? "available" : "preview",
+    runtimeSupport: blockedByDocker || digestPinBlocked ? "not_available" : callable ? "active_runner" : "preview_only",
     adapterForBackendId: CODE_MODE_DOCKER_BACKEND_ID,
     default: false,
     callable,
@@ -231,6 +232,7 @@ function buildAiderAdapter(
       ...(!enabled ? ["Aider adapter is not enabled."] : []),
       ...(!docker.callable ? ["Docker execution backend is not callable."] : []),
       ...(enabled && !image ? ["Aider adapter is enabled but no container image is configured."] : []),
+      ...(digestPinBlocked ? ["Aider adapter requires a digest-pinned image (name@sha256:<64 hex chars>)."] : []),
     ],
     governance: [
       "Must retain explicit approvals and immutable run evidence.",

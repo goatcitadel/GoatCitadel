@@ -929,6 +929,7 @@ export class LlmService {
 
   public async previewModels(input: LlmModelPreviewRequest): Promise<LlmModelPreviewResponse> {
     const existing = this.providers.get(input.providerId);
+    assertPreviewEnvironmentReferencesBound(existing, input);
     // SECURITY (codex finding #25a, #30): The preview endpoint accepts an
     // arbitrary `baseUrl` and an existing `providerId`. Previously the code
     // happily fell back to the existing provider's stored apiKey/apiKeyEnv/
@@ -940,11 +941,13 @@ export class LlmService {
     // would Authorization-bearer that secret to the attacker.
     //
     // We now refuse to inherit secret material when the caller-supplied
-    // baseUrl is on a different host than the existing provider's
+    // baseUrl is on a different origin than the existing provider's
     // configured baseUrl. The caller may still preview an arbitrary baseUrl
-    // — they just have to supply the key themselves.
-    const hostsMatch = previewHostsMatch(existing?.baseUrl, input.baseUrl);
-    const inheritFromExisting = !existing || hostsMatch;
+    // — they just have to supply the secret value themselves. Environment
+    // references remain bound to the saved provider and proxy configuration.
+    const originsMatch = previewHostsMatch(existing?.baseUrl, input.baseUrl);
+    const proxyRouteMatches = previewProxyRoutesMatch(existing?.request, input.request);
+    const inheritFromExisting = !existing || (originsMatch && proxyRouteMatches);
     const provider = normalizeProvider({
       providerId: input.providerId,
       label: existing?.label ?? input.providerId,
@@ -3099,21 +3102,91 @@ function normalizeGoogleCloudConfig(config: LlmProviderConfig["googleCloud"]): L
   return normalized && Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-// SECURITY (codex finding #25a, #30): Compare the host portion of two
-// provider base URLs. Used by `previewModels` to decide whether the
-// caller-supplied baseUrl is the same provider host as the configured one;
+// SECURITY (codex finding #25a, #30): Compare the origin of two provider
+// base URLs. Used by `previewModels` to decide whether the caller-supplied
+// baseUrl is the same provider origin as the configured one;
 // if not, inheriting stored secrets is unsafe.
 export function previewHostsMatch(configuredBaseUrl: string | undefined, requestedBaseUrl: string): boolean {
   if (!configuredBaseUrl?.trim()) {
     return true;
   }
   try {
-    const configured = new URL(configuredBaseUrl).host.toLowerCase();
-    const requested = new URL(requestedBaseUrl).host.toLowerCase();
+    const configured = new URL(configuredBaseUrl).origin.toLowerCase();
+    const requested = new URL(requestedBaseUrl).origin.toLowerCase();
     return configured === requested;
   } catch {
     return false;
   }
+}
+
+function previewProxyRoutesMatch(
+  existingRequest: LlmProviderRequestConfig | undefined,
+  previewRequest: LlmProviderRequestConfig | undefined,
+): boolean {
+  if (!previewRequest) {
+    return true;
+  }
+  const configuredProxyUrl = existingRequest?.proxy?.url?.trim();
+  const requestedProxyUrl = previewRequest.proxy?.url?.trim();
+  if (!configuredProxyUrl && !requestedProxyUrl) {
+    return true;
+  }
+  if (!configuredProxyUrl || !requestedProxyUrl) {
+    return false;
+  }
+  return previewHostsMatch(configuredProxyUrl, requestedProxyUrl);
+}
+
+function assertPreviewEnvironmentReferencesBound(
+  existing: LlmProviderConfig | undefined,
+  input: LlmModelPreviewRequest,
+): void {
+  const apiKeyEnv = input.apiKeyEnv?.trim();
+  const requestAuthEnv = readRequestAuthEnvironmentReference(input.request?.auth);
+  const proxyAuthEnv = readRequestAuthEnvironmentReference(input.request?.proxy?.auth);
+  if (!apiKeyEnv && !requestAuthEnv && !proxyAuthEnv) {
+    return;
+  }
+  if (!existing || !previewHostsMatch(existing.baseUrl, input.baseUrl)) {
+    throw new Error("Preview environment credentials require a matching saved provider origin.");
+  }
+  if (apiKeyEnv && apiKeyEnv !== existing.apiKeyEnv?.trim()) {
+    throw new Error("Preview apiKeyEnv must match the saved provider environment reference.");
+  }
+  if (requestAuthEnv) {
+    const existingRequestAuthEnv = readRequestAuthEnvironmentReference(existing.request?.auth);
+    if (requestAuthEnv !== existingRequestAuthEnv) {
+      throw new Error("Preview request auth environment reference must match the saved provider configuration.");
+    }
+  }
+  if (proxyAuthEnv) {
+    const requestedProxyUrl = input.request?.proxy?.url;
+    const existingProxyUrl = existing.request?.proxy?.url;
+    const existingProxyAuthEnv = readRequestAuthEnvironmentReference(existing.request?.proxy?.auth);
+    if (
+      !requestedProxyUrl ||
+      !existingProxyUrl ||
+      !previewHostsMatch(existingProxyUrl, requestedProxyUrl) ||
+      proxyAuthEnv !== existingProxyAuthEnv
+    ) {
+      throw new Error("Preview proxy auth environment reference must match the saved proxy configuration.");
+    }
+  }
+  if ((apiKeyEnv || requestAuthEnv) && input.request?.proxy) {
+    const existingProxyUrl = existing.request?.proxy?.url;
+    if (!existingProxyUrl || !previewHostsMatch(existingProxyUrl, input.request.proxy.url)) {
+      throw new Error("Preview requests using environment credentials require the saved provider proxy.");
+    }
+  }
+}
+
+function readRequestAuthEnvironmentReference(
+  auth: LlmProviderRequestAuthConfig | LlmProviderRequestProxyAuthConfig | undefined,
+): string | undefined {
+  if (!auth) {
+    return undefined;
+  }
+  return (auth.type === "bearer" ? auth.tokenEnv : auth.valueEnv)?.trim() || undefined;
 }
 
 // SECURITY (codex finding #15): Strip every secret-bearing field from a

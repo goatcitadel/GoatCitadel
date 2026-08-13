@@ -697,6 +697,42 @@ describe("integration-action-service", () => {
     ]);
   });
 
+  it("binds local bridge environment secrets to the connection catalog before forwarding auth", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "https://bridge.example.test",
+        authTokenEnv: "GOATCITADEL_AUTH_BASIC_PASSWORD",
+      },
+    });
+    const resolveConnectionSecret = vi.fn(() => undefined);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: "read succeeded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const host = createHost(connection, {
+      resolveConnectionSecret,
+      fetchWithDiagnosticsTimeout: fetchMock,
+    });
+
+    await invokeIntegrationConnectionAction(host, connection.connectionId, "read");
+
+    expect(resolveConnectionSecret).toHaveBeenCalledWith(
+      connection.config,
+      "authToken",
+      "authTokenEnv",
+      connection.catalogId,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://bridge.example.test/v1/integrations/actions",
+      expect.objectContaining({
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  });
+
   it("keeps the local bridge tray-status action read-only with broad compatibility fallback", async () => {
     const connection = createConnection({
       catalogId: "platform.macos-menubar-voice",

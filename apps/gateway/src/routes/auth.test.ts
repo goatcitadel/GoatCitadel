@@ -917,6 +917,23 @@ describe("auth routes", () => {
     });
   });
 
+  it("returns 429 when the durable device-request admission ceiling is full", async () => {
+    app = await buildApp("token");
+    vi.spyOn(app.services.authAdmin, "createDeviceAccessRequest").mockRejectedValue(
+      Object.assign(new Error("Too many device access requests are already pending."), { statusCode: 429 }),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/device-requests",
+      remoteAddress: "203.0.113.10",
+      payload: { deviceLabel: "LAN laptop", deviceType: "desktop" },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toEqual({ error: "Too many device access requests are already pending." });
+  });
+
   it("applies tighter per-route rate limits on device request creation", async () => {
     app = await buildApp("token", { registerRateLimit: true });
 

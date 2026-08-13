@@ -65,7 +65,8 @@ export function composeIntegrationChannelRouteDependencies(
     fetchWithTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
     transcribeVoice: (input) => gateway.mediaVoiceService.transcribeVoice(input),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
-    resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
   });
   const externalConnectorCatalog = new ExternalConnectorCatalogService({
     reviewStates: gateway.storage.externalConnectorReviewStates,
@@ -506,7 +507,8 @@ export function createIntegrationDiagnosticsServiceForGateway(
     getDiscordRuntimeStatus: (connectionId) => gateway.discordRuntimeService.getConnectionStatus(connectionId),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
-    resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
   });
 }
 
@@ -550,7 +552,8 @@ function createIntegrationChannelPortForGateway(
       await gateway.writeDiscordPairings(records);
     },
     discordRuntimeService: gateway.discordRuntimeService,
-    resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
@@ -595,7 +598,8 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     storage: gateway.storage,
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
-    resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
+      gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     evidenceEnvelopeService: gateway.evidenceEnvelopeService,
     mutationStore: gateway.mutationIdempotencyStore,

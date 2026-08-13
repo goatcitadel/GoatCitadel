@@ -922,6 +922,7 @@ describe("LlmService", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           apiStyle: "openai-chat-completions",
           defaultModel: "glm-5",
+          apiKeyEnv: "GLM_API_KEY",
         },
       ],
     };
@@ -968,6 +969,127 @@ describe("LlmService", () => {
     }
 
     expect(receivedHeaders?.get("authorization")).toBe("Bearer env-preview-token");
+  });
+
+  it("rejects unbound preview environment credentials before any outbound request", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "glm",
+      providers: [
+        {
+          providerId: "glm",
+          label: "GLM",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "glm-5",
+          apiKeyEnv: "GLM_API_KEY",
+          request: {
+            auth: { type: "bearer", tokenEnv: "GLM_REQUEST_TOKEN" },
+            proxy: {
+              url: "https://saved-proxy.example.test",
+              auth: { type: "header", headerName: "Proxy-Authorization", valueEnv: "GLM_PROXY_TOKEN" },
+            },
+          },
+        },
+      ],
+    };
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        GLM_API_KEY: "glm-secret",
+        GLM_REQUEST_TOKEN: "request-secret",
+        GLM_PROXY_TOKEN: "proxy-secret",
+        GOATCITADEL_AUTH_BASIC_PASSWORD: "gateway-secret",
+      },
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.previewModels({
+          providerId: "glm",
+          baseUrl: "https://attacker.example.test/v1",
+          apiKeyEnv: "GLM_API_KEY",
+        }),
+      ).rejects.toThrow(/matching saved provider origin/i);
+      await expect(
+        service.previewModels({
+          providerId: "glm",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          apiKeyEnv: "GOATCITADEL_AUTH_BASIC_PASSWORD",
+        }),
+      ).rejects.toThrow(/apiKeyEnv must match/i);
+      await expect(
+        service.previewModels({
+          providerId: "glm",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          request: { auth: { type: "bearer", tokenEnv: "GOATCITADEL_AUTH_BASIC_PASSWORD" } },
+        }),
+      ).rejects.toThrow(/request auth environment reference must match/i);
+      await expect(
+        service.previewModels({
+          providerId: "glm",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          request: {
+            proxy: {
+              url: "https://attacker-proxy.example.test",
+              auth: {
+                type: "header",
+                headerName: "Proxy-Authorization",
+                valueEnv: "GLM_PROXY_TOKEN",
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(/proxy auth environment reference must match/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit saved provider credentials when preview proxy routing changes", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+          apiKey: "stored-provider-secret",
+          headers: { "x-stored-secret": "stored-header-secret" },
+        },
+      ],
+    };
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let receivedHeaders: Headers | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      receivedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ data: [{ id: "gpt-4.1-mini" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.previewModels({
+        providerId: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        request: { proxy: { url: "https://attacker-proxy.example.test" } },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(receivedHeaders?.get("authorization")).toBeNull();
+    expect(receivedHeaders?.get("x-stored-secret")).toBeNull();
   });
 
   it("uses provider-template defaults when upserting a new provider without an explicit default model", () => {

@@ -120,22 +120,12 @@ function hasProxyProvenance(request: Pick<FastifyRequest, "headers" | "ips"> | u
   if (!request) {
     return false;
   }
-  const forwarded = request.headers.forwarded;
-  const forwardedFor = request.headers["x-forwarded-for"];
-  const realIp = request.headers["x-real-ip"];
   return (
-    hasNonEmptyHeaderValue(forwarded) ||
-    hasNonEmptyHeaderValue(forwardedFor) ||
-    hasNonEmptyHeaderValue(realIp) ||
+    "forwarded" in request.headers ||
+    "x-forwarded-for" in request.headers ||
+    "x-real-ip" in request.headers ||
     (Array.isArray(request.ips) && request.ips.length > 1)
   );
-}
-
-function hasNonEmptyHeaderValue(value: string | string[] | undefined): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => entry.trim().length > 0);
-  }
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function readRequestParams(params: unknown): Record<string, unknown> {

@@ -78,7 +78,12 @@ export interface ChannelVoiceInboundDeps {
   /** Gateway connection outbound-URL allowlist. */
   isConnectionUrlAllowlisted: (urlValue: string) => boolean;
   /** Connection-config secret resolver (direct value or allowlisted env name). */
-  resolveConnectionSecret: (config: Record<string, unknown>, directKey: string, envKey: string) => string | undefined;
+  resolveConnectionSecret: (
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+    catalogId: string,
+  ) => string | undefined;
 }
 
 export class ChannelVoiceInboundService {
@@ -101,8 +106,8 @@ export class ChannelVoiceInboundService {
 
   private async downloadTelegramVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "telegram" }>) {
     const botToken =
-      this.deps.resolveConnectionSecret(request.connectionConfig, "botToken", "botTokenEnv") ??
-      this.deps.resolveConnectionSecret(request.connectionConfig, "token", "tokenEnv");
+      this.deps.resolveConnectionSecret(request.connectionConfig, "botToken", "botTokenEnv", "channel.telegram") ??
+      this.deps.resolveConnectionSecret(request.connectionConfig, "token", "tokenEnv", "channel.telegram");
     if (!botToken) {
       return failure("missing_credentials", "Telegram connection is missing a bot token.");
     }
@@ -151,8 +156,12 @@ export class ChannelVoiceInboundService {
 
   private async downloadWhatsAppVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "whatsapp" }>) {
     const accessToken =
-      this.deps.resolveConnectionSecret(request.connectionConfig, "accessToken", "accessTokenEnv") ??
-      this.deps.resolveConnectionSecret(request.connectionConfig, "token", "tokenEnv");
+      this.deps.resolveConnectionSecret(
+        request.connectionConfig,
+        "accessToken",
+        "accessTokenEnv",
+        "channel.whatsapp",
+      ) ?? this.deps.resolveConnectionSecret(request.connectionConfig, "token", "tokenEnv", "channel.whatsapp");
     if (!accessToken) {
       return failure("missing_credentials", "WhatsApp connection is missing an access token.");
     }

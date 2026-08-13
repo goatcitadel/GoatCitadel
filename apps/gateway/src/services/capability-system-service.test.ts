@@ -38,6 +38,8 @@ const tempRoots: string[] = [];
 const storageCleanups: Array<() => void | Promise<void>> = [];
 const digestPinnedRunnerImage =
   "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const digestPinnedAiderImage =
+  "ghcr.io/goatcitadel/aider-adapter@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 // These cases cross child execution plus multiple committed filesystem reads.
 // Four-worker Windows V8 coverage can spend most of the default test budget in
 // process and I/O scheduling even while the bounded operations are progressing.
@@ -862,7 +864,7 @@ describe("CapabilitySystemService", () => {
       },
       aiderAdapter: {
         enabled: true,
-        image: "ghcr.io/goatcitadel/aider-adapter:preview",
+        image: digestPinnedAiderImage,
       },
     });
 
@@ -871,8 +873,9 @@ describe("CapabilitySystemService", () => {
       source: "return { ok: true };",
       executionBackendId: "aider-cli-adapter",
       aider: {
-        requestMarkdown: "Refactor this run-temp file.",
-        repositoryRootRelPath: "workspace",
+        requestMarkdown: "  Refactor this run-temp file.  ",
+        repositoryRootRelPath: " workspace ",
+        model: " test-model ",
       },
     });
 
@@ -887,9 +890,78 @@ describe("CapabilitySystemService", () => {
         aider: {
           requestMarkdown: "Refactor this run-temp file.",
           repositoryRootRelPath: "workspace",
+          model: "test-model",
         },
       },
     });
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          inputHash: run.codeModeInputHash,
+          aiderRequest: {
+            requestMarkdown: "Refactor this run-temp file.",
+            repositoryRootRelPath: "workspace",
+            model: "test-model",
+          },
+          aiderExecution: expect.objectContaining({
+            version: 1,
+            aiderAdapter: expect.objectContaining({ image: digestPinnedAiderImage, command: "aider" }),
+            dockerBackend: expect.objectContaining({ dockerCommand: "docker" }),
+          }),
+        }),
+      }),
+    );
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    expect(policySnapshot.codeModeAiderRequest).toEqual({
+      requestMarkdown: "Refactor this run-temp file.",
+      repositoryRootRelPath: "workspace",
+      model: "test-model",
+    });
+    expect(policySnapshot.codeModeAiderExecution).toEqual({
+      version: 1,
+      aiderAdapter: {
+        enabled: true,
+        image: digestPinnedAiderImage,
+        command: "aider",
+      },
+      dockerBackend: {
+        enabled: true,
+        dockerCommand: "docker",
+      },
+    });
+    expect(
+      __internal.readFrozenCodeModeInputBinding(
+        policySnapshot,
+        {},
+        { requestMarkdown: "tampered after approval", repositoryRootRelPath: "elsewhere" },
+        run.codeModeInputHash,
+      ),
+    ).toEqual({
+      input: {},
+      aiderRequest: {
+        requestMarkdown: "Refactor this run-temp file.",
+        repositoryRootRelPath: "workspace",
+        model: "test-model",
+      },
+      aiderExecution: policySnapshot.codeModeAiderExecution,
+    });
+    expect(() =>
+      __internal.readFrozenCodeModeInputBinding(
+        {
+          ...policySnapshot,
+          codeModeAiderRequest: {
+            requestMarkdown: "tampered inside snapshot",
+            repositoryRootRelPath: "workspace",
+            model: "test-model",
+          },
+        },
+        {},
+        undefined,
+        run.codeModeInputHash,
+      ),
+    ).toThrow("Code Mode input snapshot hash mismatch");
 
     await expect(
       harness.service.createCodeModeRun({
@@ -4699,6 +4771,106 @@ describe("CapabilitySystemService", () => {
       error: expect.stringContaining("Code Mode stored input hash mismatch"),
     });
     expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("requires re-approval for legacy Aider runs without a frozen request snapshot", async () => {
+    const harness = await createHarness({
+      sandboxConfig: { bestEffortHostEnabled: true },
+      dockerBackend: {
+        enabled: true,
+        image: digestPinnedRunnerImage,
+      },
+      aiderAdapter: {
+        enabled: true,
+        image: digestPinnedAiderImage,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      aider: {
+        requestMarkdown: "Refactor this run-temp file.",
+        repositoryRootRelPath: "workspace",
+      },
+    });
+    const policyPath = path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath);
+    const legacyPolicy = JSON.parse(await fs.readFile(policyPath, "utf8")) as Record<string, unknown>;
+    delete legacyPolicy.codeModeAiderRequest;
+    const legacyInputHash = sha256Text(JSON.stringify(legacyPolicy.codeModeInput ?? {}));
+    legacyPolicy.codeModeInputHash = legacyInputHash;
+    const legacyContent = JSON.stringify(legacyPolicy, null, 2);
+    await fs.writeFile(policyPath, legacyContent, "utf8");
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      codeModeInputHash: legacyInputHash,
+      policySnapshotHash: sha256Text(JSON.stringify(legacyPolicy)),
+      policySnapshotArtifact: {
+        ...run.policySnapshotArtifact,
+        sha256: sha256Text(legacyContent),
+        bytes: Buffer.byteLength(legacyContent, "utf8"),
+      },
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("Aider request snapshot is missing"),
+      }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({ error: expect.stringContaining("Aider request snapshot is missing") }),
+    );
+  });
+
+  it("fails closed when Aider execution configuration changes after approval", async () => {
+    const dockerBackend: CapabilityRuntimeConfig["codeModeDockerBackend"] = {
+      enabled: true,
+      image: digestPinnedRunnerImage,
+    };
+    const aiderAdapter: CapabilityRuntimeConfig["codeModeAiderAdapter"] = {
+      enabled: true,
+      image: digestPinnedAiderImage,
+      command: "aider",
+      model: "approved-model",
+    };
+    const harness = await createHarness({
+      sandboxConfig: { bestEffortHostEnabled: true },
+      dockerBackend,
+      aiderAdapter,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      aider: {
+        requestMarkdown: "Refactor this run-temp file.",
+        repositoryRootRelPath: "workspace",
+      },
+    });
+    aiderAdapter.command = "different-aider";
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("execution configuration changed after approval"),
+      }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({ error: expect.stringContaining("execution configuration changed after approval") }),
+    );
   });
 
   it("stages a candidate bundle after approval and execution when candidate save is enabled", async () => {

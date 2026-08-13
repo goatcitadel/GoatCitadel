@@ -38,6 +38,7 @@ import {
   buildA2ATaskExportPreview,
   buildPeerCredentialHealth,
   normalizeA2AConfig,
+  normalizeAllowedWorkspaceIds,
   readPeerCredentialSecret,
 } from "./a2a-bridge-service.js";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
@@ -77,12 +78,24 @@ export interface A2APeerAuthResult {
   peerId: string;
   label?: string;
   scopes: string[];
+  /** Always populated by network authentication. Optional only for trusted legacy in-process callers. */
+  allowedWorkspaceIds?: string[];
 }
 
 export interface A2APeerAuthFailure {
   statusCode: number;
   reason: string;
   message: string;
+}
+
+function a2aPeerAuthorizationError(message: string): A2AJsonRpcServiceError {
+  const error = new A2AJsonRpcServiceError(-32022, message) as A2AJsonRpcServiceError & {
+    statusCode: number;
+    reason: string;
+  };
+  error.statusCode = 403;
+  error.reason = "a2a_peer_scope_forbidden";
+  return error;
 }
 
 export interface A2ARouteServiceDependencies {
@@ -235,6 +248,7 @@ export class A2ARouteService {
           peerId: credential.peerId,
           label: credential.label,
           scopes: credential.scopes ?? ["a2a:jsonrpc"],
+          allowedWorkspaceIds: normalizeAllowedWorkspaceIds(credential.allowedWorkspaceIds),
         };
       }
     }
@@ -267,6 +281,7 @@ export class A2ARouteService {
       if (bindingError) {
         return jsonRpcError(request.value.id, -32030, bindingError);
       }
+      this.assertPeerTransportScope(peer, "JSONRPC");
       switch (request.value.method) {
         case "SendMessage":
           return jsonRpcResult(request.value.id, {
@@ -350,6 +365,7 @@ export class A2ARouteService {
         peerId: peer.peerId,
         label: peer.label,
         scopes: peer.scopes,
+        allowedWorkspaceIds: this.resolvePeerWorkspaceIds(peer),
       },
       checkedAt: input.checkedAt,
       boundary: "gateway_peer_authenticated",
@@ -362,6 +378,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
+    this.assertPeerTransportScope(peer, "HTTP_JSON");
     return await this.sendMessage(peer, params, checkedAt, false, "a2a_http_json");
   }
 
@@ -371,6 +388,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
+    this.assertPeerTransportScope(peer, "HTTP_JSON");
     return await this.getA2ATask(peer, params, checkedAt);
   }
 
@@ -380,6 +398,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("HTTP_JSON");
+    this.assertPeerTransportScope(peer, "HTTP_JSON");
     return await this.cancelA2ATask(peer, params, checkedAt);
   }
 
@@ -389,6 +408,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<{ task: A2ABridgeTask; events: A2ABridgeTaskEvent[] }> {
     this.assertInboundBinding("HTTP_JSON");
+    this.assertPeerTransportScope(peer, "HTTP_JSON");
     const task = await this.getA2ATask(peer, params, checkedAt);
     const since = readNumber(params.lastEventSequence) ?? 0;
     return {
@@ -403,6 +423,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("GRPC");
+    this.assertPeerTransportScope(peer, "GRPC");
     return await this.sendMessage(peer, params, checkedAt, false, "a2a_grpc");
   }
 
@@ -412,6 +433,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<{ task: A2ABridgeTask; events: A2ABridgeTaskEvent[] }> {
     this.assertInboundBinding("GRPC");
+    this.assertPeerTransportScope(peer, "GRPC");
     const task = await this.sendMessage(peer, params, checkedAt, true, "a2a_grpc");
     return {
       task,
@@ -425,6 +447,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("GRPC");
+    this.assertPeerTransportScope(peer, "GRPC");
     return await this.getA2ATask(peer, params, checkedAt);
   }
 
@@ -434,6 +457,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<A2ABridgeTask> {
     this.assertInboundBinding("GRPC");
+    this.assertPeerTransportScope(peer, "GRPC");
     return await this.cancelA2ATask(peer, params, checkedAt);
   }
 
@@ -443,6 +467,7 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<{ task: A2ABridgeTask; events: A2ABridgeTaskEvent[] }> {
     this.assertInboundBinding("GRPC");
+    this.assertPeerTransportScope(peer, "GRPC");
     const task = await this.getA2ATask(peer, params, checkedAt);
     const since = readNumber(params.lastEventSequence) ?? 0;
     return {
@@ -456,6 +481,7 @@ export class A2ARouteService {
     input: { checkedAt: string; baseUrl?: string },
   ) {
     this.assertInboundBinding("GRPC");
+    this.assertPeerTransportScope(peer, "GRPC");
     return this.getAuthenticatedExtendedAgentCard(peer, input);
   }
 
@@ -729,6 +755,14 @@ export class A2ARouteService {
     }
   }
 
+  private assertPeerTransportScope(peer: A2APeerAuthResult, binding: A2ABridgeProtocolBinding): void {
+    const requiredScope =
+      binding === "JSONRPC" ? "a2a:jsonrpc" : binding === "HTTP_JSON" ? "a2a:http-json" : "a2a:grpc";
+    if (!peer.scopes.includes(requiredScope)) {
+      throw a2aPeerAuthorizationError(`A2A peer credential does not authorize ${binding} access.`);
+    }
+  }
+
   private resolveInboundBindingError(binding?: A2ABridgeProtocolBinding): string | undefined {
     const config = this.config;
     if (!config.enabled || !config.inbound.enabled) {
@@ -763,6 +797,20 @@ export class A2ARouteService {
     if (binding.peerId !== peer.peerId) {
       throw new A2AJsonRpcServiceError(-32022, "A2A task is not owned by the authenticated peer.");
     }
+    this.assertPeerWorkspaceAccess(peer, binding.workspaceId);
+  }
+
+  private resolvePeerWorkspaceIds(peer: A2APeerAuthResult): string[] {
+    // Network authentication always supplies an explicit list. The default
+    // preserves the trusted in-process service contract while remaining
+    // limited to the historical default workspace.
+    return peer.allowedWorkspaceIds ?? ["default"];
+  }
+
+  private assertPeerWorkspaceAccess(peer: A2APeerAuthResult, workspaceId: string): void {
+    if (!this.resolvePeerWorkspaceIds(peer).includes(workspaceId)) {
+      throw a2aPeerAuthorizationError("A2A peer credential does not authorize the requested workspace.");
+    }
   }
 
   private async sendMessage(
@@ -777,6 +825,7 @@ export class A2ARouteService {
     const idempotencyKey = buildInboundIdempotencyKey(peer.peerId, contextId, message, params);
     const a2aTaskId = readString(params.taskId) ?? `a2a_${hashStableJson({ peerId: peer.peerId, idempotencyKey })}`;
     const workspaceId = readString(params.workspaceId) ?? "default";
+    this.assertPeerWorkspaceAccess(peer, workspaceId);
     const identity = buildStableA2ADispatchIdentity(peer.peerId, idempotencyKey);
     let binding =
       (await this.deps.storage.a2aTaskBindings.findByIdempotency(peer.peerId, idempotencyKey)) ??

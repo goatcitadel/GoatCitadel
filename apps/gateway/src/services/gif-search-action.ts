@@ -28,7 +28,7 @@ export async function invokeGifSearchAction(
     );
   }
   const provider = (host.readConnectionConfigValue(connection.config, "provider") ?? "tenor").trim().toLowerCase();
-  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv");
+  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv", connection.catalogId);
   if (!apiKey) {
     return blocked(
       connection,

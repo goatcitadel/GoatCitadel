@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { z } from "zod";
+import { buildAddonChildEnv } from "./addon-child-env.js";
 import type {
   AddonActionResponse,
   AddonCatalogEntry,
@@ -50,36 +52,16 @@ const AddonManifestFileSchema = z.object({
 });
 
 const ARENA_REPO_URL = "https://github.com/spurnout/goatcitadel-arena";
+// Add-on install/build executes repository code on the host. Pin the reviewed
+// source revision so a moving default branch cannot change between operator
+// consent and execution. Updates move only when GoatCitadel ships a new pin.
+const ARENA_REPO_REF = "afce1692c9504aee816423fbb0dcb6bd24496053";
+const ARENA_DATABASE_FILE = "arena.db";
+const ARENA_DATABASE_COMPANION_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const ARENA_SERVER_PORT = 3099;
 const ARENA_SERVER_HEALTH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/health`;
 const ARENA_LAUNCH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/`;
 const COREPACK_ENTRYPOINT_RELATIVE_PATH = ["node_modules", "corepack", "dist", "corepack.js"] as const;
-const ADDON_CHILD_ENV_ALLOWLIST = new Set([
-  "APPDATA",
-  "COMSPEC",
-  "COREPACK_HOME",
-  "HOME",
-  "LOCALAPPDATA",
-  "NODE_NO_WARNINGS",
-  "NUMBER_OF_PROCESSORS",
-  "OS",
-  "PATH",
-  "PATHEXT",
-  "PNPM_HOME",
-  "PROCESSOR_ARCHITECTURE",
-  "PROGRAMDATA",
-  "PROGRAMFILES",
-  "PROGRAMFILES(X86)",
-  "SYSTEMDRIVE",
-  "SYSTEMROOT",
-  "TEMP",
-  "TMP",
-  "USERPROFILE",
-  "WINDIR",
-]);
-const ADDON_CHILD_ENV_PREFIX_ALLOWLIST = ["COREPACK_", "NPM_CONFIG_"];
-const ADDON_SECRET_ENV_PATTERN =
-  /(?:API[_-]?KEY|AUTH|COOKIE|CREDENTIAL|DATABASE_URL|OPENAI|ANTHROPIC|GOOGLE|GEMINI|MOONSHOT|PERPLEXITY|MISTRAL|OPENROUTER|DEEPSEEK|GLM|GROQ|XAI|POSTGRES|PASSWORD|SECRET|TOKEN)/i;
 const MANIFEST_VERSION: AddonManifestFile = {
   items: {},
 };
@@ -111,8 +93,18 @@ const ADDON_CATALOG: AddonCatalogEntry[] = [
     installCommands: [
       {
         command: "git",
-        args: ["clone", "--depth", "1", ARENA_REPO_URL, "<install-dir>"],
-        note: "Downloads the add-on into the GoatCitadel add-ons root.",
+        args: ["init", "<install-dir>"],
+        note: "Creates the isolated add-on repository under the GoatCitadel add-ons root.",
+      },
+      {
+        command: "git",
+        args: ["-C", "<install-dir>", "fetch", "--depth", "1", "--no-tags", ARENA_REPO_URL, ARENA_REPO_REF],
+        note: "Downloads the immutable Arena revision shipped with this GoatCitadel build.",
+      },
+      {
+        command: "git",
+        args: ["-C", "<install-dir>", "checkout", "--detach", ARENA_REPO_REF],
+        note: "Checks out the pinned revision before any package or build command runs.",
       },
       {
         command: "corepack",
@@ -202,9 +194,15 @@ export class AddonsService {
       throw new Error(`Addon target path already exists: ${targetDir}`);
     }
 
-    runCommand("git", ["clone", "--depth", "1", addon.repoUrl, targetDir], this.rootDir);
-    runCommand("corepack", ["pnpm", "install", "--frozen-lockfile"], targetDir);
-    runCommand("corepack", ["pnpm", "-r", "run", "build"], targetDir);
+    const stagingDir = await this.preparePinnedAddonBuild(addon);
+    try {
+      // Rename is the admission check too: if anything appeared at the
+      // operator-visible target after the earlier existence check, fail closed.
+      await fs.rename(stagingDir, targetDir);
+    } catch (error) {
+      await removeManagedAddonTempDirectory(stagingDir, this.addonsRootDir);
+      throw error;
+    }
 
     const now = new Date().toISOString();
     manifest.items[addonId] = {
@@ -225,7 +223,12 @@ export class AddonsService {
       enabled: false,
       runtimeStatus: "disabled",
     };
-    await this.writeManifest(manifest);
+    try {
+      await this.writeManifest(manifest);
+    } catch (error) {
+      await removeNewAddonInstall(targetDir, this.addonsRootDir, addonId);
+      throw error;
+    }
     this.slotService?.unregister(addonId);
     return {
       status: await this.getStatus(addonId),
@@ -284,14 +287,32 @@ export class AddonsService {
     const manifest = await this.readManifest();
     const current = this.requireInstalledRecord(addonId, manifest);
     const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
+    const backupDir = path.join(this.addonsRootDir, `.${addonId}-update-backup`);
+    await recoverInterruptedAddonUpdate({
+      installedPath,
+      backupDir,
+      manifestInstallRef: current.installRef,
+      addonsRootDir: this.addonsRootDir,
+    });
     if (!fsSync.existsSync(installedPath)) {
       throw new Error(`Installed add-on path is missing: ${installedPath}`);
     }
-    const previousRef = readGitRef(installedPath);
+    if (typeof current.pid === "number" && isProcessRunning(current.pid)) {
+      throw new Error(`Stop add-on ${addonId} before updating it.`);
+    }
+    if (addonId === "arena") {
+      await prepareArenaDataPath(installedPath, this.addonsRootDir);
+    }
+    let stagingDir: string | undefined;
+    let oldMoved = false;
+    let newPlaced = false;
     try {
-      runCommand("git", ["-C", installedPath, "pull", "--ff-only"], this.rootDir);
-      runCommand("corepack", ["pnpm", "install", "--frozen-lockfile"], installedPath);
-      runCommand("corepack", ["pnpm", "-r", "run", "build"], installedPath);
+      stagingDir = await this.preparePinnedAddonBuild(addon);
+      await fs.rename(installedPath, backupDir);
+      oldMoved = true;
+      await fs.rename(stagingDir, installedPath);
+      stagingDir = undefined;
+      newPlaced = true;
       manifest.items[addonId] = {
         ...current,
         installedPath,
@@ -304,11 +325,18 @@ export class AddonsService {
         lastError: undefined,
       };
       await this.writeManifest(manifest);
-      return {
-        status: await this.getStatus(addonId),
-      };
     } catch (error) {
-      rollbackAddonRepo(installedPath, previousRef);
+      if (newPlaced) {
+        const failedInstallDir = path.join(this.addonsRootDir, `.${addonId}-staging-${randomUUID()}`);
+        await fs.rename(installedPath, failedInstallDir);
+        stagingDir = failedInstallDir;
+      }
+      if (oldMoved) {
+        await fs.rename(backupDir, installedPath);
+      }
+      if (stagingDir) {
+        await removeManagedAddonTempDirectory(stagingDir, this.addonsRootDir);
+      }
       manifest.items[addonId] = {
         ...current,
         installedPath,
@@ -317,6 +345,37 @@ export class AddonsService {
       };
       await this.writeManifest(manifest);
       throw error;
+    }
+    await removeManagedAddonTempDirectory(backupDir, this.addonsRootDir);
+    return {
+      status: await this.getStatus(addonId),
+    };
+  }
+
+  private async preparePinnedAddonBuild(addon: AddonCatalogEntry): Promise<string> {
+    const stagingDir = await fs.mkdtemp(path.join(this.addonsRootDir, `.${addon.addonId}-staging-`));
+    const disabledHooksDir = await fs.mkdtemp(path.join(this.addonsRootDir, ".git-hooks-"));
+    const isolatedGlobalConfig = path.join(disabledHooksDir, "global.gitconfig");
+    await fs.writeFile(isolatedGlobalConfig, "", { encoding: "utf8", flag: "wx" });
+    const isolatedGitEnv = {
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: isolatedGlobalConfig,
+    };
+    try {
+      checkoutPinnedAddonRevision({
+        repoUrl: addon.repoUrl,
+        targetDir: stagingDir,
+        disabledHooksDir,
+        isolatedGlobalConfig,
+      });
+      runCommand("corepack", ["pnpm", "install", "--frozen-lockfile"], stagingDir, isolatedGitEnv);
+      runCommand("corepack", ["pnpm", "-r", "run", "build"], stagingDir, isolatedGitEnv);
+      return stagingDir;
+    } catch (error) {
+      await removeManagedAddonTempDirectory(stagingDir, this.addonsRootDir);
+      throw error;
+    } finally {
+      await removeManagedAddonTempDirectory(disabledHooksDir, this.addonsRootDir);
     }
   }
 
@@ -336,11 +395,13 @@ export class AddonsService {
     }
     const alreadyRunning = typeof current.pid === "number" && isProcessRunning(current.pid);
     if (!alreadyRunning) {
+      const arenaDbPath = await prepareArenaDataPath(installedPath, this.addonsRootDir);
       const child = spawnDetachedCommand("corepack", ["pnpm", "--filter", "@arena/server", "start"], installedPath, {
         ARENA_HOST: "127.0.0.1",
         ARENA_PORT: String(ARENA_SERVER_PORT),
         CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
         GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
+        ARENA_DB_PATH: arenaDbPath,
       });
       current.pid = child.pid;
     }
@@ -554,6 +615,7 @@ export class AddonsService {
     if (!fsSync.existsSync(this.manifestPath)) {
       return structuredClone(MANIFEST_VERSION);
     }
+    let manifest: AddonManifestFile;
     try {
       const raw = await fs.readFile(this.manifestPath, "utf8");
       const parsed = AddonManifestFileSchema.parse(JSON.parse(raw));
@@ -568,18 +630,38 @@ export class AddonsService {
           ];
         }),
       );
-      return { items };
+      manifest = { items };
     } catch (error) {
       if (error instanceof SyntaxError || error instanceof z.ZodError || error instanceof Error) {
         throw new Error(`Invalid add-on manifest at ${this.manifestPath}.`, { cause: error });
       }
       return structuredClone(MANIFEST_VERSION);
     }
+    for (const [addonId, record] of Object.entries(manifest.items)) {
+      await recoverInterruptedAddonUpdate({
+        installedPath: record.installedPath,
+        backupDir: path.join(this.addonsRootDir, `.${addonId}-update-backup`),
+        manifestInstallRef: record.installRef,
+        addonsRootDir: this.addonsRootDir,
+      });
+    }
+    return manifest;
   }
 
   private async writeManifest(manifest: AddonManifestFile): Promise<void> {
     await fs.mkdir(this.addonsRootDir, { recursive: true });
-    await fs.writeFile(this.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const temporaryPath = path.join(this.addonsRootDir, `.manifest-${randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      await fs.rename(temporaryPath, this.manifestPath);
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true });
+      throw error;
+    }
   }
 
   private hasInstalledRecordChanged(previous: AddonInstalledRecord | undefined, next: AddonInstalledRecord): boolean {
@@ -604,13 +686,13 @@ function resolveGoatCitadelHome(rootDir: string): string {
   return path.join(os.homedir(), ".GoatCitadel");
 }
 
-function runCommand(command: string, args: string[], cwd: string): void {
+function runCommand(command: string, args: string[], cwd: string, extraEnv: Record<string, string> = {}): string {
   const resolved = resolveCommandInvocation(command, args);
-  execFileSync(resolved.file, resolved.args, {
+  return execFileSync(resolved.file, resolved.args, {
     cwd,
     stdio: "pipe",
     encoding: "utf8",
-    env: buildAddonChildEnv(),
+    env: buildAddonChildEnv(extraEnv),
   });
 }
 
@@ -656,12 +738,63 @@ function spawnDetachedCommand(
   return { pid: child.pid };
 }
 
-function readGitRef(targetDir: string): string | undefined {
+function checkoutPinnedAddonRevision(input: {
+  repoUrl: string;
+  targetDir: string;
+  disabledHooksDir: string;
+  isolatedGlobalConfig: string;
+}): void {
+  const hookStats = fsSync.lstatSync(input.disabledHooksDir);
+  if (!hookStats.isDirectory() || hookStats.isSymbolicLink()) {
+    throw new Error("Refusing to use an unsafe Git hooks directory for add-on checkout.");
+  }
+  const gitArgs = (...args: string[]) => [
+    "-c",
+    `core.hooksPath=${input.disabledHooksDir}`,
+    "-c",
+    "core.fsmonitor=false",
+    ...args,
+  ];
+  const gitEnv = {
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: input.isolatedGlobalConfig,
+  };
+  runCommand("git", gitArgs("init", input.targetDir), path.dirname(input.targetDir), gitEnv);
+  runCommand(
+    "git",
+    gitArgs("-C", input.targetDir, "fetch", "--depth", "1", "--no-tags", input.repoUrl, ARENA_REPO_REF),
+    input.targetDir,
+    gitEnv,
+  );
+  runCommand(
+    "git",
+    gitArgs("-C", input.targetDir, "checkout", "--detach", "--force", ARENA_REPO_REF),
+    input.targetDir,
+    gitEnv,
+  );
+  const checkedOutRef = readGitRef(input.targetDir, gitEnv);
+  if (checkedOutRef?.toLowerCase() !== ARENA_REPO_REF) {
+    throw new Error(
+      `Arena checkout integrity mismatch: expected ${ARENA_REPO_REF}, received ${checkedOutRef ?? "missing"}.`,
+    );
+  }
+  const worktreeState = runCommand(
+    "git",
+    gitArgs("-C", input.targetDir, "status", "--porcelain=v1", "--untracked-files=all"),
+    input.targetDir,
+    gitEnv,
+  ).trim();
+  if (worktreeState) {
+    throw new Error("Arena checkout is not clean after pinned checkout; refusing to install or build it.");
+  }
+}
+
+function readGitRef(targetDir: string, extraEnv: Record<string, string> = {}): string | undefined {
   try {
     const result = execFileSync("git", ["-C", targetDir, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: "pipe",
-      env: buildAddonChildEnv(),
+      env: buildAddonChildEnv(extraEnv),
     });
     return result.trim() || undefined;
   } catch {
@@ -758,45 +891,149 @@ function pathVariantsForAddonBoundary(inputPath: string): string[] {
   return real === resolved ? [resolved] : [resolved, real];
 }
 
-function rollbackAddonRepo(targetDir: string, previousRef: string | undefined): void {
-  if (!previousRef) {
+async function removeManagedAddonTempDirectory(targetDir: string, addonsRootDir: string): Promise<void> {
+  const resolved = assertAddonPathWithinRoot(targetDir, addonsRootDir);
+  const name = path.basename(resolved);
+  if (
+    !/^\.(?:[a-z0-9_-]+-staging|[a-z0-9_-]+-backup|git-hooks)-/i.test(name) &&
+    !/^\.[a-z0-9_-]+-update-backup$/i.test(name)
+  ) {
+    throw new Error(`Refusing to remove an unmanaged add-on directory: ${resolved}`);
+  }
+  await fs.rm(resolved, { recursive: true, force: true });
+}
+
+async function prepareArenaDataPath(installedPath: string, addonsRootDir: string): Promise<string> {
+  const safeInstalledPath = assertAddonPathWithinRoot(installedPath, addonsRootDir);
+  const dataDirectory = path.join(addonsRootDir, "data", "arena");
+  await ensureAddonDirectoryWithoutLinks(dataDirectory, addonsRootDir);
+
+  for (const suffix of ARENA_DATABASE_COMPANION_SUFFIXES) {
+    const fileName = `${ARENA_DATABASE_FILE}${suffix}`;
+    const legacyPath = path.join(safeInstalledPath, fileName);
+    const durablePath = path.join(dataDirectory, fileName);
+    const legacyStats = await lstatIfPresent(legacyPath);
+    const durableStats = await lstatIfPresent(durablePath);
+    assertRegularAddonDataFile(legacyPath, legacyStats);
+    assertRegularAddonDataFile(durablePath, durableStats);
+    if (legacyStats && durableStats) {
+      throw new Error(`Arena database migration is ambiguous because both ${legacyPath} and ${durablePath} exist.`);
+    }
+    if (legacyStats) {
+      await fs.rename(legacyPath, durablePath);
+    }
+  }
+
+  return path.join(dataDirectory, ARENA_DATABASE_FILE);
+}
+
+async function recoverInterruptedAddonUpdate(input: {
+  installedPath: string;
+  backupDir: string;
+  manifestInstallRef?: string;
+  addonsRootDir: string;
+}): Promise<void> {
+  const installedPath = assertAddonPathWithinRoot(input.installedPath, input.addonsRootDir);
+  const backupDir = assertAddonPathWithinRoot(input.backupDir, input.addonsRootDir);
+  const backupStats = await lstatIfPresent(backupDir);
+  if (!backupStats) {
     return;
   }
-  try {
-    runCommand("git", ["-C", targetDir, "reset", "--hard", previousRef], targetDir);
-  } catch {
-    // Best-effort rollback; the original failure is more important to surface.
+  if (!backupStats.isDirectory() || backupStats.isSymbolicLink()) {
+    throw new Error(`Refusing to recover from an unsafe add-on update backup: ${backupDir}`);
   }
+
+  const installedStats = await lstatIfPresent(installedPath);
+  if (!installedStats) {
+    await fs.rename(backupDir, installedPath);
+    return;
+  }
+  if (!installedStats.isDirectory() || installedStats.isSymbolicLink()) {
+    throw new Error(`Refusing to recover over an unsafe add-on install path: ${installedPath}`);
+  }
+
+  const installedRef = readGitRef(installedPath);
+  const backupRef = readGitRef(backupDir);
+  if (input.manifestInstallRef && installedRef === input.manifestInstallRef) {
+    await removeManagedAddonTempDirectory(backupDir, input.addonsRootDir);
+    return;
+  }
+  if (!input.manifestInstallRef || backupRef === input.manifestInstallRef) {
+    const interruptedInstallDir = path.join(
+      input.addonsRootDir,
+      `.${path.basename(installedPath)}-staging-${randomUUID()}`,
+    );
+    await fs.rename(installedPath, interruptedInstallDir);
+    try {
+      await fs.rename(backupDir, installedPath);
+    } catch (error) {
+      await fs.rename(interruptedInstallDir, installedPath);
+      throw error;
+    }
+    await removeManagedAddonTempDirectory(interruptedInstallDir, input.addonsRootDir);
+    return;
+  }
+
+  throw new Error(
+    `Unable to determine the committed add-on update state for ${installedPath}; both install and backup were preserved.`,
+  );
+}
+
+async function ensureAddonDirectoryWithoutLinks(directory: string, addonsRootDir: string): Promise<void> {
+  const root = path.resolve(addonsRootDir);
+  const target = path.resolve(directory);
+  const relative = path.relative(root, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Add-on data path escapes add-ons root: ${directory}`);
+  }
+  await fs.mkdir(root, { recursive: true });
+  let current = root;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const existing = await lstatIfPresent(current);
+    if (!existing) {
+      await fs.mkdir(current);
+    }
+    const stats = await fs.lstat(current);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use a linked or non-directory add-on data path: ${current}`);
+    }
+  }
+}
+
+async function lstatIfPresent(targetPath: string): Promise<Stats | undefined> {
+  try {
+    return await fs.lstat(targetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function assertRegularAddonDataFile(targetPath: string, stats: Stats | undefined): void {
+  if (stats && (!stats.isFile() || stats.isSymbolicLink())) {
+    throw new Error(`Refusing to use a linked or non-file Arena database path: ${targetPath}`);
+  }
+}
+
+async function removeNewAddonInstall(targetDir: string, addonsRootDir: string, addonId: string): Promise<void> {
+  const resolved = assertAddonPathWithinRoot(targetDir, addonsRootDir);
+  const expected = path.resolve(addonsRootDir, addonId);
+  if (resolved !== expected) {
+    throw new Error(`Refusing to remove unexpected add-on install path: ${resolved}`);
+  }
+  await fs.rm(resolved, { recursive: true, force: true });
 }
 
 export const __internal = {
+  ARENA_REPO_REF,
   AddonManifestFileSchema,
   assertAddonPathWithinRoot,
   buildAddonChildEnv,
+  checkoutPinnedAddonRevision,
+  prepareArenaDataPath,
+  recoverInterruptedAddonUpdate,
   resolveCommandInvocation,
 };
-
-function buildAddonChildEnv(extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined || !isAllowedAddonChildEnvKey(key)) {
-      continue;
-    }
-    env[key] = value;
-  }
-  return {
-    ...env,
-    ...extraEnv,
-  };
-}
-
-function isAllowedAddonChildEnvKey(key: string): boolean {
-  const normalized = key.toUpperCase();
-  if (ADDON_SECRET_ENV_PATTERN.test(normalized)) {
-    return false;
-  }
-  return (
-    ADDON_CHILD_ENV_ALLOWLIST.has(normalized) ||
-    ADDON_CHILD_ENV_PREFIX_ALLOWLIST.some((prefix) => normalized.startsWith(prefix))
-  );
-}
