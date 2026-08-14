@@ -3,6 +3,7 @@ import type { DatabaseClient } from "./db.js";
 import type {
   HookActionConfig,
   HookCreateInput,
+  HookDataScope,
   HookFailPolicy,
   HookMode,
   HookRecord,
@@ -148,7 +149,7 @@ export class WorkspaceHookRepository {
       priority: normalizePriority(input.priority),
       timeoutMs: normalizeTimeoutMs(input.timeoutMs),
       failPolicy: normalizeFailPolicy(input.failPolicy),
-      actionJson: JSON.stringify(normalizeAction(input.action)),
+      actionJson: serializeAction(input.action, input.dataScope),
       createdAt: now,
       updatedAt: now,
     });
@@ -170,7 +171,7 @@ export class WorkspaceHookRepository {
       priority: input.priority !== undefined ? normalizePriority(input.priority) : current.priority,
       timeoutMs: input.timeoutMs !== undefined ? normalizeTimeoutMs(input.timeoutMs) : current.timeoutMs,
       failPolicy: input.failPolicy !== undefined ? normalizeFailPolicy(input.failPolicy) : current.failPolicy,
-      actionJson: JSON.stringify(input.action !== undefined ? normalizeAction(input.action) : current.action),
+      actionJson: serializeAction(input.action !== undefined ? input.action : current.action, input.dataScope ?? current.dataScope),
       updatedAt: now,
     });
     return this.get(workspaceId, hookId);
@@ -183,8 +184,8 @@ export class WorkspaceHookRepository {
 }
 
 function mapHookRow(row: HookRow): HookRecord {
-  const action = parseHookAction(row.action_json);
-  if (!action) {
+  const configuration = parseHookConfiguration(row.action_json);
+  if (!configuration) {
     throw new ValidationError({ message: `Hook ${row.hook_id} has invalid action config` });
   }
   return {
@@ -198,31 +199,40 @@ function mapHookRow(row: HookRow): HookRecord {
     priority: row.priority,
     timeoutMs: row.timeout_ms,
     failPolicy: row.fail_policy,
-    action,
+    dataScope: configuration.dataScope,
+    action: configuration.action,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-function parseHookAction(raw: string): HookActionConfig | undefined {
-  const action = safeJsonParse<unknown>(raw, undefined);
-  if (!isRecord(action) || action.type !== "webhook" || !isRecord(action.webhook)) {
+function parseHookConfiguration(raw: string): { action: HookActionConfig; dataScope: HookDataScope } | undefined {
+  const value = safeJsonParse<unknown>(raw, undefined);
+  const dataScope: HookDataScope = isRecord(value) && value.dataScope === "content" ? "content" : "metadata";
+  const action = isRecord(value) && isRecord(value.action) ? value.action : value;
+  if (!isRecord(action)) {
     return undefined;
   }
-
+  if (action.type === "managed_package" && isRecord(action.managedPackage)) {
+    const packageId = action.managedPackage.packageId;
+    const manifestHash = action.managedPackage.manifestHash;
+    if (typeof packageId !== "string" || !packageId.trim() || typeof manifestHash !== "string" || !manifestHash.trim()) {
+      return undefined;
+    }
+    return { action: { type: "managed_package", managedPackage: { packageId, manifestHash } }, dataScope };
+  }
+  if (action.type !== "webhook" || !isRecord(action.webhook)) {
+    return undefined;
+  }
   const url = action.webhook.url;
   const secret = action.webhook.secret;
-  if (typeof url !== "string" || (secret !== undefined && typeof secret !== "string")) {
-    return undefined;
-  }
-
-  return {
-    type: "webhook",
-    webhook: {
-      url,
-      ...(secret ? { secret } : {}),
-    },
-  };
+  const secretRef = action.webhook.secretRef;
+  if (
+    typeof url !== "string" ||
+    (secret !== undefined && typeof secret !== "string") ||
+    (secretRef !== undefined && typeof secretRef !== "string")
+  ) return undefined;
+  return { action: { type: "webhook", webhook: { url, ...(secret ? { secret } : {}), ...(secretRef ? { secretRef } : {}) } }, dataScope };
 }
 
 function normalizeLabel(value: string): string {
@@ -248,6 +258,14 @@ function normalizeFailPolicy(value?: HookFailPolicy): HookFailPolicy {
 }
 
 function normalizeAction(value: HookActionConfig): HookActionConfig {
+  if (value.type === "managed_package") {
+    const packageId = value.managedPackage?.packageId?.trim();
+    const manifestHash = value.managedPackage?.manifestHash?.trim();
+    if (!packageId || !manifestHash) {
+      throw new ValidationError({ message: "Managed hook package requires packageId and manifestHash." });
+    }
+    return { type: "managed_package", managedPackage: { packageId, manifestHash } };
+  }
   if (value.type !== "webhook") {
     throw new ValidationError({
       message: `Unsupported hook action type: ${String((value as { type?: unknown }).type)}`,
@@ -258,13 +276,19 @@ function normalizeAction(value: HookActionConfig): HookActionConfig {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "action.webhook.url" });
   }
   const secret = value.webhook.secret?.trim();
+  const secretRef = value.webhook.secretRef?.trim();
   return {
     type: "webhook",
     webhook: {
       url,
       ...(secret ? { secret } : {}),
+      ...(secretRef ? { secretRef } : {}),
     },
   };
+}
+
+function serializeAction(value: HookActionConfig, dataScope?: HookDataScope): string {
+  return JSON.stringify({ action: normalizeAction(value), dataScope: dataScope === "content" ? "content" : "metadata" });
 }
 
 function clampLimit(value: number): number {

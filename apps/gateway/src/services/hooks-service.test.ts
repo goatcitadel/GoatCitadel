@@ -45,9 +45,7 @@ describe("HooksService", () => {
       priority: 100,
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/low",
-        },
+        webhook: { url: "https://hooks.example.test/low", secret: "test-signing-secret" },
       },
     });
     const high = await service.createWorkspaceHook({
@@ -58,9 +56,7 @@ describe("HooksService", () => {
       priority: 200,
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/high",
-        },
+        webhook: { url: "https://hooks.example.test/high", secret: "test-signing-secret" },
       },
     });
 
@@ -118,7 +114,7 @@ describe("HooksService", () => {
       label: "effect boundary",
       trigger: "tool.call.before",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/effect-boundary" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/effect-boundary", secret: "test-signing-secret" } },
     });
     const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
 
@@ -147,11 +143,11 @@ describe("HooksService", () => {
       label: "sealed hook",
       trigger: "tool.call.before",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/original" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/original", secret: "test-signing-secret" } },
     });
     const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
     await service.updateWorkspaceHook(workspaceId, hook.hookId, {
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced", secret: "test-signing-secret" } },
     });
 
     await expect(
@@ -177,11 +173,11 @@ describe("HooksService", () => {
       label: "sealed after hook",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/original-after" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/original-after", secret: "test-signing-secret" } },
     });
     const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
     await service.updateWorkspaceHook(workspaceId, hook.hookId, {
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced-after" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced-after", secret: "test-signing-secret" } },
     });
 
     await expect(
@@ -205,7 +201,7 @@ describe("HooksService", () => {
       label: "admitted after hook",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/admitted-after" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/admitted-after", secret: "test-signing-secret" } },
     });
     const expectedInterposition = await service.getToolCallBeforeInterposition(workspaceId);
     const beforeExternalDispatch = vi.fn(async () => undefined);
@@ -252,9 +248,7 @@ describe("HooksService", () => {
       failPolicy: "open",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/timeout",
-        },
+        webhook: { url: "https://hooks.example.test/timeout", secret: "test-signing-secret" },
       },
     });
 
@@ -294,9 +288,7 @@ describe("HooksService", () => {
       failPolicy: "closed",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/fail-closed",
-        },
+        webhook: { url: "https://hooks.example.test/fail-closed", secret: "test-signing-secret" },
       },
     });
 
@@ -346,9 +338,7 @@ describe("HooksService", () => {
       mode: "mutate",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/recursive",
-        },
+        webhook: { url: "https://hooks.example.test/recursive", secret: "test-signing-secret" },
       },
     });
 
@@ -425,7 +415,7 @@ describe("HooksService", () => {
       mode: "observe",
       action: {
         type: "webhook",
-        webhook: { url: "https://hooks.example.test/dead-letter" },
+        webhook: { url: "https://hooks.example.test/dead-letter", secret: "test-signing-secret" },
       },
     });
     const queued = (
@@ -453,9 +443,7 @@ describe("HooksService", () => {
       mode: "observe",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/after-dedupe",
-        },
+        webhook: { url: "https://hooks.example.test/after-dedupe", secret: "test-signing-secret" },
       },
     });
 
@@ -492,7 +480,7 @@ describe("HooksService", () => {
       label: "after-gap-repair",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-gap-repair" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-gap-repair", secret: "test-signing-secret" } },
     });
     const hookRunId = "hookrun-gap-repair";
     hookRuns.set(hookRunId, {
@@ -544,7 +532,7 @@ describe("HooksService", () => {
       label: "after-attach-rollback",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-attach-rollback" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-attach-rollback", secret: "test-signing-secret" } },
     });
     const input = {
       workspaceId,
@@ -571,7 +559,7 @@ describe("HooksService", () => {
       label: "after-link-fence",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-link-fence" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-link-fence", secret: "test-signing-secret" } },
     });
     const seed = (runId: string, entityId: string, durableRunId?: string) => {
       hookRuns.set(runId, {
@@ -637,9 +625,7 @@ describe("HooksService", () => {
       mode: "observe",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/agent-end-lifecycle",
-        },
+        webhook: { url: "https://hooks.example.test/agent-end-lifecycle", secret: "test-signing-secret" },
       },
     });
 
@@ -699,7 +685,7 @@ describe("HooksService", () => {
       mode: "observe",
       action: {
         type: "webhook",
-        webhook: { url: "https://hooks.example.test/agent-end-overlap" },
+        webhook: { url: "https://hooks.example.test/agent-end-overlap", secret: "test-signing-secret" },
       },
     });
     const enqueue = async (status: "waiting_for_approval" | "completed") =>
@@ -749,9 +735,7 @@ describe("HooksService", () => {
       mode: "observe",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/after-abort",
-        },
+        webhook: { url: "https://hooks.example.test/after-abort", secret: "test-signing-secret" },
       },
     });
 
@@ -788,7 +772,7 @@ describe("HooksService", () => {
       label: "after-commit-truth",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-commit-truth" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-commit-truth", secret: "test-signing-secret" } },
     });
     const [queued] = await service.enqueueAfterHooks({
       workspaceId,
@@ -815,7 +799,7 @@ describe("HooksService", () => {
       label: "after-late-abort",
       trigger: "tool.call.after",
       mode: "observe",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-late-abort" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-late-abort", secret: "test-signing-secret" } },
     });
     const [queued] = await service.enqueueAfterHooks({
       workspaceId,
@@ -842,9 +826,7 @@ describe("HooksService", () => {
         mode: "observe",
         action: {
           type: "webhook",
-          webhook: {
-            url: "https://hooks.example.test/observe",
-          },
+          webhook: { url: "https://hooks.example.test/observe", secret: "test-signing-secret" },
         },
       }),
     ).rejects.toThrow(/Unknown workspace/);
@@ -862,9 +844,7 @@ describe("HooksService", () => {
       mode: "observe",
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://hooks.example.test/after-disabled",
-        },
+        webhook: { url: "https://hooks.example.test/after-disabled", secret: "test-signing-secret" },
       },
     });
 
@@ -894,7 +874,7 @@ describe("HooksService", () => {
       label: "dispatch-veto",
       trigger: "gateway.dispatch.before",
       mode: "intercept",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch", secret: "test-signing-secret" } },
     });
     expect(created.trigger).toBe("gateway.dispatch.before");
     expect(created.mode).toBe("intercept");
@@ -910,7 +890,7 @@ describe("HooksService", () => {
         label: "dispatch-mutate",
         trigger: "gateway.dispatch.before",
         mode: "mutate",
-        action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch-mutate" } },
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch-mutate", secret: "test-signing-secret" } },
       }),
     ).rejects.toThrow(/does not support mutate hooks/i);
   });
@@ -924,7 +904,7 @@ describe("HooksService", () => {
       label: "approval-request-veto",
       trigger: "approval.request.before",
       mode: "intercept",
-      action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request" } },
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request", secret: "test-signing-secret" } },
     });
     expect(created.trigger).toBe("approval.request.before");
     expect(created.mode).toBe("intercept");
@@ -940,7 +920,7 @@ describe("HooksService", () => {
         label: "approval-request-mutate",
         trigger: "approval.request.before",
         mode: "mutate",
-        action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request-mutate" } },
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request-mutate", secret: "test-signing-secret" } },
       }),
     ).rejects.toThrow(/does not support mutate hooks/i);
   });
@@ -964,9 +944,7 @@ describe("HooksService", () => {
         mode: "mutate",
         action: {
           type: "webhook",
-          webhook: {
-            url: "https://hooks.example.test/agent-end",
-          },
+          webhook: { url: "https://hooks.example.test/agent-end", secret: "test-signing-secret" },
         },
       }),
     ).rejects.toThrow(/observe hooks/i);
@@ -1002,9 +980,7 @@ describe("HooksService", () => {
     const blockedTransplant = await service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
       action: {
         type: "webhook",
-        webhook: {
-          url: "https://evil.example/events?token=[REDACTED]&mode=alerts",
-        },
+        webhook: { url: "https://evil.example/events?token=[REDACTED]&mode=alerts" },
       },
     });
     expect(blockedTransplant.action.webhook.url).toBe("https://hooks.example.test/events?token=hook-short&mode=events");
@@ -1024,6 +1000,183 @@ describe("HooksService", () => {
       secret: "replacement-signing-short",
     });
   });
+
+  it("requires a signing secret and rejects content delivery without an approval-backed grant", async () => {
+    const { service, workspaceId } = createHarness();
+
+    await expect(
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "unsigned",
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/unsigned" } },
+      }),
+    ).rejects.toThrow(/signing secret is required/i);
+
+    await expect(
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "content scope",
+        trigger: "tool.call.after",
+        mode: "observe",
+        dataScope: "content",
+        action: {
+          type: "webhook",
+          webhook: { url: "https://hooks.example.test/content", secret: "signing-secret" },
+        },
+      }),
+    ).rejects.toThrow(/approval-backed data grant/i);
+  });
+
+  it("keeps webhook secrets in custody references and rejects destinations outside the live allowlist", async () => {
+    const storedSecrets = new Map<string, string>();
+    const { service, workspaceId } = createHarness({
+      getNetworkAllowlist: () => ["hooks.example.test"],
+      storeWebhookSecret: (value) => {
+        storedSecrets.set("keychain:goatcitadel:hook:test", value);
+        return "keychain:goatcitadel:hook:test";
+      },
+      resolveWebhookSecret: (reference) => {
+        const value = storedSecrets.get(reference);
+        if (!value) throw new Error("missing secret");
+        return value;
+      },
+    });
+
+    const created = await service.createWorkspaceHook({
+      workspaceId,
+      label: "custodied",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: {
+        type: "webhook",
+        webhook: { url: "https://hooks.example.test/custodied", secret: "signing-secret" },
+      },
+    });
+    expect(created.action).toEqual({
+      type: "webhook",
+      webhook: { url: "https://hooks.example.test/custodied", secretRef: "keychain:goatcitadel:hook:test" },
+    });
+    expect(JSON.stringify(created)).not.toContain("signing-secret");
+
+    await expect(
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "off allowlist",
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: { type: "webhook", webhook: { url: "https://other.example.test/hook", secret: "signing-secret" } },
+      }),
+    ).rejects.toThrow(/not yet allowlisted/i);
+  });
+
+  it("migrates a legacy raw signing secret before listing or dispatch and disables it when custody fails", async () => {
+    const storedSecrets = new Map<string, string>();
+    const { service, workspaceId, hooks } = createHarness({
+      storeWebhookSecret: (value) => {
+        storedSecrets.set("keychain:goatcitadel:hook:migrated", value);
+        return "keychain:goatcitadel:hook:migrated";
+      },
+      resolveWebhookSecret: (reference) => storedSecrets.get(reference) ?? "",
+    });
+    hooks.set("legacy-hook", {
+      hookId: "legacy-hook",
+      workspaceId,
+      label: "legacy raw secret",
+      trigger: "tool.call.after",
+      phase: "after",
+      mode: "observe",
+      enabled: true,
+      priority: 100,
+      timeoutMs: 5_000,
+      failPolicy: "open",
+      dataScope: "metadata",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/legacy", secret: "legacy-signing-secret" } },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    const [migrated] = await service.listWorkspaceHooks(workspaceId);
+    expect(migrated?.action).toEqual({
+      type: "webhook",
+      webhook: { url: "https://hooks.example.test/legacy", secretRef: "keychain:goatcitadel:hook:migrated" },
+    });
+    expect(JSON.stringify(migrated)).not.toContain("legacy-signing-secret");
+
+    const failing = createHarness({
+      storeWebhookSecret: () => { throw new Error("keychain unavailable"); },
+      resolveWebhookSecret: () => "",
+    });
+    failing.hooks.set("unmigratable-hook", {
+      ...hooks.get("legacy-hook")!,
+      hookId: "unmigratable-hook",
+      label: "unmigratable",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/unmigratable", secret: "must-not-remain" } },
+    });
+    const [disabled] = await failing.service.listWorkspaceHooks(failing.workspaceId);
+    expect(disabled).toMatchObject({ enabled: false, action: { type: "webhook", webhook: { url: "https://hooks.example.test/unmigratable" } } });
+    expect(JSON.stringify(disabled)).not.toContain("must-not-remain");
+  });
+
+  it("does not expose metadata-only payload text to webhook delivery", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => new Response("{}", { status: 200 }));
+    const { service, workspaceId } = createHarness({ fetchImpl });
+    await service.createWorkspaceHook({
+      workspaceId,
+      label: "metadata projection",
+      trigger: "tool.call.before",
+      mode: "observe",
+      action: {
+        type: "webhook",
+        webhook: { url: "https://hooks.example.test/metadata", secret: "signing-secret" },
+      },
+    });
+
+    await service.runInlineHooks({
+      workspaceId,
+      trigger: "tool.call.before",
+      entityType: "tool_call",
+      entityId: "tool-1",
+      payload: { prompt: "never leave the gateway", toolName: "search", result: { text: "private result" } },
+    });
+
+    const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+    expect(body).not.toContain("never leave the gateway");
+    expect(body).not.toContain("private result");
+    expect(body).toContain('"toolName":{"length":6}');
+  });
+
+  it("redrives only a completed durable post-event observer and creates a fresh delivery", async () => {
+    const { service, workspaceId, hookRuns } = createHarness({
+      fetchImpl: vi.fn(async () => new Response("{}", { status: 200 })),
+    });
+    await service.createWorkspaceHook({
+      workspaceId,
+      label: "completed observer",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/redrive", secret: "signing-secret" } },
+    });
+    const [queued] = await service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-1",
+      payload: { toolName: "shell.exec" },
+    });
+    const completed = await service.executeHookDelivery(queued!.runId, 1);
+    expect(completed.status).toBe("completed");
+
+    const redriven = await service.redriveWorkspaceHookRun(workspaceId, completed.runId);
+    expect(redriven.runId).not.toBe(completed.runId);
+    expect(redriven.status).toBe("queued");
+
+    hookRuns.set(completed.runId, { ...completed, status: "dead_lettered" });
+    await expect(service.redriveWorkspaceHookRun(workspaceId, completed.runId)).rejects.toThrow(
+      /only completed post-event observe hook deliveries/i,
+    );
+  });
 });
 
 function createHarness(input?: {
@@ -1032,6 +1185,9 @@ function createHarness(input?: {
   durableKernelEnabled?: boolean;
   publishRealtime?: ServiceContext["publishRealtime"];
   failAttachOnce?: boolean;
+  getNetworkAllowlist?: () => string[];
+  storeWebhookSecret?: (value: string) => string;
+  resolveWebhookSecret?: (reference: string) => string;
 }) {
   const workspaceId = "ws_test";
   const workspace: WorkspaceRecord = {
@@ -1110,6 +1266,7 @@ function createHarness(input?: {
           priority: input.priority ?? 100,
           timeoutMs: input.timeoutMs ?? 5_000,
           failPolicy: input.failPolicy ?? "open",
+          dataScope: input.dataScope ?? "metadata",
           action: input.action,
           createdAt: `2026-03-26T00:00:0${hookIndex}.000Z`,
           updatedAt: `2026-03-26T00:00:0${hookIndex}.000Z`,
@@ -1129,6 +1286,7 @@ function createHarness(input?: {
           ...(input.priority !== undefined ? { priority: input.priority } : {}),
           ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
           ...(input.failPolicy !== undefined ? { failPolicy: input.failPolicy } : {}),
+          ...(input.dataScope !== undefined ? { dataScope: input.dataScope } : {}),
           ...(input.action !== undefined ? { action: input.action } : {}),
           updatedAt: "2026-03-26T00:01:00.000Z",
         };
@@ -1297,11 +1455,15 @@ function createHarness(input?: {
       requestedRunIds.push(runId);
     },
     fetchImpl: input?.fetchImpl,
+    getNetworkAllowlist: input?.getNetworkAllowlist,
+    storeWebhookSecret: input?.storeWebhookSecret,
+    resolveWebhookSecret: input?.resolveWebhookSecret,
   });
 
   return {
     service,
     workspaceId,
+    hooks,
     requestedRunIds,
     hookRuns,
     durableRuns,

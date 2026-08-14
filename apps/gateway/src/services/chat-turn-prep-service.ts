@@ -180,6 +180,15 @@ export interface ChatTurnPrepHost {
     },
   ): Promise<unknown>;
   onUserMessageCommitted?(sessionId: string, messageId: string): Promise<void>;
+  /** Gateway-owned prompt admission hook; payload is metadata-only and never contains prompt text. */
+  runPromptSubmitBeforeHook?(input: {
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
+    contentLength: number;
+    mode?: ChatSendMessageRequest["mode"];
+    attachmentCount: number;
+  }): Promise<{ blocked?: { reason: string } }>;
   patchSessionAutonomyPrefs(
     sessionId: string,
     input: Partial<
@@ -561,6 +570,19 @@ export async function prepareAgentChatTurn(
   const content = (existingUserMessage?.content ?? input.content).trim();
   if (!content) {
     throw new Error("content is required");
+  }
+  if (!systemHeartbeatPosture) {
+    const promptHook = await host.runPromptSubmitBeforeHook?.({
+      workspaceId,
+      sessionId,
+      turnId,
+      contentLength: content.length,
+      mode: input.mode,
+      attachmentCount: input.attachments?.length ?? 0,
+    });
+    if (promptHook?.blocked) {
+      throw new ConflictError({ message: promptHook.blocked.reason });
+    }
   }
   if (options?.turnAdmission) {
     const identity = options.turnAdmission.identity;

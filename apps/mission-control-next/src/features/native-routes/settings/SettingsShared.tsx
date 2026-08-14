@@ -10,6 +10,7 @@ import {
   Gauge,
   HardDrive,
   Package2,
+  Webhook,
   Play,
   Plug2,
   RefreshCw,
@@ -584,6 +585,8 @@ export function iconForSettingsSection(section: string) {
       return Server;
     case "tools":
       return Wrench;
+    case "hooks":
+      return Webhook;
     case "addons":
       return Package2;
     default:
@@ -623,6 +626,8 @@ export function labelForSettingsSection(section: string) {
       return "MCP";
     case "tools":
       return "Tools";
+    case "hooks":
+      return "Hooks";
     case "addons":
       return "Add-ons";
     default:
@@ -662,6 +667,8 @@ export function descriptionForSettingsSection(section: string) {
       return "Manage MCP servers, templates, transport config, and tool visibility.";
     case "tools":
       return "Review the tool catalog and manage grants from one place.";
+    case "hooks":
+      return "Configure governed lifecycle hooks, data scope, and durable delivery evidence.";
     case "addons":
       return "Inspect experimental local add-ons, lifecycle truth, trust posture, and the 1.0 graduation bar.";
     default:

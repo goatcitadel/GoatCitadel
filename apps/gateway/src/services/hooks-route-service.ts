@@ -6,6 +6,8 @@ export const hooksRouteMethods = [
   "deleteWorkspaceHook",
   "listWorkspaceHookRuns",
   "listWorkspaceHooks",
+  "redriveWorkspaceHookRun",
+  "testWorkspaceHook",
   "updateWorkspaceHook",
 ] as const;
 
@@ -31,6 +33,10 @@ export function createHooksRoutePort(deps: HooksRoutePortDependencies): HooksRou
       deps.hooksService.listWorkspaceHookRuns(deps.normalizeWorkspaceId(workspaceId), limit),
     listWorkspaceHooks: (workspaceId, limit) =>
       deps.hooksService.listWorkspaceHooks(deps.normalizeWorkspaceId(workspaceId), limit),
+    redriveWorkspaceHookRun: (workspaceId, hookRunId) =>
+      deps.hooksService.redriveWorkspaceHookRun(deps.normalizeWorkspaceId(workspaceId), hookRunId),
+    testWorkspaceHook: (workspaceId, hookId) =>
+      deps.hooksService.testWorkspaceHook(deps.normalizeWorkspaceId(workspaceId), hookId),
     updateWorkspaceHook: (workspaceId, hookId, input) =>
       deps.hooksService.updateWorkspaceHookFromPublicProjection(deps.normalizeWorkspaceId(workspaceId), hookId, input),
   };

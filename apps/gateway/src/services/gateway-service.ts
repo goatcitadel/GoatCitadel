@@ -742,6 +742,7 @@ import { ChatProjectService } from "./chat-project-service.js";
 import { computeDurableBaselineDrift, DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
 import { HooksService } from "./hooks-service.js";
+import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
@@ -2296,9 +2297,14 @@ export class GatewayService {
         });
       },
     });
+    const hookSecretCustody = new HookSecretCustodyService(secretStore);
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
+      storeWebhookSecret: (value) => hookSecretCustody.storeSecret(value),
+      resolveWebhookSecret: (secretRef) => hookSecretCustody.resolveSecret(secretRef),
+      deleteWebhookSecret: (secretRef) => hookSecretCustody.deleteSecret(secretRef),
     });
     this.approvalWaitRunService = new ApprovalWaitRunService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -2542,6 +2548,16 @@ export class GatewayService {
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      onSubagentLifecycle: async (input) => {
+        await this.hooksService.enqueueAfterHooks({
+          workspaceId: input.workspaceId,
+          trigger: input.phase === "start" ? "subagent.start" : "subagent.end",
+          entityType: "chat_subagent",
+          entityId: input.childSessionId,
+          idempotencyDiscriminator: `${input.delegationRunId}:${input.stepId}:${input.status ?? "running"}`,
+          payload: input,
+        });
+      },
       validateReadOnlyExplorerParent: async ({ sessionId, policyRunId }) => {
         const sessionMeta = await this.storage.chatSessionMeta.get(sessionId);
         if (!sessionMeta) {
@@ -3524,6 +3540,24 @@ export class GatewayService {
         if (await this.isFeatureEnabled("chatTimersV1Enabled")) {
           await this.chatTimerService.cancelOnCommittedReply(sessionId, messageId);
         }
+      },
+      runPromptSubmitBeforeHook: async (input) => {
+        const result = await this.hooksService.runInlineHooks({
+          workspaceId: input.workspaceId,
+          trigger: "prompt.submit.before",
+          entityType: "chat_turn",
+          entityId: input.turnId,
+          payload: {
+            workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            contentLength: input.contentLength,
+            mode: input.mode,
+            attachmentCount: input.attachmentCount,
+          },
+          parsePatch: () => undefined,
+        });
+        return result.blockedBy ? { blocked: { reason: result.blockedBy.reason } } : {};
       },
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       isReplayScratchSession: async (sessionId) => await this.isReplayScratchSession(sessionId),
@@ -4522,6 +4556,7 @@ export class GatewayService {
     return {
       storage: this.storage,
       operatorSummaryCache: this.operatorSummaryCache,
+      hooksService: this.hooksService,
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       ensureChatSessionRuntimeGrants: async (sessionId) => await this.ensureChatSessionRuntimeGrants(sessionId),
       requireChatSession: async (sessionId) => await this.requireChatSession(sessionId),
@@ -12780,6 +12815,40 @@ export class GatewayService {
       loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
       buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
       getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
+      onCompaction: async (input) => {
+        const sessionMeta = await this.storage.chatSessionMeta.get(input.sessionId);
+        if (!sessionMeta) return;
+        const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
+        const payload = {
+          workspaceId,
+          sessionId: input.sessionId,
+          branchHeadTurnId: input.branchHeadTurnId,
+          startTurnId: input.startTurnId,
+          endTurnId: input.endTurnId,
+          turnCount: input.turnCount,
+          sourceHash: input.sourceHash,
+          ...(input.summaryHash ? { summaryHash: input.summaryHash } : {}),
+        };
+        if (input.phase === "before") {
+          await this.hooksService.runInlineHooks({
+            workspaceId,
+            trigger: "context.compaction.before",
+            entityType: "chat_session",
+            entityId: input.sessionId,
+            payload,
+            parsePatch: () => undefined,
+          });
+          return;
+        }
+        await this.hooksService.enqueueAfterHooks({
+          workspaceId,
+          trigger: "context.compaction.after",
+          entityType: "chat_session",
+          entityId: input.sessionId,
+          idempotencyDiscriminator: `${input.endTurnId}:${input.sourceHash}`,
+          payload,
+        });
+      },
     };
   }
 

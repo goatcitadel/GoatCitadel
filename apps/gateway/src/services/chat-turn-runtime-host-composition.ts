@@ -87,6 +87,7 @@ function composeSessionPreparation(
   | "resolveRuntimeGuidance"
   | "resolveThreadKnowledgeContext"
   | "routeFromSession"
+  | "runPromptSubmitBeforeHook"
 > {
   return {
     get llmService() {
@@ -118,6 +119,9 @@ function composeSessionPreparation(
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
     resolveThreadKnowledgeContext: (sessionId, query) => source.resolveThreadKnowledgeContext(sessionId, query),
     routeFromSession: (session) => source.routeFromSession(session),
+    runPromptSubmitBeforeHook: source.runPromptSubmitBeforeHook
+      ? (input) => source.runPromptSubmitBeforeHook!(input)
+      : undefined,
   };
 }
 

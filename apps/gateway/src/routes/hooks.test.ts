@@ -41,15 +41,6 @@ describe("hooks routes", () => {
       items: [
         {
           runId: "run-1",
-          requestPayload: {
-            authorization: "[REDACTED]",
-            callbackUrl: "https://callback.example.test/result?token=[REDACTED]",
-            tokenId: "token-id-safe",
-          },
-          responsePayload: {
-            DATABASE_PASSWORD: "[REDACTED]",
-            requestCount: 3,
-          },
         },
       ],
     });
@@ -202,6 +193,28 @@ describe("hooks routes", () => {
       }),
     ).resolves.toMatchObject({ statusCode: 400 });
   });
+
+  it("runs synthetic tests and only exposes the dedicated redrive operation", async () => {
+    const hooks = createHooksService({
+      testWorkspaceHook: vi.fn(() => ({ runId: "test-run", requestPayload: { synthetic: true } })),
+      redriveWorkspaceHookRun: vi.fn(() => ({ runId: "redrive-run", requestPayload: { synthetic: true } })),
+    });
+    app = buildApp(hooks);
+
+    const tested = await app.inject({
+      method: "POST",
+      url: "/api/v1/workspaces/workspace-1/hooks/hook-1/test",
+    });
+    const redriven = await app.inject({
+      method: "POST",
+      url: "/api/v1/workspaces/workspace-1/hooks/runs/run-1/redrive",
+    });
+
+    expect(tested.statusCode).toBe(202);
+    expect(redriven.statusCode).toBe(202);
+    expect(hooks.testWorkspaceHook).toHaveBeenCalledWith("workspace-1", "hook-1");
+    expect(hooks.redriveWorkspaceHookRun).toHaveBeenCalledWith("workspace-1", "run-1");
+  });
 });
 
 function buildApp(hooks: Record<string, unknown>): FastifyInstance {
@@ -252,6 +265,8 @@ function createHooksService(overrides: Record<string, unknown> = {}) {
       hookId,
     })),
     deleteWorkspaceHook: vi.fn(() => true),
+    testWorkspaceHook: vi.fn(() => ({ runId: "test-run" })),
+    redriveWorkspaceHookRun: vi.fn(() => ({ runId: "redrive-run" })),
     ...overrides,
   };
 }

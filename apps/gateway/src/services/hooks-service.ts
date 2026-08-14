@@ -1,7 +1,9 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { assertHostAllowed, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { DurableRunCreateRequest, DurableRunRecord } from "@goatcitadel/contracts";
 import {
   ConflictError,
+  HOOK_EVENT_REGISTRY,
   type HookCreateInput,
   type HookDecision,
   type HookDecisionBlock,
@@ -92,6 +94,16 @@ export class HooksService {
       ) => Promise<DurableRunRecord>;
       requestDurableRunProcessing: (runId: string) => void;
       fetchImpl?: typeof fetch;
+      /** Production callers expose the live, Gateway-owned network allowlist. */
+      getNetworkAllowlist?: () => string[];
+      /** Raw values are accepted only at this boundary and immediately placed in keychain custody. */
+      storeWebhookSecret?: (value: string) => string;
+      resolveWebhookSecret?: (secretRef: string) => string;
+      deleteWebhookSecret?: (secretRef: string) => void;
+      executeManagedPackage?: (
+        hook: HookRecord,
+        input: { payload: Record<string, unknown>; run: HookRunRecord; signal?: AbortSignal },
+      ) => Promise<HookWebhookResponse>;
     },
   ) {}
 
@@ -132,7 +144,8 @@ export class HooksService {
   }
 
   public async listWorkspaceHooks(workspaceId: string, limit = 200): Promise<HookRecord[]> {
-    return await this.ctx.storage.workspaceHooks.list(this.ctx.normalizeWorkspaceId(workspaceId), limit);
+    const records = await this.ctx.storage.workspaceHooks.list(this.ctx.normalizeWorkspaceId(workspaceId), limit);
+    return await this.ensureWebhookSecretCustodyForHooks(records);
   }
 
   /**
@@ -146,19 +159,21 @@ export class HooksService {
    */
   public async hasMutateHook(workspaceId: string, trigger: HookTrigger): Promise<boolean> {
     const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
-    const hooks = await this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, 200);
+    const hooks = await this.ensureWebhookSecretCustodyForHooks(
+      await this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, 200),
+    );
     return hooks.some((hook) => hook.enabled && hook.mode === "mutate");
   }
 
   public async getToolCallBeforeInterposition(workspaceId: string): Promise<ToolCallBeforeHookInterpositionBinding> {
     const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
-    const hooks = (
+    const hooks = await this.ensureWebhookSecretCustodyForHooks((
       await Promise.all(
         TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
           this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
         ),
       )
-    ).flat();
+    ).flat());
     return buildToolCallBeforeHookInterpositionBinding(hooks);
   }
 
@@ -171,9 +186,11 @@ export class HooksService {
     await this.ctx.storage.workspaces.get(workspaceId);
     await this.assertModeAllowed(workspaceId, input.mode);
     this.assertTriggerModeSupported(input.trigger, input.mode);
-    this.assertWebhookUrlAllowed(input.action.webhook.url);
+    this.assertDataScopeAllowed(input.dataScope);
+    const action = this.prepareActionForPersistence(input.action);
     const created = await this.ctx.storage.workspaceHooks.create({
       ...input,
+      action,
       workspaceId,
     });
     void (await this.ctx.storage.audit.append("hooks", {
@@ -199,10 +216,12 @@ export class HooksService {
     const nextMode = current.mode;
     await this.assertModeAllowed(normalizedWorkspaceId, nextMode);
     this.assertTriggerModeSupported(current.trigger, nextMode);
-    if (input.action?.webhook.url) {
-      this.assertWebhookUrlAllowed(input.action.webhook.url);
-    }
-    const updated = await this.ctx.storage.workspaceHooks.update(normalizedWorkspaceId, hookId, input);
+    this.assertDataScopeAllowed(input.dataScope ?? current.dataScope);
+    const action = input.action ? this.prepareActionForPersistence(input.action) : undefined;
+    const updated = await this.ctx.storage.workspaceHooks.update(normalizedWorkspaceId, hookId, {
+      ...input,
+      ...(action ? { action } : {}),
+    });
     void (await this.ctx.storage.audit.append("hooks", {
       event: "hook.update",
       hookId: updated.hookId,
@@ -238,8 +257,20 @@ export class HooksService {
 
   public async deleteWorkspaceHook(workspaceId: string, hookId: string): Promise<boolean> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
+    const current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
     const deleted = await this.ctx.storage.workspaceHooks.delete(normalizedWorkspaceId, hookId);
     if (deleted) {
+      if (current.action.type === "webhook" && current.action.webhook.secretRef) {
+        // The hook record is already gone, so a custody deletion failure cannot
+        // revive or expose the hook. Keep the keychain best-effort and leave
+        // ordinary record deletion available even when the local OS store is
+        // temporarily unavailable.
+        try {
+          this.deps.deleteWebhookSecret?.(current.action.webhook.secretRef);
+        } catch {
+          // An orphaned secret reference is inert and never returned publicly.
+        }
+      }
       void (await this.ctx.storage.audit.append("hooks", {
         event: "hook.delete",
         hookId,
@@ -252,6 +283,56 @@ export class HooksService {
       });
     }
     return deleted;
+  }
+
+  /** Sends a synthetic, metadata-only envelope through the normal egress path. */
+  public async testWorkspaceHook(workspaceId: string, hookId: string): Promise<HookRunRecord> {
+    const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
+    const hook = await this.ensureWebhookSecretCustody(
+      await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId),
+    );
+    if (!hook.enabled) {
+      throw new ValidationError({ message: "This hook is disabled because its signing secret is unavailable." });
+    }
+    const run = await this.ctx.storage.hookRuns.create({
+      hookId: hook.hookId,
+      workspaceId: normalizedWorkspaceId,
+      trigger: hook.trigger,
+      entityType: "hook_test",
+      entityId: hook.hookId,
+      mode: hook.mode,
+      status: "queued",
+      idempotencyKey: `hook.test:${hook.hookId}:${randomUUID()}`,
+      attemptCount: 0,
+      requestPayload: { synthetic: true, eventVersion: "goatcitadel.hook.test.v1" },
+    });
+    return await this.executeRecordedHookRun(hook, run.runId, run.requestPayload ?? {}, 1);
+  }
+
+  /** Redrive is limited to durable after-observers; inline control hooks are never replayed. */
+  public async redriveWorkspaceHookRun(workspaceId: string, hookRunId: string): Promise<HookRunRecord> {
+    const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
+    const original = await this.ctx.storage.hookRuns.get(hookRunId);
+    if (original.workspaceId !== normalizedWorkspaceId) throw new NotFoundError({ entity: "hook run", id: hookRunId });
+    const hook = await this.ensureWebhookSecretCustody(
+      await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, original.hookId),
+    );
+    if (hook.phase !== "after" || hook.mode !== "observe" || original.status !== "completed") {
+      throw new ValidationError({ message: "Only completed post-event observe hook deliveries may be redriven." });
+    }
+    const materialized = await this.materializeAfterHook({
+      hook,
+      workspaceId: normalizedWorkspaceId,
+      input: {
+        trigger: original.trigger,
+        entityType: original.entityType,
+        entityId: original.entityId,
+        payload: original.requestPayload ?? {},
+      },
+      idempotencyKey: `hook.redrive:${original.runId}:${randomUUID()}`,
+    });
+    if (materialized.run.durableRunId) this.deps.requestDurableRunProcessing(materialized.run.durableRunId);
+    return materialized.run;
   }
 
   public async runInlineHooks<TPatch extends Record<string, unknown>>(input: {
@@ -269,15 +350,17 @@ export class HooksService {
     beforeExternalDispatch?: () => Promise<void>;
   }): Promise<HookInlineDispatchResult<TPatch>> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    const hooks = await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
+    const hooks = (await this.ensureWebhookSecretCustodyForHooks(
+      await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200),
+    )).filter((hook) => hook.enabled);
     if (input.trigger === "tool.call.before" && input.expectedInterposition) {
-      const siblingHooks = (
+      const siblingHooks = await this.ensureWebhookSecretCustodyForHooks((
         await Promise.all(
           TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
             this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
           ),
         )
-      ).flat();
+      ).flat());
       const current = buildToolCallBeforeHookInterpositionBinding([...hooks, ...siblingHooks]);
       if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
         throw new Error("Immutable Chat tool-hook interposition binding drifted before dispatch.");
@@ -308,7 +391,7 @@ export class HooksService {
         idempotencyKey,
         attemptCount: 0,
       });
-      const result = await this.executeRecordedHookRun(hook, run.runId, input.payload, 1);
+      const result = await this.executeRecordedHookRun(hook, run.runId, this.projectPayloadForHook(hook, input.payload), 1);
       appliedRuns.push(result);
 
       if (result.decision?.type === "block" && hook.mode === "intercept" && (input.allowDecisionBlock ?? true)) {
@@ -347,18 +430,20 @@ export class HooksService {
     beforeExternalDispatch?: () => Promise<void>;
   }): Promise<HookRunRecord[]> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    const hooks = await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
+    const hooks = (await this.ensureWebhookSecretCustodyForHooks(
+      await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200),
+    )).filter((hook) => hook.enabled);
     if (
       input.expectedInterposition &&
       (TOOL_EFFECT_INTERPOSITION_TRIGGERS as readonly HookTrigger[]).includes(input.trigger)
     ) {
-      const siblingHooks = (
+      const siblingHooks = await this.ensureWebhookSecretCustodyForHooks((
         await Promise.all(
           TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
             this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
           ),
         )
-      ).flat();
+      ).flat());
       const current = buildToolCallBeforeHookInterpositionBinding([...hooks, ...siblingHooks]);
       if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
         throw new Error("Immutable Chat tool-hook interposition binding drifted before enqueue.");
@@ -459,7 +544,7 @@ export class HooksService {
               status: "queued",
               idempotencyKey,
               attemptCount: 0,
-              requestPayload: input.input.payload,
+              requestPayload: this.projectPayloadForHook(hook, input.input.payload),
             }),
         );
         hookRunCreated = true;
@@ -592,7 +677,16 @@ export class HooksService {
     ) {
       return run;
     }
-    const hook = await this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
+    const hook = await this.ensureWebhookSecretCustody(
+      await this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId),
+    );
+    if (!hook.enabled) {
+      return await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+        status: "skipped",
+        errorText: "hook_disabled",
+        completedAt: new Date().toISOString(),
+      });
+    }
     const delivered = await this.executeRecordedHookRun(
       hook,
       run.runId,
@@ -675,8 +769,14 @@ export class HooksService {
     this.activeExecutions.add(executionKey);
     const startedAt = Date.now();
     try {
-      const response = await this.postWebhook(hook, current, payload, options);
+      const response = await this.executeHookAction(hook, current, payload, options);
       const decision = normalizeDecision(response.decision);
+      if (decision?.type === "revise" && hook.trigger !== "agent.finalize.before") {
+        throw new Error("Only agent.finalize.before hooks may request a revision.");
+      }
+      if (decision?.type === "revise" && hook.action.type === "webhook") {
+        throw new Error("Webhook hooks cannot request finalization revision; an approved managed package is required.");
+      }
       const patchSummary = summarizePatch(response.patch);
       const status = decision?.type === "block" ? "blocked" : "completed";
       const completed = await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
@@ -721,7 +821,9 @@ export class HooksService {
     payload: Record<string, unknown>,
     options?: { signal?: AbortSignal },
   ): Promise<HookWebhookResponse> {
-    const fetchImpl = this.deps.fetchImpl ?? fetch;
+    if (hook.action.type !== "webhook") {
+      throw new Error(`Hook ${hook.hookId} is not a webhook action.`);
+    }
     const envelope: HookDispatchEnvelope = {
       hook: {
         hookId: hook.hookId,
@@ -755,8 +857,9 @@ export class HooksService {
     try {
       throwIfHookExecutionAborted(options?.signal);
       const timestamp = new Date().toISOString();
-      const signature = signHookBody(timestamp, body, hook.action.webhook.secret);
-      const response = await fetchImpl(hook.action.webhook.url, {
+      const signingSecret = this.resolveWebhookSigningSecret(hook);
+      const signature = signHookBody(timestamp, body, signingSecret);
+      const requestInit: RequestInit = {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -770,7 +873,14 @@ export class HooksService {
         },
         body,
         signal: controller.signal,
-      });
+      };
+      const response = this.deps.fetchImpl
+        ? await this.deps.fetchImpl(hook.action.webhook.url, requestInit)
+        : await fetchAllowlisted(hook.action.webhook.url, {
+            allowlist: this.deps.getNetworkAllowlist?.() ?? [],
+            timeoutMs: hook.timeoutMs,
+            init: requestInit,
+          });
       const raw = await readBoundedResponseText(response, {
         maxBytes: 256 * 1024,
         timeoutMs: hook.timeoutMs,
@@ -788,6 +898,45 @@ export class HooksService {
       clearTimeout(timeout);
       removeAbortRelay();
     }
+  }
+
+  private async executeHookAction(
+    hook: HookRecord,
+    run: HookRunRecord,
+    payload: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<HookWebhookResponse> {
+    if (hook.action.type === "webhook") {
+      return await this.postWebhook(hook, run, payload, options);
+    }
+    if (!this.deps.executeManagedPackage) {
+      throw new Error("Managed hook packages are not available in this Gateway runtime.");
+    }
+    return await this.deps.executeManagedPackage(hook, { payload, run, signal: options?.signal });
+  }
+
+  private projectPayloadForHook(hook: HookRecord, payload: Record<string, unknown>): Record<string, unknown> {
+    if (hook.dataScope === "content") {
+      return redactSensitiveHookPayload(payload);
+    }
+    return projectMetadataOnlyHookPayload(payload);
+  }
+
+  private resolveWebhookSigningSecret(hook: HookRecord): string {
+    if (hook.action.type !== "webhook") {
+      throw new Error("Only webhook actions can be signed.");
+    }
+    const { secretRef, secret } = hook.action.webhook;
+    if (secretRef) {
+      const resolved = this.deps.resolveWebhookSecret?.(secretRef)?.trim();
+      if (!resolved) throw new Error("Hook signing secret is unavailable from secure storage.");
+      return resolved;
+    }
+    // Legacy records created before keychain custody are deliberately readable
+    // only for compatibility. Edits migrate them; new Gateway API writes never
+    // persist a raw secret.
+    if (secret?.trim()) return secret.trim();
+    throw new Error("Hook signing secret is required.");
   }
 
   private async publishRunRealtime(hook: HookRecord, run: HookRunRecord): Promise<void> {
@@ -815,6 +964,93 @@ export class HooksService {
       // Retained realtime is a projection; it cannot roll back canonical hook state
       // or turn a webhook that already returned success into a replayable failure.
     }
+  }
+
+  /**
+   * Legacy records stored the signing value inside `action_json`. A production
+   * Gateway always receives the custody adapters; when it does, migrate the
+   * value before the record can be listed or dispatched. If keychain custody
+   * is unavailable or rejects the value, remove the raw secret and disable
+   * the record rather than falling back to an unsigned or database-held key.
+   *
+   * Isolated service tests may deliberately omit all custody adapters to
+   * exercise pre-custody compatibility behavior. That narrow constructor seam
+   * does not exist in Gateway composition.
+   */
+  private async ensureWebhookSecretCustodyForHooks(records: HookRecord[]): Promise<HookRecord[]> {
+    return await Promise.all(records.map(async (record) => await this.ensureWebhookSecretCustody(record)));
+  }
+
+  private async ensureWebhookSecretCustody(record: HookRecord): Promise<HookRecord> {
+    if (record.action.type !== "webhook") {
+      return record;
+    }
+    const { secret, secretRef, url } = record.action.webhook;
+    if (secretRef) {
+      if (!this.deps.resolveWebhookSecret) return record;
+      try {
+        this.deps.resolveWebhookSecret(secretRef);
+        return record;
+      } catch {
+        return await this.disableUncustodiedWebhook(record, "hook_secret_reference_unavailable");
+      }
+    }
+    if (!secret?.trim()) {
+      return await this.disableUncustodiedWebhook(record, "hook_signing_secret_missing");
+    }
+    if (!this.deps.storeWebhookSecret) {
+      // The legacy, adapter-free unit-test seam cannot safely perform a
+      // migration. Production composition always supplies this adapter.
+      return record;
+    }
+    try {
+      const migrated = await this.ctx.storage.workspaceHooks.update(record.workspaceId, record.hookId, {
+        action: {
+          type: "webhook",
+          webhook: { url, secretRef: this.deps.storeWebhookSecret(secret) },
+        },
+      });
+      void (await this.ctx.storage.audit.append("hooks", {
+        event: "hook.secret_migrated",
+        hookId: migrated.hookId,
+        workspaceId: migrated.workspaceId,
+      }));
+      await this.publishRealtimeSafely("system", "hooks", {
+        type: "hook_secret_migrated",
+        hookId: migrated.hookId,
+        workspaceId: migrated.workspaceId,
+      });
+      return migrated;
+    } catch {
+      return await this.disableUncustodiedWebhook(record, "hook_secret_migration_failed");
+    }
+  }
+
+  private async disableUncustodiedWebhook(record: HookRecord, reason: string): Promise<HookRecord> {
+    const safeAction = { type: "webhook" as const, webhook: { url: record.action.type === "webhook" ? record.action.webhook.url : "" } };
+    let disabled: HookRecord;
+    try {
+      disabled = await this.ctx.storage.workspaceHooks.update(record.workspaceId, record.hookId, {
+        enabled: false,
+        action: safeAction,
+      });
+    } catch {
+      // Do not let a storage failure turn into a plaintext-secret dispatch.
+      disabled = { ...record, enabled: false, action: safeAction };
+    }
+    void (await this.ctx.storage.audit.append("hooks", {
+      event: "hook.disabled",
+      hookId: record.hookId,
+      workspaceId: record.workspaceId,
+      reason,
+    }));
+    await this.publishRealtimeSafely("system", "hooks", {
+      type: "hook_disabled",
+      hookId: record.hookId,
+      workspaceId: record.workspaceId,
+      reason,
+    });
+    return disabled;
   }
 
   private async assertModeAllowed(workspaceId: string, mode: HookMode): Promise<void> {
@@ -854,39 +1090,59 @@ export class HooksService {
   }
 
   private assertTriggerModeSupported(trigger: HookTrigger, mode: HookMode): void {
-    if (mode === "observe") {
-      return;
-    }
-    if (trigger === "gateway.dispatch.before" && mode === "mutate") {
+    const definition = HOOK_EVENT_REGISTRY[trigger];
+    if (!definition) throw new ValidationError({ message: `Unknown hook trigger ${trigger}.` });
+    if (!definition.allowedModes.includes(mode)) {
+      const observeOnly = definition.allowedModes.length === 1 && definition.allowedModes[0] === "observe";
       throw new ValidationError({
-        message: `Trigger ${trigger} does not support mutate hooks.`,
+        message: observeOnly
+          ? `Trigger ${trigger} only supports observe hooks.`
+          : `Trigger ${trigger} does not support ${mode} hooks.`,
       });
     }
-    if (trigger === "approval.request.before" && mode === "mutate") {
+  }
+
+  private assertDataScopeAllowed(dataScope: HookRecord["dataScope"]): void {
+    if (dataScope === "content") {
       throw new ValidationError({
-        message: `Trigger ${trigger} does not support mutate hooks.`,
+        message: "Content-bearing hook payloads require an approval-backed data grant and are not enabled by this runtime.",
       });
     }
-    if (
-      trigger === "llm.response.after" ||
-      trigger === "before_prompt_build" ||
-      trigger === "llm_input" ||
-      trigger === "llm_output" ||
-      trigger === "tool.call.after" ||
-      trigger === "tool.call.error" ||
-      trigger === "after_tool_call" ||
-      trigger === "approval.resolve.after" ||
-      trigger === "approval.response.after" ||
-      trigger === "orchestration.phase.after" ||
-      trigger === "orchestration.retry.scheduled" ||
-      trigger === "orchestration.run.woken" ||
-      trigger === "before_message_write" ||
-      trigger === "agent_end"
-    ) {
-      throw new ValidationError({
-        message: `Trigger ${trigger} only supports observe hooks in v1.`,
+  }
+
+  private prepareActionForPersistence(action: HookCreateInput["action"]): HookCreateInput["action"] {
+    if (action.type === "managed_package") {
+      // A manifest-shaped request is not enough to make local code callable.
+      // The trusted-code adapter must first bind an approved, byte-checked
+      // capability artifact to the package. Until that runtime exists, fail
+      // closed rather than accepting a package that would execute later with
+      // weaker provenance than webhooks.
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Managed hook packages require the approved trusted-code runtime and are not enabled in this release.",
       });
     }
+    this.assertWebhookUrlAllowed(action.webhook.url);
+    const secret = action.webhook.secret?.trim();
+    const secretRef = action.webhook.secretRef?.trim();
+    if (!secret && !secretRef) {
+      throw new ValidationError({ message: "Hook signing secret is required." });
+    }
+    if (secret && this.deps.storeWebhookSecret) {
+      return {
+        type: "webhook",
+        webhook: { url: action.webhook.url, secretRef: this.deps.storeWebhookSecret(secret) },
+      };
+    }
+    if (secretRef && this.deps.resolveWebhookSecret) {
+      // Callers cannot smuggle a dangling or cross-feature keychain locator
+      // into a hook record. The custody adapter accepts only its opaque prefix.
+      this.deps.resolveWebhookSecret(secretRef);
+    }
+    return {
+      type: "webhook",
+      webhook: { url: action.webhook.url, ...(secretRef ? { secretRef } : {}), ...(secret ? { secret } : {}) },
+    };
   }
 
   private assertWebhookUrlAllowed(rawUrl: string): void {
@@ -902,6 +1158,14 @@ export class HooksService {
       throw new ValidationError({
         message: "Hook webhook URLs must use HTTPS.",
       });
+    }
+    const allowlist = this.deps.getNetworkAllowlist?.();
+    if (allowlist) {
+      try {
+        assertHostAllowed(url.toString(), allowlist);
+      } catch (error) {
+        throw new ValidationError({ message: error instanceof Error ? error.message : "Webhook destination is not allowed." });
+      }
     }
   }
 }
@@ -1004,7 +1268,50 @@ function normalizeDecision(value: unknown): HookDecision | undefined {
         : {}),
     };
   }
+  if (candidate.type === "revise" && typeof candidate.reason === "string" && candidate.reason.trim()) {
+    return {
+      type: "revise",
+      reason: candidate.reason.trim(),
+      ...(candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
+        ? { metadata: candidate.metadata as Record<string, unknown> }
+        : {}),
+    };
+  }
   return undefined;
+}
+
+const HOOK_SENSITIVE_KEY = /(authorization|cookie|secret|token|password|api[_-]?key|prompt|message|content|text)/i;
+
+/**
+ * Metadata deliveries retain keys and safe scalar identifiers, but convert
+ * sensitive values into a shape-only record. This prevents a default webhook
+ * from silently becoming an outbound transcript sink.
+ */
+function projectMetadataOnlyHookPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return projectHookValue(payload, true) as Record<string, unknown>;
+}
+
+/** Content scope still strips credentials and bearer material at the boundary. */
+function redactSensitiveHookPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return projectHookValue(payload, false) as Record<string, unknown>;
+}
+
+function projectHookValue(value: unknown, metadataOnly: boolean, key = ""): unknown {
+  if (HOOK_SENSITIVE_KEY.test(key)) {
+    if (typeof value === "string") return { redacted: true, length: value.length };
+    if (Array.isArray(value)) return { redacted: true, itemCount: value.length };
+    if (value && typeof value === "object") return { redacted: true };
+  }
+  if (typeof value === "string") return metadataOnly ? { length: value.length } : value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => projectHookValue(entry, metadataOnly));
+  if (!value || typeof value !== "object") return undefined;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 100)
+      .map(([entryKey, entryValue]) => [entryKey, projectHookValue(entryValue, metadataOnly, entryKey)])
+      .filter(([, entryValue]) => entryValue !== undefined),
+  );
 }
 
 function summarizePatch(value: unknown): HookPatchSummary | undefined {
@@ -1018,10 +1325,7 @@ function summarizePatch(value: unknown): HookPatchSummary | undefined {
   };
 }
 
-function signHookBody(timestamp: string, body: string, secret?: string): string {
-  if (!secret) {
-    return "unsigned";
-  }
+function signHookBody(timestamp: string, body: string, secret: string): string {
   const digest = createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex");
   return `sha256=${digest}`;
 }

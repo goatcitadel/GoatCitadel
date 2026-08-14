@@ -53,6 +53,7 @@ import { GeneralSection } from "./settings/sections/GeneralSection";
 import { PersonalitiesSection } from "./settings/sections/PersonalitiesSection";
 import { ChannelsSection } from "./settings/sections/ChannelsSection";
 import { ToolsSection } from "./settings/sections/ToolsSection";
+import { HooksSection } from "./settings/sections/HooksSection";
 import { RuntimeSection } from "./settings/sections/RuntimeSection";
 import { WorkspacesSection } from "./settings/sections/WorkspacesSection";
 import { OnboardingSection } from "./settings/sections/OnboardingSection";
@@ -209,6 +210,8 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <McpSection {...props} />;
     case "tools":
       return <ToolsSection {...props} />;
+    case "hooks":
+      return <HooksSection {...props} />;
     case "addons":
       return <AddonsSection {...props} />;
     case "workspace-capabilities":

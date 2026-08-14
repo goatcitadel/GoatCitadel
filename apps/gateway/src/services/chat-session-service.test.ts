@@ -92,6 +92,42 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("emits metadata-only durable lifecycle observers when a session starts and ends", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const enqueueAfterHooks = vi.fn();
+      deps.hooksService = { runInlineHooks: vi.fn(), enqueueAfterHooks } as never;
+
+      const created = await createChatSession(deps, {
+        workspaceId: "default",
+        title: "This title must not become hook payload content",
+        mode: "chat",
+      });
+      await deleteChatSession(deps, created.sessionId, created.revision);
+
+      expect(enqueueAfterHooks).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          trigger: "session.start",
+          entityId: created.sessionId,
+          payload: expect.objectContaining({ workspaceId: "default", sessionId: created.sessionId, mode: "chat" }),
+        }),
+      );
+      expect(enqueueAfterHooks).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          trigger: "session.end",
+          entityId: created.sessionId,
+          payload: { workspaceId: "default", sessionId: created.sessionId, reason: "deleted" },
+        }),
+      );
+      expect(JSON.stringify(enqueueAfterHooks.mock.calls)).not.toContain("This title must not become hook payload content");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("rejects stale two-client writes across the chat-session aggregate and rolls back project side effects", async () => {
     const { storage, cleanup } = createStorage();
     try {

@@ -113,6 +113,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "settings-channels": "ship",
   "settings-mcp": "ship",
   "settings-tools": "ship",
+  "settings-hooks": "ship",
 };
 
 export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
@@ -500,6 +501,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     readyText: "Tool catalog",
     expectedArea: "settings",
     expectedSection: "tools",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-hooks",
+    href: "/settings/hooks",
+    readyText: "Governed hooks",
+    expectedArea: "settings",
+    expectedSection: "hooks",
     interaction: "open-inspector",
   },
 ]);

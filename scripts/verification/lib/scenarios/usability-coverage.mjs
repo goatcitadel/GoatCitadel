@@ -52,6 +52,9 @@ const ROUTE_TEST_REFS_BY_SLUG = Object.freeze({
   "settings-trust-policy": [
     "apps/mission-control-next/src/features/native-routes/settings/sections/TrustPolicySection.test.tsx",
   ],
+  "settings-hooks": [
+    "apps/mission-control-next/src/features/native-routes/settings/sections/HooksSection.test.tsx",
+  ],
   "settings-permissions": [
     "apps/mission-control-next/src/features/native-routes/settings/sections/CapabilityScopePanel.test.tsx",
   ],
@@ -71,8 +74,8 @@ const DEFAULT_SETTINGS_TEST_REFS = Object.freeze([
 ]);
 
 export const EXPECTED_USABILITY_SURFACE_COUNTS = Object.freeze({
-  routes: 48,
-  shipped: 42,
+  routes: 49,
+  shipped: 43,
   experimental: 6,
   redirects: 20,
   directCompatibility: 3,
@@ -136,6 +139,7 @@ export const ROUTE_ACTIONS_BY_SLUG = Object.freeze({
   "settings-channels": ["channel-validation-and-diagnostics", "sandbox-destination"],
   "settings-mcp": ["mcp-server-tool-grant-lifecycle", "unsupported-transport-truth"],
   "settings-tools": ["tool-catalog-and-grants", "approval-and-policy-boundary"],
+  "settings-hooks": ["signed-webhook-safe-test-and-delivery-history"],
 });
 
 export function buildUsabilityRouteActionInventory(baseSha, sourceState) {

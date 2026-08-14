@@ -26,7 +26,10 @@ export type HookMode = "observe" | "mutate" | "intercept";
 
 export type HookFailPolicy = "open" | "closed";
 
-export type HookActionType = "webhook";
+/** Payload projection granted to a hook. Content is always an explicit opt-in. */
+export type HookDataScope = "metadata" | "content";
+
+export type HookActionType = "webhook" | "managed_package";
 
 export type HookTrigger =
   | "llm.model.select.before"
@@ -51,7 +54,84 @@ export type HookTrigger =
   | "orchestration.retry.scheduled"
   | "orchestration.run.woken"
   | "before_message_write"
-  | "agent_end";
+  | "agent_end"
+  | "session.start"
+  | "session.end"
+  | "prompt.submit.before"
+  | "context.compaction.before"
+  | "context.compaction.after"
+  | "subagent.start"
+  | "subagent.end"
+  | "agent.finalize.before";
+
+export const HOOK_TRIGGER_VALUES: readonly HookTrigger[] = [
+  "llm.model.select.before", "llm.request.before", "gateway.dispatch.before", "transform_llm_output",
+  "llm.response.after", "before_prompt_build", "llm_input", "llm_output", "tool.call.before",
+  "tool.call.after", "tool.call.error", "after_tool_call", "approval.request.before",
+  "approval.create.before", "approval.resolve.after", "approval.response.after", "orchestration.run.before",
+  "orchestration.phase.before", "orchestration.phase.after", "orchestration.retry.scheduled",
+  "orchestration.run.woken", "before_message_write", "agent_end", "session.start", "session.end",
+  "prompt.submit.before", "context.compaction.before", "context.compaction.after", "subagent.start",
+  "subagent.end", "agent.finalize.before",
+] as const;
+
+export interface HookEventDefinition {
+  trigger: HookTrigger;
+  phase: HookPhase;
+  allowedModes: readonly HookMode[];
+  defaultDataScope: HookDataScope;
+  durable: boolean;
+  /** Pre-hooks execute in priority order; post-observers materialize durable runs. */
+  ordering: "priority_serial" | "durable_async";
+  /** The Gateway-enforced delivery budget before a hook is marked timed out. */
+  defaultTimeoutMs: number;
+  /** Public contract for a handler response; actual parsing remains Gateway-owned. */
+  responseSchema: "observe" | "patch" | "block" | "finalize";
+  /** Observe failures are recorded; enforcement hooks follow their configured fail policy. */
+  failureSemantics: "record_only" | "configured_fail_policy";
+}
+
+const BEFORE_MUTABLE_TRIGGERS = new Set<HookTrigger>([
+  "llm.model.select.before", "llm.request.before", "transform_llm_output", "tool.call.before",
+  "approval.create.before", "orchestration.run.before", "orchestration.phase.before",
+]);
+const BEFORE_INTERCEPTABLE_TRIGGERS = new Set<HookTrigger>([
+  "llm.model.select.before", "llm.request.before", "gateway.dispatch.before", "transform_llm_output",
+  "tool.call.before", "approval.request.before", "approval.create.before", "orchestration.run.before",
+  "orchestration.phase.before", "prompt.submit.before", "agent.finalize.before",
+]);
+
+/** Canonical lifecycle registration contract; runtime dispatch remains Gateway-owned. */
+export const HOOK_EVENT_REGISTRY: Readonly<Record<HookTrigger, HookEventDefinition>> = Object.freeze(
+  Object.fromEntries(HOOK_TRIGGER_VALUES.map((trigger) => {
+    const phase = deriveHookPhase(trigger);
+    const allowedModes: HookMode[] = ["observe"];
+    if (BEFORE_MUTABLE_TRIGGERS.has(trigger)) allowedModes.push("mutate");
+    if (BEFORE_INTERCEPTABLE_TRIGGERS.has(trigger)) allowedModes.push("intercept");
+    const durable = phase === "after";
+    return [
+      trigger,
+      {
+        trigger,
+        phase,
+        allowedModes,
+        defaultDataScope: "metadata",
+        durable,
+        ordering: durable ? "durable_async" : "priority_serial",
+        defaultTimeoutMs: 5_000,
+        responseSchema:
+          trigger === "agent.finalize.before"
+            ? "finalize"
+            : allowedModes.includes("mutate")
+              ? "patch"
+              : allowedModes.includes("intercept")
+                ? "block"
+                : "observe",
+        failureSemantics: allowedModes.length === 1 ? "record_only" : "configured_fail_policy",
+      } satisfies HookEventDefinition,
+    ];
+  })) as unknown as Record<HookTrigger, HookEventDefinition>,
+);
 
 export type HookDeliveryStatus =
   | "queued"
@@ -65,12 +145,37 @@ export type HookDeliveryStatus =
 
 export interface HookWebhookActionConfig {
   url: string;
+  /** Opaque keychain locator persisted for newly created or rotated hooks. */
+  secretRef?: string;
+  /** @deprecated Compatibility input only; Gateway custody removes it before persistence. */
   secret?: string;
 }
 
-export interface HookActionConfig {
+export interface HookWebhookAction {
   type: "webhook";
   webhook: HookWebhookActionConfig;
+}
+
+export interface ManagedHookPackageActionConfig {
+  packageId: string;
+  manifestHash: string;
+}
+
+export interface ManagedHookPackageAction {
+  type: "managed_package";
+  managedPackage: ManagedHookPackageActionConfig;
+}
+
+export type HookActionConfig = HookWebhookAction | ManagedHookPackageAction;
+
+/** Immutable, reviewed local handler bundle. This is integrity evidence, not a hostile-code sandbox claim. */
+export interface HookPackageManifest {
+  schemaVersion: 1;
+  packageId: string;
+  title: string;
+  handlerArtifactSha256: string;
+  skillArtifactSha256: string;
+  subscriptions: Array<{ trigger: HookTrigger; mode: HookMode; dataScope: HookDataScope }>;
 }
 
 export interface LlmModelSelectHookPatch {
@@ -122,7 +227,15 @@ export type RuntimeLifecycleHookTrigger =
   | "llm_output"
   | "after_tool_call"
   | "before_message_write"
-  | "agent_end";
+  | "agent_end"
+  | "session.start"
+  | "session.end"
+  | "prompt.submit.before"
+  | "context.compaction.before"
+  | "context.compaction.after"
+  | "subagent.start"
+  | "subagent.end"
+  | "agent.finalize.before";
 
 export interface RuntimeLifecycleHookBasePayload {
   workspaceId?: string;
@@ -176,6 +289,46 @@ export interface AgentEndHookPayload extends RuntimeLifecycleHookBasePayload {
   repaired: boolean;
 }
 
+export interface SessionStartHookPayload extends RuntimeLifecycleHookBasePayload {
+  sessionId: string;
+  origin: string;
+  mode?: string;
+}
+
+export interface SessionEndHookPayload extends RuntimeLifecycleHookBasePayload {
+  sessionId: string;
+  reason: "deleted" | "archived" | "ended";
+}
+
+export interface PromptSubmitBeforeHookPayload extends RuntimeLifecycleHookBasePayload {
+  sessionId: string;
+  turnId: string;
+  contentLength: number;
+  mode?: string;
+  attachmentCount: number;
+}
+
+export interface ContextCompactionHookPayload extends RuntimeLifecycleHookBasePayload {
+  sessionId: string;
+  branchHeadTurnId: string;
+  startTurnId: string;
+  endTurnId: string;
+  turnCount: number;
+  sourceHash: string;
+  summaryHash?: string;
+}
+
+export interface SubagentLifecycleHookPayload extends RuntimeLifecycleHookBasePayload {
+  parentSessionId: string;
+  childSessionId: string;
+  delegationRunId: string;
+  stepId: string;
+  role: string;
+  status?: string;
+}
+
+export interface AgentFinalizeBeforeHookPayload extends BeforeMessageWriteHookPayload {}
+
 export interface RuntimeLifecycleHookPayloadByTrigger {
   before_prompt_build: BeforePromptBuildHookPayload;
   llm_input: LlmInputHookPayload;
@@ -183,6 +336,14 @@ export interface RuntimeLifecycleHookPayloadByTrigger {
   after_tool_call: AfterToolCallHookPayload;
   before_message_write: BeforeMessageWriteHookPayload;
   agent_end: AgentEndHookPayload;
+  "session.start": SessionStartHookPayload;
+  "session.end": SessionEndHookPayload;
+  "prompt.submit.before": PromptSubmitBeforeHookPayload;
+  "context.compaction.before": ContextCompactionHookPayload;
+  "context.compaction.after": ContextCompactionHookPayload;
+  "subagent.start": SubagentLifecycleHookPayload;
+  "subagent.end": SubagentLifecycleHookPayload;
+  "agent.finalize.before": AgentFinalizeBeforeHookPayload;
 }
 
 export interface HookPatchByTrigger {
@@ -209,6 +370,14 @@ export interface HookPatchByTrigger {
   "orchestration.run.woken": never;
   before_message_write: never;
   agent_end: never;
+  "session.start": never;
+  "session.end": never;
+  "prompt.submit.before": never;
+  "context.compaction.before": never;
+  "context.compaction.after": never;
+  "subagent.start": never;
+  "subagent.end": never;
+  "agent.finalize.before": never;
 }
 
 export type HookPatch =
@@ -238,7 +407,14 @@ export interface HookDecisionBlock {
   metadata?: Record<string, unknown>;
 }
 
-export type HookDecision = HookDecisionContinue | HookDecisionBlock;
+/** Only valid for agent.finalize.before and bounded by the durable turn owner. */
+export interface HookDecisionRevise {
+  type: "revise";
+  reason: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type HookDecision = HookDecisionContinue | HookDecisionBlock | HookDecisionRevise;
 
 export interface HookRecord {
   hookId: string;
@@ -251,6 +427,8 @@ export interface HookRecord {
   priority: number;
   timeoutMs: number;
   failPolicy: HookFailPolicy;
+  /** Omitted only by compatibility callers; persisted records always project metadata by default. */
+  dataScope?: HookDataScope;
   action: HookActionConfig;
   createdAt: string;
   updatedAt: string;
@@ -265,6 +443,7 @@ export interface HookCreateInput {
   priority?: number;
   timeoutMs?: number;
   failPolicy?: HookFailPolicy;
+  dataScope?: HookDataScope;
   action: HookActionConfig;
 }
 
@@ -274,6 +453,7 @@ export interface HookUpdateInput {
   priority?: number;
   timeoutMs?: number;
   failPolicy?: HookFailPolicy;
+  dataScope?: HookDataScope;
   action?: HookActionConfig;
 }
 
@@ -331,10 +511,26 @@ export interface HookWebhookResponse {
 }
 
 export function deriveHookPhase(trigger: HookTrigger): HookPhase {
-  if (trigger === "before_prompt_build" || trigger === "before_message_write") {
+  if (
+    trigger === "before_prompt_build" ||
+    trigger === "before_message_write" ||
+    trigger === "prompt.submit.before" ||
+    trigger === "context.compaction.before" ||
+    trigger === "agent.finalize.before"
+  ) {
     return "before";
   }
-  if (trigger === "llm_input" || trigger === "llm_output" || trigger === "after_tool_call" || trigger === "agent_end") {
+  if (
+    trigger === "llm_input" ||
+    trigger === "llm_output" ||
+    trigger === "after_tool_call" ||
+    trigger === "agent_end" ||
+    trigger === "context.compaction.after" ||
+    trigger === "session.start" ||
+    trigger === "session.end" ||
+    trigger === "subagent.start" ||
+    trigger === "subagent.end"
+  ) {
     return "after";
   }
   if (trigger.endsWith(".before")) {

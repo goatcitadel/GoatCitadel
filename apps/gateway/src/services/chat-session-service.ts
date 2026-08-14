@@ -45,6 +45,8 @@ import {
 } from "./chat-session-utils.js";
 import { buildGeneratedArtifactReference } from "./chat-generated-artifact-service.js";
 import { preserveChatSessionSecretsForPublicUpdate } from "./chat-secret-projection.js";
+import type { HooksService } from "./hooks-service.js";
+import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
 const log = logger.child("chat-session-service");
 const MISSING_CHAT_SESSION_META_WORKSPACE_ID = "__legacy_unknown__";
@@ -69,6 +71,8 @@ export interface ChatSessionDependencies {
     sessionId: string,
     patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"],
   ): Promise<unknown>;
+  /** Optional so non-Gateway service tests remain deterministic; production composition always supplies it. */
+  hooksService?: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
 }
 
 export async function listChatSessions(
@@ -667,6 +671,20 @@ async function upsertChatSessionForPeer(
     sessionId: created.sessionId,
     sessionKey: created.sessionKey,
   });
+  if (deps.hooksService) {
+    await runtimeLifecycleHookDispatcher.enqueueObserveHook(deps.hooksService, {
+      workspaceId,
+      trigger: "session.start",
+      entityType: "chat_session",
+      entityId: created.sessionId,
+      payload: {
+        workspaceId,
+        sessionId: created.sessionId,
+        origin: input.origin ?? "operator",
+        mode: created.mode,
+      },
+    });
+  }
   return created;
 }
 
@@ -896,6 +914,10 @@ export async function deleteChatSession(
   sessionId: string,
   expectedRevision?: number,
 ): Promise<{ deleted: boolean; sessionId: string }> {
+  // Resolve the workspace before deletion. The canonical session rows are gone
+  // by the time the durable observer is materialized, and hooks must never
+  // infer a workspace from a deleted UI projection.
+  const preDeleteMeta = await deps.storage.chatSessionMeta.get(sessionId);
   let currentWithoutExpectedRevision: ChatSessionRecord | undefined;
   if (expectedRevision === undefined) {
     await deps.getSession(sessionId);
@@ -962,8 +984,22 @@ export async function deleteChatSession(
     sessionId,
     mode: "hard",
   });
+  const deleted = deletionResults.some((result) => result.sessionId === sessionId && result.deleted);
+  if (deleted && preDeleteMeta?.workspaceId && deps.hooksService) {
+    await runtimeLifecycleHookDispatcher.enqueueObserveHook(deps.hooksService, {
+      workspaceId: deps.normalizeWorkspaceId(preDeleteMeta.workspaceId),
+      trigger: "session.end",
+      entityType: "chat_session",
+      entityId: sessionId,
+      payload: {
+        workspaceId: deps.normalizeWorkspaceId(preDeleteMeta.workspaceId),
+        sessionId,
+        reason: "deleted",
+      },
+    });
+  }
   return {
-    deleted: deletionResults.some((result) => result.sessionId === sessionId && result.deleted),
+    deleted,
     sessionId,
   };
 }

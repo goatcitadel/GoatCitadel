@@ -49,7 +49,7 @@ describe("hook public projection", () => {
     expect(hook.action.webhook.url).toContain("hook-short");
   });
 
-  it("projects credential-bearing URL paths and text in hook-run DTOs", () => {
+  it("keeps webhook delivery payloads, responses, and raw errors Gateway-owned", () => {
     const run: HookRunRecord = {
       runId: "run-1",
       hookId: "hook-1",
@@ -64,6 +64,9 @@ describe("hook public projection", () => {
       requestPayload: {
         endpoint: "https://callback.example.test/token/request-short?mode=events",
       },
+      responsePayload: {
+        body: "remote response with a secret",
+      },
       errorText: "failed at https://hooks.slack.com/services/team/bot/signing-short",
       createdAt: "2026-07-09T00:00:00.000Z",
       updatedAt: "2026-07-09T00:00:00.000Z",
@@ -71,8 +74,11 @@ describe("hook public projection", () => {
 
     const [projected] = projectHookRunsForPublicResponse([run]);
 
-    expect(projected?.requestPayload?.endpoint).toBe("https://callback.example.test/token/[REDACTED]?mode=events");
-    expect(projected?.errorText).toBe("failed at https://hooks.slack.com/services/[REDACTED]/[REDACTED]/[REDACTED]");
+    expect(projected?.requestPayload).toBeUndefined();
+    expect(projected?.responsePayload).toBeUndefined();
+    expect(projected?.errorText).toBe("hook_delivery_failed");
+    expect(JSON.stringify(projected)).not.toContain("request-short");
+    expect(JSON.stringify(projected)).not.toContain("remote response");
     expect(run.errorText).toContain("signing-short");
   });
 });

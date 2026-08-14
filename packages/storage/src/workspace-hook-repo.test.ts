@@ -105,6 +105,7 @@ describe("WorkspaceHookRepository", () => {
     assert.equal(lowPriority.priority, -10_000);
     assert.equal(lowPriority.timeoutMs, 250);
     assert.equal(lowPriority.failPolicy, "open");
+    assert.equal(lowPriority.dataScope, "metadata");
     assert.deepEqual(lowPriority.action, {
       type: "webhook",
       webhook: {
@@ -130,13 +131,31 @@ describe("WorkspaceHookRepository", () => {
     assert.equal(highPriority.timeoutMs, 60_000);
     assert.equal(highPriority.failPolicy, "closed");
 
+    const managed = repo.create(
+      {
+        workspaceId: "workspace-1",
+        label: "Managed shape",
+        trigger: "agent.finalize.before",
+        mode: "intercept",
+        action: {
+          type: "managed_package",
+          managedPackage: { packageId: "candidate-hook", manifestHash: "a".repeat(64) },
+        },
+      },
+      "2026-03-24T10:01:30.000Z",
+    );
+    assert.deepEqual(managed.action, {
+      type: "managed_package",
+      managedPackage: { packageId: "candidate-hook", manifestHash: "a".repeat(64) },
+    });
+
     assert.deepEqual(
       repo.list("workspace-1", Number.NaN).map((hook) => hook.hookId),
-      [highPriority.hookId, lowPriority.hookId],
+      [highPriority.hookId, managed.hookId, lowPriority.hookId],
     );
     assert.deepEqual(
       repo.list("workspace-1", 20).map((hook) => hook.hookId),
-      [highPriority.hookId, lowPriority.hookId],
+      [highPriority.hookId, managed.hookId, lowPriority.hookId],
     );
     assert.deepEqual(repo.listByTrigger("workspace-1", "llm.request.before"), []);
     assert.deepEqual(

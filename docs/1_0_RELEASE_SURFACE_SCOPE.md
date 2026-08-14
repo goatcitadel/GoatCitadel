@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Surface Scope
 
-Last updated: 2026-07-14
+Last updated: 2026-08-14
 
 This table freezes the visible Mission Control Next `1.0` route surface after the final release-readiness promotion. The canonical route list is [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts); surface and visual verification consume [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
 
@@ -61,6 +61,7 @@ Status meanings:
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
 | `/settings/mcp` | `ship` | Local stdio, Approval Inbox, and governed remote http/sse no-auth, token-env, and OAuth2 paths are visible; OAuth records show connect/reconnect readiness and fail closed as `needs_auth` when token refs are missing or expired. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |
+| `/settings/hooks` | `ship` | Create signed metadata-only HTTPS lifecycle hooks, safely test delivery, and inspect durable delivery history without exposing signing secrets or conversation payloads. |
 
 ## Held visibility surface — remote-worker Ops and one-Chat activity (HX-507)
 

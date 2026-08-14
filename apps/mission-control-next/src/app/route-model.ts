@@ -52,6 +52,7 @@ export type SettingsSection =
   | "channels"
   | "mcp"
   | "tools"
+  | "hooks"
   | "trust-policy"
   | "workspace-capabilities"
   | "citadel-capabilities";
@@ -604,6 +605,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "tools",
     },
     {
+      id: "settings-hooks",
+      label: "Hooks",
+      description: "Governed lifecycle hooks, delivery posture, and evidence.",
+      area: "settings",
+      section: "hooks",
+    },
+    {
       id: "settings-addons",
       label: "Add-ons",
       description: "Installed extensions and workspace add-on posture.",
@@ -708,7 +716,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
         "citadel-capabilities",
       ],
     },
-    { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools"] },
+    { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools", "hooks"] },
     { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },
   ],
   library: [
@@ -1213,6 +1221,14 @@ export const ROUTE_RELEASE_SCOPE = [
     releaseAction: "Inspect low-level tool catalog and scoped allow/deny grants.",
     verification: "verify:surface:regression, verify:agentic:governance",
     note: "Tool grants and deny-wins policy are release-bearing.",
+  },
+  {
+    area: "settings",
+    section: "hooks",
+    status: "ship",
+    releaseAction: "Configure governed lifecycle hooks and inspect durable delivery evidence.",
+    verification: "verify:hooks, verify:surface:regression, verify:runtime:truth",
+    note: "Hooks remain Gateway-governed: network allowlists, approvals, payload scope, and policy cannot be bypassed.",
   },
   {
     area: "settings",

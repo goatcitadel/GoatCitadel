@@ -67,6 +67,7 @@ export function composeChatRouteDependencies(
   const ChatSessionDependencies: chatSessionService.ChatSessionDependencies = {
     storage: gateway.storage,
     operatorSummaryCache: gateway.operatorSummaryCache,
+    hooksService: gateway.hooksService,
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     ensureChatSessionRuntimeGrants: (sessionId) => gateway.ensureChatSessionRuntimeGrants(sessionId),
     requireChatSession: async (sessionId) => gateway.requireChatSession(sessionId),

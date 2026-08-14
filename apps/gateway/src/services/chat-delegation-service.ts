@@ -644,6 +644,17 @@ export interface ChatDelegationServiceHost {
     source: { role: "user" | "assistant"; sourceRef: string },
   ): Promise<void>;
   scheduleChatMemoryContextPrewarm(input: { sessionId: string; prompt: string; relationScope: "peer" }): void;
+  /** Metadata-only lifecycle observer; it cannot alter delegation policy or child execution. */
+  onSubagentLifecycle?(input: {
+    phase: "start" | "end";
+    workspaceId: string;
+    parentSessionId: string;
+    childSessionId: string;
+    delegationRunId: string;
+    stepId: string;
+    role: string;
+    status?: ChatDelegationStepRecord["status"];
+  }): Promise<void>;
   validateReadOnlyExplorerParent?(input: {
     sessionId: string;
     policyRunId: string;
@@ -1539,6 +1550,15 @@ export class ChatDelegationService {
           };
         }
         await callbacks?.onStep?.(runningStep);
+        await deps.onSubagentLifecycle?.({
+          phase: "start",
+          workspaceId: sessionWorkspaceId,
+          parentSessionId: sessionId,
+          childSessionId: agentSessionId,
+          delegationRunId: runId,
+          stepId: step.stepId,
+          role: step.role,
+        });
         registeredAgentSessionId = agentSessionId;
         childSessionId = agentSessionId;
         const persistedResumeStep =
@@ -2101,6 +2121,18 @@ export class ChatDelegationService {
         if (completionRouting) {
           trace = aggregateTrace;
         }
+        if (!waiting) {
+          await deps.onSubagentLifecycle?.({
+            phase: "end",
+            workspaceId: sessionWorkspaceId,
+            parentSessionId: sessionId,
+            childSessionId: agentSessionId,
+            delegationRunId: runId,
+            stepId: step.stepId,
+            role: step.role,
+            status: completedStep.status,
+          });
+        }
         return {
           step: completedStep,
           output,
@@ -2287,6 +2319,18 @@ export class ChatDelegationService {
         );
         await publishDelegationAggregateCommit(deps, committedFailure.aggregate);
         await callbacks?.onStep?.(committedFailure.step);
+        if (registeredAgentSessionId) {
+          await deps.onSubagentLifecycle?.({
+            phase: "end",
+            workspaceId: sessionWorkspaceId,
+            parentSessionId: sessionId,
+            childSessionId: registeredAgentSessionId,
+            delegationRunId: runId,
+            stepId: step.stepId,
+            role: step.role,
+            status: committedFailure.step.status,
+          });
+        }
         return {
           step: committedFailure.step,
           output: message,

@@ -62,6 +62,17 @@ export interface ChatMessageHistoryDependencies {
    * to size prompt-cache compaction. Optional: absent implies 1 (no scaling).
    */
   getModelTokenMultiplier?(providerId: string | undefined, model: string | undefined): number;
+  /** Gateway-owned lifecycle evidence; no source or summary text crosses this boundary. */
+  onCompaction?(input: {
+    phase: "before" | "after";
+    sessionId: string;
+    branchHeadTurnId: string;
+    startTurnId: string;
+    endTurnId: string;
+    turnCount: number;
+    sourceHash: string;
+    summaryHash?: string;
+  }): Promise<void>;
 }
 
 export async function buildLlmMessagesFromTranscript(
@@ -762,6 +773,15 @@ async function getOrCreateConversationSummary(
     if (!summary) {
       return undefined;
     }
+    await deps.onCompaction?.({
+      phase: "before",
+      sessionId: input.sessionId,
+      branchHeadTurnId: input.branchHeadTurnId,
+      startTurnId: input.turnIds[0]!,
+      endTurnId: input.turnIds.at(-1)!,
+      turnCount: input.turnIds.length,
+      sourceHash,
+    });
     const persisted = await deps.storage.chatConversationSummaries.upsert({
       sessionId: input.sessionId,
       branchHeadTurnId: input.branchHeadTurnId,
@@ -771,6 +791,16 @@ async function getOrCreateConversationSummary(
       sourceHash,
       tokenEstimate: estimateTokensFromText(source),
       summary,
+    });
+    await deps.onCompaction?.({
+      phase: "after",
+      sessionId: input.sessionId,
+      branchHeadTurnId: input.branchHeadTurnId,
+      startTurnId: input.turnIds[0]!,
+      endTurnId: input.turnIds.at(-1)!,
+      turnCount: input.turnIds.length,
+      sourceHash,
+      summaryHash: createHash("sha256").update(persisted.summary).digest("hex"),
     });
     return {
       summary: persisted.summary,

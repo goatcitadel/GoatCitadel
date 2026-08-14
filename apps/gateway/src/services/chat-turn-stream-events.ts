@@ -20,6 +20,28 @@ export async function observeBeforeAssistantMessageWrite(
     model?: string;
   },
 ): Promise<void> {
+  const finalization = await host.hooksService.runInlineHooks({
+    workspaceId: input.workspaceId,
+    trigger: "agent.finalize.before",
+    entityType: "chat_turn",
+    entityId: input.turnId,
+    payload: {
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      runId: input.runId,
+      taskId: input.taskId,
+      providerId: input.providerId,
+      model: input.model,
+      messageId: input.messageId,
+      contentLength: input.content.length,
+      stream: input.stream,
+    },
+    parsePatch: () => undefined,
+  });
+  if (finalization.blockedBy) {
+    throw new Error(`Agent finalization stopped by hook: ${finalization.blockedBy.reason}`);
+  }
   await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
     workspaceId: input.workspaceId,
     trigger: "before_message_write",
