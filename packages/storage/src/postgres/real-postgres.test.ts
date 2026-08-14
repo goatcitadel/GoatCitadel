@@ -7270,3 +7270,163 @@ test(
     }
   },
 );
+
+test(
+  "real Postgres v149 reconciles the post-v140 PostgreSQL catalog lineage",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_v149_catalog_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 2 });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    const orderedIndexes = [
+      {
+        name: "idx_change_plans_session_created",
+        tableName: "change_plans",
+        definition: "workspace_id, session_id, created_at DESC, plan_id DESC",
+      },
+      {
+        name: "idx_change_plans_workspace_created",
+        tableName: "change_plans",
+        definition: "workspace_id, created_at DESC, plan_id DESC",
+      },
+      {
+        name: "idx_chat_change_plans_session",
+        tableName: "chat_change_plans",
+        definition: "session_id, created_at DESC, plan_id DESC",
+      },
+      {
+        name: "idx_managed_source_installs_status_updated",
+        tableName: "managed_source_installs",
+        definition: "status, updated_at DESC, install_id DESC",
+      },
+      {
+        name: "idx_product_source_update_manifests_install",
+        tableName: "product_source_update_manifests",
+        definition: "install_id, created_at DESC, manifest_id DESC",
+      },
+    ] as const;
+    const uniqueIndexes = [
+      {
+        name: "idx_change_plan_events_plan_id_sequence_unique",
+        tableName: "change_plan_events",
+        columns: ["plan_id", "sequence"],
+      },
+      {
+        name: "idx_chat_fanout_invocations_parent_run_id_tool_run_id_unique",
+        tableName: "chat_fanout_invocations",
+        columns: ["parent_run_id", "tool_run_id"],
+      },
+      {
+        name: "idx_chat_turn_secure_configuration_reservations_ad_dd7fd40b1194",
+        tableName: "chat_turn_secure_configuration_reservations",
+        columns: ["admission_id", "durable_run_id", "prompt_id", "waiting_run_version"],
+      },
+      {
+        name: "idx_product_source_update_events_manifest_id_idemp_82af46ec9c3b",
+        tableName: "product_source_update_events",
+        columns: ["manifest_id", "idempotency_key"],
+      },
+      {
+        name: "idx_product_source_update_events_manifest_id_sequence_unique",
+        tableName: "product_source_update_events",
+        columns: ["manifest_id", "sequence"],
+      },
+      {
+        name: "idx_product_source_update_manifests_plan_id_unique",
+        tableName: "product_source_update_manifests",
+        columns: ["plan_id"],
+      },
+      {
+        name: "idx_remote_worker_protected_admission_evidence_env_93408bc24247",
+        tableName: "remote_worker_protected_admission_evidence",
+        columns: ["envelope_sha256"],
+      },
+      {
+        name: "idx_remote_worker_protected_admission_evidence_evi_b24527dc42f7",
+        tableName: "remote_worker_protected_admission_evidence",
+        columns: ["evidence_nonce_sha256"],
+      },
+      {
+        name: "idx_remote_worker_protected_admission_evidence_ope_e63f547a0089",
+        tableName: "remote_worker_protected_admission_evidence",
+        columns: ["operation_id_base64url"],
+      },
+      {
+        name: "idx_remote_worker_protected_admission_signer_pins__d621b497c5d6",
+        tableName: "remote_worker_protected_admission_signer_pins",
+        columns: ["registry_workspace_id", "worker_id", "keyset_generation"],
+      },
+    ] as const;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(
+        migrationClient,
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 148),
+      );
+
+      await scopedPool.query(
+        "ALTER TABLE managed_source_installs ALTER COLUMN revision TYPE INTEGER USING revision::INTEGER",
+      );
+      for (const index of orderedIndexes) {
+        await scopedPool.query(`DROP INDEX "${index.name}"`);
+        await scopedPool.query(`CREATE INDEX "${index.name}" ON "${index.tableName}" (${index.definition})`);
+      }
+      for (const [ordinal, index] of uniqueIndexes.entries()) {
+        // PostgreSQL renames the paired constraint together with its backing
+        // index. That gives the fixture the older additive-lineage identity
+        // without dropping the invariant or any dependent foreign keys.
+        await scopedPool.query(`ALTER INDEX "${index.name}" RENAME TO "gc_v149_legacy_u${ordinal}"`);
+      }
+
+      const applied = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      assert.deepEqual(applied.appliedVersions, [149]);
+
+      const revision = await scopedPool.query<{ type: string }>(
+        `SELECT pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS type
+         FROM pg_catalog.pg_attribute AS attribute
+         WHERE attribute.attrelid = 'managed_source_installs'::pg_catalog.regclass
+           AND attribute.attname = 'revision'`,
+      );
+      assert.deepEqual(revision.rows, [{ type: "integer" }]);
+
+      const orderedAfter = await scopedPool.query<{ indexname: string; indexdef: string }>(
+        "SELECT indexname, indexdef FROM pg_catalog.pg_indexes WHERE schemaname = current_schema() AND indexname = ANY($1)",
+        [orderedIndexes.map((index) => index.name)],
+      );
+      assert.equal(orderedAfter.rows.length, orderedIndexes.length);
+      for (const index of orderedIndexes) {
+        const definition = orderedAfter.rows.find((row) => row.indexname === index.name)?.indexdef ?? "";
+        assert.match(definition, / DESC/u, index.name);
+      }
+
+      const uniqueAfter = await scopedPool.query<{ index_name: string; constraint_type: string; is_unique: boolean }>(
+        `SELECT index_relation.relname AS index_name, constraint_row.contype AS constraint_type, index_row.indisunique AS is_unique
+         FROM pg_catalog.pg_constraint AS constraint_row
+         JOIN pg_catalog.pg_class AS index_relation ON index_relation.oid = constraint_row.conindid
+         JOIN pg_catalog.pg_index AS index_row ON index_row.indexrelid = index_relation.oid
+         WHERE constraint_row.contype = 'u'
+           AND index_relation.relnamespace = pg_catalog.current_schema()::pg_catalog.regnamespace
+           AND index_relation.relname = ANY($1)`,
+        [uniqueIndexes.map((index) => index.name)],
+      );
+      assert.equal(uniqueAfter.rows.length, uniqueIndexes.length);
+      assert.equal(
+        uniqueAfter.rows.every((row) => row.constraint_type === "u" && row.is_unique),
+        true,
+      );
+    } finally {
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);

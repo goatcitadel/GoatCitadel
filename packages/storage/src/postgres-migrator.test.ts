@@ -921,6 +921,58 @@ describe("Postgres migration ledger compatibility", () => {
     ]);
   });
 
+  it("keeps post-v140 PostgreSQL owner shapes canonical without rewriting their data", () => {
+    const preAuthority = buildCanonicalPostgresSchemaShapeManifest(
+      POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 148),
+    );
+    assert.equal(
+      preAuthority.tables
+        .find((table) => table.name === "managed_source_installs")
+        ?.columns.find((column) => column.name === "revision")?.type,
+      "bigint",
+    );
+    assert.deepEqual(
+      preAuthority.indexes.find((index) => index.name === "idx_product_source_update_manifests_install")?.keys,
+      ["install_id", "created_at", "manifest_id"],
+    );
+
+    const authority = POSTGRES_MIGRATIONS.find((migration) => migration.version === 149);
+    assert.equal(authority?.name, "canonical_postgres_schema_authority_v2");
+    assert.match(authority?.sql ?? "", /ALTER COLUMN "revision" TYPE INTEGER/u);
+    assert.match(authority?.sql ?? "", /ALTER INDEX %I RENAME TO %I/u);
+
+    const canonical = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
+    assert.equal(
+      canonical.tables
+        .find((table) => table.name === "managed_source_installs")
+        ?.columns.find((column) => column.name === "revision")?.type,
+      "integer",
+    );
+    for (const [indexName, keys] of [
+      ["idx_change_plans_session_created", ["workspace_id", "session_id", "created_at desc", "plan_id desc"]],
+      ["idx_change_plans_workspace_created", ["workspace_id", "created_at desc", "plan_id desc"]],
+      ["idx_chat_change_plans_session", ["session_id", "created_at desc", "plan_id desc"]],
+      ["idx_managed_source_installs_status_updated", ["status", "updated_at desc", "install_id desc"]],
+      ["idx_product_source_update_manifests_install", ["install_id", "created_at desc", "manifest_id desc"]],
+    ] as const) {
+      assert.deepEqual(canonical.indexes.find((index) => index.name === indexName)?.keys, keys);
+    }
+    for (const indexName of [
+      "idx_change_plan_events_plan_id_sequence_unique",
+      "idx_chat_fanout_invocations_parent_run_id_tool_run_id_unique",
+      "idx_chat_turn_secure_configuration_reservations_ad_dd7fd40b1194",
+      "idx_product_source_update_events_manifest_id_idemp_82af46ec9c3b",
+      "idx_product_source_update_events_manifest_id_sequence_unique",
+      "idx_product_source_update_manifests_plan_id_unique",
+      "idx_remote_worker_protected_admission_evidence_env_93408bc24247",
+      "idx_remote_worker_protected_admission_evidence_evi_b24527dc42f7",
+      "idx_remote_worker_protected_admission_evidence_ope_e63f547a0089",
+      "idx_remote_worker_protected_admission_signer_pins__d621b497c5d6",
+    ]) {
+      assert.equal(canonical.indexes.find((index) => index.name === indexName)?.unique, true, indexName);
+    }
+  });
+
   it("keeps partial pre-v140 registries on structural secure-configuration FK identity", () => {
     const v140Checks = new Set([
       "assembly_runs_run_kind_check",

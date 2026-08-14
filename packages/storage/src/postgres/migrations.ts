@@ -10,6 +10,7 @@ import { CHANGE_PLAN_POSTGRES_SCHEMA_SQL } from "../change-plan-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "../managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL } from "../product-source-update-repo.js";
 import { buildPostgresV140CanonicalSchemaAuthoritySql } from "./v140-canonical-index-authority.js";
+import { buildPostgresV149CanonicalSchemaAuthoritySql } from "./v149-canonical-schema-authority.js";
 
 export interface PostgresMigration {
   version: number;
@@ -14682,6 +14683,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "product_source_update_manifests",
     sql: PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL,
     integritySha256: "700ea8a463be3db735524b0419234d87645dde50d843687b2e970b125f0382b9",
+  },
+  {
+    version: 149,
+    name: "canonical_postgres_schema_authority_v2",
+    integritySha256: "d412902ccfbd03f6e8a80c512c692d03c483e95de70c44a3013e9433560f58b5",
+    sql: buildPostgresV149CanonicalSchemaAuthoritySql(),
   },
 ];
 

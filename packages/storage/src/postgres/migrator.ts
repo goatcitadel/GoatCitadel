@@ -120,6 +120,8 @@ const SECURE_CONFIGURATION_REPAIR_VERSION = 132;
 const SECURE_CONFIGURATION_REPAIR_NAME = "repair_durable_chat_secure_configuration_reservations";
 const CANONICAL_SCHEMA_AUTHORITY_VERSION = 140;
 const CANONICAL_SCHEMA_AUTHORITY_NAME = "canonical_postgres_schema_authority";
+const CANONICAL_SCHEMA_AUTHORITY_V2_VERSION = 149;
+const CANONICAL_SCHEMA_AUTHORITY_V2_NAME = "canonical_postgres_schema_authority_v2";
 const CANONICAL_SCHEMA_AUTHORITY_CHECKS = [
   { tableName: "assembly_runs", name: "assembly_runs_run_kind_check" },
   { tableName: "assembly_runs", name: "assembly_runs_generation_check" },
@@ -495,6 +497,10 @@ function isCanonicalSchemaAuthorityMigration(migration: PostgresMigration): bool
   return isCanonicalMigration(migration, CANONICAL_SCHEMA_AUTHORITY_VERSION, CANONICAL_SCHEMA_AUTHORITY_NAME);
 }
 
+function isCanonicalSchemaAuthorityV2Migration(migration: PostgresMigration): boolean {
+  return isCanonicalMigration(migration, CANONICAL_SCHEMA_AUTHORITY_V2_VERSION, CANONICAL_SCHEMA_AUTHORITY_V2_NAME);
+}
+
 const POSTGRES_SCHEMA_SHAPE_SIMULATION_IDENTITY: PostgresMigrationSchemaIdentity = {
   name: "goatcitadel_schema_shape_simulation",
   oid: "0",
@@ -553,7 +559,25 @@ export function buildCanonicalPostgresSchemaShapeManifest(
       "chat_turn_secure_configuration_reservations_reconciled_by_fkey",
     );
   }
+  if (migrations.some(isCanonicalSchemaAuthorityV2Migration)) {
+    manifest = applyCanonicalSchemaAuthorityV2Postconditions(manifest);
+  }
   return manifest;
+}
+
+function applyCanonicalSchemaAuthorityV2Postconditions(
+  manifest: PostgresSchemaShapeManifest,
+): PostgresSchemaShapeManifest {
+  return {
+    ...manifest,
+    tables: manifest.tables.map((table) => {
+      if (table.name !== "managed_source_installs") return table;
+      return {
+        ...table,
+        columns: table.columns.map((column) => (column.name === "revision" ? { ...column, type: "integer" } : column)),
+      };
+    }),
+  };
 }
 
 function applyCanonicalSchemaAuthorityCheckPostconditions(
