@@ -230,12 +230,16 @@ describe("SettingsNativePage helpers", () => {
     expect(describeProviderReadinessFailure(missingProviderOnboarding)).toBe(
       "Choose an active provider before sending cloud-backed work.",
     );
-    expect(deriveFirstOutcomePathItems(missingProviderOnboarding, null).map((item) => item.state)).toEqual([
-      "active",
-      "active",
+    const missingProviderItems = deriveFirstOutcomePathItems(missingProviderOnboarding, null);
+    expect(missingProviderItems.map((item) => item.state)).toEqual([
+      "pending",
+      "pending",
       "active",
       "pending",
       "pending",
+    ]);
+    expect(missingProviderItems.filter((item) => item.state === "active").map((item) => item.id)).toEqual([
+      "demo-local",
     ]);
     expect(deriveFirstRunGovernedJobState(missingProviderOnboarding, null)).toBe("provider-missing");
 
@@ -290,7 +294,8 @@ describe("SettingsNativePage helpers", () => {
       nextRoute: "/chat",
       notes: [],
     } as any);
-    expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "active", "active"]);
+    expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "active", "pending"]);
+    expect(demoItems.filter((item) => item.state === "active").map((item) => item.id)).toEqual(["first-task-pending"]);
     expect(demoItems[3]!.meta).toBe("starter-ready");
     expect(demoItems.at(-1)!.meta).toBe("proof-needed");
     expect(demoItems[3]!.actionLabel).toBe("Open Chat");

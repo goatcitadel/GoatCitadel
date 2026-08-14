@@ -66,6 +66,8 @@ export function GuidedModelSetup({
   setNotice: (notice: Notice | null) => void;
 }) {
   const catalog = useProviderModelCatalog("system");
+  const catalogProviders = catalog.providers;
+  const loadModelsForProvider = catalog.loadModelsForProvider;
   const [providerId, setProviderId] = useState(onboarding.settings.llm.activeProviderId);
   const [model, setModel] = useState(onboarding.settings.llm.activeModel);
   const [thinkingLevel, setThinkingLevel] = useState<ChatThinkingLevel>(
@@ -108,9 +110,9 @@ export function GuidedModelSetup({
   useEffect(() => {
     if (!providerId) return;
     let cancelled = false;
-    const provider = catalog.providers.find((candidate) => candidate.providerId === providerId);
+    const provider = catalogProviders.find((candidate) => candidate.providerId === providerId);
     setModels(provider?.models ?? (provider?.defaultModel ? [provider.defaultModel] : []));
-    void catalog.loadModelsForProvider(providerId).then((items) => {
+    void loadModelsForProvider(providerId).then((items) => {
       if (cancelled) return;
       const nextModels = [
         ...new Set([provider?.defaultModel, ...items].filter((item): item is string => Boolean(item))),
@@ -127,7 +129,13 @@ export function GuidedModelSetup({
     return () => {
       cancelled = true;
     };
-  }, [catalog, onboarding.settings.llm, providerId]);
+  }, [
+    catalogProviders,
+    loadModelsForProvider,
+    onboarding.settings.llm.activeModel,
+    onboarding.settings.llm.activeProviderId,
+    providerId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;

@@ -1029,13 +1029,13 @@ export function deriveFirstOutcomePathItems(
   const cloudProviderReady = Boolean(activeProvider?.hasApiKey);
   const providerCredentialReady = Boolean(activeProvider && (cloudProviderReady || localEndpointReady));
   const providerConnected = Boolean(activeProvider && activeModel && providerCredentialReady);
+  const providerNeedsModelSelection = providerCredentialReady && !providerConnected;
   const demoSessions = demoState?.sessions ?? [];
   const demoTasks = demoState?.tasks ?? [];
   const demoReady = demoState?.status === "ready";
   const hasChatStart = demoSessions.some((session) => session.mode === "chat");
   const hasLegacyWorkStart = demoSessions.some((session) => session.mode === "cowork" || session.mode === "code");
   const hasSeededStartContext = Boolean(demoTasks.length > 0 || hasChatStart || hasLegacyWorkStart);
-  const hasProjectCreation = Boolean(demoState?.project?.projectId || demoState?.project?.workspacePath);
   const providerFailure = describeProviderReadinessFailure(onboarding);
   const latestProof = firstRunEvidence.evidenceEnvelopes[0];
   const proofRun = findRunForEvidence(firstRunEvidence.recentRuns, latestProof);
@@ -1053,7 +1053,7 @@ export function deriveFirstOutcomePathItems(
         ? `${activeProvider?.label ?? llmSettings?.activeProviderId} is selected with ${activeModel}; risky actions still stay approval-governed.`
         : providerFailure,
       actionDescription: "Open Providers & Models to choose a provider, model, secret source, or local endpoint.",
-      state: providerCredentialReady ? "complete" : "active",
+      state: providerConnected ? "complete" : providerNeedsModelSelection ? "active" : "pending",
       meta: providerConnected ? "provider-ready" : "provider-missing",
       actionLabel: "Configure",
       route: { area: "settings", section: "providers" },
@@ -1067,7 +1067,7 @@ export function deriveFirstOutcomePathItems(
           : "No provider or local endpoint is configured. Use the safe demo/local path before cloud-backed sends.",
       actionDescription:
         "Start or reopen the safe local demo path; it seeds inspectable data and does not send work to a cloud provider.",
-      state: providerCredentialReady ? "pending" : demoReady ? "complete" : "active",
+      state: providerCredentialReady || !demoReady ? "pending" : "complete",
       meta: providerCredentialReady ? "provider-ready" : "provider-missing",
       actionLabel: "Start demo/local",
       route: { area: "settings", section: "onboarding" },
@@ -1100,7 +1100,11 @@ export function deriveFirstOutcomePathItems(
         : firstTaskSession
           ? "Open the seeded demo thread; it is local/sample context and does not count as proof until a run records evidence."
           : "Open Work for the first supervised task, then choose Conversation, Plan, or Build posture.",
-      state: firstTaskRun ? "complete" : providerConnected || demoReady || localEndpointReady ? "active" : "pending",
+      state: firstTaskRun
+        ? "complete"
+        : !providerNeedsModelSelection && (providerConnected || demoReady || localEndpointReady)
+          ? "active"
+          : "pending",
       meta: firstTaskRun ? "recent-run-found" : hasSeededStartContext ? "starter-ready" : "first-task-pending",
       actionLabel: firstTaskActionLabel,
       route: firstTaskRoute,
@@ -1116,7 +1120,7 @@ export function deriveFirstOutcomePathItems(
       actionDescription: latestProof
         ? "Open the linked run surface and use Run details or artifacts to inspect retained evidence."
         : "Open generated artifacts or the Work proof panel after a governed task records evidence.",
-      state: latestProof ? "complete" : firstTaskRun || hasProjectCreation ? "active" : "pending",
+      state: latestProof ? "complete" : firstTaskRun ? "active" : "pending",
       meta: latestProof ? "proof-complete" : "proof-needed",
       actionLabel: latestProof ? "Open Run Detail" : "Inspect proof",
       route: latestProof ? proofRoute : { area: "library", section: "artifacts" },

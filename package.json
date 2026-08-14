@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:all": "node scripts/dev.mjs",
+    "reset:fresh-start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reset-fresh-start.ps1",
     "up": "pnpm dev:all",
     "launch": "node bin/goatcitadel.mjs launch",
     "desktop:dev": "pnpm --filter @goatcitadel/mission-control-desktop dev:desktop",

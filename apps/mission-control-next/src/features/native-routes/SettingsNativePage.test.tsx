@@ -2988,6 +2988,24 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("does not send work to a cloud provider");
     expect(text).not.toContain("hostile-code sandboxing");
     expect(text).not.toContain("autonomous high-risk");
+
+    const demoSteps = renderer!.root
+      .findByProps({ id: "onboarding-start" })
+      .findAll(
+        (node) =>
+          typeof node.props.className === "string" &&
+          node.props.className.includes("mc-next-settings-wizard-step active"),
+      );
+    const outcomeSteps = renderer!.root
+      .findByProps({ id: "onboarding-outcome" })
+      .findAll(
+        (node) =>
+          typeof node.props.className === "string" &&
+          node.props.className.includes("mc-next-settings-wizard-step active"),
+      );
+    expect(demoSteps).toHaveLength(0);
+    expect(outcomeSteps).toHaveLength(1);
+    expect(collectText(outcomeSteps[0]!)).toContain("Demo/local path");
   });
 
   it("marks proof complete from evidence and links to run detail", async () => {

@@ -509,12 +509,14 @@ function DemoStartPanel({
             description: data?.workspace
               ? "Existing demo workspace will be reused."
               : "Creates a local-only workspace with no provider or channel credentials.",
-            state: data?.workspace ? "complete" : "active",
+            // The button below is the single first-run CTA. Leaving these steps
+            // pending avoids presenting the demo plan as already selected.
+            state: data?.workspace ? "complete" : "pending",
           },
           {
             label: "Sample mission",
             description: "Seeds a planning run and build review scenario you can inspect without sending messages.",
-            state: data?.sessions?.length ? "complete" : "active",
+            state: data?.sessions?.length ? "complete" : "pending",
           },
           {
             label: "Guided context",
@@ -572,7 +574,7 @@ function FirstOutcomePathPanel({
       density="compact"
       className="mc-next-settings-panel"
       title="First trusted outcome"
-      subtitle="Follow one path from provider readiness to a proof-backed Work result."
+      subtitle="Start with the safe local demo; connect a provider when you are ready for cloud-backed work."
       stats={[
         { label: "Path state", value: humanizeEnumToken(pathState) },
         { label: "Progress", value: `${completeCount}/${items.length}` },
