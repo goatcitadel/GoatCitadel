@@ -60,6 +60,11 @@ test("self-configuration lane is wired as a degraded reviewed lane and package c
   assert.match(scenarios, /runSelfConfigurationLaneImpl/u);
   assert.match(lane, /status: "degraded"/u);
   assert.match(lane, /runtime-configuration-approval-binding\.test\.ts/u);
+  assert.match(lane, /evolution-control-plane-service\.test\.ts/u);
+  assert.match(lane, /chat-change-plan-compatibility-service\.test\.ts/u);
+  assert.match(lane, /chat\.change-plans\.test\.ts/u);
+  assert.match(lane, /chat-change-plan-repo\.test\.ts/u);
+  assert.match(lane, /change-plan\.test\.ts/u);
   assert.match(lane, /chat-secure-configuration-recovery-service\.test\.ts/u);
   assert.match(lane, /browser-tools\.manual-chromium\.test\.ts/u);
   assert.match(lane, /browser-tools-load-failure\.coverage\.test\.ts/u);

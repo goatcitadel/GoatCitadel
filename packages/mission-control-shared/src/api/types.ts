@@ -444,6 +444,15 @@ export interface AgentsResponse {
 export interface RuntimeSettingsResponse {
   /** Opaque monotonic revision required by settings mutation requests. */
   revision: number;
+  /** Present when the compatibility save was governed by a Change Plan. */
+  changePlanReceipt?: {
+    planId: string;
+    status: import("@goatcitadel/contracts").ChangePlanStatus;
+    revision: number;
+    risk: import("@goatcitadel/contracts").ChangePlanRisk;
+    requiredAction?: import("@goatcitadel/contracts").ChangePlanRequiredAction;
+    summary: string;
+  };
   environment: string;
   deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
   toolApprovalMode: "approve_all" | "approve_risky" | "bypass";
@@ -496,6 +505,8 @@ export interface RuntimeSettingsResponse {
   llm: {
     activeProviderId: string;
     activeModel: string;
+    /** Installation effort inherited only by Chats created after the setting changes. */
+    defaultThinkingLevel?: import("@goatcitadel/contracts").ChatThinkingLevel;
     providers: Array<{
       providerId: string;
       label: string;
@@ -610,6 +621,11 @@ export interface RuntimeSettingsResponse {
     streamIdleWatchdogV1Disabled?: boolean;
     plannerFanoutV1Disabled?: boolean;
     subagentFanoutV1Disabled?: boolean;
+    durableChatFanoutV1Enabled?: boolean;
+    evolutionControlPlaneV1Enabled?: boolean;
+    improvementLocalObservationV1Enabled?: boolean;
+    improvementModelEvaluationV1Enabled?: boolean;
+    productSourceEvolutionV1Enabled?: boolean;
     channelVoiceReplyV1Enabled?: boolean;
     memoryConsolidationV1Enabled?: boolean;
     cronEvidenceV1Enabled?: boolean;

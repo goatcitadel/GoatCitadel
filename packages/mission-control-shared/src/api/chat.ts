@@ -3,6 +3,13 @@ import type {
   ChatAttachmentPreviewResponse,
   ChatAttachmentRecord,
   ChatCancelTurnResponse,
+  ChatChangePlanRecord,
+  ChatChangePlanRequest,
+  ChangePlanCreateInput,
+  ChangePlanRecord,
+  ChangePlanRequest,
+  ChangePlanResponseInput,
+  ChangePlanStatus,
   ChatDelegateAcceptRequest,
   ChatDelegateRequest,
   ChatDelegateResponse,
@@ -12,6 +19,7 @@ import type {
   ChatDelegatedScopeExpansionRequest,
   ChatDelegatedScopeExpansionResponse,
   ChatDelegationRunDetail,
+  ChatFanoutInvocationStatus,
   ChatLatestWorkspaceExplorerResponse,
   ChatGeneratedArtifactKind,
   ChatGeneratedArtifactRecord,
@@ -90,7 +98,8 @@ import type {
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-export type { ChatProjectImportResult } from "@goatcitadel/contracts";
+export type { ChatChangePlanRecord, ChatProjectImportResult } from "@goatcitadel/contracts";
+export type { ChangePlanRecord } from "@goatcitadel/contracts";
 
 import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagnostics-store";
 import {
@@ -101,6 +110,7 @@ import {
   request,
 } from "./client-core.js";
 import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
+import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
 
 export interface ChatRequestSurfaceOptions {
   originSurface?: ChatMode;
@@ -393,6 +403,24 @@ export async function fetchChatSessionStatus(sessionId: string): Promise<ChatSes
   return request<ChatSessionStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/status`, {
     cache: "no-store",
   });
+}
+
+/** Response from Chat's deliberately narrow durable aggregate-stop control. */
+export interface ChatFanoutStopResponse {
+  invocationId: string;
+  status: ChatFanoutInvocationStatus;
+  terminalReason?: string;
+}
+
+/**
+ * Stops one canonical fan-out aggregate. The Gateway performs durable child
+ * cancellation; the client never retries or rewires individual children.
+ */
+export async function stopChatFanout(sessionId: string, invocationId: string): Promise<ChatFanoutStopResponse> {
+  return request<ChatFanoutStopResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/fanouts/${encodeURIComponent(invocationId)}/stop`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
 }
 
 export async function fetchChatTimers(sessionId: string): Promise<ChatTimerListResponse> {
@@ -1373,6 +1401,243 @@ export async function updateChatSessionPrefs(
   });
 }
 
+export async function createChatChangePlan(
+  sessionId: string,
+  requestInput: ChatChangePlanRequest,
+): Promise<ChatChangePlanRecord> {
+  return request<ChatChangePlanRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/change-plans`, {
+    method: "POST",
+    body: JSON.stringify(requestInput),
+  });
+}
+
+export async function fetchChatChangePlans(
+  sessionId: string,
+  options?: { limit?: number },
+): Promise<{ items: ChatChangePlanRecord[] }> {
+  const query = options?.limit ? `?limit=${encodeURIComponent(String(options.limit))}` : "";
+  return request<{ items: ChatChangePlanRecord[] }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/change-plans${query}`,
+  );
+}
+
+export async function confirmChatChangePlan(
+  sessionId: string,
+  planId: string,
+  expectedRevision: number,
+): Promise<ChatChangePlanRecord> {
+  return request<ChatChangePlanRecord>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/change-plans/${encodeURIComponent(planId)}/confirm`,
+    { method: "POST", body: JSON.stringify({ expectedRevision }) },
+  );
+}
+
+export async function cancelChatChangePlan(
+  sessionId: string,
+  planId: string,
+  expectedRevision: number,
+): Promise<ChatChangePlanRecord> {
+  return request<ChatChangePlanRecord>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/change-plans/${encodeURIComponent(planId)}/cancel`,
+    { method: "POST", body: JSON.stringify({ expectedRevision }) },
+  );
+}
+
+export interface ChangePlanClientContext {
+  workspaceId: string;
+  sessionId?: string;
+  turnId?: string;
+}
+
+export interface CreateChangePlanClientInput extends ChangePlanClientContext {
+  surface?: Exclude<ChangePlanCreateInput["origin"]["surface"], "system">;
+  request: ChangePlanRequest;
+  idempotencyKey?: string;
+}
+
+function changePlanActorBody(context: ChangePlanClientContext): ChangePlanClientContext {
+  return {
+    workspaceId: context.workspaceId,
+    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+    ...(context.turnId ? { turnId: context.turnId } : {}),
+  };
+}
+
+/** Canonical Evolution Control Plane resource API. */
+export async function createChangePlan(input: CreateChangePlanClientInput): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>("/api/v1/change-plans", {
+    method: "POST",
+    body: JSON.stringify({
+      ...changePlanActorBody(input),
+      surface: input.surface ?? "chat",
+      request: input.request,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    }),
+  });
+}
+
+export async function fetchChangePlans(
+  context: ChangePlanClientContext,
+  options?: { status?: ChangePlanStatus; limit?: number },
+): Promise<{ items: ChangePlanRecord[] }> {
+  const query = new URLSearchParams({ workspaceId: context.workspaceId });
+  if (context.sessionId) query.set("sessionId", context.sessionId);
+  if (options?.status) query.set("status", options.status);
+  if (options?.limit) query.set("limit", String(options.limit));
+  return request<{ items: ChangePlanRecord[] }>(`/api/v1/change-plans?${query.toString()}`);
+}
+
+export async function fetchChangePlan(planId: string, context: ChangePlanClientContext): Promise<ChangePlanRecord> {
+  const query = new URLSearchParams({ workspaceId: context.workspaceId });
+  if (context.sessionId) query.set("sessionId", context.sessionId);
+  if (context.turnId) query.set("turnId", context.turnId);
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}?${query.toString()}`);
+}
+
+export async function respondToChangePlan(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: ChangePlanResponseInput,
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/responses`, {
+    method: "POST",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function confirmChangePlan(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionNonce: string },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/confirmations`, {
+    method: "POST",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function cancelChangePlan(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionNonce: string },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/cancellations`, {
+    method: "POST",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function requestChangePlanRollback(
+  planId: string,
+  context: ChangePlanClientContext,
+  expectedRevision: number,
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/rollback-requests`, {
+    method: "POST",
+    body: JSON.stringify({ ...changePlanActorBody(context), expectedRevision }),
+  });
+}
+
+export async function submitChangePlanProviderSecret(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionId: string; actionNonce: string; apiKey: string },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/provider-secret`, {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function submitChangePlanGatewayAuthCredential(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionId: string; actionNonce: string; credential: string },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/gateway-auth-credential`, {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function submitChangePlanChannelSecrets(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: {
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    values: Readonly<Record<string, string>>;
+  },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/channel-secrets`, {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function submitChangePlanManagedSourceSelection(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: {
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    rootPath: string;
+  },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/managed-source-selections`, {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function completeChangePlanProviderOAuth(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionId: string; actionNonce: string },
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/provider-oauth-completions`, {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+  });
+}
+
+export async function startChangePlanProviderOAuth(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionId: string; actionNonce: string },
+): Promise<OpenAICodexDeviceStartResponse> {
+  return request<OpenAICodexDeviceStartResponse>(
+    `/api/v1/change-plans/${encodeURIComponent(planId)}/provider-oauth-starts`,
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+    },
+  );
+}
+
+export async function pollChangePlanProviderOAuth(
+  planId: string,
+  context: ChangePlanClientContext,
+  input: { expectedRevision: number; actionId: string; actionNonce: string; flowId: string },
+): Promise<OpenAICodexDevicePollResponse> {
+  return request<OpenAICodexDevicePollResponse>(
+    `/api/v1/change-plans/${encodeURIComponent(planId)}/provider-oauth-polls`,
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
+    },
+  );
+}
+
 export interface ChatProactiveStatusResponse {
   policy: ProactivePolicy;
   idleSeconds: number;
@@ -1554,6 +1819,7 @@ export async function parseChatCommand(
   command: string;
   args: string[];
   message: string;
+  changePlan?: ChatChangePlanRecord;
   prefs?: ChatSessionPrefsRecord;
   research?: ResearchSummaryRecord;
   session?: ChatSessionRecord;

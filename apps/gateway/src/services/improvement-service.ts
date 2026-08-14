@@ -442,11 +442,6 @@ export interface ImprovementServiceCallbacks {
   readEffectiveBlockerTemplateStrictness(): Promise<number>;
   readEffectiveRetryRepairThreshold(): Promise<number>;
   readEffectiveLiveIntentThreshold(): Promise<number>;
-  // Cross-cutting kill-switch & rollback. Fired after an auto-tune is applied so
-  // the gateway can append a unified autonomy-audit entry. The tune row already
-  // holds its own rollback snapshot, so the restoreRef is just the tuneId; revert
-  // calls revertDecisionAutoTune(tuneId). Optional + best-effort.
-  onAutoTuneApplied?(tuneId: string, settingKey: string): void;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
   retryChatTurn(
     sessionId: string,
@@ -616,6 +611,9 @@ export class ImprovementService {
   async runWeeklyImprovementSchedulerIfDue(
     options: { force?: boolean; recordCronState?: boolean } = {},
   ): Promise<void> {
+    if (!options.force && !(await this.ctx.isFeatureEnabled("improvementModelEvaluationV1Enabled"))) {
+      return;
+    }
     const job = await this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     if (!job?.enabled) {
       return;
@@ -1162,7 +1160,7 @@ export class ImprovementService {
     run: DurableRunRecord;
     checkpointState?: Record<string, unknown>;
   }): Promise<ImprovementSignalRecord | undefined> {
-    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
+    if (!(await this.localObservationEnabled())) {
       return undefined;
     }
     const workspaceId = this.resolveWorkspaceIdFromDurableRun(input.run, input.checkpointState);
@@ -1201,7 +1199,7 @@ export class ImprovementService {
     run: DurableRunRecord;
     message: string;
   }): Promise<ImprovementSignalRecord | undefined> {
-    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
+    if (!(await this.localObservationEnabled())) {
       return undefined;
     }
     const workspaceId = this.resolveWorkspaceIdFromDurableRun(input.run);
@@ -1241,7 +1239,7 @@ export class ImprovementService {
     task: TaskRecord;
     diagnostic: AgenticDiagnosticSignal;
   }): Promise<ImprovementSignalRecord | undefined> {
-    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
+    if (!(await this.localObservationEnabled())) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(input.task.workspaceId);
@@ -1330,7 +1328,7 @@ export class ImprovementService {
     operationPhase: string;
     policyReason?: string;
   }): Promise<ImprovementSignalRecord | undefined> {
-    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
+    if (!(await this.localObservationEnabled())) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
@@ -1399,7 +1397,7 @@ export class ImprovementService {
   }
 
   async recordApprovalResolutionSignal(approval: ApprovalRequest): Promise<ImprovementSignalRecord | undefined> {
-    if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
+    if (!(await this.localObservationEnabled())) {
       return undefined;
     }
     return await this.recordImprovementSignal({
@@ -1441,6 +1439,7 @@ export class ImprovementService {
   }
 
   public async recordSurfaceRouteOverrideSignal(input: SurfaceRouteOverrideSignalInput): Promise<void> {
+    if (!(await this.localObservationEnabled())) return;
     const fingerprint = `surface_route_override:${input.citadelId}:${input.fromMode}->${input.toMode}:${input.promptFeatureHash}`;
     await this.recordImprovementSignal({
       sourceService: "surface-router",
@@ -3034,6 +3033,18 @@ export class ImprovementService {
     return signal;
   }
 
+  /**
+   * Cheap, model-free runtime observation has its own rollout gate. The
+   * legacy ledger flag remains an additive compatibility opt-in during the
+   * migration window, so existing installations do not silently lose signals.
+   */
+  private async localObservationEnabled(): Promise<boolean> {
+    return (
+      (await this.ctx.isFeatureEnabled("improvementLocalObservationV1Enabled")) ||
+      (await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))
+    );
+  }
+
   private async recordAgenticImprovementProposal(
     proposal: AgenticImprovementBridgeProposal,
     workspaceId: string,
@@ -3588,57 +3599,18 @@ export class ImprovementService {
 
   async approveDecisionAutoTune(tuneId: string): Promise<DecisionAutoTuneRecord> {
     const tune = await this.readDecisionAutoTune(tuneId);
-    if (tune.status === "applied") {
-      return tune;
-    }
     if (tune.status !== "queued") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.status} and cannot be approved.`);
+      throw new Error(`Decision tune ${tuneId} is ${tune.status} and cannot create a new governed plan.`);
     }
-    if (tune.riskLevel !== "low") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.riskLevel} risk and requires manual code review.`);
-    }
-    return await this.applyDecisionAutoTune(tuneId, "manual");
+    await this.ensureDecisionAutoTuneCandidate(tune);
+    return await this.readDecisionAutoTune(tuneId);
   }
 
   async revertDecisionAutoTune(tuneId: string): Promise<DecisionAutoTuneRecord> {
     const tune = await this.readDecisionAutoTune(tuneId);
-    if (tune.status !== "applied") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.status} and cannot be reverted.`);
-    }
-    const snapshot = tune.snapshot ?? {};
-    const settingKey = typeof snapshot.settingKey === "string" ? snapshot.settingKey : undefined;
-    if (!settingKey) {
-      throw new Error(`Auto-tune ${tuneId} does not contain a rollback snapshot.`);
-    }
-    const previousValue = snapshot.previousValue;
-    if (previousValue === undefined) {
-      await this.ctx.storage.systemSettings.set(settingKey, null);
-    } else {
-      await this.ctx.storage.systemSettings.set(settingKey, previousValue);
-    }
-    const revertedAt = new Date().toISOString();
-    await this.ctx.storage.db
-      .prepare(
-        `
-      UPDATE decision_autotunes
-      SET status = 'reverted', reverted_at = @revertedAt, result_json = @resultJson
-      WHERE tune_id = @tuneId
-    `,
-      )
-      .run({
-        tuneId,
-        revertedAt,
-        resultJson: JSON.stringify({
-          revertedBy: "operator",
-          restoredSetting: settingKey,
-        }),
-      });
-    await this.ctx.publishRealtime("improvement_autotune_reverted", "improvement", {
-      tuneId,
-      settingKey,
-      revertedAt,
-    });
-    return await this.readDecisionAutoTune(tuneId);
+    throw new Error(
+      `Decision tune ${tuneId} is ${tune.status}. Direct tune rollback is disabled; use the linked Improvement Change Plan rollback so the exact snapshot, confirmation, and approval remain bound.`,
+    );
   }
 
   async createReplayOverrideDraft(
@@ -4270,6 +4242,7 @@ export class ImprovementService {
 
     const shouldCreateImmediately =
       signal.signalKind === "agentic_improvement_proposal" ||
+      signal.signalKind === "decision_autotune_proposed" ||
       (signal.signalClass === "evaluation" && signal.outcome === "negative" && signal.severity === "high") ||
       (signal.signalKind === "skill_revision_evaluated" && signal.outcome === "positive");
     if (!shouldCreateImmediately && !(await this.isSynthesisThresholdMet(signal, kind))) {
@@ -4392,6 +4365,9 @@ export class ImprovementService {
         ? (kind as ImprovementCandidateKind)
         : "repair_policy";
     }
+    if (signal.signalKind === "decision_autotune_proposed") {
+      return "routing_policy";
+    }
     if (signal.signalKind === "tool_provider_failure" || signal.signalKind === "durable_run_failed") {
       return "repair_policy";
     }
@@ -4472,6 +4448,9 @@ export class ImprovementService {
 
   private buildCandidateSummary(kind: ImprovementCandidateKind, signal: ImprovementSignalRecord): string {
     const metadata = safeJsonRecord(signal.metadata);
+    if (signal.signalKind === "decision_autotune_proposed") {
+      return asOptionalString(metadata.description) ?? "Review a bounded runtime decision tune";
+    }
     const proposalTitle = asOptionalString(metadata.proposalTitle);
     if (signal.signalKind === "agentic_improvement_proposal" && proposalTitle) {
       return proposalTitle;
@@ -4501,6 +4480,30 @@ export class ImprovementService {
     signal: ImprovementSignalRecord,
   ): ImprovementRef {
     const metadata = safeJsonRecord(signal.metadata);
+    if (signal.signalKind === "decision_autotune_proposed") {
+      const settingKey = requireDecisionTuneSettingKey(metadata.settingKey);
+      const proposedChange = {
+        strategy: "decision_tune",
+        tuneId: asOptionalString(metadata.tuneId) ?? signal.sourceId,
+        settingKey,
+        nextValue: requireDecisionTuneValue(settingKey, metadata.nextValue),
+        description: asOptionalString(metadata.description) ?? "Bounded runtime decision tune",
+        risk: asOptionalString(metadata.risk) ?? "low",
+        mutationApplied: false,
+      };
+      return {
+        refType: "artifact_manifest",
+        refId: `decision_autotune:${proposedChange.tuneId}`,
+        metadata: {
+          workspaceId: candidate.workspaceId,
+          fingerprint: candidate.fingerprint,
+          targetKey: candidate.targetKey,
+          proposedChange,
+          mutationApplied: false,
+        },
+        hash: hashJson(proposedChange),
+      };
+    }
     if (signal.signalKind === "agentic_improvement_proposal") {
       const proposalId = asOptionalString(metadata.proposalId) ?? signal.sourceId;
       const proposedChange = {
@@ -6071,75 +6074,61 @@ export class ImprovementService {
     return mapDecisionAutoTuneRow(row);
   }
 
-  /**
-   * P2-W3: map a tuned setting key to the runtime-effective value its decision
-   * point will read, via the shared getter callbacks. Returns `undefined` for
-   * keys that have no wired decision point (so the audit record simply omits the
-   * field rather than asserting a false "effective" value).
-   */
-  private async readEffectiveTuneValue(settingKey: string): Promise<number | undefined> {
-    switch (settingKey) {
-      case IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE:
-        return await this.callbacks.readEffectiveBlockerTemplateStrictness();
-      case IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD:
-        return await this.callbacks.readEffectiveRetryRepairThreshold();
-      case IMPROVEMENT_TUNE_KEY_LIVE_INTENT:
-        return await this.callbacks.readEffectiveLiveIntentThreshold();
-      default:
-        return undefined;
-    }
-  }
-
-  private async applyDecisionAutoTune(tuneId: string, mode: "auto" | "manual"): Promise<DecisionAutoTuneRecord> {
-    const tune = await this.readDecisionAutoTune(tuneId);
-    if (tune.riskLevel !== "low") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.riskLevel} risk and cannot auto-apply.`);
-    }
-    const settingKey = typeof tune.patch.settingKey === "string" ? tune.patch.settingKey : undefined;
-    if (!settingKey) {
-      throw new Error(`Auto-tune ${tuneId} is missing settingKey patch data.`);
-    }
-    const nextValue = tune.patch.nextValue;
-    await this.ctx.storage.systemSettings.set(settingKey, nextValue);
-    const appliedAt = new Date().toISOString();
-    // P2-W3: record the value the runtime decision point will now actually READ
-    // for this setting, proving the loop is closed (written key ⇒ read key) and
-    // making the applied tune auditable. `undefined` for keys without a wired
-    // decision point (e.g. medium-risk routing weights, which never auto-apply).
-    const effectiveRuntimeValue = await this.readEffectiveTuneValue(settingKey);
+  private async ensureDecisionAutoTuneCandidate(tune: DecisionAutoTuneRecord): Promise<ImprovementCandidateRecord> {
+    const settingKey = requireDecisionTuneSettingKey(tune.patch.settingKey);
+    const nextValue = requireDecisionTuneValue(settingKey, tune.patch.nextValue);
+    const workspaceId = this.ctx.normalizeWorkspaceId(undefined);
+    const targetKey = `decision_tune:${settingKey}`;
+    const signal = await this.recordImprovementSignal({
+      sourceService: "decision-replay",
+      sourceType: "decision_autotune",
+      sourceId: tune.tuneId,
+      sourceEventId: tune.findingId ?? tune.tuneId,
+      idempotencyKey: `decision-autotune:${tune.tuneId}`,
+      workspaceId,
+      origin: "evaluation",
+      signalClass: "evaluation",
+      signalKind: "decision_autotune_proposed",
+      outcome: "neutral",
+      severity: tune.riskLevel,
+      fingerprint: buildImprovementFingerprint([workspaceId, "decision_tune", settingKey, String(nextValue)]),
+      evidenceRefs: [{ refType: "decision_replay_run", refId: tune.runId }],
+      metadata: {
+        kind: "routing_policy",
+        targetKey,
+        tuneId: tune.tuneId,
+        settingKey,
+        nextValue,
+        description: tune.description,
+        risk: tune.riskLevel,
+        mutationApplied: false,
+      },
+    });
+    if (!signal) throw new Error(`Decision tune ${tune.tuneId} could not enter the improvement ledger.`);
+    const candidate = await this.readOpenImprovementCandidateBySignal(signal, "routing_policy");
+    if (!candidate) throw new Error(`Decision tune ${tune.tuneId} did not produce a governed improvement candidate.`);
+    const result = {
+      ...(tune.result ?? {}),
+      candidateId: candidate.candidateId,
+      disposition: "change_plan_required",
+      mutationApplied: false,
+    };
     await this.ctx.storage.db
       .prepare(
         `
-      UPDATE decision_autotunes
-      SET status = 'applied', applied_at = @appliedAt, result_json = @resultJson
-      WHERE tune_id = @tuneId
-    `,
+        UPDATE decision_autotunes
+        SET result_json = @resultJson
+        WHERE tune_id = @tuneId AND status = 'queued'
+      `,
       )
-      .run({
-        tuneId,
-        appliedAt,
-        resultJson: JSON.stringify({
-          appliedBy: mode,
-          settingKey,
-          nextValue,
-          ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
-        }),
-      });
-    await this.ctx.publishRealtime("improvement_autotune_applied", "improvement", {
-      tuneId,
-      settingKey,
-      mode,
-      ...(effectiveRuntimeValue !== undefined ? { effectiveRuntimeValue } : {}),
+      .run({ tuneId: tune.tuneId, resultJson: JSON.stringify(result) });
+    await this.ctx.publishRealtime("improvement_autotune_candidate_ready", "improvement", {
+      tuneId: tune.tuneId,
+      candidateId: candidate.candidateId,
+      status: "queued",
+      mutationApplied: false,
     });
-    // Cross-cutting audit (best-effort): notify the gateway so the applied tune is
-    // captured in the unified autonomy-audit ledger. The tune row carries its own
-    // rollback snapshot, so the audit restoreRef only needs the tuneId.
-    try {
-      this.callbacks.onAutoTuneApplied?.(tuneId, settingKey);
-    } catch {
-      // Best-effort audit append must never break the tune apply.
-    }
-    return await this.readDecisionAutoTune(tuneId);
+    return candidate;
   }
 
   private async runDecisionReplayAudit(input: { triggerMode: "scheduled" | "manual"; sampleSize: number }): Promise<{
@@ -6220,11 +6209,8 @@ export class ImprovementService {
       const queuedRecommendations: DecisionAutoTuneRecord[] = [];
       for (const planned of plannedTunes) {
         await this.insertDecisionAutoTune(planned);
-        if (planned.riskLevel === "low") {
-          appliedAutoTunes.push(await this.applyDecisionAutoTune(planned.tuneId, "auto"));
-        } else {
-          queuedRecommendations.push(planned);
-        }
+        await this.ensureDecisionAutoTuneCandidate(planned);
+        queuedRecommendations.push(await this.readDecisionAutoTune(planned.tuneId));
       }
       const report = await this.createWeeklyImprovementReport({
         runId,
@@ -6249,7 +6235,7 @@ export class ImprovementService {
         reportId: report.reportId,
         sampledDecisions: items.length,
         likelyWrongCount: items.filter((item) => item.label === "likely_wrong").length,
-        appliedAutoTunes: appliedAutoTunes.length,
+        appliedAutoTunes: 0,
         queuedRecommendations: queuedRecommendations.length,
       });
       return { run: await this.readDecisionReplayRun(runId), report };
@@ -6740,18 +6726,6 @@ export class ImprovementService {
           snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT, previousValue: current },
           createdAt: new Date().toISOString(),
         });
-      } else if (f.causeClass === "tool_mismatch" && f.recurrenceCount >= 4) {
-        plans.push({
-          tuneId: randomUUID(),
-          runId,
-          findingId: f.findingId,
-          tuneClass: "ranking_weight",
-          riskLevel: "medium",
-          status: "queued",
-          description: "Review tool routing weights for this cluster before auto-applying.",
-          patch: { settingKey: "improvement_tune_tool_routing_weights_v1", suggestedDelta: 1 },
-          createdAt: new Date().toISOString(),
-        });
       }
     }
     return plans.slice(0, 12);
@@ -6984,6 +6958,34 @@ function safeJsonRecord(value: unknown): Record<string, unknown> {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function requireDecisionTuneSettingKey(value: unknown): string {
+  const settingKey = asOptionalString(value);
+  if (
+    settingKey !== IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE &&
+    settingKey !== IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD &&
+    settingKey !== IMPROVEMENT_TUNE_KEY_LIVE_INTENT
+  ) {
+    throw new Error("Decision tune does not target an allowlisted runtime setting.");
+  }
+  return settingKey;
+}
+
+function requireDecisionTuneValue(settingKey: string, value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("Decision tune value must be a finite number.");
+  }
+  if (settingKey === IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE && Number.isInteger(value) && value >= 1 && value <= 10) {
+    return value;
+  }
+  if (settingKey === IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD && Number.isInteger(value) && value >= 0 && value <= 10) {
+    return value;
+  }
+  if (settingKey === IMPROVEMENT_TUNE_KEY_LIVE_INTENT && value >= 0 && value <= 1) {
+    return value;
+  }
+  throw new Error("Decision tune value is outside its allowlisted range.");
 }
 
 function hashJson(value: unknown): string {

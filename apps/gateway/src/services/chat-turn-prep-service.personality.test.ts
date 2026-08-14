@@ -78,6 +78,9 @@ function createHost(
       chatSessionProjects: {
         get: vi.fn(() => undefined),
       },
+      chatFanoutInvocations: {
+        listActive: vi.fn(() => []),
+      },
       chatSideChats: {
         getByChildSession: vi.fn(() => undefined),
       },

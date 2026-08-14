@@ -65,6 +65,46 @@ export class SystemSettingsRepository {
   }
 
   /**
+   * Atomically reads, transforms, and stores one JSON setting. This is the
+   * narrow compare-and-reserve primitive for settings-backed authorities: a
+   * caller can validate quota/budget against the row it subsequently writes,
+   * without a read-modify-write race across gateway processes.
+   *
+   * The callback is intentionally synchronous. Storage transactions cannot
+   * keep a database lock open across an arbitrary await boundary.
+   */
+  public mutate<T>(
+    key: string,
+    initialValue: T,
+    updater: (current: T) => T,
+    now = new Date().toISOString(),
+  ): SystemSettingRecord<T> {
+    return this.db.transaction("immediate", () => {
+      this.insertIfAbsentStmt.run({
+        key,
+        valueJson: JSON.stringify(initialValue),
+        updatedAt: now,
+      });
+      const row = this.getForUpdateStmt.get(key) as SystemSettingRow | undefined;
+      if (!row) {
+        throw new NotFoundError(`Failed to lock setting ${key}`);
+      }
+      const current = parseValue(row.value_json) as T;
+      const next = updater(current);
+      this.upsertStmt.run({
+        key,
+        valueJson: JSON.stringify(next),
+        updatedAt: now,
+      });
+      return {
+        key,
+        value: next,
+        updatedAt: now,
+      };
+    });
+  }
+
+  /**
    * Atomically advances a shared cyclic counter. PostgreSQL locks the setting
    * row (including safe first-insert contention); SQLite callers are serialized
    * by the surrounding IMMEDIATE transaction. Callers can include this write in

@@ -47,6 +47,13 @@ export function buildUpdatedFeatureFlags(
     streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
     plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
     subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
+    durableChatFanoutV1Enabled: patch.durableChatFanoutV1Enabled ?? current.durableChatFanoutV1Enabled,
+    evolutionControlPlaneV1Enabled: patch.evolutionControlPlaneV1Enabled ?? current.evolutionControlPlaneV1Enabled,
+    improvementLocalObservationV1Enabled:
+      patch.improvementLocalObservationV1Enabled ?? current.improvementLocalObservationV1Enabled,
+    improvementModelEvaluationV1Enabled:
+      patch.improvementModelEvaluationV1Enabled ?? current.improvementModelEvaluationV1Enabled,
+    productSourceEvolutionV1Enabled: patch.productSourceEvolutionV1Enabled ?? current.productSourceEvolutionV1Enabled,
     channelVoiceReplyV1Enabled: patch.channelVoiceReplyV1Enabled ?? current.channelVoiceReplyV1Enabled,
     memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
     cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
@@ -103,6 +110,15 @@ export function resolveGatewayFeatureFlags(
     streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
     plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
     subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
+    durableChatFanoutV1Enabled: stored?.durableChatFanoutV1Enabled ?? fromConfig.durableChatFanoutV1Enabled ?? false,
+    evolutionControlPlaneV1Enabled:
+      stored?.evolutionControlPlaneV1Enabled ?? fromConfig.evolutionControlPlaneV1Enabled ?? true,
+    improvementLocalObservationV1Enabled:
+      stored?.improvementLocalObservationV1Enabled ?? fromConfig.improvementLocalObservationV1Enabled ?? true,
+    improvementModelEvaluationV1Enabled:
+      stored?.improvementModelEvaluationV1Enabled ?? fromConfig.improvementModelEvaluationV1Enabled ?? false,
+    productSourceEvolutionV1Enabled:
+      stored?.productSourceEvolutionV1Enabled ?? fromConfig.productSourceEvolutionV1Enabled ?? false,
     channelVoiceReplyV1Enabled: stored?.channelVoiceReplyV1Enabled ?? fromConfig.channelVoiceReplyV1Enabled,
     memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
     cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,

@@ -62,6 +62,19 @@ function createDeps(): ChatCommandDependencies {
       },
     },
     getSession: vi.fn(async () => ({ sessionId: "session-1" })),
+    createChatChangePlan: vi.fn(async (sessionId: string, input) => ({
+      planId: "plan-1",
+      sessionId,
+      kind: input.request.kind,
+      scope: "current_chat",
+      status: "awaiting_confirmation",
+      revision: 1,
+      request: input.request,
+      title: "Use model in this chat",
+      summary: "Switch only this conversation.",
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:00:00.000Z",
+    })),
     getChatSessionPrefs: vi.fn(async () => prefs),
     updateChatSessionPrefs: vi.fn(async (_sessionId: string, patch: Record<string, unknown>) => {
       prefs = { ...prefs, ...patch };
@@ -313,9 +326,11 @@ describe("chat command runtime dispatch", () => {
     }
 
     expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith("session-1", { mode: "chat" });
-    expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith("session-1", {
-      providerId: "backup",
-      model: "backup-model",
+    expect(deps.createChatChangePlan).toHaveBeenCalledWith("session-1", {
+      request: { kind: "session_model", providerId: "backup", model: "backup-model" },
+    });
+    expect(deps.createChatChangePlan).toHaveBeenCalledWith("session-1", {
+      request: { kind: "session_model", thinkingLevel: "deep" },
     });
     expect(deps.updateChatSessionProactivePolicy).toHaveBeenCalledWith("session-1", { proactiveMode: "suggest" });
     expect(deps.undoChatTurns).toHaveBeenCalledWith("session-1", 2, { operatorId: undefined });

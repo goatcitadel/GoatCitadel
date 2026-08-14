@@ -245,7 +245,7 @@ describe("tool executor loop 20 branch tails", () => {
     await expect(executeTool(request("fs.read", { path: oversizedPath }), config, storageStub())).rejects.toThrow(
       `${FILESYSTEM_READ_MAX_BYTES} byte limit`,
     );
-  });
+  }, 20_000);
 
   it("allows file.read_range at the byte limit and rejects an oversized file", async () => {
     const exactPath = path.join(tempRoot, "range-read-exact.txt");

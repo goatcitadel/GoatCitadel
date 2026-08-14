@@ -68,6 +68,93 @@ const CHECK_GROUPS = Object.freeze({
       ),
     ],
   },
+  chatFanout: {
+    title: "Chat-native trusted fan-out durable lifecycle",
+    checks: [
+      fileContains("packages/contracts/src/autonomy.ts", ["subagent_fanout", "projectId"]),
+      fileContains("packages/contracts/src/chat-fanout.ts", [
+        "ChatFanoutInvocationRecord",
+        "grantBindingHash",
+        "reserving",
+      ]),
+      fileContains("packages/storage/src/chat-fanout-invocation-repo.ts", [
+        "parent_run_id",
+        "tool_run_id",
+        "createOrGetWithOutcome",
+      ]),
+      fileContains("apps/gateway/src/services/chat-durable-fanout-service.ts", [
+        "CHAT_DURABLE_FANOUT_RESOLVED_WAKE_EVENT",
+        "reconcileTerminalChild",
+        "maxConcurrentChildren: SUBAGENT_FANOUT_MAX_SUBTASKS",
+      ]),
+      fileContains("apps/gateway/src/routes/chat.fanout.ts", ["stopChatFanout", "fanouts/:invocationId/stop"]),
+      fileContains("apps/gateway/src/services/chat-turn-agent-runner.ts", [
+        "durableFanoutWaiting",
+        "isDurableFanoutWaitingToolRun",
+      ]),
+      fileContains("apps/gateway/src/services/chat-turn-prep-service.ts", ["agenticStateCapsule"]),
+      fileContains("apps/gateway/src/services/chat-message-history-service.ts", ["protectedTurnIds"]),
+      fileContains("docs/CANONICAL_RUNTIME_STATE_MODEL.md", [
+        "Chat Trusted Automatic Fan-Out",
+        "default-disabled",
+        "remote-worker runtime parity",
+      ]),
+      commandCheck(
+        "Chat-native durable fan-out admission, parking, recovery, and authority behavior",
+        "pnpm",
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "vitest",
+          "run",
+          "--reporter",
+          "verbose",
+          "src/services/autonomous-activation-grant-service.test.ts",
+          "src/services/chat-subagent-fanout-service.test.ts",
+          "src/services/chat-durable-fanout-service.test.ts",
+          "src/services/chat-turn-agent-runner.subagent-fanout.test.ts",
+          "src/services/chat-durable-run-service.test.ts",
+          "src/services/chat-turn-prep-service.agentic-state-capsule.test.ts",
+          "src/services/chat-message-history-service.test.ts",
+          "src/routes/chat.fanout.test.ts",
+        ],
+        {
+          timeoutMs: 180_000,
+          minimumPassedTests: 90,
+          expectedStdout: [
+            "reserves all three child slots and the conservative ceiling before dispatching the durable delegation",
+            "materializes an exact canonical child terminal result once, then wakes only its settled parent aggregate",
+            "parks a durable fan-out parent without speculative synthesis while children are waiting",
+            "parks a durable fan-out wait with the canonical invocation-keyed wake event",
+            "keeps canonical fan-out recovery references and waits while excluding child output, host paths, and secrets",
+            "never compacts across an active durable fan-out parent and keeps the capsule outside transcript summaries",
+            "stops only the canonical aggregate for the requested Chat session",
+          ],
+        },
+      ),
+      commandCheck(
+        "Durable child compare-and-set storage behavior",
+        "pnpm",
+        [
+          "--filter",
+          "@goatcitadel/storage",
+          "exec",
+          "tsx",
+          "--test",
+          "src/chat-delegation-step-repo.test.ts",
+          "src/chat-fanout-invocation-repo.test.ts",
+        ],
+        {
+          timeoutMs: 120_000,
+          expectedStdout: [
+            "materializes a terminal durable child once and never lets a late result replace cancellation or a new child binding",
+            "converges duplicate parent/tool admission and preserves terminal aggregate truth",
+          ],
+        },
+      ),
+    ],
+  },
   availability: {
     title: "Agentic availability route and callable-boundary behavior",
     checks: [

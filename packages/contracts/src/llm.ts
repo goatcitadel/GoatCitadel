@@ -177,6 +177,8 @@ export interface LlmDiscoveredModelRecord {
 export interface LlmConfigFile {
   activeProviderId: string;
   activeModel?: string;
+  /** Default effort captured only by Chat sessions created after a change. */
+  defaultThinkingLevel?: import("./chat.js").ChatThinkingLevel;
   /**
    * Optional cheap utility-model slot for background tasks (improvement scans,
    * judges, classifiers, prompt packs). Only honored when the
@@ -210,6 +212,7 @@ export interface LlmProviderSummary {
 export interface LlmRuntimeConfig {
   activeProviderId: string;
   activeModel: string;
+  defaultThinkingLevel?: import("./chat.js").ChatThinkingLevel;
   utilityProviderId?: string;
   utilityModel?: string;
   providers: LlmProviderSummary[];

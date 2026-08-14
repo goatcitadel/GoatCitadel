@@ -243,6 +243,10 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
         patch: vi.fn((_sessionId: string, patch: Record<string, unknown>) => ({ sessionId: "session-1", ...patch })),
       },
       chatSessionProjects: { get: vi.fn(() => ({ projectId: "project-1" })) },
+      chatDelegationSteps: {
+        listParentsByChildSessionIds: vi.fn(() => new Map()),
+        get: vi.fn(),
+      },
       chatStreamEvents: { append: vi.fn(), getLatestSequence: vi.fn(() => 0), purgeBefore: vi.fn() },
       chatTurnTraces: { get: vi.fn(), listBySession: vi.fn(() => []) },
       commsDeliveries: { list: vi.fn(() => []) },
@@ -1460,6 +1464,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
       signalInboundRuntimeService: { stop: vi.fn(), sync: vi.fn() },
       durableRunService: { stopWorker: vi.fn() },
+      evolutionControlPlaneService: { reconcileActive: vi.fn(async () => []) },
       improvementService: { initialize: vi.fn(async () => undefined), stopScheduler: vi.fn() },
       initCritical: vi.fn(async () => undefined),
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
@@ -1474,6 +1479,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       storage: {
         ...createGatewayHarness().gateway.storage,
         agentProfiles: { seedBuiltins: vi.fn() },
+        changePlans: { backfillLegacyChatPlans: vi.fn(async () => 0) },
         close: vi.fn(),
         waitUntilReady: vi.fn(async () => undefined),
       },

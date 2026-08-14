@@ -12,6 +12,7 @@ import type {
   ApprovalResolveInput,
   AutonomousActivationGrantCreateInput,
   AutonomousActivationGrantEvaluationInput,
+  AutonomousActivationGrantReservationInput,
   AutonomousActivationGrantRevokeInput,
   CandidateLifecycleActionResult,
   CandidateSkillDetailRecord,
@@ -216,6 +217,8 @@ export interface CapabilitySystemServiceOptions {
   ) => Promise<ChatSessionWorkbenchCommandRunResponse>;
   flushTranscriptOutbox?: () => Promise<number>;
   onVerifiedCodeModeRun?: (response: CodeModeRunVerificationResponse) => void | Promise<void>;
+  /** Durable aggregates using a revoked grant must request child cancellation immediately. */
+  onAutonomousActivationGrantRevoked?: (grantId: string) => void | Promise<void>;
   spawnCodeModeChild?: typeof spawn;
 }
 
@@ -619,20 +622,55 @@ export class CapabilitySystemService {
     return this.autonomousActivationGrants.listGrants({ includeExpired });
   }
 
-  public createAutonomousActivationGrant(input: AutonomousActivationGrantCreateInput) {
-    return this.autonomousActivationGrants.createGrant(input);
+  public async createAutonomousActivationGrant(input: AutonomousActivationGrantCreateInput) {
+    if (input.activationKinds?.includes("subagent_fanout")) {
+      const projectId = input.projectId?.trim();
+      if (!projectId) {
+        throw new ValidationError({ message: "Automatic subagent fan-out grants require an active project." });
+      }
+      const project = await this.options.storage.chatProjects.find(projectId);
+      const workspaceId = input.workspaceId?.trim() || DEFAULT_WORKSPACE_ID;
+      if (
+        !project ||
+        project.lifecycleStatus !== "active" ||
+        (project.workspaceId ?? DEFAULT_WORKSPACE_ID) !== workspaceId
+      ) {
+        throw new ValidationError({
+          message: "Automatic subagent fan-out grants require an active project in the exact requested workspace.",
+        });
+      }
+    }
+    return await this.autonomousActivationGrants.createGrant(input);
   }
 
-  public revokeAutonomousActivationGrant(grantId: string, input: AutonomousActivationGrantRevokeInput) {
-    return this.autonomousActivationGrants.revokeGrant(grantId, input);
+  public async revokeAutonomousActivationGrant(grantId: string, input: AutonomousActivationGrantRevokeInput) {
+    const grant = await this.autonomousActivationGrants.revokeGrant(grantId, input);
+    await this.options.onAutonomousActivationGrantRevoked?.(grant.grantId);
+    return grant;
   }
 
   public evaluateAutonomousActivationGrant(input: AutonomousActivationGrantEvaluationInput) {
     return this.autonomousActivationGrants.evaluateGrant(input);
   }
 
+  public evaluateAutonomousActivationGrantById(grantId: string, input: AutonomousActivationGrantEvaluationInput) {
+    return this.autonomousActivationGrants.evaluateGrantById(grantId, input);
+  }
+
+  /** Recheck frozen aggregate authority without charging its already-reserved slots a second time. */
+  public evaluateAutonomousActivationGrantAuthorityById(
+    grantId: string,
+    input: AutonomousActivationGrantEvaluationInput,
+  ) {
+    return this.autonomousActivationGrants.evaluateGrantAuthorityById(grantId, input);
+  }
+
   public recordAutonomousActivationGrantUse(grantId: string, estimatedCostUsd?: number) {
     return this.autonomousActivationGrants.recordGrantUse(grantId, estimatedCostUsd);
+  }
+
+  public reserveAutonomousActivationGrantUse(input: AutonomousActivationGrantReservationInput) {
+    return this.autonomousActivationGrants.reserveGrantUse(input);
   }
 
   public async freezeCatalogSnapshot(): Promise<CapabilityCatalogSnapshotRecord> {

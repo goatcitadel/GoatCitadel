@@ -246,7 +246,10 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         : message.toLowerCase().includes("not found")
           ? 404
           : 400;
-      return reply.code(statusCode).send({ error: projectWorkspaceExplorerError(error) });
+      return reply.code(statusCode).send({
+        error: projectWorkspaceExplorerError(error),
+        ...(isGoatError(error) ? { code: error.code } : {}),
+      });
     }
   });
 

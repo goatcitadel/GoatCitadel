@@ -128,6 +128,8 @@ export interface MissionControlActiveSessionSurfaceProps {
     error: string | null;
     status: ChatSessionStatusResponse | null;
     onRefresh: () => void;
+    /** Narrow aggregate-only control; individual child retries stay unavailable. */
+    onStopFanout?: (invocationId: string) => void;
     onClose: () => void;
   };
   chatTimerPanel?: {

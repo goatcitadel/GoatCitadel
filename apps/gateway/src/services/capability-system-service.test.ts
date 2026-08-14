@@ -5754,6 +5754,22 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         systemSettings.set(key, record);
         return record;
       }),
+      mutate: vi.fn(
+        (
+          key: string,
+          initialValue: unknown,
+          updater: (current: unknown) => unknown,
+          now = "2026-04-10T00:00:00.000Z",
+        ) => {
+          const record = {
+            key,
+            value: updater(systemSettings.get(key)?.value ?? initialValue),
+            updatedAt: now,
+          };
+          systemSettings.set(key, record);
+          return record;
+        },
+      ),
     },
     capabilityCatalogSnapshots: {
       create(snapshot: CapabilityCatalogSnapshotRecord) {

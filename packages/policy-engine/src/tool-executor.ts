@@ -5,6 +5,8 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type {
   BrowserSessionAccessCheck,
+  ChangePlanModelToolResult,
+  ChangePlanRequest,
   ChatSessionStatusModelProjection,
   DocumentPatchProposalToolInput,
   NotifyRequest,
@@ -13,7 +15,7 @@ import type {
   ToolPolicyActorContext,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { coerceRetryAfterMs } from "@goatcitadel/contracts";
+import { coerceRetryAfterMs, isChangePlanRequest } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -29,6 +31,7 @@ import type { ResolveOfficialSearchCredential } from "./research-search-official
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import {
+  CHANGE_REQUEST_TOOL_NAME,
   RUNTIME_CONFIGURATION_TARGET_IDS,
   RUNTIME_CONFIGURE_TOOL_NAME,
   type RuntimeConfigurationTargetId,
@@ -142,6 +145,8 @@ export interface ToolExecutorRuntimeHooks {
   submitWorkResult?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned secure configuration flow. Secret material must never be returned through this hook. */
   configureRuntime?: (request: ToolInvokeRequest, targetId: RuntimeConfigurationTargetId) => void | Promise<void>;
+  /** Plan creation only. The hook must return a model-safe projection without action nonces. */
+  requestChangePlan?: (request: ToolInvokeRequest, intent: ChangePlanRequest) => Promise<ChangePlanModelToolResult>;
   /** Post-authorization, Gateway-owned presentation image generation hook. */
   preparePresentationVisuals?: PreparePresentationVisuals;
 }
@@ -271,6 +276,13 @@ export async function executeTool(
     );
   }
   switch (request.toolName) {
+    case CHANGE_REQUEST_TOOL_NAME: {
+      if (!runtimeHooks.requestChangePlan) {
+        throw new Error("Change Plan requests are unavailable in this runtime.");
+      }
+      const intent = readChangePlanIntent(request.args);
+      return finalizeToolResult({ ...(await runtimeHooks.requestChangePlan(request, intent)) });
+    }
     case RUNTIME_CONFIGURE_TOOL_NAME: {
       const targetId = readRuntimeConfigurationTarget(request.args);
       if (!runtimeHooks.configureRuntime) {
@@ -392,6 +404,16 @@ export async function executeTool(
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
+}
+
+function readChangePlanIntent(args: Record<string, unknown>): ChangePlanRequest {
+  if (Object.keys(args).length !== 1 || !Object.hasOwn(args, "intent")) {
+    throw new Error("change.request accepts only intent.");
+  }
+  if (!isChangePlanRequest(args.intent)) {
+    throw new Error("change.request intent must be an allowlisted bounded Change Plan request.");
+  }
+  return args.intent;
 }
 
 function readRuntimeConfigurationTarget(args: Record<string, unknown>): RuntimeConfigurationTargetId {

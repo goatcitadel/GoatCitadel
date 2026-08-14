@@ -229,6 +229,15 @@ export interface ChatDelegationProgressCallbacks {
 
 export interface ChatDelegationRunOptions {
   abortSignal?: AbortSignal;
+  /** Server-owned durable aggregate binding; never accepted by public routes. */
+  workflowTemplate?: string;
+  executionPlanId?: string;
+  stableRunKey?: string;
+  /** Server-owned aggregate concurrency ceiling (never accepted by public routes). */
+  maxConcurrentChildren?: number;
+  requireChildWatchers?: boolean;
+  /** Rechecked immediately before every child dispatch, including recovery. */
+  preDispatchGuard?: (step: { stepId: string; index: number; role: string }) => Promise<void>;
   /** Internal durable-effect recovery seam; never accepted from the public route. */
   persistedResume?: PersistedDelegationResumeAuthority;
 }
@@ -258,6 +267,9 @@ interface NormalizedDelegationStep {
   stepId: string;
   index: number;
   role: string;
+  objective?: string;
+  label?: string;
+  expectedOutput?: string;
   parallelizable: boolean;
   dependsOnStepIds: string[];
 }
@@ -315,6 +327,8 @@ export interface ChatDelegationServiceHost {
         providerId?: string;
         model?: string;
         status: ChatDelegationRunRecord["status"];
+        workflowTemplate?: string;
+        executionPlanId?: string;
         citations: ChatCitationRecord[];
       }): Promise<ChatDelegationRunRecord>;
       patch(
@@ -461,6 +475,20 @@ export interface ChatDelegationServiceHost {
         finishedAt: string;
         durationMs: number;
       }): Promise<ChatDelegationStepRecord | undefined>;
+      materializeDurableOutcome(input: {
+        stepId: string;
+        expectedChildSessionId: string;
+        expectedChildTurnId: string;
+        expectedDurableRunId: string;
+        status: "completed" | "failed" | "cancelled";
+        output?: string;
+        summary: string;
+        error?: string;
+        failureGuidance?: string;
+        citations: ChatCitationRecord[];
+        finishedAt: string;
+        durationMs?: number;
+      }): Promise<{ outcome: "applied" | "converged" | "rejected"; step: ChatDelegationStepRecord }>;
     };
     chatTurnTraces: {
       get(turnId: string): Promise<ChatTurnTraceRecord>;
@@ -943,6 +971,80 @@ export class ChatDelegationService {
     return { ...response, reenteredPersistedStep: persistedResume.dispatchAcquired === true };
   }
 
+  /**
+   * Settles an already-admitted durable child from its canonical terminal Chat
+   * trace. This intentionally does not re-enter a child or dispatch siblings:
+   * it is the recovery-safe bridge used when a child originally parked and
+   * later completed after the request observer had returned.
+   */
+  public async materializeTerminalDurableChild(input: {
+    delegationRunId: string;
+    stepId: string;
+    durableRunId: string;
+    childSessionId: string;
+    childTurnId: string;
+    trace: ChatTurnTraceRecord;
+    output?: string;
+  }): Promise<{ outcome: "applied" | "converged" | "rejected"; status: ChatDelegationRunRecord["status"] }> {
+    const parent = await this.deps.storage.chatDelegationRuns.get(input.delegationRunId);
+    const step = await this.deps.storage.chatDelegationSteps.get(input.stepId);
+    if (
+      step.runId !== parent.runId ||
+      step.childSessionId !== input.childSessionId ||
+      step.childTurnId !== input.childTurnId ||
+      step.durableRunId !== input.durableRunId
+    ) {
+      return { outcome: "rejected", status: parent.status };
+    }
+
+    const status =
+      input.trace.status === "completed"
+        ? ("completed" as const)
+        : input.trace.status === "cancelled"
+          ? ("cancelled" as const)
+          : input.trace.status === "failed" || input.trace.status === "partial"
+            ? ("failed" as const)
+            : undefined;
+    if (!status) {
+      return { outcome: "rejected", status: parent.status };
+    }
+
+    const output = input.output?.trim();
+    const error =
+      status === "completed"
+        ? undefined
+        : (input.trace.failure?.message ??
+          (status === "cancelled" ? "Delegated child was cancelled." : "Delegated child did not complete."));
+    const finishedAt = input.trace.finishedAt ?? new Date().toISOString();
+    const materialized = await this.deps.storage.chatDelegationSteps.materializeDurableOutcome({
+      stepId: input.stepId,
+      expectedChildSessionId: input.childSessionId,
+      expectedChildTurnId: input.childTurnId,
+      expectedDurableRunId: input.durableRunId,
+      status,
+      ...(output ? { output } : {}),
+      summary:
+        status === "completed"
+          ? output?.slice(0, 1_000) || "Delegated child completed."
+          : (error ?? "Delegated child did not complete."),
+      ...(error ? { error, failureGuidance: buildDelegationFailureGuidance(error, step.role) } : {}),
+      citations: input.trace.citations ?? [],
+      finishedAt,
+    });
+    if (materialized.outcome === "rejected") {
+      return { outcome: materialized.outcome, status: parent.status };
+    }
+
+    const aggregate = await commitDelegationAggregate(this.deps, {
+      runId: parent.runId,
+      taskId: parent.taskId,
+      trace: parent.trace,
+      observedAt: finishedAt,
+    });
+    await publishDelegationAggregateCommit(this.deps, aggregate);
+    return { outcome: materialized.outcome, status: aggregate.status };
+  }
+
   public async runChatDelegation(
     sessionId: string,
     input: ChatDelegateRequest,
@@ -960,6 +1062,10 @@ export class ChatDelegationService {
     }
     const requestedMode = input.mode ?? "sequential";
     const explorerProfile = input.executionProfile === "read_only_explorer";
+    const workflowTemplate = explorerProfile
+      ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE
+      : options.workflowTemplate?.trim() || undefined;
+    const stableRunKey = options.stableRunKey?.trim() || undefined;
     if (explorerProfile && !input.policyRunId?.trim()) {
       throw new ValidationError({
         message: "Workspace exploration requires a durable parent run for progress and recovery.",
@@ -1029,7 +1135,8 @@ export class ChatDelegationService {
           objective,
           mode,
           roles,
-          workflowTemplate: explorerProfile ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE : undefined,
+          workflowTemplate,
+          executionPlanId: options.executionPlanId,
         })
       : await findStableParentDelegationRun(deps, {
           sessionId,
@@ -1037,13 +1144,18 @@ export class ChatDelegationService {
           objective,
           mode,
           roles,
-          workflowTemplate: explorerProfile ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE : undefined,
+          workflowTemplate,
+          executionPlanId: options.executionPlanId,
         });
     let repairStableParentBeforeDispatch = false;
     const stablePolicyRunId = input.policyRunId?.trim();
     const runId =
       stableParentRun?.runId ??
-      (stablePolicyRunId ? buildStableDelegationId("delegation-run", sessionId, stablePolicyRunId) : randomUUID());
+      (stablePolicyRunId
+        ? stableRunKey
+          ? buildStableDelegationId("delegation-run", sessionId, stablePolicyRunId, stableRunKey)
+          : buildStableDelegationId("delegation-run", sessionId, stablePolicyRunId)
+        : randomUUID());
     let existingSteps = stableParentRun ? await deps.storage.chatDelegationSteps.listByRun(runId) : [];
     const normalizedRequestedSteps = stablePolicyRunId
       ? stabilizeDelegationPlan(runId, requestedDelegationSteps)
@@ -1115,7 +1227,7 @@ export class ChatDelegationService {
       delegationSteps = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
     }
     const stages = buildDelegationStages(delegationSteps);
-    const maxSpawn = mode === "parallel" ? 4 : 1;
+    const maxSpawn = mode === "parallel" ? Math.max(1, Math.min(4, Math.floor(options.maxConcurrentChildren ?? 4))) : 1;
     const childRunIds = delegationSteps.map((step) => `${runId}:${step.stepId}`);
     const taskInput = {
       workspaceId: sessionWorkspaceId,
@@ -1181,7 +1293,8 @@ export class ChatDelegationService {
           providerId,
           model,
           status: "running",
-          ...(explorerProfile ? { workflowTemplate: READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE } : {}),
+          ...(workflowTemplate ? { workflowTemplate } : {}),
+          ...(options.executionPlanId ? { executionPlanId: options.executionPlanId } : {}),
           citations: [],
         });
       }
@@ -1195,7 +1308,7 @@ export class ChatDelegationService {
           stepId: step.stepId,
           runId,
           role: step.role,
-          label: step.role,
+          label: step.label ?? step.role,
           index: step.index,
           status: "pending",
           parallelizable: step.parallelizable,
@@ -1218,7 +1331,8 @@ export class ChatDelegationService {
         objective,
         mode,
         roles,
-        workflowTemplate: explorerProfile ? READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE : undefined,
+        workflowTemplate,
+        executionPlanId: options.executionPlanId,
       });
       if (!concurrentRun || concurrentRun.runId !== runId || concurrentRun.taskId !== task.taskId) {
         throw error;
@@ -1363,6 +1477,7 @@ export class ChatDelegationService {
       let scheduleLateSettleRecord: ((event: ChildTimeoutLateSettleEvent<ChatSendMessageResponse>) => void) | undefined;
 
       try {
+        await options.preDispatchGuard?.({ stepId: step.stepId, index: step.index, role: step.role });
         throwIfChatDelegationAborted(options.abortSignal);
         enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
         const dispatchLease = await acquireDelegationDispatchLease(deps, {
@@ -1524,7 +1639,8 @@ export class ChatDelegationService {
         }
         const taskFirstMessage = buildSubagentTaskFirstMessage({
           role: step.role,
-          objective,
+          objective: step.objective ?? objective,
+          ...(step.expectedOutput ? { expectedOutput: step.expectedOutput } : {}),
           mode,
           parentDelegationStepId: step.stepId,
           sharedContext: dependencyContext,
@@ -1594,6 +1710,11 @@ export class ChatDelegationService {
               fullWebAccess: explorerProfile ? false : input.fullWebAccess,
               policyContext: explorerPolicyContext,
             });
+        // The project/grant posture is intentionally checked again after the
+        // durable child identity is prepared but before the first child turn
+        // can enter the runtime. A revoke or project reassignment therefore
+        // never becomes an already-dispatched child.
+        await options.preDispatchGuard?.({ stepId: step.stepId, index: step.index, role: step.role });
         const response = await runWithChildTimeout<ChatSendMessageResponse>({
           timeoutSeconds: childTimeoutSeconds,
           onLateSettle: (event) => {
@@ -1650,7 +1771,7 @@ export class ChatDelegationService {
                     await attachDelegationChildWatcher(deps, {
                       parentRunId: input.policyRunId,
                       childRunId: durableRunId,
-                      ...(explorerProfile ? { required: true } : {}),
+                      ...(explorerProfile || options.requireChildWatchers ? { required: true } : {}),
                       watcherId: `delegation-child:${step.stepId}`,
                       delegationRunId: runId,
                       stepId: step.stepId,
@@ -2310,7 +2431,10 @@ export class ChatDelegationService {
         });
       }
 
-      await mapWithConcurrency(runnableSteps, 4, async (step) => {
+      // The fan-out aggregate passes a server-owned ceiling of three. Keep
+      // dispatch concurrency tied to the persisted task posture rather than
+      // the historical generic four-child helper default.
+      await mapWithConcurrency(runnableSteps, maxSpawn, async (step) => {
         const result = await executeDelegationStep(step);
         stepResults.set(step.stepId, result);
         return result;
@@ -3052,6 +3176,9 @@ function normalizeDelegationSteps(input: {
       requestedStepId: step.stepId?.trim(),
       requestedIndex: Number.isFinite(step.index) ? Math.max(0, Math.trunc(step.index!)) : index,
       role: normalizedRole,
+      objective: step.objective?.trim() || undefined,
+      label: step.label?.trim() || undefined,
+      expectedOutput: step.expectedOutput?.trim() || undefined,
       parallelizable: step.parallelizable ?? input.mode === "parallel",
       dependsOnStepIds: dedupeStrings(step.dependsOnStepIds ?? []),
     };
@@ -3083,6 +3210,9 @@ function normalizeDelegationSteps(input: {
       stepId,
       index,
       role: step.role,
+      ...(step.objective ? { objective: step.objective } : {}),
+      ...(step.label ? { label: step.label } : {}),
+      ...(step.expectedOutput ? { expectedOutput: step.expectedOutput } : {}),
       parallelizable: step.parallelizable,
       dependsOnStepIds: step.dependsOnStepIds.map(
         (dependencyStepId) => requestedToActualStepIds.get(dependencyStepId) ?? dependencyStepId,
@@ -3399,27 +3529,40 @@ async function findStableParentDelegationRun(
     mode: "sequential" | "parallel";
     roles: string[];
     workflowTemplate?: string;
+    executionPlanId?: string;
   },
 ): Promise<ChatDelegationRunRecord | undefined> {
   const parentRunId = input.policyRunId?.trim();
   if (!parentRunId || !deps.storage.chatDelegationRuns.listRecent) {
     return undefined;
   }
-  const existing = (
+  const candidates = (
     await deps.storage.chatDelegationRuns.listRecent({
       sessionId: input.sessionId,
       parentRunId,
-      limit: 10,
+      limit: 100,
     })
-  ).find((run) => run.sessionId === input.sessionId && run.parentRunId === parentRunId);
-  if (!existing) {
+  ).filter((run) => run.sessionId === input.sessionId && run.parentRunId === parentRunId);
+  if (candidates.length === 0) {
     return undefined;
   }
+  // A durable parent run owns exactly one persisted delegation plan. Pick an
+  // exact candidate when present, but deliberately retain an incompatible
+  // candidate long enough to fail closed below. Otherwise a caller could
+  // change a normal delegation into a filesystem explorer and cause scope
+  // admission work before the durable-plan fence rejects it.
+  const existing =
+    candidates.find(
+      (run) =>
+        run.workflowTemplate === input.workflowTemplate &&
+        (input.executionPlanId === undefined || run.executionPlanId === input.executionPlanId),
+    ) ?? candidates[0]!;
   const expectedRoles = dedupeStrings(input.roles);
   if (
     existing.objective !== input.objective ||
     existing.mode !== input.mode ||
     existing.workflowTemplate !== input.workflowTemplate ||
+    (input.executionPlanId !== undefined && existing.executionPlanId !== input.executionPlanId) ||
     existing.roles.length !== expectedRoles.length ||
     existing.roles.some((role, index) => role !== expectedRoles[index])
   ) {
@@ -3439,6 +3582,7 @@ async function loadExplicitDelegationResumeRun(
     mode: ChatDelegateRequest["mode"];
     roles: string[];
     workflowTemplate?: string;
+    executionPlanId?: string;
   },
 ): Promise<ChatDelegationRunRecord> {
   const run = await deps.storage.chatDelegationRuns.get(input.runId.trim());
@@ -3448,6 +3592,7 @@ async function loadExplicitDelegationResumeRun(
     run.objective !== input.objective ||
     run.mode !== input.mode ||
     run.workflowTemplate !== input.workflowTemplate ||
+    (input.executionPlanId !== undefined && run.executionPlanId !== input.executionPlanId) ||
     run.roles.length !== expectedRoles.length ||
     run.roles.some((role, index) => role !== expectedRoles[index])
   ) {
@@ -3674,6 +3819,7 @@ export function buildDelegationSpecialistSystemPrompt(input: BuildDelegationSpec
 export interface BuildSubagentTaskFirstMessageInput {
   role: string;
   objective: string;
+  expectedOutput?: string;
   mode: "sequential" | "parallel";
   parentDelegationStepId: string;
   sharedContext: Array<{ role: string; output: string }>;
@@ -3690,6 +3836,7 @@ export function buildSubagentTaskFirstMessage(input: BuildSubagentTaskFirstMessa
     `Assigned role: ${input.role}`,
     `Execution mode: ${input.mode}`,
     `Parent delegation step: ${input.parentDelegationStepId}`,
+    ...(input.expectedOutput ? [`Expected output: ${input.expectedOutput}`] : []),
     "",
     "Completed dependency outputs available to this role:",
     dependencyBlock,

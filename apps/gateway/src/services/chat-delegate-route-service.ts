@@ -9,6 +9,7 @@ export const chatDelegateRouteMethods = [
   "runChatDelegation",
   "runChatDelegationStream",
   "suggestChatDelegation",
+  "stopChatFanout",
 ] as const;
 
 export type ChatDelegateRouteMethod = (typeof chatDelegateRouteMethods)[number];

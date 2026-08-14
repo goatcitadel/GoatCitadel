@@ -315,6 +315,9 @@ import type {
   GmailSendInput,
   ToolInvokeRequest,
   ToolInvokeResult,
+  ChangePlanModelToolResult,
+  ChangePlanRecord,
+  ChangePlanRequest,
   LocalOperatorOverrideCreateInput,
   LocalOperatorOverrideRecord,
   PermissionProfileActivationInput,
@@ -410,6 +413,7 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { parseChannelSecretRef } from "./channel-secret-custody-service.js";
 import { enqueueMobilePushApprovalRefresh, MobilePushService } from "./mobile-push-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
 import { startMobilePushDeliveryScheduler } from "./mobile-push-scheduler.js";
@@ -568,6 +572,31 @@ import { GuidanceService } from "./guidance-service.js";
 import * as cronJobConfigHelpers from "./cron-job-config-helpers.js";
 import * as chatCommandService from "./chat-command-service.js";
 import { createChatCommandDependencies } from "./chat-command-dependencies.js";
+import { ChatChangePlanCompatibilityService } from "./chat-change-plan-compatibility-service.js";
+import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
+import { EvolutionControlPlaneService, type EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
+import { ModelChangePlanAdapter } from "./model-change-plan-adapter.js";
+import {
+  RuntimeConfigurationChangePlanAdapter,
+  runtimeTemporaryAuthAccount,
+} from "./runtime-configuration-change-plan-adapter.js";
+import {
+  ProviderConnectionChangePlanAdapter,
+  providerTemporaryOAuthAccount,
+  providerTemporarySecretAccount,
+} from "./provider-connection-change-plan-adapter.js";
+import { CapabilityCandidateChangePlanAdapter } from "./capability-candidate-change-plan-adapter.js";
+import { ImprovementCandidateChangePlanAdapter } from "./improvement-candidate-change-plan-adapter.js";
+import { ChannelConnectionChangePlanAdapter } from "./channel-connection-change-plan-adapter.js";
+import { RuntimeRemediationChangePlanAdapter } from "./runtime-remediation-change-plan-adapter.js";
+import { ManagedSourceInstallService } from "./managed-source-install-service.js";
+import { ManagedSourceRegistrationChangePlanAdapter } from "./managed-source-registration-change-plan-adapter.js";
+import { ProductSourceUpdateService } from "./product-source-update-service.js";
+import { ProductSourceUpdateChangePlanAdapter } from "./product-source-update-change-plan-adapter.js";
+import {
+  ProductSourceApplySupervisor,
+  readProductSourceApplySupervisorConfiguration,
+} from "./product-source-apply-supervisor.js";
 import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
@@ -605,6 +634,7 @@ import {
 import { ChatSteerService } from "./chat-steer-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
+import { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
@@ -738,7 +768,20 @@ import { ReviewReadinessService } from "./review-readiness-service.js";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { ChatTimerService } from "./chat-timer-service.js";
 import { resolveChatRunVariableRequest } from "./chat-run-variable-service.js";
-import { createNotificationRoutingServiceForGateway } from "./gateway-route-composition-integrations.js";
+import {
+  createChannelSetupHostForGateway,
+  createNotificationRoutingServiceForGateway,
+} from "./gateway-route-composition-integrations.js";
+import {
+  discardChannelSetupDraft,
+  finalizeChannelSetupDraft,
+  getChannelSetupDefinition,
+  reconcileChannelSetupDraftSecretCustody,
+  setChannelSetupDraftSecrets,
+  updateChannelSetupDraft,
+  validateChannelSetupDraft,
+  createChannelSetupDraft,
+} from "./channel-setup-service.js";
 import { EngineeringLearningService } from "./engineering-learning-service.js";
 import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
 import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
@@ -1309,6 +1352,7 @@ export class GatewayService {
    */
   public readonly subagentFanout = new SubagentFanoutRuntime({
     isDisabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
+    isDurableEnabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
   });
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
@@ -1335,6 +1379,8 @@ export class GatewayService {
   public readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
   private readonly chatTurnRuntime: ChatTurnRuntimeService;
   private readonly chatDelegationService: ChatDelegationService;
+  /** Chat-native durable aggregate behind the default-disabled fan-out rollout. */
+  public readonly durableFanout: ChatDurableFanoutService;
   public readonly steerService: ChatSteerService;
   public readonly pluginToolOverrideService: PluginToolOverrideService;
   /**
@@ -1400,6 +1446,12 @@ export class GatewayService {
   private readonly realtimeEventService: RealtimeEventService;
   private readonly routeCompositionPort?: GatewayRouteCompositionPort;
   public readonly routeServices: GatewayRouteServices;
+  /** Canonical Gateway-owned authority for every governed durable mutation. */
+  public readonly evolutionControlPlaneService: EvolutionControlPlaneService;
+  private readonly managedSourceInstallService: ManagedSourceInstallService;
+  private readonly productSourceUpdateService: ProductSourceUpdateService;
+  /** One-window Chat route/command projection over the canonical singleton. */
+  public readonly chatChangePlanCompatibilityService: ChatChangePlanCompatibilityService;
   public readonly mutationIdempotencyStore: Storage["mutationIdempotency"];
   public readonly chatTurnExecutionRegistry = new ChatTurnExecutionRegistry();
   public readonly backgroundTasks = new Set<Promise<void>>();
@@ -1646,6 +1698,7 @@ export class GatewayService {
         isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.modelUsageAccounting.prepareDispatch(input),
+      requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -1762,6 +1815,9 @@ export class GatewayService {
       flushTranscriptOutbox: () => this.eventIngestService.flushPendingTranscriptOutbox(),
       onVerifiedCodeModeRun: async (response) => {
         await this.engineeringLearningService.proposeFromVerifiedCodeModeRun(response);
+      },
+      onAutonomousActivationGrantRevoked: async (grantId) => {
+        await this.durableFanout.cancelForGrant(grantId, "grant_revoked");
       },
     });
     this.skillLearningService = new SkillLearningService({
@@ -1974,6 +2030,8 @@ export class GatewayService {
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
+      durableChatFanoutV1Enabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
+      isDurableFanoutAvailable: async (input) => await this.isDurableFanoutAvailable(input),
       delegationScopeExpansionV1Enabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
     });
     this.researchService = new ResearchService({
@@ -2515,6 +2573,17 @@ export class GatewayService {
         maxDepth: subagentDefaults.maxDepth,
       },
     });
+    this.durableFanout = new ChatDurableFanoutService({
+      storage: this.storage,
+      capabilitySystem: this.capabilitySystemService,
+      runChatDelegation: this.chatDelegationService.runChatDelegation.bind(this.chatDelegationService),
+      materializeTerminalDelegatedChild: this.chatDelegationService.materializeTerminalDurableChild.bind(
+        this.chatDelegationService,
+      ),
+      cancelDurableChatRun: async (runId, cancelledBy) => await this.cancelDurableRun(runId, cancelledBy),
+      wakeDurableChatRun: async (runId, event) => await this.wakeDurableRun(runId, event),
+      isEnabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
+    });
     // HX-415 slice 7d composition root: build the requester-scoped MCP runtime
     // exactly once, from server-owned ports only. Resolvers come exclusively
     // from the Gateway-owned constructor option (default EMPTY = fail closed).
@@ -2698,16 +2767,6 @@ export class GatewayService {
       readEffectiveBlockerTemplateStrictness: () => readBlockerTemplateStrictness(this.storage.systemSettings),
       readEffectiveRetryRepairThreshold: () => readRetryRepairThreshold(this.storage.systemSettings),
       readEffectiveLiveIntentThreshold: () => readLiveIntentThreshold(this.storage.systemSettings),
-      // Cross-cutting audit: record applied auto-tunes in the unified ledger. The
-      // tune row holds its own rollback snapshot, so the restoreRef is just the
-      // tuneId. The closure resolves `autonomyControlService` lazily (it is
-      // constructed just after this service), so the deferred call is safe.
-      onAutoTuneApplied: (tuneId, settingKey) =>
-        this.autonomyControlService.recordAutonomousMutation({
-          kind: "tune",
-          targetKey: settingKey,
-          restoreRef: { kind: "tune", tuneId },
-        }),
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       retryChatTurn: async (sessionId, turnId, overrides) =>
         await this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
@@ -3097,6 +3156,242 @@ export class GatewayService {
       listExternalSideEffects: async (workspaceId, limit) =>
         await this.storage.externalSideEffectRuns.listByWorkspace(workspaceId, limit),
     });
+    const evolutionChannelSetupHost = createChannelSetupHostForGateway(this.getRouteCompositionPort());
+    this.managedSourceInstallService = new ManagedSourceInstallService(this.storage.managedSourceInstalls);
+    this.productSourceUpdateService = new ProductSourceUpdateService({
+      rootDir: this.config.rootDir,
+      repository: this.storage.productSourceUpdates,
+      sourceOwner: this.managedSourceInstallService,
+      getCodeModeRun: (runId) => this.capabilitySystemService.getCodeModeRun(runId),
+      getCodeModeVerificationEvidence: async (runId) =>
+        await this.storage.codeModeRuns.listVerificationEvidence(runId, 50),
+      getWorkbench: (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
+      runWorkbenchCommand: (sessionId, input) =>
+        this.routeServices.chatSessions.runChatSessionWorkbenchCommand(sessionId, input),
+    });
+    const productSourceApplySupervisor = new ProductSourceApplySupervisor({
+      rootDir: this.config.rootDir,
+      sourceOwner: this.managedSourceInstallService,
+      ...readProductSourceApplySupervisorConfiguration(),
+    });
+    const evolutionAdapters = new EvolutionControlPlaneAdapterRegistry([
+      new ModelChangePlanAdapter({
+        getChatSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
+        updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
+        getSettings: () => this.getSettings(),
+        updateSettings: (input) => this.updateSettings(input),
+        listModels: (providerId) => this.llmService.listModels(providerId),
+        getModelReasoningMetadata: (providerId, model) => this.llmService.getModelReasoningMetadata(providerId, model),
+      }),
+      new RuntimeConfigurationChangePlanAdapter({
+        getSettings: () => this.getSettings(),
+        updateSettings: (input) => this.updateSettings(input),
+        listModels: (providerId) => this.llmService.listModels(providerId),
+        hasTemporaryAuthCredential: (planId) =>
+          Boolean(this.secretStore.getSecret(runtimeTemporaryAuthAccount(planId))?.trim()),
+        consumeTemporaryAuthCredential: (planId) => {
+          const account = runtimeTemporaryAuthAccount(planId);
+          const secret = this.secretStore.getSecret(account);
+          if (!secret?.trim()) throw new ValidationError({ message: "Temporary Gateway credential is unavailable." });
+          this.secretStore.deleteSecret(account);
+          return secret;
+        },
+        discardTemporaryAuthCredential: (planId) => this.secretStore.deleteSecret(runtimeTemporaryAuthAccount(planId)),
+      }),
+      new ProviderConnectionChangePlanAdapter({
+        getSettings: () => this.getSettings(),
+        getProviderConfig: (providerId) =>
+          this.llmService.exportConfigFile().providers.find((provider) => provider.providerId === providerId),
+        updateSettings: (input) => this.updateSettings(input),
+        hasTemporarySecret: (planId, providerId) => this.hasTemporaryProviderSecret(planId, providerId),
+        hasTemporaryOAuthCredential: (planId, providerId) =>
+          this.hasTemporaryProviderOAuthCredential(planId, providerId),
+        promoteTemporarySecret: (planId, providerId, expectedRevision, storage, envVar) =>
+          this.promoteTemporaryProviderSecret(planId, providerId, expectedRevision, storage, envVar),
+        promoteTemporaryOAuthCredential: (planId, providerId, expectedRevision) =>
+          this.promoteTemporaryProviderOAuthCredential(planId, providerId, expectedRevision),
+        removeProviderApiKey: async (providerId, expectedRevision, storage) => {
+          const result = await this.deleteProviderSecret({ providerId, expectedRevision, storage });
+          return {
+            revision: result.revision,
+            evidenceRefs: [
+              `provider:${providerId}:secret_owner_revision:${result.revision}:removed:${storage ?? "all"}`,
+            ],
+          };
+        },
+        removeProviderOAuthCredential: async (providerId, expectedRevision) => {
+          const settings = await this.getSettings();
+          if (settings.revision !== expectedRevision) {
+            throw new ConflictError({
+              code: "WRITE_CONFLICT",
+              message: "Provider settings changed before OAuth removal.",
+              details: { expectedRevision, currentRevision: settings.revision },
+            });
+          }
+          if (providerId !== "openai-codex") {
+            throw new ValidationError({ message: "This OAuth provider does not expose a governed credential owner." });
+          }
+          this.llmService.deleteOpenAICodexOAuthCredential();
+          return {
+            revision: settings.revision,
+            evidenceRefs: [`provider:${providerId}:oauth_owner_removed:settings_revision:${settings.revision}`],
+          };
+        },
+        getProviderApiKeyStatus: (providerId) => this.getProviderSecretStatus(providerId),
+        getProviderOAuthCredentialStatus: (providerId) => {
+          if (providerId !== "openai-codex") {
+            return { connected: false };
+          }
+          return this.llmService.getOpenAICodexOAuthStatus();
+        },
+        discardTemporarySecret: (planId, providerId) => this.discardTemporaryProviderSecret(planId, providerId),
+        discardTemporaryOAuthCredential: (planId, providerId) =>
+          this.discardTemporaryProviderOAuthCredential(planId, providerId),
+        verifyProvider: (providerId) => this.verifyEvolutionProviderConnection(providerId),
+      }),
+      new ChannelConnectionChangePlanAdapter({
+        getDefinition: (catalogId) => getChannelSetupDefinition(evolutionChannelSetupHost, catalogId),
+        createDraft: (input) => createChannelSetupDraft(evolutionChannelSetupHost, input),
+        getDraft: async (draftId) => await this.storage.channelSetupDrafts.get(draftId),
+        updateDraft: (draftId, input) => updateChannelSetupDraft(evolutionChannelSetupHost, draftId, input),
+        validateDraft: (draftId, expectedRevision) =>
+          validateChannelSetupDraft(evolutionChannelSetupHost, draftId, expectedRevision),
+        finalizeDraft: (draftId, expectedRevision) =>
+          finalizeChannelSetupDraft(evolutionChannelSetupHost, draftId, expectedRevision),
+        discardDraft: (draftId, expectedRevision) =>
+          discardChannelSetupDraft(evolutionChannelSetupHost, draftId, expectedRevision),
+        getConnection: async (connectionId) => await this.storage.integrationConnections.get(connectionId),
+      }),
+      new RuntimeRemediationChangePlanAdapter({
+        getState: (remediationId) => this.storage.governedRemediations.getState(remediationId),
+      }),
+      new CapabilityCandidateChangePlanAdapter({
+        getProposalDetail: (proposalId) => this.capabilitySystemService.getProposalDetail(proposalId),
+        getCandidateDetail: (candidateId) => this.capabilitySystemService.getCandidateDetail(candidateId),
+        promoteCandidate: (candidateId, expectedRevision, versionId, requesterId) =>
+          this.capabilitySystemService.promoteCandidate(candidateId, expectedRevision, versionId, requesterId),
+        revokeCandidate: (candidateId, expectedRevision, versionId, requesterId) =>
+          this.capabilitySystemService.revokeCandidate(candidateId, expectedRevision, versionId, requesterId),
+        rollbackCandidate: (candidateId, targetVersionId, expectedRevision, requesterId) =>
+          this.capabilitySystemService.rollbackCandidate(candidateId, targetVersionId, expectedRevision, requesterId),
+      }),
+      new ImprovementCandidateChangePlanAdapter({
+        getReview: (candidateId) => this.improvementService.getCuratorReviewItem(candidateId),
+        activateCandidate: (candidateId, input) =>
+          this.improvementService.activateImprovementCandidate(candidateId, input),
+        requestRollbackApproval: (activationId, input) =>
+          this.improvementService.requestImprovementRollbackApproval(activationId, input),
+      }),
+      new ManagedSourceRegistrationChangePlanAdapter(this.managedSourceInstallService),
+      new ProductSourceUpdateChangePlanAdapter({
+        sourceUpdates: this.productSourceUpdateService,
+        supervisor: productSourceApplySupervisor,
+        isEnabled: async () => await this.isFeatureEnabled("productSourceEvolutionV1Enabled"),
+        acceptAppliedBaseline: (input) => this.managedSourceInstallService.acceptAppliedBaseline(input),
+        createProtectedApproval: async (plan, manifest) => {
+          const approval = await this.createApproval({
+            kind: "change_plan_protected_source_update",
+            riskLevel: "danger",
+            payload: {
+              planId: plan.planId,
+              manifestId: manifest.manifestId,
+              manifestSha256: manifest.manifestSha256,
+              patchSha256: manifest.patchSha256,
+              rollbackSha256: manifest.rollbackSha256,
+              protectedAreas: manifest.protectedAreas,
+              priorApprovalRefs: plan.approvalRefs,
+            },
+            preview: {
+              title: "Protected-core GoatCitadel source update",
+              summary: plan.summary,
+              changedFiles: manifest.changedFiles.map((item) => item.path),
+              protectedAreas: manifest.protectedAreas,
+            },
+            rollbackNote: "Automatic compensation is limited to the exact rollback patch bound to this manifest.",
+            linkage: {
+              workspaceId: plan.origin.workspaceId,
+              ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
+              ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
+              ...(plan.origin.actorId ? { operatorId: plan.origin.actorId } : {}),
+              actionType: "change_plan_protected_source_update",
+            },
+            ...(plan.expiresAt ? { expiresAt: plan.expiresAt } : {}),
+          });
+          return approval.approvalId;
+        },
+      }),
+    ]);
+    this.evolutionControlPlaneService = new EvolutionControlPlaneService({
+      repository: this.storage.changePlans,
+      adapters: evolutionAdapters,
+      isEnabled: async () => await this.isFeatureEnabled("evolutionControlPlaneV1Enabled"),
+      appendAudit: async (event, payload) => {
+        await this.storage.audit.append("approvals", { event, ...payload });
+      },
+      publishRealtime: async (event, payload) => {
+        await this.publishRealtime(event, "evolution_control_plane", payload, {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            workspaceId: typeof payload.workspaceId === "string" ? payload.workspaceId : undefined,
+            sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
+          },
+        });
+      },
+      getApprovalDisposition: async (approvalId) => {
+        try {
+          const approval = await this.storage.approvals.get(approvalId);
+          if (approval.status === "approved") return "approved";
+          if (approval.status === "rejected" || approval.status === "edited") return "denied";
+          if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) return "expired";
+          return "pending";
+        } catch (error) {
+          if (error instanceof NotFoundError) return undefined;
+          throw error;
+        }
+      },
+      createApproval: async (plan) => {
+        const approval = await this.createApproval({
+          kind: "change_plan_effect",
+          riskLevel: plan.risk === "danger" ? "danger" : "caution",
+          payload: {
+            planId: plan.planId,
+            kind: plan.kind,
+            scope: plan.scope,
+            intentHash: plan.intentHash,
+            targetOwnerId: plan.target.ownerId,
+            targetResourceId: plan.target.resourceId,
+            targetRevision: plan.target.expectedRevision,
+            targetHash: plan.target.expectedHash,
+            adapterId: plan.adapter.adapterId,
+            adapterVersion: plan.adapter.version,
+            actionSnapshotHash: plan.actionSnapshotHash,
+            evidenceRefs: plan.evidenceRefs,
+            rollbackRefs: plan.rollbackRefs,
+          },
+          preview: {
+            title: plan.title,
+            summary: plan.summary,
+            impact: plan.impact,
+            risk: plan.risk,
+          },
+          rollbackNote: "Any compensation must use rollback material already bound to this exact Change Plan.",
+          linkage: {
+            workspaceId: plan.origin.workspaceId,
+            ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
+            ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
+            ...(plan.origin.actorId ? { operatorId: plan.origin.actorId } : {}),
+            actionType: "change_plan_effect",
+          },
+          ...(plan.expiresAt ? { expiresAt: plan.expiresAt } : {}),
+        });
+        return approval.approvalId;
+      },
+    });
+    this.chatChangePlanCompatibilityService = new ChatChangePlanCompatibilityService({
+      controlPlane: this.evolutionControlPlaneService,
+      resolveActor: (sessionId, actorId) => this.resolveEvolutionChatActor(sessionId, actorId),
+    });
     this.routeServices = this.buildRouteServices();
   }
 
@@ -3275,6 +3570,7 @@ export class GatewayService {
       scheduleBackgroundReviewIfDue: async (input) => await this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       subagentFanout: this.subagentFanout,
+      durableFanout: this.durableFanout,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       triggerChatSessionProactive: async (sessionId, input) => await this.triggerChatSessionProactive(sessionId, input),
@@ -3365,6 +3661,22 @@ export class GatewayService {
       journeyTimeline: createJourneyTimelineRouteService(
         new JourneyTimelineService(this.storage.governanceJourneyEvents),
       ),
+      evolution: this.evolutionControlPlaneService,
+      evolutionChannelConnection: {
+        submitSecrets: (input) => this.submitEvolutionChannelSecrets(input),
+      },
+      evolutionManagedSource: {
+        submitSelection: (input) => this.submitEvolutionManagedSourceSelection(input),
+      },
+      evolutionProviderConnection: {
+        submitSecret: (input) => this.submitEvolutionProviderSecret(input),
+        startOAuth: (input) => this.startEvolutionProviderOAuth(input),
+        pollOAuth: (input) => this.pollEvolutionProviderOAuth(input),
+        completeOAuth: (input) => this.completeEvolutionProviderOAuth(input),
+      },
+      evolutionRuntimeConfiguration: {
+        submitGatewayAuthCredential: (input) => this.submitEvolutionGatewayAuthCredential(input),
+      },
     };
   }
 
@@ -3628,6 +3940,24 @@ export class GatewayService {
     await traceInitStep("loadOnboardingMarker", async () => await this.loadOnboardingMarker());
     await traceInitStep("applyStoredFeatureFlags", async () => {
       await this.applyStartupFeatureFlags();
+    });
+    await traceInitStep("channelSetup.secretCustodyReconciliation", async () => {
+      const reconciled = await reconcileChannelSetupDraftSecretCustody(
+        createChannelSetupHostForGateway(this.getRouteCompositionPort()),
+      );
+      if (reconciled.migrated > 0 || reconciled.invalidated > 0 || reconciled.scrubbed > 0) {
+        log.info("reconciled channel setup credential custody", { ...reconciled });
+      }
+    });
+    await traceInitStep("evolutionControlPlane.initialize", async () => {
+      const imported = await this.storage.changePlans.backfillLegacyChatPlans();
+      const reconciled = await this.evolutionControlPlaneService.reconcileActive();
+      if (imported > 0 || reconciled.length > 0) {
+        log.info("initialized Evolution Control Plane ledger", {
+          importedLegacyPlans: imported,
+          reconciledPlans: reconciled.length,
+        });
+      }
     });
     await traceInitStep("seedBuiltinAgentProfiles", async () => {
       await this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
@@ -4203,6 +4533,14 @@ export class GatewayService {
       removeChatSessionStoredFile: async (storageRelPath) => await this.removeChatSessionStoredFile(storageRelPath),
       copyChatSessionStoredFile: async (storageRelPath, copyId) =>
         await this.copyChatSessionStoredFile(storageRelPath, copyId),
+      getChatSessionModelDefaults: () => {
+        const runtime = this.llmService.getRuntimeConfig();
+        return {
+          providerId: runtime.activeProviderId || undefined,
+          model: runtime.activeModel || undefined,
+          thinkingLevel: runtime.defaultThinkingLevel ?? "standard",
+        };
+      },
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
       hydrateChatPrefsWithAutonomy: async (sessionId, prefs) =>
         await this.hydrateChatPrefsWithAutonomy(sessionId, prefs),
@@ -5945,6 +6283,8 @@ export class GatewayService {
   ): Promise<chatCommandService.ChatCommandResult> {
     return chatCommandService.parseChatCommand(
       createChatCommandDependencies(this, {
+        createChatChangePlan: (targetSessionId, input) =>
+          this.chatChangePlanCompatibilityService.create(targetSessionId, input),
         getSettings: async () => await this.getSettings(),
         listMemoryItems: async (input) => await this.listMemoryItems(input),
         normalizeWorkspaceId: async (workspaceId) => this.normalizeWorkspaceId(workspaceId),
@@ -5953,6 +6293,491 @@ export class GatewayService {
       commandText,
       options,
     );
+  }
+
+  private async resolveEvolutionChatActor(sessionId: string, actorId?: string): Promise<EvolutionControlPlaneActor> {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) {
+      throw new ValidationError({ message: "A Chat session is required for this Change Plan." });
+    }
+    const meta = await this.storage.chatSessionMeta.get(normalizedSessionId);
+    if (!meta) {
+      throw new NotFoundError({ entity: "Canonical Chat session metadata", id: normalizedSessionId });
+    }
+    return {
+      workspaceId: meta.workspaceId,
+      actorId: actorId?.trim() || "operator",
+      surface: "chat",
+      sessionId: normalizedSessionId,
+    };
+  }
+
+  private async requestChangePlanFromTool(
+    request: ToolInvokeRequest,
+    intent: ChangePlanRequest,
+  ): Promise<ChangePlanModelToolResult> {
+    const sessionId = request.sessionId.trim();
+    const turnId = request.turnId?.trim();
+    const toolRunId = request.toolRunId?.trim();
+    if (!sessionId || !turnId || !toolRunId || request.surface !== "chat" || request.externalRuntime === true) {
+      throw new PolicyViolationError({
+        message: "change.request is available only inside a server-authored first-party Chat turn.",
+        details: { diagnosticCode: "change_request_untrusted_origin" },
+      });
+    }
+
+    const meta = await this.storage.chatSessionMeta.get(sessionId);
+    if (!meta) {
+      throw new NotFoundError({ entity: "Canonical Chat session metadata", id: sessionId });
+    }
+    const requestedWorkspaceId = request.workspaceId?.trim();
+    if (requestedWorkspaceId && requestedWorkspaceId !== meta.workspaceId) {
+      throw new PolicyViolationError({
+        message: "change.request workspace authority does not match the canonical Chat session.",
+        details: { diagnosticCode: "change_request_workspace_mismatch" },
+      });
+    }
+
+    const [delegationParents, binding] = await Promise.all([
+      this.storage.chatDelegationSteps.listParentsByChildSessionIds([sessionId], meta.workspaceId),
+      this.storage.chatSessionBindings.get(sessionId),
+    ]);
+    if (delegationParents.has(sessionId)) {
+      throw new PolicyViolationError({
+        message: "Delegated child agents cannot create Change Plans.",
+        details: { diagnosticCode: "change_request_delegated_agent_denied" },
+      });
+    }
+    if (binding?.transport === "integration") {
+      throw new PolicyViolationError({
+        message: "External channel sessions cannot invoke Change Plan controls directly.",
+        details: { diagnosticCode: "change_request_external_channel_denied" },
+      });
+    }
+
+    const actorId =
+      request.policyContext?.authActorId?.trim() ||
+      request.consentContext?.operatorId?.trim() ||
+      `model:${request.agentId.trim() || "unknown"}`;
+    const plan = await this.evolutionControlPlaneService.create({
+      actor: {
+        workspaceId: meta.workspaceId,
+        actorId,
+        surface: "chat",
+        sessionId,
+        turnId,
+        requestId: toolRunId,
+      },
+      request: intent,
+      idempotencyKey: `change.request:${turnId}:${toolRunId}`,
+    });
+    return {
+      planId: plan.planId,
+      status: plan.status,
+      ...(plan.requiredAction ? { requiredAction: plan.requiredAction.kind } : {}),
+    };
+  }
+
+  public async submitEvolutionManagedSourceSelection(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    rootPath: string;
+  }): Promise<ChangePlanRecord> {
+    const plan = await this.evolutionControlPlaneService.get(input.actor, input.planId);
+    const action = plan.requiredAction;
+    if (
+      plan.request.kind !== "managed_source_registration" ||
+      plan.revision !== input.expectedRevision ||
+      action?.kind !== "native_path_picker" ||
+      action.actionId !== input.actionId ||
+      action.actionNonce !== input.actionNonce
+    ) {
+      throw new ConflictError({ message: "Managed source picker action is stale or does not match this Change Plan." });
+    }
+    const candidate = await this.managedSourceInstallService.stageCandidate(input.rootPath);
+    try {
+      return await this.evolutionControlPlaneService.resumeOwnerInput(
+        input.actor,
+        plan.planId,
+        plan.revision,
+        input.actionNonce,
+        {
+          actionId: action.actionId,
+          actionKind: "native_path_picker",
+          ownerId: "managed_source_candidate",
+          ownerResourceId: candidate.installId,
+          ownerRevision: candidate.revision,
+          evidenceRefs: [`managed-source-inspection:${candidate.installId}:${candidate.baselineSha}`],
+        },
+      );
+    } catch (error) {
+      await this.managedSourceInstallService.discardCandidate(candidate.installId, candidate.revision);
+      throw error;
+    }
+  }
+
+  public async submitEvolutionChannelSecrets(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    values: Readonly<Record<string, string>>;
+  }): Promise<ChangePlanRecord> {
+    const plan = await this.evolutionControlPlaneService.get(input.actor, input.planId);
+    if (plan.request.kind !== "channel_connection") {
+      throw new ValidationError({ message: "This Change Plan does not own a channel credential flow." });
+    }
+    const action = plan.requiredAction;
+    if (
+      plan.revision !== input.expectedRevision ||
+      action?.kind !== "secure_input" ||
+      action.actionId !== input.actionId ||
+      action.actionNonce !== input.actionNonce ||
+      action.targetId !== plan.target.resourceId
+    ) {
+      throw new ConflictError({ message: "Channel secure-input action is stale or does not match this Change Plan." });
+    }
+    const allowed = new Set((action.fields ?? []).map((field) => field.fieldId));
+    if (allowed.size === 0 || Object.keys(input.values).some((fieldId) => !allowed.has(fieldId))) {
+      throw new ValidationError({ message: "Channel secure-input fields do not match the server-described action." });
+    }
+    for (const field of action.fields ?? []) {
+      if (field.required !== false && !input.values[field.fieldId]?.trim()) {
+        throw new ValidationError({ message: `Channel credential field ${field.fieldId} is required.` });
+      }
+    }
+    const draftRevision = plan.target.expectedRevision;
+    if (!draftRevision) {
+      throw new ConflictError({ message: "Channel Change Plan has no exact draft revision binding." });
+    }
+    const updated = await setChannelSetupDraftSecrets(
+      createChannelSetupHostForGateway(this.getRouteCompositionPort()),
+      plan.target.resourceId,
+      { expectedRevision: draftRevision, values: input.values },
+    );
+    return await this.evolutionControlPlaneService.resumeOwnerInput(
+      input.actor,
+      plan.planId,
+      plan.revision,
+      input.actionNonce,
+      {
+        actionId: action.actionId,
+        actionKind: "secure_input",
+        ownerId: "channel_setup_secret",
+        ownerResourceId: updated.draftId,
+        ownerRevision: updated.revision,
+        evidenceRefs: [`channel-secret-state:${updated.draftId}:${updated.revision}`],
+      },
+    );
+  }
+
+  public async submitEvolutionProviderSecret(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    apiKey: string;
+  }): Promise<ChangePlanRecord> {
+    const plan = await this.evolutionControlPlaneService.get(input.actor, input.planId);
+    if (plan.request.kind !== "provider_connection") {
+      throw new ValidationError({ message: "This Change Plan does not own a provider credential flow." });
+    }
+    const action = plan.requiredAction;
+    if (
+      plan.revision !== input.expectedRevision ||
+      action?.kind !== "secure_input" ||
+      action.actionId !== input.actionId ||
+      action.actionNonce !== input.actionNonce ||
+      action.targetId !== plan.request.providerId
+    ) {
+      throw new ConflictError({ message: "Provider secure-input action is stale or does not match this Change Plan." });
+    }
+    const secret = input.apiKey.trim();
+    if (!secret || secret.length > 16_384) {
+      throw new ValidationError({ message: "Provider credential is empty or exceeds the secure-input limit." });
+    }
+    const account = providerTemporarySecretAccount(plan.planId, plan.request.providerId);
+    this.secretStore.setSecret(account, secret);
+    try {
+      const evidenceRefs = await this.verifyTemporaryProviderSecret(plan.planId, plan.request.providerId);
+      return await this.evolutionControlPlaneService.resumeOwnerInput(
+        input.actor,
+        plan.planId,
+        plan.revision,
+        input.actionNonce,
+        {
+          actionId: input.actionId,
+          actionKind: "secure_input",
+          ownerId: "provider_temporary_secret",
+          ownerResourceId: plan.request.providerId,
+          evidenceRefs,
+        },
+      );
+    } catch (error) {
+      this.secretStore.deleteSecret(account);
+      throw error;
+    }
+  }
+
+  public async submitEvolutionGatewayAuthCredential(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    credential: string;
+  }): Promise<ChangePlanRecord> {
+    const plan = await this.evolutionControlPlaneService.get(input.actor, input.planId);
+    if (
+      plan.request.kind !== "runtime_configuration" ||
+      plan.request.change.operation !== "gateway_auth_configuration"
+    ) {
+      throw new ValidationError({ message: "This Change Plan does not own a Gateway authentication credential flow." });
+    }
+    const action = plan.requiredAction;
+    if (
+      plan.revision !== input.expectedRevision ||
+      action?.kind !== "secure_input" ||
+      action.actionId !== input.actionId ||
+      action.actionNonce !== input.actionNonce ||
+      action.targetId !== "gateway-auth"
+    ) {
+      throw new ConflictError({
+        message: "Gateway authentication secure-input action is stale or does not match this Change Plan.",
+      });
+    }
+    const credential = input.credential.trim();
+    if (!credential || credential.length > 16_384) {
+      throw new ValidationError({ message: "Gateway credential is empty or exceeds the secure-input limit." });
+    }
+    const account = runtimeTemporaryAuthAccount(plan.planId);
+    this.secretStore.setSecret(account, credential);
+    try {
+      return await this.evolutionControlPlaneService.resumeOwnerInput(
+        input.actor,
+        plan.planId,
+        plan.revision,
+        input.actionNonce,
+        {
+          actionId: input.actionId,
+          actionKind: "secure_input",
+          ownerId: "gateway_auth_temporary_secret",
+          ownerResourceId: "gateway-auth",
+          evidenceRefs: ["gateway-auth:temporary-credential-captured"],
+        },
+      );
+    } catch (error) {
+      this.secretStore.deleteSecret(account);
+      throw error;
+    }
+  }
+
+  public async completeEvolutionProviderOAuth(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+  }): Promise<ChangePlanRecord> {
+    const plan = await this.requireEvolutionProviderOAuthAction(input);
+    const evidenceRefs = this.verifyTemporaryProviderOAuthCredential(plan.planId, plan.request.providerId);
+    return await this.evolutionControlPlaneService.resumeOwnerInput(
+      input.actor,
+      plan.planId,
+      plan.revision,
+      input.actionNonce,
+      {
+        actionId: input.actionId,
+        actionKind: "oauth",
+        ownerId: "provider_oauth",
+        ownerResourceId: plan.request.providerId,
+        evidenceRefs,
+      },
+    );
+  }
+
+  public async startEvolutionProviderOAuth(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+  }) {
+    const plan = await this.requireEvolutionProviderOAuthAction(input);
+    if (plan.request.providerId !== "openai-codex") {
+      throw new ValidationError({ message: "This provider does not expose a first-party plan-bound OAuth owner." });
+    }
+    const credentialAccount = providerTemporaryOAuthAccount(plan.planId, plan.request.providerId);
+    return await this.llmService.startOpenAICodexOAuthDeviceFlow({
+      credentialAccount,
+      idempotencyKey: `${plan.planId}:${plan.revision}:${input.actionId}:${input.actionNonce}`,
+    });
+  }
+
+  public async pollEvolutionProviderOAuth(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    flowId: string;
+  }) {
+    const plan = await this.requireEvolutionProviderOAuthAction(input);
+    if (plan.request.providerId !== "openai-codex") {
+      throw new ValidationError({ message: "This provider does not expose a first-party plan-bound OAuth owner." });
+    }
+    return await this.llmService.pollOpenAICodexOAuthDeviceFlow(input.flowId, {
+      expectedCredentialAccount: providerTemporaryOAuthAccount(plan.planId, plan.request.providerId),
+    });
+  }
+
+  private async requireEvolutionProviderOAuthAction(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+  }): Promise<ChangePlanRecord & { request: Extract<ChangePlanRecord["request"], { kind: "provider_connection" }> }> {
+    const plan = await this.evolutionControlPlaneService.get(input.actor, input.planId);
+    if (plan.request.kind !== "provider_connection") {
+      throw new ValidationError({ message: "This Change Plan does not own a provider OAuth flow." });
+    }
+    const action = plan.requiredAction;
+    if (
+      plan.revision !== input.expectedRevision ||
+      action?.kind !== "oauth" ||
+      action.actionId !== input.actionId ||
+      action.actionNonce !== input.actionNonce ||
+      action.targetId !== plan.request.providerId
+    ) {
+      throw new ConflictError({ message: "Provider OAuth action is stale or does not match this Change Plan." });
+    }
+    return plan as ChangePlanRecord & {
+      request: Extract<ChangePlanRecord["request"], { kind: "provider_connection" }>;
+    };
+  }
+
+  private hasTemporaryProviderSecret(planId: string, providerId: string): boolean {
+    return Boolean(this.secretStore.getSecret(providerTemporarySecretAccount(planId, providerId))?.trim());
+  }
+
+  private discardTemporaryProviderSecret(planId: string, providerId: string): void {
+    this.secretStore.deleteSecret(providerTemporarySecretAccount(planId, providerId));
+  }
+
+  private hasTemporaryProviderOAuthCredential(planId: string, providerId: string): boolean {
+    return this.llmService.getOpenAICodexOAuthCredentialStatus(providerTemporaryOAuthAccount(planId, providerId))
+      .connected;
+  }
+
+  private verifyTemporaryProviderOAuthCredential(planId: string, providerId: string): readonly string[] {
+    if (providerId !== "openai-codex" || !this.hasTemporaryProviderOAuthCredential(planId, providerId)) {
+      throw new ValidationError({
+        message: "The plan-bound provider OAuth credential is unavailable or requires reauthorization.",
+      });
+    }
+    return [`provider:${providerId}:plan_bound_oauth_exchange_verified`];
+  }
+
+  private discardTemporaryProviderOAuthCredential(planId: string, providerId: string): void {
+    if (providerId !== "openai-codex") return;
+    this.llmService.discardOpenAICodexOAuthCredential(providerTemporaryOAuthAccount(planId, providerId));
+  }
+
+  private async promoteTemporaryProviderOAuthCredential(
+    planId: string,
+    providerId: string,
+    expectedRevision: number,
+  ): Promise<{ revision: number; evidenceRefs: readonly string[] }> {
+    const settings = await this.getSettings();
+    if (settings.revision !== expectedRevision) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "Provider settings changed before the OAuth credential could be promoted.",
+        details: { expectedRevision, currentRevision: settings.revision },
+      });
+    }
+    const provider = settings.llm.providers.find((candidate) => candidate.providerId === providerId);
+    if (!provider || provider.authMode !== "codex-oauth") {
+      throw new ValidationError({ message: "The approved OpenAI Codex OAuth provider profile is unavailable." });
+    }
+    const status = this.llmService.promoteOpenAICodexOAuthCredential(providerTemporaryOAuthAccount(planId, providerId));
+    if (!status.connected) {
+      throw new ValidationError({ message: "The OAuth credential owner did not confirm canonical promotion." });
+    }
+    return {
+      revision: settings.revision,
+      evidenceRefs: [`provider:${providerId}:oauth_owner_promoted:settings_revision:${settings.revision}`],
+    };
+  }
+
+  private async verifyTemporaryProviderSecret(planId: string, providerId: string): Promise<readonly string[]> {
+    const secret = this.secretStore.getSecret(providerTemporarySecretAccount(planId, providerId));
+    if (!secret?.trim()) throw new ValidationError({ message: "Temporary provider credential is unavailable." });
+    const provider = this.llmService
+      .exportConfigFile()
+      .providers.find((candidate) => candidate.providerId === providerId);
+    if (!provider) throw new NotFoundError({ entity: "LLM provider", id: providerId });
+    const preview = await this.llmService.previewModels({
+      providerId,
+      baseUrl: provider.baseUrl,
+      apiStyle: provider.apiStyle,
+      apiKey: secret,
+      ...(provider.request ? { request: provider.request } : {}),
+    });
+    if (preview.source !== "live" || preview.items.length === 0) {
+      throw new ValidationError({ message: `Unable to verify ${providerId} against its live model catalog.` });
+    }
+    return [`provider:${providerId}:temporary_credential_validated`];
+  }
+
+  private async promoteTemporaryProviderSecret(
+    planId: string,
+    providerId: string,
+    expectedRevision: number,
+    storage: "keychain" | "env" = "keychain",
+    envVar?: string,
+  ): Promise<{ revision: number; evidenceRefs: readonly string[] }> {
+    const account = providerTemporarySecretAccount(planId, providerId);
+    const secret = this.secretStore.getSecret(account);
+    if (!secret?.trim()) throw new ValidationError({ message: "Temporary provider credential is unavailable." });
+    const result = await this.saveProviderSecret({
+      providerId,
+      apiKey: secret,
+      expectedRevision,
+      storage,
+      ...(envVar ? { envVar } : {}),
+    });
+    this.secretStore.deleteSecret(account);
+    return {
+      revision: result.revision,
+      evidenceRefs: [`provider:${providerId}:secret_owner_revision:${result.revision}`],
+    };
+  }
+
+  private async verifyEvolutionProviderConnection(providerId: string): Promise<{ evidenceRefs: readonly string[] }> {
+    const settings = await this.getSettings();
+    const provider = settings.llm.providers.find((candidate) => candidate.providerId === providerId);
+    if (!provider) throw new NotFoundError({ entity: "LLM provider", id: providerId });
+    const ready = provider.authReadiness
+      ? ["configured", "ready"].includes(provider.authReadiness.status)
+      : provider.hasApiKey || provider.oauthStatus?.connected === true || provider.authMode === "google-adc";
+    if (!ready) throw new ValidationError({ message: `${provider.label} is not connected.` });
+    const catalog = await this.llmService.listModelsWithSource(providerId);
+    if (catalog.items.length === 0 || (catalog.source !== "live" && provider.authMode !== "codex-oauth")) {
+      throw new ValidationError({ message: `${provider.label} did not return a verifiable model catalog.` });
+    }
+    return {
+      evidenceRefs: [
+        `provider:${providerId}:auth_ready`,
+        `provider:${providerId}:catalog:${catalog.source}:${catalog.items.length}`,
+      ],
+    };
   }
 
   public learnSkillFromLatestTurn(input: Parameters<SkillLearningService["learnFromLatestTurn"]>[0]) {
@@ -6231,6 +7056,15 @@ export class GatewayService {
 
   public async cancelDurableRun(runId: string, actorId = "operator"): Promise<DurableRunRecord> {
     return await this.durableOperatorService.cancelRun(runId, actorId);
+  }
+
+  /** Chat's narrow aggregate-stop control; it never retries or rewires child work. */
+  public async stopChatFanout(sessionId: string, invocationId: string) {
+    const invocation = await this.storage.chatFanoutInvocations.get(invocationId);
+    if (invocation.sessionId !== sessionId) {
+      throw new NotFoundError({ entity: "Chat fan-out invocation", id: invocationId });
+    }
+    return await this.durableFanout.cancel(invocationId, "operator_stop");
   }
 
   public async retryDurableRun(
@@ -7807,6 +8641,19 @@ export class GatewayService {
       trace,
       expectedLeaseOwnerId,
     );
+    if (prepared.parentDelegationStepId) {
+      const assistantMessage = trace.assistantMessageId
+        ? await this.storage.chatMessages.get(trace.assistantMessageId)
+        : undefined;
+      await this.durableFanout.reconcileTerminalChild({
+        durableRunId: runId,
+        childSessionId: prepared.session.sessionId,
+        childTurnId: prepared.turnId,
+        parentDelegationStepId: prepared.parentDelegationStepId,
+        trace,
+        ...(assistantMessage?.content ? { output: assistantMessage.content } : {}),
+      });
+    }
   }
 
   private async executePreparedAgentChatTurnBackground(
@@ -10669,6 +11516,35 @@ export class GatewayService {
     }
   }
 
+  /**
+   * Tool-schema admission check for automatic Chat fan-out. A remembered
+   * session preference is never enough: this re-reads the exact current
+   * project binding and asks the grant owner whether one child activation is
+   * presently admissible. Aggregate quota/budget reservation still happens
+   * later, atomically, before any child is dispatched.
+   */
+  private async isDurableFanoutAvailable(input: { sessionId: string; workspaceId?: string }): Promise<boolean> {
+    const workspaceId = input.workspaceId?.trim();
+    if (!workspaceId) return false;
+    const binding = await this.storage.chatSessionProjects.get(input.sessionId);
+    if (!binding?.projectId) return false;
+    const project = await this.storage.chatProjects.find(binding.projectId);
+    if (!project || project.lifecycleStatus !== "active" || (project.workspaceId ?? "default") !== workspaceId) {
+      return false;
+    }
+    const evaluation = await this.capabilitySystemService.evaluateAutonomousActivationGrant({
+      workspaceId,
+      projectId: project.projectId,
+      surface: "chat",
+      riskLevel: "caution",
+      activationKind: "subagent_fanout",
+      capabilityId: "agent.fanout",
+      toolName: "agent.fanout",
+      estimatedCostUsd: 0,
+    });
+    return evaluation.allowed;
+  }
+
   public async isFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<boolean> {
     return (await this.readFeatureFlags())[flag] === true;
   }
@@ -10867,6 +11743,15 @@ export class GatewayService {
   ): string | undefined {
     const direct = this.readConnectionConfigValue(config, directKey);
     if (direct) {
+      if (direct.startsWith("keychain:goatcitadel:channel-")) {
+        try {
+          const account = parseChannelSecretRef(direct).account;
+          return this.secretStore.getSecret(account)?.trim() || undefined;
+        } catch {
+          log.warn("Refusing to resolve an invalid channel credential reference.", { directKey, catalogId });
+          return undefined;
+        }
+      }
       return direct;
     }
     const envName = this.readConnectionConfigValue(config, envKey);
@@ -11786,6 +12671,8 @@ export class GatewayService {
       model?: string;
       guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
       compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
+      agenticStateCapsule?: string;
+      protectedTurnIds?: readonly string[];
     },
   ): Promise<ChatCompletionRequest["messages"]> {
     return chatMessageHistoryService.buildLlmMessagesFromTranscript(
@@ -11823,6 +12710,8 @@ export class GatewayService {
       model?: string;
       guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
       compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
+      agenticStateCapsule?: string;
+      protectedTurnIds?: readonly string[];
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {

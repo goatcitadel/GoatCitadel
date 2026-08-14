@@ -35,6 +35,7 @@ import {
   filterEmptyLabel,
 } from "./ProjectsRoutePage.components";
 import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
+import { ProjectAutomaticFanoutCard } from "./ProjectAutomaticFanoutCard";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeDisclosureCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, FilterPillGroup, NativeButton, NativeSelectableList, NoticeBanner } from "../primitives";
@@ -834,6 +835,7 @@ export function ProjectsRoutePage({
                 }
               />
             ) : null}
+            <ProjectAutomaticFanoutCard project={routedProject} workspaceId={activeWorkspaceId} />
             <div className="mc-next-settings-button-row">
               {SURFACES.map((surface) => (
                 <NativeButton key={surface.mode} onClick={() => void handleNewSession(surface.mode)}>

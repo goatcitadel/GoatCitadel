@@ -280,6 +280,7 @@ function buildHeartbeatPrepHarness(options: { sessionState?: ChatTurnSessionStat
       },
       sessionAutonomyPrefs: { get: vi.fn(() => autonomy) },
       chatSessionProjects: { get: vi.fn(() => undefined) },
+      chatFanoutInvocations: { listActive: vi.fn(() => []) },
       chatSideChats: { getByChildSession: vi.fn(() => undefined) },
       chatSpecialistCandidates: { listAutoRoutable: vi.fn(() => []) },
       systemSettings: { get: vi.fn(() => undefined) },

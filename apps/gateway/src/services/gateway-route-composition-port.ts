@@ -59,6 +59,7 @@ import type { ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cach
 import type { CapabilityScopeResolver } from "./capability-scope-resolver.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { ConfigGenerationHealthSnapshot } from "./config-generation-service.js";
+import type { ChatChangePlanCompatibilityService } from "./chat-change-plan-compatibility-service.js";
 import type {
   DeleteProviderSecretInput,
   ProviderSecretMutationResponse,
@@ -85,6 +86,7 @@ export interface GatewayRouteCompositionPort {
   readonly capabilityScopeResolver: CapabilityScopeResolver;
   readonly capabilitySystemService: CapabilitySystemService;
   readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
+  readonly chatChangePlanCompatibilityService: ChatChangePlanCompatibilityService;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
   readonly chatSessionStatusService: ChatSessionStatusService;
@@ -168,6 +170,7 @@ export interface GatewayRouteCompositionPort {
   ensureChatMessageProjection(sessionId: string): Promise<void>;
   ensureChatSessionRuntimeGrants: chatSessionService.ChatSessionDependencies["ensureChatSessionRuntimeGrants"];
   fetchWithDiagnosticsTimeout: IntegrationChannelServicePort["fetchWithDiagnosticsTimeout"];
+  getSettings(): Promise<RuntimeSettings>;
   getChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["getChatSessionPrefs"];
   getRun: RouteDependencyMethod<"orchestration", "getRun">;
   getRunTrace: RouteDependencyMethod<"orchestration", "getRunTrace">;
@@ -244,6 +247,7 @@ export interface GatewayRouteCompositionPort {
   respondToExistingChatMessage: RouteDependencyMethod<"integrationWebhooks", "respondToExistingChatMessage">;
   runChatDelegation: RouteDependencyMethod<"chatDelegate", "runChatDelegation">;
   runChatDelegationStream: RouteDependencyMethod<"chatDelegate", "runChatDelegationStream">;
+  stopChatFanout: RouteDependencyMethod<"chatDelegate", "stopChatFanout">;
   runChatResearch: RouteDependencyMethod<"chatSupport", "research">["runChatResearch"];
   runDatabaseCutover: RouteDependencyMethod<"authAdmin", "runDatabaseCutover">;
   runOrchestrationPlan: RouteDependencyMethod<"orchestration", "runOrchestrationPlan">;
@@ -317,6 +321,7 @@ export function createGatewayRouteCompositionPort(
     capabilityScopeResolver: privateDependencies.capabilityScopeResolver,
     capabilitySystemService: privateDependencies.capabilitySystemService,
     chatCompactionBreakerActionService: privateDependencies.chatCompactionBreakerActionService,
+    chatChangePlanCompatibilityService: gateway.chatChangePlanCompatibilityService,
     chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
     chatSessionStatusService: gateway.chatSessionStatusService,
@@ -394,6 +399,7 @@ export function createGatewayRouteCompositionPort(
     ensureChatMessageProjection: gateway.ensureChatMessageProjection.bind(gateway),
     ensureChatSessionRuntimeGrants: gateway.ensureChatSessionRuntimeGrants.bind(gateway),
     fetchWithDiagnosticsTimeout: gateway.fetchWithDiagnosticsTimeout.bind(gateway),
+    getSettings: gateway.getSettings.bind(gateway),
     getChatSessionPrefs: gateway.getChatSessionPrefs.bind(gateway),
     getRun: gateway.getRun.bind(gateway),
     getRunTrace: gateway.getRunTrace.bind(gateway),
@@ -470,6 +476,7 @@ export function createGatewayRouteCompositionPort(
     respondToExistingChatMessage: gateway.respondToExistingChatMessage.bind(gateway),
     runChatDelegation: gateway.runChatDelegation.bind(gateway),
     runChatDelegationStream: gateway.runChatDelegationStream.bind(gateway),
+    stopChatFanout: gateway.stopChatFanout.bind(gateway),
     runChatResearch: gateway.runChatResearch.bind(gateway),
     runDatabaseCutover: gateway.runDatabaseCutover.bind(gateway),
     runOrchestrationPlan: gateway.runOrchestrationPlan.bind(gateway),

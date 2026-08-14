@@ -107,24 +107,44 @@ export async function updateChannelSetupDraft(
   });
 }
 
-export async function validateChannelSetupDraft(draftId: string): Promise<ChannelSetupValidationResult> {
+export async function submitChannelSetupDraftSecrets(
+  draftId: string,
+  input: { expectedRevision: number; values: Record<string, string> },
+): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/secure-fields`, {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function validateChannelSetupDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<ChannelSetupValidationResult> {
   return request<ChannelSetupValidationResult>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/validate`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function testChannelSetupDraft(draftId: string): Promise<ChannelSetupTestResult> {
+export async function testChannelSetupDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<ChannelSetupTestResult> {
   return request<ChannelSetupTestResult>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/test`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function finalizeChannelSetupDraft(draftId: string): Promise<ChannelSetupFinalizeResult> {
+export async function finalizeChannelSetupDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<ChannelSetupFinalizeResult> {
   return request<ChannelSetupFinalizeResult>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/finalize`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 

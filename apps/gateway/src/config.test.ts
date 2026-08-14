@@ -93,6 +93,10 @@ describe("loadGatewayConfig", () => {
     expect(config.assistant.features.notificationRoutingV1Enabled).toBe(true);
     expect(config.assistant.features.chatTimersV1Enabled).toBe(true);
     expect(config.assistant.features.typedRunVariablesV1Enabled).toBe(true);
+    expect(config.assistant.features.evolutionControlPlaneV1Enabled).toBe(true);
+    expect(config.assistant.features.improvementLocalObservationV1Enabled).toBe(true);
+    expect(config.assistant.features.improvementModelEvaluationV1Enabled).toBe(false);
+    expect(config.assistant.features.productSourceEvolutionV1Enabled).toBe(false);
   });
 
   it("defaults Firecrawl and Docker digest posture to shipped fail-closed values", async () => {

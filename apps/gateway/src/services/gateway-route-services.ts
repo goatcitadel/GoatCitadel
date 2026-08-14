@@ -201,6 +201,71 @@ import type { ExternalSourceRouteService } from "./external-source-route-service
 import type { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
 import type { MeshCapabilityInvocationService } from "./mesh-capability-invocation-service.js";
 import type { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
+import type { EvolutionControlPlaneActor, EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
+import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./openai-codex-oauth-service.js";
+
+export interface EvolutionProviderConnectionRouteService {
+  submitSecret(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    apiKey: string;
+  }): Promise<ChangePlanRecord>;
+  startOAuth(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+  }): Promise<OpenAICodexDeviceStartResponse>;
+  pollOAuth(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    flowId: string;
+  }): Promise<OpenAICodexDevicePollResponse>;
+  completeOAuth(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+  }): Promise<ChangePlanRecord>;
+}
+export interface EvolutionChannelConnectionRouteService {
+  submitSecrets(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    values: Readonly<Record<string, string>>;
+  }): Promise<ChangePlanRecord>;
+}
+export interface EvolutionRuntimeConfigurationRouteService {
+  submitGatewayAuthCredential(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    credential: string;
+  }): Promise<ChangePlanRecord>;
+}
+export interface EvolutionManagedSourceRouteService {
+  submitSelection(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    rootPath: string;
+  }): Promise<ChangePlanRecord>;
+}
 export interface GatewayRouteServices {
   a2a: A2ARouteService;
   addons: AddonsRouteService;
@@ -235,6 +300,11 @@ export interface GatewayRouteServices {
   durable: DurableRouteService;
   evidence: EvidenceRouteService;
   evidenceReceipts: EvidenceReceiptsRouteService;
+  evolution?: EvolutionControlPlaneService;
+  evolutionChannelConnection?: EvolutionChannelConnectionRouteService;
+  evolutionManagedSource?: EvolutionManagedSourceRouteService;
+  evolutionProviderConnection?: EvolutionProviderConnectionRouteService;
+  evolutionRuntimeConfiguration?: EvolutionRuntimeConfigurationRouteService;
   externalSources?: ExternalSourceRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;
@@ -456,3 +526,4 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     workspaces: createWorkspacesRouteService(deps.workspaces),
   };
 }
+import type { ChangePlanRecord } from "@goatcitadel/contracts";

@@ -38,6 +38,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
 import { ErrorState, NativeButton, NativeMetricGrid } from "../../primitives";
+import { GuidedModelSetup } from "./GuidedModelSetup";
 import {
   BUDGET_MODE_OPTIONS,
   buildFirstRunEvidenceSnapshot,
@@ -68,7 +69,7 @@ type OnboardingPageState = OnboardingState & {
   firstRunEvidence: FirstRunEvidenceSnapshot;
 };
 
-export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSectionProps) {
+export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [onboarding, runtimeSettings, demoState, agenticRuns, evidenceEnvelopes] = await Promise.all([
       fetchOnboardingState(),
@@ -306,6 +307,14 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
                 ]}
               />
             </NativeCard>
+            <GuidedModelSetup
+              workspaceId={activeWorkspaceId}
+              onboarding={data}
+              route={route}
+              navigate={navigate}
+              reloadOnboarding={reload}
+              setNotice={setNotice}
+            />
             <NativeCard
               density="compact"
               className="mc-next-settings-panel"

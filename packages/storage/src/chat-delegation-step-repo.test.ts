@@ -413,6 +413,103 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(repo.getDispatchClaim("step-active-owner")?.token, "replacement-owner");
   });
 
+  it("materializes a terminal durable child once and never lets a late result replace cancellation or a new child binding", () => {
+    const { repo } = createStore();
+    repo.create({
+      stepId: "step-durable-materialization",
+      runId: "run-durable-materialization",
+      role: "Researcher",
+      index: 0,
+      status: "running",
+      durableRunId: "child-run-1",
+      childSessionId: "child-session-1",
+      childTurnId: "child-turn-1",
+      startedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    const applied = repo.materializeDurableOutcome({
+      stepId: "step-durable-materialization",
+      expectedChildSessionId: "child-session-1",
+      expectedChildTurnId: "child-turn-1",
+      expectedDurableRunId: "child-run-1",
+      status: "completed",
+      output: "Canonical durable output",
+      summary: "Canonical durable output",
+      citations: [citation()],
+      finishedAt: "2026-03-26T00:00:03.000Z",
+    });
+    assert.equal(applied.outcome, "applied");
+    assert.equal(applied.step.status, "completed");
+    assert.equal(applied.step.output, "Canonical durable output");
+    assert.deepEqual(applied.step.citations, [citation()]);
+
+    const lateDuplicate = repo.materializeDurableOutcome({
+      stepId: "step-durable-materialization",
+      expectedChildSessionId: "child-session-1",
+      expectedChildTurnId: "child-turn-1",
+      expectedDurableRunId: "child-run-1",
+      status: "completed",
+      output: "Late replacement",
+      summary: "Late replacement",
+      citations: [],
+      finishedAt: "2026-03-26T00:00:04.000Z",
+    });
+    assert.equal(lateDuplicate.outcome, "converged");
+    assert.equal(lateDuplicate.step.output, "Canonical durable output");
+
+    repo.create({
+      stepId: "step-durable-cancelled",
+      runId: "run-durable-materialization",
+      role: "QA",
+      index: 1,
+      status: "cancelled",
+      durableRunId: "child-run-cancelled",
+      childSessionId: "child-session-cancelled",
+      childTurnId: "child-turn-cancelled",
+      startedAt: "2026-03-26T00:00:00.000Z",
+      finishedAt: "2026-03-26T00:00:01.000Z",
+    });
+    const afterCancellation = repo.materializeDurableOutcome({
+      stepId: "step-durable-cancelled",
+      expectedChildSessionId: "child-session-cancelled",
+      expectedChildTurnId: "child-turn-cancelled",
+      expectedDurableRunId: "child-run-cancelled",
+      status: "completed",
+      output: "Unsafe late output",
+      summary: "Unsafe late output",
+      citations: [],
+      finishedAt: "2026-03-26T00:00:04.000Z",
+    });
+    assert.equal(afterCancellation.outcome, "rejected");
+    assert.equal(afterCancellation.step.status, "cancelled");
+
+    repo.create({
+      stepId: "step-durable-replaced",
+      runId: "run-durable-materialization",
+      role: "Ops",
+      index: 2,
+      status: "running",
+      durableRunId: "new-child-run",
+      childSessionId: "new-child-session",
+      childTurnId: "new-child-turn",
+      startedAt: "2026-03-26T00:00:00.000Z",
+    });
+    const staleBinding = repo.materializeDurableOutcome({
+      stepId: "step-durable-replaced",
+      expectedChildSessionId: "old-child-session",
+      expectedChildTurnId: "old-child-turn",
+      expectedDurableRunId: "old-child-run",
+      status: "failed",
+      summary: "Stale failure",
+      error: "Stale failure",
+      citations: [],
+      finishedAt: "2026-03-26T00:00:04.000Z",
+    });
+    assert.equal(staleBinding.outcome, "rejected");
+    assert.equal(staleBinding.step.childSessionId, "new-child-session");
+    assert.equal(staleBinding.step.status, "running");
+  });
+
   it("atomically owns, links, reclaims, and finalizes child dispatch", () => {
     const { db, repo } = createStore();
     const competingRepo = new ChatDelegationStepRepository(db);

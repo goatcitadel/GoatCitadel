@@ -50,6 +50,7 @@ import {
 } from "./notification-routing-service.js";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
+import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
@@ -73,38 +74,33 @@ export function composeIntegrationChannelRouteDependencies(
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
   });
   const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
-  const channelSetupDeps: channelSetupService.ChannelSetupHost = {
-    storage: gateway.storage,
-    recentChannelSetupTests: gateway.recentChannelSetupTests,
-    buildIntegrationConnectionChecks: (connection) =>
-      integrationDiagnostics.buildIntegrationConnectionChecks(connection),
-    createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),
-    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
-    recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
-    runIntegrationConnectionLiveChecks: (connection, options) =>
-      integrationDiagnostics.runIntegrationConnectionLiveChecks(connection, options),
-    updateIntegrationConnection: (connectionId, patch) =>
-      integrationChannel.updateIntegrationConnection(connectionId, patch),
-  };
+  const channelSetupDeps = createChannelSetupHostForGateway(gateway, integrationDiagnostics, integrationChannel);
   const channelSetup = createChannelSetupRoutePort({
     createChannelSetupDraft: (input) => channelSetupService.createChannelSetupDraft(channelSetupDeps, input),
     createChannelSetupRepairDraft: (connectionId) =>
       channelSetupService.createChannelSetupRepairDraft(channelSetupDeps, connectionId),
     createChannelSetupRotateSecretDraft: (connectionId) =>
       channelSetupService.createChannelSetupRotateSecretDraft(channelSetupDeps, connectionId),
-    finalizeChannelSetupDraft: (draftId) => channelSetupService.finalizeChannelSetupDraft(channelSetupDeps, draftId),
+    finalizeChannelSetupDraft: (draftId, expectedRevision) =>
+      channelSetupService.finalizeChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
+    setChannelSetupDraftSecrets: (draftId, input) =>
+      channelSetupService.setChannelSetupDraftSecrets(channelSetupDeps, draftId, input),
+    discardChannelSetupDraft: (draftId, expectedRevision) =>
+      channelSetupService.discardChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
     getChannelSetupDefinition: (catalogId) =>
       channelSetupService.getChannelSetupDefinition(channelSetupDeps, catalogId),
     listChannelSetupDefinitions: () => channelSetupService.listChannelSetupDefinitions(channelSetupDeps),
     listChannelSetupDrafts: (options) => channelSetupService.listChannelSetupDrafts(channelSetupDeps, options),
     retestChannelConnection: (connectionId) =>
       channelSetupService.retestChannelConnection(channelSetupDeps, connectionId),
-    testChannelSetupDraft: (draftId) => channelSetupService.testChannelSetupDraft(channelSetupDeps, draftId),
+    testChannelSetupDraft: (draftId, expectedRevision) =>
+      channelSetupService.testChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
     updateChannelSetupDraft: (draftId, input) =>
       channelSetupService.updateChannelSetupDraft(channelSetupDeps, draftId, input, {
         reconcilePublicProjection: true,
       }),
-    validateChannelSetupDraft: (draftId) => channelSetupService.validateChannelSetupDraft(channelSetupDeps, draftId),
+    validateChannelSetupDraft: (draftId, expectedRevision) =>
+      channelSetupService.validateChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
   });
   const commsDeps = createCommsHostForGateway(gateway, integrationChannel);
   const comms = createCommsRoutePort({
@@ -510,6 +506,28 @@ export function createIntegrationDiagnosticsServiceForGateway(
     resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
       gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
   });
+}
+
+/** Shared construction point for routes, Change Plan adapters, and startup reconciliation. */
+export function createChannelSetupHostForGateway(
+  gateway: GatewayRouteCompositionPort,
+  integrationDiagnostics = createIntegrationDiagnosticsServiceForGateway(gateway),
+  integrationChannel = createIntegrationChannelServiceForGateway(gateway, integrationDiagnostics),
+): channelSetupService.ChannelSetupHost {
+  return {
+    storage: gateway.storage,
+    recentChannelSetupTests: gateway.recentChannelSetupTests,
+    ...(gateway.secretStore ? { channelSecrets: new ChannelSecretCustodyService(gateway.secretStore) } : {}),
+    buildIntegrationConnectionChecks: (connection) =>
+      integrationDiagnostics.buildIntegrationConnectionChecks(connection),
+    createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),
+    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
+    recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
+    runIntegrationConnectionLiveChecks: (connection, options) =>
+      integrationDiagnostics.runIntegrationConnectionLiveChecks(connection, options),
+    updateIntegrationConnection: (connectionId, patch) =>
+      integrationChannel.updateIntegrationConnection(connectionId, patch),
+  };
 }
 
 export function createIntegrationChannelServiceForGateway(

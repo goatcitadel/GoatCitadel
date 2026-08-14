@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-08-08
+Last updated: 2026-08-14
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -133,6 +133,27 @@ Notes:
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 - `unifiedComposerPaletteV1Enabled` is a Gateway-authored Mission Control projection gate. It changes only the Chat composer discovery surface: its client registry reads existing scoped APIs, caches source results per session, and degrades source failures independently. It does not create a second capability catalog, widen file/workspace access, or make inactive agents, candidates, proposals, or non-callable skills executable.
 
+### Evolution Change Plan
+
+Definition:
+A durable, Gateway-owned lifecycle for an allowlisted persistent change to GoatCitadel configuration, connections, capabilities, improvements, remediation, or product source.
+
+Authority:
+- Contract shape: `packages/contracts/src/change-plan.ts`
+- Persistence: `change_plans`, append-only `change_plan_events`, and immutable `change_plan_links`
+- Orchestration owner: `apps/gateway/src/services/evolution-control-plane-service.ts`
+- Frozen mutation inventory: `apps/gateway/src/services/evolution-control-plane-governance.ts`
+- Detailed contract: [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md)
+
+Notes:
+- One singleton Control Plane serves Chat, Settings, compatibility routes, startup reconciliation, and local observers. Mission Control never writes canonical owner state directly.
+- The model-facing `change.request` tool creates only a bounded, secret-free plan. Confirmation, canonical approval, apply, activation, rollback, restart, and external-effect authority remain server-owned.
+- Every transition uses revision CAS. Effectful actions additionally bind an action nonce, immutable form snapshot, target revision or hash, idempotency key, expiry, and one active target claim.
+- Provider/channel credentials, OAuth values, and native paths use dedicated owner routes. Plans and model context retain only sanitized state and opaque owner links.
+- Restart recovery inspects the linked low-level owner and reconciles observed state. It does not blindly replay an interrupted apply.
+- Realtime Change Plan events are refresh signals. The plan, event, owner, approval, and artifact repositories remain canonical.
+- Legacy Chat plan records are compatibility projections and are backfilled into the canonical owner. The `applied` state is compatibility-only for one window.
+
 ### Chat Workspace Exploration and Delegated Scope
 
 Definition:
@@ -149,6 +170,27 @@ Notes:
 - The explorer report is derived from persisted delegation truth and contains the answer, evidence references, approved searched paths and scope hashes, partial-result state, and explicit gaps. Secret projection removes delegated host roots and resolved host paths.
 - Additional scope is available only for active `workspace-explorer` or `coder` steps. Chat receives opaque IDs for bounded, server-discovered eligible paths; it cannot submit an arbitrary path. Selected IDs re-enter `submit_work_result` as the existing scope-expansion approval wait.
 - Approval application rechecks the exact step, approval, dispatch generation, and prior scope hash. Approval expands only that step's server-owned approved paths, computes a new scope hash, and resumes through durable execution; rejection, expiry, or stale binding retains the prior scope and fails closed.
+
+### Chat Trusted Automatic Fan-Out
+
+Definition:
+A default-disabled, Chat-native durable aggregate for up to three independently delegated child tasks. It is not a second orchestration runtime or a separate Cowork surface.
+
+Authority:
+- Grant and policy contract: `packages/contracts/src/autonomy.ts` and `packages/contracts/src/chat-fanout.ts`
+- Canonical aggregate state: `chat_fanout_invocations`
+- Canonical child run/step state: `chat_delegation_runs`, `chat_delegation_steps`, and durable child watchers
+- Admission, freeze, cancellation, and recovery owner: `apps/gateway/src/services/chat-durable-fanout-service.ts`
+
+Notes:
+- The feature is gated by `durableChatFanoutV1Enabled`, which defaults off. With the gate off, automatic fan-out fails closed and does not fall back to the historical in-memory automatic path.
+- Admission requires both the Chat autonomy selection `auto_when_useful` and one active, expiring, exact-project `subagent_fanout` grant in the same workspace. The grant is Chat-only, carries an explicit child-activation limit and budget ceiling, and can be revoked immediately. A legacy, wildcard-workspace, or projectless grant cannot authorize this kind.
+- Before any child starts, the Gateway atomically reserves all requested child activations and the conservative aggregate cost ceiling. The maximum is three children. Insufficient quota or budget rejects the whole aggregate; a durable reservation ID makes duplicate tool delivery/recovery idempotent.
+- The parent durable Chat run waits on the canonical fan-out invocation. Each child retains the existing frozen policy/capability context, per-child limits, approvals, effects, and non-recursive delegation boundary. The parent wakes only after child terminal state/result materialization reaches canonical delegation storage; synthesis uses only committed child output plus explicit failure or approval truth.
+- A changed session project, archived project, project binding, expiry, revocation, changed frozen grant binding, or policy block prevents later dispatch/recovery. Parent cancellation or grant revocation requests durable child cancellation and leaves unresolved effect posture explicit; it never retries ambiguous effects.
+- Chat exposes only inspect, continue-in-background, and **Stop aggregate** controls. Stop is session-bound and cancels the canonical aggregate plus its active durable children; it does not expose per-child retry or manual rewiring.
+- Compaction receives a bounded secret-free agentic state capsule. It preserves active parent tail, child/approval waits, capability/grant hashes, committed-result references, and citations; it does not promote child output into memory or treat stale grant authority as current.
+- The two-host remote-worker promotion remains a separate parity milestone. This Chat aggregate does not claim remote-worker runtime parity.
 
 ### Chat Tool Effect Truth
 

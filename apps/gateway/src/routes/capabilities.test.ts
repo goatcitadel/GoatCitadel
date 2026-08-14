@@ -838,6 +838,57 @@ describe("capabilities routes", () => {
     });
   });
 
+  it("creates an artifact-review Change Plan instead of directly promoting when evolution is enabled", async () => {
+    const promoteCapabilityCandidate = vi.fn();
+    const detail = {
+      candidateId: "candidate-1",
+      revision: 3,
+      latestVersion: { versionId: "version-2" },
+      relatedProposals: [{ proposalId: "proposal-1", candidateId: "candidate-1" }],
+      originatingRun: { workspaceId: "workspace-1" },
+      activationBlocked: false,
+      activationBlockers: [],
+      versions: [],
+    };
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-capability-1",
+      revision: 1,
+      status: "awaiting_input",
+      risk: "danger",
+      summary: "Review generated capability",
+      requiredAction: { kind: "artifact_review", artifactRefs: ["artifact:1"] },
+      ...input,
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      capabilities: {
+        getCapabilityCandidateDetail: vi.fn(async () => detail),
+        promoteCapabilityCandidate,
+      },
+      evolution: { isEnabled: vi.fn(async () => true), create },
+    } as never);
+    await app.register(capabilitiesRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/promote",
+      payload: { expectedRevision: 3, versionId: "version-2" },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(promoteCapabilityCandidate).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedTargetRevision: 3,
+        request: { kind: "capability_candidate", proposalId: "proposal-1", action: "activate", versionId: "version-2" },
+      }),
+    );
+    expect(response.json()).toMatchObject({
+      noMutationRequired: false,
+      changePlan: { planId: "plan-capability-1", status: "awaiting_input" },
+    });
+  });
+
   it("requires candidate revisions and returns structured stale-write conflicts", async () => {
     const promoteCapabilityCandidate = vi.fn(() => {
       throw new ConflictError({

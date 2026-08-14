@@ -7,7 +7,7 @@ import {
   fetchDeviceAccessGrants,
   fetchSettings,
   isApiRequestError,
-  patchSettings,
+  patchGatewayAuthSettings,
   resolveGatewayInstallToken,
   revokeDeviceAccessGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -96,17 +96,23 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
       return;
     }
     try {
-      await patchSettings({
+      const updated = await patchGatewayAuthSettings({
         expectedRevision: data.settings.revision,
-        auth: {
-          mode: form.mode as "none" | "token" | "basic",
-          allowLoopbackBypass: form.allowLoopbackBypass,
-          token: form.token.trim() || undefined,
-          basicUsername: form.basicUsername.trim() || undefined,
-          basicPassword: form.basicPassword.trim() || undefined,
-        },
+        mode: form.mode as "none" | "token" | "basic",
+        allowLoopbackBypass: form.allowLoopbackBypass,
+        token: form.token.trim() || undefined,
+        basicUsername: form.basicUsername.trim() || undefined,
+        basicPassword: form.basicPassword.trim() || undefined,
       });
-      setNotice({ tone: "success", message: "Access posture updated." });
+      const receipt = updated.changePlanReceipt;
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Finish the required action in Chat or Approvals (plan ${receipt.planId}).`,
+            }
+          : { tone: "success", message: "Access posture updated." },
+      );
       setForm((current) => ({
         ...current,
         token: "",

@@ -10,6 +10,8 @@
 import type {
   ChatMode,
   ChatDelegateResponse,
+  ChatChangePlanCreateInput,
+  ChatChangePlanRecord,
   ChatProactiveMode,
   ChatReflectionMode,
   ChatRetrievalMode,
@@ -46,6 +48,10 @@ export interface ChatCommandDependencies {
   };
   assignChatSessionProject(sessionId: string, projectId?: string): Promise<{ projectId?: string }>;
   connectMcpServer(serverId: string): Promise<McpServerRecord>;
+  createChatChangePlan(
+    sessionId: string,
+    input: Omit<ChatChangePlanCreateInput, "sessionId">,
+  ): Promise<ChatChangePlanRecord>;
   createChatSession(input: { workspaceId?: string; title?: string; projectId?: string }): Promise<ChatSessionRecord>;
   createMcpServer(input: {
     label: string;
@@ -284,6 +290,7 @@ export type ChatCommandResult = {
   command: string;
   args: string[];
   message: string;
+  changePlan?: ChatChangePlanRecord;
   prefs?: ChatSessionPrefsRecord;
   research?: ResearchSummaryRecord;
   session?: ChatSessionRecord;
@@ -587,12 +594,20 @@ export async function parseChatCommand(
     if (!target) {
       return { ok: false, command, args, message: "Usage: /model <model-id|provider-id/model-id>" };
     }
-    const prefs = await deps.updateChatSessionPrefs(sessionId, {
-      providerId: target.providerId,
-      model: target.model,
+    const changePlan = await deps.createChatChangePlan(sessionId, {
+      request: {
+        kind: "session_model",
+        ...(target.providerId ? { providerId: target.providerId } : {}),
+        model: target.model,
+      },
     });
-    const label = target.providerId ? `${target.providerId}/${prefs.model}` : prefs.model;
-    return { ok: true, command, args, prefs, message: `Model set to ${label}.` };
+    return {
+      ok: true,
+      command,
+      args,
+      changePlan,
+      message: `${changePlan.summary} Review and confirm this change plan in Chat before it applies.`,
+    };
   }
 
   if (command === "/web") {
@@ -783,8 +798,16 @@ export async function parseChatCommand(
     if (!["off", "minimal", "standard", "extended", "deep", "max", "ultra"].includes(thinkingLevel)) {
       return { ok: false, command, args, message: "Usage: /think off|minimal|standard|extended|deep|max|ultra" };
     }
-    const prefs = await deps.updateChatSessionPrefs(sessionId, { thinkingLevel });
-    return { ok: true, command, args, prefs, message: `Thinking level set to ${prefs.thinkingLevel}.` };
+    const changePlan = await deps.createChatChangePlan(sessionId, {
+      request: { kind: "session_model", thinkingLevel },
+    });
+    return {
+      ok: true,
+      command,
+      args,
+      changePlan,
+      message: `${changePlan.summary} Review and confirm this change plan in Chat before it applies.`,
+    };
   }
 
   if (command === "/speed") {

@@ -1,0 +1,137 @@
+.chat-change-plan-card {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.75rem clamp(0.75rem, 2vw, 1.5rem);
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in oklab, var(--area-chat) 32%, var(--border-subtle));
+  border-radius: var(--r-lg);
+  background: color-mix(in oklab, var(--bg-surface-2) 92%, var(--area-chat));
+  box-shadow: var(--mc-shadow-soft);
+}
+
+.chat-change-plan-card > header,
+.chat-change-plan-card .chat-change-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.chat-change-plan-card > header span {
+  color: var(--fg-muted);
+  font: 600 var(--text-xs) / 1.2 var(--font-mono, monospace);
+  text-transform: uppercase;
+}
+
+.chat-change-plan-card p,
+.chat-change-plan-card dl {
+  margin: 0;
+}
+
+.chat-change-plan-card dl,
+.chat-change-plan-action-dialog dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.55rem;
+}
+
+.chat-change-plan-card dl > div,
+.chat-change-plan-action-dialog dl > div {
+  min-width: 0;
+}
+
+.chat-change-plan-card dt,
+.chat-change-plan-action-dialog dt {
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.chat-change-plan-card dd,
+.chat-change-plan-action-dialog dd {
+  margin: 0.15rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-change-plan-card button {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-3);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.chat-change-plan-card button:first-child {
+  border-color: color-mix(in oklab, var(--area-chat) 55%, var(--border-subtle));
+}
+
+.chat-change-plan-card button:focus-visible,
+.chat-change-plan-field input:focus-visible,
+.chat-change-plan-field select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.chat-change-plan-action-dialog,
+.chat-change-plan-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.chat-change-plan-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.chat-change-plan-field input:not([type="checkbox"]),
+.chat-change-plan-field select {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-1);
+  color: var(--fg-primary);
+}
+
+.chat-change-plan-field small,
+.chat-change-plan-artifact-review p,
+.chat-change-plan-linked-scope p {
+  color: var(--fg-muted);
+}
+
+.chat-change-plan-checkbox {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.chat-change-plan-checkbox small {
+  grid-column: 2;
+}
+
+.chat-change-plan-linked-scope {
+  padding: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--area-settings) 42%, var(--border-subtle));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--bg-surface-1) 94%, var(--area-settings));
+}
+
+.chat-change-plan-artifact-review ul {
+  max-height: 12rem;
+  margin: 0.5rem 0 0;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 640px) {
+  .chat-change-plan-card {
+    margin-inline: 0.5rem;
+  }
+
+  .chat-change-plan-card .chat-change-plan-actions > button {
+    flex: 1 1 100%;
+  }
+}

@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText, Plus, RefreshCw, Save, Sparkles, Workflow } from "lucide-react";
 import type { CapabilityProposalDetailRecord, SkillEvaluationRunRecord, SkillListItem } from "@goatcitadel/contracts";
 import {
-  activateImprovementCandidate,
   approveImprovementCandidate,
+  createChangePlan,
   createSkillEvaluationProposal,
   fetchCapabilityProposal,
   fetchCuratorReviewItem,
@@ -15,7 +15,6 @@ import {
   fetchSkills,
   isApiRequestError,
   previewSkillEvaluation,
-  promoteImprovementCandidate,
   rejectImprovementCandidate,
   reloadSkills,
   runSkillEvaluation,
@@ -356,7 +355,13 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
                     </button>
                   ) : null}
                 </LibraryButtonRow>
-                <SkillEvaluationWorkbench skill={selectedSkill} onNotice={setNotice} />
+                <SkillEvaluationWorkbench
+                  skill={selectedSkill}
+                  onNotice={setNotice}
+                  workspaceId={activeWorkspaceId}
+                  navigate={navigate}
+                  theme={route.theme}
+                />
               </>
             ) : (
               <LibraryEmptyState label="Select a skill to inspect it." />
@@ -576,7 +581,19 @@ function describeSkillProvenance(
   };
 }
 
-function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; onNotice: (notice: Notice) => void }) {
+function SkillEvaluationWorkbench({
+  skill,
+  onNotice,
+  workspaceId,
+  navigate,
+  theme,
+}: {
+  skill: SkillListItem;
+  onNotice: (notice: Notice) => void;
+  workspaceId: string;
+  navigate: NativeRoutePagesProps["navigate"];
+  theme: NativeRoutePagesProps["route"]["theme"];
+}) {
   const [runs, setRuns] = useState<SkillEvaluationRunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<SkillEvaluationRunRecord | null>(null);
   const [proposalDetail, setProposalDetail] = useState<CapabilityProposalDetailRecord | null>(null);
@@ -729,6 +746,24 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
     setProposalBusyKey(action);
     setError(null);
     try {
+      if (action === "activate" || action === "promote") {
+        const proposalId = proposalDetail?.proposal.proposalId ?? activeRun?.proposalId;
+        if (!proposalId) {
+          throw new Error("This generated skill has no linked Code Mode proposal to review.");
+        }
+        const plan = await createChangePlan({
+          workspaceId,
+          surface: "settings",
+          request: { kind: "capability_candidate", proposalId },
+          idempotencyKey: `library-skill:${proposalId}:${action}`,
+        });
+        onNotice({
+          tone: "info",
+          message: `Change Plan ${plan.planId} is ready for immutable artifact review in Chat. The skill remains non-callable.`,
+        });
+        navigate({ area: "chat", theme });
+        return;
+      }
       const input =
         action === "snooze"
           ? {
@@ -743,11 +778,7 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
             ? await approveImprovementCandidate(candidateId, input)
             : action === "reject"
               ? await rejectImprovementCandidate(candidateId, input)
-              : action === "snooze"
-                ? await snoozeImprovementCandidate(candidateId, input)
-                : action === "activate"
-                  ? await activateImprovementCandidate(candidateId, input)
-                  : await promoteImprovementCandidate(candidateId, input);
+              : await snoozeImprovementCandidate(candidateId, input);
       setCuratorReview(result.review);
       await loadRuns();
       onNotice({

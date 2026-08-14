@@ -1673,6 +1673,11 @@ export interface ChatDelegateStepRequest {
   stepId?: string;
   index?: number;
   role: string;
+  /** Server-owned per-child objective for durable fan-out; regular delegation may omit it. */
+  objective?: string;
+  /** Compact operator-facing label retained on the canonical delegation step. */
+  label?: string;
+  expectedOutput?: string;
   parallelizable?: boolean;
   dependsOnStepIds?: string[];
 }

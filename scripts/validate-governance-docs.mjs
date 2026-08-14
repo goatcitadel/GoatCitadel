@@ -30,6 +30,7 @@ const requiredFiles = [
   "docs/security/findings-triage.md",
   "docs/PACKAGING.md",
   "docs/CAPABILITY_SYSTEM_V1.md",
+  "docs/EVOLUTION_CONTROL_PLANE.md",
 ];
 
 const requiredHeadings = {
@@ -56,6 +57,14 @@ const requiredHeadings = {
     "# GitHub Security Findings",
     "## 5. Dependabot Triage",
     "## 6. CodeQL `js/unhandled-error-in-stream-pipeline`",
+  ],
+  "docs/EVOLUTION_CONTROL_PLANE.md": [
+    "# Evolution Control Plane",
+    "## Authority Boundary",
+    "## Canonical Change Plan",
+    "## Operator Input and Secret Custody",
+    "## Source and Packaged Updates",
+    "## Rollout and Proof",
   ],
 };
 
@@ -373,8 +382,8 @@ if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
 }
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
-if (!/^Last updated: 2026-08-08$/m.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-08-08 freshness header.");
+if (!/^Last updated: 2026-08-14$/m.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-08-14 freshness header.");
 }
 if (
   !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. \[docs\/CANONICAL_RUNTIME_STATE_MODEL\.md\]\(\.\/CANONICAL_RUNTIME_STATE_MODEL\.md\)[\s\S]*3\. this contract for `1\.0` promise and release-scope truth[\s\S]*4\. \[docs\/ENGINEERING_HANDBOOK\.md\]\(\.\/ENGINEERING_HANDBOOK\.md\)/m.test(
@@ -430,6 +439,24 @@ if (!/mesh-core/i.test(contract) || !/verify:mesh:readiness/i.test(contract) || 
 }
 if (!/NPU sidecar maturity/i.test(contract) || !/retired from the shipped source and installer/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar retired from the readiness-bearing 1.0 story.");
+}
+if (!/Evolution Control Plane/i.test(contract) || !/verify:chat-evolution/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must name the Evolution Control Plane and its held-claim verification lane.");
+}
+
+const evolutionControlPlaneDoc = await readFile(path.join(root, "docs", "EVOLUTION_CONTROL_PLANE.md"), "utf8");
+await validateRelativeMarkdownLinks("docs/EVOLUTION_CONTROL_PLANE.md", evolutionControlPlaneDoc);
+if (!/^Last updated: 2026-08-14$/m.test(evolutionControlPlaneDoc)) {
+  errors.push("docs/EVOLUTION_CONTROL_PLANE.md must carry the current 2026-08-14 freshness header.");
+}
+if (!/`change\.request`[\s\S]*cannot confirm or apply/m.test(evolutionControlPlaneDoc)) {
+  errors.push("docs/EVOLUTION_CONTROL_PLANE.md must keep the model tool plan-only boundary explicit.");
+}
+if (!/Packaged installs reject Chat-generated patches/i.test(evolutionControlPlaneDoc)) {
+  errors.push("docs/EVOLUTION_CONTROL_PLANE.md must keep generated patches outside packaged installs.");
+}
+if (!/foundation_only/i.test(evolutionControlPlaneDoc) || !/remain held/i.test(evolutionControlPlaneDoc)) {
+  errors.push("docs/EVOLUTION_CONTROL_PLANE.md must keep live-runtime and signing claims held.");
 }
 
 const changelog = await readFile(path.join(root, "CHANGELOG.md"), "utf8");

@@ -2,12 +2,14 @@ import { createRouteService, type RoutePort, type RouteService } from "./route-s
 
 export const channelSetupRouteMethods = [
   "createChannelSetupDraft",
+  "discardChannelSetupDraft",
   "createChannelSetupRepairDraft",
   "createChannelSetupRotateSecretDraft",
   "finalizeChannelSetupDraft",
   "getChannelSetupDefinition",
   "listChannelSetupDefinitions",
   "listChannelSetupDrafts",
+  "setChannelSetupDraftSecrets",
   "retestChannelConnection",
   "testChannelSetupDraft",
   "updateChannelSetupDraft",
@@ -22,12 +24,14 @@ export type ChannelSetupPort = ChannelSetupRoutePort;
 export function createChannelSetupRoutePort(port: ChannelSetupPort): ChannelSetupRoutePort {
   return {
     createChannelSetupDraft: (...args) => port.createChannelSetupDraft(...args),
+    discardChannelSetupDraft: (...args) => port.discardChannelSetupDraft(...args),
     createChannelSetupRepairDraft: (...args) => port.createChannelSetupRepairDraft(...args),
     createChannelSetupRotateSecretDraft: (...args) => port.createChannelSetupRotateSecretDraft(...args),
     finalizeChannelSetupDraft: (...args) => port.finalizeChannelSetupDraft(...args),
     getChannelSetupDefinition: (...args) => port.getChannelSetupDefinition(...args),
     listChannelSetupDefinitions: (...args) => port.listChannelSetupDefinitions(...args),
     listChannelSetupDrafts: (...args) => port.listChannelSetupDrafts(...args),
+    setChannelSetupDraftSecrets: (...args) => port.setChannelSetupDraftSecrets(...args),
     retestChannelConnection: (...args) => port.retestChannelConnection(...args),
     testChannelSetupDraft: (...args) => port.testChannelSetupDraft(...args),
     updateChannelSetupDraft: (...args) => port.updateChannelSetupDraft(...args),

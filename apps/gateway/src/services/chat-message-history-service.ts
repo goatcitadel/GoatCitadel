@@ -72,6 +72,10 @@ export async function buildLlmMessagesFromTranscript(
     model?: string;
     guidanceSystemInstruction?: ChatSystemInstructionContent;
     compactionDimension?: ChatCompactionDimension;
+    /** Bounded, canonical durable-state context retained outside transcript summaries. */
+    agenticStateCapsule?: string;
+    /** Turn ids that must remain verbatim while their durable aggregate is active. */
+    protectedTurnIds?: readonly string[];
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const runtime = deps.llmService.getRuntimeConfig();
@@ -143,6 +147,10 @@ export async function buildLlmMessagesFromBranchPath(
     model?: string;
     guidanceSystemInstruction?: ChatSystemInstructionContent;
     compactionDimension?: ChatCompactionDimension;
+    /** Bounded, canonical durable-state context retained outside transcript summaries. */
+    agenticStateCapsule?: string;
+    /** Turn ids that must remain verbatim while their durable aggregate is active. */
+    protectedTurnIds?: readonly string[];
   },
   state?: ChatTurnSessionState,
 ): Promise<ChatCompletionRequest["messages"]> {
@@ -179,6 +187,8 @@ export async function buildLlmMessagesFromBranchPath(
     branchTurnIds: pathTurnIds,
     turnRecordsById,
     sessionState,
+    agenticStateCapsule: options?.agenticStateCapsule,
+    protectedTurnIds: options?.protectedTurnIds,
   });
 }
 
@@ -243,6 +253,8 @@ async function buildLlmMessagesFromRecords(
     turnRecordsById?: Map<string, ChatMessageRecord[]>;
     sessionState?: ChatTurnSessionState;
     compactionDimension?: ChatCompactionDimension;
+    agenticStateCapsule?: string;
+    protectedTurnIds?: readonly string[];
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const runtime = deps.llmService.getRuntimeConfig();
@@ -285,19 +297,31 @@ async function buildLlmMessagesFromRecords(
           providerId,
           model,
           compactionDimension: options.compactionDimension,
+          systemContextText: [
+            typeof options.guidanceSystemInstruction === "string" ? options.guidanceSystemInstruction : "",
+            options.agenticStateCapsule ?? "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          protectedTurnIds: options.protectedTurnIds,
         })
       : mapped;
   const guidanceSystemInstruction = normalizeGuidanceSystemInstruction(options?.guidanceSystemInstruction);
-  if (!guidanceSystemInstruction) {
+  const agenticStateCapsule = normalizeAgenticStateCapsule(options?.agenticStateCapsule);
+  if (!guidanceSystemInstruction && !agenticStateCapsule) {
     return messages;
   }
   return [
-    {
-      role: "system",
-      content: guidanceSystemInstruction,
-    },
+    ...(guidanceSystemInstruction ? [{ role: "system" as const, content: guidanceSystemInstruction }] : []),
+    ...(agenticStateCapsule ? [{ role: "system" as const, content: agenticStateCapsule }] : []),
     ...messages,
   ];
+}
+
+function normalizeAgenticStateCapsule(input: string | undefined): string | undefined {
+  const trimmed = input?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > 6_000 ? trimmed.slice(0, 6_000) : trimmed;
 }
 
 function normalizeGuidanceSystemInstruction(
@@ -356,13 +380,18 @@ async function compactBranchMappedMessages(
     providerId?: string;
     model?: string;
     compactionDimension?: ChatCompactionDimension;
+    /** System context counts toward prompt pressure without being summarized as transcript content. */
+    systemContextText?: string;
+    /** Active durable aggregate parents stay outside a compaction boundary. */
+    protectedTurnIds?: readonly string[];
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   if (input.compactionDimension?.persistState === false) {
     return input.mapped;
   }
   const totalTokens = Math.ceil(
-    estimateTokensFromText(stringifyMessagesForTokenEstimate(input.mapped)) * (input.tokenMultiplier ?? 1),
+    estimateTokensFromText(`${input.systemContextText ?? ""}\n${stringifyMessagesForTokenEstimate(input.mapped)}`) *
+      (input.tokenMultiplier ?? 1),
   );
   if (input.branchTurnIds.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT) {
     return input.mapped;
@@ -371,10 +400,20 @@ async function compactBranchMappedMessages(
   const recentTurnIds = input.branchTurnIds.slice(-CHAT_COMPACTION_RECENT_TURN_LIMIT);
   const olderTurnIds = input.branchTurnIds.slice(0, Math.max(0, input.branchTurnIds.length - recentTurnIds.length));
   const grouped = input.turnRecordsById ?? buildBranchRecordGroups(input.branchTurnIds, input.records).turnMessagesById;
-  const safeCompleteOlderTurnIds = collectSafeCompleteSummaryTurnIds(olderTurnIds, grouped).slice(
-    0,
-    CHAT_COMPACTION_MAX_BOUNDARY_TURNS,
-  );
+  const protectedTurnIds = new Set(input.protectedTurnIds ?? []);
+  const safePrefixTurnIds = collectSafeCompleteSummaryTurnIds(olderTurnIds, grouped);
+  // A summary boundary is always an exact *contiguous prefix* of the branch.
+  // Filtering an active parent out of a later window would make the resulting
+  // list non-contiguous, then the render path could hide that protected turn
+  // while calculating a count-based prefix. Stop before it instead.
+  const firstProtectedIndex = safePrefixTurnIds.findIndex((turnId) => protectedTurnIds.has(turnId));
+  const compactablePrefixTurnIds =
+    firstProtectedIndex >= 0 ? safePrefixTurnIds.slice(0, firstProtectedIndex) : safePrefixTurnIds;
+  const compactableBoundaryLength =
+    Math.floor(
+      Math.min(compactablePrefixTurnIds.length, CHAT_COMPACTION_MAX_BOUNDARY_TURNS) / CHAT_COMPACTION_WINDOW_SIZE,
+    ) * CHAT_COMPACTION_WINDOW_SIZE;
+  const safeCompleteOlderTurnIds = compactablePrefixTurnIds.slice(0, compactableBoundaryLength);
   if (safeCompleteOlderTurnIds.length === 0) {
     return input.mapped;
   }
@@ -395,13 +434,19 @@ async function compactBranchMappedMessages(
     typeof summaryRepo.commitCompactionBoundary === "function" &&
     typeof summaryRepo.recordCompactionNoProgress === "function" &&
     typeof summaryRepo.observeCompactionEvidence === "function";
-  const compatibleState = supportsState
+  const selectedCompatibleState = supportsState
     ? selectCompatibleCompactionState(
         await summaryRepo.listCompactionStates(input.sessionId, dimension.dimensionHash),
         input.branchTurnIds,
         grouped,
       )
     : undefined;
+  // A previously valid boundary can become unsafe once a durable aggregate is
+  // admitted for one of its parent turns. Keep that parent tail verbatim until
+  // the aggregate reaches a terminal state; never let an old summary hide it.
+  const compatibleState = selectedCompatibleState?.boundaryTurnIds.some((turnId) => protectedTurnIds.has(turnId))
+    ? undefined
+    : selectedCompatibleState;
   let breaker: ChatCompactionBreakerRecord | undefined;
   try {
     breaker = supportsBreaker

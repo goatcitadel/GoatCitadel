@@ -40,8 +40,11 @@ function withHostFixture(manifest, assertion) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-windows-host-skip-"));
   const executablePath = path.join(root, executableName);
   const manifestPath = path.join(root, "desktop-manifest.json");
+  const helperPath = path.join(root, "runtime", "evolution", "GoatCitadel-Product-Source-Update-Helper.exe");
   try {
     fs.writeFileSync(executablePath, "existing-native-host", "utf8");
+    fs.mkdirSync(path.dirname(helperPath), { recursive: true });
+    fs.writeFileSync(helperPath, "existing-source-update-helper", "utf8");
     if (manifest !== undefined) {
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
     }

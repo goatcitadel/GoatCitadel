@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace GoatCitadel.MissionControl.Windows.Services;
@@ -251,12 +252,31 @@ public sealed class LauncherService
         startInfo.RedirectStandardError = true;
         startInfo.Environment["GOATCITADEL_HOME"] = launcher.InstallRoot;
         startInfo.Environment["GOATCITADEL_DESKTOP_HOST"] = "1";
+        ConfigureSourceUpdateHelper(startInfo);
         if (!string.IsNullOrWhiteSpace(launcher.AppDir))
         {
             startInfo.Environment["GOATCITADEL_APP_DIR"] = launcher.AppDir;
         }
 
         return startInfo;
+    }
+
+    private static void ConfigureSourceUpdateHelper(ProcessStartInfo startInfo)
+    {
+        var helperPath = Path.Join(
+            AppContext.BaseDirectory,
+            "runtime",
+            "evolution",
+            "GoatCitadel-Product-Source-Update-Helper.exe");
+        if (!File.Exists(helperPath))
+        {
+            return;
+        }
+
+        using var stream = File.OpenRead(helperPath);
+        var sha256 = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        startInfo.Environment["GOATCITADEL_SOURCE_UPDATE_HELPER_PATH"] = Path.GetFullPath(helperPath);
+        startInfo.Environment["GOATCITADEL_SOURCE_UPDATE_HELPER_SHA256"] = sha256;
     }
 
     public static string BuildWindowsCommand(IEnumerable<string> parts) =>

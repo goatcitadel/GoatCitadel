@@ -53,15 +53,23 @@ describe("shared API wrappers", () => {
       "/api/v1/channels/drafts/draft%2F1",
       { method: "PATCH" },
     );
-    await expectCall(integrations.validateChannelSetupDraft("draft/1"), "/api/v1/channels/drafts/draft%2F1/validate", {
+    await expectCall(
+      integrations.validateChannelSetupDraft("draft/1", 1),
+      "/api/v1/channels/drafts/draft%2F1/validate",
+      {
+        method: "POST",
+      },
+    );
+    await expectCall(integrations.testChannelSetupDraft("draft/1", 2), "/api/v1/channels/drafts/draft%2F1/test", {
       method: "POST",
     });
-    await expectCall(integrations.testChannelSetupDraft("draft/1"), "/api/v1/channels/drafts/draft%2F1/test", {
-      method: "POST",
-    });
-    await expectCall(integrations.finalizeChannelSetupDraft("draft/1"), "/api/v1/channels/drafts/draft%2F1/finalize", {
-      method: "POST",
-    });
+    await expectCall(
+      integrations.finalizeChannelSetupDraft("draft/1", 3),
+      "/api/v1/channels/drafts/draft%2F1/finalize",
+      {
+        method: "POST",
+      },
+    );
     await expectCall(
       integrations.createChannelRepairDraft("conn/1"),
       "/api/v1/channels/connections/conn%2F1/repair-draft",

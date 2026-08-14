@@ -626,6 +626,42 @@ describe("chat-durable-run-service", () => {
     expect(waitForEvent).not.toHaveProperty("correlationId");
   });
 
+  it("parks a durable fan-out wait with the canonical invocation-keyed wake event", async () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_tool",
+      toolRuns: [
+        {
+          toolRunId: "tool-fanout-1",
+          turnId: "turn-1",
+          sessionId: "session-1",
+          toolName: "agent.fanout",
+          status: "executed",
+          args: { subtasks: [{ objective: "Research vendor A" }] },
+          result: { status: "waiting", fanoutInvocationId: "fanout-invocation-1" },
+          startedAt: "2026-04-10T00:00:01.000Z",
+          finishedAt: "2026-04-10T00:00:02.000Z",
+        },
+      ],
+      failure: {
+        failureClass: "tool_wait",
+        message: "Waiting for durable fan-out children",
+        retryable: true,
+        recommendedAction: "resume_tool_wait",
+      },
+    });
+    const state = createFinalizeState();
+
+    await finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    expect(state.runs.get("run-waiting")?.metadata).toMatchObject({
+      waitForEvent: {
+        eventKey: "chat.fanout.resolved",
+        correlationId: "fanout-invocation-1",
+      },
+    });
+  });
+
   it("falls back to a runId-scoped waitForEvent when an approval wait lacks a resolvable approvalId", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({

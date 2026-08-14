@@ -3,6 +3,7 @@ import type { ImprovementRef } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { AutonomyControlService } from "./autonomy-control-service.js";
 import type { SkillMutationService, SkillMutationSnapshot } from "./skill-mutation-service.js";
+import { IMPROVEMENT_TUNE_SETTING_KEYS } from "./improvement-tune-reads.js";
 
 /**
  * Self-improvement snapshot / apply / restore (B8c extraction): the governed
@@ -64,6 +65,24 @@ export async function captureRoutingPolicySnapshot(
   deps: ImprovementSnapshotDeps,
   targetKey: string,
 ): Promise<ImprovementRef> {
+  const tuneSettingKey = decisionTuneSettingKey(targetKey);
+  if (tuneSettingKey) {
+    const stored = await deps.storage.systemSettings.get<unknown>(tuneSettingKey);
+    return {
+      refType: "routing_policy_snapshot",
+      refId: targetKey,
+      hash: createHash("sha1")
+        .update(JSON.stringify({ present: Boolean(stored), value: stored?.value }))
+        .digest("hex"),
+      metadata: {
+        decisionTune: true,
+        settingKey: tuneSettingKey,
+        targetKey,
+        present: Boolean(stored),
+        previousValue: stored?.value,
+      },
+    };
+  }
   return await captureImprovementPolicySnapshot(
     deps,
     IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
@@ -77,6 +96,10 @@ export function applyRoutingPolicyCandidate(
   targetKey: string,
   revisionRef: ImprovementRef,
 ): Promise<ImprovementRef> {
+  const tuneSettingKey = decisionTuneSettingKey(targetKey);
+  if (tuneSettingKey) {
+    return applyDecisionTuneCandidate(deps, targetKey, tuneSettingKey, revisionRef);
+  }
   return applyImprovementPolicyCandidate(
     deps,
     IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
@@ -90,6 +113,15 @@ export async function restoreRoutingPolicySnapshot(
   deps: ImprovementSnapshotDeps,
   snapshotRef: ImprovementRef,
 ): Promise<void> {
+  const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
+  if (metadata.decisionTune === true) {
+    const settingKey = decisionTuneSettingKey(String(metadata.targetKey ?? snapshotRef.refId));
+    if (!settingKey || metadata.settingKey !== settingKey) {
+      throw new Error("Decision-tune rollback material does not match an allowlisted runtime setting.");
+    }
+    await deps.storage.systemSettings.set(settingKey, metadata.present === true ? metadata.previousValue : null);
+    return;
+  }
   await restoreImprovementPolicySnapshot(deps, IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
 }
 
@@ -319,6 +351,64 @@ async function writeImprovementPolicyMap(
     return;
   }
   await deps.storage.systemSettings.set(settingKey, next);
+}
+
+async function applyDecisionTuneCandidate(
+  deps: ImprovementSnapshotDeps,
+  targetKey: string,
+  settingKey: string,
+  revisionRef: ImprovementRef,
+): Promise<ImprovementRef> {
+  const metadata = isRecord(revisionRef.metadata) ? revisionRef.metadata : {};
+  const proposed = isRecord(metadata.proposedChange) ? metadata.proposedChange : {};
+  if (proposed.strategy !== "decision_tune" || proposed.settingKey !== settingKey) {
+    throw new Error("Decision-tune candidate revision is not bound to its allowlisted target.");
+  }
+  const nextValue = validateDecisionTuneValue(settingKey, proposed.nextValue);
+  await deps.storage.systemSettings.set(settingKey, nextValue);
+  return {
+    refType: "routing_policy_config",
+    refId: targetKey,
+    hash: createHash("sha1").update(JSON.stringify(nextValue)).digest("hex"),
+    metadata: { decisionTune: true, settingKey, targetKey, appliedValue: nextValue },
+  };
+}
+
+function decisionTuneSettingKey(targetKey: string): string | undefined {
+  const prefix = "decision_tune:";
+  if (!targetKey.startsWith(prefix)) return undefined;
+  const requested = targetKey.slice(prefix.length);
+  const settingKey = Object.values(IMPROVEMENT_TUNE_SETTING_KEYS).find((candidate) => candidate === requested);
+  if (!settingKey) {
+    throw new Error("Decision-tune target is not an allowlisted runtime setting.");
+  }
+  return settingKey;
+}
+
+function validateDecisionTuneValue(settingKey: string, value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("Decision-tune candidate value must be a finite number.");
+  }
+  if (
+    settingKey === IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 10
+  ) {
+    return value;
+  }
+  if (
+    settingKey === IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 10
+  ) {
+    return value;
+  }
+  if (settingKey === IMPROVEMENT_TUNE_SETTING_KEYS.liveIntentThreshold && value >= 0 && value <= 1) {
+    return value;
+  }
+  throw new Error("Decision-tune candidate value is outside its allowlisted range.");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -60,6 +60,7 @@ import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authRoutes } from "./routes/auth.js";
 import { secretsRoutes } from "./routes/secrets.js";
 import { chatRoutes } from "./routes/chat.js";
+import { registerChangePlanRoutes } from "./routes/change-plans.js";
 import { promptPackRoutes } from "./routes/prompt-packs.js";
 import { modelComparisonRoutes } from "./routes/model-comparisons.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -438,6 +439,9 @@ export async function buildApp() {
     await app.register(opsSavedBoardRoutes, { service: app.services.opsSavedBoards });
     await app.register(knowledgeRoutes);
     await app.register(engineeringLearningRoutes);
+    await app.register(async (changePlanApp) => {
+      registerChangePlanRoutes(changePlanApp);
+    });
     await app.register(chatRoutes);
     await app.register(promptPackRoutes);
     await app.register(modelComparisonRoutes);

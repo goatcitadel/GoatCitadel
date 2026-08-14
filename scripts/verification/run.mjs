@@ -12,6 +12,7 @@ import { assertNamedScenarioProofs } from "./lib/scenario-artifact-evidence.mjs"
 import {
   runArchitectureMetricsLane,
   runAgenticChannelsRuntimeLane,
+  runAgenticChatFanoutLane,
   runAgenticContractsLane,
   runAgenticGovernanceLane,
   runAgenticHarnessAvailabilityLane,
@@ -33,6 +34,7 @@ import {
   runDesktopLane,
   runDurableRecoveryLane,
   runSelfConfigurationLane,
+  runChatEvolutionLane,
   runUsageReconciliationLane,
   runRoutedContextSnapshotsLane,
   runModelCouncilLane,
@@ -86,6 +88,7 @@ const VALID_LANES = new Set([
   "operator-proof",
   "durable-recovery",
   "self-configuration",
+  "chat-evolution",
   "usage-reconciliation",
   "routed-context-snapshots",
   "model-council",
@@ -158,6 +161,7 @@ const REVIEW_LANES = new Set([
   "operator-proof",
   "durable-recovery",
   "self-configuration",
+  "chat-evolution",
   "usage-reconciliation",
   "routed-context-snapshots",
   "model-council",
@@ -297,6 +301,8 @@ async function runLockedVerification(lane, options) {
       await runDurableRecoveryLane(context, { profile });
     } else if (lane === "self-configuration") {
       await runSelfConfigurationLane(context, { profile });
+    } else if (lane === "chat-evolution") {
+      await runChatEvolutionLane(context, { profile });
     } else if (lane === "usage-reconciliation") {
       await runUsageReconciliationLane(context, { profile });
     } else if (lane === "routed-context-snapshots") {
@@ -509,6 +515,7 @@ function shouldGenerateReview(lane) {
 async function runAgenticProofSuite(context) {
   await runAgenticContractsLane(context);
   await runAgenticGovernanceLane(context);
+  await runAgenticChatFanoutLane(context);
   await runAgenticMcpOAuthLane(context);
   await runAgenticHarnessesLane(context);
   await runAgenticWorkbenchLoopLane(context);

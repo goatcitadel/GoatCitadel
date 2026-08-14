@@ -94,6 +94,16 @@ export interface FeatureFlagsConfig {
   plannerFanoutV1Disabled?: boolean;
   /** R3-8 model-callable `agent.fanout` spawn tool (fan-out part 2). */
   subagentFanoutV1Disabled?: boolean;
+  /** Default-disabled Chat-native durable fan-out aggregate (no legacy fallback). */
+  durableChatFanoutV1Enabled?: boolean;
+  /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
+  evolutionControlPlaneV1Enabled?: boolean;
+  /** Cheap local improvement signal collection. Enabled only after the control plane rolls out. */
+  improvementLocalObservationV1Enabled?: boolean;
+  /** Scheduled model-based improvement evaluation remains explicit opt-in. */
+  improvementModelEvaluationV1Enabled?: boolean;
+  /** Managed-source staging and live source evolution remain explicit opt-in. */
+  productSourceEvolutionV1Enabled?: boolean;
   /**
    * Thinking-display skeleton: gates the gateway emitting `thinking_delta` stream
    * chunks carrying the model's reasoning/thinking text. Absent/false (default) ⇒
@@ -790,6 +800,11 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
+    ["durableChatFanoutV1Enabled", process.env.GOATCITADEL_FEATURE_DURABLE_CHAT_FANOUT_V1_ENABLED],
+    ["evolutionControlPlaneV1Enabled", process.env.GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED],
+    ["improvementLocalObservationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LOCAL_OBSERVATION_V1_ENABLED],
+    ["improvementModelEvaluationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_MODEL_EVALUATION_V1_ENABLED],
+    ["productSourceEvolutionV1Enabled", process.env.GOATCITADEL_FEATURE_PRODUCT_SOURCE_EVOLUTION_V1_ENABLED],
     ["channelVoiceReplyV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_REPLY_V1_ENABLED],
     ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
@@ -1389,6 +1404,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
       subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
+      durableChatFanoutV1Enabled: featuresInput.durableChatFanoutV1Enabled ?? false,
+      evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
+      improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
+      improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,
+      productSourceEvolutionV1Enabled: featuresInput.productSourceEvolutionV1Enabled ?? false,
       // B2b TTS voice replies: default OFF. `?? false` means the channel reply
       // path never synthesizes audio unless an operator opts in — with the flag
       // left at its default, runtime behavior is byte-identical to today.

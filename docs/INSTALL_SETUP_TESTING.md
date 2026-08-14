@@ -1,6 +1,6 @@
 # GoatCitadel Install, Setup, and Testing
 
-Last updated: 2026-06-05
+Last updated: 2026-08-14
 Target release: `1.0.0`
 
 Related guides:
@@ -449,12 +449,16 @@ Expected health response:
 
 ## First-Run Checklist
 
+On a model-less installation, Mission Control presents guided setup before the first Chat. Provider/API-key or OAuth input uses the dedicated Gateway owner, live verification runs before completion, and the operator confirms the future-Chat provider, model, and optional effort through a Change Plan.
+
 1. Run doctor.
-2. Complete onboarding.
-3. Set your active provider and model in Settings.
+2. Complete the guided provider/model/effort Change Plan.
+3. Create the first Chat and verify its inherited provider, model, and effort.
 4. Confirm Chat, Projects, Library, Ops, and Settings load cleanly.
 5. Test approvals with one intentionally risky action.
 6. If you plan to use Discord or Slack, configure those after local validation is clean.
+
+Managed source evolution is separate and opt-in. A native picker must register one verified, clean GoatCitadel source installation before staging is available. Live apply is initially Windows-only, requires a separate **Apply and restart** approval, and uses the packaged native helper for revalidation, restart, smoke check, and compensation. Packaged installs never accept generated patches; they stay on the verified signed-installer path. See [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md).
 
 ## Validation Gates
 
@@ -465,6 +469,7 @@ pnpm verify:fast
 pnpm coverage:collect
 pnpm coverage:gate:production
 pnpm --filter @goatcitadel/storage test:postgres
+pnpm verify:chat-evolution
 ```
 
 For a quicker local smoke subset while iterating, use:

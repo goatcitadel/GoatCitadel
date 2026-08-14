@@ -120,6 +120,15 @@ export {
 import { ChatTurnRecoveryRepository } from "./chat-turn-recovery-repo.js";
 import { ChatStreamEventRepository } from "./chat-stream-event-repo.js";
 import { ChatExecutionPlanRepository } from "./chat-execution-plan-repo.js";
+import { ChatChangePlanRepository } from "./chat-change-plan-repo.js";
+import { ChangePlanRepository } from "./change-plan-repo.js";
+export {
+  ChangePlanRepository,
+  type ChangePlanRepositoryCreateInput,
+  type ChangePlanRepositoryListInput,
+  type ChangePlanRepositoryTransitionInput,
+} from "./change-plan-repo.js";
+export { createChangePlanSchema, CHANGE_PLAN_POSTGRES_SCHEMA_SQL } from "./change-plan-schema.js";
 import { ChatConversationSummaryRepository } from "./chat-conversation-summary-repo.js";
 import { ChatSpecialistCandidateRepository } from "./chat-specialist-candidate-repo.js";
 import { ChatToolRunRepository } from "./chat-tool-run-repo.js";
@@ -128,9 +137,12 @@ import { ChatGeneratedArtifactRepository } from "./chat-generated-artifact-repo.
 import { ChatInlineApprovalRepository } from "./chat-inline-approval-repo.js";
 import { ChatDelegationRunRepository } from "./chat-delegation-run-repo.js";
 import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
+import { ChatFanoutInvocationRepository } from "./chat-fanout-invocation-repo.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
 import { ChatThreadKnowledgeAttachmentRepository } from "./chat-thread-knowledge-attachment-repo.js";
 import { SystemSettingsRepository } from "./system-settings-repo.js";
+import { ManagedSourceInstallRepository } from "./managed-source-install-repo.js";
+import { ProductSourceUpdateRepository } from "./product-source-update-repo.js";
 import { ResearchRunRepository } from "./research-run-repo.js";
 import { ResearchSourceRepository } from "./research-source-repo.js";
 import { PromptPackRepository } from "./prompt-pack-repo.js";
@@ -361,6 +373,10 @@ export class Storage {
   public readonly chatTurnRecovery: ChatTurnRecoveryRepository;
   public readonly chatStreamEvents: ChatStreamEventRepository;
   public readonly chatExecutionPlans: ChatExecutionPlanRepository;
+  public readonly chatChangePlans: ChatChangePlanRepository;
+  public readonly changePlans: ChangePlanRepository;
+  public readonly managedSourceInstalls: ManagedSourceInstallRepository;
+  public readonly productSourceUpdates: ProductSourceUpdateRepository;
   public readonly chatConversationSummaries: ChatConversationSummaryRepository;
   public readonly chatSpecialistCandidates: ChatSpecialistCandidateRepository;
   public readonly chatToolRuns: ChatToolRunRepository;
@@ -370,6 +386,7 @@ export class Storage {
   public readonly chatInlineApprovals: ChatInlineApprovalRepository;
   public readonly chatDelegationRuns: ChatDelegationRunRepository;
   public readonly chatDelegationSteps: ChatDelegationStepRepository;
+  public readonly chatFanoutInvocations: ChatFanoutInvocationRepository;
   public readonly chatThreadKnowledgeAttachments: ChatThreadKnowledgeAttachmentRepository;
   public readonly systemSettings: SystemSettingsRepository;
   public readonly researchRuns: ResearchRunRepository;
@@ -529,6 +546,10 @@ export class Storage {
     this.chatTurnRecovery = new ChatTurnRecoveryRepository(this.db);
     this.chatStreamEvents = new ChatStreamEventRepository(this.db);
     this.chatExecutionPlans = new ChatExecutionPlanRepository(this.db);
+    this.chatChangePlans = new ChatChangePlanRepository(this.db);
+    this.changePlans = new ChangePlanRepository(this.db);
+    this.managedSourceInstalls = new ManagedSourceInstallRepository(this.db);
+    this.productSourceUpdates = new ProductSourceUpdateRepository(this.db);
     this.chatConversationSummaries = new ChatConversationSummaryRepository(this.db);
     this.chatSpecialistCandidates = new ChatSpecialistCandidateRepository(this.db);
     this.chatToolRuns = new ChatToolRunRepository(this.db);
@@ -538,6 +559,7 @@ export class Storage {
     this.chatInlineApprovals = new ChatInlineApprovalRepository(this.db);
     this.chatDelegationRuns = new ChatDelegationRunRepository(this.db);
     this.chatDelegationSteps = new ChatDelegationStepRepository(this.db);
+    this.chatFanoutInvocations = new ChatFanoutInvocationRepository(this.db);
     this.chatThreadKnowledgeAttachments = new ChatThreadKnowledgeAttachmentRepository(this.db);
     this.systemSettings = new SystemSettingsRepository(this.db);
     this.researchRuns = new ResearchRunRepository(this.db);
@@ -1012,6 +1034,8 @@ export * from "./chat-delegation-run-repo.js";
 export * from "./chat-delegation-step-repo.js";
 export * from "./chat-thread-knowledge-attachment-repo.js";
 export * from "./system-settings-repo.js";
+export * from "./managed-source-install-repo.js";
+export * from "./product-source-update-repo.js";
 export * from "./research-run-repo.js";
 export * from "./research-source-repo.js";
 export * from "./prompt-pack-policy.js";

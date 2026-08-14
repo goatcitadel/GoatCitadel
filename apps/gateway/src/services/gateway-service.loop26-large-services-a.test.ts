@@ -14,6 +14,12 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const storage = {
     chatMessages: { get: vi.fn() },
     chatSessionMeta: { get: vi.fn(() => undefined) },
+    chatSessionProjects: { get: vi.fn(() => undefined) },
+    chatProjects: { find: vi.fn(() => undefined) },
+    chatDelegationSteps: {
+      listParentsByChildSessionIds: vi.fn(() => new Map()),
+      get: vi.fn(() => undefined),
+    },
     chatStreamEvents: {
       append: vi.fn(),
       getByEventId: vi.fn(),
@@ -879,7 +885,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
-  it("normalizes docs ingest file sources through the gateway invoke path before policy evaluation", () => {
+  it("normalizes docs ingest file sources through the gateway invoke path before policy evaluation", async () => {
     const gateway = createGatewayHarness({
       config: {
         rootDir: "F:/code/personal-ai",
@@ -902,7 +908,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
           get: vi.fn(() => ({ projectId: "project-1" })),
         },
         chatProjects: {
-          get: vi.fn(() => ({ workspacePath: "projects/app" })),
+          find: vi.fn(() => ({ workspacePath: "projects/app" })),
         },
       },
     });
@@ -914,7 +920,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       sessionId: "session-1",
     };
 
-    const resolved = (GatewayService.prototype as any).resolveToolInvokeRequestPaths.call(gateway, request);
+    const resolved = await (GatewayService.prototype as any).resolveToolInvokeRequestPaths.call(gateway, request);
 
     expect(resolved.args.source).toBe(
       path.resolve("F:/code/personal-ai", "workspace", "projects/app", "docs/source.md"),
@@ -1021,7 +1027,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
           get: vi.fn(() => ({ projectId: "project-1" })),
         },
         chatProjects: {
-          get: vi.fn(() => ({ workspacePath: "projects/app" })),
+          find: vi.fn(() => ({ workspacePath: "projects/app" })),
         },
         permissionProfiles: {
           resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),

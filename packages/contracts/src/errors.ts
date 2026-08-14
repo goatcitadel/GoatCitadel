@@ -84,6 +84,16 @@ export class ValidationError extends GoatError {
   }
 }
 
+/** Syntactically valid input that cannot be satisfied by current owner state. */
+export class SemanticValidationError extends GoatError {
+  readonly code = "FIELD_INVALID" as const;
+  readonly httpStatus = 422;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, details);
+  }
+}
+
 export class ConflictError extends GoatError {
   readonly code: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT";
   readonly httpStatus = 409;
@@ -129,6 +139,16 @@ export class ToolExecutionError extends GoatError {
 export class ExternalServiceError extends GoatError {
   readonly code = "EXTERNAL_SERVICE_FAILED" as const;
   readonly httpStatus = 502;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, details);
+  }
+}
+
+/** A required local owner/adapter is temporarily unavailable. */
+export class ServiceUnavailableError extends GoatError {
+  readonly code = "EXTERNAL_SERVICE_FAILED" as const;
+  readonly httpStatus = 503;
 
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, details);

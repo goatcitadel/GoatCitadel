@@ -793,6 +793,47 @@
   line-height: 1.38;
   overflow-wrap: anywhere;
 }
+
+.mc-next-stack--compact {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mc-next-inline-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.8rem;
+  background: var(--bg-inset);
+}
+
+.mc-next-inline-card__body {
+  min-width: 0;
+}
+
+.mc-next-inline-card__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.mc-next-inline-card p,
+.mc-next-inline-card small,
+.mc-next-help-text {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .mc-next-inline-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
 .mc-next-run-detail-grid {
   align-items: start;
 }

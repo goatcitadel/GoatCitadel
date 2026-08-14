@@ -341,6 +341,8 @@ export interface ToolInvokeRequest {
   sessionId: string;
   /** Server-authored active turn binding. Direct/client tool routes must never accept it. */
   turnId?: string;
+  /** Server-authored canonical tool-run identity for idempotent durable aggregates. */
+  toolRunId?: string;
   /** Server-authored immutable routed-context binding for context.* tools. */
   routedContextSnapshotId?: string;
   /** Server-authored hash paired with routedContextSnapshotId. */

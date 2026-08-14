@@ -33,7 +33,14 @@ export interface RecoverableCompletionFailureInput {
 export function finalizeTurnCompletionState(
   input: ChatTurnCompletionFinalizationInput,
 ): NonNullable<ChatTurnTraceRecord["completion"]> {
-  if (input.approvalPending || input.userInputPending) {
+  if (
+    input.approvalPending ||
+    input.userInputPending ||
+    // `waiting_for_tool` is normally transient, but durable fan-out uses it
+    // as a keyed aggregate park. Treat any final occurrence as backgrounded so
+    // the parent cannot emit `done` before canonical child settlement.
+    input.finalStatus === "waiting_for_tool"
+  ) {
     return {
       ...input.completion,
       status: "backgrounded",

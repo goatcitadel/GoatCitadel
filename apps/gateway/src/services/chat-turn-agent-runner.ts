@@ -983,6 +983,14 @@ export interface ChatTurnAgentRunnerDeps {
    * an in-flight call cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => Promise<boolean>;
+  /** Default-disabled durable aggregate gate. Without it, agent.fanout is omitted rather than using a legacy path. */
+  durableChatFanoutV1Enabled?: () => Promise<boolean>;
+  /**
+   * Exact-project authority check for exposing automatic fan-out. This is
+   * deliberately a separate live query from the session preference: an old
+   * `auto_when_useful` preference never becomes authority on its own.
+   */
+  isDurableFanoutAvailable?: (input: { sessionId: string; workspaceId?: string }) => Promise<boolean>;
   /** Default-off delegated result/scope-expansion envelope exposure gate. */
   delegationScopeExpansionV1Enabled?: () => Promise<boolean>;
   /** Override only for deterministic liveness tests; production defaults to 5 seconds. */
@@ -2144,6 +2152,10 @@ export class ChatTurnAgentRunner {
         }
       | undefined;
     let pendingUserInput: ChatUserInputPromptRecord | undefined;
+    // A durably launched fan-out parks the parent turn until child terminal
+    // evidence is committed. It must not fall through into a speculative model
+    // synthesis pass with partial child output.
+    let durableFanoutWaiting = false;
     const recoveredRuntimeConfigurationPrompt = await this.recoverSealedRuntimeConfigurationPrompt(
       input,
       persistedSettledToolRuns,
@@ -4761,6 +4773,12 @@ export class ChatTurnAgentRunner {
               } as ChatCompletionMessage);
             }
 
+            if (isDurableFanoutWaitingToolRun(executed.record)) {
+              durableFanoutWaiting = true;
+              finalStatus = "waiting_for_tool";
+              break;
+            }
+
             for (const citation of inferCitationsFromToolResult(executed.record)) {
               citations.push(citation);
               yield {
@@ -4787,7 +4805,7 @@ export class ChatTurnAgentRunner {
                     : "Tool execution skipped.",
           );
 
-          if (approvalPayload || pendingUserInput) {
+          if (approvalPayload || pendingUserInput || durableFanoutWaiting) {
             break;
           }
 
@@ -5177,6 +5195,7 @@ export class ChatTurnAgentRunner {
       !terminalProviderFailure &&
       !quickWebProfile &&
       finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
       toolRuns.length > 0 &&
       (looksLikeDegradedAssistantFallbackContent(assistantContent) ||
         looksLikeSerializedToolCallMarkupContent(assistantContent))
@@ -5233,6 +5252,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !pendingUserInput &&
       finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
       shouldAttemptIncompleteCompletionRepair({
         completionIsIncomplete: completionState.status !== "complete",
         turnFailed: finalStatus === "failed",
@@ -5271,6 +5291,7 @@ export class ChatTurnAgentRunner {
       !pendingUserInput &&
       !terminalProviderFailure &&
       finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
       assistantContent.trim().length === 0
     ) {
       const synthesizedFallback = await this.synthesizeToolOutcomeFallback({
@@ -5322,6 +5343,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !terminalProviderFailure &&
       finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
       input.mode === "cowork" &&
       !promptLabEvalIntegrityTurn
     ) {
@@ -5343,6 +5365,7 @@ export class ChatTurnAgentRunner {
       !pendingUserInput &&
       !terminalProviderFailure &&
       finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
       intents.presentationArtifact &&
       !verifiedPresentationWrite
     ) {
@@ -5366,6 +5389,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !pendingUserInput &&
       finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
       intents.presentationArtifact &&
       verifiedPresentationWrite
     ) {
@@ -5380,7 +5404,13 @@ export class ChatTurnAgentRunner {
             : undefined,
       });
     }
-    if (!approvalPayload && !pendingUserInput && finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
+    if (
+      !approvalPayload &&
+      !pendingUserInput &&
+      finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
+      !promptLabEvalIntegrityTurn
+    ) {
       for (const toolRun of toolRuns) {
         const receipt = getExecutedWorkspaceFileWriteReceipt(toolRun);
         if (!receipt || receipt.bytesWritten > MAX_INLINE_FILE_DOWNLOAD_BYTES) {
@@ -5393,7 +5423,7 @@ export class ChatTurnAgentRunner {
         );
       }
     }
-    if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
+    if (finalStatus !== "cancelled" && !durableFanoutWaiting && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(
         assistantContent,
         projectToolRunsForModel(toolRuns),
@@ -5413,8 +5443,15 @@ export class ChatTurnAgentRunner {
     // undefined). The failed-file-mutation disclosure is surfaced even when the
     // answer was recovered, because lost writes are independent of answer quality.
     const failedFileMutations =
-      finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn ? collectFailedFileMutations(toolRuns) : [];
-    if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn && assistantContent.trim().length > 0) {
+      finalStatus !== "cancelled" && !durableFanoutWaiting && !promptLabEvalIntegrityTurn
+        ? collectFailedFileMutations(toolRuns)
+        : [];
+    if (
+      finalStatus !== "cancelled" &&
+      !durableFanoutWaiting &&
+      !promptLabEvalIntegrityTurn &&
+      assistantContent.trim().length > 0
+    ) {
       const footerParts: string[] = [];
       if (degradedOutcome) {
         const degradedFooter = buildDegradedAnswerFooter(degradedOutcome);
@@ -5524,7 +5561,7 @@ export class ChatTurnAgentRunner {
         turnId: input.turnId,
         prompt: pendingUserInput,
       };
-    } else if (finalStatus !== "cancelled") {
+    } else if (finalStatus !== "cancelled" && !durableFanoutWaiting) {
       if (usageObserved || canonicalUsageEventIds.size > 0) {
         yield {
           type: "usage",
@@ -5578,6 +5615,7 @@ export class ChatTurnAgentRunner {
       | "authActorSource"
       | "permissionProfileId"
       | "localOperatorOverrideId"
+      | "policyContext"
       | "policyRunId"
       | "policyTaskId"
       | "subagentPolicy"
@@ -5668,8 +5706,19 @@ export class ChatTurnAgentRunner {
     const restrictedAutonomousProfile =
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
-    const [subagentFanoutDisabled, attachedContextToolsEnabled, delegationScopeExpansionEnabled] = await Promise.all([
+    const [
+      subagentFanoutDisabled,
+      durableChatFanoutEnabled,
+      durableFanoutAvailable,
+      attachedContextToolsEnabled,
+      delegationScopeExpansionEnabled,
+    ] = await Promise.all([
       this.deps.subagentFanoutV1Disabled?.() ?? Promise.resolve(false),
+      this.deps.durableChatFanoutV1Enabled?.() ?? Promise.resolve(false),
+      this.deps.isDurableFanoutAvailable?.({
+        sessionId: input.sessionId,
+        workspaceId: input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
+      }) ?? Promise.resolve(false),
       this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
       this.deps.delegationScopeExpansionV1Enabled?.() ?? Promise.resolve(false),
     ]);
@@ -5685,7 +5734,9 @@ export class ChatTurnAgentRunner {
       input.mode === "chat" &&
       input.subagentPolicy === "auto_when_useful" &&
       !restrictedAutonomousProfile &&
-      !subagentFanoutDisabled;
+      !subagentFanoutDisabled &&
+      durableChatFanoutEnabled &&
+      durableFanoutAvailable;
     const routedContextToolsEligible = input.routedContextRequested === true && attachedContextToolsEnabled;
     const delegatedWorkResultEligible =
       input.mode === "chat" &&
@@ -6871,22 +6922,27 @@ export class ChatTurnAgentRunner {
     const effectReceipts: ToolEffectReceiptEnvelope[] = [];
     let executorDispatchStarted = false;
     let mainExecutorDispatchStarted = false;
+    let executorDispatchPersistence: Promise<void> | undefined;
     const captureEffectReceipt = (receipt: ToolEffectReceiptEnvelope): void => {
       if (effectReceipts.length < 8) effectReceipts.push(receipt);
     };
     const markExecutorDispatchStarted = async (): Promise<void> => {
-      if (executorDispatchStarted) return;
-      // The durable effect transition is the execution fence. Persist it
-      // before the in-memory flag changes and before control returns to the
-      // runtime owner, so a write failure cannot admit an unrecorded effect.
-      await this.patchToolRun(input.input, created.toolRunId, {
-        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_started" }),
-      });
-      executorDispatchStarted = true;
+      if (!executorDispatchPersistence) {
+        // Mark the in-memory boundary synchronously. A misbehaving runtime
+        // that calls but does not await its fence has still declared the
+        // execution boundary, so every subsequent outcome must fail closed.
+        // Well-behaved runtimes still await this shared durable transition
+        // before crossing their external-effect boundary.
+        executorDispatchStarted = true;
+        executorDispatchPersistence = this.patchToolRun(input.input, created.toolRunId, {
+          ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_started" }),
+        }).then(() => undefined);
+      }
+      await executorDispatchPersistence;
     };
     const markMainExecutorDispatchStarted = async (): Promise<void> => {
-      await markExecutorDispatchStarted();
       mainExecutorDispatchStarted = true;
+      await markExecutorDispatchStarted();
     };
     const escalateEffectPotential = async (candidate: ToolEffectPotentialRecord): Promise<void> => {
       const escalated =
@@ -6975,6 +7031,7 @@ export class ChatTurnAgentRunner {
           agentId: "assistant",
           sessionId: input.input.sessionId,
           turnId: input.turnId,
+          toolRunId: created.toolRunId,
           workspaceId: input.input.capabilityProfile?.identity.workspaceId,
           routedContextSnapshotId: input.input.serverContextUsageAttribution?.contextSnapshotId,
           routedContextSnapshotHash: input.input.serverContextUsageAttribution?.contextResolutionHash,
@@ -8393,6 +8450,18 @@ export class ChatTurnAgentRunner {
       parentOperationId: workerUsageAttribution?.parentOperationId,
     };
   }
+}
+
+function isDurableFanoutWaitingToolRun(run: ChatToolRunRecord): boolean {
+  if (run.toolName !== SUBAGENT_FANOUT_TOOL_NAME || run.status !== "executed" || !run.result) {
+    return false;
+  }
+  const result = run.result as { status?: unknown; fanoutInvocationId?: unknown };
+  return (
+    result.status === "waiting" &&
+    typeof result.fanoutInvocationId === "string" &&
+    result.fanoutInvocationId.trim().length > 0
+  );
 }
 
 function readDelegatedScopeExpansionApprovalId(run: ChatToolRunRecord): string | undefined {

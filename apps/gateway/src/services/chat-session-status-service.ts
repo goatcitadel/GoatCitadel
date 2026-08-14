@@ -3,6 +3,7 @@ import type {
   ChatSessionStatusBackgroundTask,
   ChatSessionStatusCapabilities,
   ChatSessionStatusContext,
+  ChatSessionStatusFanout,
   ChatSessionStatusModel,
   ChatSessionStatusModelProjection,
   ChatSessionStatusResponse,
@@ -87,11 +88,15 @@ export class ChatSessionStatusService {
         totalSteps: steps.length,
       };
     });
+    const fanoutInvocations = (await this.dependencies.storage.chatFanoutInvocations.listActive(100)).filter(
+      (invocation) => invocation.sessionId === sessionId,
+    );
     const durableRunIds = [
       ...traces.map((trace) => trace.durable?.runId),
       ...delegationRuns.flatMap((run) =>
         (delegationStepsByRunId.get(run.runId) ?? []).map((step) => step.durableRunId),
       ),
+      ...fanoutInvocations.map((invocation) => invocation.parentRunId),
     ];
     const backgroundTaskAttention = await this.resolveBackgroundTaskAttention(
       durableRunIds,
@@ -106,6 +111,56 @@ export class ChatSessionStatusService {
       recoveryState: run.recoveryState ?? "none",
       ...(run.recoverySummary ? { recoverySummary: run.recoverySummary } : {}),
     }));
+    const fanouts: ChatSessionStatusFanout[] = await Promise.all(
+      fanoutInvocations.map(async (invocation) => {
+        const steps = invocation.delegationRunId
+          ? (delegationStepsByRunId.get(invocation.delegationRunId) ??
+            (await this.dependencies.storage.chatDelegationSteps.listByRun(invocation.delegationRunId)))
+          : [];
+        const children = await Promise.all(
+          steps
+            .sort((left, right) => left.index - right.index)
+            .slice(0, invocation.childCount)
+            .map(async (step) => {
+              let approvalState: "waiting_for_approval" | "waiting_for_input" | undefined;
+              if (step.childTurnId) {
+                try {
+                  const childTrace = await this.dependencies.storage.chatTurnTraces.get(step.childTurnId);
+                  if (childTrace.pendingApprovalSummary) approvalState = "waiting_for_approval";
+                  else if (childTrace.pendingUserInput) approvalState = "waiting_for_input";
+                } catch {
+                  // The delegation step is still canonical; absent child trace
+                  // only means no richer approval projection is available.
+                  approvalState = undefined;
+                }
+              }
+              const status: ChatSessionStatusFanout["children"][number]["status"] =
+                step.status === "pending" || step.status === "running" ? "waiting" : step.status;
+              return {
+                index: step.index,
+                ...(step.label ? { label: step.label } : {}),
+                status,
+                ...(approvalState ? { approvalState } : {}),
+                committed: step.status === "completed",
+              };
+            }),
+        );
+        const parent = durableRunsById.get(invocation.parentRunId);
+        return {
+          invocationId: invocation.invocationId,
+          parentRunId: invocation.parentRunId,
+          status: invocation.status,
+          projectId: invocation.projectId,
+          grantId: invocation.grantId,
+          childCount: invocation.childCount,
+          reservedActivations: invocation.reservedActivations,
+          reservedBudgetUsd: invocation.reservedBudgetUsd,
+          ...(parent?.recoveryState ? { recoveryState: parent.recoveryState } : {}),
+          children,
+          ...(invocation.terminalReason ? { terminalReason: invocation.terminalReason } : {}),
+        };
+      }),
+    );
     const usageSummary = (await this.dependencies.storage.modelUsageEvents.list({ sessionId, limit: 200 })).summary;
     const usage: ChatSessionStatusUsage = {
       attemptCount: usageSummary.attemptCount,
@@ -143,7 +198,7 @@ export class ChatSessionStatusService {
         durableRuns,
       }),
       attention: available({ pendingApprovals, pendingUserInputs, ...backgroundTaskAttention }),
-      orchestration: available({ runs: orchestrationRuns }),
+      orchestration: available({ runs: orchestrationRuns, fanouts }),
       capabilities,
       usage: available(usage),
       build,

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ChatSendMessageRequest,
   ChatMessageRecord,
+  ChatToolRunRecord,
   ChatTurnTraceRecord,
   ChatTurnBranchKind,
   ChatRoutedContextSnapshotRecord,
@@ -205,6 +206,9 @@ export type ChatDurableThreadEventType =
 //                               while blocking stray cross-type wakes.
 const CHAT_APPROVAL_RESOLVED_WAKE_EVENT = "approval.resolved";
 const CHAT_USER_INPUT_RESOLVED_WAKE_EVENT = "chat.user_input.resolved";
+// Kept in lockstep with ChatDurableFanoutService. The correlation is the
+// server-authored aggregate identity, never a model-provided label or child id.
+const CHAT_FANOUT_RESOLVED_WAKE_EVENT = "chat.fanout.resolved";
 const CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT = "chat.tool_wait.resolved";
 
 export interface CanonicalChatDurableWaitForEvent {
@@ -237,8 +241,35 @@ export function resolveCanonicalChatDurableWaitForEvent(trace: ChatTurnTraceReco
       ? { eventKey: CHAT_USER_INPUT_RESOLVED_WAKE_EVENT, correlationId: promptId }
       : { eventKey: CHAT_USER_INPUT_RESOLVED_WAKE_EVENT };
   }
+  const fanoutInvocationId = readDurableFanoutWaitInvocationId(trace);
+  if (fanoutInvocationId) {
+    return {
+      eventKey: CHAT_FANOUT_RESOLVED_WAKE_EVENT,
+      correlationId: fanoutInvocationId,
+    };
+  }
   // waiting_for_tool — eventKey-only sentinel (no real keyed waker exists).
   return { eventKey: CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT };
+}
+
+function readDurableFanoutWaitInvocationId(trace: ChatTurnTraceRecord): string | undefined {
+  if (trace.status !== "waiting_for_tool") return undefined;
+  for (const toolRun of [...trace.toolRuns].reverse()) {
+    if (toolRun.toolName !== "agent.fanout" || toolRun.status !== "executed") {
+      continue;
+    }
+    const result = toolRun.result;
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      continue;
+    }
+    const candidate = result as { status?: unknown; fanoutInvocationId?: unknown };
+    if (candidate.status !== "waiting" || typeof candidate.fanoutInvocationId !== "string") {
+      continue;
+    }
+    const invocationId = candidate.fanoutInvocationId.trim();
+    if (invocationId) return invocationId;
+  }
+  return undefined;
 }
 
 interface DurableRunStore {
@@ -269,15 +300,7 @@ interface DurableRunStore {
 }
 
 interface ChatToolRunSummaryStore {
-  listByTurn(turnId: string): Promise<
-    Array<{
-      toolRunId: string;
-      toolName: string;
-      status: string;
-      startedAt?: string;
-      finishedAt?: string;
-    }>
-  >;
+  listByTurn(turnId: string): Promise<ChatToolRunRecord[]>;
 }
 
 interface ChatToolArtifactSummaryStore {
@@ -980,7 +1003,18 @@ export async function finalizeDurableChatRun(
     trace.status === "waiting_for_user_input" ||
     trace.status === "waiting_for_tool"
   ) {
-    const waitForEvent = resolveCanonicalChatDurableWaitForEvent(trace);
+    // The trace projection intentionally keeps tool runs lightweight; wait
+    // authority must nevertheless be derived from canonical tool evidence so
+    // a durable fan-out uses its invocation-keyed wake rather than the generic
+    // tool sentinel after a process restart.
+    const traceWithCanonicalToolRuns =
+      trace.toolRuns.length > 0
+        ? trace
+        : {
+            ...trace,
+            toolRuns: await deps.chatToolRuns.listByTurn(prepared.turnId),
+          };
+    const waitForEvent = resolveCanonicalChatDurableWaitForEvent(traceWithCanonicalToolRuns);
     await runChatFinalizeTransaction(deps, async () => {
       const latest = await lockCommittableRun();
       if (!latest) return;

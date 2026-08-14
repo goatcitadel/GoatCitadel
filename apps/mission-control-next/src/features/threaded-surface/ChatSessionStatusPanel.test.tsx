@@ -107,4 +107,80 @@ describe("ChatSessionStatusPanel", () => {
       "Workspace explorer: approval required",
     );
   });
+
+  it("renders the compact canonical fan-out projection without raw JSON", () => {
+    const value = status();
+    if (value.orchestration.availability !== "available") throw new Error("orchestration fixture unavailable");
+    value.orchestration.value.fanouts = [
+      {
+        invocationId: "fanout-1",
+        parentRunId: "parent-run-1",
+        status: "waiting",
+        projectId: "project-1",
+        grantId: "grant-1",
+        childCount: 3,
+        reservedActivations: 3,
+        reservedBudgetUsd: 0.75,
+        recoveryState: "reclaiming",
+        children: [
+          { index: 0, label: "Research", status: "completed", committed: true },
+          { index: 1, label: "Compare", status: "waiting", approvalState: "waiting_for_approval", committed: false },
+        ],
+      },
+    ];
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(
+        <ChatSessionStatusPanel
+          panel={{ open: true, loading: false, error: null, status: value, onRefresh: vi.fn(), onClose: vi.fn() }}
+        />,
+      );
+    });
+    const statusText = renderer.root
+      .findAllByType("span")
+      .map((node) => node.children.join(""))
+      .join(" ");
+    expect(statusText).toContain("Fan-out waiting");
+    expect(statusText).toContain("Compare: waiting for approval");
+    expect(statusText).not.toContain('"fanout-1"');
+  });
+
+  it("offers only the aggregate stop control for an active fan-out", () => {
+    const value = status();
+    if (value.orchestration.availability !== "available") throw new Error("orchestration fixture unavailable");
+    value.orchestration.value.fanouts = [
+      {
+        invocationId: "fanout-1",
+        parentRunId: "parent-run-1",
+        status: "waiting",
+        projectId: "project-1",
+        grantId: "grant-1",
+        childCount: 2,
+        reservedActivations: 2,
+        reservedBudgetUsd: 0.5,
+        children: [],
+      },
+    ];
+    const onStopFanout = vi.fn();
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(
+        <ChatSessionStatusPanel
+          panel={{
+            open: true,
+            loading: false,
+            error: null,
+            status: value,
+            onRefresh: vi.fn(),
+            onStopFanout,
+            onClose: vi.fn(),
+          }}
+        />,
+      );
+    });
+
+    act(() => renderer.root.findByProps({ children: "Stop aggregate" }).props.onClick());
+    expect(onStopFanout).toHaveBeenCalledWith("fanout-1");
+    expect(renderer.root.findAllByProps({ children: /retry/i })).toHaveLength(0);
+  });
 });

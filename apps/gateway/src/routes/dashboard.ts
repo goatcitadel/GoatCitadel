@@ -4,12 +4,16 @@ import { projectSettingsPublicValue } from "../services/provider-settings-public
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { preserveKnownPublicProjectionSecretsForUpdate } from "../services/integration-connection-public-projection.js";
 import {
+  ConflictError,
   isGoatError,
   LlmProviderCapabilitiesSchema,
   LlmProviderGoogleCloudConfigSchema,
   LlmProviderRequestConfigSchema,
+  SemanticValidationError,
+  ServiceUnavailableError,
 } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
+import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -121,6 +125,11 @@ const authUpdateSchema = z.object({
   basicUsername: z.string().optional(),
   basicPassword: z.string().optional(),
 });
+const authMutationRouteOptions = {
+  bodyLimit: 20 * 1_024,
+  logLevel: "silent" as const,
+  config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+};
 
 const llmApiStyleSchema = z.enum([
   "openai-chat-completions",
@@ -164,6 +173,7 @@ export const updateSettingsSchema = z.object({
     .object({
       activeProviderId: z.string().optional(),
       activeModel: z.string().optional(),
+      defaultThinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
       utilityProviderId: z.string().optional(),
       utilityModel: z.string().optional(),
       upsertProvider: z
@@ -276,6 +286,11 @@ export const updateSettingsSchema = z.object({
       streamIdleWatchdogV1Disabled: z.boolean().optional(),
       plannerFanoutV1Disabled: z.boolean().optional(),
       subagentFanoutV1Disabled: z.boolean().optional(),
+      durableChatFanoutV1Enabled: z.boolean().optional(),
+      evolutionControlPlaneV1Enabled: z.boolean().optional(),
+      improvementLocalObservationV1Enabled: z.boolean().optional(),
+      improvementModelEvaluationV1Enabled: z.boolean().optional(),
+      productSourceEvolutionV1Enabled: z.boolean().optional(),
       chatTurnInterruptionRecoveryV1Disabled: z.boolean().optional(),
       chatThinkingStreamV1Enabled: z.boolean().optional(),
       unifiedComposerPaletteV1Enabled: z.boolean().optional(),
@@ -747,6 +762,44 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
+      const governedRequest = settingsChangePlanRequest(parsed.data as SettingsChangePlanInput);
+      const evolution = fastify.services.evolution;
+      const evolutionEnabled = Boolean(evolution && (await evolution.isEnabled()));
+      if (governedRequest && evolution && evolutionEnabled) {
+        const actor = {
+          workspaceId: "default",
+          actorId: request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`,
+          surface: "settings" as const,
+          requestId: request.id,
+        };
+        const plan = await evolution.create({
+          actor,
+          request: governedRequest,
+          idempotencyKey: `settings:${request.id}:${parsed.data.expectedRevision}`,
+          expectedTargetRevision: parsed.data.expectedRevision,
+        });
+        if (plan.requiredAction?.kind !== "confirmation") {
+          throw new ConflictError({ message: "The governed Settings plan is not ready for exact confirmation." });
+        }
+        const settled = await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce);
+        return reply.send({
+          ...projectSettingsPublicValue(await fastify.services.settings.getSettings()),
+          changePlanReceipt: {
+            planId: settled.planId,
+            status: settled.status,
+            revision: settled.revision,
+            risk: settled.risk,
+            requiredAction: settled.requiredAction,
+            summary: settled.result?.summary ?? settled.summary,
+          },
+        });
+      }
+      if (evolutionEnabled && !governedRequest) {
+        throw new SemanticValidationError(
+          "This durable Settings mutation is not registered with the Evolution Control Plane. " +
+            "Use its dedicated secure, OAuth, or native-path flow instead of a generic Settings save.",
+        );
+      }
       return reply.send(projectSettingsPublicValue(await fastify.services.settings.updateSettings(parsed.data)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -765,7 +818,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.patch("/api/v1/auth/settings", async (request, reply) => {
+  fastify.patch("/api/v1/auth/settings", authMutationRouteOptions, async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    reply.header("pragma", "no-cache");
     const unsafeKey = findUnsafeConfigPayloadKey(request.body);
     if (unsafeKey) {
       return reply.code(400).send({ error: `Unsafe config key is not allowed: ${unsafeKey}` });
@@ -777,6 +832,62 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const { expectedRevision, ...auth } = parsed.data;
+      const evolution = fastify.services.evolution;
+      if (evolution && (await evolution.isEnabled())) {
+        const current = await fastify.services.settings.getSettings();
+        const mode = auth.mode ?? current.auth.mode;
+        const allowLoopbackBypass = auth.allowLoopbackBypass ?? current.auth.allowLoopbackBypass;
+        const credential = mode === "token" ? auth.token : mode === "basic" ? auth.basicPassword : undefined;
+        const actor = {
+          workspaceId: "default",
+          actorId: request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`,
+          surface: "settings" as const,
+          requestId: request.id,
+        };
+        let plan = await evolution.create({
+          actor,
+          request: {
+            kind: "runtime_configuration",
+            change: {
+              operation: "gateway_auth_configuration",
+              mode,
+              allowLoopbackBypass,
+              ...(mode === "basic" && auth.basicUsername ? { basicUsername: auth.basicUsername } : {}),
+              ...(credential !== undefined ? { replaceCredential: true } : {}),
+            },
+          },
+          idempotencyKey: `settings-auth:${request.id}:${expectedRevision}`,
+          expectedTargetRevision: expectedRevision,
+        });
+        if (plan.requiredAction?.kind === "secure_input" && credential !== undefined) {
+          const owner = fastify.services.evolutionRuntimeConfiguration;
+          if (!owner) throw new ServiceUnavailableError("The Gateway auth secure-input owner is unavailable.");
+          plan = await owner.submitGatewayAuthCredential({
+            actor,
+            planId: plan.planId,
+            expectedRevision: plan.revision,
+            actionId: plan.requiredAction.actionId,
+            actionNonce: plan.requiredAction.actionNonce,
+            credential,
+          });
+        }
+        if (plan.requiredAction?.kind === "confirmation") {
+          plan = await evolution.confirm(actor, plan.planId, plan.revision, plan.requiredAction.actionNonce);
+        }
+        const updated = await fastify.services.settings.getSettings();
+        return reply.send({
+          revision: updated.revision,
+          ...updated.auth,
+          changePlanReceipt: {
+            planId: plan.planId,
+            status: plan.status,
+            revision: plan.revision,
+            risk: plan.risk,
+            requiredAction: plan.requiredAction,
+            summary: plan.result?.summary ?? plan.summary,
+          },
+        });
+      }
       const updated = await fastify.services.settings.updateSettings({ expectedRevision, auth });
       return reply.send({ revision: updated.revision, ...updated.auth });
     } catch (error) {

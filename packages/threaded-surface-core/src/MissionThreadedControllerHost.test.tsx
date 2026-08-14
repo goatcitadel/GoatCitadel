@@ -24,6 +24,7 @@ import {
 
 const attachThreadKnowledgeAttachmentMock = vi.fn();
 const createChatGeneratedArtifactMock = vi.fn();
+const createChangePlanMock = vi.fn();
 const createChatSideChatMock = vi.fn();
 const createChatSessionMock = vi.fn();
 const forkChatSessionFromTurnMock = vi.fn();
@@ -240,6 +241,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
   createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
   createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
+  createChangePlan: (...args: unknown[]) => createChangePlanMock(...args),
+  cancelChangePlan: vi.fn(),
+  confirmChangePlan: vi.fn(),
+  connectEventStream: vi.fn(() => () => undefined),
   forkChatSessionFromTurn: (...args: unknown[]) => forkChatSessionFromTurnMock(...args),
   fetchAgents: (...args: unknown[]) => fetchAgentsMock(...args),
   fetchChatGeneratedArtifact: (...args: unknown[]) => fetchChatGeneratedArtifactMock(...args),
@@ -248,6 +253,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   clearChatSessionGoal: (...args: unknown[]) => clearChatSessionGoalMock(...args),
   steerChatSession: (...args: unknown[]) => steerChatSessionMock(...args),
   fetchChatSessionPrefs: (...args: unknown[]) => fetchChatSessionPrefsMock(...args),
+  fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(async () => ({ items: [] })),
+  fetchAutonomousActivationGrants: vi.fn(async () => ({ items: [] })),
   fetchChatSideChat: (...args: unknown[]) => fetchChatSideChatMock(...args),
   fetchChatThread: (...args: unknown[]) => fetchChatThreadMock(...args),
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
@@ -257,7 +265,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   parseChatCommand: (...args: unknown[]) => parseChatCommandMock(...args),
   preflightChatRoute: (...args: unknown[]) => preflightChatRouteMock(...args),
   removeThreadKnowledgeAttachment: (...args: unknown[]) => removeThreadKnowledgeAttachmentMock(...args),
+  respondToChangePlan: vi.fn(),
   streamAgentChatMessage: (...args: unknown[]) => streamAgentChatMessageMock(...args),
+  submitChangePlanProviderSecret: vi.fn(),
   updateChatSessionPrefs: (...args: unknown[]) => updateChatSessionPrefsMock(...args),
 }));
 
@@ -497,6 +507,49 @@ function installBrowserGlobals(search = "") {
 }
 
 function setupMocks() {
+  createChangePlanMock.mockImplementation(
+    async (input: {
+      workspaceId: string;
+      sessionId?: string;
+      request: { kind: string; providerId?: string; model?: string; thinkingLevel?: string };
+    }) => ({
+      schemaVersion: 1,
+      planId: `plan-${input.request.kind}`,
+      origin: {
+        surface: "chat",
+        workspaceId: input.workspaceId,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      },
+      adapter: { adapterId: "model-selection", version: 1 },
+      kind: input.request.kind,
+      scope: input.request.kind === "session_model" ? "current_chat" : "installation",
+      status: "awaiting_confirmation",
+      phase: "confirmation",
+      revision: 1,
+      request: input.request,
+      intentHash: "intent-hash",
+      target: { ownerId: "chat_session_prefs", resourceId: input.sessionId ?? "runtime", expectedRevision: 7 },
+      title: "Review model change",
+      summary: "Review the exact model change.",
+      impact: "No mutation occurs before confirmation.",
+      risk: "safe",
+      requiredAction: {
+        kind: "confirmation",
+        actionId: "action-1",
+        actionNonce: "nonce-1234567890123456",
+        title: "Confirm model change",
+        confirmationText: "Apply the exact model change.",
+        purpose: "apply",
+      },
+      actionSnapshotHash: "snapshot-hash",
+      approvalRefs: [],
+      evidenceRefs: [],
+      rollbackRefs: [],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:00:00.000Z",
+    }),
+  );
   fetchAgentsMock.mockResolvedValue({
     items: [
       {
@@ -2013,16 +2066,12 @@ describe("MissionThreadedControllerHost", () => {
 
     expect(loadModelsForProviderMock).toHaveBeenCalledWith("anthropic");
     expect(updateChatSessionPrefsMock).toHaveBeenCalled();
-    expect(confirmModalProps.some((props) => props.open && props.title === "Switch thread model?")).toBe(true);
-
-    await act(async () => {
-      const modelSwitchModal = confirmModalProps.find((props) => props.open && props.title === "Switch thread model?");
-      modelSwitchModal?.onConfirm();
-      await flushEffects();
-    });
-    expect(updateChatSessionPrefsMock).toHaveBeenCalledWith(
-      "session-1",
-      expect.objectContaining({ model: "claude-4" }),
+    expect(createChangePlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        request: expect.objectContaining({ kind: "session_model", model: "claude-4" }),
+      }),
     );
 
     await act(async () => {
@@ -2046,9 +2095,15 @@ describe("MissionThreadedControllerHost", () => {
       "session-1",
       expect.objectContaining({ url: "https://docs.example.test/runbook", retrievalMode: "full_text" }),
     );
+    expect(createChangePlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        request: expect.objectContaining({ kind: "session_model", providerId: "anthropic", model: "claude-4" }),
+      }),
+    );
     expect(updateChatSessionPrefsMock).toHaveBeenCalledWith(
       "session-1",
-      expect.objectContaining({ providerId: "anthropic", model: "claude-4", toolAutonomy: "manual" }),
+      expect.objectContaining({ toolAutonomy: "manual" }),
     );
     expect(removeThreadKnowledgeAttachmentMock).toHaveBeenCalledWith("session-1", "knowledge-1");
     expect(navigateSurface).toHaveBeenCalledWith(
@@ -3233,9 +3288,11 @@ describe("MissionThreadedControllerHost", () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
       await flushEffects(8);
     });
-    expect(updateChatSessionPrefsMock).toHaveBeenCalledWith(
-      "session-1",
-      expect.objectContaining({ providerId: "anthropic" }),
+    expect(createChangePlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        request: expect.objectContaining({ kind: "session_model", providerId: "anthropic" }),
+      }),
     );
   });
 
@@ -3844,20 +3901,22 @@ describe("MissionThreadedControllerHost", () => {
       ...useChatSessionDataMock(),
       thread: { ...thread, turns: [] },
     });
-    updateChatSessionPrefsMock.mockRejectedValueOnce(new Error("direct model patch failed"));
+    createChangePlanMock.mockRejectedValueOnce(new Error("Change Plan preparation failed"));
     await renderHost();
     await selectDefaultSession();
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
       await flushEffects(8);
     });
-    expect(updateChatSessionPrefsMock).toHaveBeenCalledWith(
-      "session-1",
-      expect.objectContaining({ model: "claude-4" }),
+    expect(createChangePlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        request: expect.objectContaining({ kind: "session_model", model: "claude-4" }),
+      }),
     );
   });
 
-  it("covers model patch rollback and no-op provider changes", async () => {
+  it("covers direct preference rollback and no-op provider changes", async () => {
     const setPrefs = vi.fn();
     useChatSessionDataMock.mockReturnValue({
       ...useChatSessionDataMock(),
@@ -3867,10 +3926,10 @@ describe("MissionThreadedControllerHost", () => {
     await renderHost();
     await selectDefaultSession();
     await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onSetThinkingLevel("deep");
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSetSpeedMode("fast");
       await flushEffects(8);
     });
-    expect(setPrefs).toHaveBeenCalledWith(expect.objectContaining({ thinkingLevel: "deep" }));
+    expect(setPrefs).toHaveBeenCalledWith(expect.objectContaining({ speedMode: "fast" }));
     expect(setPrefs).toHaveBeenCalledWith(prefs);
 
     updateChatSessionPrefsMock.mockClear();
@@ -3887,7 +3946,7 @@ describe("MissionThreadedControllerHost", () => {
     const latestPrefs = {
       ...prefs,
       revision: 8,
-      thinkingLevel: "standard" as const,
+      speedMode: "standard" as const,
       model: "gpt-5.5-server",
     };
     useChatSessionDataMock.mockReturnValue({
@@ -3905,18 +3964,18 @@ describe("MissionThreadedControllerHost", () => {
     await renderHost();
     await selectDefaultSession();
     await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onSetThinkingLevel("deep");
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSetSpeedMode("fast");
       await flushEffects(12);
     });
 
     expect(prefsRef.current).toEqual(latestPrefs);
     expect(setPrefs).toHaveBeenLastCalledWith(latestPrefs);
-    expect(latestSurfaceInput?.contextDockProps?.preferenceConflictDraft).toEqual({ thinkingLevel: "deep" });
+    expect(latestSurfaceInput?.contextDockProps?.preferenceConflictDraft).toEqual({ speedMode: "fast" });
 
     updateChatSessionPrefsMock.mockResolvedValueOnce({
       ...latestPrefs,
       revision: 9,
-      thinkingLevel: "deep",
+      speedMode: "fast",
     });
     await act(async () => {
       await latestSurfaceInput?.contextDockProps?.onRetryPreferenceConflictDraft();
@@ -3925,9 +3984,9 @@ describe("MissionThreadedControllerHost", () => {
 
     expect(updateChatSessionPrefsMock).toHaveBeenLastCalledWith("session-1", {
       expectedRevision: 8,
-      thinkingLevel: "deep",
+      speedMode: "fast",
     });
-    expect(prefsRef.current).toMatchObject({ revision: 9, thinkingLevel: "deep" });
+    expect(prefsRef.current).toMatchObject({ revision: 9, speedMode: "fast" });
     expect(latestSurfaceInput?.contextDockProps?.preferenceConflictDraft).toBeNull();
   });
 

@@ -1638,6 +1638,7 @@ async function persistProductionCorrectionTurn(input: {
         patch: vi.fn(() => prefs),
       },
       chatSessionProjects: { get: vi.fn(() => undefined) },
+      chatFanoutInvocations: { listActive: vi.fn(() => []) },
       chatSideChats: { getByChildSession: vi.fn(() => undefined) },
       chatSpecialistCandidates: { listAutoRoutable: vi.fn(() => []) },
       systemSettings: input.storage.systemSettings,

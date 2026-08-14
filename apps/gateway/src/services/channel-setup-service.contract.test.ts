@@ -5,16 +5,19 @@ import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-dia
 import {
   createChannelSetupDraft,
   finalizeChannelSetupDraft,
+  reconcileChannelSetupDraftSecretCustody,
+  setChannelSetupDraftSecrets,
   testChannelSetupDraft,
   updateChannelSetupDraft,
   type ChannelSetupHost,
 } from "./channel-setup-service.js";
+import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 
 type DraftStore = {
   create: (input: Partial<ChannelSetupDraft> & Pick<ChannelSetupDraft, "catalogId">) => ChannelSetupDraft;
   get: (draftId: string) => ChannelSetupDraft;
-  update: (draftId: string, patch: Partial<ChannelSetupDraft>) => ChannelSetupDraft;
-  delete: (draftId: string) => void;
+  update: (draftId: string, patch: Partial<ChannelSetupDraft> & { expectedRevision: number }) => ChannelSetupDraft;
+  delete: (draftId: string, expectedRevision?: number) => void;
   listByCatalog: (catalogId: string, limit: number) => ChannelSetupDraft[];
   listByConnection: (connectionId: string, limit: number) => ChannelSetupDraft[];
 };
@@ -25,15 +28,17 @@ function createDraftStore(): DraftStore {
   return {
     create(input) {
       const now = new Date().toISOString();
-      const draftId = `draft-${++sequence}`;
+      const draftId = input.draftId ?? `draft-${++sequence}`;
       const draft: ChannelSetupDraft = {
         draftId,
+        revision: 1,
         catalogId: input.catalogId,
         connectionId: input.connectionId,
         lifecycleMode: input.lifecycleMode ?? "create",
         label: input.label ?? "Draft",
         enabled: input.enabled ?? true,
         draft: input.draft ?? {},
+        secretState: input.secretState ?? {},
         hydration: input.hydration,
         contentVersion: input.contentVersion ?? "test-content",
         adapterVersion: input.adapterVersion ?? "test-adapter",
@@ -57,10 +62,13 @@ function createDraftStore(): DraftStore {
     },
     update(draftId, patch) {
       const current = this.get(draftId);
+      if (patch.expectedRevision !== current.revision) throw new Error("stale draft");
       const updated = {
         ...current,
         ...patch,
-        draft: patch.draft ? { ...current.draft, ...patch.draft } : current.draft,
+        revision: current.revision + 1,
+        draft: patch.draft ? { ...patch.draft } : current.draft,
+        secretState: patch.secretState ? { ...patch.secretState } : current.secretState,
         updatedAt: new Date().toISOString(),
       };
       drafts.set(draftId, updated);
@@ -86,6 +94,12 @@ function createHost(): ChannelSetupHost & {
   const draftStore = createDraftStore();
   const connections = new Map<string, IntegrationConnection>();
   const diagnostics = vi.fn();
+  const secretValues = new Map<string, string>();
+  const channelSecrets = new ChannelSecretCustodyService({
+    setSecret: (account, value) => void secretValues.set(account, value),
+    getSecret: (account) => secretValues.get(account),
+    deleteSecret: (account) => void secretValues.delete(account),
+  } as never);
 
   const createConnectionMock = vi.fn(
     (input: {
@@ -132,6 +146,7 @@ function createHost(): ChannelSetupHost & {
       channelSetupDrafts: draftStore as ChannelSetupHost["storage"]["channelSetupDrafts"],
     },
     recentChannelSetupTests: new Map(),
+    channelSecrets,
     getIntegrationConnection(connectionId: string) {
       const connection = connections.get(connectionId);
       if (!connection) {
@@ -151,6 +166,54 @@ function createHost(): ChannelSetupHost & {
 }
 
 describe("channel-setup-service contract behavior", () => {
+  it("moves legacy raw draft credentials into keychain custody and scrubs legacy hydration", async () => {
+    const host = createHost();
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.discord" });
+    await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
+      draft: { ...created.draft, botToken: "legacy-top-secret" },
+      hydration: {
+        status: "legacy-shape",
+        fieldState: { botToken: "configured" },
+        warnings: [],
+        rawLegacyConfig: { botToken: "legacy-top-secret" },
+      },
+    });
+
+    const result = await reconcileChannelSetupDraftSecretCustody(host);
+    const reconciled = await host.storage.channelSetupDrafts.get(created.draftId);
+
+    expect(result, JSON.stringify(host.diagnostics.mock.calls)).toMatchObject({
+      scanned: 1,
+      migrated: 1,
+      invalidated: 0,
+      scrubbed: 1,
+    });
+    expect(reconciled.draft).not.toHaveProperty("botToken");
+    expect(reconciled.hydration).not.toHaveProperty("rawLegacyConfig");
+    expect(reconciled.secretState.botToken).toMatchObject({ configured: true, custody: "temporary" });
+    expect(host.channelSecrets?.resolve(reconciled.secretState.botToken?.secretRef ?? "")).toBe("legacy-top-secret");
+  });
+
+  it("scrubs and invalidates legacy credentials when secure custody is unavailable", async () => {
+    const host = createHost();
+    delete host.channelSecrets;
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.discord" });
+    await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
+      draft: { ...created.draft, botToken: "must-not-survive" },
+    });
+
+    const result = await reconcileChannelSetupDraftSecretCustody(host);
+    const reconciled = await host.storage.channelSetupDrafts.get(created.draftId);
+
+    expect(result).toMatchObject({ scanned: 1, migrated: 0, invalidated: 1, scrubbed: 1 });
+    expect(reconciled.draft).not.toHaveProperty("botToken");
+    expect(reconciled.secretState.botToken).toEqual({ configured: false, custody: "temporary" });
+    expect(reconciled.hydration?.status).toBe("invalid-runtime");
+    expect(reconciled.lastFailureCategory).toBe("credential_rejected");
+  });
+
   it("blocks live testing for invalid drafts without probing connectors", async () => {
     const host = createHost();
     const draft = await createChannelSetupDraft(host, {
@@ -158,7 +221,7 @@ describe("channel-setup-service contract behavior", () => {
       lifecycleMode: "create",
     });
 
-    const result = await testChannelSetupDraft(host, draft.draftId);
+    const result = await testChannelSetupDraft(host, draft.draftId, draft.revision);
 
     expect(result.status).toBe("error");
     expect(result.issues.map((issue) => issue.key)).toEqual(
@@ -174,7 +237,8 @@ describe("channel-setup-service contract behavior", () => {
       catalogId: "channel.discord",
       lifecycleMode: "create",
     });
-    host.storage.channelSetupDrafts.update(created.draftId, {
+    const configured = await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
       label: "Discord Sandbox",
       draft: {
         botTokenEnv: "DISCORD_BOT_TOKEN",
@@ -184,7 +248,7 @@ describe("channel-setup-service contract behavior", () => {
       },
     });
 
-    const result = await finalizeChannelSetupDraft(host, created.draftId);
+    const result = await finalizeChannelSetupDraft(host, created.draftId, configured.revision);
 
     expect(result.validation.status).toBe("ok");
     expect(result.test?.status).toBe("ok");
@@ -219,7 +283,8 @@ describe("channel-setup-service contract behavior", () => {
       catalogId: "channel.discord",
       lifecycleMode: "create",
     });
-    host.storage.channelSetupDrafts.update(created.draftId, {
+    const configured = await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
       draft: {
         botTokenEnv: "DISCORD_BOT_TOKEN",
         defaultChannelId: "123456789012345678",
@@ -228,7 +293,7 @@ describe("channel-setup-service contract behavior", () => {
       },
     });
 
-    const result = await finalizeChannelSetupDraft(host, created.draftId);
+    const result = await finalizeChannelSetupDraft(host, created.draftId, configured.revision);
 
     expect(host.runIntegrationConnectionLiveChecks).toHaveBeenCalledWith(
       expect.objectContaining({ connectionId: created.draftId, key: "discord" }),
@@ -259,7 +324,8 @@ describe("channel-setup-service contract behavior", () => {
       catalogId: "channel.ntfy",
       lifecycleMode: "create",
     });
-    host.storage.channelSetupDrafts.update(created.draftId, {
+    const configured = await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
       label: "ntfy Sandbox",
       draft: {
         baseUrl: "https://ntfy.sh",
@@ -268,7 +334,7 @@ describe("channel-setup-service contract behavior", () => {
       },
     });
 
-    const result = await finalizeChannelSetupDraft(host, created.draftId);
+    const result = await finalizeChannelSetupDraft(host, created.draftId, configured.revision);
 
     expect(result.validation.status).toBe("ok");
     expect(result.test).toMatchObject({ status: "ok", issues: [] });
@@ -283,16 +349,15 @@ describe("channel-setup-service contract behavior", () => {
     });
   });
 
-  it("reconciles public draft placeholders while leaving the internal raw update path unchanged", async () => {
+  it("keeps channel credentials in secure custody and rejects generic secret writes", async () => {
     const host = createHost();
     const created = await createChannelSetupDraft(host, {
       catalogId: "channel.slack",
       lifecycleMode: "repair",
     });
-    host.storage.channelSetupDrafts.update(created.draftId, {
+    const seeded = await host.storage.channelSetupDrafts.update(created.draftId, {
+      expectedRevision: created.revision,
       draft: {
-        botToken: "bot-short",
-        webhookUrl: "https://hooks.example.test/events?token=hook-short&mode=events",
         botTokenEnv: "SLACK_BOT_TOKEN",
         channelId: "C-OLD",
       },
@@ -306,11 +371,19 @@ describe("channel-setup-service contract behavior", () => {
         },
       },
     });
+    const secured = await setChannelSetupDraftSecrets(host, created.draftId, {
+      expectedRevision: seeded.revision,
+      values: {
+        botToken: "bot-short",
+        webhookUrl: "https://hooks.example.test/events?token=hook-short&mode=events",
+      },
+    });
 
     const updated = await updateChannelSetupDraft(
       host,
       created.draftId,
       {
+        expectedRevision: secured.revision,
         draft: {
           webhookUrl: "[REDACTED]",
           botTokenEnv: "SLACK_BOT_TOKEN_V2",
@@ -321,21 +394,31 @@ describe("channel-setup-service contract behavior", () => {
     );
 
     expect(updated.draft).toEqual({
-      botToken: "bot-short",
-      webhookUrl: "https://hooks.example.test/events?token=hook-short&mode=events",
       botTokenEnv: "SLACK_BOT_TOKEN_V2",
       channelId: "C-NEXT",
+    });
+    expect(updated.secretState).toMatchObject({
+      botToken: { configured: true, custody: "temporary" },
+      webhookUrl: { configured: true, custody: "temporary" },
     });
     expect(updated.hydration?.rawLegacyConfig).toMatchObject({
       botToken: "bot-short",
       DATABASE_PASSWORD: "db-short",
     });
 
-    const internal = await updateChannelSetupDraft(host, created.draftId, {
-      draft: {
-        botToken: "replacement-short",
-      },
+    await expect(
+      updateChannelSetupDraft(host, created.draftId, {
+        expectedRevision: updated.revision,
+        draft: { botToken: "replacement-short" },
+      }),
+    ).rejects.toThrow(/dedicated secure-input endpoint/);
+    const replaced = await setChannelSetupDraftSecrets(host, created.draftId, {
+      expectedRevision: updated.revision,
+      values: { botToken: "replacement-short" },
     });
-    expect(internal.draft.botToken).toBe("replacement-short");
+    const replacementRef = replaced.secretState.botToken?.secretRef;
+    expect(replacementRef).toEqual(expect.any(String));
+    expect(replacementRef).not.toContain("replacement-short");
+    expect(host.channelSecrets?.resolve(replacementRef!)).toBe("replacement-short");
   });
 });

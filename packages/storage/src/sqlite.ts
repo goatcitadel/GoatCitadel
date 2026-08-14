@@ -17,6 +17,9 @@ import {
   runSqliteMigrations,
   type SqliteMigrationGroup,
 } from "./sqlite/migration-registry.js";
+import { createChangePlanSchema } from "./change-plan-schema.js";
+import { MANAGED_SOURCE_INSTALL_SQL } from "./managed-source-install-repo.js";
+import { PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL } from "./product-source-update-repo.js";
 import {
   assertSqliteSchemaShape,
   readSqliteSchemaShape,
@@ -7133,11 +7136,143 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createMobileApprovalKeySchema(db);
         },
       },
+      {
+        version: 198,
+        name: "chat_durable_fanout_invocations",
+        up: createChatFanoutInvocationSchema,
+      },
+      {
+        version: 199,
+        name: "chat_change_plan_ledger",
+        up: createChatChangePlanSchema,
+      },
+      {
+        version: 200,
+        name: "chat_change_plan_expiry",
+        up: addChatChangePlanExpiry,
+      },
+      {
+        version: 201,
+        name: "evolution_control_plane_change_plans",
+        up: (db) => {
+          createChangePlanSchema(db);
+        },
+      },
+      {
+        version: 202,
+        name: "channel_setup_draft_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "channel_setup_drafts", "revision", "INTEGER NOT NULL DEFAULT 1");
+          addColumnIfMissingIfTableExists(db, "channel_setup_drafts", "secret_refs_json", "TEXT NOT NULL DEFAULT '{}'");
+        },
+      },
+      {
+        version: 203,
+        name: "managed_source_install_registry",
+        up: (db) => {
+          db.exec(MANAGED_SOURCE_INSTALL_SQL);
+        },
+      },
+      {
+        version: 204,
+        name: "product_source_update_manifests",
+        up: (db) => {
+          db.exec(PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createChatFanoutInvocationSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_fanout_invocations (
+      invocation_id TEXT PRIMARY KEY,
+      parent_run_id TEXT NOT NULL,
+      tool_run_id TEXT NOT NULL,
+      delegation_run_id TEXT,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN (
+        'reserving', 'reserved', 'dispatching', 'waiting', 'completed', 'partial', 'failed', 'cancelled', 'blocked'
+      )),
+      child_count INTEGER NOT NULL CHECK(typeof(child_count) = 'integer' AND child_count BETWEEN 1 AND 3),
+      grant_id TEXT NOT NULL,
+      subtasks_json TEXT NOT NULL CHECK(json_valid(subtasks_json) AND json_type(subtasks_json) = 'array'),
+      reserved_activations INTEGER NOT NULL CHECK(
+        typeof(reserved_activations) = 'integer' AND reserved_activations BETWEEN 1 AND 3
+      ),
+      reserved_budget_usd REAL NOT NULL CHECK(reserved_budget_usd >= 0),
+      objective TEXT NOT NULL,
+      capability_profile_hash TEXT,
+      policy_profile_hash TEXT,
+      project_binding_hash TEXT NOT NULL CHECK(length(project_binding_hash) = 64),
+      grant_binding_hash TEXT NOT NULL CHECK(length(grant_binding_hash) = 64),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      finished_at TEXT,
+      terminal_reason TEXT,
+      UNIQUE(parent_run_id, tool_run_id),
+      CHECK(reserved_activations >= child_count),
+      CHECK(
+        (status IN ('completed', 'partial', 'failed', 'cancelled', 'blocked') AND finished_at IS NOT NULL)
+        OR (status IN ('reserving', 'reserved', 'dispatching', 'waiting') AND finished_at IS NULL)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_fanout_invocations_active
+      ON chat_fanout_invocations(status, updated_at ASC, invocation_id ASC);
+    CREATE INDEX IF NOT EXISTS idx_chat_fanout_invocations_parent
+      ON chat_fanout_invocations(parent_run_id, created_at ASC);
+  `);
+}
+
+function createChatChangePlanSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_change_plans (
+      plan_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      requester_actor_id TEXT,
+      kind TEXT NOT NULL CHECK(kind IN (
+        'session_model', 'installation_default_model', 'channel_connection', 'capability_candidate', 'product_source_update'
+      )),
+      scope TEXT NOT NULL CHECK(scope IN ('current_chat', 'installation', 'channel', 'capability', 'product_source')),
+      status TEXT NOT NULL CHECK(status IN (
+        'awaiting_confirmation', 'applying', 'applied', 'cancelled', 'failed', 'manual_required'
+      )),
+      revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision >= 1),
+      expected_target_revision INTEGER CHECK(
+        expected_target_revision IS NULL OR (typeof(expected_target_revision) = 'integer' AND expected_target_revision >= 1)
+      ),
+      request_json TEXT NOT NULL CHECK(json_valid(request_json) AND json_type(request_json) = 'object'),
+      title TEXT NOT NULL CHECK(length(trim(title)) BETWEEN 1 AND 180),
+      summary TEXT NOT NULL CHECK(length(trim(summary)) BETWEEN 1 AND 1000),
+      result_json TEXT CHECK(result_json IS NULL OR (json_valid(result_json) AND json_type(result_json) = 'object')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      applied_at TEXT,
+      CHECK(
+        (status = 'applied' AND applied_at IS NOT NULL)
+        OR (status <> 'applied' AND applied_at IS NULL)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_change_plans_session
+      ON chat_change_plans(session_id, created_at DESC, plan_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_change_plans_status
+      ON chat_change_plans(status, updated_at ASC, plan_id ASC);
+  `);
+}
+
+function addChatChangePlanExpiry(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(db, "chat_change_plans", "expires_at", "TEXT");
+  db.exec(`
+    UPDATE chat_change_plans
+    SET expires_at = created_at
+    WHERE expires_at IS NULL OR length(trim(expires_at)) = 0;
+  `);
+}
 
 function upgradeMemorySourceAuthorityAndTraceCandidateDedupe(db: DatabaseSync): void {
   const hasChatMessages = tableExists(db, "chat_messages");

@@ -80,6 +80,7 @@ import "./styles/session-control-banner.css";
 import "./styles/chat-session-status.css";
 import "./styles/chat-timer.css";
 import "./styles/run-variables.css";
+import "./styles/change-plans.css";
 
 const LazyThreadedWorkflowPanel = lazy(async () => {
   const module = await import("./ThreadedWorkflowPanel");

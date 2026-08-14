@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { ConflictError, SemanticValidationError } from "@goatcitadel/contracts";
 import {
   projectCapabilityPublicValue,
   projectCapabilityToolSchemaForPublic,
@@ -52,7 +53,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     limit: z.coerce.number().int().min(1).max(500).optional(),
   });
   const autonomyRiskSchema = z.enum(["safe", "caution", "danger", "nuclear"]);
-  const autonomyActivationKindSchema = z.enum(["capability", "tool", "mcp_tool", "code_mode"]);
+  const autonomyActivationKindSchema = z.enum(["capability", "tool", "mcp_tool", "code_mode", "subagent_fanout"]);
   const autonomyGrantQuerySchema = z.object({
     includeExpired: z.enum(["true", "false"]).optional(),
   });
@@ -61,6 +62,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   });
   const autonomyGrantCreateSchema = z.object({
     workspaceId: z.string().trim().min(1).optional(),
+    projectId: z.string().trim().min(1).optional(),
     surfaces: z.array(z.enum(["chat", "cowork", "code", "tools", "mcp", "all"])).optional(),
     maxRiskLevel: autonomyRiskSchema,
     capabilityPatterns: z.array(z.string().trim().min(1)).optional(),
@@ -78,6 +80,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   });
   const autonomyGrantEvaluateSchema = z.object({
     workspaceId: z.string().trim().min(1).optional(),
+    projectId: z.string().trim().min(1).optional(),
     surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]),
     riskLevel: autonomyRiskSchema,
     activationKind: autonomyActivationKindSchema,
@@ -314,13 +317,15 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
+      // Project fan-out authority is operator-owned even though its narrow
+      // request shape is user-editable in the console. Never record a
+      // client-provided grantor for this high-leverage activation kind.
+      const input = parsed.data.activationKinds?.includes("subagent_fanout")
+        ? { ...parsed.data, grantor: resolveActorId(request) }
+        : parsed.data;
       return reply
         .code(201)
-        .send(
-          projectCapabilityPublicValue(
-            await fastify.services.capabilities.createAutonomousActivationGrant(parsed.data),
-          ),
-        );
+        .send(projectCapabilityPublicValue(await fastify.services.capabilities.createAutonomousActivationGrant(input)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -406,6 +411,51 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
+      const evolution = fastify.services.evolution;
+      if (evolution && (await evolution.isEnabled())) {
+        const detail = await fastify.services.capabilities.getCapabilityCandidateDetail(params.data.candidateId);
+        if (detail.revision !== body.data.expectedRevision) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "The capability candidate changed before its Change Plan was created.",
+            details: { expectedRevision: body.data.expectedRevision, currentRevision: detail.revision },
+          });
+        }
+        if (body.data.versionId && detail.latestVersion?.versionId !== body.data.versionId) {
+          throw new ConflictError({
+            message: "The requested capability version is no longer the latest immutable candidate version.",
+          });
+        }
+        const proposal =
+          detail.relatedProposals.find((item) => item.candidateId === detail.candidateId) ?? detail.relatedProposals[0];
+        if (!proposal) {
+          throw new SemanticValidationError("The capability candidate has no linked Code Mode proposal.");
+        }
+        const plan = await evolution.create({
+          actor: {
+            workspaceId: detail.originatingRun?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            actorId: resolveActorId(request),
+            surface: "settings",
+            requestId: request.id,
+          },
+          request: {
+            kind: "capability_candidate",
+            proposalId: proposal.proposalId,
+            action: "activate",
+            ...(body.data.versionId ? { versionId: body.data.versionId } : {}),
+          },
+          idempotencyKey: `capability-promote:${request.id}:${params.data.candidateId}:${body.data.expectedRevision}`,
+          expectedTargetRevision: body.data.expectedRevision,
+        });
+        return reply.code(202).send(
+          projectCapabilityPublicValue({
+            pendingApproval: null,
+            noMutationRequired: false,
+            detail,
+            changePlan: plan,
+          }),
+        );
+      }
       const outcome = await fastify.services.capabilities.promoteCapabilityCandidate(
         params.data.candidateId,
         body.data.expectedRevision,
@@ -430,6 +480,48 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
+      const evolution = fastify.services.evolution;
+      if (evolution && (await evolution.isEnabled())) {
+        const detail = await fastify.services.capabilities.getCapabilityCandidateDetail(params.data.candidateId);
+        if (detail.revision !== body.data.expectedRevision) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "The capability candidate changed before its Change Plan was created.",
+            details: { expectedRevision: body.data.expectedRevision, currentRevision: detail.revision },
+          });
+        }
+        const selected = body.data.versionId
+          ? detail.versions.find((item) => item.versionId === body.data.versionId)
+          : (detail.activeVersion ?? detail.latestVersion);
+        if (!selected) throw new SemanticValidationError("The capability candidate has no version to revoke.");
+        const proposal =
+          detail.relatedProposals.find((item) => item.candidateId === detail.candidateId) ?? detail.relatedProposals[0];
+        if (!proposal) throw new SemanticValidationError("The capability candidate has no linked Code Mode proposal.");
+        const plan = await evolution.create({
+          actor: {
+            workspaceId: detail.originatingRun?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            actorId: resolveActorId(request),
+            surface: "settings",
+            requestId: request.id,
+          },
+          request: {
+            kind: "capability_candidate",
+            proposalId: proposal.proposalId,
+            action: "revoke",
+            versionId: selected.versionId,
+          },
+          idempotencyKey: `capability-revoke:${request.id}:${params.data.candidateId}:${body.data.expectedRevision}:${selected.versionId}`,
+          expectedTargetRevision: body.data.expectedRevision,
+        });
+        return reply.code(202).send(
+          projectCapabilityPublicValue({
+            pendingApproval: null,
+            noMutationRequired: false,
+            detail,
+            changePlan: plan,
+          }),
+        );
+      }
       const outcome = await fastify.services.capabilities.revokeCapabilityCandidate(
         params.data.candidateId,
         body.data.expectedRevision,
@@ -454,6 +546,49 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
+      const evolution = fastify.services.evolution;
+      if (evolution && (await evolution.isEnabled())) {
+        const detail = await fastify.services.capabilities.getCapabilityCandidateDetail(params.data.candidateId);
+        if (detail.revision !== body.data.expectedRevision) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "The capability candidate changed before its Change Plan was created.",
+            details: { expectedRevision: body.data.expectedRevision, currentRevision: detail.revision },
+          });
+        }
+        if (!detail.versions.some((item) => item.versionId === body.data.targetVersionId)) {
+          throw new ConflictError({
+            message: "The requested rollback target is no longer part of this capability candidate.",
+          });
+        }
+        const proposal =
+          detail.relatedProposals.find((item) => item.candidateId === detail.candidateId) ?? detail.relatedProposals[0];
+        if (!proposal) throw new SemanticValidationError("The capability candidate has no linked Code Mode proposal.");
+        const plan = await evolution.create({
+          actor: {
+            workspaceId: detail.originatingRun?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            actorId: resolveActorId(request),
+            surface: "settings",
+            requestId: request.id,
+          },
+          request: {
+            kind: "capability_candidate",
+            proposalId: proposal.proposalId,
+            action: "rollback",
+            versionId: body.data.targetVersionId,
+          },
+          idempotencyKey: `capability-rollback:${request.id}:${params.data.candidateId}:${body.data.expectedRevision}:${body.data.targetVersionId}`,
+          expectedTargetRevision: body.data.expectedRevision,
+        });
+        return reply.code(202).send(
+          projectCapabilityPublicValue({
+            pendingApproval: null,
+            noMutationRequired: false,
+            detail,
+            changePlan: plan,
+          }),
+        );
+      }
       const outcome = await fastify.services.capabilities.rollbackCapabilityCandidate(
         params.data.candidateId,
         body.data.targetVersionId,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { assertDesktopArtifactProvenance } from "./lib/desktop-artifact-provenance.mjs";
 import { PACKAGING_TARGETS, requirePackagingTarget } from "./lib/packaging-targets.mjs";
@@ -15,6 +16,12 @@ const windowsProject = path.join(
   "apps",
   "mission-control-windows",
   "GoatCitadel.MissionControl.Windows.csproj",
+);
+const sourceUpdateHelperProject = path.join(
+  repoRoot,
+  "apps",
+  "product-source-update-helper",
+  "GoatCitadel.ProductSourceUpdateHelper.csproj",
 );
 const PACKAGE_NAME = "GoatCitadel.MissionControl.Windows";
 const APPLICATION_ID = "App";
@@ -31,6 +38,8 @@ if (!target || !PACKAGING_TARGETS[target]) {
 const targetInfo = requirePackagingTarget(target, { allowedTargets: ["windows-x64", "windows-arm64"] });
 const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "desktop", target));
 const outArtifactPath = path.join(outDir, targetInfo.desktopArtifactName);
+const sourceUpdateHelperDir = path.join(outDir, "runtime", "evolution");
+const sourceUpdateHelperPath = path.join(sourceUpdateHelperDir, "GoatCitadel-Product-Source-Update-Helper.exe");
 const configuration = args.configuration || "Release";
 const msbuildPlatform = targetInfo.arch === "arm64" ? "ARM64" : "x64";
 const msixPublisher = args.msixPublisher ?? process.env.GOATCITADEL_WINDOWS_MSIX_PUBLISHER ?? DEFAULT_MSIX_PUBLISHER;
@@ -51,6 +60,9 @@ async function main() {
       throw new Error("The WinUI 3 Windows host publish must run on Windows.");
     }
     assertDotnet10Sdk();
+    if (!fs.existsSync(sourceUpdateHelperProject)) {
+      throw new Error(`Product source update helper project is missing: ${sourceUpdateHelperProject}`);
+    }
     removeDirectory(outDir);
     fs.mkdirSync(outDir, { recursive: true });
     const generatedManifestRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-winui-manifest-"));
@@ -76,6 +88,24 @@ async function main() {
         "--output",
         outDir,
       ]);
+      fs.mkdirSync(sourceUpdateHelperDir, { recursive: true });
+      runDotnet([
+        "publish",
+        sourceUpdateHelperProject,
+        "--configuration",
+        configuration,
+        "--runtime",
+        targetInfo.windowsRid,
+        "--self-contained",
+        "true",
+        "-p:PublishSingleFile=true",
+        "-p:IncludeNativeLibrariesForSelfExtract=true",
+        "-p:EnableWindowsTargeting=true",
+        `-p:Platform=${msbuildPlatform}`,
+        "-p:RestoreSources=https://api.nuget.org/v3/index.json",
+        "--output",
+        sourceUpdateHelperDir,
+      ]);
     } finally {
       fs.rmSync(generatedManifestRoot, { recursive: true, force: true });
     }
@@ -83,6 +113,9 @@ async function main() {
 
   if (!fs.existsSync(outArtifactPath)) {
     throw new Error(`WinUI host executable was not produced: ${outArtifactPath}`);
+  }
+  if (!fs.existsSync(sourceUpdateHelperPath)) {
+    throw new Error(`Product source update helper was not produced: ${sourceUpdateHelperPath}`);
   }
   if (args.skipBuild) {
     assertDesktopArtifactProvenance(path.join(outDir, "desktop-manifest.json"), {
@@ -191,6 +224,10 @@ function writeDesktopManifest() {
       publisher: msixPublisher,
     },
     executable: path.relative(outDir, outArtifactPath).replaceAll("\\", "/"),
+    evolutionHelper: {
+      executable: path.relative(outDir, sourceUpdateHelperPath).replaceAll("\\", "/"),
+      sha256: createHash("sha256").update(fs.readFileSync(sourceUpdateHelperPath)).digest("hex"),
+    },
     project: path.relative(repoRoot, windowsProject).replaceAll("\\", "/"),
     createdAt: new Date().toISOString(),
     files,

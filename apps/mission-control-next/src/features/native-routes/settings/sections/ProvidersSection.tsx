@@ -14,11 +14,15 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import type { LlmProviderAdviceResponse } from "@goatcitadel/contracts";
+import type { ChangePlanRecord, LlmProviderAdviceResponse } from "@goatcitadel/contracts";
 import {
-  deleteOpenAICodexOAuthCredential,
+  cancelChangePlan,
+  completeChangePlanProviderOAuth,
+  confirmChangePlan,
+  createChangePlan,
   deleteProviderSecret,
   fetchLlmProviderAdvice,
+  fetchChangePlans,
   fetchOpenAICodexOAuthStatus,
   fetchProviderSecretStatus,
   isApiRequestError,
@@ -26,9 +30,9 @@ import {
   type OpenAICodexDeviceStartResponse,
   type OpenAICodexOAuthStatus,
   patchSettings,
-  pollOpenAICodexOAuthDeviceFlow,
+  pollChangePlanProviderOAuth,
   saveProviderSecret,
-  startOpenAICodexOAuthDeviceFlow,
+  startChangePlanProviderOAuth,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
   createEmptyLlmTransportDraft,
@@ -38,6 +42,8 @@ import {
   type LlmTransportDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
+import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 import {
   buildUniversalModelPickerOptions,
   type ProviderModelCatalogOption,
@@ -82,9 +88,7 @@ import {
   normalizeOpenAICodexPollDelayMs,
   OPENAI_CODEX_MIN_POLL_MS,
   type ProviderEditorDraft,
-  readStoredOpenAICodexOAuthFlow,
   resolveProviderCredentialReady,
-  writeStoredOpenAICodexOAuthFlow,
 } from "../../SettingsNativePage";
 
 const PROVIDER_API_STYLE_OPTIONS: ProviderEditorDraft["apiStyle"][] = [
@@ -129,9 +133,9 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [providerProbeBusyId, setProviderProbeBusyId] = useState<string | null>(null);
   const [modelPickerQuery, setModelPickerQuery] = useState("");
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
-  const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(
-    readStoredOpenAICodexOAuthFlow,
-  );
+  const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(null);
+  const [codexOAuthPlan, setCodexOAuthPlan] = useState<ChangePlanRecord | null>(null);
+  const [codexOAuthPlanDialog, setCodexOAuthPlanDialog] = useState<ChangePlanRecord | null>(null);
   const [codexOAuthBusy, setCodexOAuthBusy] = useState(false);
   const [providerAdvice, setProviderAdvice] = useState<LoadState<LlmProviderAdviceResponse>>({
     loading: false,
@@ -200,10 +204,6 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setCodexOAuthStatus(data);
     }
     return data;
-  }, []);
-  const setAuthoritativeCodexOAuthStatus = useCallback((status: OpenAICodexOAuthStatus) => {
-    codexOAuthStatusRequestIdRef.current += 1;
-    setCodexOAuthStatus(status);
   }, []);
   const codexOAuthWizardSteps = useMemo(
     () => [
@@ -379,6 +379,12 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   );
 
   useEffect(() => {
+    // Legacy browser-stored device flows were not bound to a Change Plan action.
+    // They cannot be resumed safely after the Control Plane takes custody.
+    clearStoredOpenAICodexOAuthFlow();
+  }, []);
+
+  useEffect(() => {
     if (!providers.length) {
       setSelectedProviderId("");
       return;
@@ -495,18 +501,27 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     const nextProvider = providers.find((provider) => provider.providerId === normalizedProviderId);
     const usesFallbackModels = nextProvider?.modelProbeState === "fallback";
     try {
-      await patchSettings({
+      const updated = await patchSettings({
         expectedRevision: config.revision,
         llm: {
           activeProviderId: normalizedProviderId,
           activeModel: normalizedModel,
         },
       });
+      const receipt = updated.changePlanReceipt;
       setNotice({
-        tone: usesFallbackModels ? "warning" : "success",
-        message: usesFallbackModels
-          ? "Provider routing updated with a suggested model that has not been account-verified."
-          : "Provider routing updated.",
+        tone:
+          receipt && receipt.status !== "completed" && receipt.status !== "applied"
+            ? "warning"
+            : usesFallbackModels
+              ? "warning"
+              : "success",
+        message:
+          receipt && receipt.status !== "completed" && receipt.status !== "applied"
+            ? `${receipt.summary} Finish the required action in Chat (plan ${receipt.planId}).`
+            : usesFallbackModels
+              ? "Provider routing updated with a suggested model that has not been account-verified."
+              : "Provider routing updated.",
       });
       setRoutingBaseline({ providerId: normalizedProviderId, model: normalizedModel });
       await reload();
@@ -569,10 +584,18 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       const next = await saveProviderSecret(selectedProviderId, secretValue.trim(), config.revision);
       setSecretState({ loading: false, error: null, data: next });
       setSecretValue("");
-      setNotice({
-        tone: "success",
-        message: `Provider secret saved. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
-      });
+      const receipt = next.changePlanReceipt;
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Finish the required action in Chat or Approvals (plan ${receipt.planId}).`,
+            }
+          : {
+              tone: "success",
+              message: `Provider secret saved. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
+            },
+      );
       await reload();
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {
@@ -599,10 +622,18 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     try {
       const next = await deleteProviderSecret(pendingDeleteSecret.providerId, config.revision);
       setSecretState({ loading: false, error: null, data: next });
-      setNotice({
-        tone: "success",
-        message: `Provider secret removed. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
-      });
+      const receipt = next.changePlanReceipt;
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Approval is still required before removal (plan ${receipt.planId}).`,
+            }
+          : {
+              tone: "success",
+              message: `Provider secret removed. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
+            },
+      );
       setPendingDeleteSecret(null);
       await reload();
     } catch (deleteError) {
@@ -625,17 +656,31 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       if (result.status === "connected") {
         setCodexOAuthFlow(null);
         clearStoredOpenAICodexOAuthFlow();
-        const nextStatus = await refreshCodexOAuthStatus();
-        await reload();
-        if (nextStatus.connected) {
-          setNotice({ tone: "success", message: "OpenAI Codex OAuth connected." });
-        } else {
+        const plan = codexOAuthPlan;
+        const action = plan?.requiredAction;
+        if (!plan || action?.kind !== "oauth") {
           setNotice({
-            tone: "warning",
-            message:
-              "OpenAI approved the login, but GoatCitadel could not confirm a saved ChatGPT OAuth credential. Start ChatGPT login again.",
+            tone: "error",
+            message: "The OAuth Change Plan action changed. The staged credential was not promoted.",
           });
+          return false;
         }
+        const updated = await completeChangePlanProviderOAuth(
+          plan.planId,
+          { workspaceId: activeWorkspaceId },
+          {
+            expectedRevision: plan.revision,
+            actionId: action.actionId,
+            actionNonce: action.actionNonce,
+          },
+        );
+        setCodexOAuthPlan(updated);
+        setCodexOAuthPlanDialog(updated);
+        setNotice({
+          tone: "success",
+          message:
+            "OpenAI approved the login. Review the exact Change Plan below to promote it into the provider runtime.",
+        });
         return false;
       }
       if (result.status === "expired") {
@@ -655,7 +700,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       }
       return true;
     },
-    [refreshCodexOAuthStatus, reload],
+    [activeWorkspaceId, codexOAuthPlan],
   );
 
   const openCodexOAuthVerificationUrl = useCallback((verificationUrl: string) => {
@@ -666,15 +711,52 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     globalThis.open?.(verificationUrl, "_blank", "noopener,noreferrer");
   }, []);
 
-  const handleStartCodexOAuth = async (openVerificationPage = false) => {
+  const handleStartCodexOAuth = async (openVerificationPage = false, suppliedPlan?: ChangePlanRecord) => {
     setCodexOAuthBusy(true);
     try {
-      const flow = await startOpenAICodexOAuthDeviceFlow();
+      const context = { workspaceId: activeWorkspaceId };
+      let plan = suppliedPlan ?? codexOAuthPlan;
+      if (
+        !plan ||
+        plan.request.kind !== "provider_connection" ||
+        plan.request.providerId !== "openai-codex" ||
+        !plan.requiredAction
+      ) {
+        const activePlans = await fetchChangePlans(context, { limit: 50 });
+        plan =
+          activePlans.items.find(
+            (candidate) =>
+              candidate.request.kind === "provider_connection" &&
+              candidate.request.providerId === "openai-codex" &&
+              !["completed", "applied", "cancelled", "failed", "rolled_back", "rollback_failed"].includes(
+                candidate.status,
+              ),
+          ) ??
+          (await createChangePlan({
+            ...context,
+            surface: "settings",
+            request: {
+              kind: "provider_connection",
+              providerId: "openai-codex",
+              ...(codexOAuthConnected ? { credentialAction: "replace_oauth" as const } : {}),
+            },
+          }));
+        setCodexOAuthPlan(plan);
+      }
+      const action = plan.requiredAction;
+      if (action?.kind !== "oauth") {
+        setCodexOAuthPlanDialog(plan);
+        throw new Error("Review the pending provider Change Plan before starting OAuth.");
+      }
+      const flow = await startChangePlanProviderOAuth(plan.planId, context, {
+        expectedRevision: plan.revision,
+        actionId: action.actionId,
+        actionNonce: action.actionNonce,
+      });
       if (!isStoredOpenAICodexOAuthFlow(flow)) {
         throw new Error("OpenAI Codex OAuth start returned an invalid login flow.");
       }
       setCodexOAuthFlow(flow);
-      writeStoredOpenAICodexOAuthFlow(flow);
       if (openVerificationPage) {
         openCodexOAuthVerificationUrl(flow.verificationUrl);
       }
@@ -700,7 +782,8 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   const handlePollCodexOAuth = async () => {
-    if (!codexOAuthFlow) {
+    const action = codexOAuthPlan?.requiredAction;
+    if (!codexOAuthFlow || !codexOAuthPlan || action?.kind !== "oauth") {
       setNotice({ tone: "warning", message: "Start ChatGPT login first." });
       return;
     }
@@ -711,7 +794,16 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     setCodexOAuthBusy(true);
     codexOAuthPollInFlightRef.current = codexOAuthFlow.flowId;
     try {
-      const result = await pollOpenAICodexOAuthDeviceFlow(codexOAuthFlow.flowId);
+      const result = await pollChangePlanProviderOAuth(
+        codexOAuthPlan.planId,
+        { workspaceId: activeWorkspaceId },
+        {
+          expectedRevision: codexOAuthPlan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+          flowId: codexOAuthFlow.flowId,
+        },
+      );
       await handleCodexOAuthPollResult(result, { showPendingNotice: true });
     } catch (oauthError) {
       setNotice({ tone: "error", message: getErrorMessage(oauthError) });
@@ -724,11 +816,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const handleDisconnectCodexOAuth = async () => {
     setCodexOAuthBusy(true);
     try {
-      setAuthoritativeCodexOAuthStatus(await deleteOpenAICodexOAuthCredential());
-      setCodexOAuthFlow(null);
-      clearStoredOpenAICodexOAuthFlow();
-      setNotice({ tone: "success", message: "OpenAI Codex OAuth disconnected." });
-      await reload();
+      const plan = await createChangePlan({
+        workspaceId: activeWorkspaceId,
+        surface: "settings",
+        request: { kind: "provider_connection", providerId: "openai-codex", credentialAction: "remove_oauth" },
+      });
+      setCodexOAuthPlan(plan);
+      setCodexOAuthPlanDialog(plan);
+      setNotice({ tone: "warning", message: "Review and confirm the exact OAuth disconnect Change Plan." });
     } catch (oauthError) {
       setNotice({ tone: "error", message: getErrorMessage(oauthError) });
     } finally {
@@ -759,7 +854,22 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       }
       codexOAuthPollInFlightRef.current = flowId;
       setCodexOAuthBusy(true);
-      void pollOpenAICodexOAuthDeviceFlow(flowId)
+      const plan = codexOAuthPlan;
+      const action = plan?.requiredAction;
+      if (!plan || action?.kind !== "oauth") {
+        setCodexOAuthFlow(null);
+        return;
+      }
+      void pollChangePlanProviderOAuth(
+        plan.planId,
+        { workspaceId: activeWorkspaceId },
+        {
+          expectedRevision: plan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+          flowId,
+        },
+      )
         .then(async (result) => {
           if (cancelled) {
             return;
@@ -797,7 +907,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
         codexOAuthPollInFlightRef.current = null;
       }
     };
-  }, [codexOAuthFlow, handleCodexOAuthPollResult]);
+  }, [activeWorkspaceId, codexOAuthFlow, codexOAuthPlan, handleCodexOAuthPollResult]);
 
   const handleAddChatGptOAuthProvider = async () => {
     if (hasCodexOAuthProvider) {
@@ -813,7 +923,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     const draft = buildChatGptOAuthProviderDraft();
     setProviderSaveBusy(true);
     try {
-      await patchSettings({
+      const updated = await patchSettings({
         expectedRevision: config.revision,
         llm: {
           upsertProvider: {
@@ -826,6 +936,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           },
         },
       });
+      const receipt = updated.changePlanReceipt;
       await reload();
       setEditorMode("selected");
       setProviderDraft(draft);
@@ -834,7 +945,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setProviderTransportDraft(emptyTransportDraft);
       setProviderTransportBaselineDraft(emptyTransportDraft);
       setSelectedProviderId(draft.providerId);
-      setNotice({ tone: "success", message: "ChatGPT provider added. Start ChatGPT login below." });
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Complete ChatGPT login in the governed setup (plan ${receipt.planId}).`,
+            }
+          : { tone: "success", message: "ChatGPT provider added. Start ChatGPT login below." },
+      );
       void loadModelsForProvider(draft.providerId, { force: true });
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {
@@ -866,7 +984,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
     setProviderSaveBusy(true);
     try {
-      await patchSettings({
+      const updated = await patchSettings({
         expectedRevision: config.revision,
         llm: {
           upsertProvider: {
@@ -893,12 +1011,20 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           },
         },
       });
+      const receipt = updated.changePlanReceipt;
       setProviderBaselineDraft(providerDraft);
       setProviderTransportBaselineDraft(providerTransportDraft);
       await reload();
       setEditorMode("selected");
       setSelectedProviderId(providerDraft.providerId.trim());
-      setNotice({ tone: "success", message: `Saved provider ${providerDraft.providerId.trim()}.` });
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Finish the required secure or OAuth action in Chat (plan ${receipt.planId}).`,
+            }
+          : { tone: "success", message: `Saved provider ${providerDraft.providerId.trim()}.` },
+      );
       void loadModelsForProvider(providerDraft.providerId.trim(), { force: true });
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {
@@ -1319,6 +1445,34 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 ) : null}
               </SettingsFieldGrid>
             ) : null}
+            {codexOAuthPlan ? (
+              <ChatChangePlanCard
+                plan={codexOAuthPlan}
+                pending={codexOAuthBusy}
+                onReview={(plan) => setCodexOAuthPlanDialog(plan)}
+                onCancel={(plan) => {
+                  const action = plan.requiredAction;
+                  if (!action) return;
+                  setCodexOAuthBusy(true);
+                  void cancelChangePlan(
+                    plan.planId,
+                    { workspaceId: activeWorkspaceId },
+                    {
+                      expectedRevision: plan.revision,
+                      actionNonce: action.actionNonce,
+                    },
+                  )
+                    .then((updated) => {
+                      setCodexOAuthPlan(updated);
+                      setCodexOAuthFlow(null);
+                    })
+                    .catch((planError) => {
+                      setNotice({ tone: "error", message: getErrorMessage(planError) });
+                    })
+                    .finally(() => setCodexOAuthBusy(false));
+                }}
+              />
+            ) : null}
             <SettingsButtonRow>
               {codexOAuthConnected && !codexIsActiveRouting ? (
                 <NativeButton
@@ -1366,7 +1520,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   disabled={codexOAuthBusy}
                 >
                   <RotateCcw size={16} />
-                  {codexOAuthFlowUserCode ? "Get a new code" : "Restart login"}
+                  Reopen login
                 </NativeButton>
               ) : null}
               {hasCodexOAuthProvider && !codexOAuthFlow ? (
@@ -1876,6 +2030,56 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
         confirmLabel="Delete secret"
         onCancel={() => setPendingDeleteSecret(null)}
         onConfirm={() => void handleDeleteSecret()}
+      />
+      <ChatChangePlanActionDialog
+        plan={codexOAuthPlanDialog}
+        pending={codexOAuthBusy}
+        onClose={() => setCodexOAuthPlanDialog(null)}
+        onConfirm={async (plan) => {
+          const action = plan.requiredAction;
+          if (action?.kind !== "confirmation") {
+            setNotice({ tone: "error", message: "This provider Change Plan changed. Reopen it before confirming." });
+            return;
+          }
+          setCodexOAuthBusy(true);
+          try {
+            const updated = await confirmChangePlan(
+              plan.planId,
+              { workspaceId: activeWorkspaceId },
+              {
+                expectedRevision: plan.revision,
+                actionNonce: action.actionNonce,
+              },
+            );
+            setCodexOAuthPlan(updated);
+            setCodexOAuthPlanDialog(null);
+            await reload();
+            await refreshCodexOAuthStatus();
+            setNotice({
+              tone: updated.status === "completed" || updated.status === "applied" ? "success" : "warning",
+              message: updated.result?.summary ?? updated.summary,
+            });
+          } catch (planError) {
+            setNotice({ tone: "error", message: getErrorMessage(planError) });
+          } finally {
+            setCodexOAuthBusy(false);
+          }
+        }}
+        onSubmitPublicForm={() => undefined}
+        onSubmitSecureInput={() => undefined}
+        onContinueOAuth={(plan) => handleStartCodexOAuth(true, plan)}
+        onOpenApproval={(plan) => {
+          setCodexOAuthPlanDialog(null);
+          setNotice({
+            tone: "warning",
+            message:
+              plan.requiredAction?.kind === "approval" && plan.requiredAction.approvalId
+                ? `Approval ${plan.requiredAction.approvalId} is pending in Ops.`
+                : "The canonical approval is not available yet.",
+          });
+        }}
+        onReviewArtifacts={() => undefined}
+        onOpenNativePathPicker={() => undefined}
       />
     </SettingsSectionShell>
   );

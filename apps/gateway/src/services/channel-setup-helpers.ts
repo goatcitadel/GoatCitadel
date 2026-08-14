@@ -42,6 +42,7 @@ export function buildChannelSetupValidationResult(
       : "ok";
   return {
     draftId: draft.draftId,
+    draftRevision: draft.revision,
     status,
     levels,
     issues,

@@ -1,8 +1,8 @@
 # Governed Self-Configuration and Self-Repair
 
-Last updated: 2026-08-11
+Last updated: 2026-08-14
 
-Status: current owner contract and parity acceptance rubric. The first direct-loopback official-search credential vertical is implemented in source, including durable pre-effect reservation and receipt-bound resume, but generic self-repair and **shipped parity** remain open until the named integrated proof lane and remaining repair classes pass.
+Status: current remediation-owner contract and parity acceptance rubric. The Gateway-owned [Evolution Control Plane](./EVOLUTION_CONTROL_PLANE.md) now provides the umbrella Change Plan lifecycle and the named `verify:chat-evolution` foundation lane. The remediation coordinator remains the durable repair owner; real-provider, browser, packaged restart, and broader repair-class evidence remain held before **shipped parity** may be claimed.
 
 Program placement: implementation order and dependencies are owned by tranche
 `M5` in [MASTER_COMPLETION_PROGRAM.md](./MASTER_COMPLETION_PROGRAM.md). This
@@ -46,7 +46,7 @@ Future parity reviews therefore score composed blank-profile journeys and negati
 
 ## GoatCitadel Ownership Boundaries
 
-The Gateway owns remediation truth. The model may infer intent and explain a blocker, but it must not invent a repair recipe, receive a secret, authorize a mutation, or report verification from its own reasoning.
+The Gateway owns remediation truth. The Evolution Control Plane owns its user-facing Change Plan and confirmation lifecycle, while the remediation coordinator owns the durable repair operation. The model may infer intent and explain a blocker, but it must not invent a repair recipe, receive a secret, authorize a mutation, or report verification from its own reasoning.
 
 | Responsibility | Owner boundary |
 |---|---|

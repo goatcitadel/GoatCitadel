@@ -77,6 +77,8 @@ function turnInput(overrides: Partial<ChatTurnAgentRunnerInput> & { sessionSuffi
 function buildHarness(input: {
   responses?: ChatCompletionResponse[];
   fanoutDisabled?: boolean;
+  durableFanoutEnabled?: boolean;
+  fanoutAvailable?: boolean;
   invokeResult?: ToolInvokeResult;
 }) {
   const completionRequests: ChatCompletionRequest[] = [];
@@ -99,6 +101,8 @@ function buildHarness(input: {
     invokeTool: invokeTool as never,
     evaluateToolAccess: () => ({ allowed: true, requiresApproval: false, reasonCodes: [] }),
     subagentFanoutV1Disabled: () => input.fanoutDisabled === true,
+    durableChatFanoutV1Enabled: async () => input.durableFanoutEnabled ?? true,
+    isDurableFanoutAvailable: async () => input.fanoutAvailable ?? true,
   } as never);
   return { orchestrator, completionRequests, invokeTool };
 }
@@ -146,6 +150,16 @@ describe("ChatTurnAgentRunner agent.fanout exposure (R3-8)", () => {
     expect(exposedToolNames(harness.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
   });
 
+  it("fails closed when the durable rollout or exact active-project grant is unavailable", async () => {
+    const rolloutOff = buildHarness({ durableFanoutEnabled: false });
+    await rolloutOff.orchestrator.run(turnInput({ sessionSuffix: "rollout-off" }));
+    expect(exposedToolNames(rolloutOff.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
+
+    const noProjectGrant = buildHarness({ fanoutAvailable: false });
+    await noProjectGrant.orchestrator.run(turnInput({ sessionSuffix: "no-project-grant" }));
+    expect(exposedToolNames(noProjectGrant.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
+  });
+
   it("hides agent.fanout from restricted autonomous (scheduled) turns", async () => {
     const harness = buildHarness({});
     await harness.orchestrator.run(
@@ -186,6 +200,34 @@ describe("ChatTurnAgentRunner agent.fanout invocation (R3-8)", () => {
     const toolMessages = (followUp?.messages ?? []).filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(1);
     expect(String((toolMessages[0] as { content?: unknown }).content)).toContain("A findings");
+  });
+
+  it("parks a durable fan-out parent without speculative synthesis while children are waiting", async () => {
+    const harness = buildHarness({
+      responses: [
+        namedToolCallCompletion("agent.fanout", { subtasks: [{ objective: "Research vendor A" }] }),
+        finalResponse(),
+      ],
+      invokeResult: {
+        outcome: "executed",
+        result: {
+          status: "waiting",
+          fanoutInvocationId: "fanout-invocation-1",
+          subtaskCount: 1,
+          results: [{ index: 0, objective: "Research vendor A", status: "running" }],
+        },
+      } as ToolInvokeResult,
+    });
+
+    const result = await harness.orchestrator.run(
+      turnInput({ sessionSuffix: "durable-wait", subagentPolicy: "auto_when_useful" }),
+    );
+
+    expect(harness.invokeTool).toHaveBeenCalledTimes(1);
+    expect(harness.completionRequests).toHaveLength(1);
+    expect(result.assistantContent).toBe("");
+    expect(result.turnTrace.status).toBe("waiting_for_tool");
+    expect(result.turnTrace.completion).toMatchObject({ status: "backgrounded" });
   });
 
   it("charges parent tool-run budget by fan-out subtask count", async () => {

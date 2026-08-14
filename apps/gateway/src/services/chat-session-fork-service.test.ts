@@ -47,6 +47,11 @@ describe("forkChatSessionFromTurn", () => {
       async publishRealtime() {},
       clearChatTurnWriteLease() {},
       removeChatSessionStoredFile: async () => undefined,
+      getChatSessionModelDefaults: () => ({
+        providerId: undefined,
+        model: undefined,
+        thinkingLevel: "standard" as const,
+      }),
       copyChatSessionStoredFile: async (storageRelPath, copyId) => {
         const destinationRelPath = `forks/${copyId}-${path.basename(storageRelPath)}`;
         await fs.mkdir(path.join(root, "forks"), { recursive: true });
@@ -151,6 +156,11 @@ describe("forkChatSessionFromTurn", () => {
       async publishRealtime() {},
       clearChatTurnWriteLease() {},
       removeChatSessionStoredFile: async () => undefined,
+      getChatSessionModelDefaults: () => ({
+        providerId: undefined,
+        model: undefined,
+        thinkingLevel: "standard" as const,
+      }),
       copyChatSessionStoredFile: async (value) => value,
       ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
       hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,

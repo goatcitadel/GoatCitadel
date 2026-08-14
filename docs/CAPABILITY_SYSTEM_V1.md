@@ -184,6 +184,8 @@ Each candidate bundle contains:
 
 Proposals and unactivated candidates are inspectable in Mission Control but are never callable until activation.
 
+Chat and legacy capability mutation routes now request a canonical `capability_candidate` Change Plan from the Gateway-owned Evolution Control Plane. Activation, revocation, and rollback bind the exact proposal/version, candidate hashes, canonical approval, and activation receipt. Code Mode remains the candidate-generation and validation worker; it cannot confirm the Change Plan or mutate `callableCatalog` directly. Existing autonomous grants do not bypass confirmation for self-authored candidates.
+
 Tool creation in v1 is proposal-and-scaffold only. Executable new tools still require human review and activation.
 
 ## Skill Backfill

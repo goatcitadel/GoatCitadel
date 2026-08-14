@@ -154,6 +154,7 @@ export const createChannelDraftSchema = z.object({
 });
 
 export const updateChannelDraftSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   label: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
   draft: z.record(z.unknown()).optional(),
@@ -171,6 +172,20 @@ export const updateChannelDraftSchema = z.object({
     ])
     .optional(),
 });
+
+export const channelDraftActionSchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+
+export const channelDraftSecureFieldsSchema = channelDraftActionSchema
+  .extend({
+    values: z
+      .record(z.string().trim().min(1).max(128), z.string().min(1).max(16_384))
+      .refine((values) => Object.keys(values).length > 0 && Object.keys(values).length <= 12),
+  })
+  .strict();
 
 export const pluginInstallSchema = z.object({
   source: z.string().min(1),

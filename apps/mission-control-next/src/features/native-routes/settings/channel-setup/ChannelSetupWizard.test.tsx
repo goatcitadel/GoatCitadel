@@ -8,17 +8,19 @@ import { ChannelsSection } from "../sections/ChannelsSection";
 
 const channelApiMocks = vi.hoisted(() => ({
   createChannelSetupDraft: vi.fn(),
+  createChangePlan: vi.fn(),
   discoverTelegramTargets: vi.fn(),
   fetchChannelSetupDefinitions: vi.fn(),
   fetchChannelSetupDrafts: vi.fn(),
   fetchIntegrationConnections: vi.fn(),
   fetchSlackOAuthStatus: vi.fn(),
-  finalizeChannelSetupDraft: vi.fn(),
   startSlackOAuth: vi.fn(),
   testChannelSetupDraft: vi.fn(),
   updateChannelSetupDraft: vi.fn(),
   validateChannelSetupDraft: vi.fn(),
 }));
+
+const settingsNavigate = vi.fn();
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => channelApiMocks);
 
@@ -266,6 +268,7 @@ const discordDefinition: ChannelSetupDefinition = {
 
 const discordDraft: ChannelSetupDraft = {
   draftId: "discord-draft-1",
+  revision: 1,
   catalogId: "channel.discord",
   lifecycleMode: "create",
   label: "Discord sandbox",
@@ -276,6 +279,7 @@ const discordDraft: ChannelSetupDraft = {
     inboundDmPolicy: "pairing",
     guildPolicy: "allowlist",
   },
+  secretState: {},
   contentVersion: discordDefinition.wizard.contentVersion,
   adapterVersion: discordDefinition.adapter.adapterVersion,
   validationVersion: discordDefinition.validation.validationVersion,
@@ -308,6 +312,7 @@ const passingTestFeedback: ChannelSetupWizardFeedback = {
 
 const validationResponse = {
   draftId: discordDraft.draftId,
+  draftRevision: discordDraft.revision,
   status: "ok" as const,
   levels: ["structural", "semantic"] as const,
   issues: [],
@@ -316,6 +321,7 @@ const validationResponse = {
 
 const testResponse = {
   draftId: discordDraft.draftId,
+  draftRevision: discordDraft.revision,
   status: passingTestFeedback.status,
   levels: ["live-auth", "live-send"] as const,
   issues: passingTestFeedback.issues,
@@ -346,20 +352,10 @@ function configureChannelApiMocks(): void {
       return currentApiDraft;
     },
   );
-  channelApiMocks.finalizeChannelSetupDraft.mockImplementation(async () => ({
-    connection: {
-      connectionId: "connection-discord-1",
-      catalogId: "channel.discord",
-      label: currentApiDraft.label ?? "Discord",
-      kind: "channel",
-      status: "connected",
-      enabled: currentApiDraft.enabled,
-      config: currentApiDraft.draft,
-      createdAt: "2026-08-07T12:11:00.000Z",
-      updatedAt: "2026-08-07T12:11:00.000Z",
-    },
-    validation: validationResponse,
-    test: testResponse,
+  channelApiMocks.createChangePlan.mockImplementation(async () => ({
+    planId: "plan-channel-1",
+    status: "awaiting_confirmation",
+    revision: 1,
   }));
 }
 
@@ -458,7 +454,18 @@ async function flushWork(rounds = 5): Promise<void> {
 async function renderChannelsSection(): Promise<ReactTestRenderer> {
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(<ChannelsSection {...({} as ComponentProps<typeof ChannelsSection>)} />);
+    renderer = create(
+      <ChannelsSection
+        {...({
+          activeWorkspaceId: "default",
+          activeWorkspaceName: "Default",
+          setActiveWorkspaceId: vi.fn(),
+          navigate: settingsNavigate,
+          route: { area: "settings", section: "channels", theme: "light" },
+          section: "channels",
+        } as ComponentProps<typeof ChannelsSection>)}
+      />,
+    );
     await Promise.resolve();
   });
   await flushWork();
@@ -734,7 +741,7 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     renderer.unmount();
   });
 
-  it("persists dirty values before validation, runs the live probe, and finalizes without another write", async () => {
+  it("persists dirty values, runs the live probe, and creates a governed finalization plan", async () => {
     const renderer = await renderChannelsSection();
     expect(renderer.root.findByProps({ "aria-label": "Discord guided setup" })).toBeDefined();
 
@@ -749,6 +756,7 @@ describe("ChannelsSection Discord setup lifecycle", () => {
 
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledWith("discord-draft-1", {
+      expectedRevision: 1,
       label: "Discord sandbox",
       enabled: true,
       draft: expect.objectContaining({ defaultChannelId: "987654321098765432" }),
@@ -761,7 +769,7 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     await click(findButton(renderer.root, "Run live test"));
     await flushWork();
     expect(channelApiMocks.validateChannelSetupDraft).toHaveBeenCalledTimes(2);
-    expect(channelApiMocks.testChannelSetupDraft).toHaveBeenCalledWith("discord-draft-1");
+    expect(channelApiMocks.testChannelSetupDraft).toHaveBeenCalledWith("discord-draft-1", discordDraft.revision);
     expect(channelApiMocks.validateChannelSetupDraft.mock.invocationCallOrder[1]).toBeLessThan(
       channelApiMocks.testChannelSetupDraft.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -775,8 +783,19 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     await click(findButton(renderer.root, "Finalize connection"));
     await flushWork();
 
-    expect(channelApiMocks.finalizeChannelSetupDraft).toHaveBeenCalledWith("discord-draft-1");
+    expect(channelApiMocks.createChangePlan).toHaveBeenCalledWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: {
+        kind: "channel_connection",
+        channelKind: "channel.discord",
+        draftId: "discord-draft-1",
+      },
+      idempotencyKey: expect.stringContaining("settings-channel-finalize:discord-draft-1:"),
+    });
     expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(settingsNavigate).toHaveBeenCalledWith({ area: "chat", theme: "light" });
+    expect(textOf(renderer.root)).toContain("has not been finalized yet");
 
     renderer.unmount();
   });

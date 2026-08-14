@@ -661,6 +661,12 @@ describe("GatewayService low-hanging facade delegation", () => {
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-meta" })),
       },
+      chatSessionProjects: { get: vi.fn(() => undefined) },
+      chatProjects: { find: vi.fn(() => undefined) },
+      chatDelegationSteps: {
+        listParentsByChildSessionIds: vi.fn(() => new Map()),
+        get: vi.fn(),
+      },
       permissionProfiles: {
         resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
       },

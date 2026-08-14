@@ -62,6 +62,7 @@ export interface ChatSessionDependencies {
   clearChatTurnWriteLease(sessionId: string): void;
   removeChatSessionStoredFile(storageRelPath: string): Promise<void>;
   copyChatSessionStoredFile(storageRelPath: string, copyId: string): Promise<string>;
+  getChatSessionModelDefaults(): Pick<ChatSessionPrefsRecord, "providerId" | "model" | "thinkingLevel">;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
   hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): Promise<ChatSessionPrefsRecord>;
   patchSessionAutonomyPrefs(
@@ -621,7 +622,7 @@ async function upsertChatSessionForPeer(
       timestamp: now,
     });
     await deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
-    await deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    await deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now, deps.getChatSessionModelDefaults());
     await deps.storage.chatSessionMeta.patch(
       resolution.sessionId,
       {

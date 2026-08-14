@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using GoatCitadel.MissionControl.Windows.Models;
 using GoatCitadel.MissionControl.Windows.Services;
 using Microsoft.UI;
@@ -173,6 +174,7 @@ public sealed partial class MainWindow : Window
             Directory.CreateDirectory(userDataFolder);
             Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", userDataFolder, EnvironmentVariableTarget.Process);
             await MissionWebView.EnsureCoreWebView2Async();
+            MissionWebView.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
             MissionWebView.CoreWebView2.NavigationStarting += (_, args) =>
             {
                 if (!NavigationPolicy.TryValidateBrowserTarget(args.Uri, out var ignoredUri, out var error))
@@ -211,6 +213,67 @@ public sealed partial class MainWindow : Window
         catch (UnauthorizedAccessException error)
         {
             RenderWebViewRecovery(error);
+        }
+    }
+
+    private void MissionWebView_WebMessageReceived(
+        Microsoft.Web.WebView2.Core.CoreWebView2 sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        try
+        {
+            if (!Uri.TryCreate(args.Source, UriKind.Absolute, out var source)
+                || !source.IsLoopback
+                || (source.Scheme != Uri.UriSchemeHttp && source.Scheme != Uri.UriSchemeHttps))
+            {
+                return;
+            }
+            using var document = JsonDocument.Parse(args.WebMessageAsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("type", out var type)
+                || type.GetString() != "goatcitadel.evolution.pick_source"
+                || !root.TryGetProperty("requestId", out var requestIdElement)
+                || !Guid.TryParse(requestIdElement.GetString(), out var requestId))
+            {
+                return;
+            }
+
+            using var picker = new System.Windows.Forms.FolderBrowserDialog
+            {
+                Description = "Choose a clean GoatCitadel source repository",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = false,
+            };
+            var result = picker.ShowDialog();
+            var response = result == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(picker.SelectedPath)
+                ? new
+                {
+                    type = "goatcitadel.evolution.source_selected",
+                    requestId = requestId.ToString(),
+                    cancelled = false,
+                    path = Path.GetFullPath(picker.SelectedPath),
+                }
+                : new
+                {
+                    type = "goatcitadel.evolution.source_selected",
+                    requestId = requestId.ToString(),
+                    cancelled = true,
+                    path = string.Empty,
+                };
+            sender.PostWebMessageAsJson(JsonSerializer.Serialize(response));
+        }
+        catch (JsonException)
+        {
+            // Invalid web messages are ignored; native picker input is fail-closed.
+        }
+        catch (ArgumentException)
+        {
+            // Invalid native paths are never returned to the web surface.
+        }
+        catch (NotSupportedException)
+        {
+            // Unsupported path formats remain unselected.
         }
     }
 

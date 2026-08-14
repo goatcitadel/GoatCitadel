@@ -2,7 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import readline from "node:readline/promises";
 import {
@@ -1896,12 +1896,55 @@ function startSourceGateway(gatewayUrl, expectedFingerprint) {
     cwd: appDir,
     env: {
       ...runtimeProcessEnv,
+      ...resolveSourceEvolutionRuntimeEnv(gatewayUrl),
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
     },
     stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
     stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
   });
+}
+
+function resolveSourceEvolutionRuntimeEnv(gatewayUrl) {
+  if (process.platform !== "win32" || process.env.GOATCITADEL_DESKTOP_HOST !== "1") return {};
+  const configured = [
+    "GOATCITADEL_SOURCE_UPDATE_HELPER_PATH",
+    "GOATCITADEL_SOURCE_UPDATE_HELPER_SHA256",
+    "GOATCITADEL_SOURCE_UPDATE_RESTART_EXECUTABLE",
+    "GOATCITADEL_SOURCE_UPDATE_RESTART_ARGS_JSON",
+    "GOATCITADEL_SOURCE_UPDATE_RESTART_WORKING_DIRECTORY",
+    "GOATCITADEL_SOURCE_UPDATE_HEALTH_URL",
+  ];
+  if (configured.every((key) => typeof process.env[key] === "string" && process.env[key].trim().length > 0)) {
+    return {};
+  }
+  const architecture = process.arch === "arm64" ? "ARM64" : "x64";
+  const framework = "net10.0-windows10.0.19041.0";
+  const helperName = "GoatCitadel-Product-Source-Update-Helper.exe";
+  const candidates = [
+    path.join(appDir, "runtime", "evolution", helperName),
+    path.join(appDir, "apps", "product-source-update-helper", "bin", architecture, "Release", framework, helperName),
+    path.join(appDir, "apps", "product-source-update-helper", "bin", architecture, "Debug", framework, helperName),
+  ];
+  const explicitHelperPath = process.env.GOATCITADEL_SOURCE_UPDATE_HELPER_PATH?.trim();
+  const helperPath = explicitHelperPath && fs.existsSync(explicitHelperPath) && fs.statSync(explicitHelperPath).isFile()
+    ? path.resolve(explicitHelperPath)
+    : candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!helperPath) return {};
+  const launcherPath = path.join(appDir, "bin", "goatcitadel.mjs");
+  if (!fs.existsSync(launcherPath)) return {};
+  const helperSha256 = createHash("sha256").update(fs.readFileSync(helperPath)).digest("hex");
+  const configuredHelperSha256 = process.env.GOATCITADEL_SOURCE_UPDATE_HELPER_SHA256?.trim().toLowerCase();
+  if (configuredHelperSha256 && configuredHelperSha256 !== helperSha256) return {};
+  return {
+    GOATCITADEL_SOURCE_UPDATE_HELPER_PATH: helperPath,
+    GOATCITADEL_SOURCE_UPDATE_HELPER_SHA256: helperSha256,
+    GOATCITADEL_SOURCE_UPDATE_RESTART_EXECUTABLE: process.execPath,
+    GOATCITADEL_SOURCE_UPDATE_RESTART_ARGS_JSON: JSON.stringify([launcherPath, "start", "--json"]),
+    GOATCITADEL_SOURCE_UPDATE_RESTART_WORKING_DIRECTORY: appDir,
+    GOATCITADEL_SOURCE_UPDATE_HEALTH_URL: `${gatewayUrl.replace(/\/$/u, "")}/health`,
+    GOATCITADEL_SOURCE_UPDATE_HEALTH_TIMEOUT_MS: "120000",
+  };
 }
 
 function startSourceUi(gatewayUrl, uiUrl, expectedFingerprint) {

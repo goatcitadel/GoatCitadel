@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { LlmProviderOAuthStatus } from "@goatcitadel/contracts";
+import { ConflictError, type LlmProviderOAuthStatus } from "@goatcitadel/contracts";
 import {
   SecretStoreService,
   SecretStoreUnavailableError,
@@ -60,6 +60,9 @@ interface OpenAICodexCallbackConfig {
 interface PendingDeviceFlow {
   codeVerifier: string;
   state: string;
+  credentialAccount: string;
+  idempotencyKey?: string;
+  verificationUrl: string;
   authorizationCode?: string;
   error?: string;
   expiresAt: number;
@@ -102,9 +105,9 @@ export class OpenAICodexOAuthService {
     };
   }
 
-  public getStatus(): OpenAICodexOAuthStatus {
+  public getStatus(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthStatus {
     const available = this.secretStore.isAvailable();
-    const credential = this.readCredential();
+    const credential = this.readCredential(credentialAccount);
     return {
       providerId: OPENAI_CODEX_PROVIDER_ID,
       available,
@@ -115,19 +118,38 @@ export class OpenAICodexOAuthService {
     };
   }
 
-  public async startDeviceFlow(): Promise<OpenAICodexDeviceStartResponse> {
+  public async startDeviceFlow(
+    options: {
+      credentialAccount?: string;
+      idempotencyKey?: string;
+    } = {},
+  ): Promise<OpenAICodexDeviceStartResponse> {
     this.assertKeychainAvailable();
     this.purgeExpiredPendingFlows();
     await this.ensureCallbackServer();
+
+    const credentialAccount = options.credentialAccount ?? OPENAI_CODEX_OAUTH_ACCOUNT;
+    const idempotencyKey = options.idempotencyKey?.trim() || undefined;
+    if (idempotencyKey) {
+      for (const [flowId, flow] of this.pendingFlows) {
+        if (flow.idempotencyKey === idempotencyKey && flow.credentialAccount === credentialAccount) {
+          return this.projectPendingFlow(flowId, flow);
+        }
+      }
+    }
 
     const flowId = randomUUID();
     const state = randomBytes(16).toString("hex");
     const pkce = createPkcePair();
     const expiresAt = Date.now() + OPENAI_CODEX_OAUTH_TIMEOUT_MS;
 
+    const verificationUrl = this.buildAuthorizationUrl({ state, codeChallenge: pkce.challenge });
     this.pendingFlows.set(flowId, {
       codeVerifier: pkce.verifier,
       state,
+      credentialAccount,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      verificationUrl,
       expiresAt,
       intervalMs: OPENAI_CODEX_OAUTH_DEFAULT_INTERVAL_MS,
     });
@@ -135,13 +157,16 @@ export class OpenAICodexOAuthService {
     return {
       flowId,
       providerId: OPENAI_CODEX_PROVIDER_ID,
-      verificationUrl: this.buildAuthorizationUrl({ state, codeChallenge: pkce.challenge }),
+      verificationUrl,
       expiresAt: new Date(expiresAt).toISOString(),
       pollAfterMs: OPENAI_CODEX_OAUTH_DEFAULT_INTERVAL_MS,
     };
   }
 
-  public async pollDeviceFlow(flowId: string): Promise<OpenAICodexDevicePollResponse> {
+  public async pollDeviceFlow(
+    flowId: string,
+    options: { expectedCredentialAccount?: string } = {},
+  ): Promise<OpenAICodexDevicePollResponse> {
     this.assertKeychainAvailable();
     this.purgeExpiredPendingFlows();
     const flow = this.pendingFlows.get(flowId);
@@ -152,6 +177,12 @@ export class OpenAICodexOAuthService {
         status: "expired",
         requiresReauth: true,
       };
+    }
+    if (options.expectedCredentialAccount && flow.credentialAccount !== options.expectedCredentialAccount) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "OpenAI Codex OAuth flow is not bound to this credential owner.",
+      });
     }
     if (Date.now() >= flow.expiresAt) {
       this.pendingFlows.delete(flowId);
@@ -183,7 +214,7 @@ export class OpenAICodexOAuthService {
 
     try {
       const credential = await this.exchangeAuthorizationCode(flow.authorizationCode, flow.codeVerifier);
-      this.saveCredential(credential);
+      this.saveCredential(credential, flow.credentialAccount);
       this.pendingFlows.delete(flowId);
       return {
         flowId,
@@ -204,10 +235,35 @@ export class OpenAICodexOAuthService {
     }
   }
 
-  public deleteCredential(): OpenAICodexOAuthStatus {
+  public deleteCredential(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthStatus {
     this.assertKeychainAvailable();
-    this.secretStore.deleteSecret(OPENAI_CODEX_OAUTH_ACCOUNT);
+    this.secretStore.deleteSecret(credentialAccount);
+    return this.getStatus(credentialAccount);
+  }
+
+  /** Promote an already verified, plan-scoped OAuth credential into the canonical runtime owner. */
+  public promoteCredential(sourceAccount: string): OpenAICodexOAuthStatus {
+    this.assertKeychainAvailable();
+    if (sourceAccount === OPENAI_CODEX_OAUTH_ACCOUNT) {
+      throw new ConflictError({ message: "OAuth promotion requires a temporary credential owner." });
+    }
+    const credential = this.readCredential(sourceAccount);
+    if (!credential?.accessToken || !credential.refreshToken || credential.requiresReauth) {
+      throw new Error("The temporary OpenAI Codex OAuth credential is unavailable or requires reauthorization.");
+    }
+    // Write canonical state before removing staging custody. Reconciliation can
+    // safely clean the duplicate if the process stops between these operations.
+    this.saveCredential(credential, OPENAI_CODEX_OAUTH_ACCOUNT);
+    this.secretStore.deleteSecret(sourceAccount);
     return this.getStatus();
+  }
+
+  public discardCredential(credentialAccount: string): void {
+    if (credentialAccount === OPENAI_CODEX_OAUTH_ACCOUNT) {
+      throw new ConflictError({ message: "Temporary OAuth cleanup cannot target the canonical credential owner." });
+    }
+    this.assertKeychainAvailable();
+    this.secretStore.deleteSecret(credentialAccount);
   }
 
   public close(): void {
@@ -217,8 +273,8 @@ export class OpenAICodexOAuthService {
     this.callbackServerStart = null;
   }
 
-  public async resolveAccessToken(): Promise<string> {
-    const credential = this.readCredential();
+  public async resolveAccessToken(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): Promise<string> {
+    const credential = this.readCredential(credentialAccount);
     if (!credential?.accessToken || !credential.refreshToken || credential.requiresReauth) {
       throw new Error("OpenAI Codex OAuth is not connected. Connect ChatGPT OAuth in Settings first.");
     }
@@ -227,14 +283,17 @@ export class OpenAICodexOAuthService {
     }
     try {
       const refreshed = await this.refreshCredential(credential);
-      this.saveCredential(refreshed);
+      this.saveCredential(refreshed, credentialAccount);
       return refreshed.accessToken;
     } catch (error) {
-      this.saveCredential({
-        ...credential,
-        requiresReauth: true,
-        updatedAt: Date.now(),
-      });
+      this.saveCredential(
+        {
+          ...credential,
+          requiresReauth: true,
+          updatedAt: Date.now(),
+        },
+        credentialAccount,
+      );
       throw new Error("OpenAI Codex OAuth token refresh failed. Reconnect ChatGPT OAuth in Settings.", {
         cause: error,
       });
@@ -247,9 +306,9 @@ export class OpenAICodexOAuthService {
     }
   }
 
-  private readCredential(): OpenAICodexOAuthCredential | undefined {
+  private readCredential(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthCredential | undefined {
     try {
-      const raw = this.secretStore.getSecret(OPENAI_CODEX_OAUTH_ACCOUNT);
+      const raw = this.secretStore.getSecret(credentialAccount);
       if (!raw) {
         return undefined;
       }
@@ -263,8 +322,18 @@ export class OpenAICodexOAuthService {
     }
   }
 
-  private saveCredential(credential: OpenAICodexOAuthCredential): void {
-    this.secretStore.setSecret(OPENAI_CODEX_OAUTH_ACCOUNT, JSON.stringify(credential));
+  private saveCredential(credential: OpenAICodexOAuthCredential, credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): void {
+    this.secretStore.setSecret(credentialAccount, JSON.stringify(credential));
+  }
+
+  private projectPendingFlow(flowId: string, flow: PendingDeviceFlow): OpenAICodexDeviceStartResponse {
+    return {
+      flowId,
+      providerId: OPENAI_CODEX_PROVIDER_ID,
+      verificationUrl: flow.verificationUrl,
+      expiresAt: new Date(flow.expiresAt).toISOString(),
+      pollAfterMs: flow.intervalMs,
+    };
   }
 
   private async ensureCallbackServer(): Promise<void> {

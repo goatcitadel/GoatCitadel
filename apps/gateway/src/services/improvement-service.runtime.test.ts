@@ -34,22 +34,22 @@ afterEach(() => {
 });
 
 describe("ImprovementService runtime coverage", () => {
-  it("applies and reverts low-risk decision auto-tunes while rejecting unsafe states", async () => {
+  it("turns decision auto-tunes into governed candidates without mutating runtime settings", async () => {
     const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     insertDecisionAutoTune(harness, {
       tuneId: "tune-low-risk",
       riskLevel: "low",
       status: "queued",
-      patch: { settingKey: "routing.weight.provider_balance", nextValue: 0.72 },
-      snapshot: { settingKey: "routing.weight.provider_balance", previousValue: 0.5 },
+      patch: { settingKey: "improvement_tune_live_intent_threshold_v1", nextValue: 0.72 },
+      snapshot: { settingKey: "improvement_tune_live_intent_threshold_v1", previousValue: 0.5 },
     });
     insertDecisionAutoTune(harness, {
       tuneId: "tune-medium-risk",
       riskLevel: "medium",
       status: "queued",
-      patch: { settingKey: "routing.weight.context", nextValue: 0.4 },
-      snapshot: { settingKey: "routing.weight.context", previousValue: 0.2 },
+      patch: { settingKey: "improvement_tune_retry_threshold_v1", nextValue: 0 },
+      snapshot: { settingKey: "improvement_tune_retry_threshold_v1", previousValue: 1 },
     });
     insertDecisionAutoTune(harness, {
       tuneId: "tune-failed",
@@ -59,20 +59,31 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "routing.weight.failed", previousValue: 0 },
     });
 
-    expect((await harness.service.approveDecisionAutoTune("tune-low-risk")).status).toBe("applied");
-    expect(harness.storage.systemSettings.get<number>("routing.weight.provider_balance")?.value).toBe(0.72);
-    expect((await harness.service.approveDecisionAutoTune("tune-low-risk")).status).toBe("applied");
-    expect((await harness.service.revertDecisionAutoTune("tune-low-risk")).status).toBe("reverted");
-    expect(harness.storage.systemSettings.get<number>("routing.weight.provider_balance")?.value).toBe(0.5);
+    const requested = await harness.service.approveDecisionAutoTune("tune-low-risk");
+    expect(requested).toMatchObject({
+      status: "queued",
+      result: {
+        disposition: "change_plan_required",
+        mutationApplied: false,
+      },
+    });
+    expect(requested.result?.candidateId).toEqual(expect.any(String));
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")).toBeUndefined();
+    expect((await harness.service.approveDecisionAutoTune("tune-low-risk")).result?.candidateId).toBe(
+      requested.result?.candidateId,
+    );
 
-    expect(harness.published.some((event) => event.eventType === "improvement_autotune_applied")).toBe(true);
-    expect(harness.published.some((event) => event.eventType === "improvement_autotune_reverted")).toBe(true);
-    await expect(harness.service.approveDecisionAutoTune("tune-medium-risk")).rejects.toThrow(/manual code review/);
-    await expect(harness.service.approveDecisionAutoTune("tune-failed")).rejects.toThrow(/cannot be approved/);
-    await expect(harness.service.revertDecisionAutoTune("tune-medium-risk")).rejects.toThrow(/cannot be reverted/);
+    const medium = await harness.service.approveDecisionAutoTune("tune-medium-risk");
+    expect(medium.result).toMatchObject({ disposition: "change_plan_required", mutationApplied: false });
+    expect(harness.published.some((event) => event.eventType === "improvement_autotune_candidate_ready")).toBe(true);
+    expect(harness.published.some((event) => event.eventType === "improvement_autotune_applied")).toBe(false);
+    await expect(harness.service.approveDecisionAutoTune("tune-failed")).rejects.toThrow(
+      /cannot create a new governed plan/,
+    );
+    await expect(harness.service.revertDecisionAutoTune("tune-low-risk")).rejects.toThrow(/Change Plan rollback/);
   });
 
-  it("closes the loop: applying a wired tune records the runtime-effective value and revert restores the prior value (P2-W3)", async () => {
+  it("keeps a live-intent tune inert until its linked improvement Change Plan activates", async () => {
     const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     // The live-intent tune the weekly tuner produces: raise from 0.6 -> 0.65.
@@ -84,30 +95,17 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "improvement_tune_live_intent_threshold_v1", previousValue: 0.6 },
     });
 
-    const applied = await harness.service.approveDecisionAutoTune("tune-live-intent");
-    expect(applied.status).toBe("applied");
-    // The raw setting was written...
-    expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")?.value).toBe(0.65);
-    // ...and the applied tune's audit records the value the runtime decision
-    // point will now READ — proving the written key is read (loop closed).
-    expect(applied.result).toMatchObject({
-      settingKey: "improvement_tune_live_intent_threshold_v1",
-      nextValue: 0.65,
-      effectiveRuntimeValue: 0.65,
+    const requested = await harness.service.approveDecisionAutoTune("tune-live-intent");
+    expect(requested.status).toBe("queued");
+    expect(requested.result).toMatchObject({
+      candidateId: expect.any(String),
+      disposition: "change_plan_required",
+      mutationApplied: false,
     });
-    expect(
-      harness.published.some(
-        (event) => event.eventType === "improvement_autotune_applied" && event.payload.effectiveRuntimeValue === 0.65,
-      ),
-    ).toBe(true);
-
-    // Revert restores the prior value through the snapshot rail.
-    const reverted = await harness.service.revertDecisionAutoTune("tune-live-intent");
-    expect(reverted.status).toBe("reverted");
-    expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")?.value).toBe(0.6);
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_live_intent_threshold_v1")).toBeUndefined();
   });
 
-  it("revert clears a wired tune key that had no prior value back to unset (P2-W3)", async () => {
+  it("does not materialize a previously absent retry-threshold tune", async () => {
     const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     // Retry-threshold tune with NO previousValue snapshot field => unset before.
@@ -119,16 +117,12 @@ describe("ImprovementService runtime coverage", () => {
       snapshot: { settingKey: "improvement_tune_retry_threshold_v1" },
     });
 
-    await harness.service.approveDecisionAutoTune("tune-retry");
-    expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")?.value).toBe(0);
-    // Effective value falls back to the safe default (1) once reverted to unset.
-    const reverted = await harness.service.revertDecisionAutoTune("tune-retry");
-    expect(reverted.status).toBe("reverted");
-    // previousValue was undefined => the key is set to null (unset).
-    expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")?.value ?? null).toBe(null);
+    const requested = await harness.service.approveDecisionAutoTune("tune-retry");
+    expect(requested.result?.candidateId).toEqual(expect.any(String));
+    expect(harness.storage.systemSettings.get<number>("improvement_tune_retry_threshold_v1")).toBeUndefined();
   });
 
-  it("never auto-applies medium/high-risk tunes (safety invariant)", async () => {
+  it("records high-risk tune suggestions without applying them (safety invariant)", async () => {
     const harness = await createHarness();
     insertDecisionReplayRun(harness, "run-autotune");
     insertDecisionAutoTune(harness, {
@@ -138,9 +132,8 @@ describe("ImprovementService runtime coverage", () => {
       patch: { settingKey: "improvement_tune_blocker_template_v1", nextValue: 8 },
       snapshot: { settingKey: "improvement_tune_blocker_template_v1", previousValue: 1 },
     });
-    // Operator approval is refused for non-low risk...
-    await expect(harness.service.approveDecisionAutoTune("tune-high-blocker")).rejects.toThrow(/manual code review/);
-    // ...and the underlying setting was never written.
+    const requested = await harness.service.approveDecisionAutoTune("tune-high-blocker");
+    expect(requested.result).toMatchObject({ disposition: "change_plan_required", mutationApplied: false });
     expect(harness.storage.systemSettings.get<number>("improvement_tune_blocker_template_v1")).toBeUndefined();
   });
 

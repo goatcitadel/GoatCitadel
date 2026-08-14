@@ -93,6 +93,63 @@ describe("OpenAICodexOAuthService", () => {
     });
   });
 
+  it("keeps plan-bound OAuth credentials staged until exact promotion", async () => {
+    const port = await getFreePort();
+    const secretStore = createMemorySecretStore();
+    const temporaryAccount = "evolution:provider-oauth:plan-1:openai-codex";
+    const accessToken = createJwt({
+      exp: Math.trunc(Date.now() / 1000) + 3600,
+      "https://api.openai.com/profile": { email: "staged@example.com" },
+    });
+    service = new OpenAICodexOAuthService(
+      secretStore,
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: accessToken,
+              refresh_token: "refresh-plan-1",
+              expires_in: 3600,
+            }),
+            { status: 200 },
+          ),
+      ) as unknown as typeof fetch,
+      { port, redirectUri: `http://localhost:${port}/auth/callback` },
+    );
+
+    const flow = await service.startDeviceFlow({
+      credentialAccount: temporaryAccount,
+      idempotencyKey: "plan-1:revision-2:action-3",
+    });
+    await expect(
+      service.startDeviceFlow({
+        credentialAccount: temporaryAccount,
+        idempotencyKey: "plan-1:revision-2:action-3",
+      }),
+    ).resolves.toEqual(flow);
+    const state = new URL(flow.verificationUrl).searchParams.get("state");
+    await fetch(`http://127.0.0.1:${port}/auth/callback?state=${state}&code=staged-code`);
+
+    await expect(
+      service.pollDeviceFlow(flow.flowId, {
+        expectedCredentialAccount: "evolution:provider-oauth:another-plan:openai-codex",
+      }),
+    ).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    await expect(
+      service.pollDeviceFlow(flow.flowId, {
+        expectedCredentialAccount: temporaryAccount,
+      }),
+    ).resolves.toMatchObject({ status: "connected", accountLabel: "staged@example.com" });
+
+    expect(service.getStatus()).toMatchObject({ connected: false });
+    expect(service.getStatus(temporaryAccount)).toMatchObject({ connected: true, accountLabel: "staged@example.com" });
+    expect(service.promoteCredential(temporaryAccount)).toMatchObject({
+      connected: true,
+      accountLabel: "staged@example.com",
+    });
+    expect(service.getStatus(temporaryAccount)).toMatchObject({ connected: false });
+  });
+
   it("reports pending, callback-denied, missing-code, missing-flow, and expired flow states", async () => {
     const port = await getFreePort();
     const secretStore = createMemorySecretStore();

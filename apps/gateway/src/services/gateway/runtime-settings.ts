@@ -140,6 +140,16 @@ export interface RuntimeSettings {
     plannerFanoutV1Disabled?: boolean;
     /** R3-8 kill switch: model-callable `agent.fanout` spawn tool. Absent/false ⇒ feature ON. */
     subagentFanoutV1Disabled?: boolean;
+    /** Default-off Chat-native durable agent.fanout aggregate. */
+    durableChatFanoutV1Enabled?: boolean;
+    /** Gateway-owned governed Change Plan authority. */
+    evolutionControlPlaneV1Enabled?: boolean;
+    /** Default-on only after the Evolution Control Plane rollout. */
+    improvementLocalObservationV1Enabled?: boolean;
+    /** Scheduled model evaluation remains opt-in. */
+    improvementModelEvaluationV1Enabled?: boolean;
+    /** Managed-source evolution remains opt-in and registration-gated. */
+    productSourceEvolutionV1Enabled?: boolean;
     /** B2b TTS voice replies to audio-capable channels. Absent/false (default) ⇒ no audio synthesis on the reply path. */
     channelVoiceReplyV1Enabled?: boolean;
     /** Opt-in: weekly governed memory consolidation (propose-only, approval-gated). Absent/false ⇒ job never runs. */

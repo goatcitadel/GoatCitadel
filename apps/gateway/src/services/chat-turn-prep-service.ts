@@ -16,6 +16,7 @@ import {
   DEFAULT_CITADEL_ID,
   ConflictError,
   NotFoundError,
+  redactStructuredSecrets,
 } from "@goatcitadel/contracts";
 import type {
   CapabilityCatalogSnapshotRecord,
@@ -148,6 +149,9 @@ type ChatTurnPrepStorage = Pick<
   | "chatSessionMeta"
   | "chatSessionPrefs"
   | "chatSessionProjects"
+  | "chatFanoutInvocations"
+  | "chatDelegationSteps"
+  | "chatTurnTraces"
   | "chatSideChats"
   | "chatSpecialistCandidates"
   | "runImmediateTransaction"
@@ -205,6 +209,8 @@ export interface ChatTurnPrepHost {
       model?: string;
       guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
       compactionDimension?: ChatCompactionDimension;
+      agenticStateCapsule?: string;
+      protectedTurnIds?: readonly string[];
     },
     state?: ChatTurnSessionState,
   ): Promise<ChatCompletionRequest["messages"]>;
@@ -941,6 +947,7 @@ export async function prepareAgentChatTurn(
     return items;
   });
   conversationMessages.push(userMessage);
+  const agenticStateCapsule = await buildAgenticStateCapsule(host.storage, sessionId, sessionState);
   const hasRoutedContextRefs = input.contextRefs !== undefined;
   if (hasRoutedContextRefs && boundCapabilityProfile) {
     throw new ConflictError({
@@ -984,6 +991,8 @@ export async function prepareAgentChatTurn(
       model: effectiveModel,
       guidanceSystemInstruction,
       compactionDimension,
+      agenticStateCapsule: agenticStateCapsule.instruction,
+      protectedTurnIds: agenticStateCapsule.protectedTurnIds,
     },
     sessionState,
   );
@@ -1038,6 +1047,8 @@ export async function prepareAgentChatTurn(
           model: effectiveModel,
           guidanceSystemInstruction,
           compactionDimension,
+          agenticStateCapsule: agenticStateCapsule.instruction,
+          protectedTurnIds: agenticStateCapsule.protectedTurnIds,
         },
         sessionState,
       );
@@ -1186,6 +1197,8 @@ export async function prepareAgentChatTurn(
         model: effectiveModel,
         guidanceSystemInstruction,
         compactionDimension,
+        agenticStateCapsule: agenticStateCapsule.instruction,
+        protectedTurnIds: agenticStateCapsule.protectedTurnIds,
       },
       sessionState,
     );
@@ -1357,6 +1370,111 @@ function assertRoutedContextRouteDecisionMatchesFrozenRoute(
 }
 
 const ROUTED_CONTEXT_SYSTEM_PREFIX = "Routed context snapshot (immutable).";
+
+interface AgenticStateCapsule {
+  instruction?: string;
+  protectedTurnIds: string[];
+}
+
+/**
+ * Rehydrates the minimum durable aggregate state needed to resume an agentic
+ * Chat conversation after compaction or restart. It intentionally includes
+ * references and terminal state—not child output—so uncommitted work cannot
+ * be mistaken for an answer and no child text is promoted into memory.
+ */
+export async function buildAgenticStateCapsule(
+  storage: ChatTurnPrepStorage,
+  sessionId: string,
+  sessionState: ChatTurnSessionState,
+): Promise<AgenticStateCapsule> {
+  // Production async storage always owns this canonical repository. The
+  // explicit absence guard keeps narrow compatibility/test adapters from
+  // fabricating durable state; it never catches repository failures.
+  const fanoutInvocations = storage.chatFanoutInvocations;
+  if (!fanoutInvocations) {
+    return { protectedTurnIds: [] };
+  }
+  const active = (await fanoutInvocations.listActive(50))
+    .filter((invocation) => invocation.sessionId === sessionId)
+    .slice(-3);
+  if (active.length === 0) {
+    return { protectedTurnIds: [] };
+  }
+
+  const protectedTurnIds = sessionState.traces
+    .filter((trace) => active.some((invocation) => trace.durable?.runId === invocation.parentRunId))
+    .map((trace) => trace.turnId);
+  const lines = [
+    "Server-owned durable agentic state capsule (v1).",
+    "This is canonical recovery context, not memory and not current authority. Recheck live policy, grant, project, approvals, and effect state before dispatch.",
+  ];
+  for (const invocation of active) {
+    const steps = invocation.delegationRunId
+      ? await storage.chatDelegationSteps.listByRun(invocation.delegationRunId)
+      : [];
+    lines.push(
+      `Fan-out ${invocation.invocationId}: parent=${invocation.parentRunId}; status=${invocation.status}; project=${invocation.projectId}; children=${invocation.childCount}; grant=${invocation.grantId}.`,
+      `Parent objective (bounded/redacted): ${redactAgenticCapsuleText(invocation.objective, 360) || "[not retained]"}`,
+      `Frozen receipts: capability=${invocation.capabilityProfileHash ?? "none"}; policy=${invocation.policyProfileHash ?? "none"}; project=${invocation.projectBindingHash}; grant=${invocation.grantBindingHash}.`,
+    );
+    for (const step of steps.sort((left, right) => left.index - right.index).slice(0, invocation.childCount)) {
+      const approvalState = await resolveCapsuleApprovalState(storage, step.childTurnId);
+      const committedReference =
+        step.status === "completed"
+          ? [step.durableRunId, step.childSessionId, step.childTurnId].filter(Boolean).join("/") ||
+            "committed-without-child-reference"
+          : undefined;
+      const citationIds =
+        step.status === "completed" ? (step.citations ?? []).map((citation) => citation.citationId).slice(0, 4) : [];
+      lines.push(
+        [
+          `Child ${step.index + 1}${step.label ? ` (${redactAgenticCapsuleText(step.label, 96)})` : ""}: ${step.status}.`,
+          approvalState ? `approval=${approvalState}.` : undefined,
+          committedReference ? `committed-result-ref=${committedReference}.` : undefined,
+          citationIds.length > 0 ? `citation-receipts=${citationIds.join(",")}.` : undefined,
+          step.status !== "completed"
+            ? "Do not synthesize from this child until a committed terminal output exists."
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    }
+  }
+  lines.push(
+    "Use only committed completed-child outputs plus explicit failure, cancellation, or approval state. Never infer current authority from the frozen grant receipt.",
+  );
+  return {
+    instruction: lines.join("\n").slice(0, 6_000),
+    protectedTurnIds: [...new Set(protectedTurnIds)],
+  };
+}
+
+async function resolveCapsuleApprovalState(
+  storage: ChatTurnPrepStorage,
+  childTurnId: string | undefined,
+): Promise<"waiting_for_approval" | "waiting_for_input" | undefined> {
+  if (!childTurnId) return undefined;
+  try {
+    const trace = await storage.chatTurnTraces.get(childTurnId);
+    if (trace.pendingApprovalSummary) return "waiting_for_approval";
+    if (trace.pendingUserInput) return "waiting_for_input";
+  } catch {
+    // The parent step remains the canonical status when a child trace has been
+    // pruned or is unavailable during recovery; do not fabricate an approval.
+    return undefined;
+  }
+  return undefined;
+}
+
+function redactAgenticCapsuleText(value: string, limit: number): string {
+  const redacted = redactStructuredSecrets(value, { marker: "[redacted]" })
+    .value.replace(/(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)[^\s]+/g, "[path]")
+    .replace(/\/(?:[^\s/]+\/){1,}[^\s]*/g, "[path]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return redacted.length > limit ? redacted.slice(0, limit) : redacted;
+}
 
 export function upsertChatRoutedContextSystemInstruction(
   history: ChatCompletionRequest["messages"],

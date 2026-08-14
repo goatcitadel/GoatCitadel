@@ -77,6 +77,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/secrets", accessClass: "operator" },
   { prefix: "/api/v1/sessions", accessClass: "operator" },
   { prefix: "/api/v1/chat", accessClass: "operator" },
+  { prefix: "/api/v1/change-plans", accessClass: "operator" },
   // Read-only surface classifier preview (POST /api/v1/surface/classify). It takes an
   // arbitrary prompt plus workspace/citadel ids, so it stays operator-gated like the rest
   // of the console — this makes the classification explicit (was resolving to the operator

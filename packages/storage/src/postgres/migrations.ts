@@ -6,6 +6,9 @@ import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remot
 import { REMOTE_WORKER_MESH_NODE_ADMISSION_POSTGRES_SQL } from "./remote-worker-mesh-node-admission.js";
 import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
 import { MOBILE_APPROVAL_KEY_POSTGRES_SCHEMA_SQL } from "./mobile-approval-key-schema.js";
+import { CHANGE_PLAN_POSTGRES_SCHEMA_SQL } from "../change-plan-schema.js";
+import { MANAGED_SOURCE_INSTALL_SQL } from "../managed-source-install-repo.js";
+import { PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL } from "../product-source-update-repo.js";
 import { buildPostgresV140CanonicalSchemaAuthoritySql } from "./v140-canonical-index-authority.js";
 
 export interface PostgresMigration {
@@ -14561,6 +14564,124 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "mobile_approval_key_registration_owner",
     sql: MOBILE_APPROVAL_KEY_POSTGRES_SCHEMA_SQL,
     integritySha256: "d02f99ec698724cc18468b40f71f1bc142d29bc141303987dadd89ef81b43248",
+  },
+  {
+    version: 142,
+    name: "chat_durable_fanout_invocations",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_fanout_invocations (
+        invocation_id TEXT PRIMARY KEY CHECK(char_length(BTRIM(invocation_id)) BETWEEN 1 AND 256),
+        parent_run_id TEXT NOT NULL CHECK(char_length(BTRIM(parent_run_id)) BETWEEN 1 AND 256),
+        tool_run_id TEXT NOT NULL CHECK(char_length(BTRIM(tool_run_id)) BETWEEN 1 AND 256),
+        delegation_run_id TEXT CHECK(delegation_run_id IS NULL OR char_length(BTRIM(delegation_run_id)) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(char_length(BTRIM(session_id)) BETWEEN 1 AND 256),
+        workspace_id TEXT NOT NULL CHECK(char_length(BTRIM(workspace_id)) BETWEEN 1 AND 256),
+        project_id TEXT NOT NULL CHECK(char_length(BTRIM(project_id)) BETWEEN 1 AND 256),
+        status TEXT NOT NULL CHECK(status IN (
+          'reserving', 'reserved', 'dispatching', 'waiting', 'completed', 'partial', 'failed', 'cancelled', 'blocked'
+        )),
+        child_count BIGINT NOT NULL CHECK(child_count BETWEEN 1 AND 3),
+        grant_id TEXT NOT NULL CHECK(char_length(BTRIM(grant_id)) BETWEEN 1 AND 256),
+        subtasks_json TEXT NOT NULL CHECK(
+          jsonb_typeof(subtasks_json::jsonb) = 'array' AND octet_length(subtasks_json) <= 16384
+        ),
+        reserved_activations BIGINT NOT NULL CHECK(reserved_activations BETWEEN 1 AND 3 AND reserved_activations >= child_count),
+        reserved_budget_usd DOUBLE PRECISION NOT NULL CHECK(reserved_budget_usd >= 0),
+        objective TEXT NOT NULL CHECK(char_length(BTRIM(objective)) BETWEEN 1 AND 2048),
+        capability_profile_hash TEXT CHECK(capability_profile_hash IS NULL OR capability_profile_hash ~ '^[0-9a-f]{64}$'),
+        policy_profile_hash TEXT CHECK(policy_profile_hash IS NULL OR policy_profile_hash ~ '^[0-9a-f]{64}$'),
+        project_binding_hash TEXT NOT NULL CHECK(project_binding_hash ~ '^[0-9a-f]{64}$'),
+        grant_binding_hash TEXT NOT NULL CHECK(grant_binding_hash ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL CHECK(char_length(BTRIM(created_at)) > 0),
+        updated_at TEXT NOT NULL CHECK(char_length(BTRIM(updated_at)) > 0),
+        finished_at TEXT,
+        terminal_reason TEXT,
+        UNIQUE(parent_run_id, tool_run_id),
+        CHECK(
+          (status IN ('completed', 'partial', 'failed', 'cancelled', 'blocked') AND finished_at IS NOT NULL)
+          OR (status IN ('reserving', 'reserved', 'dispatching', 'waiting') AND finished_at IS NULL)
+        )
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_fanout_invocations_active
+        ON chat_fanout_invocations(status, updated_at ASC, invocation_id ASC);
+      CREATE INDEX IF NOT EXISTS idx_chat_fanout_invocations_parent
+        ON chat_fanout_invocations(parent_run_id, created_at ASC);
+    `,
+  },
+  {
+    version: 143,
+    name: "chat_change_plan_ledger",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_change_plans (
+        plan_id TEXT PRIMARY KEY CHECK(char_length(BTRIM(plan_id)) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(char_length(BTRIM(session_id)) BETWEEN 1 AND 256),
+        requester_actor_id TEXT CHECK(requester_actor_id IS NULL OR char_length(BTRIM(requester_actor_id)) BETWEEN 1 AND 256),
+        kind TEXT NOT NULL CHECK(kind IN (
+          'session_model', 'installation_default_model', 'channel_connection', 'capability_candidate', 'product_source_update'
+        )),
+        scope TEXT NOT NULL CHECK(scope IN ('current_chat', 'installation', 'channel', 'capability', 'product_source')),
+        status TEXT NOT NULL CHECK(status IN (
+          'awaiting_confirmation', 'applying', 'applied', 'cancelled', 'failed', 'manual_required'
+        )),
+        revision BIGINT NOT NULL CHECK(revision >= 1),
+        expected_target_revision BIGINT CHECK(expected_target_revision IS NULL OR expected_target_revision >= 1),
+        request_json TEXT NOT NULL CHECK(jsonb_typeof(request_json::jsonb) = 'object' AND octet_length(request_json) <= 16384),
+        title TEXT NOT NULL CHECK(char_length(BTRIM(title)) BETWEEN 1 AND 180),
+        summary TEXT NOT NULL CHECK(char_length(BTRIM(summary)) BETWEEN 1 AND 1000),
+        result_json TEXT CHECK(result_json IS NULL OR (jsonb_typeof(result_json::jsonb) = 'object' AND octet_length(result_json) <= 16384)),
+        created_at TEXT NOT NULL CHECK(char_length(BTRIM(created_at)) > 0),
+        updated_at TEXT NOT NULL CHECK(char_length(BTRIM(updated_at)) > 0),
+        applied_at TEXT,
+        CHECK(
+          (status = 'applied' AND applied_at IS NOT NULL)
+          OR (status <> 'applied' AND applied_at IS NULL)
+        )
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_change_plans_session
+        ON chat_change_plans(session_id, created_at DESC, plan_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_change_plans_status
+        ON chat_change_plans(status, updated_at ASC, plan_id ASC);
+    `,
+  },
+  {
+    version: 144,
+    name: "chat_change_plan_expiry",
+    sql: `
+      ALTER TABLE chat_change_plans ADD COLUMN IF NOT EXISTS expires_at TEXT;
+      UPDATE chat_change_plans
+      SET expires_at = created_at
+      WHERE expires_at IS NULL OR char_length(BTRIM(expires_at)) = 0;
+      ALTER TABLE chat_change_plans ALTER COLUMN expires_at SET NOT NULL;
+    `,
+  },
+  {
+    version: 145,
+    name: "evolution_control_plane_change_plans",
+    sql: CHANGE_PLAN_POSTGRES_SCHEMA_SQL,
+    integritySha256: "8dbbf62f33748cf8c028f0934976c8fc13fe975ac1165f08cc7b538cbfca0c04",
+  },
+  {
+    version: 146,
+    name: "channel_setup_draft_revision_cas",
+    sql: `
+      ALTER TABLE channel_setup_drafts ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE channel_setup_drafts ADD COLUMN IF NOT EXISTS secret_refs_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE channel_setup_drafts DROP CONSTRAINT IF EXISTS channel_setup_drafts_revision_positive;
+      ALTER TABLE channel_setup_drafts
+        ADD CONSTRAINT channel_setup_drafts_revision_positive CHECK(revision >= 1);
+    `,
+  },
+  {
+    version: 147,
+    name: "managed_source_install_registry",
+    sql: MANAGED_SOURCE_INSTALL_SQL,
+    integritySha256: "8e969753aae7af0c8b17a8db522b2287581e4be0fab7a49cde691959faa58ff1",
+  },
+  {
+    version: 148,
+    name: "product_source_update_manifests",
+    sql: PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL,
+    integritySha256: "700ea8a463be3db735524b0419234d87645dde50d843687b2e970b125f0382b9",
   },
 ];
 

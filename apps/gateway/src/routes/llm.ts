@@ -278,6 +278,12 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (_request, reply) => {
       try {
+        if (await fastify.services.evolution?.isEnabled()) {
+          return reply.code(409).send({
+            error:
+              "OpenAI Codex OAuth must be started from a provider Change Plan while the Evolution Control Plane is enabled.",
+          });
+        }
         return reply.send(await fastify.services.llm.startOpenAICodexOAuthDeviceFlow());
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
@@ -300,6 +306,11 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
       try {
+        if (await fastify.services.evolution?.isEnabled()) {
+          return reply.code(409).send({
+            error: "OpenAI Codex OAuth polling must use the exact provider Change Plan owner route.",
+          });
+        }
         return reply.send(await fastify.services.llm.pollOpenAICodexOAuthDeviceFlow(parsed.data.flowId));
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
@@ -318,6 +329,11 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (_request, reply) => {
       try {
+        if (await fastify.services.evolution?.isEnabled()) {
+          return reply.code(409).send({
+            error: "OpenAI Codex OAuth removal requires a confirmed provider Change Plan.",
+          });
+        }
         return reply.send(fastify.services.llm.deleteOpenAICodexOAuthCredential());
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });

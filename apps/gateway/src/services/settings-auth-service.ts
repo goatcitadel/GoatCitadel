@@ -40,6 +40,7 @@ import {
   type CompanionSessionRefreshInput,
   type CompanionSessionRefreshResponse,
   type CompanionSessionRevokeResponse,
+  type ChatThinkingLevel,
   type DeploymentProfile,
   type DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   type DeviceAccessRequestCreateInput,
@@ -276,6 +277,7 @@ export interface UpdateSettingsInput {
   llm?: {
     activeProviderId?: string;
     activeModel?: string;
+    defaultThinkingLevel?: ChatThinkingLevel;
     utilityProviderId?: string;
     utilityModel?: string;
     upsertProvider?: {

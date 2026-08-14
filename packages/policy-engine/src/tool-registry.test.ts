@@ -56,6 +56,26 @@ describe("tool registry", () => {
     expect(tool?.usageHints?.join(" ")).toContain("Never ask the operator to paste credentials into Chat");
   });
 
+  it("registers change.request as a plan-creation-only bounded Chat tool", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((entry) => entry.toolName === "change.request");
+
+    expect(tool).toMatchObject({
+      category: "ops",
+      riskLevel: "safe",
+      requiresApproval: false,
+      pack: "core",
+      recommendedContexts: ["chat"],
+      argSchema: { type: "object", required: ["intent"], additionalProperties: false },
+    });
+    const schemaText = JSON.stringify(tool?.argSchema);
+    expect(schemaText).toContain("session_model");
+    expect(schemaText).toContain("product_source_update");
+    expect(schemaText).not.toMatch(/apiKey|password|filesystemPath|patch|command/iu);
+    expect(tool?.description).toContain("never confirms or applies");
+  });
+
   it("includes browser session-state tools", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     expect(catalog.some((tool) => tool.toolName === "browser.cookies.get")).toBe(true);

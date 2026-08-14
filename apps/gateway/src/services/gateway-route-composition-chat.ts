@@ -105,6 +105,14 @@ export function composeChatRouteDependencies(
       await fs.copyFile(sourcePath, destinationPath);
       return destinationRelPath;
     },
+    getChatSessionModelDefaults: () => {
+      const runtime = gateway.llmService.getRuntimeConfig();
+      return {
+        providerId: runtime.activeProviderId || undefined,
+        model: runtime.activeModel || undefined,
+        thinkingLevel: runtime.defaultThinkingLevel ?? "standard",
+      };
+    },
     ensureChatSessionModelDefaults: (sessionId, prefs) => gateway.ensureChatSessionModelDefaults(sessionId, prefs),
     hydrateChatPrefsWithAutonomy: (sessionId, prefs) => gateway.hydrateChatPrefsWithAutonomy(sessionId, prefs),
     patchSessionAutonomyPrefs: (sessionId, patch) => gateway.patchSessionAutonomyPrefs(sessionId, patch),
@@ -378,6 +386,7 @@ export function composeChatRouteDependencies(
     runChatDelegation: (sessionId, input) => gateway.runChatDelegation(sessionId, input),
     runChatDelegationStream: (sessionId, input, options) => gateway.runChatDelegationStream(sessionId, input, options),
     suggestChatDelegation: (sessionId, input) => gateway.suggestChatDelegation(sessionId, input),
+    stopChatFanout: (sessionId, invocationId) => gateway.stopChatFanout(sessionId, invocationId),
   };
   const chatTools: GatewayRouteServiceDependencies["chatTools"] = {
     getChatToolArtifactContent: (artifactId, options) =>
@@ -661,6 +670,14 @@ export function composeChatRouteDependencies(
     },
     chatSessions,
     chatSupport: {
+      changePlans: {
+        create: (sessionId, input) => gateway.chatChangePlanCompatibilityService.create(sessionId, input),
+        list: (sessionId, limit) => gateway.chatChangePlanCompatibilityService.list(sessionId, limit),
+        confirm: (sessionId, planId, expectedRevision) =>
+          gateway.chatChangePlanCompatibilityService.confirm(sessionId, planId, expectedRevision),
+        cancel: (sessionId, planId, expectedRevision) =>
+          gateway.chatChangePlanCompatibilityService.cancel(sessionId, planId, expectedRevision),
+      },
       commands: {
         listChatCommandCatalog: () => chatCommandService.listChatCommandCatalog(),
         parseChatCommand: (sessionId, commandText, options) =>

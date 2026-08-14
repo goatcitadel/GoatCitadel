@@ -89,6 +89,8 @@ export interface ProviderSecretStatus {
 
 export interface ProviderSecretMutationResponse extends ProviderSecretStatus {
   revision: number;
+  /** Additive compatibility receipt when the save/delete entered the Evolution Control Plane. */
+  changePlanReceipt?: NonNullable<RuntimeSettingsResponse["changePlanReceipt"]>;
 }
 
 export interface OpenAICodexOAuthStatus {

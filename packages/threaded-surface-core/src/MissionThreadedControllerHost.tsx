@@ -33,6 +33,8 @@ import type {
   ChatSessionWorkbenchRecord,
   ChatSessionWorkbenchTreeResponse,
   ChatSessionPrefsPatch,
+  ChangePlanRecord,
+  AutonomousActivationGrantRecord,
   ChatThreadResponse,
   ChatWorkspaceSnapshotRequest,
   RunTemplateInvocation,
@@ -53,6 +55,21 @@ import {
   attachThreadKnowledgeAttachment,
   clearChatSessionGoal,
   cancelChatTimer,
+  cancelChangePlan,
+  completeChangePlanProviderOAuth,
+  confirmChangePlan,
+  connectEventStream,
+  createChangePlan,
+  fetchChangePlan,
+  fetchChangePlans,
+  respondToChangePlan,
+  submitChangePlanGatewayAuthCredential,
+  submitChangePlanProviderSecret,
+  submitChangePlanChannelSecrets,
+  submitChangePlanManagedSourceSelection,
+  startChangePlanProviderOAuth,
+  pollChangePlanProviderOAuth,
+  type OpenAICodexDeviceStartResponse,
   createChatTimer,
   createChatGeneratedArtifact,
   forkChatSessionFromTurn,
@@ -62,6 +79,7 @@ import {
   fetchChatSessionGoal,
   fetchChatSessionPrefs,
   fetchChatSessionStatus,
+  fetchAutonomousActivationGrants,
   fetchChatTimers,
   fetchNotificationRules,
   fetchMcpServers,
@@ -71,6 +89,7 @@ import {
   parseChatCommand,
   removeThreadKnowledgeAttachment,
   setChatSessionGoal,
+  stopChatFanout as stopChatFanoutAggregate,
   steerChatSession,
   updateChatSessionPrefs,
   uploadChatAttachment,
@@ -95,6 +114,11 @@ import { StatusChip } from "@goatcitadel/mission-control-shared/components/Statu
 import type { CoworkCanvasPanel as LegacyCoworkCanvasPanelComponent } from "@goatcitadel/mission-control-shared/components/CoworkCanvasPanel";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
+import {
+  ChatChangePlanActionDialog,
+  type ChangePlanPublicValues,
+} from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { deriveCoworkRunViewModel, type CoworkAgenticControlItem } from "./cowork-view-model";
 import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
@@ -1097,11 +1121,18 @@ export function MissionThreadedControllerHost({
     message: string;
     onConfirm: () => void;
   } | null>(null);
-  const [threadModelSwitchConfirm, setThreadModelSwitchConfirm] = useState<{
-    title: string;
-    message: string;
-    patch: ChatSessionPrefsPatch;
+  const [activeChangePlan, setActiveChangePlan] = useState<ChangePlanRecord | null>(null);
+  const [linkedDefaultChangePlan, setLinkedDefaultChangePlan] = useState<ChangePlanRecord | null>(null);
+  const [changePlanActionPending, setChangePlanActionPending] = useState(false);
+  const [changePlanActionError, setChangePlanActionError] = useState<string | null>(null);
+  const [changePlanOAuthFlow, setChangePlanOAuthFlow] = useState<{
+    planId: string;
+    planRevision: number;
+    actionId: string;
+    actionNonce: string;
+    flow: OpenAICodexDeviceStartResponse;
   } | null>(null);
+  const [chatChangePlans, setChatChangePlans] = useState<ChangePlanRecord[]>([]);
   const [forkConfirm, setForkConfirm] = useState<{
     turnId: string;
     turnCount: number;
@@ -1267,6 +1298,33 @@ export function MissionThreadedControllerHost({
     loadSessionCoreState,
     loadSessionSecondaryState,
   } = sessionData;
+
+  const [autonomousActivationGrants, setAutonomousActivationGrants] = useState<AutonomousActivationGrantRecord[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const refreshAutonomousActivationGrants = () => {
+      void fetchAutonomousActivationGrants(true)
+        .then((response) => {
+          if (!cancelled) setAutonomousActivationGrants(response.items ?? []);
+        })
+        .catch(() => {
+          if (!cancelled) setAutonomousActivationGrants([]);
+        });
+    };
+    refreshAutonomousActivationGrants();
+    if (typeof window !== "undefined") {
+      window.addEventListener("goatcitadel:autonomous-activation-grants-changed", refreshAutonomousActivationGrants);
+    }
+    return () => {
+      cancelled = true;
+      if (typeof window !== "undefined") {
+        window.removeEventListener(
+          "goatcitadel:autonomous-activation-grants-changed",
+          refreshAutonomousActivationGrants,
+        );
+      }
+    };
+  }, [workspaceId]);
   const currentSessionMode: ChatMode = "chat";
   const sessionStatusEnabled = settings?.features?.chatSessionStatusV1Enabled === true;
   const chatTimersEnabled = settings?.features?.chatTimersV1Enabled === true;
@@ -1304,12 +1362,90 @@ export function MissionThreadedControllerHost({
     }
   }, [selectedSessionId, sessionStatusEnabled]);
 
+  const stopSessionFanout = useCallback(
+    async (invocationId: string) => {
+      if (!selectedSessionId || !sessionStatusEnabled) return;
+      setSessionStatusPanel((current) => ({ ...current, open: true, loading: true, error: null }));
+      let stoppedStatus: string;
+      try {
+        const stopped = await stopChatFanoutAggregate(selectedSessionId, invocationId);
+        stoppedStatus = stopped.status;
+      } catch (stopError) {
+        setSessionStatusPanel((current) => ({
+          ...current,
+          open: true,
+          loading: false,
+          error: stopError instanceof Error ? stopError.message : String(stopError),
+        }));
+        return;
+      }
+      pushLocalNotice(
+        `Fan-out stop requested (${stoppedStatus}). Active children are being cancelled durably.`,
+        "success",
+      );
+      try {
+        const status = await fetchChatSessionStatus(selectedSessionId);
+        setSessionStatusPanel({ open: true, loading: false, error: null, status });
+      } catch (refreshError) {
+        setSessionStatusPanel((current) => ({
+          ...current,
+          open: true,
+          loading: false,
+          error: `Stop was requested (${stoppedStatus}), but canonical status could not be refreshed: ${
+            refreshError instanceof Error ? refreshError.message : String(refreshError)
+          }`,
+        }));
+      }
+    },
+    [pushLocalNotice, selectedSessionId, sessionStatusEnabled],
+  );
+
   useEffect(() => {
     setSessionStatusPanel({ open: false, loading: false, error: null, status: null });
     setChatTimerPanel((current) => ({ ...current, open: false, error: null, timers: [] }));
     setRunVariablePanel(null);
     setPendingTemplateInvocation(null);
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedSessionId) {
+      setChatChangePlans([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void fetchChangePlans({ workspaceId, sessionId: selectedSessionId }, { limit: 12 })
+      .then((response) => {
+        if (!cancelled) setChatChangePlans(response.items);
+      })
+      .catch(() => {
+        if (!cancelled) setChatChangePlans([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSessionId, workspaceId]);
+
+  useEffect(() => {
+    if (!selectedSessionId) return undefined;
+    return connectEventStream((event) => {
+      if (event.source !== "evolution_control_plane" || !event.eventType.startsWith("change_plan.")) return;
+      const eventWorkspaceId = event.links?.workspaceId;
+      const eventSessionId = event.links?.sessionId;
+      if (eventWorkspaceId && eventWorkspaceId !== workspaceId) return;
+      if (eventSessionId && eventSessionId !== selectedSessionId) return;
+      void fetchChangePlans({ workspaceId, sessionId: selectedSessionId }, { limit: 12 })
+        .then((response) => {
+          setChatChangePlans(response.items);
+          setActiveChangePlan((current) => {
+            if (!current) return null;
+            return response.items.find((item) => item.planId === current.planId) ?? current;
+          });
+        })
+        .catch(() => undefined);
+    });
+  }, [selectedSessionId, workspaceId]);
 
   const refreshChatTimers = useCallback(async () => {
     if (!selectedSessionId || !chatTimersEnabled) return;
@@ -1504,6 +1640,84 @@ export function MissionThreadedControllerHost({
     visibleSessionLabelById,
     availableFolders,
   } = threadController;
+  const automaticFanout = useMemo(() => {
+    if (settings?.features?.durableChatFanoutV1Enabled !== true) {
+      return {
+        enabled: false,
+        unavailableReason: "Automatic fan-out is not enabled for this runtime. Ask remains the safe default.",
+      };
+    }
+    const projectId = selectedSession?.projectId?.trim();
+    if (!projectId) {
+      return {
+        enabled: false,
+        unavailableReason: "Bind this Chat session to an active project before enabling automatic fan-out.",
+      };
+    }
+    const project = projects?.items?.find((candidate) => candidate.projectId === projectId);
+    if (!project || project.lifecycleStatus !== "active" || (project.workspaceId ?? "default") !== workspaceId) {
+      return {
+        enabled: false,
+        projectId,
+        unavailableReason: "The bound project is missing, archived, or belongs to a different workspace.",
+      };
+    }
+    const now = Date.now();
+    const candidateGrants = autonomousActivationGrants.filter(
+      (candidate) =>
+        candidate.status === "active" &&
+        candidate.workspaceId === workspaceId &&
+        candidate.projectId === projectId &&
+        candidate.activationKinds.includes("subagent_fanout") &&
+        Number.isFinite(Date.parse(candidate.expiresAt)) &&
+        Date.parse(candidate.expiresAt) > now,
+    );
+    const grant = candidateGrants.find(
+      (candidate) =>
+        candidate.activationKinds.length === 1 &&
+        candidate.activationKinds[0] === "subagent_fanout" &&
+        candidate.surfaces.length === 1 &&
+        candidate.surfaces[0] === "chat" &&
+        candidate.maxRiskLevel === "caution" &&
+        Number.isInteger(candidate.maxActivations) &&
+        (candidate.maxActivations ?? 0) >= 1 &&
+        typeof candidate.budgetUsd === "number" &&
+        Number.isFinite(candidate.budgetUsd) &&
+        candidate.budgetUsd >= 0.25,
+    );
+    if (!grant) {
+      return {
+        enabled: false,
+        projectId,
+        unavailableReason: candidateGrants.length
+          ? "The active project grant no longer meets the dedicated Chat fan-out safety limits. Ask remains active until it is replaced."
+          : "Ask remains active. Auto when useful requires an active, expiring automatic fan-out grant for this exact project.",
+      };
+    }
+    if (grant.maxActivations !== undefined && grant.usedActivations >= grant.maxActivations) {
+      return {
+        enabled: false,
+        projectId,
+        grant,
+        unavailableReason: "The project grant has no child-activation quota remaining. Ask remains active.",
+      };
+    }
+    if (grant.budgetUsd !== undefined && (grant.usedBudgetUsd ?? 0) >= grant.budgetUsd) {
+      return {
+        enabled: false,
+        projectId,
+        grant,
+        unavailableReason: "The project grant has no budget remaining. Ask remains active.",
+      };
+    }
+    return { enabled: true, projectId, grant };
+  }, [
+    autonomousActivationGrants,
+    projects?.items,
+    selectedSession?.projectId,
+    settings?.features?.durableChatFanoutV1Enabled,
+    workspaceId,
+  ]);
   const routeArtifactId = useMemo(
     () => new URLSearchParams(routeSearch).get("artifactId")?.trim() || null,
     [routeSearch],
@@ -2052,6 +2266,12 @@ export function MissionThreadedControllerHost({
         ...(commandPolicyRunId ? { policyRunId: commandPolicyRunId } : {}),
       });
       if (result.prefs) setPrefs(result.prefs);
+      const changePlan = result.changePlan;
+      if (changePlan) {
+        setChatChangePlans((current) =>
+          [changePlan, ...current.filter((item) => item.planId !== changePlan.planId)].slice(0, 12),
+        );
+      }
       pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
       if (result.command === "/project" || result.command === "/new") {
         await loadSidebar();
@@ -3353,53 +3573,523 @@ export function MissionThreadedControllerHost({
       orchestrationReviewDepth: currentReviewDepth === "off" ? "standard" : "off",
     });
   }, [handlePrefPatch, prefs?.orchestrationReviewDepth]);
-  const applyThreadModelPatch = useCallback(
-    async (patch: ChatSessionPrefsPatch) => {
-      await runWithSelectedSession(selectedSession, async (session) => {
-        try {
-          await applyPrefPatchToSession(session.sessionId, patch);
-          setUiError(null);
-        } catch {
-          // Errors already surface through page state.
-        }
-      });
-    },
-    [applyPrefPatchToSession, selectedSession, setUiError],
-  );
   const requestThreadModelPatch = useCallback(
     (patch: ChatSessionPrefsPatch) => {
-      runWithSelectedSession(selectedSession, () => {
+      void runWithSelectedSession(selectedSession, async (session) => {
         const nextProviderId = patch.providerId ?? selectedProviderId ?? "";
         const nextModel = patch.model ?? selectedModel ?? "";
         const providerChanged = patch.providerId !== undefined && patch.providerId !== (selectedProviderId ?? "");
         const modelChanged = patch.model !== undefined && patch.model !== (selectedModel ?? "");
-        if (!providerChanged && !modelChanged) {
+        const effortChanged = patch.thinkingLevel !== undefined && patch.thinkingLevel !== prefs?.thinkingLevel;
+        if (!providerChanged && !modelChanged && !effortChanged) {
           return;
         }
-        const nextProviderLabel =
-          providerOptions.find((item) => item.providerId === nextProviderId)?.label ?? selectedProviderLabel;
-        const nextRoutingSummary = formatWorkProviderModelSummary(nextProviderLabel, nextModel || undefined);
-        const turnCount = thread?.turns.length ?? 0;
-        if (turnCount === 0) {
-          void applyThreadModelPatch(patch);
-          return;
+        try {
+          const plan = await createChangePlan({
+            workspaceId,
+            sessionId: session.sessionId,
+            surface: "chat",
+            idempotencyKey: [
+              "chat-model",
+              session.sessionId,
+              prefs?.revision ?? 0,
+              nextProviderId,
+              nextModel,
+              patch.thinkingLevel ?? prefs?.thinkingLevel ?? "unchanged",
+            ].join(":"),
+            request: {
+              kind: "session_model",
+              ...(nextProviderId ? { providerId: nextProviderId } : {}),
+              ...(nextModel ? { model: nextModel } : {}),
+              ...(patch.thinkingLevel ? { thinkingLevel: patch.thinkingLevel } : {}),
+            },
+          });
+          if (plan.status !== "awaiting_confirmation") {
+            setUiError(plan.result?.summary ?? "This change needs additional setup before it can be confirmed.");
+            return;
+          }
+          setChatChangePlans((current) =>
+            [plan, ...current.filter((item) => item.planId !== plan.planId)].slice(0, 12),
+          );
+        } catch (error) {
+          setUiError(error instanceof Error ? error.message : "Unable to prepare this model change.");
         }
-        setThreadModelSwitchConfirm({
-          title: "Switch thread model?",
-          message: `This conversation already has ${turnCount} turn${turnCount === 1 ? "" : "s"}. Switching to ${nextRoutingSummary} can reduce continuity because the new model will not share the same hidden reasoning state. Important context stays in the thread, but you may want to restate key instructions after the switch.`,
-          patch,
-        });
       });
     },
     [
-      applyThreadModelPatch,
-      providerOptions,
       selectedModel,
       selectedProviderId,
-      selectedProviderLabel,
       selectedSession,
-      thread?.turns.length,
+      setUiError,
+      prefs?.thinkingLevel,
+      prefs?.revision,
+      workspaceId,
     ],
+  );
+  const reviewChatChangePlan = useCallback((plan: ChangePlanRecord) => {
+    setChangePlanActionError(null);
+    setLinkedDefaultChangePlan(null);
+    setActiveChangePlan(plan);
+  }, []);
+  const cancelPendingChatChangePlan = useCallback(
+    (plan: ChangePlanRecord) => {
+      const actionNonce = plan.requiredAction?.actionNonce;
+      if (!actionNonce) {
+        setUiError("This Change Plan no longer has a cancellable action. Refresh it before continuing.");
+        return;
+      }
+      void cancelChangePlan(
+        plan.planId,
+        { workspaceId, ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}) },
+        { expectedRevision: plan.revision, actionNonce },
+      )
+        .then((cancelled) => {
+          setChatChangePlans((current) => current.map((item) => (item.planId === cancelled.planId ? cancelled : item)));
+          setActiveChangePlan((current) => (current?.planId === cancelled.planId ? null : current));
+          setLinkedDefaultChangePlan((current) => (current?.planId === cancelled.planId ? null : current));
+          pushLocalNotice("Change plan cancelled.", "success");
+        })
+        .catch((error) => {
+          setUiError(error instanceof Error ? error.message : "Unable to cancel this Change Plan.");
+        });
+    },
+    [pushLocalNotice, setUiError, workspaceId],
+  );
+  const makeChatChangePlanDefault = useCallback(
+    (plan: ChangePlanRecord) => {
+      if (plan.request.kind !== "session_model") return;
+      const providerId = plan.request.providerId ?? selectedProviderId ?? prefs?.providerId;
+      const model = plan.request.model ?? selectedModel ?? prefs?.model;
+      if (!providerId || !model) {
+        setUiError("Choose a provider and model before making it the default for future chats.");
+        return;
+      }
+      void createChangePlan({
+        workspaceId,
+        ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
+        surface: "chat",
+        idempotencyKey: `default-model:${plan.planId}:${plan.revision}`,
+        request: {
+          kind: "installation_default_model",
+          providerId,
+          model,
+          ...(plan.request.thinkingLevel ? { thinkingLevel: plan.request.thinkingLevel } : {}),
+        },
+      })
+        .then((created) => {
+          if (created.status !== "awaiting_confirmation") {
+            setUiError(
+              created.result?.summary ?? "This default change needs additional setup before it can be confirmed.",
+            );
+            return;
+          }
+          setChatChangePlans((current) =>
+            [created, ...current.filter((item) => item.planId !== created.planId)].slice(0, 12),
+          );
+          setActiveChangePlan(plan);
+          setLinkedDefaultChangePlan(created);
+        })
+        .catch((error) => {
+          setUiError(error instanceof Error ? error.message : "Unable to prepare the default-model change.");
+        });
+    },
+    [prefs?.model, prefs?.providerId, selectedModel, selectedProviderId, setUiError, workspaceId],
+  );
+  const recordChangePlanResult = useCallback((updated: ChangePlanRecord) => {
+    setChatChangePlans((current) =>
+      [updated, ...current.filter((item) => item.planId !== updated.planId)].slice(0, 12),
+    );
+    if (updated.requiredAction && !isTerminalChangePlanStatus(updated.status)) {
+      setActiveChangePlan(updated);
+    } else {
+      setActiveChangePlan((current) => (current?.planId === updated.planId ? null : current));
+    }
+    return updated;
+  }, []);
+  const handleConfirmChangePlan = useCallback(
+    async (plan: ChangePlanRecord) => {
+      const action = plan.requiredAction;
+      if (action?.kind !== "confirmation") {
+        setChangePlanActionError(
+          "This Change Plan changed before confirmation. Reload it and review the current action.",
+        );
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        const updated = recordChangePlanResult(
+          await confirmChangePlan(plan.planId, changePlanClientContext(workspaceId, plan), {
+            expectedRevision: plan.revision,
+            actionNonce: action.actionNonce,
+          }),
+        );
+        if (plan.request.kind === "session_model" && plan.origin.sessionId && updated.status === "completed") {
+          const refreshed = await fetchChatSessionPrefs(plan.origin.sessionId);
+          prefsRef.current = refreshed;
+          setPrefs(refreshed);
+        }
+        if (updated.status === "completed") {
+          setUiError(null);
+          pushLocalNotice(updated.result?.summary ?? "Change applied and verified.", "success");
+        }
+      } catch (error) {
+        setChangePlanActionError(error instanceof Error ? error.message : "Unable to apply this Change Plan.");
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [prefsRef, pushLocalNotice, recordChangePlanResult, setPrefs, setUiError, workspaceId],
+  );
+  const handleConfirmLinkedModelPlans = useCallback(
+    async (currentChatPlan: ChangePlanRecord, defaultPlan: ChangePlanRecord) => {
+      const currentAction = currentChatPlan.requiredAction;
+      const defaultAction = defaultPlan.requiredAction;
+      if (
+        currentChatPlan.request.kind !== "session_model" ||
+        defaultPlan.request.kind !== "installation_default_model" ||
+        currentAction?.kind !== "confirmation" ||
+        defaultAction?.kind !== "confirmation"
+      ) {
+        setChangePlanActionError(
+          "The linked model plans changed before confirmation. Reload and review both scopes again.",
+        );
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        const [freshCurrent, freshDefault] = await Promise.all([
+          fetchChangePlan(currentChatPlan.planId, changePlanClientContext(workspaceId, currentChatPlan)),
+          fetchChangePlan(defaultPlan.planId, changePlanClientContext(workspaceId, defaultPlan)),
+        ]);
+        requireExactLinkedConfirmation(currentChatPlan, freshCurrent);
+        requireExactLinkedConfirmation(defaultPlan, freshDefault);
+        const currentResult = recordChangePlanResult(
+          await confirmChangePlan(currentChatPlan.planId, changePlanClientContext(workspaceId, currentChatPlan), {
+            expectedRevision: currentChatPlan.revision,
+            actionNonce: currentAction.actionNonce,
+          }),
+        );
+        try {
+          const defaultResult = recordChangePlanResult(
+            await confirmChangePlan(defaultPlan.planId, changePlanClientContext(workspaceId, defaultPlan), {
+              expectedRevision: defaultPlan.revision,
+              actionNonce: defaultAction.actionNonce,
+            }),
+          );
+          setLinkedDefaultChangePlan(null);
+          if (currentChatPlan.origin.sessionId && currentResult.status === "completed") {
+            const refreshed = await fetchChatSessionPrefs(currentChatPlan.origin.sessionId);
+            prefsRef.current = refreshed;
+            setPrefs(refreshed);
+          }
+          if (currentResult.status === "completed" && defaultResult.status === "completed") {
+            setActiveChangePlan(null);
+            pushLocalNotice("Model changed for this Chat and saved as the default for future Chats.", "success");
+          }
+        } catch (defaultError) {
+          setActiveChangePlan(defaultPlan);
+          setLinkedDefaultChangePlan(null);
+          setChangePlanActionError(
+            `This Chat was updated, but the future-Chat default was not. Review the remaining default plan before retrying. ${defaultError instanceof Error ? defaultError.message : ""}`.trim(),
+          );
+        }
+      } catch (error) {
+        setChangePlanActionError(
+          error instanceof Error ? error.message : "Unable to confirm these linked model plans.",
+        );
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [prefsRef, pushLocalNotice, recordChangePlanResult, setPrefs, workspaceId],
+  );
+  const handleSubmitChangePlanForm = useCallback(
+    async (plan: ChangePlanRecord, values: ChangePlanPublicValues) => {
+      const action = plan.requiredAction;
+      if (action?.kind !== "public_form") {
+        setChangePlanActionError("The requested form is no longer current. Reload this Change Plan.");
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        recordChangePlanResult(
+          await respondToChangePlan(plan.planId, changePlanClientContext(workspaceId, plan), {
+            expectedRevision: plan.revision,
+            actionId: action.actionId,
+            actionNonce: action.actionNonce,
+            values,
+          }),
+        );
+      } catch (error) {
+        setChangePlanActionError(
+          error instanceof Error ? error.message : "Unable to submit these Change Plan details.",
+        );
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [recordChangePlanResult, workspaceId],
+  );
+  const handleSubmitChangePlanSecret = useCallback(
+    async (plan: ChangePlanRecord, values: Readonly<Record<string, string>>) => {
+      const action = plan.requiredAction;
+      if (
+        action?.kind !== "secure_input" ||
+        (plan.request.kind !== "provider_connection" &&
+          plan.request.kind !== "channel_connection" &&
+          !(
+            plan.request.kind === "runtime_configuration" &&
+            plan.request.change.operation === "gateway_auth_configuration"
+          ))
+      ) {
+        setChangePlanActionError(
+          "This secure owner action changed. Reload the Change Plan before entering a credential.",
+        );
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        const exactAction = {
+          expectedRevision: plan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+        };
+        const context = changePlanClientContext(workspaceId, plan);
+        const result =
+          plan.request.kind === "provider_connection"
+            ? await submitChangePlanProviderSecret(plan.planId, context, {
+                ...exactAction,
+                apiKey: values.credential ?? Object.values(values)[0] ?? "",
+              })
+            : plan.request.kind === "channel_connection"
+              ? await submitChangePlanChannelSecrets(plan.planId, context, { ...exactAction, values })
+              : await submitChangePlanGatewayAuthCredential(plan.planId, context, {
+                  ...exactAction,
+                  credential: Object.values(values)[0] ?? "",
+                });
+        recordChangePlanResult(result);
+      } catch (error) {
+        setChangePlanActionError(error instanceof Error ? error.message : "Unable to submit this credential securely.");
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [recordChangePlanResult, workspaceId],
+  );
+  const handleReviewChangePlanArtifacts = useCallback(
+    async (plan: ChangePlanRecord) => {
+      const action = plan.requiredAction;
+      if (action?.kind !== "artifact_review") {
+        setChangePlanActionError("The artifact review changed. Reload this Change Plan.");
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        recordChangePlanResult(
+          await respondToChangePlan(plan.planId, changePlanClientContext(workspaceId, plan), {
+            expectedRevision: plan.revision,
+            actionId: action.actionId,
+            actionNonce: action.actionNonce,
+            values: {},
+          }),
+        );
+      } catch (error) {
+        setChangePlanActionError(error instanceof Error ? error.message : "Unable to acknowledge the artifact review.");
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [recordChangePlanResult, workspaceId],
+  );
+  const handleOpenChangePlanApproval = useCallback(
+    async (plan: ChangePlanRecord) => {
+      const action = plan.requiredAction;
+      if (action?.kind !== "approval" || !action.approvalId) {
+        setChangePlanActionError("The canonical approval is not available yet.");
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        const result = await respondToChangePlan(plan.planId, changePlanClientContext(workspaceId, plan), {
+          expectedRevision: plan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+          values: {},
+        });
+        recordChangePlanResult(result);
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 409) {
+          onOpenApprovals(action.approvalId);
+          setActiveChangePlan(null);
+        } else {
+          setChangePlanActionError(
+            error instanceof Error ? error.message : "Unable to resume this approved Change Plan.",
+          );
+        }
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [onOpenApprovals, recordChangePlanResult, workspaceId],
+  );
+  const handleChangePlanOAuth = useCallback(
+    async (plan: ChangePlanRecord) => {
+      const action = plan.requiredAction;
+      if (action?.kind !== "oauth") {
+        setChangePlanActionError("This OAuth action changed. Reload the Change Plan.");
+        return;
+      }
+      if (action.targetId !== "openai-codex") {
+        setChangePlanActionError(
+          "This provider does not expose a first-party Chat OAuth owner yet. The Change Plan remains unapplied; use its dedicated provider Settings flow.",
+        );
+        return;
+      }
+      const currentFlow =
+        changePlanOAuthFlow?.planId === plan.planId &&
+        changePlanOAuthFlow.actionId === action.actionId &&
+        Date.parse(changePlanOAuthFlow.flow.expiresAt) > Date.now()
+          ? changePlanOAuthFlow
+          : null;
+      if (currentFlow) {
+        globalThis.open?.(currentFlow.flow.verificationUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        const flow = await startChangePlanProviderOAuth(plan.planId, changePlanClientContext(workspaceId, plan), {
+          expectedRevision: plan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+        });
+        setChangePlanOAuthFlow({
+          planId: plan.planId,
+          planRevision: plan.revision,
+          actionId: action.actionId,
+          actionNonce: action.actionNonce,
+          flow,
+        });
+        globalThis.open?.(flow.verificationUrl, "_blank", "noopener,noreferrer");
+      } catch (error) {
+        setChangePlanActionError(
+          error instanceof Error ? error.message : "Unable to start the provider OAuth owner flow.",
+        );
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [changePlanOAuthFlow, workspaceId],
+  );
+
+  useEffect(() => {
+    const owned = changePlanOAuthFlow;
+    if (!owned || activeChangePlan?.planId !== owned.planId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      if (cancelled) return;
+      if (Date.parse(owned.flow.expiresAt) <= Date.now()) {
+        setChangePlanOAuthFlow(null);
+        setChangePlanActionError(
+          "The provider OAuth flow expired. Start it again to keep the credential owner binding exact.",
+        );
+        return;
+      }
+      try {
+        const result = await pollChangePlanProviderOAuth(
+          owned.planId,
+          changePlanClientContext(workspaceId, activeChangePlan),
+          {
+            expectedRevision: owned.planRevision,
+            actionId: owned.actionId,
+            actionNonce: owned.actionNonce,
+            flowId: owned.flow.flowId,
+          },
+        );
+        if (cancelled) return;
+        if (result.status === "connected") {
+          const plan = activeChangePlan;
+          const action = plan.requiredAction;
+          if (
+            plan.revision !== owned.planRevision ||
+            action?.kind !== "oauth" ||
+            action.actionId !== owned.actionId ||
+            action.actionNonce !== owned.actionNonce
+          ) {
+            setChangePlanOAuthFlow(null);
+            setChangePlanActionError(
+              "The OAuth Change Plan action changed before completion. Its credential was not promoted by this plan.",
+            );
+            return;
+          }
+          const updated = await completeChangePlanProviderOAuth(
+            plan.planId,
+            changePlanClientContext(workspaceId, plan),
+            {
+              expectedRevision: plan.revision,
+              actionId: action.actionId,
+              actionNonce: action.actionNonce,
+            },
+          );
+          setChangePlanOAuthFlow(null);
+          recordChangePlanResult(updated);
+          return;
+        }
+        if (result.status === "expired" || result.status === "failed") {
+          setChangePlanOAuthFlow(null);
+          setChangePlanActionError(result.error ?? `Provider OAuth ${result.status}. Start the dedicated flow again.`);
+          return;
+        }
+        timer = setTimeout(() => void poll(), Math.max(1_000, result.retryAfterMs ?? owned.flow.pollAfterMs));
+      } catch (error) {
+        if (!cancelled) {
+          setChangePlanActionError(error instanceof Error ? error.message : "Unable to poll the provider OAuth owner.");
+          timer = setTimeout(() => void poll(), Math.max(2_000, owned.flow.pollAfterMs));
+        }
+      }
+    };
+    timer = setTimeout(() => void poll(), Math.max(1_000, owned.flow.pollAfterMs));
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeChangePlan, changePlanOAuthFlow, recordChangePlanResult, workspaceId]);
+  const handleChangePlanNativePath = useCallback(
+    async (plan: ChangePlanRecord) => {
+      const action = plan.requiredAction;
+      if (action?.kind !== "native_path_picker") {
+        setChangePlanActionError("This native picker action changed. Reload the Change Plan.");
+        return;
+      }
+      setChangePlanActionPending(true);
+      setChangePlanActionError(null);
+      try {
+        const rootPath = await requestNativeManagedSourcePath(plan.planId, action.actionId);
+        if (!rootPath) return;
+        recordChangePlanResult(
+          await submitChangePlanManagedSourceSelection(plan.planId, changePlanClientContext(workspaceId, plan), {
+            expectedRevision: plan.revision,
+            actionId: action.actionId,
+            actionNonce: action.actionNonce,
+            rootPath,
+          }),
+        );
+      } catch (error) {
+        setChangePlanActionError(
+          error instanceof Error ? error.message : "The native source picker could not complete.",
+        );
+      } finally {
+        setChangePlanActionPending(false);
+      }
+    },
+    [recordChangePlanResult, workspaceId],
   );
   const handleSetPendingAttachmentMode = useCallback((attachmentId: string, mode: PendingAttachmentDocumentMode) => {
     setPendingAttachmentModes((current) => ({
@@ -3513,9 +4203,14 @@ export function MissionThreadedControllerHost({
           return;
         }
         const session = await ensureSession();
-        const patch: ChatSessionPrefsPatch = {
+        const modelPatch: ChatSessionPrefsPatch = {
           providerId: preset.preferredProviderId,
           model: preset.preferredModel,
+        };
+        if (modelPatch.providerId !== undefined || modelPatch.model !== undefined) {
+          requestThreadModelPatch(modelPatch);
+        }
+        const patch: ChatSessionPrefsPatch = {
           toolAutonomy: preset.toolsPosture,
         };
         const hasPatch = Object.values(patch).some((value) => value !== undefined);
@@ -3558,6 +4253,7 @@ export function MissionThreadedControllerHost({
       messageMode,
       presetProfiles,
       pushLocalNotice,
+      requestThreadModelPatch,
       setUiError,
       setPresetApplyWarning,
       threadKnowledgeAttachments?.items,
@@ -3604,13 +4300,7 @@ export function MissionThreadedControllerHost({
             break;
           }
           case "select_model": {
-            const session = await ensureSession();
-            await applyPrefPatchToSession(
-              session.sessionId,
-              { providerId: item.action.providerId, model: item.action.model },
-              { syncLocalState: true },
-            );
-            pushLocalNotice(`Selected ${item.action.model}.`, "success");
+            requestThreadModelPatch({ providerId: item.action.providerId, model: item.action.model });
             break;
           }
           case "select_preset":
@@ -3663,14 +4353,13 @@ export function MissionThreadedControllerHost({
       }
     },
     [
-      applyPrefPatchToSession,
-      ensureSession,
       handleApplyPresetById,
       handleAssignProject,
       handleAttachKnowledgeUrlValue,
       handleAttachPaletteFile,
       handleExploreWorkspace,
       pushLocalNotice,
+      requestThreadModelPatch,
       setUiError,
       toggleDocumentContext,
     ],
@@ -4329,6 +5018,7 @@ export function MissionThreadedControllerHost({
           ? {
               ...sessionStatusPanel,
               onRefresh: () => void refreshSessionStatus(),
+              onStopFanout: (invocationId) => void stopSessionFanout(invocationId),
               onClose: () => setSessionStatusPanel((current) => ({ ...current, open: false })),
             }
           : undefined,
@@ -4622,7 +5312,7 @@ export function MissionThreadedControllerHost({
           if (!blockHistoricalMutation()) setFullWebAccess(value);
         },
         onSetThinkingLevel: (level) => {
-          if (!blockHistoricalMutation()) void handlePrefPatch({ thinkingLevel: level });
+          if (!blockHistoricalMutation()) requestThreadModelPatch({ thinkingLevel: level });
         },
         onSetSpeedMode: (mode) => {
           if (!blockHistoricalMutation()) void handlePrefPatch({ speedMode: mode });
@@ -5076,11 +5766,17 @@ export function MissionThreadedControllerHost({
           integrationTarget,
           selectedSessionProjectValue,
           projectOptions,
+          automaticFanout,
           loadModelsForProvider,
           getCachedModels,
           resolveProviderModelSelection,
           onPrefPatch: async (patch) => {
-            if (!blockHistoricalMutation()) await handlePrefPatch(patch);
+            if (blockHistoricalMutation()) return;
+            if (patch.providerId !== undefined || patch.model !== undefined || patch.thinkingLevel !== undefined) {
+              requestThreadModelPatch(patch);
+              return;
+            }
+            await handlePrefPatch(patch);
           },
           onSuggestDelegation: async () => {
             if (!blockHistoricalMutation()) await handleSuggestDelegation();
@@ -5221,6 +5917,15 @@ export function MissionThreadedControllerHost({
       ) : null}
       {error ? <p className="error">{error}</p> : null}
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
+      {chatChangePlans.slice(0, 5).map((plan) => (
+        <ChatChangePlanCard
+          key={plan.planId}
+          plan={plan}
+          onReview={reviewChatChangePlan}
+          onCancel={cancelPendingChatChangePlan}
+          onMakeDefault={makeChatChangePlanDefault}
+        />
+      ))}
 
       {renderSurface(threadedSurfaceInput)}
       <ConfirmModal
@@ -5272,23 +5977,33 @@ export function MissionThreadedControllerHost({
           action();
         }}
       />
-      <ConfirmModal
-        open={Boolean(threadModelSwitchConfirm)}
-        title={threadModelSwitchConfirm?.title ?? "Switch thread model?"}
-        message={threadModelSwitchConfirm?.message ?? ""}
-        confirmLabel="Switch model"
-        onCancel={() => setThreadModelSwitchConfirm(null)}
-        onConfirm={() => {
-          if (!threadModelSwitchConfirm) {
-            return;
+      <ChatChangePlanActionDialog
+        plan={activeChangePlan}
+        linkedPlan={linkedDefaultChangePlan}
+        pending={changePlanActionPending}
+        error={changePlanActionError}
+        contextNote={changePlanContextNote(activeChangePlan, thread?.turns.length ?? 0, changePlanOAuthFlow)}
+        onClose={() => {
+          if (!changePlanActionPending) {
+            setActiveChangePlan(null);
+            setLinkedDefaultChangePlan(null);
+            setChangePlanActionError(null);
           }
-          if (blockHistoricalMutation()) {
-            return;
-          }
-          const patch = threadModelSwitchConfirm.patch;
-          setThreadModelSwitchConfirm(null);
-          void applyThreadModelPatch(patch);
         }}
+        onConfirm={async (plan) => {
+          if (blockHistoricalMutation()) return;
+          if (linkedDefaultChangePlan) {
+            await handleConfirmLinkedModelPlans(plan, linkedDefaultChangePlan);
+          } else {
+            await handleConfirmChangePlan(plan);
+          }
+        }}
+        onSubmitPublicForm={handleSubmitChangePlanForm}
+        onSubmitSecureInput={handleSubmitChangePlanSecret}
+        onContinueOAuth={handleChangePlanOAuth}
+        onOpenApproval={handleOpenChangePlanApproval}
+        onReviewArtifacts={handleReviewChangePlanArtifacts}
+        onOpenNativePathPicker={handleChangePlanNativePath}
       />
       <ConfirmModal
         open={Boolean(sessionDeleteConfirm)}
@@ -5320,4 +6035,101 @@ export function MissionThreadedControllerHost({
       />
     </section>
   );
+}
+
+function changePlanClientContext(workspaceId: string, plan: ChangePlanRecord) {
+  return {
+    workspaceId,
+    ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
+    ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
+  };
+}
+
+function isTerminalChangePlanStatus(status: ChangePlanRecord["status"]): boolean {
+  return ["completed", "applied", "manual_required", "failed", "cancelled", "rolled_back", "rollback_failed"].includes(
+    status,
+  );
+}
+
+function changePlanContextNote(
+  plan: ChangePlanRecord | null,
+  turnCount: number,
+  oauthFlow: {
+    planId: string;
+    flow: OpenAICodexDeviceStartResponse;
+  } | null,
+): string | undefined {
+  const continuity = changePlanContinuityNote(plan, turnCount);
+  const oauth =
+    plan && oauthFlow?.planId === plan.planId
+      ? `Open ${oauthFlow.flow.verificationUrl}${oauthFlow.flow.userCode ? ` and enter code ${oauthFlow.flow.userCode}` : ""}. GoatCitadel is polling the dedicated provider owner; OAuth tokens never enter Chat.`
+      : undefined;
+  const notes = [continuity, oauth].filter((value): value is string => Boolean(value));
+  return notes.length ? notes.join("\n\n") : undefined;
+}
+
+function changePlanContinuityNote(plan: ChangePlanRecord | null, turnCount: number): string | undefined {
+  if (!plan || plan.request.kind !== "session_model" || turnCount < 1) return undefined;
+  return `This conversation already has ${turnCount} turn${turnCount === 1 ? "" : "s"}. The thread remains available to the new model, but hidden reasoning state does not transfer. Restate any critical instruction after switching.`;
+}
+
+function requireExactLinkedConfirmation(expected: ChangePlanRecord, current: ChangePlanRecord): void {
+  if (
+    current.revision !== expected.revision ||
+    current.intentHash !== expected.intentHash ||
+    current.actionSnapshotHash !== expected.actionSnapshotHash ||
+    current.requiredAction?.kind !== "confirmation" ||
+    current.requiredAction.actionNonce !== expected.requiredAction?.actionNonce ||
+    current.target.expectedRevision !== expected.target.expectedRevision ||
+    current.target.expectedHash !== expected.target.expectedHash
+  ) {
+    throw new Error(
+      "One of the linked model plans changed. Nothing was applied; review the refreshed exact revisions.",
+    );
+  }
+}
+
+interface NativeWebViewBridge {
+  postMessage(message: unknown): void;
+  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+  removeEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+}
+
+async function requestNativeManagedSourcePath(planId: string, actionId: string): Promise<string | undefined> {
+  const bridge = (window as typeof window & { chrome?: { webview?: NativeWebViewBridge } }).chrome?.webview;
+  if (!bridge) {
+    throw new Error("Managed source registration requires the signed GoatCitadel Windows desktop host.");
+  }
+  const requestId = crypto.randomUUID();
+  return await new Promise<string | undefined>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      bridge.removeEventListener("message", onMessage);
+      reject(new Error("The native source picker expired without returning a selection."));
+    }, 5 * 60_000);
+    const onMessage = (event: { data: unknown }) => {
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+      if (Reflect.get(data, "type") !== "goatcitadel.evolution.source_selected") return;
+      if (Reflect.get(data, "requestId") !== requestId) return;
+      window.clearTimeout(timeout);
+      bridge.removeEventListener("message", onMessage);
+      if (Reflect.get(data, "cancelled") === true) {
+        resolve(undefined);
+        return;
+      }
+      const selectedPath = Reflect.get(data, "path");
+      if (typeof selectedPath !== "string" || !selectedPath.trim()) {
+        reject(new Error("The native source picker returned an invalid selection."));
+        return;
+      }
+      resolve(selectedPath);
+    };
+    bridge.addEventListener("message", onMessage);
+    bridge.postMessage({
+      type: "goatcitadel.evolution.pick_source",
+      requestId,
+      planId,
+      actionId,
+    });
+  });
 }

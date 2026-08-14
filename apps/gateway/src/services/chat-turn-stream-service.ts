@@ -47,6 +47,7 @@ import {
   type SubagentFanoutExecutorOptions,
   type SubagentFanoutRuntime,
 } from "./chat-subagent-fanout-service.js";
+import type { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
@@ -228,6 +229,8 @@ export interface ChatTurnStreamHost
    * `agent.fanout` call fails closed inside the policy-engine runtime hook.
    */
   readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
+  /** Default-disabled durable executor for automatic Chat fan-out. */
+  readonly durableFanout?: Pick<ChatDurableFanoutService, "execute">;
 }
 
 export type ChatTurnCanonicalWriteFence = <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
@@ -1365,9 +1368,12 @@ export async function executeDelegatedPlanStep(
 export function createTurnSubagentFanoutExecutor(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
-  options: Omit<SubagentFanoutExecutorOptions, "runDelegatedStep">,
+  options: SubagentFanoutExecutorOptions,
 ): SubagentFanoutExecutor {
-  return createSubagentFanoutExecutor(host, prepared, { ...options, runDelegatedStep: executeDelegatedPlanStep });
+  return createSubagentFanoutExecutor(host, prepared, {
+    ...options,
+    durableFanout: options.durableFanout ?? host.durableFanout,
+  });
 }
 
 /**
@@ -1381,7 +1387,7 @@ export function createTurnSubagentFanoutExecutor(
 async function* runDirectTurnStreamWithSubagentFanout(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
-  options: Omit<SubagentFanoutExecutorOptions, "runDelegatedStep">,
+  options: SubagentFanoutExecutorOptions,
   makeStream: () => ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]>,
 ): ReturnType<ChatTurnStreamHost["turnRuntime"]["runStream"]> {
   const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared, options.permissionProfileId)

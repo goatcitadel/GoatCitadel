@@ -138,7 +138,13 @@ export interface CapabilityLifecyclePendingApproval {
 
 export type CapabilityCandidateMutationOutcome =
   | { pendingApproval: CapabilityLifecyclePendingApproval }
-  | { pendingApproval: null; noMutationRequired: true; detail: CandidateSkillDetailRecord };
+  | { pendingApproval: null; noMutationRequired: true; detail: CandidateSkillDetailRecord }
+  | {
+      pendingApproval: null;
+      noMutationRequired: false;
+      detail: CandidateSkillDetailRecord;
+      changePlan: import("@goatcitadel/contracts").ChangePlanRecord;
+    };
 
 export async function promoteCapabilityCandidate(
   candidateId: string,

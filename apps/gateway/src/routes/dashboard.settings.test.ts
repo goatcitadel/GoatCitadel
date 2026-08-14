@@ -43,6 +43,187 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it("routes an explicit compatible Settings save through one confirmed Change Plan", async () => {
+    const updateSettings = vi.fn();
+    const getSettings = vi.fn(() => ({ revision: 8, budgetMode: "balanced" }));
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-settings-budget",
+      revision: 1,
+      requiredAction: { kind: "confirmation", actionNonce: "nonce-settings-budget-1234" },
+      ...input,
+    }));
+    const confirm = vi.fn(async () => ({
+      planId: "plan-settings-budget",
+      revision: 3,
+      status: "completed",
+      risk: "safe",
+      summary: "Change runtime budget mode from saver to balanced.",
+      result: { summary: "Runtime budget mode is now balanced." },
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings, updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true), create, confirm },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 8, budgetMode: "balanced" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: { kind: "runtime_configuration", change: { operation: "budget_mode", mode: "balanced" } },
+        expectedTargetRevision: 8,
+      }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "settings" }),
+      "plan-settings-budget",
+      1,
+      "nonce-settings-budget-1234",
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      revision: 8,
+      changePlanReceipt: { planId: "plan-settings-budget", status: "completed", revision: 3 },
+    });
+  });
+
+  it("routes a secret-free provider profile through the provider connection adapter", async () => {
+    const updateSettings = vi.fn();
+    const getSettings = vi.fn(() => ({ revision: 12, llm: { providers: [] } }));
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-provider-profile",
+      revision: 1,
+      requiredAction: { kind: "confirmation", actionNonce: "nonce-provider-profile-1234" },
+      ...input,
+    }));
+    const confirm = vi.fn(async () => ({
+      planId: "plan-provider-profile",
+      revision: 3,
+      status: "awaiting_input",
+      risk: "safe",
+      summary: "Provider profile saved.",
+      requiredAction: { kind: "secure_input" },
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings, updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true), create, confirm },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: {
+        expectedRevision: 12,
+        llm: {
+          upsertProvider: {
+            providerId: "compatible",
+            label: "Compatible",
+            baseUrl: "https://models.example.test/v1",
+            apiStyle: "openai-responses",
+            authMode: "api-key",
+            defaultModel: "model-1",
+            apiKeyEnv: "COMPATIBLE_API_KEY",
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedTargetRevision: 12,
+        request: {
+          kind: "provider_connection",
+          providerId: "compatible",
+          profile: expect.objectContaining({
+            baseUrl: "https://models.example.test/v1",
+            apiKeyEnv: "COMPATIBLE_API_KEY",
+          }),
+        },
+      }),
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      revision: 12,
+      changePlanReceipt: { planId: "plan-provider-profile", status: "awaiting_input" },
+    });
+  });
+
+  it("routes a typed Settings group through the runtime configuration adapter", async () => {
+    const updateSettings = vi.fn();
+    const getSettings = vi.fn(() => ({ revision: 21, memory: { enabled: true } }));
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-memory-settings",
+      revision: 1,
+      requiredAction: { kind: "confirmation", actionNonce: "nonce-memory-settings-1234" },
+      ...input,
+    }));
+    const confirm = vi.fn(async () => ({
+      planId: "plan-memory-settings",
+      revision: 2,
+      status: "awaiting_approval",
+      risk: "caution",
+      summary: "Apply reviewed memory settings.",
+      requiredAction: { kind: "approval", approvalId: "approval-memory" },
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings, updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true), create, confirm },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 21, memory: { enabled: true, qmdMaxContextTokens: 8_192 } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: {
+          kind: "runtime_configuration",
+          change: { operation: "memory_configuration", config: { enabled: true, qmdMaxContextTokens: 8_192 } },
+        },
+      }),
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      changePlanReceipt: { planId: "plan-memory-settings", status: "awaiting_approval" },
+    });
+  });
+
+  it("fails closed on path-bearing generic Settings saves while the Control Plane is enabled", async () => {
+    const updateSettings = vi.fn();
+    app = Fastify();
+    app.decorate("services", {
+      settings: { updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true) },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 7, llamaCpp: { modelPath: "C:\\Models\\private.gguf" } },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toMatch(/dedicated secure, OAuth, or native-path flow/iu);
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it("passes provider request transport overrides through the settings patch schema", async () => {
     const updateSettings = vi.fn((input: Record<string, unknown>) => input);
 
@@ -250,6 +431,80 @@ describe("dashboard settings routes", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "Unsafe config key is not allowed: prototype" });
     expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps Gateway auth credentials out of the plan and submits them only to the secure owner", async () => {
+    const updateSettings = vi.fn();
+    const getSettings = vi.fn(() => ({
+      revision: 9,
+      auth: { mode: "none", allowLoopbackBypass: true, tokenConfigured: false, basicConfigured: false },
+    }));
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-auth-settings",
+      revision: 1,
+      status: "awaiting_input",
+      risk: "caution",
+      summary: "Change Gateway authentication",
+      requiredAction: {
+        kind: "secure_input",
+        actionId: "secure-auth",
+        actionNonce: "secure-auth-nonce-1234",
+        targetId: "gateway-auth",
+      },
+      ...input,
+    }));
+    const submitGatewayAuthCredential = vi.fn(async () => ({
+      planId: "plan-auth-settings",
+      revision: 2,
+      status: "awaiting_confirmation",
+      risk: "caution",
+      summary: "Change Gateway authentication",
+      requiredAction: { kind: "confirmation", actionNonce: "confirm-auth-nonce-1234" },
+    }));
+    const confirm = vi.fn(async () => ({
+      planId: "plan-auth-settings",
+      revision: 3,
+      status: "awaiting_approval",
+      risk: "caution",
+      summary: "Change Gateway authentication",
+      requiredAction: { kind: "approval", approvalId: "approval-auth" },
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings, updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true), create, confirm },
+      evolutionRuntimeConfiguration: { submitGatewayAuthCredential },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/auth/settings",
+      payload: { expectedRevision: 9, mode: "token", allowLoopbackBypass: false, token: "private-auth-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.stringify(create.mock.calls)).not.toContain("private-auth-token");
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: {
+          kind: "runtime_configuration",
+          change: {
+            operation: "gateway_auth_configuration",
+            mode: "token",
+            allowLoopbackBypass: false,
+            replaceCredential: true,
+          },
+        },
+      }),
+    );
+    expect(submitGatewayAuthCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ credential: "private-auth-token" }),
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      changePlanReceipt: { status: "awaiting_approval", requiredAction: { approvalId: "approval-auth" } },
+    });
   });
 
   it("projects executable settings and runtime diagnostics while preserving auth readiness metadata", async () => {

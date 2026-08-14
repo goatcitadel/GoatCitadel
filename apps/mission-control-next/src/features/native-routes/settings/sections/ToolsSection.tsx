@@ -175,11 +175,19 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       return;
     }
     try {
-      await patchSettings({
+      const updated = await patchSettings({
         expectedRevision: data.settings.revision,
         toolApprovalMode: approvalModeDraft,
       });
-      setNotice({ tone: "success", message: "Tool approval mode saved." });
+      const receipt = updated.changePlanReceipt;
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Approval is still required before this setting changes (plan ${receipt.planId}).`,
+            }
+          : { tone: "success", message: "Tool approval mode saved." },
+      );
       await reload();
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {

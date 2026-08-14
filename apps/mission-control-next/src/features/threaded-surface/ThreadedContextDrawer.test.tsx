@@ -111,6 +111,34 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("presents Ask as the effective posture when a saved auto preference lacks an exact project grant", async () => {
+    const onPrefPatch = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            onPrefPatch,
+            prefs: { subagentPolicy: "auto_when_useful" },
+            automaticFanout: {
+              enabled: false,
+              unavailableReason: "Ask remains active. This project grant was revoked.",
+            },
+          })}
+        />,
+      );
+    });
+
+    await act(async () => findButton(renderer!.root, "Assist").props.onClick());
+
+    const select = renderer!.root.findByProps({ "aria-label": "Subagent policy" });
+    expect(select.props.value).toBe("ask_when_useful");
+    expect(select.findByProps({ value: "auto_when_useful" }).props.disabled).toBe(true);
+    expect(collectText(renderer!.root)).toContain("saved Auto when useful preference is not authority");
+    expect(onPrefPatch).not.toHaveBeenCalled();
+  });
+
   it("keeps all five Working Context tabs in a deliberate balanced grid", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
@@ -818,6 +846,16 @@ describe("ThreadedContextDrawer", () => {
           speedMode: "standard",
           subagentPolicy: "ask_when_useful",
           planningMode: "off",
+        },
+        automaticFanout: {
+          enabled: true,
+          projectId: "project-1",
+          grant: {
+            grantId: "grant-1",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+            maxActivations: 3,
+            budgetUsd: 0.75,
+          },
         },
         onPrefPatch,
       });

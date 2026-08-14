@@ -143,6 +143,79 @@ describe("chat API origin surface headers", () => {
     });
   });
 
+  it("uses canonical Change Plan resources and binds every action to the exact revision and nonce", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ planId: "plan-1", revision: 4 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const {
+      cancelChangePlan,
+      confirmChangePlan,
+      createChangePlan,
+      fetchChangePlan,
+      fetchChangePlans,
+      completeChangePlanProviderOAuth,
+      pollChangePlanProviderOAuth,
+      requestChangePlanRollback,
+      respondToChangePlan,
+      startChangePlanProviderOAuth,
+      submitChangePlanProviderSecret,
+    } = await import("./chat");
+    const context = { workspaceId: "workspace/1", sessionId: "session/1", turnId: "turn/1" };
+    const exactAction = { expectedRevision: 4, actionNonce: "nonce-1234567890123456" };
+
+    await createChangePlan({
+      ...context,
+      request: { kind: "session_model", providerId: "openai", model: "gpt-5.5" },
+      idempotencyKey: "turn-1:tool-1",
+    });
+    await fetchChangePlans(context, { status: "awaiting_confirmation", limit: 12 });
+    await fetchChangePlan("plan/1", context);
+    await respondToChangePlan("plan/1", context, {
+      ...exactAction,
+      actionId: "form-1",
+      values: { effort: "extended", remember: true },
+    });
+    await confirmChangePlan("plan/1", context, exactAction);
+    await cancelChangePlan("plan/1", context, exactAction);
+    await requestChangePlanRollback("plan/1", context, 4);
+    await submitChangePlanProviderSecret("plan/1", context, {
+      ...exactAction,
+      actionId: "secret-1",
+      apiKey: "test-secret",
+    });
+    await startChangePlanProviderOAuth("plan/1", context, { ...exactAction, actionId: "oauth-1" });
+    await pollChangePlanProviderOAuth("plan/1", context, {
+      ...exactAction,
+      actionId: "oauth-1",
+      flowId: "flow-1",
+    });
+    await completeChangePlanProviderOAuth("plan/1", context, { ...exactAction, actionId: "oauth-1" });
+
+    const calls = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), init }));
+    expect(calls[0]?.url).toContain("/api/v1/change-plans");
+    expect(calls[0]?.init?.body).toBe(
+      JSON.stringify({
+        workspaceId: "workspace/1",
+        sessionId: "session/1",
+        turnId: "turn/1",
+        surface: "chat",
+        request: { kind: "session_model", providerId: "openai", model: "gpt-5.5" },
+        idempotencyKey: "turn-1:tool-1",
+      }),
+    );
+    expect(calls[1]?.url).toContain("workspaceId=workspace%2F1");
+    expect(calls[3]?.url).toContain("/plan%2F1/responses");
+    expect(calls[4]?.init?.body).toContain('"actionNonce":"nonce-1234567890123456"');
+    expect(calls[5]?.url).toContain("/plan%2F1/cancellations");
+    expect(calls[6]?.url).toContain("/plan%2F1/rollback-requests");
+    expect(calls[7]?.url).toContain("/plan%2F1/provider-secret");
+    expect(calls[7]?.init).toMatchObject({ method: "POST", cache: "no-store" });
+    expect(calls[8]?.url).toContain("/plan%2F1/provider-oauth-starts");
+    expect(calls[9]?.url).toContain("/plan%2F1/provider-oauth-polls");
+    expect(calls[9]?.init?.body).toContain('"flowId":"flow-1"');
+    expect(calls[10]?.url).toContain("/plan%2F1/provider-oauth-completions");
+    expect(calls.slice(8, 11).every(({ init }) => init?.cache === "no-store")).toBe(true);
+  });
+
   it("uses focused session timer endpoints without sending a chat turn", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ item: { timerId: "timer-1" }, items: [] }));
     vi.stubGlobal("fetch", fetchMock);
@@ -418,6 +491,14 @@ describe("chat API origin surface headers", () => {
       await chat.fetchChatAttachmentPreview("attachment 1");
       await chat.fetchChatSessionPrefs(sessionId);
       await chat.updateChatSessionPrefs(sessionId, { expectedRevision: 17, model: "gpt-5.5" });
+      await chat.createChatChangePlan(sessionId, {
+        kind: "session_model",
+        model: "gpt-5.5",
+        thinkingLevel: "extended",
+      });
+      await chat.fetchChatChangePlans(sessionId, { limit: 25 });
+      await chat.confirmChatChangePlan(sessionId, "plan 1", 3);
+      await chat.cancelChatChangePlan(sessionId, "plan 2", 4);
       await chat.fetchChatProactiveStatus(sessionId);
       await chat.updateChatProactivePolicy(sessionId, { expectedRevision: 18, proactiveMode: "suggest" });
       await chat.triggerChatProactive(sessionId, { source: "manual", reason: "test" });
@@ -530,6 +611,19 @@ describe("chat API origin surface headers", () => {
       ).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/sessions/session%201/change-plans") &&
+            init?.method === "POST" &&
+            String(init.body).includes('"kind":"session_model"'),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).includes("/api/v1/chat/sessions/session%201/change-plans?limit=25"),
+        ),
+      ).toBe(true);
     },
     CHAT_API_TEST_TIMEOUT_MS,
   );

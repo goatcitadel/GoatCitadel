@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 
 const mocks = vi.hoisted(() => ({
@@ -292,6 +293,15 @@ const mocks = vi.hoisted(() => ({
     source: "generated",
   })),
   patchSettings: vi.fn(async () => ({})),
+  patchGatewayAuthSettings: vi.fn(async (input: any) => ({
+    revision: 42,
+    auth: {
+      mode: input.mode,
+      allowLoopbackBypass: input.allowLoopbackBypass,
+      tokenConfigured: Boolean(input.token),
+      basicConfigured: Boolean(input.basicUsername && input.basicPassword),
+    },
+  })),
   fetchPersonalities: vi.fn(async () => ({
     defaultPersonalityId: "operator",
     items: [
@@ -527,6 +537,112 @@ const mocks = vi.hoisted(() => ({
     connected: false,
     requiresReauth: false,
   })),
+  fetchChangePlans: vi.fn(async () => ({ items: [] })),
+  createChangePlan: vi.fn(async (input: any) => ({
+    schemaVersion: 1,
+    planId: "plan-oauth-1",
+    origin: {
+      surface: input.surface ?? "settings",
+      workspaceId: input.workspaceId ?? "default",
+      actorId: "operator-test",
+    },
+    kind: "provider_connection",
+    scope: "provider",
+    phase: "intent",
+    status: input.request?.credentialAction === "remove_oauth" ? "awaiting_confirmation" : "awaiting_input",
+    revision: 1,
+    adapter: { adapterId: "provider-connection", version: 3 },
+    request: input.request,
+    target: { ownerId: "provider_connection", resourceId: "openai-codex", expectedRevision: 43 },
+    title:
+      input.request?.credentialAction === "remove_oauth"
+        ? "Disconnect OAuth from OpenAI Codex"
+        : "Connect OpenAI Codex",
+    summary: "Use the dedicated plan-bound OAuth owner.",
+    impact: "The credential remains outside Chat and model context.",
+    risk: input.request?.credentialAction === "remove_oauth" ? "caution" : "safe",
+    requiredAction:
+      input.request?.credentialAction === "remove_oauth"
+        ? {
+            kind: "confirmation",
+            actionId: "confirm-oauth",
+            actionNonce: "confirmation-nonce-123456",
+            purpose: "apply",
+            title: "Confirm disconnect",
+            confirmationText: "Disconnect OAuth.",
+          }
+        : {
+            kind: "oauth",
+            actionId: "oauth-action",
+            actionNonce: "oauth-action-nonce-123456",
+            targetId: "openai-codex",
+            title: "Authorize OpenAI Codex",
+          },
+    approvalRefs: [],
+    evidenceRefs: [],
+    rollbackRefs: [],
+    links: [],
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:00:00.000Z",
+  })),
+  startChangePlanProviderOAuth: vi.fn(async () => await mocks.startOpenAICodexOAuthDeviceFlow()),
+  pollChangePlanProviderOAuth: vi.fn(async () => await mocks.pollOpenAICodexOAuthDeviceFlow()),
+  completeChangePlanProviderOAuth: vi.fn(async () => ({
+    schemaVersion: 1,
+    planId: "plan-oauth-1",
+    origin: { surface: "settings", workspaceId: "default", actorId: "operator-test" },
+    kind: "provider_connection",
+    scope: "provider",
+    phase: "authorization",
+    status: "awaiting_confirmation",
+    revision: 2,
+    adapter: { adapterId: "provider-connection", version: 3 },
+    request: { kind: "provider_connection", providerId: "openai-codex" },
+    target: { ownerId: "provider_connection", resourceId: "openai-codex", expectedRevision: 43 },
+    title: "Connect OpenAI Codex",
+    summary: "The OAuth credential is staged and awaits exact promotion.",
+    impact: "Promotes the plan-bound credential.",
+    risk: "safe",
+    requiredAction: {
+      kind: "confirmation",
+      actionId: "confirm-oauth",
+      actionNonce: "confirmation-nonce-123456",
+      purpose: "apply",
+      title: "Confirm connection",
+      confirmationText: "Promote OAuth.",
+    },
+    approvalRefs: [],
+    evidenceRefs: ["oauth:staged"],
+    rollbackRefs: [],
+    links: [],
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:01:00.000Z",
+  })),
+  confirmChangePlan: vi.fn(async (planId: string) => ({
+    schemaVersion: 1,
+    planId,
+    origin: { surface: "settings", workspaceId: "default", actorId: "operator-test" },
+    kind: "provider_connection",
+    scope: "provider",
+    phase: "terminal",
+    status: "completed",
+    revision: 3,
+    adapter: { adapterId: "provider-connection", version: 3 },
+    request: { kind: "provider_connection", providerId: "openai-codex" },
+    target: { ownerId: "provider_connection", resourceId: "openai-codex", expectedRevision: 43 },
+    title: "Connect OpenAI Codex",
+    summary: "Connected.",
+    impact: "Applied.",
+    risk: "safe",
+    approvalRefs: [],
+    evidenceRefs: ["oauth:promoted"],
+    rollbackRefs: [],
+    links: [],
+    result: { summary: "OpenAI Codex OAuth connected." },
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:02:00.000Z",
+  })),
+  cancelChangePlan: vi.fn(async () => ({ planId: "plan-oauth-1", status: "cancelled", revision: 2 })),
   fetchOnboardingState: vi.fn(async () => ({
     completed: false,
     checklist: [
@@ -1013,6 +1129,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
   return {
     ...actual,
     patchSettings: mocks.patchSettings,
+    patchGatewayAuthSettings: mocks.patchGatewayAuthSettings,
     fetchPersonalities: mocks.fetchPersonalities,
     createPersonality: mocks.createPersonality,
     updatePersonality: mocks.updatePersonality,
@@ -1088,6 +1205,13 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     startOpenAICodexOAuthDeviceFlow: mocks.startOpenAICodexOAuthDeviceFlow,
     pollOpenAICodexOAuthDeviceFlow: mocks.pollOpenAICodexOAuthDeviceFlow,
     deleteOpenAICodexOAuthCredential: mocks.deleteOpenAICodexOAuthCredential,
+    fetchChangePlans: mocks.fetchChangePlans,
+    createChangePlan: mocks.createChangePlan,
+    startChangePlanProviderOAuth: mocks.startChangePlanProviderOAuth,
+    pollChangePlanProviderOAuth: mocks.pollChangePlanProviderOAuth,
+    completeChangePlanProviderOAuth: mocks.completeChangePlanProviderOAuth,
+    confirmChangePlan: mocks.confirmChangePlan,
+    cancelChangePlan: mocks.cancelChangePlan,
   };
 });
 
@@ -2739,9 +2863,15 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Store a balanced budget preference");
     expect(text).not.toContain("Terminal onboarding");
     expect(text).not.toContain("Mission Control posture");
-    const onboardingBudgetSelect = renderer!.root.findAll(
-      (node) => node.type === "select" && node.props.className === "mc-next-settings-input",
-    )[2];
+    const onboardingBudgetSelect = renderer!.root
+      .findAll((node) => node.type === "select" && node.props.className === "mc-next-settings-input")
+      .find(
+        (select) =>
+          select
+            .findAllByType("option")
+            .map((option) => collectText(option))
+            .join("|") === "Saver|Balanced|Power",
+      );
     expect(onboardingBudgetSelect!.findAllByType("option").map((option) => collectText(option))).toEqual([
       "Saver",
       "Balanced",
@@ -3456,7 +3586,7 @@ describe("SettingsNativePage providers", () => {
     expect(pairingText).toContain("Open OpenAI page");
     expect(pairingText).toContain("Use this exact OpenAI code");
     expect(pairingText).toContain("I approved, check now");
-    expect(pairingText).toContain("Get a new code");
+    expect(pairingText).toContain("Reopen login");
     expect(
       renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Open OpenAI page")),
     ).toHaveLength(1);
@@ -3464,7 +3594,7 @@ describe("SettingsNativePage providers", () => {
       renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("I approved, check now")),
     ).toHaveLength(1);
     expect(
-      renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Get a new code")),
+      renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Reopen login")),
     ).toHaveLength(1);
   });
 
@@ -3571,7 +3701,7 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Complete the OpenAI browser approval");
     expect(text).toContain("Open OpenAI page");
     expect(text).toContain("I approved, check now");
-    expect(text).toContain("Restart login");
+    expect(text).toContain("Reopen login");
     expect(text).not.toContain("Use this exact OpenAI code");
     expect(text).not.toContain("Current code");
   });
@@ -3597,36 +3727,29 @@ describe("SettingsNativePage providers", () => {
     expect(collectText(renderer!.root)).toContain("OpenAI Codex OAuth start returned an invalid login flow.");
     renderer!.unmount();
 
+    mocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValueOnce({
+      providerId: "openai-codex",
+      flowId: "expired-flow",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "EXPD-CODE",
+      expiresAt: "2099-04-24T12:00:00.000Z",
+      pollAfterMs: 5000,
+    } as any);
     mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValueOnce({
       providerId: "openai-codex",
       flowId: "expired-flow",
       status: "expired",
     } as any);
-    const restoreBrowserStorage = installBrowserStorageMock({
-      session: {
-        [OAUTH_STORAGE_KEY]: JSON.stringify({
-          providerId: "openai-codex",
-          flowId: "expired-flow",
-          verificationUrl: "https://auth.openai.com/codex/device",
-          userCode: "EXPD-CODE",
-          expiresAt: "2099-04-24T12:00:00.000Z",
-          pollAfterMs: 5000,
-        }),
-      },
+    await act(async () => {
+      renderer = renderPage();
     });
-
-    try {
-      await act(async () => {
-        renderer = renderPage();
-      });
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(collectText(renderer!.root)).toContain("OpenAI Codex OAuth login expired. Start ChatGPT login again.");
-    } finally {
-      restoreBrowserStorage();
-    }
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushAsyncUpdates();
+    expect(collectText(renderer!.root)).toContain("OpenAI Codex OAuth login expired. Start ChatGPT login again.");
   });
 
   it("keeps connected ChatGPT OAuth status from being overwritten by a stale status read", async () => {
@@ -3650,50 +3773,43 @@ describe("SettingsNativePage providers", () => {
       accountLabel: "user@example.com",
     } as any);
     setCodexProviderCatalogState({ hasApiKey: false });
-    const restoreBrowserStorage = installBrowserStorageMock({
-      session: {
-        [OAUTH_STORAGE_KEY]: JSON.stringify({
-          providerId: "openai-codex",
-          flowId: "flow-1",
-          verificationUrl: "https://auth.openai.com/codex/device",
-          userCode: "ABCD-EFGH",
-          expiresAt: "2099-04-24T12:00:00.000Z",
-          pollAfterMs: 5000,
-        }),
-      },
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushAsyncUpdates();
+
+    const dialog = renderer!.root
+      .findAllByType(ChatChangePlanActionDialog)
+      .find((candidate) => candidate.props.plan?.status === "awaiting_confirmation");
+    expect(dialog).toBeDefined();
+    await act(async () => {
+      await dialog!.props.onConfirm(dialog!.props.plan);
     });
 
-    try {
-      let renderer: ReactTestRenderer | null = null;
-      await act(async () => {
-        renderer = renderPage();
+    await act(async () => {
+      resolveInitialStatus({
+        providerId: "openai-codex",
+        available: true,
+        connected: false,
+        requiresReauth: false,
       });
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+      await initialStatus;
+    });
 
-      await act(async () => {
-        resolveInitialStatus({
-          providerId: "openai-codex",
-          available: true,
-          connected: false,
-          requiresReauth: false,
-        });
-        await initialStatus;
-      });
-
-      const text = collectText(renderer!.root);
-      expect(text).toContain("OpenAI Codex OAuth connected.");
-      expect(text).toContain("OAuth connected");
-      expect(text).toContain("Done. ChatGPT OAuth is connected as user@example.com");
-      expect(text).not.toContain("OpenAI approved the login, but GoatCitadel could not confirm");
-    } finally {
-      restoreBrowserStorage();
-    }
+    const text = collectText(renderer!.root);
+    expect(mocks.confirmChangePlan).toHaveBeenCalledTimes(1);
+    expect(text).toContain("OpenAI Codex OAuth connected.");
+    expect(text).toContain("OAuth connected");
+    expect(text).toContain("Done. ChatGPT OAuth is connected as user@example.com");
   });
 
-  it("does not show a connected success banner when status confirmation stays disconnected", async () => {
+  it("does not promote or show connected status before exact Change Plan confirmation", async () => {
     mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
       providerId: "openai-codex",
       available: true,
@@ -3707,39 +3823,26 @@ describe("SettingsNativePage providers", () => {
       accountLabel: "user@example.com",
     } as any);
     setCodexProviderCatalogState({ hasApiKey: false });
-    const restoreBrowserStorage = installBrowserStorageMock({
-      session: {
-        [OAUTH_STORAGE_KEY]: JSON.stringify({
-          providerId: "openai-codex",
-          flowId: "flow-1",
-          verificationUrl: "https://auth.openai.com/codex/device",
-          userCode: "ABCD-EFGH",
-          expiresAt: "2099-04-24T12:00:00.000Z",
-          pollAfterMs: 5000,
-        }),
-      },
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
     });
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushAsyncUpdates();
 
-    try {
-      let renderer: ReactTestRenderer | null = null;
-      await act(async () => {
-        renderer = renderPage();
-      });
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      const text = collectText(renderer!.root);
-      expect(text).toContain("OpenAI approved the login, but GoatCitadel could not confirm");
-      expect(text).toContain("OAuth missing");
-      expect(text).not.toContain("OpenAI Codex OAuth connected.");
-    } finally {
-      restoreBrowserStorage();
-    }
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Review the exact Change Plan below to promote it");
+    expect(text).toContain("OAuth missing");
+    expect(mocks.completeChangePlanProviderOAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.confirmChangePlan).not.toHaveBeenCalled();
+    expect(text).not.toContain("OpenAI Codex OAuth connected.");
   });
 
-  it("restores an in-progress ChatGPT OAuth pairing after a Settings refresh", async () => {
+  it("scrubs an unbound legacy OAuth pairing after a Settings refresh", async () => {
     mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
       providerId: "openai-codex",
       flowId: "flow-1",
@@ -3803,15 +3906,17 @@ describe("SettingsNativePage providers", () => {
       });
 
       const text = collectText(renderer!.root);
-      expect(text).toContain("Use this exact OpenAI code");
-      expect(text).toContain("ABCD-EFGH");
-      expect(text).toContain("Open OpenAI page");
+      expect(text).toContain("Start ChatGPT login");
+      expect(text).not.toContain("ABCD-EFGH");
+      expect(globalThis.localStorage.getItem(OAUTH_STORAGE_KEY)).toBeNull();
+      expect(globalThis.sessionStorage.getItem(OAUTH_STORAGE_KEY)).toBeNull();
+      expect(mocks.pollChangePlanProviderOAuth).not.toHaveBeenCalled();
     } finally {
       restoreBrowserStorage();
     }
   });
 
-  it("prefers a valid session OAuth flow over stale local storage", async () => {
+  it("scrubs both local and session OAuth flows that lack Change Plan binding", async () => {
     mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
       providerId: "openai-codex",
       flowId: "session-flow",
@@ -3849,10 +3954,11 @@ describe("SettingsNativePage providers", () => {
       });
 
       const text = collectText(renderer!.root);
-      expect(text).toContain("SESSION-CODE");
+      expect(text).not.toContain("SESSION-CODE");
       expect(text).not.toContain("OLD-CODE");
       expect(globalThis.localStorage.getItem(OAUTH_STORAGE_KEY)).toBeNull();
-      expect(globalThis.sessionStorage.getItem(OAUTH_STORAGE_KEY)).toContain("SESSION-CODE");
+      expect(globalThis.sessionStorage.getItem(OAUTH_STORAGE_KEY)).toBeNull();
+      expect(mocks.pollChangePlanProviderOAuth).not.toHaveBeenCalled();
     } finally {
       restoreBrowserStorage();
     }
@@ -3888,7 +3994,7 @@ describe("SettingsNativePage providers", () => {
     }
   });
 
-  it("does not overlap automatic OAuth polling and honors retryAfterMs", async () => {
+  it("does not overlap plan-bound automatic OAuth polling and honors retryAfterMs", async () => {
     vi.useFakeTimers();
     setCodexProviderCatalogState({ models: ["gpt-5.5"] });
     let resolveFirstPoll: (value: unknown) => void = () => undefined;
@@ -3903,53 +4009,41 @@ describe("SettingsNativePage providers", () => {
         status: "pending",
         retryAfterMs: 7000,
       } as any);
-    const restoreBrowserStorage = installBrowserStorageMock({
-      session: {
-        [OAUTH_STORAGE_KEY]: JSON.stringify({
-          providerId: "openai-codex",
-          flowId: "flow-1",
-          verificationUrl: "https://auth.openai.com/codex/device",
-          userCode: "ABCD-EFGH",
-          expiresAt: "2099-04-24T12:00:00.000Z",
-          pollAfterMs: 5000,
-        }),
-      },
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
     });
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mocks.pollChangePlanProviderOAuth).toHaveBeenCalledTimes(1);
 
-    try {
-      let renderer: ReactTestRenderer | null = null;
-      await act(async () => {
-        renderer = renderPage();
-      });
-      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(mocks.pollChangePlanProviderOAuth).toHaveBeenCalledTimes(1);
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
+    await act(async () => {
+      resolveFirstPoll({
+        providerId: "openai-codex",
+        flowId: "flow-1",
+        status: "pending",
+        retryAfterMs: 7000,
       });
-      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+      await firstPoll;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6999);
+    });
+    expect(mocks.pollChangePlanProviderOAuth).toHaveBeenCalledTimes(1);
 
-      await act(async () => {
-        resolveFirstPoll({
-          providerId: "openai-codex",
-          flowId: "flow-1",
-          status: "pending",
-          retryAfterMs: 7000,
-        });
-        await firstPoll;
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6999);
-      });
-      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
-      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(2);
-      renderer!.unmount();
-    } finally {
-      restoreBrowserStorage();
-    }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.pollChangePlanProviderOAuth).toHaveBeenCalledTimes(2);
+    renderer!.unmount();
   });
 
   it("shows and can disconnect an orphan ChatGPT OAuth credential", async () => {
@@ -3973,7 +4067,14 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       findButton(renderer!.root, "Disconnect").props.onClick();
     });
-    expect(mocks.deleteOpenAICodexOAuthCredential).toHaveBeenCalledTimes(1);
+    await flushAsyncUpdates();
+    expect(mocks.createChangePlan).toHaveBeenCalledWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: { kind: "provider_connection", providerId: "openai-codex", credentialAction: "remove_oauth" },
+    });
+    expect(mocks.deleteOpenAICodexOAuthCredential).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("Disconnect OAuth from OpenAI Codex");
   });
 
   it("labels fallback-only Codex model catalogs as suggested and unverified", async () => {
@@ -4217,15 +4318,13 @@ describe("SettingsNativePage access", () => {
       });
       await flushAsyncUpdates();
 
-      expect(mocks.patchSettings).toHaveBeenCalledWith({
+      expect(mocks.patchGatewayAuthSettings).toHaveBeenCalledWith({
         expectedRevision: 41,
-        auth: {
-          mode: "basic",
-          allowLoopbackBypass: false,
-          token: "rotated-token",
-          basicUsername: "goat-admin",
-          basicPassword: "basic-secret",
-        },
+        mode: "basic",
+        allowLoopbackBypass: false,
+        token: "rotated-token",
+        basicUsername: "goat-admin",
+        basicPassword: "basic-secret",
       });
       expect(collectText(renderer!.root)).toContain("Access posture updated.");
 

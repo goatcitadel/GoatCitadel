@@ -25,6 +25,7 @@ import type {
   ChatCompletionRequest,
   ChatCompletionReasoningReceipt,
   ChatCompletionResponse,
+  ChatThinkingLevel,
   ChatProviderFailureRecord,
   ImageAssetInput,
   ImageGenerationRequest,
@@ -37,6 +38,7 @@ import type {
   LlmConfigFile,
   LlmModelDiscoverySource,
   LlmModelMetadataManifest,
+  LlmModelReasoningMetadata,
   LlmModelRecord,
   LlmModelPreviewRequest,
   LlmModelPreviewResponse,
@@ -105,6 +107,7 @@ const MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS = 64 * 1024;
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
   activeModel?: string;
+  defaultThinkingLevel?: ChatThinkingLevel;
   utilityProviderId?: string;
   utilityModel?: string;
   upsertProvider?: {
@@ -308,6 +311,7 @@ export class LlmService {
   private readonly dnsLookup: ProviderDnsLookupFn;
   private activeProviderId: string;
   private activeModel: string;
+  private defaultThinkingLevel: ChatThinkingLevel;
   private utilityProviderId: string;
   private utilityModel: string;
   private readonly modelMetadata: LlmModelMetadataManifest;
@@ -331,6 +335,7 @@ export class LlmService {
     this.modelUsageAccounting = options.modelUsageAccounting;
     this.activeProviderId = "";
     this.activeModel = "";
+    this.defaultThinkingLevel = config.defaultThinkingLevel ?? "standard";
     this.utilityProviderId = "";
     this.utilityModel = "";
     this.modelCatalogCachePath = options.modelCatalogCachePath ?? this.env.GOATCITADEL_LLM_MODEL_CATALOG_CACHE_PATH;
@@ -472,6 +477,17 @@ export class LlmService {
     return Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 0 ? contextWindow : undefined;
   }
 
+  /** Exact server-owned reasoning metadata used by Change Plan validation. */
+  public getModelReasoningMetadata(providerId: string, model: string): LlmModelReasoningMetadata | undefined {
+    const reasoning = lookupExactModelMetadata(this.modelMetadata, providerId, model)?.reasoning;
+    return reasoning
+      ? {
+          supportedEfforts: [...reasoning.supportedEfforts],
+          ...(reasoning.providerEffortMap ? { providerEffortMap: { ...reasoning.providerEffortMap } } : {}),
+        }
+      : undefined;
+  }
+
   /** Secret-free fingerprint of every configured selector that can change an exact model transport route. */
   public getProviderRouteConfigFingerprint(providerId: string, model: string): string | undefined {
     const provider = this.providers.get(providerId);
@@ -504,6 +520,7 @@ export class LlmService {
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
+      defaultThinkingLevel: this.defaultThinkingLevel,
       utilityProviderId: this.utilityProviderId || undefined,
       utilityModel: this.utilityModel || undefined,
       activeModelContextWindow: activeMeta?.contextWindow,
@@ -516,6 +533,9 @@ export class LlmService {
     this.modelDiscoveryCache.clear();
     this.modelDiscoveryInFlight.clear();
     this.modelDiscoveryAuthTokens.clear();
+    if (input.defaultThinkingLevel !== undefined) {
+      this.defaultThinkingLevel = input.defaultThinkingLevel;
+    }
     if (input.upsertProvider) {
       const existing = this.providers.get(input.upsertProvider.providerId);
       const isCodexOAuthProvider = input.upsertProvider.providerId.trim().toLowerCase() === "openai-codex";
@@ -849,14 +869,37 @@ export class LlmService {
     return this.openAICodexOAuth.getStatus();
   }
 
-  public async startOpenAICodexOAuthDeviceFlow(): Promise<OpenAICodexDeviceStartResponse> {
+  public async startOpenAICodexOAuthDeviceFlow(
+    options: {
+      credentialAccount?: string;
+      idempotencyKey?: string;
+    } = {},
+  ): Promise<OpenAICodexDeviceStartResponse> {
     this.assertKnownOpenAICodexProvider();
-    return this.openAICodexOAuth.startDeviceFlow();
+    return this.openAICodexOAuth.startDeviceFlow(options);
   }
 
-  public async pollOpenAICodexOAuthDeviceFlow(flowId: string): Promise<OpenAICodexDevicePollResponse> {
+  public async pollOpenAICodexOAuthDeviceFlow(
+    flowId: string,
+    options: { expectedCredentialAccount?: string } = {},
+  ): Promise<OpenAICodexDevicePollResponse> {
     this.assertKnownOpenAICodexProvider();
-    return this.openAICodexOAuth.pollDeviceFlow(flowId);
+    return this.openAICodexOAuth.pollDeviceFlow(flowId, options);
+  }
+
+  /** @internal Plan-scoped OAuth custody. Public provider projections never expose the account name. */
+  public getOpenAICodexOAuthCredentialStatus(credentialAccount: string): OpenAICodexOAuthStatus {
+    return this.openAICodexOAuth.getStatus(credentialAccount);
+  }
+
+  /** @internal Exact Change Plan apply seam; the OAuth service owns the credential move. */
+  public promoteOpenAICodexOAuthCredential(credentialAccount: string): OpenAICodexOAuthStatus {
+    return this.openAICodexOAuth.promoteCredential(credentialAccount);
+  }
+
+  /** @internal Cancellation/expiry cleanup for a plan-scoped OAuth credential. */
+  public discardOpenAICodexOAuthCredential(credentialAccount: string): void {
+    this.openAICodexOAuth.discardCredential(credentialAccount);
   }
 
   public deleteOpenAICodexOAuthCredential(): OpenAICodexOAuthStatus {
@@ -882,6 +925,7 @@ export class LlmService {
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
+      defaultThinkingLevel: this.defaultThinkingLevel,
       utilityProviderId: this.utilityProviderId || undefined,
       utilityModel: this.utilityModel || undefined,
       providers: Array.from(this.providers.values()).map((provider) => ({
@@ -906,6 +950,7 @@ export class LlmService {
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
+      defaultThinkingLevel: this.defaultThinkingLevel,
       utilityProviderId: this.utilityProviderId || undefined,
       utilityModel: this.utilityModel || undefined,
       providers: Array.from(this.providers.values()).map((provider) => structuredClone(provider)),

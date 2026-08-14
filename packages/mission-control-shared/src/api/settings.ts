@@ -1,5 +1,6 @@
 import type {
   AuthSettingsUpdateInput,
+  AuthRuntimeSettings,
   DeviceAccessGrantListResponse,
   DeviceAccessGrantRevokeResponse,
   GatewayInstallTokenResolution,
@@ -152,6 +153,23 @@ export async function patchSettings(input: {
 }): Promise<RuntimeSettingsResponse> {
   return request<RuntimeSettingsResponse>("/api/v1/settings", {
     method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function patchGatewayAuthSettings(
+  input: AuthSettingsUpdateInput & {
+    expectedRevision: number;
+  },
+): Promise<
+  AuthRuntimeSettings & {
+    revision: number;
+    changePlanReceipt?: NonNullable<RuntimeSettingsResponse["changePlanReceipt"]>;
+  }
+> {
+  return request("/api/v1/auth/settings", {
+    method: "PATCH",
+    cache: "no-store",
     body: JSON.stringify(input),
   });
 }

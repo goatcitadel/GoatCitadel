@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
@@ -14,9 +16,11 @@ import {
   RemoteWorkerManifestRejectedError,
   RemoteWorkerManifestVerifierUnavailableError,
 } from "./remote-worker-manifest-verifier.js";
+import { readRemoteWorkerNoFollowFile } from "./remote-worker-installed-tree-scanner.js";
 import { REMOTE_WORKER_RUNTIME_ENV } from "./remote-worker-runtime-config.js";
 
 const temporaryRoots: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -25,6 +29,15 @@ afterEach(async () => {
 describe("configured remote worker manifest verifier", () => {
   it("verifies the configured signer ID, SPKI pin, and Ed25519 signature", async () => {
     const fixture = await signerFixture();
+    const signerBytes = await readRemoteWorkerNoFollowFile(
+      fixture.env[REMOTE_WORKER_RUNTIME_ENV.manifestSignerPublicKeyFile]!,
+      16 * 1024,
+    );
+    try {
+      expect(signerBytes.byteLength).toBeGreaterThan(0);
+    } finally {
+      signerBytes.fill(0);
+    }
     const receipt = await createConfiguredRemoteWorkerManifestVerifier(fixture.env).verify(fixture.manifest);
 
     expect(receipt).toMatchObject({
@@ -76,8 +89,7 @@ async function signerFixture(): Promise<{
   manifest: RemoteWorkerRuntimeManifest;
   spkiSha256: string;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "goatcitadel-worker-signer-"));
-  temporaryRoots.push(root);
+  const root = await lockedSignerRoot();
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const publicKeyFile = join(root, "manifest-signer.pem");
   const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
@@ -121,6 +133,33 @@ async function signerFixture(): Promise<{
       [REMOTE_WORKER_RUNTIME_ENV.manifestSignerSpkiSha256]: spkiSha256,
     },
   };
+}
+
+/**
+ * The production verifier rejects any signer path writable by a foreign
+ * principal. Keep the fixture inside a deliberately operator-locked root so
+ * the test exercises signature posture rather than the host Temp ACL.
+ */
+async function lockedSignerRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "goatcitadel-worker-signer-"));
+  temporaryRoots.push(root);
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot as string;
+    const { stdout } = await execFileAsync(join(systemRoot, "System32", "whoami.exe"), ["/user", "/fo", "csv", "/nh"]);
+    const sid = /"(S-1-[0-9-]+)"/u.exec(stdout)?.[1];
+    if (sid === undefined) throw new Error("Unable to resolve the Windows test operator SID.");
+    await execFileAsync(join(systemRoot, "System32", "icacls.exe"), [
+      root,
+      "/inheritance:r",
+      "/grant:r",
+      `*${sid}:(OI)(CI)F`,
+      "*S-1-5-18:(OI)(CI)F",
+      "*S-1-5-32-544:(OI)(CI)F",
+    ]);
+  } else {
+    await chmod(root, 0o700);
+  }
+  return root;
 }
 
 function digest(value: Buffer): string {

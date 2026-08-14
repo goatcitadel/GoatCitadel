@@ -52,6 +52,8 @@ apps/mission-control-windows/bin/
 apps/mission-control-windows/obj/
 apps/mission-control-windows/Tests/bin/
 apps/mission-control-windows/Tests/obj/
+apps/product-source-update-helper/bin/
+apps/product-source-update-helper/obj/
 backups/
 data/postgres/
 output/

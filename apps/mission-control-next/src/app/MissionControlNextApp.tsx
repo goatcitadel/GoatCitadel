@@ -731,6 +731,21 @@ export function MissionControlNextApp() {
     preloadRouteChunk(route);
   }, [route]);
 
+  // A bare installation has no completed setup marker. Keep its first
+  // destination native and guided instead of opening a model-less Chat that
+  // cannot produce a useful first turn. Settings remains reachable later, but
+  // this initial redirect is intentionally one-way and history-neutral.
+  useEffect(() => {
+    if (
+      gatewayAccess.status !== "ready" ||
+      gatewayAccess.onboardingState?.completed !== false ||
+      route.area !== "chat"
+    ) {
+      return;
+    }
+    navigate({ area: "settings", section: "onboarding", theme: route.theme }, { replace: true });
+  }, [gatewayAccess, navigate, route.area, route.theme]);
+
   useEffect(() => {
     if (route.area !== "chat") {
       return;

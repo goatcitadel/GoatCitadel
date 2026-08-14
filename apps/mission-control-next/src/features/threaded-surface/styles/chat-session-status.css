@@ -49,6 +49,29 @@
   overflow-wrap: anywhere;
 }
 
+.mc-next-chat-status__fanout {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.mc-next-chat-status__fanout-stop {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--mc-danger, #f1788e) 56%, transparent);
+  border-radius: 0.38rem;
+  background: transparent;
+  color: var(--mc-danger, #f1788e);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-2xs);
+  padding: 0.2rem 0.35rem;
+}
+
+.mc-next-chat-status__fanout-stop:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 @media (max-width: 900px) {
   .mc-next-chat-status__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -65,5 +88,9 @@
   }
   .mc-next-chat-status__grid {
     grid-template-columns: 1fr;
+  }
+  .mc-next-chat-status__fanout {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

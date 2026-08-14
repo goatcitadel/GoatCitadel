@@ -4,6 +4,7 @@ import type {
   AutonomousActivationGrantEvaluationInput,
   AutonomousActivationGrantEvaluationResult,
   AutonomousActivationGrantRecord,
+  AutonomousActivationGrantReservationInput,
   AutonomousActivationGrantRevokeInput,
   AutonomousActivationRiskLevel,
   PermissionSurface,
@@ -13,6 +14,8 @@ import { wildcardMatch } from "./mcp-server-policy.js";
 
 const SETTING_KEY = "autonomous_activation_grants_v1";
 const DEFAULT_WORKSPACE_ID = "default";
+/** One child needs this conservative ceiling; lower project grants cannot ever admit even one fan-out child. */
+const MIN_AUTOMATIC_FANOUT_BUDGET_USD = 0.25;
 const RISK_RANK: Record<AutonomousActivationRiskLevel, number> = {
   safe: 1,
   caution: 2,
@@ -51,17 +54,57 @@ export class AutonomousActivationGrantService {
     if (!input.grantor.trim()) {
       throw new Error("Autonomous activation grants require a grantor.");
     }
+    const activationKinds: AutonomousActivationGrantRecord["activationKinds"] = input.activationKinds?.length
+      ? [...new Set(input.activationKinds)]
+      : ["capability", "tool", "mcp_tool", "code_mode"];
+    const workspaceId = input.workspaceId?.trim() || DEFAULT_WORKSPACE_ID;
+    const projectId = input.projectId?.trim() || undefined;
+    if (activationKinds.includes("subagent_fanout")) {
+      if (!projectId || projectId === "*") {
+        throw new Error("Automatic subagent fan-out grants require one exact projectId.");
+      }
+      if (workspaceId === "*") {
+        throw new Error("Automatic subagent fan-out grants cannot use a wildcard workspace.");
+      }
+      const surfaces = normalizeSurfaces(input.surfaces);
+      if (activationKinds.length !== 1 || activationKinds[0] !== "subagent_fanout") {
+        throw new Error("Automatic subagent fan-out grants cannot be combined with other activation kinds.");
+      }
+      if (surfaces.length !== 1 || surfaces[0] !== "chat") {
+        throw new Error("Automatic subagent fan-out grants are scoped only to Chat.");
+      }
+      if (input.maxRiskLevel !== "caution") {
+        throw new Error("Automatic subagent fan-out grants require the fixed caution risk level.");
+      }
+      const maxFanoutActivations = input.maxActivations;
+      if (
+        typeof maxFanoutActivations !== "number" ||
+        !Number.isInteger(maxFanoutActivations) ||
+        maxFanoutActivations < 1
+      ) {
+        throw new Error("Automatic subagent fan-out grants require a positive maximum child activation limit.");
+      }
+      const fanoutBudgetUsd = input.budgetUsd;
+      if (
+        typeof fanoutBudgetUsd !== "number" ||
+        !Number.isFinite(fanoutBudgetUsd) ||
+        fanoutBudgetUsd < MIN_AUTOMATIC_FANOUT_BUDGET_USD
+      ) {
+        throw new Error(
+          `Automatic subagent fan-out grants require a budget ceiling of at least $${MIN_AUTOMATIC_FANOUT_BUDGET_USD.toFixed(2)}.`,
+        );
+      }
+    }
     const grant: AutonomousActivationGrantRecord = {
       grantId: `auto-grant-${randomUUID()}`,
       status: "active",
-      workspaceId: input.workspaceId?.trim() || DEFAULT_WORKSPACE_ID,
+      workspaceId,
+      ...(projectId ? { projectId } : {}),
       surfaces: normalizeSurfaces(input.surfaces),
       maxRiskLevel: input.maxRiskLevel,
       capabilityPatterns: normalizePatterns(input.capabilityPatterns),
       toolPatterns: normalizePatterns(input.toolPatterns),
-      activationKinds: input.activationKinds?.length
-        ? [...new Set(input.activationKinds)]
-        : ["capability", "tool", "mcp_tool", "code_mode"],
+      activationKinds,
       maxActivations: input.maxActivations,
       usedActivations: 0,
       budgetUsd: input.budgetUsd,
@@ -72,11 +115,12 @@ export class AutonomousActivationGrantService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.writeGrants([grant, ...(await this.readGrants())]);
+    await this.systemSettings.mutate(SETTING_KEY, [], (stored) => [grant, ...normalizeStoredGrants(stored)]);
     await this.publishRealtime("system", "capabilities", {
       type: "autonomous_activation_grant_created",
       grantId: grant.grantId,
       workspaceId: grant.workspaceId,
+      ...(grant.projectId ? { projectId: grant.projectId } : {}),
       maxRiskLevel: grant.maxRiskLevel,
       expiresAt: grant.expiresAt,
     });
@@ -89,24 +133,26 @@ export class AutonomousActivationGrantService {
   ): Promise<AutonomousActivationGrantRecord> {
     const now = new Date().toISOString();
     let updated: AutonomousActivationGrantRecord | undefined;
-    const grants = (await this.readGrants()).map((grant) => {
-      if (grant.grantId !== grantId) {
-        return grant;
-      }
-      updated = {
-        ...hydrateGrantStatus(grant),
-        status: "revoked",
-        revokedAt: now,
-        revokedBy: input.revokedBy.trim() || "operator",
-        revocationReason: input.reason?.trim() || undefined,
-        updatedAt: now,
-      };
-      return updated;
+    await this.systemSettings.mutate(SETTING_KEY, [], (stored) => {
+      const grants = normalizeStoredGrants(stored).map((grant) => {
+        if (grant.grantId !== grantId) {
+          return grant;
+        }
+        updated = {
+          ...hydrateGrantStatus(grant),
+          status: "revoked",
+          revokedAt: now,
+          revokedBy: input.revokedBy.trim() || "operator",
+          revocationReason: input.reason?.trim() || undefined,
+          updatedAt: now,
+        };
+        return updated;
+      });
+      return grants;
     });
     if (!updated) {
       throw new Error(`Unknown autonomous activation grant: ${grantId}`);
     }
-    await this.writeGrants(grants);
     await this.publishRealtime("system", "capabilities", {
       type: "autonomous_activation_grant_revoked",
       grantId,
@@ -142,39 +188,98 @@ export class AutonomousActivationGrantService {
     };
   }
 
-  public async recordGrantUse(grantId: string, estimatedCostUsd = 0): Promise<AutonomousActivationGrantRecord> {
-    const now = new Date().toISOString();
-    let updated: AutonomousActivationGrantRecord | undefined;
-    const grants = (await this.readGrants()).map((grant) => {
-      if (grant.grantId !== grantId) {
-        return grant;
-      }
-      const hydrated = hydrateGrantStatus(grant);
-      if (hydrated.status !== "active") {
-        throw new Error(`Autonomous activation grant ${grantId} is ${hydrated.status}.`);
-      }
-      if (hydrated.maxActivations !== undefined && hydrated.usedActivations >= hydrated.maxActivations) {
-        throw new Error(`Autonomous activation grant ${grantId} activation count is exhausted.`);
-      }
-      if (hydrated.budgetUsd !== undefined && (hydrated.usedBudgetUsd ?? 0) + estimatedCostUsd > hydrated.budgetUsd) {
-        throw new Error(`Autonomous activation grant ${grantId} budget is exhausted.`);
-      }
-      updated = {
-        ...hydrated,
-        usedActivations: hydrated.usedActivations + 1,
-        usedBudgetUsd: (hydrated.usedBudgetUsd ?? 0) + estimatedCostUsd,
-        lastUsedAt: now,
-        updatedAt: now,
+  /** Revalidates the exact frozen grant reference; it never substitutes another grant. */
+  public async evaluateGrantById(
+    grantId: string,
+    input: AutonomousActivationGrantEvaluationInput,
+  ): Promise<AutonomousActivationGrantEvaluationResult> {
+    const grant = (await this.readGrants())
+      .map((item) => hydrateGrantStatus(item))
+      .find((item) => item.grantId === grantId);
+    if (!grant) {
+      return {
+        allowed: false,
+        blockers: [`Unknown autonomous activation grant: ${grantId}`],
+        governance: [],
       };
-      return updated;
-    });
-    if (!updated) {
-      throw new Error(`Unknown autonomous activation grant: ${grantId}`);
     }
-    await this.writeGrants(grants);
+    if (grant.status !== "active") {
+      return {
+        allowed: false,
+        blockers: [`Autonomous activation grant ${grantId} is ${grant.status}.`],
+        governance: [],
+      };
+    }
+    return evaluateSingleGrant(grant, input);
+  }
+
+  /**
+   * Revalidates frozen authority after its aggregate quota/cost has already
+   * been atomically reserved. It deliberately still checks status, expiry,
+   * exact workspace/project scope, surface, kind, and capability/tool scope;
+   * it only omits *new* capacity consumption so a fully reserved three-child
+   * aggregate does not invalidate itself before child one can start.
+   */
+  public async evaluateGrantAuthorityById(
+    grantId: string,
+    input: AutonomousActivationGrantEvaluationInput,
+  ): Promise<AutonomousActivationGrantEvaluationResult> {
+    const grant = (await this.readGrants())
+      .map((item) => hydrateGrantStatus(item))
+      .find((item) => item.grantId === grantId);
+    if (!grant) {
+      return { allowed: false, blockers: [`Unknown autonomous activation grant: ${grantId}`], governance: [] };
+    }
+    if (grant.status !== "active") {
+      return {
+        allowed: false,
+        blockers: [`Autonomous activation grant ${grantId} is ${grant.status}.`],
+        governance: [],
+      };
+    }
+    return evaluateSingleGrant(grant, input, { skipCapacityCheck: true });
+  }
+
+  public async recordGrantUse(grantId: string, estimatedCostUsd = 0): Promise<AutonomousActivationGrantRecord> {
+    const updated = await this.reserveGrantMutation({
+      grantId,
+      requiredActivations: 1,
+      estimatedCostUsd,
+    });
     await this.publishRealtime("system", "capabilities", {
       type: "autonomous_activation_grant_used",
       grantId,
+      usedActivations: updated.usedActivations,
+      usedBudgetUsd: updated.usedBudgetUsd,
+    });
+    return updated;
+  }
+
+  /**
+   * Conservatively consumes an aggregate's child slots and cost ceiling in one
+   * row-locked settings mutation. Callers must reserve before the first child
+   * starts; an insufficient reservation rejects the entire aggregate.
+   */
+  public async reserveGrantUse(
+    input: AutonomousActivationGrantReservationInput,
+  ): Promise<AutonomousActivationGrantRecord> {
+    if (!Number.isInteger(input.requiredActivations) || input.requiredActivations < 1) {
+      throw new Error("Autonomous activation grant reservations require at least one activation.");
+    }
+    if (!Number.isFinite(input.estimatedCostUsd ?? 0) || (input.estimatedCostUsd ?? 0) < 0) {
+      throw new Error("Autonomous activation grant reservations require a non-negative finite cost ceiling.");
+    }
+    if (input.reservationId !== undefined && (!input.reservationId.trim() || input.reservationId.length > 256)) {
+      throw new Error("Autonomous activation grant reservation IDs must be non-empty and at most 256 characters.");
+    }
+    const updated = await this.reserveGrantMutation(input);
+    await this.publishRealtime("system", "capabilities", {
+      type: "autonomous_activation_grant_reserved",
+      grantId: updated.grantId,
+      workspaceId: updated.workspaceId,
+      ...(updated.projectId ? { projectId: updated.projectId } : {}),
+      reservedActivations: input.requiredActivations,
+      reservedBudgetUsd: input.estimatedCostUsd ?? 0,
       usedActivations: updated.usedActivations,
       usedBudgetUsd: updated.usedBudgetUsd,
     });
@@ -189,21 +294,76 @@ export class AutonomousActivationGrantService {
     return stored.filter((item): item is AutonomousActivationGrantRecord => Boolean(item?.grantId));
   }
 
-  private async writeGrants(grants: AutonomousActivationGrantRecord[]): Promise<void> {
-    await this.systemSettings.set(
-      SETTING_KEY,
-      grants.map((grant) => hydrateGrantStatus(grant)),
-    );
+  private async reserveGrantMutation(
+    input: Pick<
+      AutonomousActivationGrantReservationInput,
+      "grantId" | "requiredActivations" | "estimatedCostUsd" | "reservationId"
+    > &
+      Partial<AutonomousActivationGrantEvaluationInput>,
+  ): Promise<AutonomousActivationGrantRecord> {
+    const now = new Date().toISOString();
+    let updated: AutonomousActivationGrantRecord | undefined;
+    await this.systemSettings.mutate(SETTING_KEY, [], (stored) => {
+      const grants = normalizeStoredGrants(stored).map((grant) => {
+        if (grant.grantId !== input.grantId) {
+          return grant;
+        }
+        const hydrated = hydrateGrantStatus(grant);
+        if (hydrated.status !== "active") {
+          throw new Error(`Autonomous activation grant ${input.grantId} is ${hydrated.status}.`);
+        }
+        const reservationId = input.reservationId?.trim();
+        if (reservationId && hydrated.reservationIds?.includes(reservationId)) {
+          updated = hydrated;
+          return updated;
+        }
+        if (input.activationKind) {
+          const evaluation = evaluateSingleGrant(hydrated, {
+            workspaceId: input.workspaceId,
+            projectId: input.projectId,
+            surface: input.surface!,
+            riskLevel: input.riskLevel!,
+            activationKind: input.activationKind,
+            capabilityId: input.capabilityId,
+            toolName: input.toolName,
+            estimatedCostUsd: input.estimatedCostUsd,
+            requiredActivations: input.requiredActivations,
+          });
+          if (!evaluation.allowed) {
+            throw new Error(
+              `Autonomous activation grant ${input.grantId} cannot reserve this request: ${evaluation.blockers.join(" ")}`,
+            );
+          }
+        } else {
+          assertReservationCapacity(hydrated, input.requiredActivations, input.estimatedCostUsd ?? 0);
+        }
+        updated = {
+          ...hydrated,
+          usedActivations: hydrated.usedActivations + input.requiredActivations,
+          usedBudgetUsd: (hydrated.usedBudgetUsd ?? 0) + (input.estimatedCostUsd ?? 0),
+          ...(reservationId ? { reservationIds: [...(hydrated.reservationIds ?? []), reservationId] } : {}),
+          lastUsedAt: now,
+          updatedAt: now,
+        };
+        return updated;
+      });
+      return grants;
+    });
+    if (!updated) {
+      throw new Error(`Unknown autonomous activation grant: ${input.grantId}`);
+    }
+    return updated;
   }
 }
 
 function evaluateSingleGrant(
   grant: AutonomousActivationGrantRecord,
-  input: AutonomousActivationGrantEvaluationInput,
+  input: AutonomousActivationGrantEvaluationInput & { requiredActivations?: number },
+  options: { skipCapacityCheck?: boolean } = {},
 ): AutonomousActivationGrantEvaluationResult {
   const blockers: string[] = [];
   const workspaceId = input.workspaceId?.trim() || DEFAULT_WORKSPACE_ID;
-  if (grant.workspaceId !== workspaceId) {
+  if (grant.workspaceId !== "*" && grant.workspaceId !== workspaceId) {
     blockers.push(`Grant ${grant.grantId} is scoped to workspace ${grant.workspaceId}.`);
   }
   if (!grant.surfaces.includes("all") && !grant.surfaces.includes(input.surface)) {
@@ -215,14 +375,32 @@ function evaluateSingleGrant(
   if (!grant.activationKinds.includes(input.activationKind)) {
     blockers.push(`Grant ${grant.grantId} does not cover ${input.activationKind} activation.`);
   }
+  const requestedProjectId = input.projectId?.trim();
+  if (input.activationKind === "subagent_fanout") {
+    blockers.push(...fanoutGrantShapeBlockers(grant));
+    if (!requestedProjectId) {
+      blockers.push("Automatic subagent fan-out requires an active project binding.");
+    }
+    if (!grant.projectId || grant.projectId === "*" || grant.projectId !== requestedProjectId) {
+      blockers.push(`Grant ${grant.grantId} is not scoped to the active project.`);
+    }
+    if (grant.workspaceId === "*") {
+      blockers.push(`Grant ${grant.grantId} uses a wildcard workspace and cannot authorize subagent fan-out.`);
+    }
+  } else if (grant.projectId && grant.projectId !== requestedProjectId) {
+    blockers.push(`Grant ${grant.grantId} is scoped to project ${grant.projectId}.`);
+  }
   if (!matchesAny(input.capabilityId, grant.capabilityPatterns) && !matchesAny(input.toolName, grant.toolPatterns)) {
     blockers.push(`Grant ${grant.grantId} does not match the requested capability or tool pattern.`);
   }
-  if (grant.maxActivations !== undefined && grant.usedActivations >= grant.maxActivations) {
-    blockers.push(`Grant ${grant.grantId} activation count is exhausted.`);
-  }
-  if (grant.budgetUsd !== undefined && (grant.usedBudgetUsd ?? 0) + (input.estimatedCostUsd ?? 0) > grant.budgetUsd) {
-    blockers.push(`Grant ${grant.grantId} budget is exhausted.`);
+  if (!options.skipCapacityCheck) {
+    const requiredActivations = input.requiredActivations ?? 1;
+    if (grant.maxActivations !== undefined && grant.usedActivations + requiredActivations > grant.maxActivations) {
+      blockers.push(`Grant ${grant.grantId} activation count is exhausted for this reservation.`);
+    }
+    if (grant.budgetUsd !== undefined && (grant.usedBudgetUsd ?? 0) + (input.estimatedCostUsd ?? 0) > grant.budgetUsd) {
+      blockers.push(`Grant ${grant.grantId} budget is exhausted for this reservation.`);
+    }
   }
   return {
     allowed: blockers.length === 0,
@@ -230,6 +408,55 @@ function evaluateSingleGrant(
     blockers,
     governance: blockers.length === 0 ? buildGovernance(grant) : [],
   };
+}
+
+/**
+ * Fan-out authority is deliberately narrower than the generic grant format.
+ * This runtime-time check is also important for persisted data: a grant that
+ * predates the dedicated kind, or was manually malformed, must not become
+ * valid merely because its array happens to mention `subagent_fanout`.
+ */
+function fanoutGrantShapeBlockers(grant: AutonomousActivationGrantRecord): string[] {
+  const blockers: string[] = [];
+  if (grant.activationKinds.length !== 1 || grant.activationKinds[0] !== "subagent_fanout") {
+    blockers.push(`Grant ${grant.grantId} is not a dedicated automatic fan-out grant.`);
+  }
+  if (grant.surfaces.length !== 1 || grant.surfaces[0] !== "chat") {
+    blockers.push(`Grant ${grant.grantId} is not scoped exclusively to Chat.`);
+  }
+  if (grant.maxRiskLevel !== "caution") {
+    blockers.push(`Grant ${grant.grantId} does not use the required caution risk boundary.`);
+  }
+  if (typeof grant.maxActivations !== "number" || !Number.isInteger(grant.maxActivations) || grant.maxActivations < 1) {
+    blockers.push(`Grant ${grant.grantId} lacks a valid child-activation limit.`);
+  }
+  if (
+    typeof grant.budgetUsd !== "number" ||
+    !Number.isFinite(grant.budgetUsd) ||
+    grant.budgetUsd < MIN_AUTOMATIC_FANOUT_BUDGET_USD
+  ) {
+    blockers.push(`Grant ${grant.grantId} lacks the minimum automatic fan-out budget ceiling.`);
+  }
+  return blockers;
+}
+
+function assertReservationCapacity(
+  grant: AutonomousActivationGrantRecord,
+  requiredActivations: number,
+  estimatedCostUsd: number,
+): void {
+  if (!Number.isInteger(requiredActivations) || requiredActivations < 1) {
+    throw new Error("Autonomous activation grant reservations require at least one activation.");
+  }
+  if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd < 0) {
+    throw new Error("Autonomous activation grant reservations require a non-negative finite cost ceiling.");
+  }
+  if (grant.maxActivations !== undefined && grant.usedActivations + requiredActivations > grant.maxActivations) {
+    throw new Error(`Autonomous activation grant ${grant.grantId} activation count is exhausted.`);
+  }
+  if (grant.budgetUsd !== undefined && (grant.usedBudgetUsd ?? 0) + estimatedCostUsd > grant.budgetUsd) {
+    throw new Error(`Autonomous activation grant ${grant.grantId} budget is exhausted.`);
+  }
 }
 
 function buildGovernance(grant: AutonomousActivationGrantRecord): string[] {
@@ -266,6 +493,13 @@ function normalizePatterns(patterns?: string[]): string[] {
 
 function matchesAny(value: string | undefined, patterns: string[]): boolean {
   return Boolean(value?.trim()) && patterns.some((pattern) => wildcardMatch(value!, pattern));
+}
+
+function normalizeStoredGrants(value: unknown): AutonomousActivationGrantRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is AutonomousActivationGrantRecord => Boolean(item?.grantId));
 }
 
 function dedupe(values: string[]): string[] {

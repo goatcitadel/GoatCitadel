@@ -63,6 +63,11 @@ function createDeps(storage: Storage): ChatSessionDependencies {
     publishRealtime: vi.fn(),
     clearChatTurnWriteLease: vi.fn(),
     removeChatSessionStoredFile: vi.fn(),
+    getChatSessionModelDefaults: () => ({
+      providerId: undefined,
+      model: undefined,
+      thinkingLevel: "standard" as const,
+    }),
     ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
     hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
     patchSessionAutonomyPrefs: vi.fn(),

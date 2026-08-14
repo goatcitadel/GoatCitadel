@@ -28,6 +28,7 @@ import type { MissionControlDockSectionId } from "./useMissionControlSurfaceStat
 import type { ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
+import type { AutonomousActivationGrantRecord } from "@goatcitadel/contracts";
 
 export interface ChatContextDockPanelsProps {
   mode: "chat" | "cowork" | "code";
@@ -117,6 +118,13 @@ export interface ChatContextDockPanelsProps {
   integrationTarget: string;
   selectedSessionProjectValue: string;
   projectOptions: Array<{ value: string; label: string }>;
+  /** Exact project-scoped authority for automatic durable fan-out, loaded by the shell. */
+  automaticFanout?: {
+    enabled: boolean;
+    projectId?: string;
+    grant?: AutonomousActivationGrantRecord;
+    unavailableReason?: string;
+  };
   loadModelsForProvider: (providerId: string, options?: { force?: boolean }) => Promise<string[]>;
   getCachedModels: (providerId: string) => string[];
   resolveProviderModelSelection: (input: {

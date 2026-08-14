@@ -2,15 +2,17 @@
 // per-section settings decomposition.
 import { useCallback, useEffect, useState } from "react";
 import { ExternalLink, Plus, RefreshCw } from "lucide-react";
+import type { ChannelSetupDraft } from "@goatcitadel/contracts";
 import {
   createChannelSetupDraft,
+  createChangePlan,
   discoverTelegramTargets,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
   fetchIntegrationConnections,
   fetchSlackOAuthStatus,
-  finalizeChannelSetupDraft,
   startSlackOAuth,
+  submitChannelSetupDraftSecrets,
   testChannelSetupDraft,
   updateChannelSetupDraft,
   validateChannelSetupDraft,
@@ -46,7 +48,7 @@ import {
 } from "../../SettingsNativePage";
 import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 
-export function ChannelsSection(_props: SettingsSectionProps) {
+export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [definitions, drafts, connections] = await Promise.all([
       nativeLoad("Channel definitions", fetchChannelSetupDefinitions(), { items: [] }),
@@ -278,40 +280,61 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     }
   };
 
-  const persistDraft = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
+  const persistDraft = async (valuesOverride?: Record<string, unknown>): Promise<ChannelSetupDraft | undefined> => {
     if (!selectedDraft) {
-      return false;
+      return undefined;
     }
     const nextValues = valuesOverride ?? draftValues;
     if (!draftHasChanges(nextValues)) {
-      return true;
+      return selectedDraft;
     }
     try {
-      const savedDraft = await updateChannelSetupDraft(selectedDraft.draftId, {
+      const secretFieldKeys = new Set(selectedDefinition?.adapter.secretFieldKeys ?? []);
+      const publicValues = Object.fromEntries(
+        Object.entries(nextValues).filter(([fieldKey]) => !secretFieldKeys.has(fieldKey)),
+      );
+      const secureValues = Object.fromEntries(
+        Object.entries(nextValues).flatMap(([fieldKey, value]) =>
+          secretFieldKeys.has(fieldKey) &&
+          typeof value === "string" &&
+          value.trim().length > 0 &&
+          value !== "[REDACTED]"
+            ? [[fieldKey, value]]
+            : [],
+        ),
+      );
+      let savedDraft = await updateChannelSetupDraft(selectedDraft.draftId, {
+        expectedRevision: selectedDraft.revision,
         label: draftLabel.trim() || undefined,
         enabled: draftEnabled,
-        draft: nextValues,
+        draft: publicValues,
       });
+      if (Object.keys(secureValues).length > 0) {
+        savedDraft = await submitChannelSetupDraftSecrets(savedDraft.draftId, {
+          expectedRevision: savedDraft.revision,
+          values: secureValues,
+        });
+      }
       setDraftLabel(savedDraft.label ?? draftLabel.trim());
       setDraftEnabled(savedDraft.enabled ?? draftEnabled);
       setDraftValues(savedDraft.draft ?? nextValues);
       setDraftDirty(false);
-      return true;
+      return savedDraft;
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
-      return false;
+      return undefined;
     }
   };
 
   const handleSave = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
     setBusyAction("save");
     try {
-      const saved = await persistDraft(valuesOverride);
-      if (saved) {
+      const savedDraft = await persistDraft(valuesOverride);
+      if (savedDraft) {
         setNotice({ tone: "success", message: "Channel draft saved." });
         await reload();
       }
-      return saved;
+      return Boolean(savedDraft);
     } finally {
       setBusyAction(null);
     }
@@ -323,10 +346,11 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     }
     setBusyAction("validate");
     try {
-      if (!(await persistDraft(valuesOverride))) {
+      const currentDraft = await persistDraft(valuesOverride);
+      if (!currentDraft) {
         return;
       }
-      const result = await validateChannelSetupDraft(selectedDraft.draftId);
+      const result = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
       setValidationResult({
         kind: "validate",
         status: result.status,
@@ -350,10 +374,11 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     }
     setBusyAction("test");
     try {
-      if (!(await persistDraft(valuesOverride))) {
+      const currentDraft = await persistDraft(valuesOverride);
+      if (!currentDraft) {
         return;
       }
-      const validation = await validateChannelSetupDraft(selectedDraft.draftId);
+      const validation = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
       if (validation.status === "error") {
         setValidationResult({
           kind: "validate",
@@ -364,7 +389,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
         await reload();
         return;
       }
-      const result = await testChannelSetupDraft(selectedDraft.draftId);
+      const result = await testChannelSetupDraft(currentDraft.draftId, validation.draftRevision);
       setValidationResult({
         kind: "test",
         status: result.status,
@@ -398,12 +423,21 @@ export function ChannelsSection(_props: SettingsSectionProps) {
     }
     setBusyAction("finalize");
     try {
-      const result = await finalizeChannelSetupDraft(selectedDraft.draftId);
-      setNotice({ tone: "success", message: `Channel connection ${result.connection.label} finalized.` });
-      setSelectedDraftId("");
-      setValidationResult(null);
-      setDraftDirty(false);
-      await reload();
+      const plan = await createChangePlan({
+        workspaceId: activeWorkspaceId,
+        surface: "settings",
+        request: {
+          kind: "channel_connection",
+          channelKind: selectedDraft.catalogId,
+          draftId: selectedDraft.draftId,
+        },
+        idempotencyKey: `settings-channel-finalize:${selectedDraft.draftId}:${selectedDraft.revision}`,
+      });
+      setNotice({
+        tone: "success",
+        message: `Change Plan ${plan.planId} is ready for exact confirmation in Chat. The draft has not been finalized yet.`,
+      });
+      navigate({ area: "chat", theme: route.theme });
     } catch (finalizeError) {
       setNotice({ tone: "error", message: getErrorMessage(finalizeError) });
     } finally {

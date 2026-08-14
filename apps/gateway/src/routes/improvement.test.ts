@@ -13,6 +13,112 @@ describe("improvement routes", () => {
     app = null;
   });
 
+  it("projects a decision tune into an idempotent improvement Change Plan instead of applying it", async () => {
+    const approveDecisionAutoTune = vi.fn(async () => ({
+      tuneId: "tune-1",
+      status: "queued",
+      result: {
+        candidateId: "candidate-1",
+        disposition: "change_plan_required",
+        mutationApplied: false,
+      },
+    }));
+    const create = vi.fn(async () => ({
+      planId: "plan-1",
+      status: "awaiting_confirmation",
+      requiredAction: { kind: "confirmation" },
+    }));
+
+    app = Fastify();
+    app.decorateRequest("authActorId", undefined);
+    app.addHook("onRequest", async (request) => {
+      request.authActorId = "operator:improvement";
+    });
+    app.decorate("services", {
+      improvement: { approveDecisionAutoTune },
+      evolution: { create },
+    } as never);
+    await app.register(improvementRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/improvement/autotune/tune-1/approve",
+      payload: { workspaceId: "workspace-1" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(approveDecisionAutoTune).toHaveBeenCalledWith("tune-1");
+    expect(create).toHaveBeenCalledWith({
+      actor: {
+        workspaceId: "workspace-1",
+        actorId: "operator:improvement",
+        surface: "settings",
+      },
+      request: { kind: "improvement_candidate", candidateId: "candidate-1" },
+      idempotencyKey: "decision-tune:tune-1:change-plan",
+    });
+    expect(response.json()).toMatchObject({
+      status: "queued",
+      result: {
+        mutationApplied: false,
+        changePlanId: "plan-1",
+        changePlanStatus: "awaiting_confirmation",
+        requiredAction: "confirmation",
+      },
+    });
+  });
+
+  it("creates a review Change Plan instead of directly activating an improvement candidate", async () => {
+    const activateImprovementCandidate = vi.fn();
+    const review = {
+      candidate: {
+        candidateId: "candidate-1",
+        workspaceId: "workspace-1",
+        kind: "prompt_override",
+        status: "ready_for_approval",
+        summary: "Use a safer routing prompt",
+      },
+      actionStatuses: { activate: "ready" },
+    };
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-improvement-1",
+      revision: 1,
+      status: "awaiting_input",
+      risk: "caution",
+      summary: "Review improvement evidence",
+      requiredAction: { kind: "artifact_review" },
+      ...input,
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      improvement: {
+        getCuratorReviewItem: vi.fn(async () => review),
+        activateImprovementCandidate,
+      },
+      evolution: { isEnabled: vi.fn(async () => true), create },
+    } as never);
+    await app.register(improvementRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/improvement/candidates/candidate-1/activate",
+      payload: { actorId: "operator-1", reason: "Apply the reviewed suggestion." },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(activateImprovementCandidate).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: { kind: "improvement_candidate", candidateId: "candidate-1" },
+      }),
+    );
+    expect(response.json()).toMatchObject({
+      status: "change_plan_pending",
+      mutationApplied: false,
+      changePlan: { planId: "plan-improvement-1" },
+    });
+  });
+
   it("serves legacy capability-gap and repair-candidate endpoints", async () => {
     const listCapabilityGapEvents = vi.fn(() => [
       {

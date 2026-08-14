@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 197,
+      "expectedCount": 204,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 197,
+      "expectedLastVersion": 204,
       "migrations": [
         {
           "version": 1,
@@ -1387,15 +1387,64 @@
           "groupName": "canonical",
           "definitionSha256": "52d4114efcaba67f80a01c2aa2f0ed33347e12435b8489a3bd540d7e8d61c943",
           "implementationSha256": "b86e0fc4d3d2e05ae0b8934d234deec847d0056e4e26cd3fe1b30239a8e7e387"
+        },
+        {
+          "version": 198,
+          "name": "chat_durable_fanout_invocations",
+          "groupName": "canonical",
+          "definitionSha256": "f1b4f0460ecfb50dcbf176dd8d6c2525d81577effc66c393ffa6bb5f114776d1",
+          "implementationSha256": "67ac2d83d03df8f00dc0f690f03e81b11f71cf4a8bb5f7e9d661ddbef8f434b7"
+        },
+        {
+          "version": 199,
+          "name": "chat_change_plan_ledger",
+          "groupName": "canonical",
+          "definitionSha256": "234d5571623387fe8adb01a04a2cb0834c8812d410481a89dbb87343962a1993",
+          "implementationSha256": "eee40c8d7c6073b96c552f18a542433711da6e064b044dc818b3f532774803cb"
+        },
+        {
+          "version": 200,
+          "name": "chat_change_plan_expiry",
+          "groupName": "canonical",
+          "definitionSha256": "3eda940cc0b92a78283dfc37aa16f564625c5bf573210404e7de2260a437ccf9",
+          "implementationSha256": "a33caccfbf0d3c59a37703c4d6579544443ee52d54537cdf03359a5b2c38cc06"
+        },
+        {
+          "version": 201,
+          "name": "evolution_control_plane_change_plans",
+          "groupName": "canonical",
+          "definitionSha256": "5b8551a607889a69a45d03d25ae62ff662ac0858a07e07a425cbdd177275c887",
+          "implementationSha256": "136fb81a263387f2b8c105b65a9da4e4fad498fa31b20ff2dee44d0c73314848"
+        },
+        {
+          "version": 202,
+          "name": "channel_setup_draft_revision_cas",
+          "groupName": "canonical",
+          "definitionSha256": "c25c65f755a7b7083e4cabc72583002b830cae9805344a88e175d5dc582dcab6",
+          "implementationSha256": "4a3efee6f52efcaee1d36acc47633c35af2ec78577652ab7d10e023812b90bb4"
+        },
+        {
+          "version": 203,
+          "name": "managed_source_install_registry",
+          "groupName": "canonical",
+          "definitionSha256": "ebc7d856b18b13cc3e0dfdb57ad863a40440c27f5274a670f6b5b739db45365c",
+          "implementationSha256": "3d5350fa432924448a7fba3ee813e7573864ccc7528b3442cbcfd42cf34370ad"
+        },
+        {
+          "version": 204,
+          "name": "product_source_update_manifests",
+          "groupName": "canonical",
+          "definitionSha256": "8ca81a61fa52aa7bb4b070d7c7f66e842e7a20e757f01881d20239849a744f53",
+          "implementationSha256": "0135825590772b790c43e058b355047d081dc789c81739d61983fa4159b8ed57"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 141,
+      "expectedCount": 148,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 141,
+      "expectedLastVersion": 148,
       "migrations": [
         {
           "version": 1,
@@ -2244,6 +2293,48 @@
           "name": "mobile_approval_key_registration_owner",
           "definitionSha256": "ec1ec0c31494b56ce9b1fe686dae6470b2bd34b010d0e166e3ec26ddfa1c5d40",
           "runtimeIntegritySha256": "d02f99ec698724cc18468b40f71f1bc142d29bc141303987dadd89ef81b43248"
+        },
+        {
+          "version": 142,
+          "name": "chat_durable_fanout_invocations",
+          "definitionSha256": "c0ed638986643f4eba3ee6c5b3b34a9682034c114f2ad8f7c412fcaae825fa9b",
+          "sqlPayloadSha256": "d28033f6407f2c31e628878f68c530b0ac3c77c53599b018994fe8bb51c996bd"
+        },
+        {
+          "version": 143,
+          "name": "chat_change_plan_ledger",
+          "definitionSha256": "6497cce4afb24d4375361c35861096b280bc9398333230dca7cc854dd4c30157",
+          "sqlPayloadSha256": "5e97e0ccca2c671ead306bceec9da0d1335f9859310654664a0d85a25a236d52"
+        },
+        {
+          "version": 144,
+          "name": "chat_change_plan_expiry",
+          "definitionSha256": "c59f05849dfb5d38bb54418f6e22054512ada827f2aafe3c3b6f3eeed738c3ed",
+          "sqlPayloadSha256": "e7f73eab6bf9e96971ca5e04940efe32d3d58fcd4b061e01ef9d8b2ade9a66bd"
+        },
+        {
+          "version": 145,
+          "name": "evolution_control_plane_change_plans",
+          "definitionSha256": "d9b3c2dccc5a6ae2605e85ec5c91c97b90b897ac1cd3ce4907fa8c7411ce6f82",
+          "runtimeIntegritySha256": "8dbbf62f33748cf8c028f0934976c8fc13fe975ac1165f08cc7b538cbfca0c04"
+        },
+        {
+          "version": 146,
+          "name": "channel_setup_draft_revision_cas",
+          "definitionSha256": "c3fed51ec5305be58a7ae8b621e121c4065ed57c055900bd4e7a682b0c231dc9",
+          "sqlPayloadSha256": "7816dd96f619a6222c2062023c7917cd4633a17e1c6dd2558172f014d5b7549f"
+        },
+        {
+          "version": 147,
+          "name": "managed_source_install_registry",
+          "definitionSha256": "7cd1be1b558572ff5f4760f28f78239f6319ebfbf984e138af59ffdf02758821",
+          "runtimeIntegritySha256": "9d51dc5dacfcfb3704e5ea147f84e9c999ac7cd14ea043959bf1d1b3081abebc"
+        },
+        {
+          "version": 148,
+          "name": "product_source_update_manifests",
+          "definitionSha256": "00fa951007b505f7ca839510e577a1c986c08d2c371d6dcb8c5382b3640c5b02",
+          "runtimeIntegritySha256": "34334761d41a9b5b0dfb6f3a001ffcadcbd0ee3ba32a93d3a404b13fd91394e6"
         }
       ]
     }

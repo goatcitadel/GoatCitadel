@@ -1,4 +1,5 @@
 /* eslint-disable max-lines */
+import { CHANGE_PLAN_RUNTIME_FEATURE_FLAGS } from "@goatcitadel/contracts";
 import type { ToolCatalogEntry, ToolCategory, ToolPack, ToolRiskLevel } from "@goatcitadel/contracts";
 
 export interface ToolDefinition {
@@ -27,6 +28,9 @@ export const SUBAGENT_FANOUT_TOOL_NAME = "agent.fanout";
 
 /** Chat-callable request for a Gateway-owned secure runtime configuration flow. */
 export const RUNTIME_CONFIGURE_TOOL_NAME = "runtime.configure";
+
+/** Model-callable, plan-creation-only entry to the Evolution Control Plane. */
+export const CHANGE_REQUEST_TOOL_NAME = "change.request";
 
 export const RUNTIME_CONFIGURATION_TARGET_IDS = ["search.brave", "search.parallel"] as const;
 
@@ -82,6 +86,377 @@ const ARTIFACT_DESTINATION_ARG_SCHEMA = {
 } as const;
 
 const BUILTIN_TOOLS: ToolDefinition[] = [
+  {
+    name: CHANGE_REQUEST_TOOL_NAME,
+    category: "ops",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Request an inspectable Change Plan for an allowlisted configuration, connection, capability, repair, or update intent. This never confirms or applies the change.",
+    argSchema: {
+      type: "object",
+      properties: {
+        intent: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                kind: { const: "session_model" },
+                providerId: { type: "string", minLength: 1, maxLength: 256 },
+                model: { type: "string", minLength: 1, maxLength: 256 },
+                thinkingLevel: {
+                  type: "string",
+                  enum: ["off", "minimal", "standard", "extended", "deep", "max", "ultra"],
+                },
+              },
+              required: ["kind"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "installation_default_model" },
+                providerId: { type: "string", minLength: 1, maxLength: 256 },
+                model: { type: "string", minLength: 1, maxLength: 256 },
+                thinkingLevel: {
+                  type: "string",
+                  enum: ["off", "minimal", "standard", "extended", "deep", "max", "ultra"],
+                },
+              },
+              required: ["kind", "providerId", "model"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "provider_connection" },
+                providerId: { type: "string", minLength: 1, maxLength: 256 },
+                credentialAction: {
+                  type: "string",
+                  enum: ["replace_api_key", "replace_oauth", "remove_api_key", "remove_oauth"],
+                },
+                profile: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string", minLength: 1, maxLength: 256 },
+                    baseUrl: { type: "string", format: "uri", maxLength: 2048 },
+                    apiStyle: {
+                      type: "string",
+                      enum: [
+                        "openai-chat-completions",
+                        "openai-responses",
+                        "openai-codex-responses",
+                        "anthropic-messages",
+                        "bedrock-messages",
+                      ],
+                    },
+                    authMode: {
+                      type: "string",
+                      enum: ["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"],
+                    },
+                    defaultModel: { type: "string", minLength: 1, maxLength: 256 },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              required: ["kind", "providerId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "runtime_configuration" },
+                change: {
+                  oneOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "tool_approval_mode" },
+                        mode: { type: "string", enum: ["approve_all", "approve_risky", "bypass"] },
+                      },
+                      required: ["operation", "mode"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "budget_mode" },
+                        mode: { type: "string", enum: ["saver", "balanced", "power"] },
+                      },
+                      required: ["operation", "mode"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "default_tool_profile" },
+                        profileId: { type: "string", minLength: 1, maxLength: 256 },
+                      },
+                      required: ["operation", "profileId"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "deployment_profile" },
+                        profile: { type: "string", enum: ["local_dev", "trusted_local", "remote_hardened"] },
+                      },
+                      required: ["operation", "profile"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "read_access_policy" },
+                        mode: { type: "string", enum: ["roots_only", "approval_required", "full_disk"] },
+                      },
+                      required: ["operation", "mode"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "network_allowlist" },
+                        entries: {
+                          type: "array",
+                          maxItems: 256,
+                          items: { type: "string", minLength: 1, maxLength: 512 },
+                        },
+                      },
+                      required: ["operation", "entries"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "utility_model" },
+                        providerId: { type: "string", minLength: 1, maxLength: 256 },
+                        model: { type: "string", minLength: 1, maxLength: 256 },
+                      },
+                      required: ["operation", "providerId", "model"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "gateway_auth_configuration" },
+                        mode: { type: "string", enum: ["none", "token", "basic"] },
+                        allowLoopbackBypass: { type: "boolean" },
+                        basicUsername: { type: "string", minLength: 1, maxLength: 256 },
+                        replaceCredential: { type: "boolean" },
+                      },
+                      required: ["operation", "mode", "allowLoopbackBypass"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "memory_configuration" },
+                        config: {
+                          type: "object",
+                          minProperties: 1,
+                          properties: {
+                            enabled: { type: "boolean" },
+                            qmdEnabled: { type: "boolean" },
+                            qmdApplyToChat: { type: "boolean" },
+                            qmdApplyToOrchestration: { type: "boolean" },
+                            qmdMaxContextTokens: { type: "integer", minimum: 1, maximum: 2_000_000 },
+                            qmdMinPromptChars: { type: "integer", minimum: 0, maximum: 2_000_000 },
+                            qmdCacheTtlSeconds: { type: "integer", minimum: 1, maximum: 31_536_000 },
+                            qmdDistillerProviderId: { type: "string", minLength: 1, maxLength: 256 },
+                            qmdDistillerModel: { type: "string", minLength: 1, maxLength: 256 },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "web_firecrawl_configuration" },
+                        config: {
+                          type: "object",
+                          minProperties: 1,
+                          properties: {
+                            enabled: { type: "boolean" },
+                            baseUrl: { type: "string", format: "uri", maxLength: 2_048 },
+                            timeoutMs: { type: "integer", minimum: 100, maximum: 300_000 },
+                            defaultReadBackend: { type: "string", enum: ["native", "firecrawl"] },
+                            fallbackToNative: { type: "boolean" },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "mesh_configuration" },
+                        config: {
+                          type: "object",
+                          minProperties: 1,
+                          properties: {
+                            enabled: { type: "boolean" },
+                            mode: { type: "string", enum: ["lan", "wan", "tailnet"] },
+                            nodeId: { type: "string", minLength: 1, maxLength: 256 },
+                            mdns: { type: "boolean" },
+                            staticPeers: {
+                              type: "array",
+                              maxItems: 64,
+                              items: { type: "string", minLength: 1, maxLength: 2_048 },
+                            },
+                            requireMtls: { type: "boolean" },
+                            tailnetEnabled: { type: "boolean" },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "npu_configuration" },
+                        config: {
+                          type: "object",
+                          minProperties: 1,
+                          properties: {
+                            enabled: { type: "boolean" },
+                            autoStart: { type: "boolean" },
+                            sidecarUrl: { type: "string", format: "uri", maxLength: 2_048 },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "llama_cpp_configuration" },
+                        config: {
+                          type: "object",
+                          minProperties: 1,
+                          properties: {
+                            enabled: { type: "boolean" },
+                            autoStart: { type: "boolean" },
+                            baseUrl: { type: "string", format: "uri", maxLength: 2_048 },
+                            alias: { type: "string", minLength: 1, maxLength: 256 },
+                            ctxSize: { type: ["integer", "null"], minimum: 1, maximum: 2_000_000 },
+                            threads: { type: ["integer", "null"], minimum: 1, maximum: 2_000_000 },
+                            gpuLayers: { type: ["integer", "null"], minimum: 0, maximum: 2_000_000 },
+                            parallel: { type: ["integer", "null"], minimum: 1, maximum: 2_000_000 },
+                            batchSize: { type: ["integer", "null"], minimum: 1, maximum: 2_000_000 },
+                            ubatchSize: { type: ["integer", "null"], minimum: 1, maximum: 2_000_000 },
+                            flashAttention: { type: ["boolean", "null"] },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        operation: { const: "feature_flag" },
+                        flag: {
+                          type: "string",
+                          enum: CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+                        },
+                        enabled: { type: "boolean" },
+                      },
+                      required: ["operation", "flag", "enabled"],
+                      additionalProperties: false,
+                    },
+                  ],
+                },
+              },
+              required: ["kind", "change"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "channel_connection" },
+                channelKind: { type: "string", minLength: 1, maxLength: 256 },
+                draftId: { type: "string", minLength: 1, maxLength: 256 },
+              },
+              required: ["kind", "channelKind"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "runtime_remediation" },
+                remediationId: { type: "string", minLength: 1, maxLength: 256 },
+              },
+              required: ["kind", "remediationId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "capability_candidate" },
+                proposalId: { type: "string", minLength: 1, maxLength: 256 },
+                action: { type: "string", enum: ["activate", "revoke", "rollback"] },
+                versionId: { type: "string", minLength: 1, maxLength: 256 },
+              },
+              required: ["kind", "proposalId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "improvement_candidate" },
+                candidateId: { type: "string", minLength: 1, maxLength: 256 },
+              },
+              required: ["kind", "candidateId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: { kind: { const: "managed_source_registration" } },
+              required: ["kind"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { const: "product_source_update" },
+                sourceInstallId: { type: "string", minLength: 1, maxLength: 256 },
+                changeSummary: { type: "string", minLength: 1, maxLength: 2_000 },
+                codeModeRunId: { type: "string", minLength: 1, maxLength: 256 },
+              },
+              required: ["kind", "sourceInstallId", "changeSummary", "codeModeRunId"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ["intent"],
+      additionalProperties: false,
+    },
+    pack: "core",
+    recommendedContexts: ["chat"],
+    preferredForIntents: [
+      "change_configuration",
+      "connect_provider",
+      "connect_channel",
+      "improve_capability",
+      "update_product",
+    ],
+    usageHints: [
+      "Use this only to create a Change Plan; tell the operator that Chat will show the exact confirmation action.",
+      "Never include credentials, OAuth values, filesystem paths, patches, commands, arbitrary setting keys, or delegated-agent requests.",
+    ],
+  },
   {
     name: "session.status",
     category: "session",

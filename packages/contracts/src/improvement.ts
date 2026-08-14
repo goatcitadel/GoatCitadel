@@ -505,9 +505,11 @@ export interface ImprovementCandidateLifecycleInput {
 
 export interface ImprovementCandidateLifecycleResult {
   action: ImprovementCandidateLifecycleAction;
-  status: "validated" | "approved" | "rejected" | "snoozed" | "approval_pending" | "blocked";
+  status: "validated" | "approved" | "rejected" | "snoozed" | "approval_pending" | "change_plan_pending" | "blocked";
   review: CuratorReviewItem;
   activation?: ImprovementActivationRecord;
   approvalId?: string;
   mutationApplied: boolean;
+  /** Additive compatibility projection when activation is governed by the Evolution Control Plane. */
+  changePlan?: import("./change-plan.js").ChangePlanRecord;
 }

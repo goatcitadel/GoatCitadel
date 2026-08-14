@@ -271,6 +271,7 @@ function composeEntryExtras(
   | "recoverDecisionCommittedHeartbeat"
   | "reconcileTerminalChatAdmission"
   | "subagentFanout"
+  | "durableFanout"
 > {
   return {
     agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
@@ -296,6 +297,9 @@ function composeEntryExtras(
     // (the member is optional, so the compiler cannot catch the omission).
     get subagentFanout() {
       return source.subagentFanout;
+    },
+    get durableFanout() {
+      return source.durableFanout;
     },
   };
 }

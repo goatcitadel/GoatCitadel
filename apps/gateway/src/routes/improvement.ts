@@ -1,5 +1,7 @@
-import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { SemanticValidationError, ServiceUnavailableError } from "@goatcitadel/contracts";
+import { sendRouteError } from "./_error-handler.js";
 
 const reportListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(260).default(24),
@@ -34,6 +36,12 @@ const replayRunParamsSchema = z.object({
 const tuneParamsSchema = z.object({
   tuneId: z.string().min(1),
 });
+
+const tunePlanBodySchema = z
+  .object({
+    workspaceId: z.string().trim().min(1).max(256).default("default"),
+  })
+  .strict();
 
 const signalParamsSchema = z.object({
   signalId: z.string().min(1),
@@ -109,6 +117,57 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
         .catch((error) => replyWithImprovementMutationError(reply, error));
     } catch (error) {
       return replyWithImprovementMutationError(reply, error);
+    }
+  };
+  const handleGovernedCandidateActivation = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    action: "activate" | "promote",
+  ) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    const body = candidateLifecycleBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      const evolution = fastify.services.evolution;
+      if (!evolution || !(await evolution.isEnabled())) {
+        const result =
+          action === "activate"
+            ? await improvement.activateImprovementCandidate(params.data.candidateId, body.data)
+            : await improvement.promoteImprovementCandidate(params.data.candidateId, body.data);
+        return reply.send(result);
+      }
+      const review = await improvement.getCuratorReviewItem(params.data.candidateId);
+      if (review.candidate.kind === "skill_revision") {
+        throw new SemanticValidationError(
+          "Skill revisions must be reviewed through their linked Code Mode capability proposal in Chat.",
+        );
+      }
+      const plan = await evolution.create({
+        actor: {
+          workspaceId: review.candidate.workspaceId,
+          actorId: body.data.actorId ?? request.authActorId?.trim() ?? `ip:${request.ip ?? "unknown"}`,
+          surface: "settings",
+          requestId: request.id,
+        },
+        request: { kind: "improvement_candidate", candidateId: params.data.candidateId },
+        idempotencyKey: `improvement-${action}:${request.id}:${params.data.candidateId}`,
+      });
+      return reply.code(202).send({
+        action,
+        status: "change_plan_pending",
+        review,
+        mutationApplied: false,
+        changePlan: plan,
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
   };
 
@@ -238,16 +297,14 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     ),
   );
 
-  fastify.post("/api/v1/improvement/candidates/:candidateId/activate", async (request, reply) =>
-    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
-      improvement.activateImprovementCandidate(candidateId, body),
-    ),
+  fastify.post(
+    "/api/v1/improvement/candidates/:candidateId/activate",
+    async (request, reply) => await handleGovernedCandidateActivation(request, reply, "activate"),
   );
 
-  fastify.post("/api/v1/improvement/candidates/:candidateId/promote", async (request, reply) =>
-    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
-      improvement.promoteImprovementCandidate(candidateId, body),
-    ),
+  fastify.post(
+    "/api/v1/improvement/candidates/:candidateId/promote",
+    async (request, reply) => await handleGovernedCandidateActivation(request, reply, "promote"),
   );
 
   fastify.post("/api/v1/improvement/candidates/:candidateId/activation-request", async (request, reply) => {
@@ -390,13 +447,45 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/improvement/autotune/:tuneId/approve", async (request, reply) => {
     const params = tuneParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = tunePlanBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(await improvement.approveDecisionAutoTune(params.data.tuneId));
+      const tune = await improvement.approveDecisionAutoTune(params.data.tuneId);
+      const candidateId = typeof tune.result?.candidateId === "string" ? tune.result.candidateId : undefined;
+      if (!candidateId) {
+        throw new ServiceUnavailableError("The decision tune did not produce a governed improvement candidate.");
+      }
+      const evolution = fastify.services.evolution;
+      if (!evolution) {
+        throw new ServiceUnavailableError("The Evolution Control Plane is unavailable.");
+      }
+      const plan = await evolution.create({
+        actor: {
+          workspaceId: body.data.workspaceId,
+          actorId: request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`,
+          surface: "settings",
+        },
+        request: { kind: "improvement_candidate", candidateId },
+        idempotencyKey: `decision-tune:${params.data.tuneId}:change-plan`,
+      });
+      return reply.send({
+        ...tune,
+        result: {
+          ...(tune.result ?? {}),
+          changePlanId: plan.planId,
+          changePlanStatus: plan.status,
+          requiredAction: plan.requiredAction?.kind ?? null,
+        },
+      });
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

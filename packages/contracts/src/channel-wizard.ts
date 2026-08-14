@@ -205,14 +205,24 @@ export interface ChannelSetupHydrationResult {
   rawLegacyConfig?: Record<string, unknown>;
 }
 
+export interface ChannelSetupSecretState {
+  configured: boolean;
+  custody: "temporary" | "connection";
+  /** Internal opaque locator. Public Gateway projections omit this field. */
+  secretRef?: string;
+}
+
 export interface ChannelSetupDraft {
   draftId: string;
+  /** Positive compare-and-swap revision for every draft mutation and external check. */
+  revision: number;
   catalogId: string;
   connectionId?: string;
   lifecycleMode: ChannelSetupLifecycleMode;
   label?: string;
   enabled: boolean;
   draft: Record<string, unknown>;
+  secretState: Record<string, ChannelSetupSecretState>;
   contentVersion: string;
   adapterVersion: string;
   validationVersion: string;
@@ -232,6 +242,7 @@ export interface ChannelSetupDraftCreateInput {
 }
 
 export interface ChannelSetupDraftUpdateInput {
+  expectedRevision: number;
   label?: string;
   enabled?: boolean;
   draft?: Record<string, unknown>;
@@ -250,6 +261,7 @@ export interface ChannelSetupIssue {
 
 export interface ChannelSetupValidationResult {
   draftId: string;
+  draftRevision: number;
   status: ChannelSetupStatus;
   levels: ChannelSetupValidationLevel[];
   issues: ChannelSetupIssue[];
@@ -258,6 +270,7 @@ export interface ChannelSetupValidationResult {
 
 export interface ChannelSetupTestResult {
   draftId: string;
+  draftRevision: number;
   status: ChannelSetupStatus;
   levels: ChannelSetupValidationLevel[];
   issues: ChannelSetupIssue[];
@@ -267,6 +280,7 @@ export interface ChannelSetupTestResult {
 }
 
 export interface ChannelSetupFinalizeResult {
+  draftRevision: number;
   connection: IntegrationConnection;
   validation: ChannelSetupValidationResult;
   test?: ChannelSetupTestResult;

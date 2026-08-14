@@ -119,6 +119,7 @@ describe("channel setup routes", () => {
   it("creates and updates channel setup drafts", async () => {
     const createChannelSetupDraft = vi.fn(() => ({
       draftId: "11111111-1111-1111-1111-111111111111",
+      revision: 1,
       catalogId: "channel.discord",
       lifecycleMode: "create",
       enabled: true,
@@ -132,6 +133,7 @@ describe("channel setup routes", () => {
     }));
     const updateChannelSetupDraft = vi.fn(() => ({
       draftId: "11111111-1111-1111-1111-111111111111",
+      revision: 2,
       catalogId: "channel.discord",
       lifecycleMode: "create",
       enabled: true,
@@ -169,6 +171,7 @@ describe("channel setup routes", () => {
       method: "PATCH",
       url: "/api/v1/channels/drafts/11111111-1111-1111-1111-111111111111",
       payload: {
+        expectedRevision: 1,
         draft: {
           defaultChannelId: "123456789012345678",
         },
@@ -177,15 +180,64 @@ describe("channel setup routes", () => {
 
     expect(updateResponse.statusCode).toBe(200);
     expect(updateChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", {
+      expectedRevision: 1,
       draft: {
         defaultChannelId: "123456789012345678",
       },
     });
   });
 
+  it("accepts credentials only through the no-store secure-field route and returns presence state", async () => {
+    const setChannelSetupDraftSecrets = vi.fn(() => ({
+      draftId: "11111111-1111-1111-1111-111111111111",
+      revision: 2,
+      catalogId: "channel.telegram",
+      lifecycleMode: "create",
+      enabled: true,
+      draft: { defaultChatId: "123" },
+      secretState: {
+        botToken: {
+          configured: true,
+          custody: "temporary",
+          secretRef: "keychain:goatcitadel:channel-draft:11111111-1111-1111-1111-111111111111:botToken:nonce-1",
+        },
+      },
+      contentVersion: "content.v1",
+      adapterVersion: "adapter.v1",
+      validationVersion: "validation.v1",
+      testVersion: "test.v1",
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:01:00.000Z",
+    }));
+    app = Fastify();
+    decorateIntegrationServices(app, { setChannelSetupDraftSecrets });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/channels/drafts/11111111-1111-1111-1111-111111111111/secure-fields",
+      payload: { expectedRevision: 1, values: { botToken: "raw-telegram-token" } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(setChannelSetupDraftSecrets).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", {
+      expectedRevision: 1,
+      values: { botToken: "raw-telegram-token" },
+    });
+    expect(response.body).not.toContain("raw-telegram-token");
+    expect(response.body).not.toContain("keychain:goatcitadel");
+    expect(response.json()).toMatchObject({
+      revision: 2,
+      draft: { botToken: "[REDACTED]" },
+      secretState: { botToken: { configured: true, custody: "temporary" } },
+    });
+  });
+
   it("validates, tests, and finalizes channel setup drafts", async () => {
     const validateChannelSetupDraft = vi.fn(() => ({
       draftId: "11111111-1111-1111-1111-111111111111",
+      draftRevision: 2,
       status: "ok",
       levels: ["structural", "semantic"],
       issues: [],
@@ -193,6 +245,7 @@ describe("channel setup routes", () => {
     }));
     const testChannelSetupDraft = vi.fn(async () => ({
       draftId: "11111111-1111-1111-1111-111111111111",
+      draftRevision: 3,
       status: "ok",
       levels: ["live-auth"],
       issues: [],
@@ -200,6 +253,7 @@ describe("channel setup routes", () => {
       recommendedNextAction: "Finalize the connection.",
     }));
     const finalizeChannelSetupDraft = vi.fn(async () => ({
+      draftRevision: 4,
       connection: {
         connectionId: "22222222-2222-2222-2222-222222222222",
         catalogId: "channel.discord",
@@ -214,6 +268,7 @@ describe("channel setup routes", () => {
       },
       validation: {
         draftId: "11111111-1111-1111-1111-111111111111",
+        draftRevision: 4,
         status: "ok",
         levels: ["structural", "semantic"],
         issues: [],
@@ -221,6 +276,7 @@ describe("channel setup routes", () => {
       },
       test: {
         draftId: "11111111-1111-1111-1111-111111111111",
+        draftRevision: 4,
         status: "ok",
         levels: ["live-auth"],
         issues: [],
@@ -238,23 +294,26 @@ describe("channel setup routes", () => {
     const validateResponse = await app.inject({
       method: "POST",
       url: "/api/v1/channels/drafts/11111111-1111-1111-1111-111111111111/validate",
+      payload: { expectedRevision: 1 },
     });
     expect(validateResponse.statusCode).toBe(200);
-    expect(validateChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
+    expect(validateChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", 1);
 
     const testResponse = await app.inject({
       method: "POST",
       url: "/api/v1/channels/drafts/11111111-1111-1111-1111-111111111111/test",
+      payload: { expectedRevision: 2 },
     });
     expect(testResponse.statusCode).toBe(200);
-    expect(testChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
+    expect(testChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", 2);
 
     const finalizeResponse = await app.inject({
       method: "POST",
       url: "/api/v1/channels/drafts/11111111-1111-1111-1111-111111111111/finalize",
+      payload: { expectedRevision: 3 },
     });
     expect(finalizeResponse.statusCode).toBe(200);
-    expect(finalizeChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
+    expect(finalizeChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", 3);
     expect(finalizeResponse.json()).toEqual(
       expect.objectContaining({
         connection: expect.objectContaining({

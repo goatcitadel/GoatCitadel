@@ -104,6 +104,7 @@ export function ChatSessionStatusPanel({ panel }: { panel: PanelState }) {
             {(value) => {
               const activeRuns = value.runs.filter((run) => run.status === "running").length;
               const activeSteps = value.runs.reduce((total, run) => total + run.activeSteps, 0);
+              const fanouts = value.fanouts ?? [];
               return (
                 <>
                   <strong>
@@ -112,6 +113,33 @@ export function ChatSessionStatusPanel({ panel }: { panel: PanelState }) {
                   <span>
                     {activeSteps} active step{activeSteps === 1 ? "" : "s"}
                   </span>
+                  {fanouts.map((fanout) => (
+                    <div key={fanout.invocationId} className="mc-next-chat-status__fanout" role="status">
+                      <span>
+                        Fan-out {label(fanout.status)} · {fanout.children.length}/{fanout.childCount} child rows · grant{" "}
+                        {fanout.grantId} · ${fanout.reservedBudgetUsd.toFixed(2)} reserved
+                        {fanout.recoveryState ? ` · recovery ${label(fanout.recoveryState)}` : ""}
+                        {fanout.children.length > 0
+                          ? ` · ${fanout.children
+                              .map(
+                                (child) =>
+                                  `${child.label ?? `child ${child.index + 1}`}: ${label(child.approvalState ?? child.status)}`,
+                              )
+                              .join(", ")}`
+                          : ""}
+                      </span>
+                      {panel.onStopFanout && !isTerminalFanoutStatus(fanout.status) ? (
+                        <button
+                          type="button"
+                          className="mc-next-chat-status__fanout-stop"
+                          disabled={panel.loading}
+                          onClick={() => panel.onStopFanout?.(fanout.invocationId)}
+                        >
+                          Stop aggregate
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
                 </>
               );
             }}
@@ -203,4 +231,8 @@ function formatCost(metric: { value?: number; availability: { complete: boolean 
 
 function label(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function isTerminalFanoutStatus(status: string): boolean {
+  return ["completed", "partial", "failed", "cancelled", "blocked"].includes(status);
 }

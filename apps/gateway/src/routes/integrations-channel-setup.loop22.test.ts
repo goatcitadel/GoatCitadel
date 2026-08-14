@@ -60,14 +60,19 @@ describe("channel setup route tails", () => {
     });
     await expectStatus("PATCH", "/api/v1/channels/drafts/not-a-uuid", 400, { label: "" });
     await expectError("PATCH", `/api/v1/channels/drafts/${DRAFT_ID}`, 400, "update failed", {
+      expectedRevision: 1,
       enabled: false,
     });
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/validate", 400);
-    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/validate`, 404, "validate failed");
+    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/validate`, 404, "validate failed", {
+      expectedRevision: 1,
+    });
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/test", 400);
-    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/test`, 404, "test failed");
+    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/test`, 404, "test failed", { expectedRevision: 1 });
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/finalize", 400);
-    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 400, "finalize failed");
+    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 400, "finalize failed", {
+      expectedRevision: 1,
+    });
     await expectStatus("POST", "/api/v1/channels/connections/not-a-uuid/repair-draft", 400);
     await expectError("POST", `/api/v1/channels/connections/${CONNECTION_ID}/repair-draft`, 400, "repair failed");
     await expectStatus("POST", "/api/v1/channels/connections/not-a-uuid/rotate-secret-draft", 400);
@@ -81,7 +86,10 @@ describe("channel setup route tails", () => {
     await expectError("POST", `/api/v1/channels/connections/${CONNECTION_ID}/retest`, 400, "retest failed");
 
     expect(channelSetup.getChannelSetupDefinition).toHaveBeenCalledWith("channel.discord");
-    expect(channelSetup.updateChannelSetupDraft).toHaveBeenCalledWith(DRAFT_ID, { enabled: false });
+    expect(channelSetup.updateChannelSetupDraft).toHaveBeenCalledWith(DRAFT_ID, {
+      expectedRevision: 1,
+      enabled: false,
+    });
     expect(channelSetup.createChannelSetupRepairDraft).toHaveBeenCalledWith(CONNECTION_ID);
     expect(channelSetup.createChannelSetupRotateSecretDraft).toHaveBeenCalledWith(CONNECTION_ID);
     expect(channelSetup.retestChannelConnection).toHaveBeenCalledWith(CONNECTION_ID);
@@ -115,6 +123,7 @@ describe("channel setup route tails", () => {
       method: "PATCH",
       url: `/api/v1/channels/drafts/${DRAFT_ID}`,
       payload: {
+        expectedRevision: 1,
         draft: {
           botToken: "[REDACTED]",
           webhookUrl: "[REDACTED]",
@@ -133,14 +142,17 @@ describe("channel setup route tails", () => {
     const finalized = await app.inject({
       method: "POST",
       url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`,
+      payload: { expectedRevision: 1 },
     });
     const validated = await app.inject({
       method: "POST",
       url: `/api/v1/channels/drafts/${DRAFT_ID}/validate`,
+      payload: { expectedRevision: 1 },
     });
     const tested = await app.inject({
       method: "POST",
       url: `/api/v1/channels/drafts/${DRAFT_ID}/test`,
+      payload: { expectedRevision: 1 },
     });
     const retested = await app.inject({
       method: "POST",
@@ -193,6 +205,47 @@ describe("channel setup route tails", () => {
     expect(rawFinalizeResult.test?.probe?.steps[0]?.message).toContain("probe-short");
   });
 
+  it("turns the legacy finalize route into a Change Plan without mutating when evolution is enabled", async () => {
+    const rawDraft = createSecretBearingDraft();
+    const finalizeChannelSetupDraft = vi.fn();
+    const create = vi.fn(async () => ({
+      planId: "plan-channel-finalize",
+      revision: 1,
+      status: "awaiting_confirmation",
+    }));
+    app = buildApp(
+      {
+        listChannelSetupDrafts: vi.fn(async () => [rawDraft]),
+        finalizeChannelSetupDraft,
+      },
+      {
+        isEnabled: vi.fn(async () => true),
+        create,
+      },
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`,
+      payload: { expectedRevision: rawDraft.revision },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      finalized: false,
+      draft: { draftId: DRAFT_ID, revision: rawDraft.revision },
+      changePlan: { planId: "plan-channel-finalize", status: "awaiting_confirmation" },
+    });
+    expect(finalizeChannelSetupDraft).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedTargetRevision: rawDraft.revision,
+        request: { kind: "channel_connection", channelKind: "channel.slack", draftId: DRAFT_ID },
+      }),
+    );
+    expect(response.body).not.toContain("bot-short");
+  });
+
   async function expectStatus(
     method: "GET" | "POST" | "PATCH",
     url: string,
@@ -216,9 +269,9 @@ describe("channel setup route tails", () => {
   }
 });
 
-function buildApp(channelSetup: Record<string, unknown>): FastifyInstance {
+function buildApp(channelSetup: Record<string, unknown>, evolution?: Record<string, unknown>): FastifyInstance {
   const next = Fastify();
-  next.decorate("services", { channelSetup } as never);
+  next.decorate("services", { channelSetup, ...(evolution ? { evolution } : {}) } as never);
   registerChannelSetupIntegrationRoutes(next);
   return next;
 }
@@ -226,6 +279,7 @@ function buildApp(channelSetup: Record<string, unknown>): FastifyInstance {
 function createSecretBearingDraft(): ChannelSetupDraft {
   return {
     draftId: DRAFT_ID,
+    revision: 1,
     catalogId: "channel.slack",
     connectionId: CONNECTION_ID,
     lifecycleMode: "repair",
@@ -273,9 +327,11 @@ function createSecretBearingFinalizeResult(): ChannelSetupFinalizeResult {
     updatedAt: draft.updatedAt,
   };
   return {
+    draftRevision: draft.revision,
     connection,
     validation: {
       draftId: draft.draftId,
+      draftRevision: draft.revision,
       status: "warn",
       levels: ["structural"],
       issues: [
@@ -290,6 +346,7 @@ function createSecretBearingFinalizeResult(): ChannelSetupFinalizeResult {
     },
     test: {
       draftId: draft.draftId,
+      draftRevision: draft.revision,
       status: "ok",
       levels: ["live_auth"],
       issues: [],

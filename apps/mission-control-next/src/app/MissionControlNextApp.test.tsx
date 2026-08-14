@@ -801,6 +801,19 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.closeEventStream).toHaveBeenCalled();
   });
 
+  it("routes a bare installation to the native guided setup before Chat", async () => {
+    appMocks.preflightGatewayAccess.mockResolvedValueOnce({
+      status: "ready",
+      message: "Gateway ready",
+      healthDetail: "ok",
+      onboardingState: { completed: false },
+    });
+
+    await renderApp();
+
+    expect(window.location.pathname).toBe("/settings/onboarding");
+  });
+
   it("pauses scoped routes when the active Citadel has no workspaces", async () => {
     appMocks.activeCitadelId = "company";
     appMocks.activeWorkspaceId = "default";

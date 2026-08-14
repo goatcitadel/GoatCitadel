@@ -1,4 +1,11 @@
-import type { ChatMemoryMode, ChatRetrievalMode, ChatTurnLifecycleStatus, ChatUserInputPromptKind } from "./chat.js";
+import type {
+  ChatDelegationStepStatus,
+  ChatMemoryMode,
+  ChatRetrievalMode,
+  ChatTurnLifecycleStatus,
+  ChatUserInputPromptKind,
+} from "./chat.js";
+import type { ChatFanoutInvocationStatus } from "./chat-fanout.js";
 import type {
   DurableBackgroundTaskAttention,
   DurableBackgroundTaskBlocker,
@@ -104,6 +111,27 @@ export interface ChatSessionStatusOrchestrationRun {
   totalSteps: number;
 }
 
+/** Secret-free, canonical projection for the Chat status and task rail. */
+export interface ChatSessionStatusFanout {
+  invocationId: string;
+  parentRunId: string;
+  status: ChatFanoutInvocationStatus;
+  projectId: string;
+  grantId: string;
+  childCount: number;
+  reservedActivations: number;
+  reservedBudgetUsd: number;
+  recoveryState?: DurableRecoveryState;
+  children: Array<{
+    index: number;
+    label?: string;
+    status: ChatDelegationStepStatus | "waiting";
+    approvalState?: "waiting_for_approval" | "waiting_for_input";
+    committed: boolean;
+  }>;
+  terminalReason?: string;
+}
+
 export interface ChatSessionStatusCapabilities {
   profileTurnId: string;
   callableTools: string[];
@@ -137,7 +165,10 @@ export interface ChatSessionStatusResponse {
   context: ChatSessionStatusSection<ChatSessionStatusContext>;
   work: ChatSessionStatusSection<ChatSessionStatusWork>;
   attention: ChatSessionStatusSection<ChatSessionStatusAttention>;
-  orchestration: ChatSessionStatusSection<{ runs: ChatSessionStatusOrchestrationRun[] }>;
+  orchestration: ChatSessionStatusSection<{
+    runs: ChatSessionStatusOrchestrationRun[];
+    fanouts?: ChatSessionStatusFanout[];
+  }>;
   capabilities: ChatSessionStatusSection<ChatSessionStatusCapabilities>;
   usage: ChatSessionStatusSection<ChatSessionStatusUsage>;
   build: ChatSessionStatusSection<RuntimeBuildIdentity>;

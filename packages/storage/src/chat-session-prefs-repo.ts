@@ -72,6 +72,12 @@ export interface RevisionedChatSessionPrefsRecord extends ChatSessionPrefsRecord
   revision: number;
 }
 
+export interface ChatSessionModelDefaults {
+  readonly providerId?: string;
+  readonly model?: string;
+  readonly thinkingLevel?: ChatThinkingLevel;
+}
+
 const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "revision" | "createdAt" | "updatedAt"> = {
   mode: "chat",
   planningMode: "off",
@@ -181,7 +187,11 @@ export class ChatSessionPrefsRepository {
     );
   }
 
-  public ensure(sessionId: string, now = new Date().toISOString()): RevisionedChatSessionPrefsRecord {
+  public ensure(
+    sessionId: string,
+    now = new Date().toISOString(),
+    modelDefaults: ChatSessionModelDefaults = {},
+  ): RevisionedChatSessionPrefsRecord {
     const revision = this.revisions.ensure(sessionId, now);
     const existing = this.get(sessionId);
     if (existing) {
@@ -191,13 +201,13 @@ export class ChatSessionPrefsRepository {
       sessionId,
       mode: DEFAULT_PREFS.mode,
       planningMode: DEFAULT_PREFS.planningMode,
-      providerId: null,
-      model: null,
+      providerId: modelDefaults.providerId ? normalizeOptional(modelDefaults.providerId) : null,
+      model: modelDefaults.model ? normalizeOptional(modelDefaults.model) : null,
       imageProviderId: null,
       imageModel: null,
       webMode: DEFAULT_PREFS.webMode,
       memoryMode: DEFAULT_PREFS.memoryMode,
-      thinkingLevel: DEFAULT_PREFS.thinkingLevel,
+      thinkingLevel: modelDefaults.thinkingLevel ?? DEFAULT_PREFS.thinkingLevel,
       speedMode: DEFAULT_PREFS.speedMode,
       subagentPolicy: DEFAULT_PREFS.subagentPolicy,
       toolAutonomy: DEFAULT_PREFS.toolAutonomy,

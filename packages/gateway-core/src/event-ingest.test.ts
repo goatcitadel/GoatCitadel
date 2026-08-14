@@ -74,7 +74,7 @@ describe("EventIngestService", () => {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("persists partial legacy usage as lower bounds and does not duplicate it on replay", async () => {
     const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

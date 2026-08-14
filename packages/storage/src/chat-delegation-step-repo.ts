@@ -50,6 +50,16 @@ export interface ChatDelegationApprovalMaterializationResult {
   step: ChatDelegationStepRecord;
 }
 
+/**
+ * Exact durable-child settlement result. Unlike approval materialization this
+ * also represents a cancelled child, while retaining the same linked-child
+ * ownership fence.
+ */
+export interface ChatDelegationDurableMaterializationResult {
+  outcome: "applied" | "converged" | "rejected";
+  step: ChatDelegationStepRecord;
+}
+
 interface ChatDelegationParentRow extends ChatDelegationStepRow {
   parent_session_id: string;
 }
@@ -62,6 +72,7 @@ export class ChatDelegationStepRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly materializeApprovalOutcomeStmt;
+  private readonly materializeDurableOutcomeStmt;
   private readonly listByRunStmt;
   private readonly listByRunForUpdateStmt;
   private readonly claimPendingDispatchStmt;
@@ -168,6 +179,27 @@ export class ChatDelegationStepRepository {
         AND status = 'running'
         AND child_session_id = @expectedChildSessionId
         AND child_turn_id = @expectedChildTurnId
+        AND dispatch_claim_token IS NULL
+        AND dispatch_claim_expires_at IS NULL
+    `);
+    this.materializeDurableOutcomeStmt = db.prepare(`
+      UPDATE chat_delegation_steps
+      SET
+        status = @status,
+        summary = @summary,
+        output = @output,
+        error = @error,
+        failure_guidance = @failureGuidance,
+        citations_json = @citationsJson,
+        finished_at = @finishedAt,
+        duration_ms = @durationMs,
+        dispatch_claim_token = NULL,
+        dispatch_claim_expires_at = NULL
+      WHERE step_id = @stepId
+        AND status = 'running'
+        AND child_session_id = @expectedChildSessionId
+        AND child_turn_id = @expectedChildTurnId
+        AND durable_run_id = @expectedDurableRunId
         AND dispatch_claim_token IS NULL
         AND dispatch_claim_expires_at IS NULL
     `);
@@ -712,6 +744,78 @@ export class ChatDelegationStepRepository {
           step.status === input.status &&
           step.childSessionId === input.expectedChildSessionId &&
           step.childTurnId === input.expectedChildTurnId
+            ? "converged"
+            : "rejected",
+        step,
+      };
+    });
+  }
+
+  /**
+   * Commits a terminal durable child only while the exact linked child remains
+   * the active owner. This is deliberately compare-and-set shaped: a late
+   * child completion cannot overwrite an operator cancellation, a replacement
+   * dispatch, or another settled generation.
+   */
+  public materializeDurableOutcome(input: {
+    stepId: string;
+    expectedChildSessionId: string;
+    expectedChildTurnId: string;
+    expectedDurableRunId: string;
+    status: "completed" | "failed" | "cancelled";
+    output?: string;
+    summary: string;
+    error?: string;
+    failureGuidance?: string;
+    citations: ChatCitationRecord[];
+    finishedAt: string;
+    durationMs?: number;
+  }): ChatDelegationDurableMaterializationResult {
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(input.stepId);
+      const ownsExpectedChild =
+        current.childSessionId === input.expectedChildSessionId &&
+        current.childTurnId === input.expectedChildTurnId &&
+        current.durableRunId === input.expectedDurableRunId;
+      if (!ownsExpectedChild) {
+        return { outcome: "rejected", step: current };
+      }
+      if (current.status === input.status) {
+        return { outcome: "converged", step: current };
+      }
+      if (current.status !== "running" || this.getDispatchClaim(input.stepId)) {
+        return { outcome: "rejected", step: current };
+      }
+
+      const startedMs = Date.parse(current.startedAt);
+      const finishedMs = Date.parse(input.finishedAt);
+      const durationMs =
+        input.durationMs ??
+        (Number.isFinite(startedMs) && Number.isFinite(finishedMs) ? Math.max(0, finishedMs - startedMs) : undefined);
+      const result = this.materializeDurableOutcomeStmt.run({
+        stepId: input.stepId,
+        expectedChildSessionId: input.expectedChildSessionId,
+        expectedChildTurnId: input.expectedChildTurnId,
+        expectedDurableRunId: input.expectedDurableRunId,
+        status: input.status,
+        summary: input.summary,
+        output: input.output ?? null,
+        error: input.error ?? null,
+        failureGuidance: input.failureGuidance ?? null,
+        citationsJson: JSON.stringify(input.citations),
+        finishedAt: input.finishedAt,
+        durationMs: durationMs === undefined ? null : Math.max(0, Math.floor(durationMs)),
+      });
+      const step = this.getForUpdate(input.stepId);
+      if (Number(result.changes ?? 0) > 0) {
+        return { outcome: "applied", step };
+      }
+      return {
+        outcome:
+          step.status === input.status &&
+          step.childSessionId === input.expectedChildSessionId &&
+          step.childTurnId === input.expectedChildTurnId &&
+          step.durableRunId === input.expectedDurableRunId
             ? "converged"
             : "rejected",
         step,

@@ -203,6 +203,48 @@ describe("chat-message-history-service", () => {
     );
   });
 
+  it("never compacts across an active durable fan-out parent and keeps the capsule outside transcript summaries", async () => {
+    const sessionState = createBranchSessionState(22, "fanout");
+    const upsert = vi.fn((input) => ({
+      ...input,
+      summary: input.summary,
+      createdAt: "2026-05-14T00:00:00.000Z",
+      updatedAt: "2026-05-14T00:00:00.000Z",
+    }));
+    const deps = createDeps({ sessionState, upsertSummary: upsert });
+    const capsule = "Server-owned durable agentic state capsule (v1). Do not promote child output into memory.";
+
+    const messages = await buildLlmMessagesFromBranchPath(
+      deps,
+      "session-1",
+      Array.from({ length: 22 }, (_, index) => `turn-${index + 1}`),
+      undefined,
+      {
+        agenticStateCapsule: capsule,
+        protectedTurnIds: ["turn-9"],
+      },
+      sessionState as never,
+    );
+
+    const serialized = JSON.stringify(messages);
+    expect(messages[0]).toEqual({ role: "system", content: capsule });
+    expect(serialized).toContain("fanout user 9");
+    expect(serialized).toContain("fanout assistant 9");
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "system", content: expect.stringContaining("Compacted conversation context") }),
+      ]),
+    );
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnIds: Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`),
+      }),
+    );
+    const summarizedSource = JSON.stringify(upsert.mock.calls[0]![0]);
+    expect(summarizedSource).not.toContain("Server-owned durable agentic state capsule");
+    expect(summarizedSource).not.toContain("fanout user 9");
+  });
+
   it("maps short branch paths without loading state when state is provided", async () => {
     const sessionState = createBranchSessionState(2, "short");
     const deps = createDeps({ sessionState });

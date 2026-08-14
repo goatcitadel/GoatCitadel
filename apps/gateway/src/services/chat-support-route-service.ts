@@ -1,4 +1,6 @@
 import type {
+  ChatChangePlanCreateInput,
+  ChatChangePlanRecord,
   ChatGoalRequest,
   ChatGoalStatusResponse,
   ChatProactiveMode,
@@ -25,6 +27,12 @@ import type {
 import type { ChatCommandOptions, ChatCommandResult } from "./chat-command-service.js";
 
 export interface ChatSupportRouteDependencies {
+  changePlans: {
+    create(sessionId: string, input: Omit<ChatChangePlanCreateInput, "sessionId">): Promise<ChatChangePlanRecord>;
+    list(sessionId: string, limit?: number): Promise<ChatChangePlanRecord[]>;
+    confirm(sessionId: string, planId: string, expectedRevision: number): Promise<ChatChangePlanRecord>;
+    cancel(sessionId: string, planId: string, expectedRevision: number): Promise<ChatChangePlanRecord>;
+  };
   commands: {
     listChatCommandCatalog(): Array<{
       command: string;
@@ -149,6 +157,22 @@ export interface ChatSupportRouteDependencies {
 
 export class ChatSupportRouteService {
   public constructor(private readonly deps: ChatSupportRouteDependencies) {}
+
+  public createChatChangePlan(sessionId: string, input: Omit<ChatChangePlanCreateInput, "sessionId">) {
+    return this.deps.changePlans.create(sessionId, input);
+  }
+
+  public listChatChangePlans(sessionId: string, limit?: number) {
+    return this.deps.changePlans.list(sessionId, limit);
+  }
+
+  public confirmChatChangePlan(sessionId: string, planId: string, expectedRevision: number) {
+    return this.deps.changePlans.confirm(sessionId, planId, expectedRevision);
+  }
+
+  public cancelChatChangePlan(sessionId: string, planId: string, expectedRevision: number) {
+    return this.deps.changePlans.cancel(sessionId, planId, expectedRevision);
+  }
 
   public getChatSessionPrefs(sessionId: string) {
     return this.deps.prefs.getChatSessionPrefs(sessionId);

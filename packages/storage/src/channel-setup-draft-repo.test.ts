@@ -62,6 +62,7 @@ describe("ChannelSetupDraftRepository", () => {
     assert.equal(created.draft.defaultChannelId, "123456789012345678");
 
     const updated = repo.update(created.draftId, {
+      expectedRevision: created.revision,
       enabled: false,
       label: "Discord Repair",
       draft: {
@@ -115,9 +116,11 @@ describe("ChannelSetupDraftRepository", () => {
     assert.equal(created.hydration, undefined);
 
     const failed = repo.update(created.draftId, {
+      expectedRevision: created.revision,
       lastFailureCategory: "platform_unavailable",
     });
     const cleared = repo.update(created.draftId, {
+      expectedRevision: failed.revision,
       label: null,
       enabled: true,
       hydration: null,
@@ -127,6 +130,10 @@ describe("ChannelSetupDraftRepository", () => {
     assert.equal(cleared.label, undefined);
     assert.equal(cleared.enabled, true);
     assert.equal(cleared.lastFailureCategory, undefined);
+    assert.throws(
+      () => repo.update(created.draftId, { expectedRevision: created.revision, label: "stale" }),
+      /changed after it was loaded/,
+    );
 
     const internal = repo as unknown as {
       listByCatalogStmt: { all: (...args: unknown[]) => unknown };

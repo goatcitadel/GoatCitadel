@@ -280,6 +280,7 @@ export const LlmConfigFileSchema = z
   .object({
     activeProviderId: z.string(),
     activeModel: z.string().optional(),
+    defaultThinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
     // Optional cheap utility-model slot for background LLM tasks; only honored
     // when the utilityModelRoutingV1Enabled feature flag is on.
     utilityProviderId: z.string().optional(),
@@ -747,6 +748,10 @@ export const AssistantConfigInputSchema = z
         // prompt packs) to the configured cheap utility-model slot. Absent/false
         // (default) ⇒ background calls keep today's model selection exactly.
         utilityModelRoutingV1Enabled: z.boolean().optional(),
+        evolutionControlPlaneV1Enabled: z.boolean().optional(),
+        improvementLocalObservationV1Enabled: z.boolean().optional(),
+        improvementModelEvaluationV1Enabled: z.boolean().optional(),
+        productSourceEvolutionV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

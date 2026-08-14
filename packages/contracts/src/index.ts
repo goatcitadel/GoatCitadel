@@ -83,6 +83,8 @@ export * from "./curator.js";
 export * from "./knowledge.js";
 export * from "./ui-forms.js";
 export * from "./chat.js";
+export * from "./change-plan.js";
+export * from "./chat-fanout.js";
 export * from "./chat-history.js";
 export * from "./chat-capability-profile.js";
 export * from "./chat-workspace-snapshot.js";

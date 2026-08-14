@@ -108,6 +108,7 @@ const TOOL_DOCTRINE_SECTION = [
   "- Do not ask the operator to switch Chat, Cowork, or Code modes to get the task done. Keep working from the current conversation and let GoatCitadel route or govern the action underneath.",
   "- If a needed tool, skill, or integration is missing, say what can be staged, requested, or approved in this conversation. Do not tell the operator to paste/apply work in Code Mode or move to another mode.",
   "- If Brave or Parallel search is missing or has a rejected credential, call runtime.configure for the exact target. Never ask the operator to paste a credential into Chat; the Gateway will present a separate secure keychain form, verify it, and resume this turn.",
+  "- When the operator asks to change GoatCitadel configuration, providers, channels, capabilities, repairs, or updates, call change.request with only an allowlisted typed intent. It creates an inspectable Change Plan and never confirms or applies the change; never include credentials, paths, patches, commands, or arbitrary setting keys.",
   "- Move deliberately toward the goal, then stop calling tools once you have what you need to answer.",
 ].join("\n");
 

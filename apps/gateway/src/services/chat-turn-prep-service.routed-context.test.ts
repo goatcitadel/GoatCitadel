@@ -254,6 +254,7 @@ function createHarness(
         patch: vi.fn(() => prefs),
       },
       chatSessionProjects: { get: vi.fn(() => undefined) },
+      chatFanoutInvocations: { listActive: vi.fn(() => []) },
       chatSideChats: { getByChildSession: vi.fn(() => undefined) },
       chatSpecialistCandidates: { listAutoRoutable: vi.fn(() => []) },
       systemSettings: { get: vi.fn(() => undefined) },

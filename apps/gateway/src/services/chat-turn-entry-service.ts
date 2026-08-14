@@ -53,7 +53,8 @@ import {
   type PreparedAgentChatTurn,
 } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
-import { shouldRegisterSubagentFanoutExecutor } from "./chat-subagent-fanout-service.js";
+import { shouldRegisterSubagentFanoutExecutor, type SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
+import type { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
 import { createTurnSubagentFanoutExecutor } from "./chat-turn-stream-service.js";
 import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
@@ -201,6 +202,8 @@ export interface ChatTurnEntryHost
   readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
   persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
   recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): Promise<void>;
+  readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
+  readonly durableFanout?: Pick<ChatDurableFanoutService, "execute">;
 }
 
 export interface ChatTurnResumeHost {

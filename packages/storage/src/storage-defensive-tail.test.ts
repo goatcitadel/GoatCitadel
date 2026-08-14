@@ -590,9 +590,15 @@ describe("storage defensive tail coverage", () => {
       },
       "2026-05-01T00:00:00.000Z",
     );
-    const failed = drafts.update(draft.draftId, { lastFailureCategory: "platform_unavailable" });
+    const failed = drafts.update(draft.draftId, {
+      expectedRevision: draft.revision,
+      lastFailureCategory: "platform_unavailable",
+    });
     assert.equal(failed.lastFailureCategory, "platform_unavailable");
-    assert.equal(drafts.update(draft.draftId, { label: "Renamed draft" }).lastFailureCategory, "platform_unavailable");
+    assert.equal(
+      drafts.update(draft.draftId, { expectedRevision: failed.revision, label: "Renamed draft" }).lastFailureCategory,
+      "platform_unavailable",
+    );
 
     const qmd = new MemoryQmdRunRepository(createDb("qmd-tail"));
     assert.equal(qmd.stats("2026-05-01T00:00:00.000Z", "2026-05-02T00:00:00.000Z").efficiencyLabel, "neutral");

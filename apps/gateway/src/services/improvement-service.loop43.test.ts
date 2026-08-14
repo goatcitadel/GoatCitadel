@@ -34,6 +34,29 @@ afterEach(() => {
 });
 
 describe("ImprovementService loop43 weekly scheduler behavior", () => {
+  it("keeps scheduled model evaluation opt-in while local signal collection can run independently", async () => {
+    vi.useFakeTimers({ now: new Date("2026-05-17T09:30:00.000Z") });
+    const harness = await createHarness((flag) => flag === "improvementLocalObservationV1Enabled");
+    await harness.service.ensureWeeklyImprovementCronJob();
+    const created = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
+    harness.storage.cronJobs.upsert({ ...created!, enabled: true }, new Date().toISOString());
+
+    await harness.service.recordSurfaceRouteOverrideSignal({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      citadelId: "citadel-1",
+      fromMode: "chat",
+      toMode: "code",
+      autoConfidence: 0.5,
+      promptFeatureHash: "feature-hash-1",
+    });
+    await harness.service.runWeeklyImprovementSchedulerIfDue();
+
+    expect(await harness.service.listImprovementSignals(5, "workspace-1")).toHaveLength(1);
+    expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
+  });
+
   it("does not run replay work without an enabled weekly cron job or outside the scheduled window", async () => {
     vi.useFakeTimers({ now: new Date("2026-05-15T17:00:00.000Z") });
     const harness = await createHarness();
@@ -127,7 +150,10 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
   });
 });
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(
+  featureEnabled: (flag: keyof import("./gateway/runtime-settings.js").RuntimeSettings["features"]) => boolean = () =>
+    true,
+): Promise<Harness> {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-loop43-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -149,7 +175,7 @@ async function createHarness(): Promise<Harness> {
       published.push({ channel, topic, payload });
     },
     requireFeatureEnabled: () => undefined,
-    isFeatureEnabled: () => true,
+    isFeatureEnabled: async (flag) => featureEnabled(flag),
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
   };
   const callbacks: ImprovementServiceCallbacks = {

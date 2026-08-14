@@ -353,6 +353,13 @@ export function ThreadedContextDrawer({
   const subagentPolicy: ChatSubagentPolicy = props.prefs?.subagentPolicy ?? "ask_when_useful";
   const planningMode: ChatPlanningMode = props.prefs?.planningMode ?? props.planningMode ?? "off";
   const planningEnabled = planningMode === "advisory";
+  const automaticFanout = props.automaticFanout;
+  // Never silently rewrite a session preference when a project grant expires
+  // or is revoked. The selector accurately presents the safe effective Ask
+  // posture, while the persisted preference remains visible in the status copy
+  // and the Gateway independently fails closed.
+  const effectiveSubagentPolicy: ChatSubagentPolicy =
+    subagentPolicy === "auto_when_useful" && !automaticFanout?.enabled ? "ask_when_useful" : subagentPolicy;
   const trustRouteSummary = formatTrustRouteSummary(props);
   const selectionSummary =
     props.trust?.selectionSourceSummary ?? formatSelectionSource(props.routePreflight?.selectionSource);
@@ -360,6 +367,9 @@ export function ThreadedContextDrawer({
     props.visualStreamMode === "smooth" ? "Smooth" : "Instant"
   }`;
   const handleSubagentPolicyChange = (next: ChatSubagentPolicy) => {
+    if (next === "auto_when_useful" && !automaticFanout?.enabled) {
+      return;
+    }
     if (next === "auto_when_useful" && !readSubagentAutoAckFromStorage(props.selectedSessionId)) {
       setPendingSubagentAuto(next);
       return;
@@ -667,15 +677,29 @@ export function ThreadedContextDrawer({
             <label className="mc-next-context-field">
               <span>Subagents</span>
               <select
-                value={subagentPolicy}
+                value={effectiveSubagentPolicy}
                 onChange={(event) => handleSubagentPolicyChange(event.target.value as ChatSubagentPolicy)}
                 aria-label="Subagent policy"
               >
                 <option value="off">No subagents</option>
                 <option value="ask_when_useful">Ask before delegating</option>
-                <option value="auto_when_useful">Auto-delegate to subagents</option>
+                <option value="auto_when_useful" disabled={!automaticFanout?.enabled}>
+                  Auto when useful
+                </option>
               </select>
             </label>
+            <div className="mc-next-context-field" role="status" aria-live="polite">
+              <span>Automatic fan-out</span>
+              <p>
+                {automaticFanout?.enabled
+                  ? `Available for this project until ${new Date(automaticFanout.grant!.expiresAt).toLocaleString()}. Up to ${automaticFanout.grant!.maxActivations ?? "the grant limit"} child activations are governed by its budget.`
+                  : `${automaticFanout?.unavailableReason ?? "Ask remains active. Auto when useful requires an active, expiring automatic fan-out grant for this exact project."}${
+                      subagentPolicy === "auto_when_useful"
+                        ? " The saved Auto when useful preference is not authority; this Chat session is effectively asking until a valid project grant is present."
+                        : ""
+                    }`}
+              </p>
+            </div>
             <div className="mc-next-context-actions">
               <button
                 type="button"
