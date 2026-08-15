@@ -832,7 +832,7 @@ describe("NativeRoutePages library coverage", () => {
     const artifacts = await mount("library", "artifacts");
     expect(collectText(artifacts.root)).toContain("Generated artifacts");
     expect(collectText(artifacts.root)).toContain("Release notes");
-    expect(collectText(artifacts.root)).toContain("Use in Work");
+    expect(collectText(artifacts.root)).toContain("Use in Chat");
     expect(collectText(artifacts.root)).toContain("Validation");
     expect(artifacts.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
       expect.arrayContaining([

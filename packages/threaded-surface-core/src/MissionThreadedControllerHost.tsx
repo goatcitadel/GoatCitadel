@@ -114,7 +114,6 @@ import { StatusChip } from "@goatcitadel/mission-control-shared/components/Statu
 import type { CoworkCanvasPanel as LegacyCoworkCanvasPanelComponent } from "@goatcitadel/mission-control-shared/components/CoworkCanvasPanel";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
-import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 import {
   ChatChangePlanActionDialog,
   type ChangePlanPublicValues,
@@ -865,6 +864,17 @@ export type MissionThreadedWorkflowPanel =
   | { kind: "code"; props: MissionThreadedCodeWorkflowPanelProps }
   | null;
 
+export interface MissionThreadedChangePlanReceipt {
+  readonly plan: ChangePlanRecord;
+  readonly dismissed?: boolean;
+  readonly pending?: boolean;
+  readonly onReview?: (plan: ChangePlanRecord) => void;
+  readonly onCancel?: (plan: ChangePlanRecord) => void;
+  readonly onMakeDefault?: (plan: ChangePlanRecord) => void;
+  readonly onDismiss?: (plan: ChangePlanRecord) => void;
+  readonly onOpenDetails?: (plan: ChangePlanRecord) => void;
+}
+
 export interface MissionThreadedRenderSurfaceInput {
   messageMode: ChatMode;
   sessionRailOpen: boolean;
@@ -878,6 +888,12 @@ export interface MissionThreadedRenderSurfaceInput {
   workflowPanel: MissionThreadedWorkflowPanel;
   contextDockProps: ChatContextDockPanelsProps | null;
   btwSideChatProps: MissionThreadedBtwSideChatProps;
+  /** Gateway-owned plan history remains available to the local Activity view. */
+  changePlans?: readonly ChangePlanRecord[];
+  /** At most one transcript-adjacent plan receipt; all records remain in Activity history. */
+  changePlanReceipt?: MissionThreadedChangePlanReceipt;
+  /** A monotonically increasing request to reveal Activity from transcript-adjacent UI. */
+  activityOpenRequest?: number;
 }
 
 export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessionSurfaceProps;
@@ -954,6 +970,11 @@ export function MissionThreadedControllerHost({
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<"active" | "archived">("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // Async work captures the error setter from the session in which it started.
+  // Keep the current selection in a ref so a late rejection cannot attach its
+  // recovery message to whichever chat the operator opened meanwhile.
+  const selectedSessionIdRef = useRef(selectedSessionId);
+  selectedSessionIdRef.current = selectedSessionId;
   const [modeOverride, setModeOverride] = useState<ChatMode | null>(initialModeOverride ?? null);
   // Synced ref so the selectedSessionId-keyed reset effect below can read the
   // latest initialModeOverride without depending on it directly (it must only
@@ -1054,13 +1075,23 @@ export function MissionThreadedControllerHost({
   const [knowledgeUrlDraft, setKnowledgeUrlDraft] = useState("");
   const [knowledgeUrlMode, setKnowledgeUrlMode] = useState<ThreadKnowledgeRetrievalMode>("retrieval");
   const [presetApplyWarning, setPresetApplyWarning] = useState<string | null>(null);
-  const setUiError = useCallback((value: string | null, source: ChatErrorSource = "other") => {
-    setError(value);
-    setErrorSource(value ? source : null);
-    if (!value || source !== "image_generate") {
-      setFailedAutoImageRecovery(null);
-    }
-  }, []);
+  const setUiError = useCallback(
+    (value: string | null, source: ChatErrorSource = "other") => {
+      // The callback can be invoked by a promise that began in an older chat.
+      // Its closure retains that chat's selectedSessionId, so ignore both a
+      // stale error and stale clear rather than leaking them into the current
+      // chat's composer/recovery state.
+      if (selectedSessionId !== selectedSessionIdRef.current) {
+        return;
+      }
+      setError(value);
+      setErrorSource(value ? source : null);
+      if (!value || source !== "image_generate") {
+        setFailedAutoImageRecovery(null);
+      }
+    },
+    [selectedSessionId],
+  );
   useEffect(() => {
     if (
       failedAutoImageRecovery &&
@@ -1132,7 +1163,19 @@ export function MissionThreadedControllerHost({
     actionNonce: string;
     flow: OpenAICodexDeviceStartResponse;
   } | null>(null);
-  const [chatChangePlans, setChatChangePlans] = useState<ChangePlanRecord[]>([]);
+  const [chatChangePlanSnapshot, setChatChangePlanSnapshot] = useState<{
+    ownerSessionId: string | null;
+    items: ChangePlanRecord[];
+  }>({ ownerSessionId: null, items: [] });
+  // A fetch from a previously selected session can settle after the operator
+  // changes chats. Keep its owner alongside the records so transient stale
+  // data never reaches the transcript or Activity projections.
+  const chatChangePlans =
+    chatChangePlanSnapshot.ownerSessionId === selectedSessionId ? chatChangePlanSnapshot.items : [];
+  // Receipt dismissal is deliberately a client-only acknowledgement. The
+  // canonical plan, result, and evidence stay in the Gateway-backed history.
+  const [dismissedChangePlanReceiptKeys, setDismissedChangePlanReceiptKeys] = useState<Set<string>>(() => new Set());
+  const [activityOpenRequest, setActivityOpenRequest] = useState(0);
   const [forkConfirm, setForkConfirm] = useState<{
     turnId: string;
     turnCount: number;
@@ -1401,26 +1444,31 @@ export function MissionThreadedControllerHost({
   );
 
   useEffect(() => {
+    // The controller owns one transient UI-error channel. It is rendered with
+    // the selected chat, so discard any prior chat's recovery state before a
+    // new selection can expose it as that chat's error.
+    setUiError(null);
     setSessionStatusPanel({ open: false, loading: false, error: null, status: null });
     setChatTimerPanel((current) => ({ ...current, open: false, error: null, timers: [] }));
     setRunVariablePanel(null);
     setPendingTemplateInvocation(null);
-  }, [selectedSessionId]);
+  }, [selectedSessionId, setUiError]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedSessionId) {
-      setChatChangePlans([]);
+    const sessionId = selectedSessionId;
+    setChatChangePlanSnapshot({ ownerSessionId: sessionId, items: [] });
+    if (!sessionId) {
       return () => {
         cancelled = true;
       };
     }
-    void fetchChangePlans({ workspaceId, sessionId: selectedSessionId }, { limit: 12 })
+    void fetchChangePlans({ workspaceId, sessionId }, { limit: 12 })
       .then((response) => {
-        if (!cancelled) setChatChangePlans(response.items);
+        if (!cancelled) setChatChangePlanSnapshot({ ownerSessionId: sessionId, items: response.items });
       })
       .catch(() => {
-        if (!cancelled) setChatChangePlans([]);
+        if (!cancelled) setChatChangePlanSnapshot({ ownerSessionId: sessionId, items: [] });
       });
     return () => {
       cancelled = true;
@@ -1429,15 +1477,18 @@ export function MissionThreadedControllerHost({
 
   useEffect(() => {
     if (!selectedSessionId) return undefined;
-    return connectEventStream((event) => {
+    let cancelled = false;
+    const sessionId = selectedSessionId;
+    const disconnect = connectEventStream((event) => {
       if (event.source !== "evolution_control_plane" || !event.eventType.startsWith("change_plan.")) return;
       const eventWorkspaceId = event.links?.workspaceId;
       const eventSessionId = event.links?.sessionId;
       if (eventWorkspaceId && eventWorkspaceId !== workspaceId) return;
-      if (eventSessionId && eventSessionId !== selectedSessionId) return;
-      void fetchChangePlans({ workspaceId, sessionId: selectedSessionId }, { limit: 12 })
+      if (eventSessionId && eventSessionId !== sessionId) return;
+      void fetchChangePlans({ workspaceId, sessionId }, { limit: 12 })
         .then((response) => {
-          setChatChangePlans(response.items);
+          if (cancelled) return;
+          setChatChangePlanSnapshot({ ownerSessionId: sessionId, items: response.items });
           setActiveChangePlan((current) => {
             if (!current) return null;
             return response.items.find((item) => item.planId === current.planId) ?? current;
@@ -1445,6 +1496,10 @@ export function MissionThreadedControllerHost({
         })
         .catch(() => undefined);
     });
+    return () => {
+      cancelled = true;
+      disconnect();
+    };
   }, [selectedSessionId, workspaceId]);
 
   const refreshChatTimers = useCallback(async () => {
@@ -2268,9 +2323,13 @@ export function MissionThreadedControllerHost({
       if (result.prefs) setPrefs(result.prefs);
       const changePlan = result.changePlan;
       if (changePlan) {
-        setChatChangePlans((current) =>
-          [changePlan, ...current.filter((item) => item.planId !== changePlan.planId)].slice(0, 12),
-        );
+        setChatChangePlanSnapshot((current) => {
+          if (current.ownerSessionId !== sessionId) return current;
+          return {
+            ownerSessionId: sessionId,
+            items: [changePlan, ...current.items.filter((item) => item.planId !== changePlan.planId)].slice(0, 12),
+          };
+        });
       }
       pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
       if (result.command === "/project" || result.command === "/new") {
@@ -2395,6 +2454,7 @@ export function MissionThreadedControllerHost({
     stateConfig: {
       sending,
       error,
+      errorSource,
       queuedOutbound,
       thread,
       messages,
@@ -3608,9 +3668,13 @@ export function MissionThreadedControllerHost({
             setUiError(plan.result?.summary ?? "This change needs additional setup before it can be confirmed.");
             return;
           }
-          setChatChangePlans((current) =>
-            [plan, ...current.filter((item) => item.planId !== plan.planId)].slice(0, 12),
-          );
+          setChatChangePlanSnapshot((current) => {
+            if (current.ownerSessionId !== session.sessionId) return current;
+            return {
+              ownerSessionId: session.sessionId,
+              items: [plan, ...current.items.filter((item) => item.planId !== plan.planId)].slice(0, 12),
+            };
+          });
         } catch (error) {
           setUiError(error instanceof Error ? error.message : "Unable to prepare this model change.");
         }
@@ -3644,7 +3708,13 @@ export function MissionThreadedControllerHost({
         { expectedRevision: plan.revision, actionNonce },
       )
         .then((cancelled) => {
-          setChatChangePlans((current) => current.map((item) => (item.planId === cancelled.planId ? cancelled : item)));
+          setChatChangePlanSnapshot((current) => {
+            if (current.ownerSessionId !== (plan.origin.sessionId ?? null)) return current;
+            return {
+              ...current,
+              items: current.items.map((item) => (item.planId === cancelled.planId ? cancelled : item)),
+            };
+          });
           setActiveChangePlan((current) => (current?.planId === cancelled.planId ? null : current));
           setLinkedDefaultChangePlan((current) => (current?.planId === cancelled.planId ? null : current));
           pushLocalNotice("Change plan cancelled.", "success");
@@ -3683,9 +3753,14 @@ export function MissionThreadedControllerHost({
             );
             return;
           }
-          setChatChangePlans((current) =>
-            [created, ...current.filter((item) => item.planId !== created.planId)].slice(0, 12),
-          );
+          setChatChangePlanSnapshot((current) => {
+            const ownerSessionId = plan.origin.sessionId ?? null;
+            if (current.ownerSessionId !== ownerSessionId) return current;
+            return {
+              ownerSessionId,
+              items: [created, ...current.items.filter((item) => item.planId !== created.planId)].slice(0, 12),
+            };
+          });
           setActiveChangePlan(plan);
           setLinkedDefaultChangePlan(created);
         })
@@ -3696,9 +3771,14 @@ export function MissionThreadedControllerHost({
     [prefs?.model, prefs?.providerId, selectedModel, selectedProviderId, setUiError, workspaceId],
   );
   const recordChangePlanResult = useCallback((updated: ChangePlanRecord) => {
-    setChatChangePlans((current) =>
-      [updated, ...current.filter((item) => item.planId !== updated.planId)].slice(0, 12),
-    );
+    setChatChangePlanSnapshot((current) => {
+      const ownerSessionId = updated.origin.sessionId ?? null;
+      if (current.ownerSessionId !== ownerSessionId) return current;
+      return {
+        ownerSessionId,
+        items: [updated, ...current.items.filter((item) => item.planId !== updated.planId)].slice(0, 12),
+      };
+    });
     if (updated.requiredAction && !isTerminalChangePlanStatus(updated.status)) {
       setActiveChangePlan(updated);
     } else {
@@ -5618,6 +5698,36 @@ export function MissionThreadedControllerHost({
           }
         : null;
 
+  const activeTranscriptChangePlan = chatChangePlans.find(
+    (plan) => !isTerminalChangePlanStatus(plan.status) && plan.phase !== "terminal",
+  );
+  // Change-plan history is newest-first. A dismissed terminal receipt must not
+  // cascade through older history; Activity remains the place to inspect it.
+  const newestTerminalChangePlan = chatChangePlans.find((plan) => isTerminalChangePlanStatus(plan.status));
+  const transcriptChangePlan =
+    activeTranscriptChangePlan ??
+    (newestTerminalChangePlan && !dismissedChangePlanReceiptKeys.has(changePlanReceiptKey(newestTerminalChangePlan))
+      ? newestTerminalChangePlan
+      : undefined);
+  const changePlanReceipt = transcriptChangePlan
+    ? {
+        plan: transcriptChangePlan,
+        pending: changePlanActionPending,
+        dismissed: dismissedChangePlanReceiptKeys.has(changePlanReceiptKey(transcriptChangePlan)),
+        onReview: reviewChatChangePlan,
+        onCancel: cancelPendingChatChangePlan,
+        onMakeDefault: makeChatChangePlanDefault,
+        onDismiss: (dismissedPlan: ChangePlanRecord) => {
+          setDismissedChangePlanReceiptKeys((current) => {
+            const next = new Set(current);
+            next.add(changePlanReceiptKey(dismissedPlan));
+            return next;
+          });
+        },
+        onOpenDetails: () => setActivityOpenRequest((current) => current + 1),
+      }
+    : undefined;
+
   const threadedSurfaceInput: MissionThreadedRenderSurfaceInput = {
     messageMode,
     sessionRailOpen,
@@ -5648,6 +5758,9 @@ export function MissionThreadedControllerHost({
       }) as DragEventHandler<HTMLElement>,
     },
     workflowPanel,
+    changePlans: chatChangePlans,
+    changePlanReceipt,
+    activityOpenRequest,
     btwSideChatProps,
     contextDockProps: selectedSession
       ? {
@@ -5917,16 +6030,6 @@ export function MissionThreadedControllerHost({
       ) : null}
       {error ? <p className="error">{error}</p> : null}
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
-      {chatChangePlans.slice(0, 5).map((plan) => (
-        <ChatChangePlanCard
-          key={plan.planId}
-          plan={plan}
-          onReview={reviewChatChangePlan}
-          onCancel={cancelPendingChatChangePlan}
-          onMakeDefault={makeChatChangePlanDefault}
-        />
-      ))}
-
       {renderSurface(threadedSurfaceInput)}
       <ConfirmModal
         open={Boolean(forkConfirm)}
@@ -6049,6 +6152,10 @@ function isTerminalChangePlanStatus(status: ChangePlanRecord["status"]): boolean
   return ["completed", "applied", "manual_required", "failed", "cancelled", "rolled_back", "rollback_failed"].includes(
     status,
   );
+}
+
+function changePlanReceiptKey(plan: Pick<ChangePlanRecord, "planId" | "revision" | "status">): string {
+  return `${plan.planId}:${plan.revision}:${plan.status}`;
 }
 
 function changePlanContextNote(

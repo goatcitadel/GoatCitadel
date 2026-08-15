@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   type ChatCitationRecord,
   type ChatThreadSystemNoticeRecord,
@@ -6,7 +6,6 @@ import {
 } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatOptimisticUserMessage } from "@goatcitadel/mission-control-shared/components/chat/ChatOptimisticUserMessage";
-import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
 import {
   formatMemoryCitationMeta,
@@ -34,6 +33,31 @@ import {
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import { useEscapeToStopStream } from "./useEscapeToStopStream";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
+import { FocusedActiveWorkSummary, deriveFocusedActiveWorkState } from "./FocusedActiveWorkSummary";
+import "./styles/focused-active-work.css";
+
+/**
+ * The persisted turn array retains branch siblings, so its tail is not
+ * necessarily the conversation branch the operator is currently following.
+ * Keep chronological-tail reads for timeline ordering and scroll signals, but
+ * derive the single focused work projection from the selected/active branch.
+ */
+export function resolveFocusedActiveTurn(
+  thread:
+    | {
+        selectedTurnId?: string | null;
+        activeLeafTurnId?: string | null;
+        turns: readonly ChatThreadTurnRecord[];
+      }
+    | null
+    | undefined,
+): ChatThreadTurnRecord | null {
+  if (!thread) {
+    return null;
+  }
+  const currentTurnId = thread.selectedTurnId ?? thread.activeLeafTurnId;
+  return thread.turns.find((turn) => turn.turnId === currentTurnId) ?? thread.turns.at(-1) ?? null;
+}
 
 function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
   if (!activity) {
@@ -103,6 +127,7 @@ function formatCitationSource(citation: ChatCitationRecord): string {
 
 function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {
   const [expanded, setExpanded] = useState(false);
+  const citationsId = useId();
   if (citations.length === 0) {
     return null;
   }
@@ -110,7 +135,7 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
   const visibleCitations = expanded ? citations : citations.slice(0, collapsedLimit);
   const hiddenCount = citations.length - visibleCitations.length;
   return (
-    <div className="mc-next-thread-citations" aria-label="Citations for this answer">
+    <div id={citationsId} className="mc-next-thread-citations" aria-label="Citations for this answer">
       {visibleCitations.map((citation, index) => {
         const label = normalizeCitationDisplayText(citation.title) || citation.url;
         const snippet = normalizeCitationDisplayText(citation.snippet);
@@ -152,6 +177,7 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
           type="button"
           className="mc-next-thread-inline-button mc-next-thread-citations-toggle"
           aria-expanded={expanded}
+          aria-controls={citationsId}
           onClick={() => setExpanded((current) => !current)}
         >
           {expanded ? "Show fewer citations" : `Show ${hiddenCount} more citations`}
@@ -323,14 +349,17 @@ function toTimelineTimestamp(value: string): number {
 
 export function ThreadedTimeline({
   props,
+  onOpenActivity,
   onOpenUniversalRunDetail,
 }: {
   props: MissionThreadedActiveSessionSurfaceProps;
+  onOpenActivity?: (turnId?: string) => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
   const lastTurn = props.thread?.turns.at(-1) ?? null;
+  const activeWorkTurn = resolveFocusedActiveTurn(props.thread);
   const threadTurnCount = props.thread?.turns.length ?? 0;
   const systemNotices = props.thread?.systemNotices ?? EMPTY_SYSTEM_NOTICES;
   const latestSystemNotice = systemNotices.at(-1) ?? null;
@@ -487,17 +516,52 @@ export function ThreadedTimeline({
       ),
     [props.thread?.systemNoticeHiddenCount, systemNotices, windowedThreadItems],
   );
-  const liveStatus =
-    props.streamError ||
-    (props.streamStatus === "streaming"
+  // `streamError` is the controller's single UI-error channel, so it also
+  // carries failures from model changes, attachments, exports, and other
+  // non-stream controls. Only outbound chat transport failures belong in the
+  // compact active-work and live-status projections. An explicit stream error
+  // remains authoritative even when a legacy caller did not provide a source.
+  const hasExplicitNonStreamError = Boolean(
+    props.streamErrorSource && props.streamErrorSource !== "send" && props.streamErrorSource !== "edit",
+  );
+  const streamTransportError =
+    props.streamErrorSource === "send" || props.streamErrorSource === "edit" ? props.streamError : null;
+  // A legacy caller can report an error stream without a source, so preserve
+  // that as authoritative. An explicit non-stream source, however, must not
+  // turn its global UI error into a failed Chat response even if an older host
+  // still reports streamStatus="error".
+  const effectiveStreamStatus =
+    hasExplicitNonStreamError && props.streamStatus === "error" ? "idle" : props.streamStatus;
+  const hasStreamError = effectiveStreamStatus === "error" || Boolean(streamTransportError?.trim());
+  const liveStatus = hasStreamError
+    ? "Chat response could not be completed. Use the composer to try again or open Activity for details."
+    : effectiveStreamStatus === "streaming"
       ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
-      : props.streamStatus === "queued"
+      : effectiveStreamStatus === "queued"
         ? `${toTitleCase(props.mode)} turn queued.`
-        : props.streamStatus === "connecting"
+        : effectiveStreamStatus === "connecting"
           ? `${toTitleCase(props.mode)} stream connecting.`
-          : "");
+          : "";
   const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(streamingPreview, props.activeStreamingTurnId);
-
+  const activeWorkState = deriveFocusedActiveWorkState({
+    turn: activeWorkTurn,
+    streamStatus: effectiveStreamStatus,
+    streamError: streamTransportError,
+    pendingApproval: props.pendingApproval,
+    pendingUserInput: props.pendingUserInput,
+  });
+  const displayActiveWorkState = activeWorkState
+    ? { ...activeWorkState, canStop: activeWorkState.canStop && props.hasActiveStream }
+    : null;
+  const openActivity = () => {
+    if (onOpenActivity) {
+      onOpenActivity(activeWorkState?.turnId);
+      return;
+    }
+    if (activeWorkState?.turnId) {
+      onOpenRunDetails(activeWorkState.turnId);
+    }
+  };
   const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
     followOutput: props.followOutput,
     onBottomStateChange: props.onBottomStateChange,
@@ -509,9 +573,9 @@ export function ThreadedTimeline({
       latestTurnToolRunCount: lastTurn?.toolRuns.length ?? 0,
       noticeCount: props.notices.length,
       queuedCount: props.queuedCount,
-      streamStatus: props.streamStatus,
+      streamStatus: effectiveStreamStatus,
       streamingPreviewSignal,
-      streamError: props.streamError,
+      streamError: streamTransportError,
     },
   });
   const jumpToLatestLabel = props.pendingApproval
@@ -565,6 +629,14 @@ export function ThreadedTimeline({
       </div>
       <div className="mc-next-thread-status-lane">
         <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
+        <FocusedActiveWorkSummary
+          state={displayActiveWorkState}
+          onFocusComposer={() => props.composerRef.current?.focus()}
+          onOpenActivity={openActivity}
+          onOpenApprovals={props.onOpenApprovals}
+          onRetry={onRetryTurn}
+          onStop={onStopStreamingTurn}
+        />
       </div>
       <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
         {props.loading ? (
@@ -638,22 +710,20 @@ export function ThreadedTimeline({
                     onCreateGeneratedArtifact={onCreateGeneratedArtifact}
                     onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
                     onStopStreamingTurn={onStopStreamingTurn}
+                    hideLiveActivity={item.turn.turnId === activeWorkState?.turnId}
+                    hidePendingIndicator={item.turn.turnId === activeWorkState?.turnId}
+                    hideRecoveryAction={
+                      item.turn.turnId === activeWorkState?.turnId &&
+                      ["folder_failure", "failure", "stream_error"].includes(activeWorkState?.kind ?? "")
+                    }
+                    hideApprovedToolFailureOutput={props.mode === "chat"}
                   />
                 );
               })}
               {visibleOptimisticUserMessage ? (
                 <ChatOptimisticUserMessage message={visibleOptimisticUserMessage} />
               ) : null}
-              <ChatStreamStatusBar
-                mode={props.mode}
-                status={props.streamStatus}
-                queuedCount={props.queuedCount}
-                error={props.streamError}
-                announce={false}
-                activitySessionId={sessionId}
-                suppressStallIndicator={Boolean(props.pendingApproval || props.pendingUserInput)}
-              />
-              <ChatThreadNotices notices={props.notices} />
+              <ChatThreadNotices notices={props.notices} scopeKey={sessionId} />
               <div ref={threadEndRef} aria-hidden="true" />
             </div>
           </div>

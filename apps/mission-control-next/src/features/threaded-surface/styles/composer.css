@@ -390,6 +390,10 @@
   color: var(--foreground);
 }
 
+.mc-next-turn-evidence-summary:not([open]) > .mc-next-turn-evidence-body {
+  display: none;
+}
+
 .mc-next-turn-evidence-section {
   display: grid;
   gap: 0.34rem;
@@ -549,13 +553,23 @@
 }
 
 .mc-next-thread-action-menu-summary {
-  display: none;
+  display: inline-flex;
 }
 
-details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-body,
 .mc-next-thread-action-menu-body {
   display: grid;
   gap: 0.35rem;
+}
+
+details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-body {
+  display: none;
+}
+
+.mc-next-thread-primary-recovery {
+  border-color: color-mix(in oklab, var(--mc-area-color) 48%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-1));
+  color: color-mix(in oklab, var(--foreground) 92%, var(--mc-area-color));
+  font-weight: 650;
 }
 
 .mc-next-thread-inline-button,
@@ -607,10 +621,6 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
   padding: 0.2rem 0.46rem;
   border-radius: var(--r-xs);
   font-size: var(--text-xs);
-}
-
-details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
-  display: none;
 }
 
 .mc-next-panel-button.icon {
@@ -862,6 +872,41 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.mc-next-thread-notice-feed {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.mc-next-thread-notice-feed > summary {
+  list-style: none;
+}
+
+.mc-next-thread-notice-feed > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-thread-notice-feed:not([open]) > .mc-next-thread-notices {
+  display: none;
+}
+
+.mc-next-thread-system-notice-details {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.mc-next-thread-system-notice-details > summary {
+  width: fit-content;
+  list-style: none;
+}
+
+.mc-next-thread-system-notice-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-thread-system-notice-details:not([open]) > :not(summary) {
+  display: none;
 }
 
 .mc-next-thread-notices li,

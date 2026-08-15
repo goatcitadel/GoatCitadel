@@ -595,6 +595,8 @@ function CheckpointTimelinePanel({
   compact?: boolean;
 }) {
   const rows = buildCheckpointRows(viewModel, fallbackItems);
+  const [expandedCheckpointIds, setExpandedCheckpointIds] = useState<Record<string, boolean>>({});
+  const checkpointDetailsIdPrefix = useId();
   return (
     <section className={`mc-next-cowork-checkpoints${compact ? " compact" : ""}`}>
       <div className="mc-next-cowork-checkpoints-head">
@@ -608,18 +610,27 @@ function CheckpointTimelinePanel({
       </div>
       {rows.length > 0 ? (
         <ol className="mc-next-cowork-checkpoint-list">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <details>
-                <summary>
-                  <span>{row.timestamp}</span>
-                  <strong>{row.title}</strong>
-                  {row.meta ? <em>{row.meta}</em> : null}
-                </summary>
-                <p>{row.summary}</p>
-              </details>
-            </li>
-          ))}
+          {rows.map((row) => {
+            const open = expandedCheckpointIds[row.id] ?? false;
+            const detailsId = `${checkpointDetailsIdPrefix}-checkpoint-${encodeURIComponent(row.id)}`;
+            return (
+              <li key={row.id}>
+                <details
+                  open={open}
+                  onToggle={(event) =>
+                    setExpandedCheckpointIds((current) => ({ ...current, [row.id]: event.currentTarget.open }))
+                  }
+                >
+                  <summary aria-expanded={open} aria-controls={detailsId}>
+                    <span>{row.timestamp}</span>
+                    <strong>{row.title}</strong>
+                    {row.meta ? <em>{row.meta}</em> : null}
+                  </summary>
+                  <p id={detailsId}>{row.summary}</p>
+                </details>
+              </li>
+            );
+          })}
         </ol>
       ) : (
         <p>Recent checkpoints will appear here once the run starts moving.</p>

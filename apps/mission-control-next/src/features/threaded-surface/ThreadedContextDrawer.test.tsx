@@ -39,6 +39,26 @@ function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[
   return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
 }
 
+function findDisclosure(root: ReactTestInstance, label: string): ReactTestInstance {
+  const disclosure = root.findAllByType("details").find((node) => {
+    const summary = node.findAllByType("summary")[0];
+    return summary ? collectText(summary).includes(label) : false;
+  });
+  if (!disclosure) {
+    throw new Error(`Unable to find disclosure: ${label}`);
+  }
+  return disclosure;
+}
+
+function expectDisclosureControls(disclosure: ReactTestInstance, expanded: boolean) {
+  const summary = disclosure.findByType("summary");
+  const controls = summary.props["aria-controls"];
+  expect(disclosure.props.open).toBe(expanded);
+  expect(summary.props["aria-expanded"]).toBe(expanded);
+  expect(typeof controls).toBe("string");
+  expect(disclosure.findByProps({ id: controls }).type).toBe("div");
+}
+
 function collectText(node: ReactTestInstance): string {
   return node.children
     .map((child) => {
@@ -111,6 +131,39 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("keeps informational context disclosures closed with explicit ARIA targets", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            trust: {
+              workspaceLabel: "Workspace One",
+              gatewayTone: "success",
+              gatewayLabel: "Gateway ready",
+              gatewayDetail: "The local gateway is serving.",
+              approvalsSummary: "Decisions clear",
+              activeModeLabel: "Chat",
+              providerModelSummary: "OpenAI / gpt-5.4-mini",
+              runtimeSummary: "Runtime ready",
+            },
+          })}
+        />,
+      );
+    });
+
+    const runtimeControls = findDisclosure(renderer!.root, "Runtime controls");
+    const policyDetail = findDisclosure(renderer!.root, "Inspect policy detail");
+    expectDisclosureControls(runtimeControls, false);
+    expectDisclosureControls(policyDetail, false);
+
+    await act(async () => {
+      runtimeControls.props.onToggle({ currentTarget: { open: true } });
+    });
+    expectDisclosureControls(findDisclosure(renderer!.root, "Runtime controls"), true);
+  });
+
   it("presents Ask as the effective posture when a saved auto preference lacks an exact project grant", async () => {
     const onPrefPatch = vi.fn();
     let renderer: ReactTestRenderer | null = null;
@@ -202,7 +255,19 @@ describe("ThreadedContextDrawer", () => {
           updatedAt: "2026-07-27T00:00:00.000Z",
         },
       ],
-      proposals: [],
+      proposals: [
+        {
+          proposalId: "proposal-1",
+          targetKind: "personal_note",
+          targetId: "note-1",
+          state: "pending",
+          authorKind: "operator",
+          authorId: "operator-1",
+          turnId: "turn-1",
+          derivedDiff: "- before\n+ after",
+          proposedContent: "after",
+        },
+      ],
       includedRefs: [],
       onRefresh: vi.fn(async () => undefined),
       onToggleInclude,
@@ -218,7 +283,14 @@ describe("ThreadedContextDrawer", () => {
     });
     const root = renderer!.root;
     await act(async () => findButton(root, "Documents").props.onClick());
+    expectDisclosureControls(findDisclosure(root, "personal_note · pending"), false);
+    await act(async () => {
+      findDisclosure(root, "personal_note · pending").props.onToggle({ currentTarget: { open: true } });
+    });
+    expectDisclosureControls(findDisclosure(root, "personal_note · pending"), true);
+    expect(findButton(root, "Apply").props.disabled).toBe(false);
     await act(async () => findButton(root, "Release note").props.onClick());
+    expectDisclosureControls(findDisclosure(root, "Safe preview"), false);
     const textarea = root.findByType("textarea");
     await act(async () => textarea.props.onChange({ target: { value: "after" } }));
     await act(async () => findButton(root, "Include in next turn").props.onClick());
@@ -561,6 +633,10 @@ describe("ThreadedContextDrawer", () => {
 
     await act(async () => {
       findButton(renderer!.root, "Trace").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Show trace");
+    await act(async () => {
+      findButton(renderer!.root, "Show trace").props.onClick();
     });
     expect(collectText(renderer!.root)).toContain("Fallback used");
     expect(collectText(renderer!.root)).toContain("Tool execution failed.");

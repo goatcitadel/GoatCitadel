@@ -55,15 +55,15 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       sessionRailVisibility: "secondary",
       threadPlacement: "primary",
       threadPanelRank: "primary",
-      supportThreadBehavior: "persistent",
+      supportThreadBehavior: "collapsible",
       workflowPlacement: "none",
       dockPlacement: "support",
       dockBehavior: "collapsible",
-      idleSupportVisibility: "visible",
+      idleSupportVisibility: "hidden",
       idleDockOpen: false,
       idleMinHeight: "chat",
       desktopDensity: "chat",
-      defaultColumnWidths: "thread | dock",
+      defaultColumnWidths: "conversation",
       shellClassName: "surface-layout-chat",
       sessionRailClassName: "surface-rail-chat",
       mainGridClassName: "surface-grid-chat",
@@ -167,8 +167,10 @@ export function getMissionControlSurfaceConfig(mode: ChatMode): MissionControlSu
 export const DESKTOP_DOCK_BREAKPOINT = 1200;
 
 export function defaultDockOpenForMode(mode: ChatMode, viewportWidth?: number): boolean {
-  if (viewportWidth === undefined || viewportWidth < DESKTOP_DOCK_BREAKPOINT) {
-    return false;
-  }
-  return mode === "chat" || mode === "cowork" || mode === "code";
+  // Focused Chat starts with the conversation unobstructed at every viewport.
+  // Activity remains one explicit click away; this helper retains its public
+  // signature so existing callers do not need a migration.
+  void mode;
+  void viewportWidth;
+  return false;
 }

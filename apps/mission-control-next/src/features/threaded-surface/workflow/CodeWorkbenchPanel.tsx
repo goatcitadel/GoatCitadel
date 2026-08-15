@@ -330,6 +330,8 @@ function CodeSessionInspector({
   sections: CodeInspectorSection[];
   variant: "inline" | "drawer";
 }) {
+  const disclosureIdPrefix = useId();
+
   return (
     <section className="mc-next-code-session-inspector" data-variant={variant} aria-label="Code session inspector">
       <header className="mc-next-code-session-inspector-head">
@@ -346,6 +348,7 @@ function CodeSessionInspector({
       <div className="mc-next-code-session-inspector-stack">
         {sections.map((section) => {
           const expanded = expandedSections.has(section.id);
+          const controlsId = `${disclosureIdPrefix}-${section.id}`;
           return (
             <details
               key={section.id}
@@ -353,12 +356,12 @@ function CodeSessionInspector({
               open={expanded}
               onToggle={(event) => onToggleSection(section.id, event.currentTarget.open)}
             >
-              <summary>
+              <summary aria-expanded={expanded} aria-controls={controlsId}>
                 {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 <span>{section.label}</span>
                 <em>{section.summary}</em>
               </summary>
-              <div className="mc-next-code-session-inspector-rows">
+              <div id={controlsId} className="mc-next-code-session-inspector-rows">
                 {section.rows.map((row) => (
                   <div key={`${section.id}-${row.label}`} className="mc-next-code-session-inspector-row">
                     <span>{row.label}</span>
@@ -832,6 +835,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   visitedPanesRef.current.add(activePane);
   const paneMounted = (paneId: WorkbenchPaneId) => visitedPanesRef.current.has(paneId);
   const workbenchTabIdPrefix = useId();
+  const workbenchDisclosureIdPrefix = useId();
+  const inspectorDrawerId = `${workbenchDisclosureIdPrefix}-inspector-drawer`;
+  const moreMenuId = `${workbenchDisclosureIdPrefix}-more-actions`;
   const workbenchTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const workbenchPaneDefs = useMemo(() => buildWorkbenchPaneDefs(Boolean(generatedArtifact)), [generatedArtifact]);
   const activeWorkbenchTabIndex = workbenchPaneDefs.findIndex((pane) => pane.id === activePane);
@@ -1873,6 +1879,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             type="button"
             className="mc-next-panel-button mc-next-code-inspector-open"
             aria-expanded={inspectorDrawerOpen}
+            aria-controls={inspectorDrawerId}
             onClick={() => setInspectorDrawerOpen(true)}
           >
             <PanelRightOpen size={14} />
@@ -1971,6 +1978,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
               (!onRevertFile && !onRevertAll)
             }
             aria-expanded={moreMenuOpen}
+            aria-controls={moreMenuId}
             aria-haspopup="menu"
             aria-label="More workbench actions"
             onClick={() => setMoreMenuOpen((open) => !open)}
@@ -1978,7 +1986,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             More ▾
           </button>
           {moreMenuOpen ? (
-            <div className="mc-next-workbench-more-popover" role="menu">
+            <div id={moreMenuId} className="mc-next-workbench-more-popover" role="menu">
               <button
                 type="button"
                 role="menuitem"
@@ -2010,7 +2018,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                 Revert all
               </button>
             </div>
-          ) : null}
+          ) : (
+            <div id={moreMenuId} hidden aria-hidden="true" />
+          )}
         </div>
         <span aria-hidden="true" className="mc-next-workbench-action-divider" />
         <label className="mc-next-workbench-layout-control">
@@ -2971,6 +2981,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       {inspectorDrawerOpen ? (
         <div
           ref={inspectorSheetRef}
+          id={inspectorDrawerId}
           className="mc-next-code-inspector-sheet"
           role="dialog"
           aria-modal="true"
@@ -2992,7 +3003,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             />
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div id={inspectorDrawerId} hidden aria-hidden="true" />
+      )}
       <ConfirmModal
         open={Boolean(pendingFilePath)}
         title="Discard unsaved file changes?"

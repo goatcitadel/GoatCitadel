@@ -276,7 +276,10 @@ describe("ChatTraceCard", () => {
     const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
 
     expect(details.props.className).toContain("chat-decision-trace");
-    expect(details.props.open).toBeUndefined();
+    expect(details.props.open).toBe(false);
+    const summary = details.findByType("summary");
+    expect(summary.props["aria-expanded"]).toBe(false);
+    expect(summary.props["aria-controls"]).toBeTruthy();
     expect(text).toMatch(/Decision Trace \( ?1 ?\)/);
     expect(text).toContain("Routing Choice");
     expect(text).toContain("Chosen action: Use tool-backed answer");

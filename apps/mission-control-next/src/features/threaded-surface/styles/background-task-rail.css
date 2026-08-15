@@ -304,8 +304,15 @@
   font-size: var(--text-2xs);
 }
 
-.mc-next-background-rail__unknowns summary {
+.mc-next-background-rail__unknowns-trigger {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
   cursor: pointer;
+  font: inherit;
+  text-align: left;
 }
 
 .mc-next-background-rail__unknowns ul {

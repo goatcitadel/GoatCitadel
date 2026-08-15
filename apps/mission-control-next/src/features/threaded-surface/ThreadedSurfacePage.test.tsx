@@ -18,7 +18,10 @@ import {
   ThreadedSurfacePage,
   formatRelativeTime,
   formatThreadedPermissionSummary,
+  getDrawerFocusableElements,
   getArchiveActionLabel,
+  panelOwnsActiveFocus,
+  resolveDrawerTabTarget,
 } from "./ThreadedSurfacePage";
 
 vi.mock("./ThreadedWorkflowPanel", () => ({
@@ -359,12 +362,18 @@ function findExactButton(root: ReactTestInstance, label: string): ReactTestInsta
   return button;
 }
 
-function findExactButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
-  return root.findAll((node) => node.type === "button" && normalizeText(collectText(node)) === label);
-}
-
 function findButtonByAriaLabel(root: ReactTestInstance, ariaLabel: string): ReactTestInstance {
   return root.findByProps({ "aria-label": ariaLabel });
+}
+
+function findSessionRailTrigger(root: ReactTestInstance): ReactTestInstance {
+  const button = root.findAll(
+    (node) => node.type === "button" && node.props["aria-controls"] === "mc-next-threaded-session-rail",
+  )[0];
+  if (!button) {
+    throw new Error("Unable to find the Threads trigger");
+  }
+  return button;
 }
 
 function setMediaQuery(query: string, matches: boolean) {
@@ -382,7 +391,77 @@ afterEach(() => {
 });
 
 describe("ThreadedSurfacePage", () => {
-  it("keeps the persistent desktop session rail interactive when drawer state is closed", async () => {
+  it("assigns Escape to the panel that contains the active element when both desktop panels are open", () => {
+    const activityFocusTarget = {} as Node;
+    const railFocusTarget = {} as Node;
+    const rail = { contains: (node: Node | null) => node === railFocusTarget } as Pick<HTMLElement, "contains">;
+    const activity = { contains: (node: Node | null) => node === activityFocusTarget } as Pick<HTMLElement, "contains">;
+
+    expect(panelOwnsActiveFocus(rail, activityFocusTarget)).toBe(false);
+    expect(panelOwnsActiveFocus(activity, activityFocusTarget)).toBe(true);
+    expect(panelOwnsActiveFocus(rail, railFocusTarget)).toBe(true);
+    expect(panelOwnsActiveFocus(activity, railFocusTarget)).toBe(false);
+  });
+
+  it("keeps mobile drawer tabbing inside reachable controls, including a closed details summary", () => {
+    const closedDetails = {} as HTMLElement;
+    const hiddenAncestor = {} as Element;
+    const createFocusable = ({
+      tagName = "BUTTON",
+      parentElement = null,
+      closed = null,
+      hidden = false,
+    }: {
+      tagName?: string;
+      parentElement?: HTMLElement | null;
+      closed?: Element | null;
+      hidden?: boolean;
+    }) =>
+      ({
+        tabIndex: 0,
+        tagName,
+        parentElement,
+        closest: (selector: string) => {
+          if (selector === '[hidden], [aria-hidden="true"], [inert]') {
+            return hidden ? hiddenAncestor : null;
+          }
+          if (selector === "details:not([open])") {
+            return closed;
+          }
+          return null;
+        },
+      }) as unknown as HTMLElement;
+    const summary = createFocusable({ tagName: "SUMMARY", parentElement: closedDetails, closed: closedDetails });
+    const closedDetailButton = createFocusable({ closed: closedDetails });
+    const hiddenButton = createFocusable({ hidden: true });
+    const firstButton = createFocusable({});
+    const lastButton = createFocusable({});
+    const filterPanel = {
+      querySelectorAll: vi.fn(() => [summary, closedDetailButton, hiddenButton, firstButton, lastButton]),
+    } as unknown as HTMLElement;
+
+    const focusable = getDrawerFocusableElements(filterPanel);
+    expect(focusable).toEqual([summary, firstButton, lastButton]);
+
+    const outside = {} as Node;
+    const staleClosedDetailControl = {} as Node;
+    const modalPanel = {
+      contains: (node: Node | null) =>
+        node === modalPanel || node === staleClosedDetailControl || focusable.includes(node as HTMLElement),
+      focus: vi.fn(),
+    } as unknown as HTMLElement;
+    expect(resolveDrawerTabTarget({ activeElement: modalPanel, focusable, modalPanel, shiftKey: true })).toBe(
+      lastButton,
+    );
+    expect(resolveDrawerTabTarget({ activeElement: summary, focusable, modalPanel, shiftKey: true })).toBe(lastButton);
+    expect(resolveDrawerTabTarget({ activeElement: lastButton, focusable, modalPanel, shiftKey: false })).toBe(summary);
+    expect(resolveDrawerTabTarget({ activeElement: outside, focusable, modalPanel, shiftKey: false })).toBe(summary);
+    expect(
+      resolveDrawerTabTarget({ activeElement: staleClosedDetailControl, focusable, modalPanel, shiftKey: true }),
+    ).toBe(lastButton);
+  });
+
+  it("keeps desktop Threads closed until requested, then exposes a visible close control", async () => {
     setMediaQuery("(width < 1180px)", false);
     const input = buildInput() as any;
     input.sessionRailOpen = false;
@@ -393,24 +472,33 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
     });
 
-    const rail = renderer!.root.findByProps({ "aria-label": "Sessions" });
+    let rail = renderer!.root.findByProps({ "aria-label": "Threads" });
     expect(rail.props.className).toBe("mc-next-threaded-rail");
-    expect(rail.props["aria-hidden"]).toBe(false);
-    expect(rail.props.inert).toBe(false);
+    expect(rail.props["aria-hidden"]).toBe(true);
+    expect(rail.props.inert).toBe(true);
+    expect(rail.props.hidden).toBe(true);
     expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim" }).props.tabIndex).toBe(-1);
-    const group = renderer!.root
-      .findAllByProps({ className: "mc-next-threaded-session-group" })
-      .find((node) => node.props["aria-label"] === "Recent threads");
-    expect(group).toBeDefined();
-    expect(group!.props["aria-label"]).toBe("Recent threads");
-    const groupHead = group!.findByProps({ className: "mc-next-threaded-group-head" });
-    expect(groupHead.findByType("h3").children).toEqual(["Recent threads"]);
-    expect(groupHead.findByType("span").props["aria-hidden"]).toBe("true");
+    expect(renderer!.root.findAllByProps({ "aria-label": "Resize session rail" })).toHaveLength(0);
 
     await act(async () => {
-      findButton(renderer!.root, "New thread").props.onClick();
+      findSessionRailTrigger(renderer!.root).props.onClick();
+    });
+
+    const root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified session-rail-open" });
+    rail = renderer!.root.findByProps({ "aria-label": "Threads" });
+    expect(root.props.style["--mc-session-rail-width"]).toBe("216px");
+    expect(rail.props["aria-hidden"]).toBe(false);
+    expect(rail.props.inert).toBe(false);
+    expect(rail.props.hidden).toBe(false);
+    expect(findButtonByAriaLabel(renderer!.root, "Close session rail").type).toBe("button");
+    expect(findButtonByAriaLabel(renderer!.root, "Resize session rail").type).toBe("button");
+
+    await act(async () => {
+      findButton(renderer!.root, "New chat").props.onClick();
     });
     expect(input.sessionRail.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(input.onSessionRailOpenChange).not.toHaveBeenCalled();
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" })).toBeDefined();
   });
 
   it("only marks the mobile drawer rail inert while it is closed", async () => {
@@ -423,7 +511,7 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
     });
 
-    let rail = renderer!.root.findByProps({ "aria-label": "Sessions" });
+    let rail = renderer!.root.findByProps({ "aria-label": "Threads" });
     expect(rail.props.className).toBe("mc-next-threaded-rail");
     expect(rail.props["aria-hidden"]).toBe(true);
     expect(rail.props.inert).toBe(true);
@@ -432,14 +520,14 @@ describe("ThreadedSurfacePage", () => {
     await act(async () => {
       renderer!.update(<ThreadedSurfacePage surface="cowork" input={{ ...input, sessionRailOpen: true }} />);
     });
-    rail = renderer!.root.findByProps({ "aria-label": "Sessions" });
+    rail = renderer!.root.findByProps({ "aria-label": "Threads" });
     expect(rail.props.className).toBe("mc-next-threaded-rail open");
     expect(rail.props["aria-hidden"]).toBe(false);
     expect(rail.props.inert).toBe(false);
-    expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.tabIndex).toBe(0);
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.tabIndex).toBe(-1);
   });
 
-  it("closes the mobile session drawer after starting a new thread", async () => {
+  it("closes the mobile session drawer after starting a new chat", async () => {
     setMediaQuery("(width < 1180px)", true);
     const input = buildInput() as any;
     input.sessionRailOpen = true;
@@ -452,11 +540,46 @@ describe("ThreadedSurfacePage", () => {
     });
 
     await act(async () => {
-      findButton(renderer!.root, "New thread").props.onClick();
+      findButton(renderer!.root, "New chat").props.onClick();
     });
 
     expect(input.sessionRail.onCreateSession).toHaveBeenCalledTimes(1);
     expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("opens Activity as a modal mobile sheet and keeps it exclusive with Threads", async () => {
+    setMediaQuery("(width < 1180px)", true);
+    const input = {
+      ...buildInput(),
+      sessionRailOpen: false,
+      dockOpen: false,
+      activeSessionSurfaceProps: buildActiveSessionProps(),
+      contextDockProps: {},
+      onSessionRailOpenChange: vi.fn(),
+      onDockOpenChange: vi.fn(),
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Activity").props.onClick();
+    });
+    const activity = renderer!.root.findByProps({ "aria-label": "Thread utility drawer" });
+    expect(activity.props.role).toBe("dialog");
+    expect(activity.props["aria-modal"]).toBe(true);
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-context-scrim open" }).props.tabIndex).toBe(-1);
+    // The desktop-only separator must not be present in the modal focus trap.
+    expect(renderer!.root.findAllByProps({ "aria-label": "Resize right drawer" })).toHaveLength(0);
+
+    await act(async () => {
+      findButton(renderer!.root, "Threads").props.onClick();
+    });
+    expect(input.onDockOpenChange).toHaveBeenCalledWith(false);
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
+    expect(renderer!.root.findAllByProps({ "aria-label": "Thread utility drawer" })).toHaveLength(0);
   });
 
   it("closes the mobile drawer with Escape or scrim and restores focus to the opener", async () => {
@@ -486,7 +609,7 @@ describe("ThreadedSurfacePage", () => {
     });
 
     await act(async () => {
-      findButton(renderer!.root, "Sessions").props.onClick();
+      findButton(renderer!.root, "Threads").props.onClick();
     });
     expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
 
@@ -514,7 +637,7 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      findButton(renderer!.root, "Sessions").props.onClick();
+      findButton(renderer!.root, "Threads").props.onClick();
     });
     await act(async () => {
       renderer!.update(<ThreadedSurfacePage surface="cowork" input={{ ...input, sessionRailOpen: true }} />);
@@ -569,6 +692,70 @@ describe("ThreadedSurfacePage", () => {
     );
   });
 
+  it("keeps the composer in a dedicated anchored row while desktop panels stay bounded", () => {
+    const workspaceCss = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
+    const timelineCss = readFileSync(new URL("./styles/timeline-frame.css", import.meta.url), "utf8");
+    const markup = renderToStaticMarkup(
+      <ThreadedSurfacePage
+        surface="chat"
+        input={
+          {
+            ...buildInput(),
+            messageMode: "chat",
+            activeSessionSurfaceProps: buildActiveSessionProps(),
+            emptyStateProps: null,
+          } as any
+        }
+      />,
+    );
+
+    expect(workspaceCss).toContain("grid-template-rows: minmax(0, 1fr) auto;");
+    expect(workspaceCss).toContain(".mc-next-threaded-timeline-region");
+    expect(workspaceCss).toContain("minmax(680px, 1fr)");
+    expect(workspaceCss).toContain(".session-rail-open .mc-next-threaded-rail-head");
+    expect(timelineCss).not.toContain(
+      ".mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card",
+    );
+    expect(markup.indexOf("mc-next-threaded-timeline-region")).toBeLessThan(
+      markup.indexOf("mc-next-threaded-composer-card"),
+    );
+  });
+
+  it("gives a compact model receipt its own slot above the one scrollable timeline", () => {
+    const css = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
+    const timelineCss = readFileSync(new URL("./styles/timeline-frame.css", import.meta.url), "utf8");
+
+    expect(css).toMatch(
+      /\.mc-next-threaded-surface\.unified \.mc-next-threaded-thread-card\s*\{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;[\s\S]*?overflow: hidden;/u,
+    );
+    // timeline-frame still owns a host-qualified grid baseline. The focused
+    // workspace override must match that specificity; otherwise its generic
+    // flex declaration loses and a receipt creates implicit, clipped grid rows.
+    expect(timelineCss).toMatch(
+      /\.mc-next-surface-host-work \.mc-next-threaded-surface\.unified \.mc-next-threaded-thread-card\s*\{[\s\S]*?display: grid;/u,
+    );
+    expect(css).toMatch(
+      /\.mc-next-surface-host-work \.mc-next-threaded-surface\.unified \.mc-next-threaded-thread-card\s*\{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;[\s\S]*?overflow: hidden;/u,
+    );
+    expect(css).toMatch(
+      /\.mc-next-threaded-surface\.unified \.mc-next-threaded-thread-card > \.chat-change-plan-card\s*\{\s*flex: 0 0 auto;/u,
+    );
+    expect(css).toMatch(
+      /\.mc-next-threaded-thread-card\s*> \.mc-next-thread-shell\s*\{[\s\S]*?flex: 1 1 auto;[\s\S]*?min-height: 0;[\s\S]*?height: auto;/u,
+    );
+    expect(css).toContain("@media (max-width: 1680px) and (max-height: 699px), (width < 1180px)");
+  });
+
+  it("keeps Activity and current-plan disclosure bodies out of layout until opened", () => {
+    const workspaceCss = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
+    const headerCss = readFileSync(new URL("./styles/header.css", import.meta.url), "utf8");
+
+    expect(workspaceCss).toContain(".mc-next-work-record-history:not([open]) > div,");
+    expect(workspaceCss).toContain(".mc-next-work-record-session-actions:not([open]) > div,");
+    expect(workspaceCss).toContain(".mc-next-work-record-history-item > details:not([open]) > div");
+    expect(headerCss).toContain(".mc-next-threaded-execution-overview:not([open]) > div");
+  });
+
   it("collapses narrow Cowork side-panel sections before text can overlap", () => {
     const css = readFileSync(new URL("./styles/composer.css", import.meta.url), "utf8");
     const start = css.indexOf("@container (max-width: 36rem)");
@@ -593,11 +780,11 @@ describe("ThreadedSurfacePage", () => {
     );
   });
 
-  it("keeps the Chat build editor visible in the unified desktop header", () => {
+  it("keeps focused desktop header controls visible", () => {
     const css = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
 
     expect(css).toContain(
-      "> .mc-next-threaded-secondary:not(.mc-next-threaded-work-record):not(.mc-next-threaded-build-editor),",
+      "> .mc-next-threaded-secondary:not(.mc-next-threaded-work-record):not(.mc-next-threaded-threads),",
     );
   });
 
@@ -632,10 +819,11 @@ describe("ThreadedSurfacePage", () => {
 
     expect(markup).toContain("Main Plan run");
     expect(markup).toContain("Expand delegated chats");
+    expect(markup).toContain('aria-controls="mc-next-threaded-session-children-parent-1"');
     expect(markup).not.toContain("Delegate · Work");
   });
 
-  it("renders a quick archive action for active sessions", () => {
+  it("keeps archive out of the focused header", () => {
     const markup = renderToStaticMarkup(
       <ThreadedSurfacePage
         surface="chat"
@@ -650,7 +838,9 @@ describe("ThreadedSurfacePage", () => {
       />,
     );
 
-    expect(markup).toContain(">Archive<");
+    expect(markup).toContain(">Threads<");
+    expect(markup).toContain(">Activity<");
+    expect(markup).not.toContain(">Archive<");
   });
 
   it("normalizes Conversation, Plan, and Build stage posture into Chat", () => {
@@ -713,8 +903,7 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain('aria-label="Model: OpenAI / gpt-test"');
     expect(markup).toContain('aria-label="Route: Selection: session"');
     expect(markup).toContain('aria-label="Runtime: Runtime ready · Run: completed"');
-    expect(markup).toContain('aria-label="Tokens: 0 tokens"');
-    expect(markup).toContain('aria-label="Cost: $0.00"');
+    expect(markup).not.toContain("Runtime detail");
     expect(markup).toContain('aria-label="Approvals: Decisions clear"');
     expect(markup).toContain("OpenAI / gpt-test");
     expect(markup).toContain("Selection: session");
@@ -757,7 +946,7 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).not.toContain("mc-next-composer-blocked-actions");
   });
 
-  it("renders a quick restore action for archived sessions", () => {
+  it("keeps restore out of the focused header", () => {
     const markup = renderToStaticMarkup(
       <ThreadedSurfacePage
         surface="chat"
@@ -772,7 +961,9 @@ describe("ThreadedSurfacePage", () => {
       />,
     );
 
-    expect(markup).toContain(">Restore<");
+    expect(markup).toContain(">Threads<");
+    expect(markup).toContain(">Activity<");
+    expect(markup).not.toContain(">Restore<");
   });
 
   it("wires session rail filters, project creation, file upload, and archive confirmation", async () => {
@@ -811,7 +1002,7 @@ describe("ThreadedSurfacePage", () => {
     await act(async () => {
       renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.onClick();
       findButtonByAriaLabel(renderer!.root, "Close session rail").props.onClick();
-      findButton(renderer!.root, "New thread").props.onClick();
+      findButton(renderer!.root, "New chat").props.onClick();
       findButton(renderer!.root, "Hide project").props.onClick();
       findButton(renderer!.root, "Active").props.onClick();
       findButton(renderer!.root, "Archived").props.onClick();
@@ -942,6 +1133,7 @@ describe("ThreadedSurfacePage", () => {
       dockOpen: false,
       activeSessionSurfaceProps: activeProps,
       emptyStateProps: null,
+      contextDockProps: {},
       dropTargetProps: {
         ...(buildInput() as any).dropTargetProps,
         isDragActive: true,
@@ -961,9 +1153,7 @@ describe("ThreadedSurfacePage", () => {
     // readout. Verify the current control is present and the remaining header
     // actions still wire correctly.
     await act(async () => {
-      findExactButton(renderer!.root, "Archive").props.onClick();
-      findButton(renderer!.root, "Show context").props.onClick();
-      findButton(renderer!.root, "Context").props.onClick();
+      findExactButton(renderer!.root, "Activity").props.onClick();
       const dropzone = renderer!.root.findAll(
         (node) =>
           typeof node.props.className === "string" && node.props.className.includes("mc-next-threaded-dropzone"),
@@ -979,6 +1169,7 @@ describe("ThreadedSurfacePage", () => {
     );
     expect(modeControl.length).toBeGreaterThan(0);
     expect(modeControl[0]!.props["data-mode"]).toBe("chat");
+    findExactButton(renderer!.root, "Archive").props.onClick();
     expect(activeProps.onToggleArchiveSession).toHaveBeenCalledTimes(1);
     expect(input.onDockOpenChange).toHaveBeenCalledWith(true);
     expect(input.dropTargetProps.onDragEnter).toHaveBeenCalledTimes(1);
@@ -1095,6 +1286,13 @@ describe("ThreadedSurfacePage", () => {
     expect(normalizeText(collectText(renderer!.root))).toContain("Viewing history around search result");
     expect(normalizeText(collectText(renderer!.root))).toContain("The exact deployment decision");
     expect(renderer!.root.findByProps({ "aria-current": "true" }).props["aria-label"]).toBe("Exact search result");
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-history-banner" }).props["aria-live"]).toBe(
+      "polite",
+    );
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-history-send-lock" }).props.role).toBeUndefined();
+    expect(
+      renderer!.root.findByProps({ className: "mc-next-threaded-history-send-lock" }).props["aria-live"],
+    ).toBeUndefined();
     expect(findExactButton(renderer!.root, "Send").props.disabled).toBe(true);
     expect(renderer!.root.findByProps({ "aria-label": "Message composer" }).props.disabled).toBe(true);
     await act(async () => {
@@ -1110,6 +1308,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("opens the session rail from mobile while keeping legacy routes in Chat", async () => {
+    setMediaQuery("(width < 1180px)", true);
     vi.stubGlobal("HTMLElement", class HTMLElement {});
     const activeProps = buildActiveSessionProps({
       mode: "chat",
@@ -1130,7 +1329,7 @@ describe("ThreadedSurfacePage", () => {
     });
 
     await act(async () => {
-      findButton(renderer!.root, "Sessions").props.onClick();
+      findSessionRailTrigger(renderer!.root).props.onClick();
     });
 
     // Rail toggle still works; the old mode switcher is now a read-only Chat readout.
@@ -1142,7 +1341,7 @@ describe("ThreadedSurfacePage", () => {
     expect(modeControl[0]!.props["data-mode"]).toBe("chat");
   });
 
-  it("keeps the Chat build editor closed by default and opens it from the conversation control", async () => {
+  it("keeps Activity and the build editor mutually exclusive from either entry point", async () => {
     vi.stubGlobal("HTMLElement", class HTMLElement {});
     vi.stubGlobal("window", {
       matchMedia: vi.fn((query: string) => ({
@@ -1171,7 +1370,7 @@ describe("ThreadedSurfacePage", () => {
         runTrace: null,
         suggestions: null,
       },
-      dockOpen: true,
+      dockOpen: false,
       onDockOpenChange: vi.fn(),
     } as any;
 
@@ -1181,28 +1380,42 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    expect(collectText(renderer!.root)).toContain("Build editor");
-    expect(collectText(renderer!.root)).not.toContain("Hide build editor");
+    await act(async () => {
+      findExactButton(renderer!.root, "Activity").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Work Record");
 
     await act(async () => {
-      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Build editor").find(
-        (button) => button.props.className === "mc-next-threaded-secondary mc-next-threaded-build-editor",
-      );
-      expect(conversationWorkbenchButton).toBeDefined();
-      conversationWorkbenchButton!.props.onClick();
+      findExactButton(renderer!.root, "Export proof").props.onClick();
     });
+    expect(activeProps.onExportRunBundle).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Build editor").props.onClick();
+    });
+    expect(input.onDockOpenChange).toHaveBeenLastCalledWith(false);
+    expect(renderer!.root.findAllByProps({ className: "mc-next-utility-panel" })).toHaveLength(0);
+    expect(
+      renderer!.root.findByProps({ className: "mc-next-threaded-stage mode-chat has-workbench has-code-panel" }),
+    ).toBeDefined();
     expect(collectText(renderer!.root)).toContain("Hide build editor");
 
     await act(async () => {
-      findButton(renderer!.root, "Hide context").props.onClick();
-      findButton(renderer!.root, "Export run bundle").props.onClick();
+      findExactButton(renderer!.root, "Activity").props.onClick();
     });
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-stage mode-chat has-context" })).toBeDefined();
 
-    expect(activeProps.onExportRunBundle).toHaveBeenCalledTimes(1);
-    expect(input.onDockOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => {
+      findExactButton(renderer!.root, "Open build editor").props.onClick();
+    });
+    expect(input.onDockOpenChange).toHaveBeenLastCalledWith(false);
+    expect(renderer!.root.findAllByProps({ className: "mc-next-utility-panel" })).toHaveLength(0);
+    expect(
+      renderer!.root.findByProps({ className: "mc-next-threaded-stage mode-chat has-workbench has-code-panel" }),
+    ).toBeDefined();
   });
 
-  it("opens Claude-style right-panel choices from the active-session header", async () => {
+  it("opens Activity as the single entry point to inspect right-panel work", async () => {
     const onDockOpenChange = vi.fn();
     const onSelectFile = vi.fn();
     const onOpenTasks = vi.fn();
@@ -1259,9 +1472,9 @@ describe("ThreadedSurfacePage", () => {
     });
 
     await act(async () => {
-      findButtonByAriaLabel(renderer!.root, "Open right panel menu").props.onClick();
+      findExactButton(renderer!.root, "Activity").props.onClick();
     });
-    expect(collectText(renderer!.root)).toContain("Background tasks");
+    expect(collectText(renderer!.root)).toContain("Work Record");
 
     await act(async () => {
       findExactButton(renderer!.root, "Diff").props.onClick();
@@ -1291,6 +1504,56 @@ describe("ThreadedSurfacePage", () => {
       findButton(renderer!.root, "Open task board").props.onClick();
     });
     expect(onOpenTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps dismissed model receipts inspectable through Activity history", async () => {
+    const plan = {
+      schemaVersion: 1,
+      planId: "plan-model-1",
+      origin: { surface: "chat", workspaceId: "default", sessionId: "session-1" },
+      adapter: { adapterId: "chat", version: 1 },
+      kind: "session_model",
+      scope: "current_chat",
+      status: "completed",
+      phase: "terminal",
+      revision: 4,
+      request: { kind: "session_model", providerId: "openai-codex", model: "gpt-5.6-terra" },
+      intentHash: "intent-1",
+      target: { ownerId: "session-1", resourceId: "session-1" },
+      title: "Use gpt-5.6-terra in this chat",
+      summary: "Model changed for this chat.",
+      impact: "This chat now uses gpt-5.6-terra.",
+      risk: "safe",
+      approvalRefs: [],
+      evidenceRefs: ["chat_session:session-1:revision:4"],
+      rollbackRefs: [],
+      result: { summary: "Model changed." },
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z",
+    } as any;
+    const input = {
+      ...buildInput(),
+      messageMode: "chat",
+      activeSessionSurfaceProps: buildActiveSessionProps(),
+      contextDockProps: {},
+      changePlans: [plan],
+      changePlanReceipt: { plan, onDismiss: vi.fn(), onOpenDetails: vi.fn() },
+      activityOpenRequest: 1,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer!.root.findByProps({ "aria-label": "Change plan receipt: Use gpt-5.6-terra in this chat" }),
+    ).toBeTruthy();
+    expect(collectText(renderer!.root)).toMatch(/Activity history\s*\(\s*1\s*\)/u);
+    expect(collectText(renderer!.root)).toContain(
+      "Completed receipts stay here after you dismiss them from the conversation.",
+    );
   });
 
   it("launches Work Record destinations through host callbacks", async () => {
@@ -1336,7 +1599,11 @@ describe("ThreadedSurfacePage", () => {
       workRecordButton.props.onClick();
     });
 
-    expect(findButton(renderer!.root, "Work Record").props["aria-expanded"]).toBe(true);
+    expect(
+      renderer!.root.findByProps({
+        className: "mc-next-threaded-secondary mc-next-threaded-work-record",
+      }).props["aria-expanded"],
+    ).toBe(true);
 
     await act(async () => {
       findButton(renderer!.root, "Library").props.onClick();
@@ -1348,8 +1615,118 @@ describe("ThreadedSurfacePage", () => {
     expect(renderer!.root.findAll((node) => node.type === "a" && String(node.props.href).startsWith("/"))).toEqual([]);
   });
 
+  it("selects the focused recovery turn before opening its Activity record", async () => {
+    const onSelectTurn = vi.fn();
+    const previousTurn = {
+      turnId: "turn-previous",
+      userMessage: {
+        messageId: "user-previous",
+        sessionId: "session-1",
+        role: "user",
+        actorType: "operator",
+        actorId: "operator",
+        content: "Earlier request",
+        timestamp: "2026-08-15T00:00:00.000Z",
+        attachments: [],
+      },
+      assistantMessage: {
+        messageId: "assistant-previous",
+        sessionId: "session-1",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: "Earlier answer",
+        timestamp: "2026-08-15T00:00:01.000Z",
+      },
+      trace: {
+        turnId: "turn-previous",
+        sessionId: "session-1",
+        userMessageId: "user-previous",
+        branchKind: "append",
+        status: "completed",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        startedAt: "2026-08-15T00:00:00.000Z",
+        toolRuns: [],
+        citations: [],
+        routing: {},
+      },
+      toolRuns: [],
+      citations: [],
+      branch: {
+        siblingTurnIds: ["turn-previous"],
+        siblingCount: 1,
+        activeSiblingIndex: 0,
+        isSelectedPath: false,
+        newestLeafTurnId: "turn-focused-failure",
+      },
+    };
+    const focusedFailureTurn = {
+      ...previousTurn,
+      turnId: "turn-focused-failure",
+      userMessage: {
+        ...previousTurn.userMessage,
+        messageId: "user-focused-failure",
+        content: "Current request",
+      },
+      assistantMessage: undefined,
+      trace: {
+        ...previousTurn.trace,
+        turnId: "turn-focused-failure",
+        userMessageId: "user-focused-failure",
+        status: "failed",
+        failure: {
+          failureClass: "provider_timeout",
+          message: "Provider timed out.",
+          retryable: true,
+        },
+      },
+      branch: {
+        siblingTurnIds: ["turn-focused-failure"],
+        siblingCount: 1,
+        activeSiblingIndex: 0,
+        isSelectedPath: true,
+        newestLeafTurnId: "turn-focused-failure",
+      },
+    };
+    const activeProps = buildActiveSessionProps({
+      onSelectTurn,
+      selectedTurn: previousTurn,
+      selectedTurnId: previousTurn.turnId,
+      thread: {
+        sessionId: "session-1",
+        selectedTurnId: focusedFailureTurn.turnId,
+        activeLeafTurnId: focusedFailureTurn.turnId,
+        turns: [previousTurn, focusedFailureTurn],
+      },
+    });
+    const input = {
+      ...buildInput(),
+      messageMode: "chat",
+      activeSessionSurfaceProps: activeProps,
+      contextDockProps: {},
+      sessionRailOpen: false,
+      dockOpen: false,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findExactButton(renderer!.root, "View activity").props.onClick();
+    });
+
+    expect(onSelectTurn).toHaveBeenCalledWith("turn-focused-failure");
+    expect(collectText(renderer!.root)).toContain("Work Record");
+  });
+
   /**
-   * Exercises the Panels menu's Escape claim against useEscapeToStopStream in
+   * Exercises the Activity drawer's Escape claim against useEscapeToStopStream in
    * both possible registration orders. `document.addEventListener` dispatch
    * is registration-order (both listeners are bubble-phase, so whichever
    * registered first also runs first), and which one registers first depends
@@ -1358,7 +1735,7 @@ describe("ThreadedSurfacePage", () => {
    * re-checks `event.defaultPrevented` after every listener in the simulated
    * dispatch below has run, so the outcome must be identical either way.
    */
-  async function runPanelsMenuEscapeOrderingCase(order: "menu-opens-first" | "stream-starts-first") {
+  async function runActivityEscapeOrderingCase(order: "activity-opens-first" | "stream-starts-first") {
     const addEventListener = vi.fn();
     const removeEventListener = vi.fn();
     vi.stubGlobal("document", {
@@ -1376,13 +1753,14 @@ describe("ThreadedSurfacePage", () => {
       messageMode: "chat",
       activeSessionSurfaceProps: activeProps,
       // Keep the capture-phase rail drawer and context dock closed so the only
-      // "keydown" listeners registered on `document` are the Panels menu's own
+      // "keydown" listeners registered on `document` are the Activity drawer's own
       // bubble-phase Escape handler and useEscapeToStopStream's (both of those
       // other capture-phase handlers are gated behind `railDrawerOpen`/`dockOpen`
       // and would otherwise also call `addEventListener`, making the assertions
       // below ambiguous).
       sessionRailOpen: false,
       dockOpen: false,
+      contextDockProps: {},
     } as any;
 
     let renderer: ReactTestRenderer | null = null;
@@ -1390,9 +1768,9 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
     });
 
-    const openMenu = async () => {
+    const openActivity = async () => {
       await act(async () => {
-        findButtonByAriaLabel(renderer!.root, "Open right panel menu").props.onClick();
+        findExactButton(renderer!.root, "Activity").props.onClick();
       });
     };
     const startStream = async () => {
@@ -1409,21 +1787,20 @@ describe("ThreadedSurfacePage", () => {
       });
     };
 
-    if (order === "menu-opens-first") {
-      await openMenu();
+    if (order === "activity-opens-first") {
+      await openActivity();
       await startStream();
     } else {
       await startStream();
-      await openMenu();
+      await openActivity();
     }
 
     const keydownHandlers = addEventListener.mock.calls
       .filter(([type]) => type === "keydown")
       .map(([, handler]) => handler as (event: unknown) => void);
-    // Exactly two bubble-phase "keydown" listeners should be live at this
-    // point: the Panels menu's own handler and useEscapeToStopStream's
-    // document-level hook, in whichever order this case registered them.
-    expect(keydownHandlers).toHaveLength(2);
+    // The focus trap, Activity drawer handler, and stream-stop hook can all
+    // observe Escape. The drawer must claim it before the stream-stop hook.
+    expect(keydownHandlers.length).toBeGreaterThanOrEqual(2);
 
     const preventDefault = vi.fn();
     const stopPropagation = vi.fn();
@@ -1453,22 +1830,22 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    // The menu closed...
-    expect(collectText(renderer!.root)).not.toContain("Background tasks");
+    // Activity closed...
+    expect(collectText(renderer!.root)).not.toContain("Work Record");
     // ...claimed the event so the document-bubble useEscapeToStopStream hook
     // (which only fires when `!event.defaultPrevented`) would skip it...
-    expect(preventDefault).toHaveBeenCalledTimes(1);
-    expect(stopPropagation).toHaveBeenCalledTimes(1);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(stopPropagation).toHaveBeenCalled();
     // ...and, wired end-to-end, the stream was never cancelled by this keypress.
     expect(onStopActiveTurn).not.toHaveBeenCalled();
   }
 
-  it("claims Escape to close the Panels menu without leaking it to the document-bubble stream-stop hook (menu opens, then stream starts)", async () => {
-    await runPanelsMenuEscapeOrderingCase("menu-opens-first");
+  it("claims Escape to close Activity without leaking it to the stream-stop hook (Activity opens, then stream starts)", async () => {
+    await runActivityEscapeOrderingCase("activity-opens-first");
   });
 
-  it("claims Escape to close the Panels menu without leaking it to the document-bubble stream-stop hook (stream starts, then menu opens)", async () => {
-    await runPanelsMenuEscapeOrderingCase("stream-starts-first");
+  it("claims Escape to close Activity without leaking it to the stream-stop hook (stream starts, then Activity opens)", async () => {
+    await runActivityEscapeOrderingCase("stream-starts-first");
   });
 
   it("does not touch the Escape event when the Panels menu is closed", async () => {
@@ -1495,7 +1872,7 @@ describe("ThreadedSurfacePage", () => {
       create(<ThreadedSurfacePage surface="chat" input={input} />);
     });
 
-    // The Panels menu was never opened, so its `useEffect` never registers a
+    // Activity was never opened, so its `useEffect` never registers a
     // "keydown" listener at all (it early-returns while `open` is false).
     expect(addEventListener.mock.calls.find(([type]) => type === "keydown")).toBeUndefined();
   });
@@ -1522,12 +1899,21 @@ describe("ThreadedSurfacePage", () => {
     let root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
     expect(root.props.style["--mc-session-rail-width"]).toBe("216px");
 
+    await act(async () => {
+      findSessionRailTrigger(renderer!.root).props.onClick();
+    });
     const railHandle = findButtonByAriaLabel(renderer!.root, "Resize session rail");
     await act(async () => {
       railHandle.props.onKeyDown({ key: "ArrowRight", preventDefault: vi.fn() });
     });
-    root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
+    root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified session-rail-open" });
     expect(root.props.style["--mc-session-rail-width"]).toBe("240px");
+
+    await act(async () => {
+      railHandle.props.onKeyDown({ key: "End", preventDefault: vi.fn() });
+    });
+    root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified session-rail-open" });
+    expect(root.props.style["--mc-session-rail-width"]).toBe("300px");
 
     const drawerHandle = findButtonByAriaLabel(renderer!.root, "Resize right drawer");
     await act(async () => {

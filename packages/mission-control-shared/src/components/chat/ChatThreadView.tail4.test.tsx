@@ -142,7 +142,7 @@ describe("ChatThreadView tail coverage", () => {
     const buttons = renderer.root.findAllByType("button");
     TestRenderer.act(() => {
       buttons.find((button) => button.children.join("") === "Run details")?.props.onClick();
-      buttons.find((button) => button.children.join("") === "Actions")?.props.onClick?.();
+      buttons.find((button) => button.children.join("") === "More")?.props.onClick?.();
       buttons.find((button) => button.children.join("") === "Retry run step")?.props.onClick();
       buttons.find((button) => button.children.join("") === "Edit and resend")?.props.onClick();
       buttons.find((button) => button.children.join("") === "Save answer")?.props.onClick();

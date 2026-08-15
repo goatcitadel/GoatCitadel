@@ -285,6 +285,10 @@
   gap: 0.42rem;
 }
 
+.mc-next-thread-turn.delegation.compact > details:not([open]) > :not(summary) {
+  display: none;
+}
+
 .mc-next-thread-turn.delegation.compact > details > summary {
   display: block;
   cursor: pointer;
@@ -464,6 +468,10 @@
 .mc-next-thread-step-output-details {
   display: grid;
   gap: 0.55rem;
+}
+
+.mc-next-thread-step-output-details:not([open]) > :not(summary) {
+  display: none;
 }
 
 .mc-next-thread-step-output-details > summary {

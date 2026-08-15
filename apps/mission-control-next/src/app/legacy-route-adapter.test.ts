@@ -213,7 +213,7 @@ describe("mission-control-next route model", () => {
   it("covers route labels, descriptions, navigation preservation, and legacy tab aliases", () => {
     expect(getRouteLabel({ area: "cowork", section: "tasks" })).toBe("Kanban");
     expect(getRouteLabel({ area: "cowork", section: "board" })).toBe("Kanban");
-    expect(getRouteLabel({ area: "cowork" })).toBe("Work");
+    expect(getRouteLabel({ area: "cowork" })).toBe("Chat");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("Multi-agent board");
     expect(getRouteDescription({ area: "cowork" })).toContain("One chat workspace");
     expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
@@ -392,6 +392,10 @@ describe("mission-control-next route model", () => {
     expect(chatCodeScope.verification).toContain("verify:surface:regression");
     expect(chatCoworkScope.releaseAction).toContain("Send a Chat turn");
     expect(chatCoworkScope.verification).toContain("verify:surface:regression");
+    expect(getRouteReleaseScope({ area: "settings", section: "personalities" }).note).toContain("Chat defaults");
+    expect(getRouteReleaseScope({ area: "settings", section: "onboarding" }).releaseAction).toContain(
+      "first Chat task",
+    );
     expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
       "needs_release_polish" satisfies ReleaseSurfaceStatus,
     );

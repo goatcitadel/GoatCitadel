@@ -397,6 +397,7 @@ function ExternalSourceStrip({
   onOpenLibrary?: () => void;
 }) {
   const stripInstanceId = useId();
+  const attachFormId = `${stripInstanceId}-attach-form`;
   const stripRef = useRef<HTMLElement | null>(null);
   const [attachFormOpen, setAttachFormOpen] = useState(false);
   const selectedCount = controls.selectedAttachmentIds.length;
@@ -437,6 +438,7 @@ function ExternalSourceStrip({
           type="button"
           className="mc-next-composer-inline-button"
           aria-expanded={attachFormOpen}
+          aria-controls={attachFormId}
           onClick={() => setAttachFormOpen((current) => !current)}
         >
           {attachFormOpen ? "Close picker" : "Attach imported item"}
@@ -448,86 +450,78 @@ function ExternalSourceStrip({
         </p>
       ) : null}
       {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
-      {attachFormOpen ? (
-        <div className="mc-next-composer-external-attach-form">
-          <p className="mc-next-composer-external-hint">
-            Choose a verified applied import. Chat receives only its immutable binding; external content stays
-            read-only.
+      <div id={attachFormId} className="mc-next-composer-external-attach-form" hidden={!attachFormOpen}>
+        <p className="mc-next-composer-external-hint">
+          Choose a verified applied import. Chat receives only its immutable binding; external content stays read-only.
+        </p>
+        {controls.loading ? (
+          <p className="mc-next-composer-external-hint" role="status">
+            Refreshing eligible imports…
           </p>
-          {controls.loading ? (
-            <p className="mc-next-composer-external-hint" role="status">
-              Refreshing eligible imports…
-            </p>
-          ) : controls.candidatesSupported === false ? (
-            <p className="mc-next-composer-external-hint">
-              This Gateway does not expose the governed import picker yet. Manage imports in Library.
-            </p>
-          ) : controls.candidates.length === 0 ? (
-            <p className="mc-next-composer-external-hint">
-              No unattached verified imports are eligible for this session.
-            </p>
-          ) : (
-            <ul role="list" className="mc-next-composer-external-list" aria-label="Eligible imported items">
-              {controls.candidates.map((candidate) => {
-                const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
-                return (
-                  <li
-                    key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`}
-                    className="mc-next-composer-external-chip"
-                  >
-                    <div className="mc-next-composer-external-chip-body">
-                      <strong>{candidate.itemId}</strong>
-                      <p
-                        className="mc-next-composer-external-meta"
-                        title={`Immutable source ${candidate.sourceId} · import ${candidate.importId} · item ${candidate.itemId}`}
-                      >
-                        {candidate.sourceLabel} · source rev {candidate.sourceRevision} · verified{" "}
-                        {candidate.artifactsVerifiedAt.slice(0, 10)}
-                      </p>
-                    </div>
-                    <div className="mc-next-composer-external-chip-actions">
-                      <StatusChip tone="muted">Read-only</StatusChip>
-                      <button
-                        type="button"
-                        className="mc-next-composer-inline-button"
-                        disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
-                        onClick={() =>
-                          controls.onAttach({
-                            sourceId: candidate.sourceId,
-                            importId: candidate.importId,
-                            itemId: candidate.itemId,
-                          })
-                        }
-                        aria-label={`Attach ${candidate.itemId} from ${candidate.sourceLabel} read-only`}
-                      >
-                        {busy ? "Attaching…" : "Attach read-only"}
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <button
-            type="button"
-            className="mc-next-composer-inline-button"
-            disabled={disabled || controls.loading}
-            onClick={controls.onReload}
-          >
-            Refresh imports
+        ) : controls.candidatesSupported === false ? (
+          <p className="mc-next-composer-external-hint">
+            This Gateway does not expose the governed import picker yet. Manage imports in Library.
+          </p>
+        ) : controls.candidates.length === 0 ? (
+          <p className="mc-next-composer-external-hint">
+            No unattached verified imports are eligible for this session.
+          </p>
+        ) : (
+          <ul role="list" className="mc-next-composer-external-list" aria-label="Eligible imported items">
+            {controls.candidates.map((candidate) => {
+              const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
+              return (
+                <li
+                  key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`}
+                  className="mc-next-composer-external-chip"
+                >
+                  <div className="mc-next-composer-external-chip-body">
+                    <strong>{candidate.itemId}</strong>
+                    <p
+                      className="mc-next-composer-external-meta"
+                      title={`Immutable source ${candidate.sourceId} · import ${candidate.importId} · item ${candidate.itemId}`}
+                    >
+                      {candidate.sourceLabel} · source rev {candidate.sourceRevision} · verified{" "}
+                      {candidate.artifactsVerifiedAt.slice(0, 10)}
+                    </p>
+                  </div>
+                  <div className="mc-next-composer-external-chip-actions">
+                    <StatusChip tone="muted">Read-only</StatusChip>
+                    <button
+                      type="button"
+                      className="mc-next-composer-inline-button"
+                      disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
+                      onClick={() =>
+                        controls.onAttach({
+                          sourceId: candidate.sourceId,
+                          importId: candidate.importId,
+                          itemId: candidate.itemId,
+                        })
+                      }
+                      aria-label={`Attach ${candidate.itemId} from ${candidate.sourceLabel} read-only`}
+                    >
+                      {busy ? "Attaching…" : "Attach read-only"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <button
+          type="button"
+          className="mc-next-composer-inline-button"
+          disabled={disabled || controls.loading}
+          onClick={controls.onReload}
+        >
+          Refresh imports
+        </button>
+        {onOpenLibrary ? (
+          <button type="button" className="mc-next-composer-inline-button" disabled={disabled} onClick={onOpenLibrary}>
+            Manage Library imports
           </button>
-          {onOpenLibrary ? (
-            <button
-              type="button"
-              className="mc-next-composer-inline-button"
-              disabled={disabled}
-              onClick={onOpenLibrary}
-            >
-              Manage Library imports
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       {controls.attachments.length === 0 ? (
         <p className="mc-next-composer-external-hint">
           No external sources are attached to this session. Import them in the Library first.
@@ -600,7 +594,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     ? [props.routePreflight.effectiveProviderId, props.routePreflight.effectiveModel].filter(Boolean).join(" / ")
     : null;
   const capabilityProfile = props.routePreflight?.capabilityProfile;
-  const sessionStateLabel = props.selectedSessionId ? "Thread ready" : "New thread";
+  const sessionStateLabel = props.selectedSessionId ? "Chat ready" : "New chat";
   const webModeLabel =
     props.currentWebMode === "off"
       ? null

@@ -55,30 +55,13 @@
   background: linear-gradient(to top, var(--background) calc(100% - 14px), transparent);
 }
 
-.mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
-  position: relative;
-  bottom: auto;
-}
-
-.mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card {
-  opacity: 0.58;
-  filter: saturate(0.72);
-}
-
-.mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card::after {
-  content: "Resolve the inline blocker above to continue.";
-  position: absolute;
-  inset: 0.42rem;
-  z-index: 4;
-  display: grid;
-  place-items: center;
-  padding: 0.72rem;
-  border-radius: var(--r-sm);
+.mc-next-threaded-composer-gate-hint {
+  margin: 0 0 0.38rem;
+  padding: 0.38rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 32%, var(--border));
-  background: color-mix(in oklab, var(--card) 76%, transparent);
-  color: var(--foreground);
-  font-size: var(--text-sm);
-  font-weight: 700;
-  text-align: center;
-  backdrop-filter: blur(7px);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-2) 74%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
 }

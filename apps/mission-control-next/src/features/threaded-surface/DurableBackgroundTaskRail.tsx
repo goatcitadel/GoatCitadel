@@ -33,6 +33,8 @@ export interface DurableBackgroundTaskRailProps {
 export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps) {
   const rail = useDurableBackgroundTaskRail(props);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const [runtimeUnknownsOpen, setRuntimeUnknownsOpen] = useState(false);
+  const runtimeUnknownsId = useId();
   const attentionAnnouncement = useAttentionAnnouncement(
     rail.snapshot,
     `${props.parentRunId ?? ""}\u0000${props.sessionId ?? ""}`,
@@ -42,6 +44,7 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
     `${props.parentRunId ?? ""}\u0000${props.sessionId ?? ""}`,
     props.onBackgroundTaskSettled,
   );
+  const runtimeUnknowns = rail.snapshot?.unknowns ?? [];
 
   if (!props.parentRunId || !props.sessionId) {
     return <FallbackQueueState {...props} />;
@@ -125,15 +128,23 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
       <RemoteWorkerInlineActivity workspaceId={props.workspaceId} sessionId={props.sessionId} turnId={props.turnId} />
 
       {rail.snapshot ? <SynthesisLineage snapshot={rail.snapshot} /> : null}
-      {rail.snapshot?.unknowns.length ? (
-        <details className="mc-next-background-rail__unknowns">
-          <summary>{rail.snapshot.unknowns.length} runtime unknowns</summary>
-          <ul>
-            {rail.snapshot.unknowns.map((unknown) => (
+      {runtimeUnknowns.length ? (
+        <div className="mc-next-background-rail__unknowns">
+          <button
+            type="button"
+            className="mc-next-background-rail__unknowns-trigger"
+            aria-expanded={runtimeUnknownsOpen}
+            aria-controls={runtimeUnknownsId}
+            onClick={() => setRuntimeUnknownsOpen((open) => !open)}
+          >
+            {runtimeUnknowns.length} runtime unknown{runtimeUnknowns.length === 1 ? "" : "s"}
+          </button>
+          <ul id={runtimeUnknownsId} hidden={!runtimeUnknownsOpen}>
+            {runtimeUnknowns.map((unknown) => (
               <li key={unknown}>{unknown}</li>
             ))}
           </ul>
-        </details>
+        </div>
       ) : null}
       {props.onOpenTasks ? (
         <button type="button" className="mc-next-panel-button" onClick={props.onOpenTasks}>

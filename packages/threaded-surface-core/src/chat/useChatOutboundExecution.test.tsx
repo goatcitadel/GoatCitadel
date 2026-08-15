@@ -154,6 +154,7 @@ function Harness(props: {
   ensureSession?: () => Promise<any>;
   handleCommandExecution?: (sessionId: string, commandText: string) => Promise<void>;
   initialError?: string | null;
+  initialErrorSource?: "send" | "edit" | "other" | null;
   initialDraft?: string;
   initialPendingAttachments?: any[];
   initialActiveStream?: ActiveChatStreamState | null;
@@ -272,6 +273,7 @@ function Harness(props: {
     stateConfig: {
       sending,
       error,
+      errorSource: props.initialErrorSource ?? null,
       queuedOutbound: props.queuedOutbound ?? [],
       thread,
       messages: messages as any,
@@ -1388,6 +1390,24 @@ describe("useChatOutboundExecution", () => {
     });
 
     expect(latest?.getSnapshot().streamStatus).toBe("queued");
+  });
+
+  it("keeps a non-transport UI error out of the outbound stream status", async () => {
+    await act(async () => {
+      create(<Harness initialError="Export bundle could not be created" initialErrorSource="other" />);
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().streamStatus).toBe("idle");
+  });
+
+  it("keeps a source-less legacy error as an outbound stream error", async () => {
+    await act(async () => {
+      create(<Harness initialError="Legacy stream request failed" />);
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().streamStatus).toBe("error");
   });
 
   it("handles branch selection, fetched-thread reconciliation, and stream status guards", async () => {

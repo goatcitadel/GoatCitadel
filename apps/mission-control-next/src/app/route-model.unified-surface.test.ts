@@ -56,10 +56,10 @@ describe("single chat surface route compatibility", () => {
     expect(n.area).toBe("chat");
     expect(n.mode).toBeUndefined();
   });
-  it("labels the chat surface as Work regardless of legacy mode", () => {
-    expect(getRouteLabel({ area: "chat" })).toBe("Work");
-    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Work");
-    expect(getRouteLabel({ area: "code" })).toBe("Work");
+  it("labels the chat surface as Chat regardless of legacy mode", () => {
+    expect(getRouteLabel({ area: "chat" })).toBe("Chat");
+    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Chat");
+    expect(getRouteLabel({ area: "code" })).toBe("Chat");
     expect(getRouteDescription({ area: "chat" })).toContain("One chat workspace");
     expect(getRouteDescription({ area: "chat", mode: "code" })).toContain("One chat workspace");
   });

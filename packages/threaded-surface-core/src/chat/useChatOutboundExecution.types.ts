@@ -56,6 +56,8 @@ export interface UseChatOutboundStreamConfig {
 export interface UseChatOutboundStateConfig {
   sending: boolean;
   error: string | null;
+  /** Only send/edit failures represent a chat transport error. */
+  errorSource?: ChatErrorSource | null;
   queuedOutbound: OutboundQueueItem[];
   thread: ChatThreadResponse | null;
   messages: ChatMessageRecord[];

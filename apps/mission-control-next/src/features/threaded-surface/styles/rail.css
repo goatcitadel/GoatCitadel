@@ -27,7 +27,8 @@
   --mc-area-color: var(--mc-mode-code);
 }
 
-.mc-next-threaded-scrim {
+.mc-next-threaded-scrim,
+.mc-next-threaded-context-scrim {
   display: none;
 }
 

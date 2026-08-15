@@ -1,7 +1,15 @@
 .mc-next-threaded-surface.unified {
-  grid-template-columns: var(--mc-session-rail-width, 216px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   min-height: calc(100dvh - 56px);
   background: var(--background);
+}
+
+.mc-next-threaded-surface.unified.session-rail-open {
+  grid-template-columns: minmax(184px, var(--mc-session-rail-width, 216px)) minmax(0, 1fr);
+}
+
+.mc-next-threaded-surface.unified.session-rail-open .mc-next-threaded-stage.mode-chat.has-context {
+  grid-template-columns: minmax(680px, 1fr) minmax(244px, var(--mc-context-panel-width, 268px));
 }
 
 .mc-next-threaded-resize-handle.rail {
@@ -15,6 +23,42 @@
   max-height: calc(100dvh - 56px);
   background: var(--mc-surface-1);
   border-color: var(--border);
+}
+
+.mc-next-threaded-surface.unified.session-rail-open .mc-next-threaded-rail-head,
+.mc-next-threaded-surface.unified .mc-next-threaded-rail.open .mc-next-threaded-rail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.65rem 0.42rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.mc-next-threaded-surface.unified.session-rail-open .mc-next-threaded-rail-head > div,
+.mc-next-threaded-surface.unified .mc-next-threaded-rail.open .mc-next-threaded-rail-head > div {
+  min-width: 0;
+}
+
+.mc-next-threaded-surface.unified.session-rail-open .mc-next-threaded-rail-head h2,
+.mc-next-threaded-surface.unified .mc-next-threaded-rail.open .mc-next-threaded-rail-head h2 {
+  margin-top: 0.08rem;
+  font-size: var(--text-md);
+}
+
+.mc-next-threaded-surface.unified.session-rail-open .mc-next-threaded-rail-head span,
+.mc-next-threaded-surface.unified .mc-next-threaded-rail.open .mc-next-threaded-rail-head span {
+  display: none;
+}
+
+.mc-next-threaded-surface.unified.session-rail-open .mc-next-threaded-rail-head .mc-next-threaded-menu-button,
+.mc-next-threaded-surface.unified
+  .mc-next-threaded-rail.open
+  .mc-next-threaded-rail-head
+  .mc-next-threaded-menu-button {
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-rail-actions {
@@ -199,6 +243,57 @@
   display: none;
 }
 
+.mc-next-threaded-surface.unified .mc-next-threaded-model-control {
+  position: relative;
+  min-width: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-model-control > summary {
+  display: inline-flex;
+  max-width: 15rem;
+  min-height: 1.9rem;
+  align-items: center;
+  gap: 0.34rem;
+  padding: 0.2rem 0.48rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-2) 76%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  list-style: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-model-control > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-model-control > summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-model-control-body {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.36rem);
+  right: 0;
+  width: min(25rem, 76vw);
+  padding: 0.56rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--mc-surface-1);
+  box-shadow: var(--mc-shadow-strong);
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-model-control:not([open]) > .mc-next-threaded-model-control-body {
+  display: none;
+}
+
 .mc-next-threaded-surface.unified .mc-next-threaded-panel-switcher-row {
   display: none;
 }
@@ -210,7 +305,7 @@
 
 .mc-next-threaded-surface.unified
   .mc-next-threaded-action-row
-  > .mc-next-threaded-secondary:not(.mc-next-threaded-work-record):not(.mc-next-threaded-build-editor),
+  > .mc-next-threaded-secondary:not(.mc-next-threaded-work-record):not(.mc-next-threaded-threads),
 .mc-next-threaded-surface.unified .mc-next-threaded-action-row > .mc-next-threaded-archive {
   display: none;
 }
@@ -237,12 +332,75 @@
   max-width: 100%;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
-  display: block;
+.mc-next-threaded-surface.unified .mc-next-threaded-timeline-region {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-timeline-region > .mc-next-threaded-thread-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card,
+/* timeline-frame.css retains a host-qualified grid rule for the legacy
+   contained shell. Match that selector here so a terminal receipt always
+   leaves the timeline in a flex remaining-height slot instead of creating
+   implicit grid rows that clip its own scroll container. */
+.mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
+  /* A terminal model receipt shares this card with the timeline. Keep the
+     receipt in its own non-scrolling slot and give the timeline the remaining
+     height; otherwise the receipt adds to the shell's 100% height and creates
+     an outer scroll container around the already-scrollable timeline. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 22px 18px 10px;
+  overflow: hidden;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card > .chat-change-plan-card {
+  flex: 0 0 auto;
+}
+
+.mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-thread-card > .mc-next-thread-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card > .mc-next-threaded-history-list,
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card > .mc-next-threaded-history-state {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+}
+
+/* Mirror mobile.css's page-scroll fallback. This stylesheet is imported after
+   mobile.css, so restore document flow here rather than leaving a hidden
+   flex card around the timeline at short viewport heights. */
+@media (max-width: 1680px) and (max-height: 699px), (width < 1180px) {
+  .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
+    display: block;
+    overflow: visible;
+  }
+
+  .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-thread-card > .mc-next-thread-shell {
+    height: auto;
+  }
+
+  .mc-next-surface-host-work .mc-next-threaded-thread-card > .mc-next-threaded-history-list,
+  .mc-next-surface-host-work .mc-next-threaded-thread-card > .mc-next-threaded-history-state {
+    overflow: visible;
+  }
 }
 
 .mc-next-threaded-surface.unified .mc-next-thread-shell {
@@ -523,6 +681,12 @@
 
 .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel > .mc-next-threaded-resize-handle.panel {
   width: 9px;
+}
+
+.mc-next-threaded-context-close-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.42rem 0.46rem 0;
 }
 
 .mc-next-context-drawer {
@@ -926,6 +1090,77 @@
   border-top: 1px solid color-mix(in oklab, var(--border) 58%, transparent);
 }
 
+.mc-next-work-record-history,
+.mc-next-work-record-session-actions {
+  display: grid;
+  gap: 0.44rem;
+  padding-top: 0.66rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 58%, transparent);
+}
+
+.mc-next-work-record-history > summary,
+.mc-next-work-record-session-actions > summary,
+.mc-next-work-record-history-item > details > summary {
+  cursor: pointer;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 760;
+}
+
+.mc-next-work-record-history > div {
+  display: grid;
+  gap: 0.42rem;
+}
+
+/* Native <details> only hides direct content while it retains the browser's
+   default display. These authored grid/flex rules override that default, so
+   make the closed state explicit for every Activity disclosure. */
+.mc-next-work-record-history:not([open]) > div,
+.mc-next-work-record-session-actions:not([open]) > div,
+.mc-next-work-record-history-item > details:not([open]) > div {
+  display: none;
+}
+
+.mc-next-work-record-history > div > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.mc-next-work-record-history-item {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start !important;
+}
+
+.mc-next-work-record-history-item > div {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.mc-next-work-record-history-item > details {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.28rem;
+  width: 100%;
+}
+
+.mc-next-work-record-history-item > details > div {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-work-record-session-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+}
+
 .mc-next-panel-link {
   display: inline-flex;
   align-items: center;
@@ -1053,7 +1288,7 @@
   box-shadow: var(--mc-shadow-strong);
 }
 
-@media (max-width: 1180px) {
+@media (width < 1180px) {
   .mc-next-threaded-surface.unified {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1074,13 +1309,41 @@
     right: 0;
     bottom: 0;
     left: 0;
-    z-index: 50;
+    z-index: var(--z-mobile-rail);
     width: 100%;
     height: min(72vh, 42rem);
     border-left: 0;
     border-top: 1px solid var(--border);
     border-radius: 14px 14px 0 0;
     box-shadow: var(--mc-shadow-strong);
+    overflow: auto;
+  }
+
+  .mc-next-threaded-context-scrim.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-side-sheet);
+    border: 0;
+    background: var(--bg-scrim);
+    cursor: default;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-model-control {
+    width: 100%;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-model-control > summary {
+    width: 100%;
+    max-width: none;
+    justify-content: space-between;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-model-control-body {
+    position: static;
+    width: auto;
+    margin-top: 0.36rem;
+    box-shadow: none;
   }
 
   .mc-next-status-strip {

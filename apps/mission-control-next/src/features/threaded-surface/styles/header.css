@@ -256,6 +256,32 @@
   background: color-mix(in oklab, var(--mc-surface-1) 93%, var(--area-chat));
 }
 
+.mc-next-threaded-execution-overview > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  cursor: pointer;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 760;
+}
+
+.mc-next-threaded-execution-overview > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-threaded-execution-overview > div {
+  display: grid;
+  gap: 0.48rem;
+}
+
+/* The overview body is an authored grid, so preserve native closed-details
+   behavior explicitly instead of leaving the plan expanded by CSS. */
+.mc-next-threaded-execution-overview:not([open]) > div {
+  display: none;
+}
+
 .mc-next-threaded-execution-overview-head {
   display: flex;
   align-items: flex-start;

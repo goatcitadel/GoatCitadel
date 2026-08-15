@@ -2,6 +2,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   lazy,
   useMemo,
   useRef,
@@ -13,7 +14,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ChevronDown,
   ChevronRight,
   Code2,
   Eye,
@@ -29,8 +29,9 @@ import {
   Search,
   Terminal,
   Workflow,
+  X,
 } from "lucide-react";
-import type { ChatMode, ChatSessionRecord, ChatSessionSearchHitRecord } from "@goatcitadel/contracts";
+import type { ChangePlanRecord, ChatMode, ChatSessionRecord, ChatSessionSearchHitRecord } from "@goatcitadel/contracts";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
   MissionThreadedDropTargetProps,
@@ -38,11 +39,12 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { groupDelegatedSessionsForRail } from "@goatcitadel/threaded-surface-core";
 import { buildThreadedSessionStatusSummary } from "@goatcitadel/threaded-surface-core/work-trust";
-import { StatusChip } from "../native-routes/primitives";
+import { StatusChip, type StatusChipTone } from "../native-routes/primitives";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { ChatExecutionPlanSummary } from "@goatcitadel/mission-control-shared/components/chat/ChatExecutionPlanSummary";
+import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 import {
   Sheet,
   SheetContent,
@@ -51,7 +53,7 @@ import {
   SheetTitle,
 } from "@goatcitadel/mission-control-shared/components/ui";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { ThreadedComposer, computeUsageTotals, formatCostLabel, formatTokenLabel } from "./ThreadedComposer";
+import { ThreadedComposer } from "./ThreadedComposer";
 import { ChatSessionStatusPanel } from "./ChatSessionStatusPanel";
 import { ChatTimerPanel } from "./ChatTimerPanel";
 import { RunVariablePanel } from "./RunVariablePanel";
@@ -174,10 +176,75 @@ const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
 ];
 
 const PANE_WIDTHS = {
-  rail: { initial: 216, min: 184, max: 360 },
+  rail: { initial: 216, min: 184, max: 300 },
   workbench: { initial: 560, min: 320, max: 840 },
   context: { initial: 268, min: 244, max: 420 },
 };
+const MIN_CONVERSATION_WIDTH = 680;
+const PANEL_GRID_GAP = 12;
+
+/**
+ * Escape belongs to the disclosure that currently owns focus. On wide
+ * desktops both panels can be open, so a document-level listener must not
+ * close Threads while the operator is working in Activity (or vice versa).
+ */
+export function panelOwnsActiveFocus(panel: Pick<HTMLElement, "contains"> | null, activeElement: Node | null): boolean {
+  return panel === null || panel.contains(activeElement);
+}
+
+/**
+ * Return the controls that are actually reachable in a modal drawer. Native
+ * summaries are focusable, while controls inside a closed <details> element
+ * are not; both facts matter when we calculate the Tab boundary ourselves.
+ */
+export function getDrawerFocusableElements(modalPanel: HTMLElement): HTMLElement[] {
+  return Array.from(
+    modalPanel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary:not([tabindex="-1"]), [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => {
+    if (element.tabIndex < 0 || element.closest('[hidden], [aria-hidden="true"], [inert]')) {
+      return false;
+    }
+    const closedDetails = element.closest("details:not([open])");
+    return !closedDetails || (element.tagName === "SUMMARY" && element.parentElement === closedDetails);
+  });
+}
+
+export function resolveDrawerTabTarget({
+  activeElement,
+  focusable,
+  modalPanel,
+  shiftKey,
+}: {
+  activeElement: Node | null;
+  focusable: readonly HTMLElement[];
+  modalPanel: HTMLElement;
+  shiftKey: boolean;
+}): HTMLElement | null {
+  if (focusable.length === 0) {
+    return modalPanel;
+  }
+  const first = focusable[0]!;
+  const last = focusable[focusable.length - 1]!;
+  const activeIndex = focusable.indexOf(activeElement as HTMLElement);
+
+  // The context sheet deliberately receives focus first. Without this branch,
+  // Shift+Tab immediately walks back to the underlying page instead of the
+  // dialog's final control. It also recovers focus if a browser extension,
+  // stale DOM selection, or a just-closed <details> leaves focus somewhere
+  // that is not part of the current focus order.
+  if (activeElement === modalPanel || !modalPanel.contains(activeElement) || activeIndex === -1) {
+    return shiftKey ? last : first;
+  }
+  if (shiftKey && activeIndex === 0) {
+    return last;
+  }
+  if (!shiftKey && activeIndex === focusable.length - 1) {
+    return first;
+  }
+  return null;
+}
 
 export interface ThreadedPermissionState {
   loading?: boolean;
@@ -243,6 +310,10 @@ export function ThreadedSurfacePage({
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const railDrawerLayout = useMediaQuery("(width < 1180px)");
+  // The controller-owned rail state is intentionally reserved for the compact
+  // drawer. Desktop Chat owns its own temporary disclosure state so opening
+  // Threads never makes a persistent rail compete with the conversation.
+  const [desktopSessionRailOpen, setDesktopSessionRailOpen] = useState(false);
   const railPane = useHorizontalPaneResize({
     direction: "right",
     initialWidth: PANE_WIDTHS.rail.initial,
@@ -261,10 +332,15 @@ export function ThreadedSurfacePage({
     maxWidth: PANE_WIDTHS.context.max,
     minWidth: PANE_WIDTHS.context.min,
   });
-  const railOpen = input.sessionRailOpen;
+  const desktopPanelsCanCoexist = useMediaQuery(
+    `(width >= ${MIN_CONVERSATION_WIDTH + railPane.width + contextPane.width + PANEL_GRID_GAP}px)`,
+  );
+  const railOpen = railDrawerLayout ? input.sessionRailOpen : desktopSessionRailOpen;
   const railDrawerOpen = railDrawerLayout && railOpen;
   const railCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const railPanelRef = useRef<HTMLElement | null>(null);
   const railFocusReturnRef = useRef<HTMLElement | null>(null);
+  const desktopPanelsCouldCoexistRef = useRef(desktopPanelsCanCoexist);
   const contextPanelRef = useRef<HTMLElement | null>(null);
   const contextFocusReturnRef = useRef<HTMLElement | null>(null);
   const activeProps = input.activeSessionSurfaceProps;
@@ -275,6 +351,7 @@ export function ThreadedSurfacePage({
   const modeMeta = MODE_META[activeMode];
   const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const lastActivityOpenRequestRef = useRef(0);
   const workflowPanelOpen = Boolean(workflowPanel && (workflowPanel.kind !== "code" || codeWorkbenchOpen));
   const missionSessionGroups = useMemo(
     () => groupDelegatedSessionsForRail(input.sessionRail.missionSessions),
@@ -349,50 +426,108 @@ export function ThreadedSurfacePage({
     },
     [captureContextFocusReturn, dockOpen, input, restoreContextFocusReturn],
   );
-  const handleSelectUtilityPanel = useCallback(
-    (panel: ThreadedUtilityPanelId) => {
-      if (!dockOpen) {
-        captureContextFocusReturn();
+  const closeSessionRail = useCallback(
+    (restoreFocus = true) => {
+      if (railDrawerLayout) {
+        input.onSessionRailOpenChange(false);
+      } else {
+        setDesktopSessionRailOpen(false);
       }
-      setActiveUtilityPanel(panel);
-      input.onDockOpenChange(true);
+      if (!restoreFocus) {
+        return;
+      }
+      queueMicrotask(() => {
+        const target = railFocusReturnRef.current;
+        if (
+          target &&
+          typeof target.focus === "function" &&
+          (typeof document === "undefined" || !document.contains || document.contains(target))
+        ) {
+          target.focus();
+        }
+        railFocusReturnRef.current = null;
+      });
     },
-    [captureContextFocusReturn, dockOpen, input],
+    [input, railDrawerLayout],
   );
-  const closeSessionRail = useCallback(() => {
-    input.onSessionRailOpenChange(false);
-    if (!railDrawerLayout) {
-      return;
-    }
-    queueMicrotask(() => {
-      const target = railFocusReturnRef.current;
-      if (
-        target &&
-        typeof target.focus === "function" &&
-        (typeof document === "undefined" || !document.contains || document.contains(target))
-      ) {
-        target.focus();
-      }
-      railFocusReturnRef.current = null;
-    });
-  }, [input, railDrawerLayout]);
   const openSessionRail = useCallback(() => {
     if (
-      railDrawerLayout &&
       typeof document !== "undefined" &&
       typeof HTMLElement !== "undefined" &&
       document.activeElement instanceof HTMLElement
     ) {
       railFocusReturnRef.current = document.activeElement;
     }
-    input.onSessionRailOpenChange(true);
-  }, [input, railDrawerLayout]);
+    // A rail and Activity panel together turn the conversation into a narrow
+    // afterthought. Keep the two disclosures mutually exclusive at every
+    // breakpoint, including desktop where the controller only manages the
+    // compact rail drawer.
+    if (dockOpen && (railDrawerLayout || !desktopPanelsCanCoexist)) {
+      setActiveUtilityPanel(null);
+      input.onDockOpenChange(false);
+    }
+    if (railDrawerLayout) {
+      input.onSessionRailOpenChange(true);
+    } else {
+      setDesktopSessionRailOpen(true);
+    }
+  }, [desktopPanelsCanCoexist, dockOpen, input, railDrawerLayout]);
+  const handleSelectUtilityPanel = useCallback(
+    (panel: ThreadedUtilityPanelId) => {
+      if (!dockOpen) {
+        captureContextFocusReturn();
+      }
+      // The build workbench and Activity compete for the same supporting
+      // panel budget. Opening Activity from any entry point closes the editor
+      // just as opening the editor closes Activity below.
+      if (workflowPanel?.kind === "code" && codeWorkbenchOpen) {
+        setCodeWorkbenchOpen(false);
+      }
+      if (railOpen && (railDrawerLayout || !desktopPanelsCanCoexist)) {
+        closeSessionRail(false);
+      }
+      setActiveUtilityPanel(panel);
+      input.onDockOpenChange(true);
+    },
+    [
+      captureContextFocusReturn,
+      closeSessionRail,
+      codeWorkbenchOpen,
+      desktopPanelsCanCoexist,
+      dockOpen,
+      input,
+      railDrawerLayout,
+      railOpen,
+      workflowPanel?.kind,
+    ],
+  );
+  const handleToggleActivity = useCallback(() => {
+    if (dockOpen) {
+      handleDockOpenChange(false);
+      return;
+    }
+    handleSelectUtilityPanel("preview");
+  }, [dockOpen, handleDockOpenChange, handleSelectUtilityPanel]);
+  const openBuildEditor = useCallback(() => {
+    // The focused Chat layout gives either Activity or the build editor the
+    // supporting panel slot. Keeping both open would trigger the legacy
+    // full-width context row at laptop widths and crowd the conversation.
+    setCodeWorkbenchOpen(true);
+    if (dockOpen) {
+      handleDockOpenChange(false);
+    }
+  }, [dockOpen, handleDockOpenChange]);
+  const handleToggleBuildEditor = useCallback(() => {
+    if (codeWorkbenchOpen) {
+      setCodeWorkbenchOpen(false);
+      return;
+    }
+    openBuildEditor();
+  }, [codeWorkbenchOpen, openBuildEditor]);
   const handleCreateSessionFromRail = useCallback(() => {
     input.sessionRail.onCreateSession();
-    if (railDrawerLayout) {
-      closeSessionRail();
-    }
-  }, [closeSessionRail, input.sessionRail, railDrawerLayout]);
+    closeSessionRail();
+  }, [closeSessionRail, input.sessionRail]);
   const handleArchiveWorkspace = () => {
     if (
       !input.sessionRail.archiveWorkspaceEnabled ||
@@ -408,20 +543,40 @@ export function ThreadedSurfacePage({
     input.sessionRail.onConfirmArchiveWorkspace?.();
   };
   useEffect(() => {
-    if (!railDrawerOpen) {
+    if (railDrawerLayout) {
+      setDesktopSessionRailOpen(false);
+    }
+  }, [railDrawerLayout]);
+  useEffect(() => {
+    const request = input.activityOpenRequest ?? 0;
+    if (request <= lastActivityOpenRequestRef.current) {
+      return;
+    }
+    lastActivityOpenRequestRef.current = request;
+    handleSelectUtilityPanel("preview");
+  }, [handleSelectUtilityPanel, input.activityOpenRequest]);
+  useEffect(() => {
+    const didLoseDesktopPanelRoom = desktopPanelsCouldCoexistRef.current && !desktopPanelsCanCoexist;
+    desktopPanelsCouldCoexistRef.current = desktopPanelsCanCoexist;
+    if (!railDrawerLayout && didLoseDesktopPanelRoom && railOpen && dockOpen) {
+      closeSessionRail(false);
+    }
+  }, [closeSessionRail, desktopPanelsCanCoexist, dockOpen, railDrawerLayout, railOpen]);
+  useEffect(() => {
+    if (!railOpen) {
       return;
     }
     queueMicrotask(() => {
       railCloseButtonRef.current?.focus();
     });
-  }, [railDrawerOpen]);
+  }, [railOpen]);
   useEffect(() => {
-    if (!railDrawerOpen || typeof document === "undefined" || typeof document.addEventListener !== "function") {
+    if (!railOpen || typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return undefined;
     }
     const eventTarget = document;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
+      if (event.key !== "Escape" || !panelOwnsActiveFocus(railPanelRef.current, document.activeElement)) {
         return;
       }
       event.preventDefault();
@@ -430,7 +585,7 @@ export function ThreadedSurfacePage({
     };
     eventTarget.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => eventTarget.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [closeSessionRail, railDrawerOpen]);
+  }, [closeSessionRail, railOpen]);
   useEffect(() => {
     if (!dockOpen) {
       return;
@@ -440,17 +595,12 @@ export function ThreadedSurfacePage({
     });
   }, [activeUtilityPanel, dockOpen]);
   useEffect(() => {
-    if (
-      !dockOpen ||
-      railDrawerOpen ||
-      typeof document === "undefined" ||
-      typeof document.addEventListener !== "function"
-    ) {
+    if (!dockOpen || typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return undefined;
     }
     const eventTarget = document;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
+      if (event.key !== "Escape" || !panelOwnsActiveFocus(contextPanelRef.current, document.activeElement)) {
         return;
       }
       event.preventDefault();
@@ -459,11 +609,39 @@ export function ThreadedSurfacePage({
     };
     eventTarget.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => eventTarget.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [dockOpen, handleDockOpenChange, railDrawerOpen]);
+  }, [dockOpen, handleDockOpenChange]);
+  useEffect(() => {
+    const modalPanel =
+      railDrawerLayout && railOpen
+        ? railPanelRef.current
+        : railDrawerLayout && dockOpen
+          ? contextPanelRef.current
+          : null;
+    if (!modalPanel || typeof document === "undefined") {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") {
+        return;
+      }
+      const nextFocus = resolveDrawerTabTarget({
+        activeElement: document.activeElement,
+        focusable: getDrawerFocusableElements(modalPanel),
+        modalPanel,
+        shiftKey: event.shiftKey,
+      });
+      if (nextFocus) {
+        event.preventDefault();
+        nextFocus.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [dockOpen, railDrawerLayout, railOpen]);
 
   return (
     <div
-      className="mc-next-threaded-surface unified"
+      className={`mc-next-threaded-surface unified${!railDrawerLayout && railOpen ? " session-rail-open" : ""}`}
       data-mode={surface}
       data-active-mode={activeMode}
       data-area={surface}
@@ -475,20 +653,34 @@ export function ThreadedSurfacePage({
         className={`mc-next-threaded-scrim${railDrawerOpen ? " open" : ""}`}
         aria-label="Dismiss session rail"
         aria-hidden={!railDrawerOpen}
-        tabIndex={railDrawerOpen ? 0 : -1}
-        onClick={closeSessionRail}
+        tabIndex={-1}
+        onClick={() => closeSessionRail()}
       />
+      <button
+        type="button"
+        className={`mc-next-threaded-context-scrim${railDrawerLayout && dockOpen ? " open" : ""}`}
+        aria-label="Dismiss Activity"
+        aria-hidden={!(railDrawerLayout && dockOpen)}
+        tabIndex={-1}
+        onClick={() => handleDockOpenChange(false)}
+      />
+      {activeProps && !dockOpen ? <div id="mc-next-threaded-context-panel" hidden aria-hidden="true" /> : null}
 
       <aside
         id="mc-next-threaded-session-rail"
+        ref={railPanelRef}
         className={`mc-next-threaded-rail${railDrawerOpen ? " open" : ""}`}
-        aria-label="Sessions"
-        aria-hidden={railDrawerLayout && !railOpen}
-        inert={railDrawerLayout && !railOpen}
+        role={railDrawerLayout ? "dialog" : "complementary"}
+        aria-label="Threads"
+        aria-modal={railDrawerLayout ? true : undefined}
+        tabIndex={railDrawerLayout ? -1 : undefined}
+        aria-hidden={!railOpen}
+        inert={!railOpen}
+        hidden={!railDrawerLayout && !railOpen}
       >
         <div className="mc-next-threaded-rail-head">
           <div>
-            <p>Sessions</p>
+            <p>Threads</p>
             <h2>{input.sessionRail.summaryTitle}</h2>
             <span>Conversation, planning, and build threads stay connected by project.</span>
           </div>
@@ -496,17 +688,17 @@ export function ThreadedSurfacePage({
             ref={railCloseButtonRef}
             type="button"
             className="mc-next-threaded-menu-button"
-            onClick={closeSessionRail}
+            onClick={() => closeSessionRail()}
             aria-label="Close session rail"
           >
-            <PanelRight size={16} />
+            <X size={16} />
           </button>
         </div>
 
         <div className="mc-next-threaded-rail-actions">
           <button type="button" className="mc-next-threaded-primary" onClick={handleCreateSessionFromRail}>
             <MessageSquareText size={16} />
-            <span>New thread</span>
+            <span>New chat</span>
           </button>
           <button
             type="button"
@@ -639,7 +831,7 @@ export function ThreadedSurfacePage({
         />
       </aside>
 
-      {!railDrawerLayout ? (
+      {!railDrawerLayout && railOpen ? (
         <PaneResizeHandle
           ariaLabel="Resize session rail"
           className="rail"
@@ -674,17 +866,13 @@ export function ThreadedSurfacePage({
               className="mc-next-threaded-menu-button"
               onClick={openSessionRail}
               aria-controls="mc-next-threaded-session-rail"
-              aria-expanded={railDrawerOpen}
+              aria-expanded={railOpen}
             >
               <Menu size={16} />
-              <span>Sessions</span>
+              <span>Threads</span>
             </button>
             {workflowPanel?.kind === "code" ? (
-              <button
-                type="button"
-                className="mc-next-threaded-menu-button"
-                onClick={() => setCodeWorkbenchOpen((current) => !current)}
-              >
+              <button type="button" className="mc-next-threaded-menu-button" onClick={handleToggleBuildEditor}>
                 <Code2 size={16} />
                 <span>{codeWorkbenchOpen ? "Hide build editor" : "Build editor"}</span>
               </button>
@@ -693,10 +881,12 @@ export function ThreadedSurfacePage({
               <button
                 type="button"
                 className="mc-next-threaded-menu-button"
-                onClick={() => handleDockOpenChange(!dockOpen)}
+                onClick={handleToggleActivity}
+                aria-controls="mc-next-threaded-context-panel"
+                aria-expanded={dockOpen}
               >
                 <PanelRight size={16} />
-                <span>{dockOpen ? "Hide context" : "Context"}</span>
+                <span>{dockOpen ? "Hide activity" : "Activity"}</span>
               </button>
             ) : null}
           </div>
@@ -707,13 +897,16 @@ export function ThreadedSurfacePage({
               props={activeProps}
               dropTarget={input.dropTargetProps}
               dockOpen={dockOpen}
-              activeUtilityPanel={activeUtilityPanel}
-              onToggleDock={() => handleDockOpenChange(!dockOpen)}
-              onSelectUtilityPanel={handleSelectUtilityPanel}
-              codeWorkbenchOpen={codeWorkbenchOpen}
-              onToggleCodeWorkbench={
-                workflowPanel?.kind === "code" ? () => setCodeWorkbenchOpen((current) => !current) : undefined
-              }
+              railOpen={railOpen}
+              changePlanReceipt={input.changePlanReceipt}
+              onToggleSessionRail={() => (railOpen ? closeSessionRail() : openSessionRail())}
+              onToggleActivity={handleToggleActivity}
+              onOpenActivity={(turnId) => {
+                if (turnId) {
+                  activeProps.onSelectTurn(turnId);
+                }
+                handleSelectUtilityPanel("preview");
+              }}
               permissionState={permissionState}
               onOpenUniversalRunDetail={onOpenUniversalRunDetail}
             />
@@ -751,21 +944,35 @@ export function ThreadedSurfacePage({
             id="mc-next-threaded-context-panel"
             ref={contextPanelRef}
             className={`mc-next-threaded-context-panel${activeUtilityPanel ? " utility" : ""}`}
-            role="complementary"
+            role={railDrawerLayout ? "dialog" : "complementary"}
             aria-label={activeUtilityPanel ? "Thread utility drawer" : "Thread context drawer"}
+            aria-modal={railDrawerLayout ? true : undefined}
             tabIndex={-1}
           >
-            <PaneResizeHandle
-              ariaLabel="Resize right drawer"
-              className="panel"
-              dragging={contextPane.dragging}
-              maxWidth={PANE_WIDTHS.context.max}
-              minWidth={PANE_WIDTHS.context.min}
-              onDoubleClick={contextPane.reset}
-              onKeyDown={contextPane.handleKeyDown}
-              onPointerDown={contextPane.handlePointerDown}
-              width={contextPane.width}
-            />
+            {!railDrawerLayout ? (
+              <PaneResizeHandle
+                ariaLabel="Resize right drawer"
+                className="panel"
+                dragging={contextPane.dragging}
+                maxWidth={PANE_WIDTHS.context.max}
+                minWidth={PANE_WIDTHS.context.min}
+                onDoubleClick={contextPane.reset}
+                onKeyDown={contextPane.handleKeyDown}
+                onPointerDown={contextPane.handlePointerDown}
+                width={contextPane.width}
+              />
+            ) : null}
+            {!activeUtilityPanel ? (
+              <div className="mc-next-threaded-context-close-row">
+                <button
+                  type="button"
+                  className="mc-next-threaded-menu-button"
+                  onClick={() => handleDockOpenChange(false)}
+                >
+                  Close
+                </button>
+              </div>
+            ) : null}
             {activeUtilityPanel && activeProps ? (
               <ThreadedUtilityPanel
                 activePanel={activeUtilityPanel}
@@ -776,6 +983,8 @@ export function ThreadedSurfacePage({
                 onOpenTasks={input.emptyStateProps?.onOpenTasks}
                 onSelectPanel={setActiveUtilityPanel}
                 onSelectSession={input.sessionRail.onSelectSession}
+                changePlans={input.changePlans}
+                onOpenBuildEditor={workflowPanel?.kind === "code" ? openBuildEditor : undefined}
                 surface={activeMode}
                 workflowPanel={workflowPanel}
               />
@@ -814,11 +1023,11 @@ function ThreadConversationSurface({
   props,
   dropTarget,
   dockOpen,
-  activeUtilityPanel,
-  onToggleDock,
-  onSelectUtilityPanel,
-  codeWorkbenchOpen,
-  onToggleCodeWorkbench,
+  railOpen,
+  changePlanReceipt,
+  onToggleSessionRail,
+  onToggleActivity,
+  onOpenActivity,
   permissionState,
   onOpenUniversalRunDetail,
 }: {
@@ -826,11 +1035,11 @@ function ThreadConversationSurface({
   props: MissionThreadedActiveSessionSurfaceProps;
   dropTarget: MissionThreadedDropTargetProps;
   dockOpen: boolean;
-  activeUtilityPanel: ThreadedUtilityPanelId | null;
-  onToggleDock: () => void;
-  onSelectUtilityPanel: (panel: ThreadedUtilityPanelId) => void;
-  codeWorkbenchOpen: boolean;
-  onToggleCodeWorkbench?: () => void;
+  railOpen: boolean;
+  changePlanReceipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
+  onToggleSessionRail: () => void;
+  onToggleActivity: () => void;
+  onOpenActivity: (turnId?: string) => void;
   permissionState?: ThreadedPermissionState;
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
@@ -847,10 +1056,14 @@ function ThreadConversationSurface({
     policySummary: permissionSummary,
     policyOverrideActive: Boolean(permissionState?.localOperatorOverrideId),
   });
-  const usageTotals = computeUsageTotals(props.thread);
   const routeSelectionSummary = props.routePreflight?.selectionSource
     ? `Selection: ${props.routePreflight.selectionSource}`
     : (props.trust.selectionSourceSummary ?? "Route pending");
+  const composerGateHint = props.pendingApproval
+    ? "Approval is waiting for the next gated step. You can keep drafting a follow-up."
+    : props.pendingUserInput
+      ? "This chat needs one answer to continue. You can reply below."
+      : null;
 
   return (
     <div
@@ -911,60 +1124,40 @@ function ThreadConversationSurface({
             >
               {headerStatus.compactPolicySummary}
             </StatusChip>
-            <details className="mc-next-threaded-runtime-detail">
-              <summary>Runtime detail</summary>
-              <div>
-                <span aria-label={`Tokens: ${formatTokenLabel(usageTotals.tokens)}`}>
-                  Tokens {formatTokenLabel(usageTotals.tokens)}
-                </span>
-                <span aria-label={`Cost: ${formatCostLabel(usageTotals.costUsd)}`}>
-                  Estimated cost {formatCostLabel(usageTotals.costUsd)}
-                </span>
-                <span>{headerStatus.providerModelSummary}</span>
-                <span>{routeSelectionSummary}</span>
-              </div>
-            </details>
           </div>
         </div>
 
         <div className="mc-next-threaded-header-actions">
-          <div className="mc-next-threaded-model-picker">
-            <ChatModelPicker
-              providers={props.providerOptions}
-              providerId={props.selectedProviderId}
-              model={props.selectedModel}
-              disabled={props.modelSwitchDisabled}
-              onChangeProvider={props.onRequestProviderChange}
-              onChangeModel={props.onRequestModelChange}
-            />
-          </div>
-          <div className="mc-next-threaded-panel-switcher-row">
-            <ThreadedPanelSwitcher activePanel={activeUtilityPanel} onSelectPanel={onSelectUtilityPanel} />
-          </div>
+          <CompactModelControl
+            providerModelSummary={headerStatus.providerModelSummary}
+            providers={props.providerOptions}
+            providerId={props.selectedProviderId}
+            model={props.selectedModel}
+            disabled={props.modelSwitchDisabled}
+            onChangeProvider={props.onRequestProviderChange}
+            onChangeModel={props.onRequestModelChange}
+          />
           <div className={`mc-next-threaded-action-row${approvalsAreBlocking ? " has-priority-approval" : ""}`}>
+            <button
+              type="button"
+              className="mc-next-threaded-secondary mc-next-threaded-threads"
+              aria-controls="mc-next-threaded-session-rail"
+              aria-expanded={railOpen}
+              onClick={onToggleSessionRail}
+            >
+              <Menu size={14} />
+              Threads
+            </button>
             <button
               type="button"
               className="mc-next-threaded-secondary mc-next-threaded-work-record"
               aria-controls="mc-next-threaded-context-panel"
-              aria-expanded={Boolean(dockOpen && activeUtilityPanel === "preview")}
-              onClick={() => onSelectUtilityPanel("preview")}
+              aria-expanded={dockOpen}
+              onClick={onToggleActivity}
             >
-              Work Record
+              <PanelRight size={14} />
+              Activity
             </button>
-            {onToggleCodeWorkbench ? (
-              <button
-                type="button"
-                className="mc-next-threaded-secondary mc-next-threaded-build-editor"
-                onClick={onToggleCodeWorkbench}
-              >
-                {codeWorkbenchOpen ? "Hide build editor" : "Build editor"}
-              </button>
-            ) : null}
-            {props.onExportRunBundle ? (
-              <button type="button" className="mc-next-threaded-secondary" onClick={props.onExportRunBundle}>
-                Export run bundle
-              </button>
-            ) : null}
             {props.approvalsCount > 0 ? (
               <button
                 type="button"
@@ -976,66 +1169,56 @@ function ThreadConversationSurface({
                 Approvals ({props.approvalsCount})
               </button>
             ) : null}
-            <button
-              type="button"
-              className="mc-next-threaded-secondary"
-              disabled={props.sessionArchivePending}
-              onClick={props.onToggleArchiveSession}
-            >
-              {getArchiveActionLabel(props.sessionLifecycleStatus, props.sessionArchivePending)}
-            </button>
-            <button type="button" className="mc-next-threaded-secondary" onClick={onToggleDock}>
-              {dockOpen ? "Hide context" : "Show context"}
-            </button>
           </div>
         </div>
       </header>
 
       <section className="mc-next-threaded-conversation">
-        {props.selectedTurn?.trace.executionPlan ? (
-          <section
-            className="mc-next-threaded-execution-overview"
-            aria-label="Current execution plan"
-            aria-live="polite"
-          >
-            <div className="mc-next-threaded-execution-overview-head">
-              <div>
-                <span>Governed execution</span>
-                <strong>Current plan and progress</strong>
-              </div>
-              <StatusChip tone={approvalsAreBlocking ? "warning" : (props.trust.runtimeTone ?? "muted")}>
-                {approvalsAreBlocking ? "Waiting for approval" : headerStatus.runtimeRunSummary}
-              </StatusChip>
-            </div>
-            <ChatExecutionPlanSummary plan={props.selectedTurn.trace.executionPlan} />
-          </section>
-        ) : null}
-        {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
-          <section className="mc-next-threaded-history-banner" aria-live="polite">
-            <div>
-              <strong>Viewing history around search result</strong>
-              <span>Sending is paused until you return to the latest conversation.</span>
-            </div>
-            <button type="button" className="mc-next-threaded-secondary" onClick={props.onReturnToLatest}>
-              Return to latest
-            </button>
-          </section>
-        ) : null}
-        {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
-        {props.sessionStatusPanel ? <ChatSessionStatusPanel panel={props.sessionStatusPanel} /> : null}
-        {props.chatTimerPanel ? <ChatTimerPanel panel={props.chatTimerPanel} /> : null}
-        {props.runVariablePanel ? <RunVariablePanel panel={props.runVariablePanel} /> : null}
-        <div className="mc-next-threaded-thread-card">
+        <div className="mc-next-threaded-timeline-region">
+          {props.selectedTurn?.trace.executionPlan ? (
+            <ExecutionPlanDisclosure
+              plan={props.selectedTurn.trace.executionPlan}
+              status={approvalsAreBlocking ? "Waiting for approval" : headerStatus.runtimeRunSummary}
+              tone={approvalsAreBlocking ? "warning" : (props.trust.runtimeTone ?? "muted")}
+            />
+          ) : null}
           {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
-            <HistoricalConversationView props={props} />
-          ) : (
-            <ThreadedTimeline props={props} onOpenUniversalRunDetail={onOpenUniversalRunDetail} />
-          )}
+            <section className="mc-next-threaded-history-banner" aria-live="polite">
+              <div>
+                <strong>Viewing history around search result</strong>
+                <span>Sending is paused until you return to the latest conversation.</span>
+              </div>
+              <button type="button" className="mc-next-threaded-secondary" onClick={props.onReturnToLatest}>
+                Return to latest
+              </button>
+            </section>
+          ) : null}
+          {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
+          {props.sessionStatusPanel ? <ChatSessionStatusPanel panel={props.sessionStatusPanel} /> : null}
+          {props.chatTimerPanel ? <ChatTimerPanel panel={props.chatTimerPanel} /> : null}
+          {props.runVariablePanel ? <RunVariablePanel panel={props.runVariablePanel} /> : null}
+          <div className="mc-next-threaded-thread-card">
+            {changePlanReceipt ? <ChatChangePlanCard {...changePlanReceipt} /> : null}
+            {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
+              <HistoricalConversationView props={props} />
+            ) : (
+              <ThreadedTimeline
+                props={props}
+                onOpenActivity={onOpenActivity}
+                onOpenUniversalRunDetail={onOpenUniversalRunDetail}
+              />
+            )}
+          </div>
         </div>
         <div className="mc-next-threaded-composer-card">
           {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
-            <p className="mc-next-threaded-history-send-lock" role="status">
+            <p className="mc-next-threaded-history-send-lock">
               Return to latest before sending or editing this conversation.
+            </p>
+          ) : null}
+          {composerGateHint ? (
+            <p className="mc-next-threaded-composer-gate-hint" role="status">
+              {composerGateHint}
             </p>
           ) : null}
           <ThreadedComposer props={props} />
@@ -1057,6 +1240,78 @@ function ThreadConversationSurface({
         </Sheet>
       ) : null}
     </div>
+  );
+}
+
+function CompactModelControl({
+  providerModelSummary,
+  providers,
+  providerId,
+  model,
+  disabled,
+  onChangeProvider,
+  onChangeModel,
+}: {
+  providerModelSummary: string;
+  providers: MissionThreadedActiveSessionSurfaceProps["providerOptions"];
+  providerId: MissionThreadedActiveSessionSurfaceProps["selectedProviderId"];
+  model: MissionThreadedActiveSessionSurfaceProps["selectedModel"];
+  disabled: MissionThreadedActiveSessionSurfaceProps["modelSwitchDisabled"];
+  onChangeProvider: MissionThreadedActiveSessionSurfaceProps["onRequestProviderChange"];
+  onChangeModel: MissionThreadedActiveSessionSurfaceProps["onRequestModelChange"];
+}) {
+  const [open, setOpen] = useState(false);
+  const controlsId = useId();
+
+  return (
+    <details
+      className="mc-next-threaded-model-control"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-expanded={open} aria-controls={controlsId} title="View or change the model for this chat">
+        <span>Model</span>
+        <strong>{providerModelSummary}</strong>
+      </summary>
+      <div id={controlsId} className="mc-next-threaded-model-control-body">
+        <ChatModelPicker
+          providers={providers}
+          providerId={providerId}
+          model={model}
+          disabled={disabled}
+          onChangeProvider={onChangeProvider}
+          onChangeModel={onChangeModel}
+        />
+      </div>
+    </details>
+  );
+}
+
+function ExecutionPlanDisclosure({
+  plan,
+  status,
+  tone,
+}: {
+  plan: NonNullable<NonNullable<MissionThreadedActiveSessionSurfaceProps["selectedTurn"]>["trace"]["executionPlan"]>;
+  status: string;
+  tone: StatusChipTone;
+}) {
+  const [open, setOpen] = useState(false);
+  const controlsId = useId();
+  return (
+    <details
+      className="mc-next-threaded-execution-overview"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-expanded={open} aria-controls={controlsId}>
+        <span>Current plan</span>
+        <StatusChip tone={tone}>{status}</StatusChip>
+      </summary>
+      <div id={controlsId}>
+        <ChatExecutionPlanSummary plan={plan} />
+      </div>
+    </details>
   );
 }
 
@@ -1302,88 +1557,13 @@ function PaneResizeHandle({
   );
 }
 
-function ThreadedPanelSwitcher({
-  activePanel,
-  onSelectPanel,
-}: {
-  activePanel: ThreadedUtilityPanelId | null;
-  onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open || typeof document === "undefined") {
-      return undefined;
-    }
-    const eventTarget = document;
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && menuRef.current && !menuRef.current.contains(target)) {
-        setOpen(false);
-      }
-    };
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-      }
-    };
-    eventTarget.addEventListener("mousedown", handlePointerDown);
-    eventTarget.addEventListener("keydown", handleKeyDown);
-    return () => {
-      eventTarget.removeEventListener("mousedown", handlePointerDown);
-      eventTarget.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div className="mc-next-threaded-panel-switcher" ref={menuRef}>
-      <button
-        type="button"
-        className={`mc-next-threaded-secondary mc-next-threaded-panel-trigger${activePanel ? " active" : ""}`}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-label="Open right panel menu"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <PanelRight size={14} />
-        <span>Panels</span>
-        <ChevronDown size={13} />
-      </button>
-      {open ? (
-        <div className="mc-next-threaded-panel-menu" role="menu" aria-label="Right panel menu">
-          {UTILITY_PANEL_ITEMS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={activePanel === item.id}
-                className={`mc-next-threaded-panel-menu-item${activePanel === item.id ? " active" : ""}`}
-                onClick={() => {
-                  onSelectPanel(item.id);
-                  setOpen(false);
-                }}
-              >
-                <Icon size={14} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function ThreadedUtilityPanel({
   activePanel,
   activeProps,
+  changePlans,
   contextDockProps,
   onClose,
+  onOpenBuildEditor,
   onOpenUniversalRunDetail,
   onOpenTasks,
   onSelectPanel,
@@ -1393,8 +1573,10 @@ function ThreadedUtilityPanel({
 }: {
   activePanel: ThreadedUtilityPanelId;
   activeProps: MissionThreadedActiveSessionSurfaceProps;
+  changePlans?: readonly ChangePlanRecord[];
   contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
   onClose: () => void;
+  onOpenBuildEditor?: () => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
   onOpenTasks?: () => void;
   onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
@@ -1433,7 +1615,11 @@ function ThreadedUtilityPanel({
         })}
       </div>
       {activePanel === "preview" ? (
-        <UtilityPreviewPanel activeProps={activeProps} />
+        <UtilityPreviewPanel
+          activeProps={activeProps}
+          changePlans={changePlans}
+          onOpenBuildEditor={onOpenBuildEditor}
+        />
       ) : activePanel === "diff" ? (
         <UtilityDiffPanel workflowPanel={workflowPanel} />
       ) : activePanel === "terminal" ? (
@@ -1454,7 +1640,15 @@ function ThreadedUtilityPanel({
   );
 }
 
-function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActiveSessionSurfaceProps }) {
+function UtilityPreviewPanel({
+  activeProps,
+  changePlans,
+  onOpenBuildEditor,
+}: {
+  activeProps: MissionThreadedActiveSessionSurfaceProps;
+  changePlans?: readonly ChangePlanRecord[];
+  onOpenBuildEditor?: () => void;
+}) {
   const selectedTurn = activeProps.selectedTurn;
   const assistantPreview = formatUtilitySnippet(selectedTurn?.assistantMessage?.content);
   const userPreview = formatUtilitySnippet(selectedTurn?.userMessage?.content);
@@ -1462,7 +1656,7 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
   const citations = selectedTurn?.citations ?? [];
   const generatedArtifacts = selectedTurn?.generatedArtifacts ?? [];
   const threadTurnCount = activeProps.thread?.turns.length ?? 0;
-  const sessionLabel = activeProps.selectedSessionId ? shortId(activeProps.selectedSessionId) : "New thread";
+  const sessionLabel = activeProps.selectedSessionId ? shortId(activeProps.selectedSessionId) : "New chat";
 
   if (activeProps.activeGeneratedArtifact) {
     return (
@@ -1479,6 +1673,10 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
           ) : null}
         </div>
         <GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact} compact />
+        <UtilityChangePlanHistory changePlans={changePlans ?? []} />
+        <div className="mc-next-work-record-actions">
+          <ActivitySessionActions activeProps={activeProps} onOpenBuildEditor={onOpenBuildEditor} />
+        </div>
       </section>
     );
   }
@@ -1587,6 +1785,7 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
       ) : (
         <p>Select a turn or open a generated artifact to preview the thread record here.</p>
       )}
+      <UtilityChangePlanHistory changePlans={changePlans ?? []} />
       <div className="mc-next-work-record-actions">
         {selectedTurn ? (
           <>
@@ -1617,6 +1816,7 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
             Export proof
           </button>
         ) : null}
+        <ActivitySessionActions activeProps={activeProps} onOpenBuildEditor={onOpenBuildEditor} />
         <button type="button" className="mc-next-panel-link" onClick={activeProps.onOpenLibraryArtifacts}>
           Library
         </button>
@@ -1625,6 +1825,108 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
         </button>
       </div>
     </section>
+  );
+}
+
+function UtilityChangePlanHistory({ changePlans }: { changePlans: readonly ChangePlanRecord[] }) {
+  const [open, setOpen] = useState(false);
+  const controlsId = useId();
+  if (changePlans.length === 0) {
+    return null;
+  }
+
+  return (
+    <details
+      className="mc-next-work-record-history"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-expanded={open} aria-controls={controlsId}>
+        Activity history ({changePlans.length})
+      </summary>
+      <div id={controlsId}>
+        <p>Completed receipts stay here after you dismiss them from the conversation.</p>
+        <ul className="mc-next-work-record-list">
+          {changePlans.slice(0, 12).map((plan) => (
+            <ChangePlanHistoryItem key={`${plan.planId}:${plan.revision}:${plan.status}`} plan={plan} />
+          ))}
+        </ul>
+      </div>
+    </details>
+  );
+}
+
+function ChangePlanHistoryItem({ plan }: { plan: ChangePlanRecord }) {
+  const [open, setOpen] = useState(false);
+  const controlsId = useId();
+  const title = plan.kind === "session_model" ? "Model change" : plan.title;
+  const model =
+    plan.request.kind === "session_model" || plan.request.kind === "installation_default_model"
+      ? [plan.request.providerId, plan.request.model].filter(Boolean).join(" / ")
+      : null;
+  const evidence = [...plan.evidenceRefs, ...(plan.result?.evidenceRefs ?? [])];
+
+  return (
+    <li className="mc-next-work-record-history-item">
+      <div>
+        <strong>{title}</strong>
+        <span>{model || plan.status}</span>
+      </div>
+      <StatusChip tone={plan.status === "completed" || plan.status === "applied" ? "success" : "muted"}>
+        {plan.status}
+      </StatusChip>
+      <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+        <summary aria-expanded={open} aria-controls={controlsId}>
+          Details
+        </summary>
+        <div id={controlsId}>
+          <span>Scope: {plan.scope}</span>
+          <span>Revision: {plan.revision}</span>
+          <span>Risk: {plan.risk}</span>
+          <span>Impact: {plan.impact}</span>
+          {plan.result?.summary ? <span>Result: {plan.result.summary}</span> : null}
+          {evidence.length > 0 ? <span>Evidence: {evidence.join(", ")}</span> : null}
+        </div>
+      </details>
+    </li>
+  );
+}
+
+function ActivitySessionActions({
+  activeProps,
+  onOpenBuildEditor,
+}: {
+  activeProps: MissionThreadedActiveSessionSurfaceProps;
+  onOpenBuildEditor?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const controlsId = useId();
+
+  return (
+    <details
+      className="mc-next-work-record-session-actions"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="mc-next-panel-button" aria-expanded={open} aria-controls={controlsId}>
+        Session actions
+      </summary>
+      <div id={controlsId}>
+        {onOpenBuildEditor ? (
+          <button type="button" className="mc-next-panel-button" onClick={onOpenBuildEditor}>
+            Open build editor
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          disabled={activeProps.sessionArchivePending}
+          onClick={activeProps.onToggleArchiveSession}
+        >
+          {getArchiveActionLabel(activeProps.sessionLifecycleStatus, activeProps.sessionArchivePending)}
+        </button>
+      </div>
+    </details>
   );
 }
 
@@ -2025,6 +2327,7 @@ function SessionGroup({
           {items.map((item) => {
             const children = nestedChildrenByParentId?.[item.sessionId] ?? [];
             const collapsed = collapsedParents[item.sessionId] ?? children.length > 0;
+            const childrenControlsId = `mc-next-threaded-session-children-${encodeURIComponent(item.sessionId)}`;
             return (
               <div key={item.sessionId} className="mc-next-threaded-session-tree-node">
                 <SessionRow
@@ -2034,6 +2337,7 @@ function SessionGroup({
                   renderSessionLabel={renderSessionLabel}
                   childCount={children.length}
                   collapsed={collapsed}
+                  childrenControlsId={children.length > 0 ? childrenControlsId : undefined}
                   onToggleChildren={
                     children.length > 0
                       ? () =>
@@ -2044,18 +2348,25 @@ function SessionGroup({
                       : undefined
                   }
                 />
-                {children.length > 0 && !collapsed ? (
-                  <div className="mc-next-threaded-session-children">
-                    {children.map((child) => (
-                      <SessionRow
-                        key={child.sessionId}
-                        item={child}
-                        selectedSessionId={selectedSessionId}
-                        onSelectSession={onSelectSession}
-                        renderSessionLabel={renderSessionLabel}
-                        nested
-                      />
-                    ))}
+                {children.length > 0 ? (
+                  <div
+                    id={childrenControlsId}
+                    className="mc-next-threaded-session-children"
+                    hidden={collapsed}
+                    aria-hidden={collapsed}
+                  >
+                    {collapsed
+                      ? null
+                      : children.map((child) => (
+                          <SessionRow
+                            key={child.sessionId}
+                            item={child}
+                            selectedSessionId={selectedSessionId}
+                            onSelectSession={onSelectSession}
+                            renderSessionLabel={renderSessionLabel}
+                            nested
+                          />
+                        ))}
                   </div>
                 ) : null}
               </div>
@@ -2094,6 +2405,7 @@ function SessionRow({
   renderSessionLabel,
   childCount = 0,
   collapsed = false,
+  childrenControlsId,
   onToggleChildren,
   nested = false,
 }: {
@@ -2106,6 +2418,7 @@ function SessionRow({
   renderSessionLabel: (sessionId: string) => string;
   childCount?: number;
   collapsed?: boolean;
+  childrenControlsId?: string;
   onToggleChildren?: () => void;
   nested?: boolean;
 }) {
@@ -2173,6 +2486,7 @@ function SessionRow({
           onClick={onToggleChildren}
           aria-label={collapsed ? "Expand delegated chats" : "Collapse delegated chats"}
           aria-expanded={!collapsed}
+          aria-controls={childrenControlsId}
           title={collapsed ? "Expand delegated chats" : "Collapse delegated chats"}
         >
           <span>{childCount}</span>

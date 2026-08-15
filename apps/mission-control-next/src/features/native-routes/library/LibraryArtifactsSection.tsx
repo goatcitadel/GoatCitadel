@@ -240,10 +240,10 @@ export function LibraryArtifactsSection({
                     },
                     {
                       id: "use-chat",
-                      label: "Use in Work",
+                      label: "Use in Chat",
                       value: "Discuss",
-                      description: "Open Work with the artifact id carried in the route for follow-up context.",
-                      actionLabel: "Work",
+                      description: "Open Chat with the artifact id carried in the route for follow-up context.",
+                      actionLabel: "Chat",
                       onClick: () =>
                         navigate({
                           area: "chat",

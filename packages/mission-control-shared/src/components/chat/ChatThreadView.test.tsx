@@ -150,7 +150,7 @@ describe("ChatThreadView", () => {
 
     const selectableTurn = renderer.root.findAll((node) => node.props["aria-label"]?.startsWith("Open turn:") === true);
     expect(selectableTurn).toHaveLength(1);
-    expect(renderer.root.findByProps({ className: "mc-next-thread-action-menu" }).props.open).toBe(true);
+    expect(renderer.root.findByProps({ className: "mc-next-thread-action-menu" }).props.open).not.toBe(true);
   });
 
   it("shows compact execution metadata and exposes the detail action", () => {

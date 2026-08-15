@@ -133,12 +133,12 @@ export function ChatThreadView({
       ),
       Footer: () => (
         <>
-          <ChatThreadNotices notices={notices} />
+          <ChatThreadNotices notices={notices} scopeKey={thread?.sessionId} />
           <div aria-hidden="true" />
         </>
       ),
     }),
-    [delegationRun, mode, notices, onOpenRunDetails],
+    [delegationRun, mode, notices, onOpenRunDetails, thread?.sessionId],
   );
   const threadSignalsKey = [
     thread?.sessionId ?? "none",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   getChatTurnRecoveryActionSummary,
@@ -175,6 +175,9 @@ export function ChatTraceCard({
   defaultCollapsed?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [decisionTraceOpen, setDecisionTraceOpen] = useState(false);
+  const traceBodyId = useId();
+  const decisionTraceId = useId();
   const fallbackAttemptCount = getTraceFallbackAttemptCount(trace);
   const routingSummary = summarizeTraceRouting(trace);
   const runtimeUsage = trace.completion?.usage;
@@ -192,12 +195,20 @@ export function ChatTraceCard({
           </p>
           {routingSummary.mismatchLabel ? <p className="chat-trace-meta">{routingSummary.mismatchLabel}</p> : null}
         </div>
-        <button type="button" onClick={() => setCollapsed((value) => !value)} className="gc-button">
+        <button
+          type="button"
+          className="gc-button"
+          aria-expanded={!collapsed}
+          aria-controls={traceBodyId}
+          onClick={() => setCollapsed((value) => !value)}
+        >
           {collapsed ? "Show trace" : "Hide trace"}
         </button>
       </header>
-      {collapsed ? null : (
-        <div className="chat-trace-body">
+      {collapsed ? (
+        <div id={traceBodyId} hidden />
+      ) : (
+        <div id={traceBodyId} className="chat-trace-body">
           <div className="chat-trace-grid">
             <span>Mode: {trace.mode}</span>
             <span>Web: {trace.webMode}</span>
@@ -249,9 +260,15 @@ export function ChatTraceCard({
             </div>
           ) : null}
           {trace.decisionTrace?.length ? (
-            <details className="chat-trace-section chat-decision-trace">
-              <summary>Decision Trace ({trace.decisionTrace.length})</summary>
-              <ul className="chat-trace-list">
+            <details
+              className="chat-trace-section chat-decision-trace"
+              open={decisionTraceOpen}
+              onToggle={(event) => setDecisionTraceOpen(event.currentTarget.open)}
+            >
+              <summary aria-expanded={decisionTraceOpen} aria-controls={decisionTraceId}>
+                Decision Trace ({trace.decisionTrace.length})
+              </summary>
+              <ul id={decisionTraceId} className="chat-trace-list">
                 {trace.decisionTrace.map((decision) => {
                   const alternatives = formatDecisionAlternatives(decision.alternatives);
                   const signals = formatDecisionSignals(decision.signals);

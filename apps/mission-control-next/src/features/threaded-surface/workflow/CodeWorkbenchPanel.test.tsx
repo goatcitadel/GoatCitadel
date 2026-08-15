@@ -191,6 +191,74 @@ describe("NextCodeWorkbenchPanel more-menu Escape handling", () => {
   });
 });
 
+describe("NextCodeWorkbenchPanel inspector disclosures", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it("connects each inspector summary to its controlled detail region", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<NextCodeWorkbenchPanel panel={buildCodePanel()} />);
+      await Promise.resolve();
+    });
+
+    const disclosures = renderer!.root.findAllByProps({ className: "mc-next-code-session-inspector-section" });
+    expect(disclosures.length).toBeGreaterThan(0);
+
+    for (const disclosure of disclosures) {
+      const summary = disclosure.findByType("summary");
+      const controlsId = summary.props["aria-controls"] as string;
+      expect(summary.props["aria-expanded"]).toBe(Boolean(disclosure.props.open));
+      expect(controlsId).toBeTruthy();
+      expect(renderer!.root.findByProps({ id: controlsId }).type).toBe("div");
+    }
+  });
+
+  it("connects the inspector drawer and workbench action menu to their popups", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<NextCodeWorkbenchPanel panel={buildCodePanel()} />);
+      await Promise.resolve();
+    });
+
+    const inspectorTrigger = renderer!.root.findByProps({
+      className: "mc-next-panel-button mc-next-code-inspector-open",
+    });
+    const inspectorDrawerId = inspectorTrigger.props["aria-controls"] as string;
+    expect(inspectorDrawerId).toBeTruthy();
+    expect(inspectorTrigger.props["aria-expanded"]).toBe(false);
+
+    await act(async () => {
+      inspectorTrigger.props.onClick();
+      await Promise.resolve();
+    });
+    expect(inspectorTrigger.props["aria-expanded"]).toBe(true);
+    expect(renderer!.root.findByProps({ id: inspectorDrawerId }).props.role).toBe("dialog");
+
+    const moreMenuTrigger = findButtonByAriaLabel(renderer!.root, "More workbench actions");
+    const moreMenuId = moreMenuTrigger.props["aria-controls"] as string;
+    expect(moreMenuId).toBeTruthy();
+    expect(moreMenuTrigger.props["aria-expanded"]).toBe(false);
+
+    await act(async () => {
+      moreMenuTrigger.props.onClick();
+      await Promise.resolve();
+    });
+    expect(moreMenuTrigger.props["aria-expanded"]).toBe(true);
+    expect(renderer!.root.findByProps({ id: moreMenuId }).props.role).toBe("menu");
+  });
+});
+
 describe("summarizeCapabilitySnapshotProfile", () => {
   it("summarizes frozen callable and inspect-only catalog evidence", () => {
     expect(

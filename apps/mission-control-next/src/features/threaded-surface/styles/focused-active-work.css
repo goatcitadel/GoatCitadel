@@ -1,0 +1,97 @@
+.mc-next-active-work-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: min(100%, 52rem);
+  margin: 0.55rem auto 0;
+  padding: 0.58rem 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 26%, var(--border));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, var(--background));
+}
+
+.mc-next-active-work-summary.state-failure,
+.mc-next-active-work-summary.state-folder_failure,
+.mc-next-active-work-summary.state-stream_error {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 52%, var(--border));
+}
+
+.mc-next-active-work-summary.state-approval {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 56%, var(--border));
+}
+
+.mc-next-active-work-copy {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.mc-next-active-work-copy strong {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+}
+
+.mc-next-active-work-copy span {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-active-work-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.38rem;
+}
+
+.mc-next-active-work-primary {
+  border-color: color-mix(in oklab, var(--mc-area-color) 56%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 14%, var(--mc-surface-1));
+  color: var(--foreground);
+}
+
+.mc-next-active-work-more {
+  position: relative;
+}
+
+.mc-next-active-work-more > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.mc-next-active-work-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-active-work-more > div {
+  position: absolute;
+  right: 0;
+  z-index: 8;
+  display: grid;
+  gap: 0.3rem;
+  min-width: max-content;
+  margin-top: 0.35rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--mc-surface-1);
+  box-shadow: var(--mc-shadow-strong);
+}
+
+.mc-next-active-work-more:not([open]) > div {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .mc-next-active-work-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mc-next-active-work-actions {
+    justify-content: flex-start;
+  }
+}

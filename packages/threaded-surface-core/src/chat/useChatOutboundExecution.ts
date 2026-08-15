@@ -150,7 +150,7 @@ export function useChatOutboundExecution(
   onWorkspaceSnapshotFailedRef.current = input.externalContext?.onWorkspaceSnapshotFailed;
   const { selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } = sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
-  const { sending, error, queuedOutbound, thread, messages } = stateConfig;
+  const { sending, error, errorSource, queuedOutbound, thread, messages } = stateConfig;
   const {
     setThread,
     setError,
@@ -1207,7 +1207,12 @@ export function useChatOutboundExecution(
    * never invalidates it). The result is a primitive, so recomputing is free
    * and the status flips to "streaming" on the first preview-flush render.
    */
-  const streamStatus: ChatStreamStatus = error
+  // `error` is the host's shared UI-error channel. Only outbound transport
+  // failures should change the stream state; model, export, and other control
+  // errors still render beside their own controls without becoming a failed
+  // chat response. A missing source is retained as a legacy transport error.
+  const hasTransportError = Boolean(error && (!errorSource || errorSource === "send" || errorSource === "edit"));
+  const streamStatus: ChatStreamStatus = hasTransportError
     ? "error"
     : sending && activeStreamRef.current
       ? "streaming"

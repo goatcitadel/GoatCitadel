@@ -105,7 +105,7 @@ type RouteReleaseKeyInput = {
 export const AREA_META: Record<PrimaryArea, AreaMeta> = {
   chat: {
     id: "chat",
-    label: "Work",
+    label: "Chat",
     kicker: "Conversation",
     description: "One chat workspace for planning, building, search, attachments, approvals, and quick help.",
   },
@@ -1113,7 +1113,7 @@ export const ROUTE_RELEASE_SCOPE = [
     status: "experimental",
     releaseAction: "Adjust personality presets without treating them as a release-critical runtime guarantee.",
     verification: "verify:surface:regression label check",
-    note: "Personalities remain experimental polish around Work defaults.",
+    note: "Personalities remain experimental polish around Chat defaults.",
   },
   {
     area: "settings",
@@ -1153,7 +1153,7 @@ export const ROUTE_RELEASE_SCOPE = [
     section: "onboarding",
     status: "ship",
     releaseAction:
-      "Follow Start Here readiness through provider/local path, first Work task, evidence, and Run Detail steps.",
+      "Follow Start Here readiness through provider/local path, first Chat task, evidence, and Run Detail steps.",
     verification: "verify:install, verify:surface:regression",
     note: "Start Here is release-bearing as the first-run checklist through setup, first work, proof artifact, and run evidence.",
   },

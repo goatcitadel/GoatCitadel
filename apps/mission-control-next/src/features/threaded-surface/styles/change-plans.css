@@ -1,12 +1,18 @@
 .chat-change-plan-card {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.5rem;
   margin: 0.75rem clamp(0.75rem, 2vw, 1.5rem);
-  padding: 0.9rem 1rem;
+  padding: 0.75rem 0.85rem;
   border: 1px solid color-mix(in oklab, var(--area-chat) 32%, var(--border-subtle));
   border-radius: var(--r-lg);
   background: color-mix(in oklab, var(--bg-surface-2) 92%, var(--area-chat));
   box-shadow: var(--mc-shadow-soft);
+}
+
+.chat-change-plan-card--terminal {
+  gap: 0.5rem;
+  padding-block: 0.55rem;
+  box-shadow: none;
 }
 
 .chat-change-plan-card > header,
@@ -18,7 +24,35 @@
   gap: 0.55rem;
 }
 
+.chat-change-plan-receipt,
+.chat-change-plan-receipt-actions,
+.chat-change-plan-secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.chat-change-plan-receipt {
+  justify-content: space-between;
+}
+
+.chat-change-plan-receipt-title {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .chat-change-plan-card > header span {
+  color: var(--fg-muted);
+  font: 600 var(--text-xs) / 1.2 var(--font-mono, monospace);
+  text-transform: uppercase;
+}
+
+.chat-change-plan-receipt-title span {
   color: var(--fg-muted);
   font: 600 var(--text-xs) / 1.2 var(--font-mono, monospace);
   text-transform: uppercase;
@@ -27,6 +61,16 @@
 .chat-change-plan-card p,
 .chat-change-plan-card dl {
   margin: 0;
+}
+
+.chat-change-plan-summary {
+  color: var(--fg-secondary);
+}
+
+.chat-change-plan-details {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.15rem;
 }
 
 .chat-change-plan-card dl,
@@ -132,6 +176,10 @@
   }
 
   .chat-change-plan-card .chat-change-plan-actions > button {
-    flex: 1 1 100%;
+    flex: 0 1 auto;
+  }
+
+  .chat-change-plan-card .chat-change-plan-actions > button:first-child {
+    flex-basis: 100%;
   }
 }

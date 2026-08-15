@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   isChatTurnActiveStatus,
   type ChatDelegateResponse,
@@ -316,27 +316,56 @@ export function StreamingAssistantSkeleton({ label }: { label: string }) {
   );
 }
 
-export function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) {
+export function ChatThreadNotices({
+  notices,
+  scopeKey,
+}: {
+  notices: ChatThreadNotice[];
+  /** Remounts the disclosure when the surrounding conversation changes. */
+  scopeKey?: string | null;
+}) {
+  return <ChatThreadNoticesContents key={scopeKey ?? "thread-notices"} notices={notices} />;
+}
+
+function ChatThreadNoticesContents({ notices }: { notices: ChatThreadNotice[] }) {
+  const [open, setOpen] = useState(false);
+  const feedId = useId();
   if (notices.length === 0) {
     return null;
   }
   return (
-    <ul className="mc-next-thread-notices">
-      {notices.map((notice) => (
-        <li key={notice.id} className={`tone-${notice.tone}`}>
-          <p className="mc-next-thread-meta">
-            <strong>Notice</strong> · <ActorTimestamp timestamp={notice.timestamp} />
-          </p>
-          <NoticeContent content={notice.content} />
-        </li>
-      ))}
-    </ul>
+    <details className="mc-next-thread-notice-feed" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary
+        className="mc-next-thread-inline-button mc-next-thread-notice-feed-summary"
+        aria-label={`Conversation updates (${notices.length})`}
+        aria-expanded={open}
+        aria-controls={feedId}
+      >
+        Updates ({notices.length})
+      </summary>
+      <ul className="mc-next-thread-notices" id={feedId}>
+        {notices.map((notice) => (
+          <li key={notice.id} className={`tone-${notice.tone}`}>
+            <p className="mc-next-thread-meta">
+              <strong>Notice</strong> · <ActorTimestamp timestamp={notice.timestamp} />
+            </p>
+            <NoticeContent content={notice.content} />
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
 export function ChatThreadSystemNoticeCard({ notice }: { notice: ChatThreadSystemNoticeRecord }) {
+  const [dismissed, setDismissed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
   const isTimer = notice.kind === "timer_due";
   const label = isTimer ? "Timer due" : "Heartbeat";
+  if (dismissed) {
+    return null;
+  }
   return (
     <section
       className="mc-next-thread-system-notice"
@@ -344,15 +373,32 @@ export function ChatThreadSystemNoticeCard({ notice }: { notice: ChatThreadSyste
       data-notice-id={notice.noticeId}
       data-notice-kind={notice.kind}
     >
-      <div className="mc-next-thread-bubble assistant">
-        <p className="mc-next-thread-meta">
-          <strong>GoatCitadel</strong> · <ActorTimestamp timestamp={notice.message.timestamp} />{" "}
-          <Badge variant="outline" className="align-middle">
-            {label}
-          </Badge>
-        </p>
-        <AssistantMessageRenderer role="assistant" content={notice.message.content} />
-      </div>
+      <details
+        className="mc-next-thread-system-notice-details"
+        open={open}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+      >
+        <summary
+          className="mc-next-thread-inline-button"
+          aria-label={`${label} update`}
+          aria-expanded={open}
+          aria-controls={contentId}
+        >
+          <strong>{label}</strong> · <ActorTimestamp timestamp={notice.message.timestamp} />
+        </summary>
+        <div className="mc-next-thread-bubble assistant" id={contentId}>
+          <p className="mc-next-thread-meta">
+            <strong>GoatCitadel</strong> · <ActorTimestamp timestamp={notice.message.timestamp} />{" "}
+            <Badge variant="outline" className="align-middle">
+              {label}
+            </Badge>
+          </p>
+          <AssistantMessageRenderer role="assistant" content={notice.message.content} />
+          <button type="button" className="mc-next-thread-inline-button" onClick={() => setDismissed(true)}>
+            Dismiss
+          </button>
+        </div>
+      </details>
     </section>
   );
 }
@@ -422,6 +468,7 @@ function TurnEvidenceSummary({
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const [open, setOpen] = useState(expandedByDefault);
+  const evidenceBodyId = useId();
   const userToggledRef = useRef(false);
   const expandedByDefaultRef = useRef(expandedByDefault);
   expandedByDefaultRef.current = expandedByDefault;
@@ -459,7 +506,7 @@ function TurnEvidenceSummary({
         setOpen(nextOpen);
       }}
     >
-      <summary className="mc-next-turn-evidence-summary-trigger">
+      <summary className="mc-next-turn-evidence-summary-trigger" aria-expanded={open} aria-controls={evidenceBodyId}>
         <span className="mc-next-turn-evidence-title">Evidence</span>
         {summaryChips.map((chip, index) => (
           <span key={`${chip}-${index}`} className="mc-next-turn-evidence-chip">
@@ -467,7 +514,7 @@ function TurnEvidenceSummary({
           </span>
         ))}
       </summary>
-      <div className="mc-next-turn-evidence-body">
+      <div className="mc-next-turn-evidence-body" id={evidenceBodyId}>
         <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
           {showContextToggle ? (
             <label className="mc-next-thread-context-toggle">
@@ -707,6 +754,10 @@ function ChatDelegationStepEvidence({
   formatStepLabel: (step: ChatDelegationStepView) => string;
   onOpenStepDetails?: (turnId: string) => void;
 }) {
+  const [scopeDetailsOpen, setScopeDetailsOpen] = useState(false);
+  const [outputDetailsOpen, setOutputDetailsOpen] = useState(false);
+  const scopeDetailsId = useId();
+  const outputDetailsId = useId();
   const duration = formatStepDuration(step);
   const evidenceItems = [
     step.runId ? ["Run", step.runId] : null,
@@ -739,9 +790,15 @@ function ChatDelegationStepEvidence({
       {step.failureGuidance ? <p>{step.failureGuidance}</p> : null}
       {step.error ? <p>{step.error}</p> : null}
       {step.scopeControl ? (
-        <details className="mc-next-thread-step-output-details">
-          <summary>Filesystem scope and approval lineage</summary>
-          <dl className="mc-next-thread-subagent-evidence-grid">
+        <details
+          className="mc-next-thread-step-output-details"
+          open={scopeDetailsOpen}
+          onToggle={(event) => setScopeDetailsOpen(event.currentTarget.open)}
+        >
+          <summary aria-expanded={scopeDetailsOpen} aria-controls={scopeDetailsId}>
+            Filesystem scope and approval lineage
+          </summary>
+          <dl id={scopeDetailsId} className="mc-next-thread-subagent-evidence-grid">
             <div>
               <dt>Approved scope</dt>
               <dd>{step.scopeControl.approvedPaths.join(", ") || "none"}</dd>
@@ -791,9 +848,17 @@ function ChatDelegationStepEvidence({
         </button>
       ) : null}
       {step.output ? (
-        <details className="mc-next-thread-step-output-details">
-          <summary>Show subagent output</summary>
-          <AssistantMessageRenderer role="assistant" content={step.output} className="mc-next-thread-step-output" />
+        <details
+          className="mc-next-thread-step-output-details"
+          open={outputDetailsOpen}
+          onToggle={(event) => setOutputDetailsOpen(event.currentTarget.open)}
+        >
+          <summary aria-expanded={outputDetailsOpen} aria-controls={outputDetailsId}>
+            Show subagent output
+          </summary>
+          <div id={outputDetailsId}>
+            <AssistantMessageRenderer role="assistant" content={step.output} className="mc-next-thread-step-output" />
+          </div>
         </details>
       ) : null}
     </li>
@@ -810,6 +875,7 @@ export function ChatThreadDelegationSummary({
   onOpenRunDetails: (turnId: string) => void;
 }) {
   const [coworkExpanded, setCoworkExpanded] = useState(false);
+  const coworkDetailsId = useId();
   if (!delegationRun) {
     return null;
   }
@@ -824,7 +890,7 @@ export function ChatThreadDelegationSummary({
     return (
       <section className="mc-next-thread-turn delegation compact">
         <details open={coworkExpanded} onToggle={(event) => setCoworkExpanded(event.currentTarget.open)}>
-          <summary>
+          <summary aria-expanded={coworkExpanded} aria-controls={coworkDetailsId}>
             <div className="mc-next-thread-strip">
               <PrimitiveStatusChip tone={getDelegationStatusTone(delegationRun.status)}>
                 {delegationRun.status}
@@ -857,7 +923,7 @@ export function ChatThreadDelegationSummary({
               onOpenStepDetails={onOpenRunDetails}
             />
           </summary>
-          <div className="mc-next-thread-bubble assistant">
+          <div id={coworkDetailsId} className="mc-next-thread-bubble assistant">
             <p className="mc-next-thread-meta">
               <strong>{delegationRun.label}</strong> · {delegationRun.mode}
             </p>
@@ -982,6 +1048,28 @@ export interface ChatThreadTurnCardProps {
   contextSelected?: boolean;
   groupedWithPrevious?: boolean;
   streamingPreview?: ChatStreamingPreview | null;
+  /**
+   * The canonical timeline can project active work into one surface-level
+   * summary. Keep the per-turn rail available for compatibility callers, but
+   * let that timeline suppress the duplicate visual rail.
+   */
+  hideLiveActivity?: boolean;
+  /**
+   * Lets a surface-level active-work summary own the empty streaming/pending
+   * indicator while this card continues to render any assistant output.
+   */
+  hidePendingIndicator?: boolean;
+  /**
+   * Lets the focused surface-level recovery card own retry for the active
+   * failed turn without removing recovery affordances from historical turns.
+   */
+  hideRecoveryAction?: boolean;
+  /**
+   * Focused Chat can replace the Gateway's diagnostic approved-tool failure
+   * envelope with a safe recovery sentence. Compatibility callers keep the
+   * canonical assistant content available by default.
+   */
+  hideApprovedToolFailureOutput?: boolean;
   visualStreamMode?: AssistantStreamPresentationMode;
   renderUserMetaAddon?: (turn: ChatThreadTurnRecord) => ReactNode;
   renderCitationList?: (turn: ChatThreadTurnRecord) => ReactNode;
@@ -1006,6 +1094,21 @@ export interface ChatThreadTurnCardProps {
   onStopStreamingTurn?: () => void;
 }
 
+function isApprovedToolFailureDiagnostic(turn: ChatThreadTurnRecord, content: string): boolean {
+  return (
+    turn.trace.status === "failed" &&
+    turn.trace.failure?.failureClass === "tool_failed" &&
+    /^Approved tool action (?:failed|requires manual reconciliation):/iu.test(content.trim())
+  );
+}
+
+function approvedToolFailureRecoveryCopy(content: string): string {
+  if (/^Approved tool action requires manual reconciliation:/iu.test(content.trim())) {
+    return "An approved tool action needs manual reconciliation. Open Activity to inspect the recorded outcome before trying again.";
+  }
+  return "An approved tool action could not be completed. Open Activity to inspect the recovery details.";
+}
+
 export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   mode,
   turn,
@@ -1013,6 +1116,10 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   contextSelected = false,
   groupedWithPrevious = false,
   streamingPreview,
+  hideLiveActivity = false,
+  hidePendingIndicator = false,
+  hideRecoveryAction = false,
+  hideApprovedToolFailureOutput = false,
   visualStreamMode = "smooth",
   renderUserMetaAddon,
   renderCitationList,
@@ -1043,7 +1150,12 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const assistantContent = isStreamingTurn
     ? (streamingPreview?.visibleText ?? "")
     : (turn.assistantMessage?.content ?? "");
-  const hasAssistantOutput = assistantContent.trim().length > 0;
+  const shouldHideApprovedToolFailureOutput =
+    hideApprovedToolFailureOutput && isApprovedToolFailureDiagnostic(turn, assistantContent);
+  const visibleAssistantContent = shouldHideApprovedToolFailureOutput
+    ? approvedToolFailureRecoveryCopy(assistantContent)
+    : assistantContent;
+  const hasAssistantOutput = visibleAssistantContent.trim().length > 0;
   const assistantTimestamp = turn.assistantMessage
     ? formatActorTimestamp(turn.assistantMessage.timestamp)
     : isStreamingTurn
@@ -1053,18 +1165,19 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const isPlainChat = mode === "chat";
   const showContextToggle = Boolean(onToggleContextTurn);
   const hasRetryAction = canRetryTurn(turn);
+  const showRetryAction = hasRetryAction && !hideRecoveryAction;
   const hasStartNewThreadAction = Boolean(onStartNewThreadFromTurn);
   const hasEditAction = Boolean(onEditTurn);
   const hasGeneratedArtifactAction = Boolean(turn.assistantMessage);
   const hasGeneratedArtifactVersionAction = hasGeneratedArtifact;
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const actionMenuId = useId();
+  // Retry is the primary recovery action, so it stays reachable without
+  // opening the menu. Everything else remains secondary and collapsible.
   const showActionMenu =
-    hasRetryAction ||
-    hasStartNewThreadAction ||
-    hasEditAction ||
-    hasGeneratedArtifactAction ||
-    hasGeneratedArtifactVersionAction;
+    hasStartNewThreadAction || hasEditAction || hasGeneratedArtifactAction || hasGeneratedArtifactVersionAction;
   const showBranchSwitcher = turn.branch.siblingCount > 1;
-  const showActions = showActionMenu || showBranchSwitcher || Boolean(suggestionSummary);
+  const showActions = showRetryAction || showActionMenu || showBranchSwitcher || Boolean(suggestionSummary);
   const showOperationalDetails =
     !isPlainChat ||
     isStreamingTurn ||
@@ -1078,17 +1191,10 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     Boolean(durableRunId) ||
     Boolean(turn.trace.guidance?.truncated) ||
     hasGeneratedArtifact;
-  const evidenceExpandedByDefault =
-    !isPlainChat ||
-    isStreamingTurn ||
-    turn.trace.status !== "completed" ||
-    turnHasRepairedAssistantOutput(turn) ||
-    turn.trace.routing.fallbackUsed ||
-    Boolean(turn.trace.failure) ||
-    Boolean(turn.trace.orchestration) ||
-    Boolean(durableRunId) ||
-    Boolean(turn.trace.guidance?.truncated) ||
-    hasGeneratedArtifact;
+  // Runtime truth belongs close to the turn, but it must not displace the
+  // conversation just because a turn is selected, streaming, or failed. The
+  // operator can open Evidence deliberately when they need the forensic view.
+  const evidenceExpandedByDefault = false;
   const isRoutineChatTurn = isPlainChat && !showOperationalDetails;
   const citationList = renderCitationList?.(turn);
   const turnClassName = [
@@ -1103,6 +1209,10 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     .join(" ");
 
   const turnLabel = turn.userMessage.content?.trim().slice(0, 60) || "turn";
+
+  useEffect(() => {
+    setActionMenuOpen(false);
+  }, [turn.turnId]);
 
   return (
     <article className={turnClassName}>
@@ -1159,7 +1269,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             ) : null}
           </p>
           <ChatThinkingSection thinking={turn.thinking} turnStatus={turn.trace.status} />
-          {showLiveActivity ? (
+          {showLiveActivity && !hideLiveActivity ? (
             <ChatLiveActivityRail
               turn={turn}
               hasVisibleAssistantText={hasAssistantOutput}
@@ -1170,12 +1280,12 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
           {hasAssistantOutput ? (
             <AssistantMessageRenderer
               role="assistant"
-              content={assistantContent}
+              content={visibleAssistantContent}
               running={isStreamingTurn}
               streamPresentationMode={visualStreamMode}
               streamTurnId={turn.turnId}
             />
-          ) : isStreamingTurn ? (
+          ) : hidePendingIndicator ? null : isStreamingTurn ? (
             <StreamingAssistantSkeleton label={assistantPendingLabel} />
           ) : (
             <p>{assistantPendingLabel}</p>
@@ -1200,21 +1310,32 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
       />
       {showActions ? (
         <div className="mc-next-thread-actions">
+          {showRetryAction ? (
+            <button
+              type="button"
+              className="mc-next-thread-inline-button mc-next-thread-primary-recovery"
+              aria-label={`Retry assistant answer for turn ${turn.turnId}`}
+              onClick={() => onRetryTurn(turn.turnId)}
+            >
+              {mode === "cowork" ? "Retry run step" : "Retry"}
+            </button>
+          ) : null}
           {showActionMenu ? (
-            <details className="mc-next-thread-action-menu" open={selected}>
-              <summary className="mc-next-thread-inline-button mc-next-thread-action-menu-summary">Actions</summary>
-              <div className="mc-next-thread-action-menu-body">
+            <details
+              className="mc-next-thread-action-menu"
+              open={actionMenuOpen}
+              onToggle={(event) => setActionMenuOpen(event.currentTarget.open)}
+            >
+              <summary
+                className="mc-next-thread-inline-button mc-next-thread-action-menu-summary"
+                aria-label={`More actions for turn ${turn.turnId}`}
+                aria-expanded={actionMenuOpen}
+                aria-controls={actionMenuId}
+              >
+                More
+              </summary>
+              <div className="mc-next-thread-action-menu-body" id={actionMenuId}>
                 <div className="mc-next-thread-action-row">
-                  {hasRetryAction ? (
-                    <button
-                      type="button"
-                      className="mc-next-thread-inline-button"
-                      aria-label={`Retry assistant answer for turn ${turn.turnId}`}
-                      onClick={() => onRetryTurn(turn.turnId)}
-                    >
-                      {mode === "cowork" ? "Retry run step" : "Retry"}
-                    </button>
-                  ) : null}
                   {hasStartNewThreadAction ? (
                     <button
                       type="button"

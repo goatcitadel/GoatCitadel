@@ -103,4 +103,28 @@ describe("InlineApprovalPrompt countdown accessibility", () => {
     expect(alertAfter).toBe(alertBefore);
     expect(alertAfter).not.toContain("Expires in");
   });
+
+  it("keeps technical details collapsed with an accessible, mounted disclosure target", () => {
+    renderer = create(
+      <InlineApprovalPrompt approvalId="approval-details" codeHash="sha256:abc123" {...noopCallbacks} />,
+    );
+
+    const findTechnicalDetails = () =>
+      renderer!.root.find((node) => node.type === "details" && node.props.className === "approval-technical-details");
+    const details = findTechnicalDetails();
+    const summary = details.findByType("summary");
+    const target = details.find((node) => node.type === "div" && node.props.id === summary.props["aria-controls"]);
+
+    expect(details.props.open).toBe(false);
+    expect(summary.props["aria-expanded"]).toBe(false);
+    expect(summary.props["aria-controls"]).toBeTruthy();
+    expect(target.props.id).toBe(summary.props["aria-controls"]);
+
+    act(() => {
+      findTechnicalDetails().props.onToggle({ currentTarget: { open: true } });
+    });
+
+    expect(findTechnicalDetails().props.open).toBe(true);
+    expect(findTechnicalDetails().findByType("summary").props["aria-expanded"]).toBe(true);
+  });
 });

@@ -28,6 +28,7 @@ const createChangePlanMock = vi.fn();
 const createChatSideChatMock = vi.fn();
 const createChatSessionMock = vi.fn();
 const forkChatSessionFromTurnMock = vi.fn();
+const fetchChangePlansMock = vi.fn(async () => ({ items: [] }));
 const fetchAgentsMock = vi.fn();
 const fetchChatGeneratedArtifactMock = vi.fn();
 const fetchChatSessionGoalMock = vi.fn();
@@ -254,7 +255,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   steerChatSession: (...args: unknown[]) => steerChatSessionMock(...args),
   fetchChatSessionPrefs: (...args: unknown[]) => fetchChatSessionPrefsMock(...args),
   fetchChangePlan: vi.fn(),
-  fetchChangePlans: vi.fn(async () => ({ items: [] })),
+  fetchChangePlans: (...args: unknown[]) => fetchChangePlansMock(...args),
   fetchAutonomousActivationGrants: vi.fn(async () => ({ items: [] })),
   fetchChatSideChat: (...args: unknown[]) => fetchChatSideChatMock(...args),
   fetchChatThread: (...args: unknown[]) => fetchChatThreadMock(...args),
@@ -2110,6 +2111,141 @@ describe("MissionThreadedControllerHost", () => {
       "chat",
       expect.objectContaining({ artifactId: undefined, sessionId: "session-1", turnId: "turn-1" }),
     );
+  });
+
+  it("does not promote older terminal receipts after dismissing the newest one", async () => {
+    const newestTerminalPlan = {
+      planId: "plan-newest",
+      revision: 3,
+      status: "completed",
+      phase: "terminal",
+      kind: "session_model",
+      request: { kind: "session_model", providerId: "openai", model: "gpt-5.6" },
+      createdAt: "2026-08-15T12:00:00.000Z",
+    };
+    const olderTerminalPlan = {
+      planId: "plan-older",
+      revision: 2,
+      status: "completed",
+      phase: "terminal",
+      kind: "session_model",
+      request: { kind: "session_model", providerId: "openai", model: "gpt-5.5" },
+      createdAt: "2026-08-14T12:00:00.000Z",
+    };
+    // Gateway change-plan history is newest-first.
+    fetchChangePlansMock.mockResolvedValueOnce({ items: [newestTerminalPlan, olderTerminalPlan] });
+
+    await renderHost();
+    await selectDefaultSession();
+
+    expect(latestSurfaceInput?.changePlanReceipt?.plan.planId).toBe("plan-newest");
+    expect(latestSurfaceInput?.changePlans?.map((plan) => plan.planId)).toEqual(["plan-newest", "plan-older"]);
+
+    await act(async () => {
+      latestSurfaceInput?.changePlanReceipt?.onDismiss?.(newestTerminalPlan as any);
+      await flushEffects();
+    });
+
+    expect(latestSurfaceInput?.changePlanReceipt).toBeUndefined();
+    expect(latestSurfaceInput?.changePlans?.map((plan) => plan.planId)).toEqual(["plan-newest", "plan-older"]);
+  });
+
+  it("clears prior-session change plans while the next session fetch is pending or fails", async () => {
+    const priorSessionPlan = {
+      planId: "plan-session-1",
+      revision: 1,
+      status: "completed",
+      phase: "terminal",
+      kind: "session_model",
+      request: { kind: "session_model", providerId: "openai", model: "gpt-5.6" },
+      createdAt: "2026-08-15T12:00:00.000Z",
+    };
+    let rejectNextSessionFetch: ((reason?: unknown) => void) | undefined;
+    const nextSessionFetch = new Promise<{ items: never[] }>((_resolve, reject) => {
+      rejectNextSessionFetch = reject;
+    });
+    fetchChangePlansMock
+      .mockResolvedValueOnce({ items: [priorSessionPlan] })
+      .mockImplementationOnce(() => nextSessionFetch);
+
+    await renderHost();
+    await selectDefaultSession();
+    expect(latestSurfaceInput?.changePlanReceipt?.plan.planId).toBe("plan-session-1");
+    expect(latestSurfaceInput?.changePlans?.map((plan) => plan.planId)).toEqual(["plan-session-1"]);
+
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+      await flushEffects(2);
+    });
+
+    expect(fetchChangePlansMock).toHaveBeenLastCalledWith(
+      { workspaceId: "workspace-1", sessionId: "session-2" },
+      { limit: 12 },
+    );
+    expect(latestSurfaceInput?.changePlanReceipt).toBeUndefined();
+    expect(latestSurfaceInput?.changePlans).toEqual([]);
+
+    await act(async () => {
+      rejectNextSessionFetch?.(new Error("Change plan history unavailable"));
+      await flushEffects(4);
+    });
+
+    expect(latestSurfaceInput?.changePlanReceipt).toBeUndefined();
+    expect(latestSurfaceInput?.changePlans).toEqual([]);
+  });
+
+  it("clears transient recovery errors when the selected chat changes", async () => {
+    createChangePlanMock.mockRejectedValueOnce(new Error("Change Plan preparation failed"));
+    await renderHost();
+    await selectDefaultSession();
+
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
+      await flushEffects(8);
+    });
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBe("Change Plan preparation failed");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBe("other");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamStatus).toBe("idle");
+
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+      await flushEffects(6);
+    });
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBeNull();
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBeNull();
+  });
+
+  it("ignores a late session-scoped UI error after the operator switches chats", async () => {
+    let rejectExport: ((reason?: unknown) => void) | undefined;
+    fetchRuntimeLifecycleExportMock.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectExport = reject;
+        }),
+    );
+    await renderHost();
+    await selectDefaultSession();
+
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onExportRunBundle();
+      await flushEffects(2);
+    });
+    expect(fetchRuntimeLifecycleExportMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1" }));
+
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+      await flushEffects(6);
+    });
+
+    await act(async () => {
+      rejectExport?.(new Error("Export for session-1 failed"));
+      await flushEffects(6);
+    });
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBeNull();
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBeNull();
   });
 
   it("synchronizes created and rail-selected sessions through the route owner", async () => {

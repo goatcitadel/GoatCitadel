@@ -265,6 +265,49 @@ describe("DurableBackgroundTaskRail", () => {
     );
   });
 
+  it("keeps runtime unknowns collapsed behind a controlled, inspectable disclosure", () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+        />,
+      );
+    });
+
+    const trigger = renderer.root.find(
+      (node) => node.type === "button" && node.props.className === "mc-next-background-rail__unknowns-trigger",
+    );
+    const unknownsId = trigger.props["aria-controls"] as string;
+    const unknowns = () => renderer.root.findByProps({ id: unknownsId });
+
+    expect(trigger.props["aria-expanded"]).toBe(false);
+    expect(unknowns().props.hidden).toBe(true);
+
+    act(() => trigger.props.onClick());
+    expect(renderer.root.findByProps({ "aria-controls": unknownsId }).props["aria-expanded"]).toBe(true);
+    expect(unknowns().props.hidden).toBe(false);
+
+    act(() => {
+      renderer.update(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          queuedCount={0}
+          streamStatus="idle"
+          queueLabels={[]}
+        />,
+      );
+    });
+    expect(renderer.root.findByProps({ "aria-controls": unknownsId }).props["aria-expanded"]).toBe(true);
+  });
+
   it("releases the local explorer observer only after canonical detach succeeds and keeps the task inspectable", async () => {
     const onContinueInBackground = vi.fn();
     let renderer!: ReactTestRenderer;

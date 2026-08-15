@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import React from "react";
 import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -8,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ThreadedTimeline,
   mergeSystemNoticesIntoThreadWindow,
+  resolveFocusedActiveTurn,
   resolveStreamingPreviewScrollSignal,
 } from "./ThreadedTimeline";
 import {
@@ -254,7 +256,7 @@ describe("ThreadedTimeline", () => {
     const text = renderedText(renderer);
     expect(text).toContain("Show this immediately");
     expect(text).toContain("Sending");
-    expect(text).toContain("Connecting...");
+    expect(text).toContain("Chat stream connecting.");
     expect(text).not.toContain("Start with a plain request");
   });
 
@@ -479,12 +481,13 @@ describe("ThreadedTimeline", () => {
     expect(text).toContain("Cowork response streaming with 2 queued.");
     expect(renderer.root.findByProps({ "aria-label": "Citations for this answer" })).toBeTruthy();
     expect(renderer.root.findByProps({ className: "mc-next-thread-live-region" }).props["aria-live"]).toBe("polite");
-    expect(renderer.root.findByProps({ className: "chat-stream-status-bar tone-active" }).props.role).toBeUndefined();
+    expect(text).toContain("Working on your request");
+    expect(renderer.root.findAllByProps({ className: "chat-stream-status-bar tone-active" })).toHaveLength(0);
     const markup = renderToStaticMarkup(<ThreadedTimeline props={props as any} />);
     const assistantAnswerIndex = markup.indexOf("Main synthesized answer.");
-    const streamStatusIndex = markup.indexOf("chat-stream-status-bar tone-active");
+    const activitySummaryIndex = markup.indexOf("Working on your request");
     expect(assistantAnswerIndex).toBeGreaterThanOrEqual(0);
-    expect(streamStatusIndex).toBeGreaterThan(assistantAnswerIndex);
+    expect(activitySummaryIndex).toBeGreaterThanOrEqual(0);
     // Exactly one element owns the streaming-status announcement: the dedicated live
     // region. The embedded status bar is silenced (announce=false) and no other node in
     // the streaming surface carries role="status" / aria-live for that announcement.
@@ -639,6 +642,10 @@ describe("ThreadedTimeline", () => {
 
     const toggle = renderer.root.find(
       (node) => node.type === "button" && node.children.join("") === "Show 2 more citations",
+    );
+    expect(toggle.props["aria-controls"]).toBeTruthy();
+    expect(renderer.root.findByProps({ id: toggle.props["aria-controls"] }).props.className).toBe(
+      "mc-next-thread-citations",
     );
     TestRenderer.act(() => {
       toggle.props.onClick();
@@ -801,11 +808,11 @@ describe("ThreadedTimeline", () => {
     ).toContain("Describe a focused implementation or review task");
 
     const cases = [
-      ["queued", "Queued"],
-      ["running", "Working"],
-      ["waiting_for_tool", "Using tools"],
-      ["waiting_for_approval", "Waiting for approval"],
-      ["waiting_for_user_input", "Waiting for your answer"],
+      ["queued", "Your request is queued"],
+      ["running", "Working on your request"],
+      ["waiting_for_tool", "Working on your request"],
+      ["waiting_for_approval", "Waiting for your approval"],
+      ["waiting_for_user_input", "I need one decision to continue"],
       ["cancelled", "Turn cancelled"],
       ["partial", "Turn partially completed"],
       ["completed", "No assistant output yet"],
@@ -829,8 +836,183 @@ describe("ThreadedTimeline", () => {
       recommendedAction: "retry",
     };
     const renderer = TestRenderer.create(<ThreadedTimeline props={failed as any} />);
-    expect(renderedText(renderer)).toContain("Provider timed out.");
-    expect(renderedText(renderer)).toContain("Retry the turn");
+    expect(renderedText(renderer)).toContain("That response took too long to finish");
+    expect(renderedText(renderer)).toContain("Retry");
+  });
+
+  it("keeps transport errors visible without repeating their raw diagnostic", () => {
+    const props = buildProps({ streamStatus: "error", streamError: "Gateway stream dropped: ECONNRESET" });
+    props.thread.turns[0].assistantMessage = undefined;
+    props.thread.turns[0].trace.status = "partial";
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+
+    expect(renderedText(renderer)).toContain("I couldn’t complete that response");
+    expect(renderedText(renderer)).toContain("Try again");
+    expect(renderedText(renderer)).not.toContain("ECONNRESET");
+    expect(renderedText(renderer)).not.toContain("Gateway stream dropped");
+  });
+
+  it("keeps a new transport error recoverable when the latest persisted turn already completed", () => {
+    const props = buildProps({ streamStatus: "error", streamError: "Gateway stream dropped: ECONNRESET" });
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+
+    expect(renderedText(renderer)).toContain("I couldn’t complete that response");
+    expect(renderedText(renderer)).toContain("Try again");
+    const activeWork = renderer.root.find(
+      (node) =>
+        typeof node.props.className === "string" && node.props.className.includes("mc-next-active-work-summary"),
+    );
+    const activeWorkActions = activeWork.findAllByType("button").map((button) => button.children.join(""));
+    expect(activeWorkActions).toContain("Try again");
+    expect(activeWorkActions).not.toContain("Retry");
+    expect(renderedText(renderer)).not.toContain("ECONNRESET");
+  });
+
+  it("does not project unrelated global UI errors as a failed chat response", () => {
+    const props = buildProps({
+      streamStatus: "error",
+      streamError: "Unable to prepare this model change.",
+      streamErrorSource: "other",
+    });
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+
+    expect(renderedText(renderer)).not.toContain("I couldn’t complete that response");
+    expect(renderedText(renderer)).not.toContain("Chat response could not be completed");
+    expect(
+      renderer.root.findAll(
+        (node) =>
+          typeof node.props.className === "string" && node.props.className.includes("mc-next-active-work-summary"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("lets the focused recovery summary own retry for the active failed turn", () => {
+    const props = buildProps({ mode: "chat", delegationRun: null });
+    props.thread.turns[0].trace.status = "failed";
+    props.thread.turns[0].trace.failure = {
+      failureClass: "provider_timeout",
+      message: "Provider timed out.",
+      retryable: true,
+    };
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+
+    const summary = renderer.root.find((node) =>
+      String(node.props.className ?? "").includes("mc-next-active-work-summary"),
+    );
+    expect(summary.findAllByType("button").map((button) => button.children.join(""))).toContain("Retry");
+    expect(renderer.root.findAllByProps({ "aria-label": "Retry assistant answer for turn turn-1" })).toHaveLength(0);
+  });
+
+  it("projects focused work from the selected branch instead of a stale stored sibling", () => {
+    const props = buildProps();
+    const selectedTurn = props.thread.turns[0];
+    const staleSibling = {
+      ...selectedTurn,
+      turnId: "turn-stale-sibling",
+      trace: {
+        ...selectedTurn.trace,
+        turnId: "turn-stale-sibling",
+        status: "failed",
+        failure: {
+          failureClass: "provider_timeout",
+          message: "Stale sibling timed out.",
+          retryable: true,
+        },
+      },
+    };
+    props.thread = {
+      ...props.thread,
+      selectedTurnId: selectedTurn.turnId,
+      activeLeafTurnId: selectedTurn.turnId,
+      turns: [selectedTurn, staleSibling],
+    };
+
+    expect(resolveFocusedActiveTurn(props.thread)?.turnId).toBe(selectedTurn.turnId);
+    expect(
+      resolveFocusedActiveTurn({
+        ...props.thread,
+        selectedTurnId: null,
+        activeLeafTurnId: "turn-stale-sibling",
+      })?.turnId,
+    ).toBe("turn-stale-sibling");
+  });
+
+  it("passes the focused recovery turn to Activity instead of a previously selected turn", () => {
+    const onOpenActivity = vi.fn();
+    const props = buildProps({ mode: "chat", delegationRun: null, streamStatus: "idle" });
+    const previouslySelectedTurn = {
+      ...props.thread.turns[0],
+      turnId: "turn-previous",
+      trace: {
+        ...props.thread.turns[0].trace,
+        turnId: "turn-previous",
+        status: "completed",
+      },
+    };
+    const focusedFailureTurn = {
+      ...props.thread.turns[0],
+      turnId: "turn-focused-failure",
+      trace: {
+        ...props.thread.turns[0].trace,
+        turnId: "turn-focused-failure",
+        status: "failed",
+        failure: {
+          failureClass: "provider_timeout",
+          message: "Provider timed out.",
+          retryable: true,
+        },
+      },
+    };
+    props.thread = {
+      ...props.thread,
+      selectedTurnId: focusedFailureTurn.turnId,
+      activeLeafTurnId: focusedFailureTurn.turnId,
+      turns: [previouslySelectedTurn, focusedFailureTurn],
+    };
+    props.selectedTurnId = previouslySelectedTurn.turnId;
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} onOpenActivity={onOpenActivity} />);
+    const viewActivity = renderer.root.find(
+      (node) => node.type === "button" && collectNodeText(node) === "View activity",
+    );
+
+    TestRenderer.act(() => {
+      viewActivity.props.onClick();
+    });
+
+    expect(onOpenActivity).toHaveBeenCalledWith("turn-focused-failure");
+  });
+
+  it("keeps approved-tool failure diagnostics out of focused Chat copy while retaining the closed evidence", () => {
+    const rawFailure = "Approved tool action failed: `fs.list`.\n\nFailure: ENOENT: scandir 'F:\\private\\project'";
+    const props = buildProps({ mode: "chat", delegationRun: null });
+    props.thread.turns[0].trace.status = "failed";
+    props.thread.turns[0].trace.failure = {
+      failureClass: "tool_failed",
+      message: rawFailure,
+      retryable: false,
+    };
+    props.thread.turns[0].assistantMessage = { ...props.thread.turns[0].assistantMessage, content: rawFailure };
+    props.thread.turns[0].toolRuns = [
+      {
+        toolRunId: "tool-approved-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "fs.list",
+        status: "failed",
+        error: rawFailure,
+        failureGuidance: rawFailure,
+        startedAt: "2026-04-30T00:00:01.000Z",
+        finishedAt: "2026-04-30T00:00:02.000Z",
+      },
+    ];
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const assistantBubble = renderer.root.findByProps({ className: "mc-next-thread-bubble assistant" });
+
+    expect(collectNodeText(assistantBubble)).toContain("An approved tool action could not be completed.");
+    expect(collectNodeText(assistantBubble)).not.toContain("ENOENT");
+    expect(collectNodeText(assistantBubble)).not.toContain("F:\\private");
+    expect(renderedText(renderer)).toContain("ENOENT");
   });
 
   it("fills the composer from the chat first-message canvas and routes handoffs", () => {
@@ -938,7 +1120,7 @@ describe("ThreadedTimeline", () => {
     expect(
       renderer.root.findByProps({ className: "mc-next-thread-inline-button mc-next-thread-action-menu-summary" })
         .children,
-    ).toEqual(["Actions"]);
+    ).toEqual(["More"]);
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
     // The pointer surface is intentionally non-interactive in the accessibility tree;
@@ -1508,7 +1690,7 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).not.toContain("used anthropic · claude-sonnet · messages");
   });
 
-  it("resets evidence expansion when a streaming chat turn settles", () => {
+  it("keeps evidence collapsed when a streaming chat turn settles", () => {
     const props = buildProps({
       mode: "chat",
       delegationRun: null,
@@ -1533,7 +1715,7 @@ describe("ThreadedTimeline", () => {
           node.type === "details" && String(node.props.className ?? "").startsWith("mc-next-turn-evidence-summary"),
       );
 
-    expect(evidenceDetails().props.open).toBe(true);
+    expect(evidenceDetails().props.open).toBe(false);
 
     const settledProps = buildProps({
       mode: "chat",
@@ -1549,6 +1731,19 @@ describe("ThreadedTimeline", () => {
     });
 
     expect(evidenceDetails().props.open).toBe(false);
+  });
+
+  it("keeps authored disclosure bodies out of closed Details layout", () => {
+    const composerCss = readFileSync("src/features/threaded-surface/styles/composer.css", "utf8");
+    const timelineCss = readFileSync("src/features/threaded-surface/styles/timeline.css", "utf8");
+    const activeWorkCss = readFileSync("src/features/threaded-surface/styles/focused-active-work.css", "utf8");
+
+    expect(composerCss).toContain(".mc-next-turn-evidence-summary:not([open]) > .mc-next-turn-evidence-body");
+    expect(composerCss).toContain(".mc-next-thread-notice-feed:not([open]) > .mc-next-thread-notices");
+    expect(composerCss).toContain(".mc-next-thread-system-notice-details:not([open]) > :not(summary)");
+    expect(timelineCss).toContain(".mc-next-thread-turn.delegation.compact > details:not([open]) > :not(summary)");
+    expect(timelineCss).toContain(".mc-next-thread-step-output-details:not([open]) > :not(summary)");
+    expect(activeWorkCss).toContain(".mc-next-active-work-more:not([open]) > div");
   });
 
   it("windows long transcripts while keeping selected, context-pinned, streaming, and recent turns rendered", () => {

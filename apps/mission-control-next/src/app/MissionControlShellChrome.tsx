@@ -1,4 +1,4 @@
-import { Suspense, useRef, type ReactNode } from "react";
+import { Suspense, useId, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   Bell,
@@ -545,10 +545,12 @@ export function ShellStatusStrip({
   buildIdentityError,
   currentReleaseScope,
   currentReleaseStatusLabel,
+  daemonDegraded,
   daemonStatusValue,
   gatewayMessage,
   navigateApprovals,
   navigateBuildProof,
+  realtimeDegraded,
   realtimeValue,
   sessionsPill,
   spendPill,
@@ -558,54 +560,79 @@ export function ShellStatusStrip({
   buildIdentityError: string | null;
   currentReleaseScope: RouteReleaseScope;
   currentReleaseStatusLabel: string;
+  daemonDegraded: boolean;
   daemonStatusValue: string;
   gatewayMessage: string;
   navigateApprovals: () => void;
   navigateBuildProof: () => void;
+  realtimeDegraded: boolean;
   realtimeValue: string;
   sessionsPill: StatusPillModel;
   spendPill: StatusPillModel;
 }) {
+  const [systemDetailsOpen, setSystemDetailsOpen] = useState(false);
+  const systemDetailsId = useId();
   const identityChip = formatRuntimeIdentityChip(buildIdentity, buildIdentityError);
+  const pendingApprovalMatch = /^(\d+)\s+pending\b/i.exec(approvalsPill.value.trim());
+  const pendingApprovalCount = pendingApprovalMatch ? Number.parseInt(pendingApprovalMatch[1]!, 10) : null;
+  const hasBlockingApproval = !approvalsPill.degraded && (pendingApprovalCount ?? 0) > 0;
+  const hasRuntimeIssue = Boolean(
+    approvalsPill.degraded ||
+    sessionsPill.degraded ||
+    spendPill.degraded ||
+    realtimeDegraded ||
+    daemonDegraded ||
+    gatewayMessage !== "Gateway ready",
+  );
+  const systemStatus =
+    hasBlockingApproval || hasRuntimeIssue ? "attention" : pendingApprovalCount === null ? "checking" : "healthy";
+  const systemSummary = hasBlockingApproval
+    ? `Approval needed · ${approvalsPill.value}`
+    : hasRuntimeIssue
+      ? "Needs attention"
+      : systemStatus === "checking"
+        ? "Checking"
+        : "Healthy";
   return (
-    <footer className="mc-next-status-strip" aria-label="Mission Control status strip">
-      <div className="mc-next-status-strip-identity" data-shell-identity-anchor="pinned">
-        <StatusPill
-          icon={<Fingerprint size={15} />}
-          label="Build identity"
-          value={identityChip.value}
-          compactValue={identityChip.compactValue}
-          identityStatus={identityChip.status}
-          onClick={navigateBuildProof}
-        />
-      </div>
-      <div className="mc-next-status-strip-primary">
-        <StatusPill icon={<ShieldCheck size={15} />} label={gatewayMessage} value="Gateway ready" />
-        <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeValue} />
-        <StatusPill
-          icon={<Workflow size={15} />}
-          label="Approvals"
-          value={approvalsPill.value}
-          degraded={approvalsPill.degraded}
-          onClick={navigateApprovals}
-        />
-      </div>
-      <details className="mc-next-status-details">
-        <summary>
-          <span>Details</span>
-          <strong>{daemonStatusValue}</strong>
+    <footer className="mc-next-status-strip" aria-label="Mission Control status strip" data-status={systemStatus}>
+      <details
+        className="mc-next-status-details mc-next-status-system"
+        open={systemDetailsOpen}
+        onToggle={(event) => setSystemDetailsOpen(event.currentTarget.open)}
+      >
+        <summary aria-expanded={systemDetailsOpen} aria-controls={systemDetailsId}>
+          <ShieldCheck size={14} aria-hidden="true" />
+          <span>System</span>
+          <strong>{systemSummary}</strong>
         </summary>
-        <div className="mc-next-status-details-popover">
-          <div className="mc-next-status-details-mobile-only">
-            <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeValue} />
-            <StatusPill
-              icon={<Workflow size={15} />}
-              label="Approvals"
-              value={approvalsPill.value}
-              degraded={approvalsPill.degraded}
-              onClick={navigateApprovals}
-            />
-          </div>
+        <div id={systemDetailsId} className="mc-next-status-details-popover">
+          <StatusPill
+            icon={<Fingerprint size={15} />}
+            label="Build identity"
+            value={identityChip.value}
+            compactValue={identityChip.compactValue}
+            identityStatus={identityChip.status}
+            onClick={navigateBuildProof}
+          />
+          <StatusPill
+            icon={<ShieldCheck size={15} />}
+            label="Gateway"
+            value={gatewayMessage}
+            degraded={gatewayMessage !== "Gateway ready"}
+          />
+          <StatusPill
+            icon={<Activity size={15} />}
+            label="Live updates"
+            value={realtimeValue}
+            degraded={realtimeDegraded}
+          />
+          <StatusPill
+            icon={<Workflow size={15} />}
+            label="Approvals"
+            value={approvalsPill.value}
+            degraded={approvalsPill.degraded}
+            onClick={navigateApprovals}
+          />
           {currentReleaseScope.status === "ship" ? null : (
             <StatusPill
               icon={<ShieldCheck size={15} />}
@@ -621,7 +648,7 @@ export function ShellStatusStrip({
             degraded={sessionsPill.degraded}
           />
           <StatusPill icon={<Wrench size={15} />} label="Spend" value={spendPill.value} degraded={spendPill.degraded} />
-          <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} />
+          <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} degraded={daemonDegraded} />
         </div>
       </details>
     </footer>

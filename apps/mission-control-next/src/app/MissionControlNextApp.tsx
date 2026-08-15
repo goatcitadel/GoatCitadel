@@ -423,7 +423,7 @@ export function MissionControlNextApp() {
   const copyTrustReport = useCallback(
     async (sessionId?: string | null, turnId?: string | null) => {
       if (!sessionId) {
-        pushNotification("warning", "Open a Work session before exporting a trust report.", "trust-report");
+        pushNotification("warning", "Open a Chat session before exporting a trust report.", "trust-report");
         return;
       }
       if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
@@ -979,10 +979,12 @@ export function MissionControlNextApp() {
             buildIdentityError={status.runtimeIdentityError}
             currentReleaseScope={currentReleaseScope}
             currentReleaseStatusLabel={currentReleaseStatusLabel}
+            daemonDegraded={daemonStatusUnavailable || daemonNeedsIntervention}
             daemonStatusValue={daemonStatusValue}
             gatewayMessage={gatewayAccess.message}
             navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
             navigateBuildProof={() => navigate({ area: "ops", section: "diagnostics", theme: route.theme })}
+            realtimeDegraded={realtimeStatusCopy.degraded}
             realtimeValue={realtimeStatusCopy.strip}
             sessionsPill={sessionsPill}
             spendPill={spendPill}

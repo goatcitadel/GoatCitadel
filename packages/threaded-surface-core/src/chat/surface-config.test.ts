@@ -15,6 +15,9 @@ describe("surface-config", () => {
         dominantArtifact: "conversation",
         workflowPlacement: "none",
         dockBehavior: "collapsible",
+        supportThreadBehavior: "collapsible",
+        idleSupportVisibility: "hidden",
+        defaultColumnWidths: "conversation",
       },
     });
     expect(cowork).toMatchObject({
@@ -37,11 +40,11 @@ describe("surface-config", () => {
     expect(code.emptyPrompts).toContain("Implement the smallest safe fix");
   });
 
-  it("opens the dock only for desktop-width surface layouts", () => {
+  it("keeps Activity closed for focused Chat at every viewport", () => {
     expect(defaultDockOpenForMode("chat")).toBe(false);
     expect(defaultDockOpenForMode("chat", DESKTOP_DOCK_BREAKPOINT - 1)).toBe(false);
-    expect(defaultDockOpenForMode("chat", DESKTOP_DOCK_BREAKPOINT)).toBe(true);
-    expect(defaultDockOpenForMode("cowork", DESKTOP_DOCK_BREAKPOINT + 100)).toBe(true);
-    expect(defaultDockOpenForMode("code", DESKTOP_DOCK_BREAKPOINT + 100)).toBe(true);
+    expect(defaultDockOpenForMode("chat", DESKTOP_DOCK_BREAKPOINT)).toBe(false);
+    expect(defaultDockOpenForMode("cowork", DESKTOP_DOCK_BREAKPOINT + 100)).toBe(false);
+    expect(defaultDockOpenForMode("code", DESKTOP_DOCK_BREAKPOINT + 100)).toBe(false);
   });
 });

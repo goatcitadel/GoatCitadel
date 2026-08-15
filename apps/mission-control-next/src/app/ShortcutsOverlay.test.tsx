@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 
 const routeShortcuts = [
-  { label: "Work", letter: "c" },
+  { label: "Chat", letter: "c" },
   { label: "Settings", letter: "s" },
 ];
 
@@ -22,7 +22,7 @@ describe("ShortcutsOverlay", () => {
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('aria-modal="true"');
     expect(markup).toContain("Command palette");
-    expect(markup).toContain("Go to Work");
+    expect(markup).toContain("Go to Chat");
     expect(markup).toContain("Go to Settings");
   });
 

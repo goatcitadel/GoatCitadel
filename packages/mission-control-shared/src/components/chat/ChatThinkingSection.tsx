@@ -1,4 +1,5 @@
 import { isChatTurnActiveStatus, type ChatTurnLifecycleStatus } from "@goatcitadel/contracts";
+import { useId, useState } from "react";
 
 /**
  * Renders the collapsible "thinking" disclosure for a turn's accumulated
@@ -16,14 +17,20 @@ export function ChatThinkingSection({
   thinking: string | undefined;
   turnStatus: ChatTurnLifecycleStatus;
 }) {
+  const [open, setOpen] = useState(false);
+  const thinkingId = useId();
   if (!thinking) {
     return null;
   }
   const label = isChatTurnActiveStatus(turnStatus) ? "Thinking…" : "Thought process";
   return (
-    <details className="mc-next-thread-thinking">
-      <summary>{label}</summary>
-      <div className="mc-next-thread-thinking-body">{thinking}</div>
+    <details className="mc-next-thread-thinking" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary aria-expanded={open} aria-controls={thinkingId}>
+        {label}
+      </summary>
+      <div id={thinkingId} className="mc-next-thread-thinking-body">
+        {thinking}
+      </div>
     </details>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import type {
   ChatMode,
@@ -19,6 +19,32 @@ import { ChatCapabilityProfileRunDetail } from "./ChatCapabilityProfilePanel";
 type DrawerTab = "context" | "documents" | "trace" | "assist" | "session";
 
 const SUBAGENT_AUTO_ACK_STORAGE_PREFIX = "mc-next:subagent-auto-ack:";
+
+function ContextDisclosure({
+  children,
+  defaultOpen = false,
+  summary,
+}: {
+  children: ReactNode;
+  defaultOpen?: boolean;
+  summary: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const contentId = useId();
+
+  return (
+    <details
+      className="mc-next-context-detail-disclosure"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-controls={contentId} aria-expanded={open}>
+        {summary}
+      </summary>
+      <div id={contentId}>{children}</div>
+    </details>
+  );
+}
 
 function readSubagentAutoAckFromStorage(sessionId: string | null): boolean {
   if (!sessionId || typeof window === "undefined") {
@@ -267,13 +293,12 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
               can be edited.
             </p>
           )}
-          <details className="mc-next-context-detail-disclosure" open>
-            <summary>Safe preview</summary>
+          <ContextDisclosure summary="Safe preview">
             {selectedNote ? <AssistantMessageRenderer role="assistant" content={draft} /> : null}
             {selectedArtifact ? (
               <GeneratedArtifactViewer artifact={{ ...selectedArtifact, content: draft }} compact />
             ) : null}
-          </details>
+          </ContextDisclosure>
           {error ? <p role="alert">{error}</p> : null}
         </section>
       ) : null}
@@ -283,10 +308,7 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
           <p className="mc-next-panel-kicker">Patch proposals</p>
           <h4>Review before apply</h4>
           {documents.proposals.map((proposal) => (
-            <details key={proposal.proposalId} className="mc-next-context-detail-disclosure">
-              <summary>
-                {proposal.targetKind} · {proposal.state}
-              </summary>
+            <ContextDisclosure key={proposal.proposalId} summary={`${proposal.targetKind} · ${proposal.state}`}>
               <p>
                 {proposal.authorKind} provenance · {proposal.turnId ?? proposal.authorId}
               </p>
@@ -324,7 +346,7 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
                   Load for rebase
                 </button>
               ) : null}
-            </details>
+            </ContextDisclosure>
           ))}
         </section>
       ) : null}
@@ -476,8 +498,7 @@ export function ThreadedContextDrawer({
                 {planningEnabled ? "Planning on" : "Planning off"}
               </StatusChip>
             </div>
-            <details className="mc-next-context-detail-disclosure">
-              <summary>Runtime controls</summary>
+            <ContextDisclosure summary="Runtime controls">
               <div className="mc-next-context-actions">
                 <button
                   type="button"
@@ -526,7 +547,7 @@ export function ThreadedContextDrawer({
                   {props.planningMode === "advisory" ? "Turn planning off" : "Turn planning on"}
                 </button>
               </div>
-            </details>
+            </ContextDisclosure>
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
             {props.routePreflight?.blockedReason ? <p>{props.routePreflight.blockedReason}</p> : null}
             {onCopyTrustReport && props.selectedSessionId ? (
@@ -553,8 +574,7 @@ export function ThreadedContextDrawer({
                   <StatusChip tone="warning">{props.trust.fallbackSummary}</StatusChip>
                 ) : null}
               </div>
-              <details className="mc-next-context-detail-disclosure">
-                <summary>Inspect policy detail</summary>
+              <ContextDisclosure summary="Inspect policy detail">
                 <div className="mc-next-context-truth-copy">
                   <p>
                     <strong>Gateway:</strong> {props.trust.gatewayDetail ?? props.trust.gatewayLabel}
@@ -571,7 +591,7 @@ export function ThreadedContextDrawer({
                     </p>
                   ) : null}
                 </div>
-              </details>
+              </ContextDisclosure>
             </section>
           ) : null}
 
@@ -632,7 +652,6 @@ export function ThreadedContextDrawer({
               <ChatTraceCard
                 trace={props.selectedTurn.trace}
                 workspaceId={props.selectedSession.workspaceId ?? "default"}
-                defaultCollapsed={false}
               />
             </>
           ) : (

@@ -1249,7 +1249,7 @@ describe("ThreadedComposer", () => {
       ...callbacks,
     });
 
-    expect(collectText(renderer.root)).toContain("New thread");
+    expect(collectText(renderer.root)).toContain("New chat");
     expect(collectText(renderer.root)).toContain("Checking the selected provider/model route before send.");
 
     await click(findButton(renderer.root, "Plan"));
@@ -1748,7 +1748,13 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     expect(
       renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
     ).toHaveLength(1);
-    await click(findButton(renderer.root, "Attach imported item"));
+    const attachPicker = findButton(renderer.root, "Attach imported item");
+    expect(attachPicker.props["aria-expanded"]).toBe(false);
+    expect(attachPicker.props["aria-controls"]).toBeTruthy();
+    await click(attachPicker);
+    expect(renderer.root.findByProps({ id: attachPicker.props["aria-controls"] }).props.className).toBe(
+      "mc-next-composer-external-attach-form",
+    );
     expect(collectText(renderer.root)).toContain("Choose a verified applied import");
     expect(collectText(renderer.root)).toContain("Imported Codex sessions");
     expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(

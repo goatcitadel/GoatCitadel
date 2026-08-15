@@ -634,7 +634,7 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400, "personal");
     expect(appMocks.fetchDashboardState).toHaveBeenCalled();
     expect(appMocks.connectEventStream).toHaveBeenCalled();
-    expect(renderer.root.findAllByProps({ "aria-label": "Approvals: 2 pending" })).toHaveLength(2);
+    expect(renderer.root.findAllByProps({ "aria-label": "Approvals: 2 pending" })).toHaveLength(1);
     expect(renderer.root.findByProps({ "aria-label": "Sessions: 2 visible" })).toBeDefined();
     expect(renderer.root.findByProps({ "aria-label": "Spend: $1.25" })).toBeDefined();
 
@@ -744,7 +744,7 @@ describe("MissionControlNextApp", () => {
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Work"),
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
         )
         ?.props.onClick();
     });
@@ -925,7 +925,7 @@ describe("MissionControlNextApp", () => {
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Work"),
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
         )
         ?.props.onClick();
     });
@@ -1035,6 +1035,13 @@ describe("MissionControlNextApp", () => {
   });
 
   it("marks daemon health unavailable when status refresh fails", async () => {
+    appMocks.fetchDashboardState.mockResolvedValueOnce({
+      pendingApprovals: 0,
+      activeSubagents: 3,
+      dailyCostUsd: 1.25,
+      sessions: [{ sessionId: "session-1" }, { sessionId: "session-2" }],
+      taskStatusCounts: [{ status: "open", count: 4 }],
+    });
     appMocks.fetchHealthSummary.mockRejectedValueOnce(new Error("health offline"));
 
     const renderer = await renderApp();
@@ -1042,6 +1049,8 @@ describe("MissionControlNextApp", () => {
 
     expect(rendered).toContain("Unavailable");
     expect(rendered).not.toContain("Needs intervention");
+    expect(rendered).toContain("Needs attention");
+    expect(rendered).toContain('"data-status":"attention"');
   });
 
   it("keeps the daemon Serving but marks dashboard-derived pills unavailable when only dashboard refresh fails (F-H4)", async () => {
@@ -1137,7 +1146,7 @@ describe("MissionControlNextApp", () => {
 
   it("keeps command-palette area jumps session-scoped without leaking preference theme", async () => {
     // Cowork is no longer a primary-nav area (it is reached as /chat?mode=cowork).
-    // Verify that navigating to Work via the palette preserves session context and
+    // Verify that navigating to Chat via the palette preserves session context and
     // does not leak the stored theme preference into the URL.
     const renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1&turnId=turn-1");
 
@@ -1146,7 +1155,7 @@ describe("MissionControlNextApp", () => {
     });
 
     await act(async () => {
-      findButton(renderer, "Go to Work").props.onClick();
+      findButton(renderer, "Go to Chat").props.onClick();
     });
 
     expect(window.location.pathname).toBe("/chat");
@@ -1173,6 +1182,14 @@ describe("MissionControlNextApp", () => {
   });
 
   it("surfaces replay-gap events as an operator-visible recovery signal", async () => {
+    appMocks.fetchDashboardState.mockResolvedValueOnce({
+      pendingApprovals: 0,
+      activeSubagents: 3,
+      dailyCostUsd: 1.25,
+      sessions: [{ sessionId: "session-1" }, { sessionId: "session-2" }],
+      taskStatusCounts: [{ status: "open", count: 4 }],
+    });
+    appMocks.fetchHealthSummary.mockResolvedValueOnce({ daemonStatus: { running: true } });
     const renderer = await renderApp();
     appMocks.deriveRealtimeRefresh.mockReturnValueOnce({
       topics: ["surface"],
@@ -1199,6 +1216,8 @@ describe("MissionControlNextApp", () => {
 
     const rendered = JSON.stringify(renderer.toJSON());
     expect(rendered).toContain("Streaming (replay recovery)");
+    expect(rendered).toContain("Needs attention");
+    expect(rendered).toContain('"data-status":"attention"');
     expect(rendered).toContain(
       "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
     );
@@ -1220,7 +1239,7 @@ describe("MissionControlNextApp", () => {
       (appMocks.threadedRouteProps?.onCopyTrustReport as (sessionId?: string) => void)(undefined);
     });
     expect(JSON.stringify(noSessionRenderer.toJSON())).toContain(
-      "Open a Work session before exporting a trust report.",
+      "Open a Chat session before exporting a trust report.",
     );
     noSessionRenderer.unmount();
 

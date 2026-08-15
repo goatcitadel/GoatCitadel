@@ -13,7 +13,7 @@ import {
   fetchWorkPassportBaseline,
   updateWorkPassportBaseline,
 } from "@goatcitadel/mission-control-shared/api/work-passport";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { StatusChip } from "../native-routes/primitives";
 
 function shortHash(value: string | undefined, size = 12): string {
@@ -44,6 +44,8 @@ export function ChatCapabilityProfilePreflight({
   workspaceId?: string;
   onBaselineUpdated?: () => Promise<void>;
 }) {
+  const [profileDetailsOpen, setProfileDetailsOpen] = useState(false);
+  const profileDetailsId = useId();
   const blocked = profile.blockedReasons.length > 0;
   const blockedReadiness = profile.authReadiness.filter(
     (item) => item.status === "missing" || item.status === "blocked",
@@ -75,9 +77,15 @@ export function ChatCapabilityProfilePreflight({
         />
       ) : null}
       {profile.workspaceSnapshot ? <WorkspaceSnapshotReceipt snapshot={profile.workspaceSnapshot} /> : null}
-      <details className="mc-next-capability-profile-disclosure">
-        <summary>Inspect proposed profile</summary>
-        <div className="mc-next-capability-profile-detail">
+      <details
+        className="mc-next-capability-profile-disclosure"
+        open={profileDetailsOpen}
+        onToggle={(event) => setProfileDetailsOpen(event.currentTarget.open)}
+      >
+        <summary aria-expanded={profileDetailsOpen} aria-controls={profileDetailsId}>
+          Inspect proposed profile
+        </summary>
+        <div id={profileDetailsId} className="mc-next-capability-profile-detail">
           <dl className="mc-next-capability-profile-facts">
             <div>
               <dt>Route</dt>
@@ -179,6 +187,8 @@ function VerifiedCapabilityProfile({
   routedContext?: ChatRoutedContextInspection;
   message?: string;
 }) {
+  const [profileDetailsOpen, setProfileDetailsOpen] = useState(false);
+  const profileDetailsId = useId();
   const blockedDecisions = profile.governance.policyDecisions.filter((decision) => !decision.allowed);
   const approvalDecisions = profile.governance.policyDecisions.filter((decision) => decision.requiresApproval);
   return (
@@ -217,9 +227,15 @@ function VerifiedCapabilityProfile({
         <WorkspaceSnapshotReceipt snapshot={profile.selection.workspaceSnapshot} />
       ) : null}
       {routedContext ? <RoutedContextReceipt routedContext={routedContext} /> : null}
-      <details className="mc-next-capability-profile-disclosure">
-        <summary>Inspect frozen selections and governance</summary>
-        <div className="mc-next-capability-profile-detail">
+      <details
+        className="mc-next-capability-profile-disclosure"
+        open={profileDetailsOpen}
+        onToggle={(event) => setProfileDetailsOpen(event.currentTarget.open)}
+      >
+        <summary aria-expanded={profileDetailsOpen} aria-controls={profileDetailsId}>
+          Inspect frozen selections and governance
+        </summary>
+        <div id={profileDetailsId} className="mc-next-capability-profile-detail">
           <dl className="mc-next-capability-profile-facts">
             <div>
               <dt>Profile</dt>
@@ -391,6 +407,8 @@ function WorkPassportPanel({
   const [domains, setDomains] = useState<WorkPassportDomain[]>(passport.baseline.primaryDomains);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const evidenceDetailsId = useId();
 
   useEffect(() => {
     setBaseline(passport.baseline);
@@ -471,9 +489,15 @@ function WorkPassportPanel({
         </div>
       </div>
       <p>{passport.review.reason}</p>
-      <details className="mc-next-capability-profile-disclosure mc-next-work-passport-disclosure">
-        <summary>Review evidence and correct baseline</summary>
-        <div className="mc-next-work-passport-detail">
+      <details
+        className="mc-next-capability-profile-disclosure mc-next-work-passport-disclosure"
+        open={evidenceOpen}
+        onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}
+      >
+        <summary aria-expanded={evidenceOpen} aria-controls={evidenceDetailsId}>
+          Review evidence and correct baseline
+        </summary>
+        <div id={evidenceDetailsId} className="mc-next-work-passport-detail">
           <section aria-label="Work Passport evidence requirements">
             <h5>Before relying on this work</h5>
             <ul>

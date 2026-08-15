@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatThreadSystemNoticeRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import {
   ChatThreadDelegationSummary,
+  ChatThreadNotices,
   ChatThreadSystemNoticeCard,
   ChatThreadTurnCard,
   StreamingAssistantSkeleton,
@@ -112,6 +113,8 @@ describe("ChatThreadPrimitives", () => {
     expect(renderedText(renderer)).toContain("Disk pressure high.");
     expect(renderer.root.findAllByProps({ className: "mc-next-thread-bubble user" })).toHaveLength(0);
     expect(renderer.root.findByProps({ "data-notice-id": "assistant-heartbeat-1" })).toBeTruthy();
+    expect(renderer.root.findByType("details").props.open).toBe(false);
+    expect(renderer.root.findByType("summary").props["aria-label"]).toBe("Heartbeat update");
   });
 
   it("labels provider-free timer notices distinctly", () => {
@@ -346,7 +349,7 @@ describe("ChatThreadPrimitives", () => {
     expect(text).toContain("context trimmed");
   });
 
-  it("keeps routine chat evidence collapsed and expands proof-heavy modes", () => {
+  it("keeps evidence collapsed by default for routine, selected failed, and non-chat turns", () => {
     const routine = renderTurn();
     expect(
       routine.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary")).props
@@ -378,6 +381,7 @@ describe("ChatThreadPrimitives", () => {
     ).toBe(false);
 
     const failed = renderTurn({
+      selected: true,
       turn: createTurn({
         trace: {
           ...createTurn().trace,
@@ -392,13 +396,172 @@ describe("ChatThreadPrimitives", () => {
     expect(
       failed.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary")).props
         .open,
-    ).toBe(true);
+    ).toBe(false);
 
     const cowork = renderTurn({ mode: "cowork" });
     expect(
       cowork.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary")).props
         .open,
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("keeps secondary turn actions collapsed while preserving an immediately reachable retry", () => {
+    const onRetryTurn = vi.fn();
+    const renderer = renderTurn({
+      selected: true,
+      onEditTurn: vi.fn(),
+      onRetryTurn,
+      turn: createTurn({
+        trace: {
+          ...createTurn().trace,
+          status: "failed",
+          failure: {
+            failureClass: "provider_error",
+            message: "Provider unavailable.",
+            retryable: true,
+          },
+        },
+      }),
+    });
+
+    const evidence = renderer.root.find((node) =>
+      String(node.props.className ?? "").includes("mc-next-turn-evidence-summary"),
+    );
+    const actionMenu = renderer.root.findByProps({ className: "mc-next-thread-action-menu" });
+    const retry = renderer.root.findByProps({ "aria-label": "Retry assistant answer for turn turn-1" });
+
+    expect(evidence.props.open).toBe(false);
+    expect(actionMenu.props.open).not.toBe(true);
+    expect(actionMenu.findAllByProps({ "aria-label": "Retry assistant answer for turn turn-1" })).toHaveLength(0);
+    expect(actionMenu.findByType("summary").children).toEqual(["More"]);
+
+    TestRenderer.act(() => {
+      retry.props.onClick();
+    });
+    expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("renders a recovery retry without an empty More menu when it is the only turn action", () => {
+    const onRetryTurn = vi.fn();
+    const renderer = renderTurn({
+      onRetryTurn,
+      turn: createTurn({
+        assistantMessage: undefined,
+        trace: {
+          ...createTurn().trace,
+          status: "failed",
+          failure: {
+            failureClass: "provider_error",
+            message: "Provider unavailable.",
+            retryable: true,
+          },
+        },
+      }),
+    });
+
+    const retry = renderer.root.findByProps({ "aria-label": "Retry assistant answer for turn turn-1" });
+    expect(renderer.root.findAllByProps({ className: "mc-next-thread-action-menu" })).toHaveLength(0);
+
+    TestRenderer.act(() => {
+      retry.props.onClick();
+    });
+    expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("can leave active failure recovery to the focused summary without removing historical actions", () => {
+    const renderer = renderTurn({
+      hideRecoveryAction: true,
+      onEditTurn: vi.fn(),
+      turn: createTurn({
+        trace: {
+          ...createTurn().trace,
+          status: "failed",
+          failure: {
+            failureClass: "provider_error",
+            message: "Provider unavailable.",
+            retryable: true,
+          },
+        },
+      }),
+    });
+
+    expect(renderer.root.findAllByProps({ "aria-label": "Retry assistant answer for turn turn-1" })).toHaveLength(0);
+    // Non-recovery actions stay available from the collapsed menu.
+    expect(renderer.root.findByProps({ className: "mc-next-thread-action-menu" }).props.open).not.toBe(true);
+  });
+
+  it("does not suppress ordinary failed assistant prose in focused Chat", () => {
+    const base = createTurn();
+    const renderer = renderTurn({
+      hideApprovedToolFailureOutput: true,
+      turn: {
+        ...base,
+        assistantMessage: {
+          ...base.assistantMessage!,
+          content: "I could not finish the check, but the project is intact.",
+        },
+        trace: {
+          ...base.trace,
+          status: "failed",
+          failure: {
+            failureClass: "tool_failed",
+            message: "Tool unavailable.",
+            retryable: false,
+          },
+        },
+      },
+    });
+
+    expect(renderedText(renderer)).toContain("I could not finish the check, but the project is intact.");
+  });
+
+  it("collapses non-actionable notices behind one compact updates disclosure", () => {
+    const renderer = TestRenderer.create(
+      <ChatThreadNotices
+        notices={[
+          {
+            id: "notice-1",
+            tone: "warning",
+            content: "Tool queue is backed up.",
+            timestamp: "2026-05-15T00:00:02.000Z",
+          },
+        ]}
+      />,
+    );
+
+    const updates = renderer.root.findByProps({ className: "mc-next-thread-notice-feed" });
+    expect(updates.props.open).not.toBe(true);
+    expect(updates.findByType("summary").children).toEqual(["Updates (", "1", ")"]);
+    expect(renderedText(renderer)).toContain("Tool queue is backed up.");
+  });
+
+  it("closes Updates when the conversation scope changes", () => {
+    const firstNotices = [
+      {
+        id: "notice-1",
+        tone: "warning" as const,
+        content: "Tool queue is backed up.",
+        timestamp: "2026-05-15T00:00:02.000Z",
+      },
+    ];
+    const renderer = TestRenderer.create(<ChatThreadNotices notices={firstNotices} scopeKey="session-a" />);
+
+    TestRenderer.act(() => {
+      renderer.root
+        .findByProps({ className: "mc-next-thread-notice-feed" })
+        .props.onToggle({ currentTarget: { open: true } });
+    });
+    expect(renderer.root.findByProps({ className: "mc-next-thread-notice-feed" }).props.open).toBe(true);
+
+    TestRenderer.act(() => {
+      renderer.update(
+        <ChatThreadNotices
+          notices={[{ ...firstNotices[0], id: "notice-2", content: "Different chat update." }]}
+          scopeKey="session-b"
+        />,
+      );
+    });
+    expect(renderer.root.findByProps({ className: "mc-next-thread-notice-feed" }).props.open).toBe(false);
   });
 
   it("does not render an empty action menu when no turn actions are available", () => {
@@ -614,23 +777,21 @@ describe("ChatThreadPrimitives", () => {
     expect(isInteractiveChatEventTarget({ closest: () => ({ tagName: "BUTTON" }) } as any, {} as any)).toBe(true);
   });
 
-  it("keeps a manually-closed evidence summary closed after the streaming default flips back open", () => {
-    // "running" drives evidenceExpandedByDefault=true; "completed" drives it false (see
-    // ChatThreadPrimitives evidenceExpandedByDefault derivation) — this stands in for a
-    // stream ending and the default expansion collapsing.
+  it("keeps evidence closed while a turn transitions between streaming and settled states", () => {
+    // Evidence is intentionally never opened just because a turn starts or settles.
     const runningTurn = createTurn({ trace: { ...createTurn().trace, status: "running" } });
     const renderer = renderTurn({ turn: runningTurn });
     const findEvidence = () =>
       renderer.root.find((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-summary"));
 
-    expect(findEvidence().props.open).toBe(true);
+    expect(findEvidence().props.open).toBe(false);
 
     TestRenderer.act(() => {
       findEvidence().props.onToggle({ currentTarget: { open: false } });
     });
     expect(findEvidence().props.open).toBe(false);
 
-    // Stream ends: expandedByDefault flips back to false — no-op for an already-closed panel.
+    // Stream ends: the compact default remains closed.
     TestRenderer.act(() => {
       renderer.update(
         <ChatThreadTurnCard
@@ -649,7 +810,7 @@ describe("ChatThreadPrimitives", () => {
     });
     expect(findEvidence().props.open).toBe(false);
 
-    // The real regression: default flips true again — user's manual close must still win.
+    // A retry starts streaming again: it must stay closed.
     TestRenderer.act(() => {
       renderer.update(
         <ChatThreadTurnCard
@@ -669,7 +830,7 @@ describe("ChatThreadPrimitives", () => {
     expect(findEvidence().props.open).toBe(false);
   });
 
-  it("keeps a manually-opened evidence summary open after the streaming default flips back closed", () => {
+  it("keeps a manually-opened evidence summary open as a turn changes status", () => {
     const completedTurn = createTurn({ trace: { ...createTurn().trace, status: "completed" } });
     const runningTurn = createTurn({ trace: { ...createTurn().trace, status: "running" } });
     const renderer = renderTurn({ turn: completedTurn });
@@ -683,8 +844,7 @@ describe("ChatThreadPrimitives", () => {
     });
     expect(findEvidence().props.open).toBe(true);
 
-    // Default flips true (e.g. a retry starts streaming again) — already open, so this
-    // render pass is a no-op for the panel state either way.
+    // A retry starts streaming again; the operator's explicit open state wins.
     TestRenderer.act(() => {
       renderer.update(
         <ChatThreadTurnCard
@@ -703,7 +863,7 @@ describe("ChatThreadPrimitives", () => {
     });
     expect(findEvidence().props.open).toBe(true);
 
-    // The real regression: default flips back to false — user's manual open must still win.
+    // Settling again must not collapse a detail panel the operator opened.
     TestRenderer.act(() => {
       renderer.update(
         <ChatThreadTurnCard
@@ -823,6 +983,41 @@ describe("ChatThreadPrimitives", () => {
 
     expect(renderer.root.findAllByProps({ className: "mc-next-live-activity" })).toHaveLength(0);
     expect(renderer.root.findByProps({ className: "mc-next-thread-tool-activity" })).toBeTruthy();
+  });
+
+  it("allows the canonical timeline to suppress the duplicate per-turn live activity rail", () => {
+    const toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "memory.search",
+        status: "started",
+        startedAt: "2026-05-15T00:00:01.000Z",
+      },
+    ] satisfies ChatThreadTurnRecord["toolRuns"];
+    const renderer = renderTurn({
+      hideLiveActivity: true,
+      hidePendingIndicator: true,
+      turn: createTurn({
+        assistantMessage: undefined,
+        toolRuns,
+        trace: { ...createTurn().trace, status: "running", toolRuns },
+      }),
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "",
+        visibleText: "",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    expect(renderer.root.findAllByProps({ className: "mc-next-live-activity" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "mc-next-thread-tool-activity" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "mc-next-assistant-streaming-skeleton" })).toHaveLength(0);
   });
 
   it("passes onStopStreamingTurn to the rail only while this card's turn is the one streaming", () => {

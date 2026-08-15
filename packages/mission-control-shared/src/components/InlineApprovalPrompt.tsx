@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { IdentifierChip } from "./IdentifierChip";
 
 function formatRemainingDuration(ms: number): string {
@@ -61,6 +61,8 @@ export function InlineApprovalPrompt({
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [confirmWorkspaceAllow, setConfirmWorkspaceAllow] = useState(false);
+  const [technicalDetailsOpen, setTechnicalDetailsOpen] = useState(false);
+  const technicalDetailsId = useId();
 
   useEffect(() => {
     if (!expiresAt) {
@@ -219,13 +221,21 @@ export function InlineApprovalPrompt({
         </div>
       ) : null}
       {codePreview || codeHash || wrapperManifestHash || capabilitySnapshotId || inspectPath ? (
-        <details className="approval-technical-details">
-          <summary>Technical details</summary>
-          {codePreview ? <pre className="chat-approval-id">{codePreview}</pre> : null}
-          {codeHash ? <p className="chat-approval-id">Code hash: {codeHash}</p> : null}
-          {wrapperManifestHash ? <p className="chat-approval-id">Wrapper hash: {wrapperManifestHash}</p> : null}
-          {capabilitySnapshotId ? <p className="chat-approval-id">Snapshot: {capabilitySnapshotId}</p> : null}
-          {inspectPath ? <p className="chat-approval-id">Inspect: {inspectPath}</p> : null}
+        <details
+          className="approval-technical-details"
+          open={technicalDetailsOpen}
+          onToggle={(event) => setTechnicalDetailsOpen(event.currentTarget.open)}
+        >
+          <summary aria-expanded={technicalDetailsOpen} aria-controls={technicalDetailsId}>
+            Technical details
+          </summary>
+          <div id={technicalDetailsId}>
+            {codePreview ? <pre className="chat-approval-id">{codePreview}</pre> : null}
+            {codeHash ? <p className="chat-approval-id">Code hash: {codeHash}</p> : null}
+            {wrapperManifestHash ? <p className="chat-approval-id">Wrapper hash: {wrapperManifestHash}</p> : null}
+            {capabilitySnapshotId ? <p className="chat-approval-id">Snapshot: {capabilitySnapshotId}</p> : null}
+            {inspectPath ? <p className="chat-approval-id">Inspect: {inspectPath}</p> : null}
+          </div>
         </details>
       ) : null}
       {approvalsHref ? (

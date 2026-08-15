@@ -1587,6 +1587,32 @@
   scrollbar-width: none;
 }
 
+/* Focused Chat keeps healthy runtime telemetry out of the reading path. The
+   single System disclosure retains the full operational record without a row
+   of competing footer pills. */
+.mc-next-status-strip:has(.mc-next-status-system) {
+  justify-content: flex-end;
+}
+
+.mc-next-status-system summary > svg {
+  flex: 0 0 auto;
+  color: color-mix(in oklab, var(--gc-risk-safe) 78%, var(--foreground));
+}
+
+.mc-next-status-strip[data-status="checking"] .mc-next-status-system summary > svg,
+.mc-next-status-strip[data-status="checking"] .mc-next-status-system summary strong {
+  color: var(--text-muted);
+}
+
+.mc-next-status-strip[data-status="attention"] .mc-next-status-system summary {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 52%, var(--border));
+}
+
+.mc-next-status-strip[data-status="attention"] .mc-next-status-system summary > svg,
+.mc-next-status-strip[data-status="attention"] .mc-next-status-system summary strong {
+  color: color-mix(in oklab, var(--gc-risk-caution) 84%, var(--foreground));
+}
+
 .mc-next-status-strip::-webkit-scrollbar {
   display: none;
 }
@@ -1781,6 +1807,10 @@
   border-radius: var(--r-sm);
   background: var(--mc-surface-1);
   box-shadow: var(--mc-shadow-strong);
+}
+
+.mc-next-status-details:not([open]) > .mc-next-status-details-popover {
+  display: none;
 }
 
 .mc-next-status-details-mobile-only {
