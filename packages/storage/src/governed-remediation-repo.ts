@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Governed-remediation storage grew past the cap in the control-plane work; splitting the repository module is tracked follow-up, and the always-on lint lane must stay green meanwhile. */
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   ConflictError,
@@ -69,12 +70,7 @@ export interface GovernedRemediationReconciliationRecoveryQuery extends Governed
   after?: GovernedRemediationReconciliationRecoveryCursor;
 }
 
-export type GovernedRemediationPhaseClaimAcquireDisposition =
-  | "acquired"
-  | "replayed"
-  | "busy"
-  | "stale"
-  | "completed";
+export type GovernedRemediationPhaseClaimAcquireDisposition = "acquired" | "replayed" | "busy" | "stale" | "completed";
 
 export interface GovernedRemediationPhaseClaimAcquireInput {
   claimId: string;
@@ -378,11 +374,7 @@ export class GovernedRemediationRepository {
         input.phase,
         input.expectedAggregateRevision,
       );
-      const aggregateRevision = this.readAggregateRevision(
-        input.aggregateKind,
-        input.aggregateId,
-        input.remediationId,
-      );
+      const aggregateRevision = this.readAggregateRevision(input.aggregateKind, input.aggregateId, input.remediationId);
       if (aggregateRevision !== input.expectedAggregateRevision) {
         const observed = matching ?? active;
         this.recordPhaseClaimAcquisition(input, acquisitionRequestSha256, "stale", observed);
@@ -470,11 +462,7 @@ export class GovernedRemediationRepository {
   }): GovernedRemediationClaimedPhasePublicationResult {
     const witness = normalizePhaseClaimWitness(input.claim);
     const expectedAggregateRevision = positiveInteger(input.expectedAggregateRevision, "expectedAggregateRevision");
-    const publicationIdempotencyKey = identifier(
-      input.publicationIdempotencyKey,
-      "publicationIdempotencyKey",
-      512,
-    );
+    const publicationIdempotencyKey = identifier(input.publicationIdempotencyKey, "publicationIdempotencyKey", 512);
     const outcome = normalizeClaimedPhaseOutcome(input.outcome);
     const outcomeSha256 = digestRecord(outcome);
     const leaseTokenSha256 = digestLeaseToken(witness.leaseToken);
@@ -1284,10 +1272,7 @@ export class GovernedRemediationRepository {
     });
   }
 
-  private assertClaimedOutcomeBindings(
-    claim: PhaseClaimRow,
-    outcome: GovernedRemediationClaimedPhaseOutcome,
-  ): void {
+  private assertClaimedOutcomeBindings(claim: PhaseClaimRow, outcome: GovernedRemediationClaimedPhaseOutcome): void {
     const state = this.getState(claim.remediation_id);
     const expectedRevision = asPositiveInteger(claim.expected_aggregate_revision);
     const claimEffectId = claim.effect_id;
@@ -1363,10 +1348,7 @@ export class GovernedRemediationRepository {
       if (outcome.receipt.kind === "resume") {
         if (claimOwnerRevision === null) throw conflict("claimed resume owner revision");
         const verification = this.getReceipt(outcome.receipt.verificationReceiptId);
-        if (
-          verification.kind !== "verification" ||
-          verification.ownerRevisionObserved !== claimOwnerRevision
-        ) {
+        if (verification.kind !== "verification" || verification.ownerRevisionObserved !== claimOwnerRevision) {
           throw conflict("claimed resume owner revision");
         }
       }
@@ -1478,9 +1460,7 @@ export class GovernedRemediationRepository {
       return;
     }
     const reconciliationReceipt =
-      outcome.kind === "reconciliation_receipt"
-        ? outcome.receipt
-        : outcome.reconciliationReceipt;
+      outcome.kind === "reconciliation_receipt" ? outcome.receipt : outcome.reconciliationReceipt;
     const nextReconciliation = outcome.nextReconciliation;
     assertReconciliationNext(nextReconciliation);
     if (
@@ -1513,20 +1493,14 @@ export class GovernedRemediationRepository {
         throw conflict("claimed reconciliation resume owner revision");
       } else {
         const verification = this.getReceipt(outcome.resumeReceipt.verificationReceiptId);
-        if (
-          verification.kind !== "verification" ||
-          verification.ownerRevisionObserved !== claimOwnerRevision
-        ) {
+        if (verification.kind !== "verification" || verification.ownerRevisionObserved !== claimOwnerRevision) {
           throw conflict("claimed reconciliation resume owner revision");
         }
       }
     }
   }
 
-  private assertReceiptLineage(
-    state: GovernedRemediationStoredState,
-    receipt: GovernedRemediationReceipt,
-  ): void {
+  private assertReceiptLineage(state: GovernedRemediationStoredState, receipt: GovernedRemediationReceipt): void {
     if (receipt.kind === "application") {
       if (receipt.ownerId !== state.ownerId) throw conflict("application receipt owner");
       return;
@@ -1624,8 +1598,7 @@ export class GovernedRemediationRepository {
     return {
       claim: mapPhaseClaimRow(row),
       state: this.getState(row.remediation_id),
-      reconciliation:
-        row.aggregate_kind === "reconciliation" ? this.getReconciliation(row.aggregate_id) : null,
+      reconciliation: row.aggregate_kind === "reconciliation" ? this.getReconciliation(row.aggregate_id) : null,
       replayed,
     };
   }
@@ -1696,9 +1669,9 @@ export class GovernedRemediationRepository {
   }
 
   private findPhaseClaimById(claimId: string): PhaseClaimRow | undefined {
-    return this.db
-      .prepare("SELECT * FROM governed_remediation_phase_claims WHERE claim_id = ?")
-      .get(claimId) as PhaseClaimRow | undefined;
+    return this.db.prepare("SELECT * FROM governed_remediation_phase_claims WHERE claim_id = ?").get(claimId) as
+      | PhaseClaimRow
+      | undefined;
   }
 
   private findPhaseClaimForOperation(input: GovernedRemediationPhaseClaimAcquireInput): PhaseClaimRow | undefined {
@@ -1736,9 +1709,7 @@ export class GovernedRemediationRepository {
 
   private findPhaseClaimAcquisition(acquisitionIdempotencyKey: string): PhaseClaimAcquisitionRow | undefined {
     return this.db
-      .prepare(
-        "SELECT * FROM governed_remediation_phase_claim_acquisitions WHERE acquisition_idempotency_key = ?",
-      )
+      .prepare("SELECT * FROM governed_remediation_phase_claim_acquisitions WHERE acquisition_idempotency_key = ?")
       .get(acquisitionIdempotencyKey) as PhaseClaimAcquisitionRow | undefined;
   }
 
@@ -1772,7 +1743,8 @@ export class GovernedRemediationRepository {
   ): GovernedRemediationPhaseClaimAcquireResult {
     const claim = row.claim_id ? this.findPhaseClaimById(row.claim_id) : undefined;
     if (!claim) return { disposition: "stale", claim: null };
-    const observedRevision = row.observed_claim_revision === null ? null : asPositiveInteger(row.observed_claim_revision);
+    const observedRevision =
+      row.observed_claim_revision === null ? null : asPositiveInteger(row.observed_claim_revision);
     const currentRevision = asPositiveInteger(claim.claim_revision);
     if (row.disposition === "acquired" && observedRevision === currentRevision && claim.status === "active") {
       return { disposition: "replayed", claim: mapPhaseClaimRow(claim) };
@@ -2422,7 +2394,8 @@ function normalizePhaseClaimAcquireInput(
     "effect_reconcile",
     "resume_reconcile",
   ].includes(phase);
-  if (effectBound !== (effectId !== null)) throw new TypeError("Governed remediation phase claim effect binding is invalid.");
+  if (effectBound !== (effectId !== null))
+    throw new TypeError("Governed remediation phase claim effect binding is invalid.");
   if (aggregateKind === "state") {
     if (aggregateId !== remediationId || phase === "effect_reconcile") {
       throw new TypeError("Governed remediation state phase claim aggregate binding is invalid.");
@@ -2502,7 +2475,9 @@ function normalizePhaseClaimWitness(input: GovernedRemediationPhaseClaimWitness)
   };
 }
 
-function normalizeClaimedPhaseOutcome(input: GovernedRemediationClaimedPhaseOutcome): GovernedRemediationClaimedPhaseOutcome {
+function normalizeClaimedPhaseOutcome(
+  input: GovernedRemediationClaimedPhaseOutcome,
+): GovernedRemediationClaimedPhaseOutcome {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("Governed remediation claimed phase outcome must be an object.");
   }
@@ -2867,7 +2842,9 @@ function reconciliationResolutionForState(
 }
 
 function digestLeaseToken(value: string): string {
-  return createHash("sha256").update(Buffer.from(canonicalLeaseToken(value), "base64url")).digest("hex");
+  return createHash("sha256")
+    .update(Buffer.from(canonicalLeaseToken(value), "base64url"))
+    .digest("hex");
 }
 
 function canonicalLeaseToken(value: unknown): string {
@@ -3011,10 +2988,7 @@ function normalizeReconciliationRecoveryCursor(
   return cursor
     ? {
         updatedAt: timestamp(cursor.updatedAt, "reconciliation recovery cursor timestamp"),
-        reconciliationId: identifier(
-          cursor.reconciliationId,
-          "reconciliation recovery cursor reconciliationId",
-        ),
+        reconciliationId: identifier(cursor.reconciliationId, "reconciliation recovery cursor reconciliationId"),
       }
     : null;
 }
