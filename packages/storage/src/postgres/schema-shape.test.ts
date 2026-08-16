@@ -27,6 +27,21 @@ test("schema-shape manifest expands serial pseudo-types the way Postgres reports
   });
 });
 
+test("schema-shape manifest normalizes int2 and int8 aliases", () => {
+  const manifest = buildPostgresSchemaShapeManifest([
+    {
+      version: 1,
+      name: "integer_aliases",
+      sql: "CREATE TABLE integer_aliases (a INT2, b INT8)",
+    },
+  ]);
+  const table = manifest.tables.find((candidate) => candidate.name === "integer_aliases");
+  assert.ok(table);
+  const byName = new Map(table.columns.map((column) => [column.name, column]));
+  assert.equal(byName.get("a")?.type, "smallint");
+  assert.equal(byName.get("b")?.type, "bigint");
+});
+
 test("schema-shape manifest normalizes each serial alias to its integer family", () => {
   const manifest = buildPostgresSchemaShapeManifest([
     {

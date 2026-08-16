@@ -95,8 +95,10 @@ function readNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const JSON_UNICODE_ESCAPE_TRIGGER_RE = /\\u[0-9a-fA-F]{4}/;
+
 export function decodeJsonUnicodeEscapes(content: string): string {
-  if (!/\\u[0-9a-fA-F]{4}/.test(content)) {
+  if (!JSON_UNICODE_ESCAPE_TRIGGER_RE.test(content)) {
     return content;
   }
   return content.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) =>
@@ -349,6 +351,22 @@ function looksLikeHtml(content: string): boolean {
 
 const TEXT_FINALIZE_BLOCKER_RE = /<(?:script|style|svg|math|canvas)\b|<!--/i;
 
+/**
+ * Blocker detection must see what `stripHtmlNoise` will eventually see: that
+ * pipeline decodes HTML entities BEFORE stripping, so an entity-encoded
+ * opener (`&lt;script&gt;`, `&#60;style&#62;`, `&lt;!--`) materializes only
+ * after decoding. Testing the raw line would finalize the opener's line
+ * separately from its closer and diverge from the one-shot normalizer.
+ * Entities never span newlines, so decoding line-by-line is exact; the raw
+ * test stays first as the cheap fast path (decoding cannot remove a raw `<`).
+ */
+function lineBlocksTextFinalization(line: string): boolean {
+  if (TEXT_FINALIZE_BLOCKER_RE.test(line)) {
+    return true;
+  }
+  return line.includes("&") && TEXT_FINALIZE_BLOCKER_RE.test(decodeBasicHtmlEntities(line));
+}
+
 export interface IncrementalDisplayTextState {
   /** Full raw content seen on the previous push; used to detect non-append deltas. */
   raw: string;
@@ -370,6 +388,14 @@ export interface IncrementalDisplayTextState {
   seenTag: boolean;
   /** Index the most recent push began its line walk from (perf instrumentation). */
   lastWalkStart: number;
+  /**
+   * True while no `\uXXXX` escape trigger has been seen anywhere in `raw`.
+   * Lets each append test only the delta (plus a 5-char boundary window for
+   * escapes split across pushes) instead of regex-scanning the whole
+   * accumulated string per flush. Monotone: once false, stays false until a
+   * non-append reset.
+   */
+  rawEscapeFree: boolean;
 }
 
 export function createIncrementalDisplayTextState(): IncrementalDisplayTextState {
@@ -386,6 +412,7 @@ export function createIncrementalDisplayTextState(): IncrementalDisplayTextState
     seenCommentClose: false,
     seenTag: false,
     lastWalkStart: 0,
+    rawEscapeFree: true,
   };
 }
 
@@ -401,6 +428,7 @@ function resetIncrementalDisplayTextState(state: IncrementalDisplayTextState): v
   state.seenCommentClose = false;
   state.seenTag = false;
   state.lastWalkStart = 0;
+  state.rawEscapeFree = true;
 }
 
 function countTrailingNewlines(value: string): number {
@@ -464,13 +492,24 @@ function consumePiece(state: IncrementalDisplayTextState, decoded: string, end: 
 export function normalizeAssistantDisplayTextIncremental(state: IncrementalDisplayTextState, content: string): string {
   if (content.length < state.raw.length || !content.startsWith(state.raw)) {
     resetIncrementalDisplayTextState(state);
+    state.raw = "";
+  }
+  // Escape detection scans only the appended delta plus a 5-char boundary
+  // window (a `\uXXXX` token is 6 chars, so any escape completed by new
+  // characters starts at or after previousLength - 5). This keeps the
+  // escape-free common case at O(delta) per flush instead of re-running the
+  // trigger regex over the whole accumulated string.
+  if (state.rawEscapeFree) {
+    const scanFrom = Math.max(0, state.raw.length - 5);
+    if (JSON_UNICODE_ESCAPE_TRIGGER_RE.test(content.slice(scanFrom))) {
+      state.rawEscapeFree = false;
+    }
   }
   state.raw = content;
-  // Decoding is whole-string (escape tokens never span the completed-line
-  // boundary, so the decoded prefix before `consumedEnd` is append-stable and
-  // carried indices stay valid). The no-escape fast path returns `content`
-  // itself without allocating.
-  const decoded = decodeJsonUnicodeEscapes(content);
+  // When escapes are present, decoding stays whole-string (escape tokens
+  // never span the completed-line boundary, so the decoded prefix before
+  // `consumedEnd` is append-stable and carried indices stay valid).
+  const decoded = state.rawEscapeFree ? content : decodeJsonUnicodeEscapes(content);
   state.lastWalkStart = state.fenceScanEnd;
 
   // Walk newly completed lines, consuming append-immutable regions.
@@ -497,7 +536,7 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
           state.fenceChar = opening.char;
           state.fenceLength = opening.length;
         }
-      } else if (!state.textBlocked && TEXT_FINALIZE_BLOCKER_RE.test(line)) {
+      } else if (!state.textBlocked && lineBlocksTextFinalization(line)) {
         state.textBlocked = true;
       }
     } else if (state.fenceChar && matchMarkdownFenceClosing(line, state.fenceChar, state.fenceLength)) {

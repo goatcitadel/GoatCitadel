@@ -45,6 +45,21 @@ const CORPUS: Array<{ name: string; content: string }> = [
   { name: "html only fallback", content: "<div><span></span></div>" },
   { name: "comment only fallback", content: "<!-- just a comment -->" },
   {
+    // Entity-encoded openers only materialize after decodeBasicHtmlEntities
+    // inside stripHtmlNoise; blocker detection must see the decoded line or
+    // the opener's line is finalized separately from its closer.
+    name: "entity-encoded script block",
+    content: "before\n&lt;script&gt;\nalert(1)\n&lt;/script&gt;\nafter\n",
+  },
+  {
+    name: "entity-encoded comment spanning lines",
+    content: "keep\n&lt;!-- drop\nacross\nlines --&gt; tail\nend\n",
+  },
+  {
+    name: "numeric-entity-encoded style opener",
+    content: "a\n&#60;style&#62;\nbody { display: none }\n&#60;/style&#62;\nb\n",
+  },
+  {
     name: "kitchen sink",
     content:
       "Intro &amp; setup\n\n```html\n<script>kept()</script>\n<!-- kept -->\n```\n\n" +
@@ -121,6 +136,20 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     expect(state.lastWalkStart).toBe(first.length);
     // And the finalized prefix was consumed, so the recomputed tail excludes it.
     expect(state.consumedEnd).toBe(first.length);
+  });
+
+  it("detects a JSON escape split across pushes via the boundary window", () => {
+    const state = createIncrementalDisplayTextState();
+    // Escape-free stream keeps the fast path (no full-string rescan).
+    normalizeAssistantDisplayTextIncremental(state, "plain ");
+    expect(state.rawEscapeFree).toBe(true);
+    // The escape token arrives split across two pushes: "\\u00" then "41".
+    normalizeAssistantDisplayTextIncremental(state, "plain \\u00");
+    expect(state.rawEscapeFree).toBe(true);
+    const decodedResult = normalizeAssistantDisplayTextIncremental(state, "plain \\u0041 end");
+    expect(state.rawEscapeFree).toBe(false);
+    expect(decodedResult).toBe(normalizeAssistantDisplayText("plain \\u0041 end"));
+    expect(decodedResult).toContain("plain A end");
   });
 
   it("keeps equivalence while finalization is blocked by an unclosed block element", () => {
