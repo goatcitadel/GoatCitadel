@@ -1442,9 +1442,9 @@
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 148,
+      "expectedCount": 149,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 148,
+      "expectedLastVersion": 149,
       "migrations": [
         {
           "version": 1,
@@ -2327,14 +2327,20 @@
         {
           "version": 147,
           "name": "managed_source_install_registry",
-          "definitionSha256": "7cd1be1b558572ff5f4760f28f78239f6319ebfbf984e138af59ffdf02758821",
-          "runtimeIntegritySha256": "9d51dc5dacfcfb3704e5ea147f84e9c999ac7cd14ea043959bf1d1b3081abebc"
+          "definitionSha256": "8f04b2dac8c5863351e4643e8a4ca37c036c93d1f34e10d3c321f3810ad2f89c",
+          "runtimeIntegritySha256": "8e969753aae7af0c8b17a8db522b2287581e4be0fab7a49cde691959faa58ff1"
         },
         {
           "version": 148,
           "name": "product_source_update_manifests",
-          "definitionSha256": "00fa951007b505f7ca839510e577a1c986c08d2c371d6dcb8c5382b3640c5b02",
-          "runtimeIntegritySha256": "34334761d41a9b5b0dfb6f3a001ffcadcbd0ee3ba32a93d3a404b13fd91394e6"
+          "definitionSha256": "053c91ea7cfc2887efdd40db60cebf3cf09fb225634b6a10d438aaa314db8f2e",
+          "runtimeIntegritySha256": "700ea8a463be3db735524b0419234d87645dde50d843687b2e970b125f0382b9"
+        },
+        {
+          "version": 149,
+          "name": "canonical_postgres_schema_authority_v2",
+          "definitionSha256": "3287cbd1a801b4c10a82c1be1cd4e7004100d7c4b48cf1ce37174cd81c1bd582",
+          "runtimeIntegritySha256": "d412902ccfbd03f6e8a80c512c692d03c483e95de70c44a3013e9433560f58b5"
         }
       ]
     }
