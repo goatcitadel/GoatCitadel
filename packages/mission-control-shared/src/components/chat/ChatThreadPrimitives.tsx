@@ -1141,7 +1141,9 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const routingSummary = summarizeTurnRouting(turn, { effectiveVerb: "used" });
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
   const durableRunId = turn.trace.durable?.runId;
-  const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
+  // A published (non-null) preview means the turn is still streaming or
+  // settling its final reveal; the cleared preview is the idle signal.
+  const isStreamingTurn = streamingPreview?.turnId === turn.turnId;
   // The live activity rail owns rendering tool runs while the turn is in
   // flight; TurnEvidenceSummary's ChatTurnActivityRows takes back over the
   // instant the trace settles, in the same commit the rail unmounts (see
@@ -1303,7 +1305,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
         showContextToggle={showContextToggle}
         showOperationalDetails={showOperationalDetails}
         expandedByDefault={evidenceExpandedByDefault}
-        suppressActivityRows={showLiveActivity}
+        suppressActivityRows={showLiveActivity && !hideLiveActivity}
         onToggleContextTurn={onToggleContextTurn}
         onOpenRunDetails={onOpenRunDetails}
         onOpenUniversalRunDetail={onOpenUniversalRunDetail}

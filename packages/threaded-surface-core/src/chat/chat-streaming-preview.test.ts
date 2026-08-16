@@ -3,14 +3,12 @@ import { ChatStreamingPreviewBuffer, resolveVisibleStreamingText } from "./chat-
 
 describe("chat streaming preview", () => {
   it("reveals an in-progress line instead of waiting for a newline", () => {
-    expect(resolveVisibleStreamingText("First line\nsecond", 1000, 1010, { revealCharsPerFrame: 120 })).toBe(
-      "First line\nsecond",
-    );
+    expect(resolveVisibleStreamingText("First line\nsecond", { revealCharsPerFrame: 120 })).toBe("First line\nsecond");
   });
 
   it("continues from the prior visible prefix", () => {
     expect(
-      resolveVisibleStreamingText("short answer continues", 1000, 1016, {
+      resolveVisibleStreamingText("short answer continues", {
         previousVisibleText: "short",
         revealCharsPerFrame: 7,
       }),
@@ -19,18 +17,17 @@ describe("chat streaming preview", () => {
 
   it("keeps late no-newline chunks on the frame reveal budget", () => {
     expect(
-      resolveVisibleStreamingText("short answer continues", 1000, 2000, {
+      resolveVisibleStreamingText("short answer continues", {
         previousVisibleText: "short",
         revealCharsPerFrame: 7,
-        noNewlineRevealChars: 80,
       }),
     ).toBe("short answer");
   });
 
   it("reveals long no-newline answers progressively", () => {
     const content = "x".repeat(80);
-    const firstFrame = resolveVisibleStreamingText(content, 1000, 1005, { revealCharsPerFrame: 12 });
-    const secondFrame = resolveVisibleStreamingText(content, 1000, 1021, {
+    const firstFrame = resolveVisibleStreamingText(content, { revealCharsPerFrame: 12 });
+    const secondFrame = resolveVisibleStreamingText(content, {
       previousVisibleText: firstFrame,
       revealCharsPerFrame: 12,
     });
@@ -40,7 +37,7 @@ describe("chat streaming preview", () => {
   });
 
   it("reveals all text in reduced-motion mode", () => {
-    expect(resolveVisibleStreamingText("partial", 1000, 1001, { reducedMotion: true })).toBe("partial");
+    expect(resolveVisibleStreamingText("partial", { reducedMotion: true })).toBe("partial");
   });
 
   it("batches flushes through frame cadence and max-delay fallback", () => {
@@ -222,7 +219,7 @@ describe("chat streaming preview", () => {
 
   it("adaptive reveal: 3000-char backlog / base 18 → reveals ceil(3000/15)=200 chars", () => {
     const backlog = "x".repeat(3000);
-    const result = resolveVisibleStreamingText(backlog, 1000, 1016, {
+    const result = resolveVisibleStreamingText(backlog, {
       previousVisibleText: "",
       revealCharsPerFrame: 18,
     });
@@ -231,7 +228,7 @@ describe("chat streaming preview", () => {
 
   it("adaptive reveal: 100000-char backlog → capped at MAX_REVEAL_CHARS_PER_FRAME (600)", () => {
     const backlog = "x".repeat(100000);
-    const result = resolveVisibleStreamingText(backlog, 1000, 1016, {
+    const result = resolveVisibleStreamingText(backlog, {
       previousVisibleText: "",
       revealCharsPerFrame: 18,
     });
@@ -240,7 +237,7 @@ describe("chat streaming preview", () => {
 
   it("adaptive reveal: 30-char backlog / base 18 → reveals 18 (base floor preserved)", () => {
     const backlog = "x".repeat(30);
-    const result = resolveVisibleStreamingText(backlog, 1000, 1016, {
+    const result = resolveVisibleStreamingText(backlog, {
       previousVisibleText: "",
       revealCharsPerFrame: 18,
     });

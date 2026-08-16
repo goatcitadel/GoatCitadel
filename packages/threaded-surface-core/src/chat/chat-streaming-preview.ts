@@ -22,7 +22,6 @@ interface ChatStreamingPreviewBufferOptions {
   now?: () => number;
   maxDelayMs?: number;
   noNewlineRevealDelayMs?: number;
-  noNewlineRevealChars?: number;
   revealCharsPerFrame?: number;
   isReducedMotion?: () => boolean;
   requestFrame?: (callback: () => void) => number;
@@ -40,15 +39,12 @@ interface ChatStreamingPreviewFinishOptions {
 interface ResolveVisibleStreamingTextOptions {
   force?: boolean;
   reducedMotion?: boolean;
-  noNewlineRevealDelayMs?: number;
-  noNewlineRevealChars?: number;
   previousVisibleText?: string;
   revealCharsPerFrame?: number;
 }
 
 const DEFAULT_MAX_DELAY_MS = 50;
 const DEFAULT_NO_NEWLINE_DELAY_MS = 250;
-const DEFAULT_NO_NEWLINE_CHARS = 80;
 const DEFAULT_REVEAL_CHARS_PER_FRAME = 18;
 
 export const STREAM_CATCH_UP_FRAMES = 15; // drain horizon ≈ 250 ms at 60 fps
@@ -62,12 +58,7 @@ export function isReducedMotionPreferred(): boolean {
   );
 }
 
-export function resolveVisibleStreamingText(
-  text: string,
-  startedAt: number,
-  now: number,
-  options: ResolveVisibleStreamingTextOptions = {},
-): string {
+export function resolveVisibleStreamingText(text: string, options: ResolveVisibleStreamingTextOptions = {}): string {
   if (!text || options.force || options.reducedMotion) {
     return text;
   }
@@ -106,7 +97,6 @@ export class ChatStreamingPreviewBuffer {
   private readonly now: () => number;
   private readonly maxDelayMs: number;
   private readonly noNewlineRevealDelayMs: number;
-  private readonly noNewlineRevealChars: number;
   private readonly revealCharsPerFrame: number;
   private readonly isReducedMotion: () => boolean;
   private readonly requestFrame: (callback: () => void) => number;
@@ -127,7 +117,6 @@ export class ChatStreamingPreviewBuffer {
     this.now = options.now ?? (() => Date.now());
     this.maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
     this.noNewlineRevealDelayMs = options.noNewlineRevealDelayMs ?? DEFAULT_NO_NEWLINE_DELAY_MS;
-    this.noNewlineRevealChars = options.noNewlineRevealChars ?? DEFAULT_NO_NEWLINE_CHARS;
     this.revealCharsPerFrame = options.revealCharsPerFrame ?? DEFAULT_REVEAL_CHARS_PER_FRAME;
     this.isReducedMotion = options.isReducedMotion ?? isReducedMotionPreferred;
     this.requestFrame =
@@ -296,11 +285,9 @@ export class ChatStreamingPreviewBuffer {
       throw new Error("Cannot create a streaming preview snapshot without a seed.");
     }
     const updatedAt = this.now();
-    this.visibleText = resolveVisibleStreamingText(this.text, this.startedAt, updatedAt, {
+    this.visibleText = resolveVisibleStreamingText(this.text, {
       force: forceVisible,
       reducedMotion: this.isReducedMotion(),
-      noNewlineRevealDelayMs: this.noNewlineRevealDelayMs,
-      noNewlineRevealChars: this.noNewlineRevealChars,
       previousVisibleText: this.visibleText,
       revealCharsPerFrame: this.revealCharsPerFrame,
     });
@@ -310,7 +297,6 @@ export class ChatStreamingPreviewBuffer {
       messageId: this.seed.messageId,
       text: this.text,
       visibleText: this.visibleText,
-      isRunning: true,
       updatedAt,
     };
   }

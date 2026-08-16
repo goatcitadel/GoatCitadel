@@ -148,7 +148,6 @@ export function ChatThreadView({
     activeStreamingTurnId ?? "none",
     streamingPreview?.turnId ?? "none",
     streamingPreview?.visibleText.length ?? 0,
-    streamingPreview?.isRunning ? "running" : "idle",
     notices.length,
     queuedCount,
     streamStatus,

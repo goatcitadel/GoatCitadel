@@ -11,7 +11,21 @@ function formatArtifactTimestamp(value: string): string {
   return parsed.toLocaleString();
 }
 
-function hardenMermaidSvg(svg: string): string {
+export function isSafeSvgLinkTarget(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+  } catch {
+    // Relative references cannot carry a scheme.
+    return !trimmed.includes(":");
+  }
+}
+
+export function hardenMermaidSvg(svg: string): string {
   // Defence-in-depth on top of mermaid's securityLevel: "strict". When a DOM is
   // available, strip scripting vectors from the rendered SVG before it is set via
   // dangerouslySetInnerHTML. When no DOM is available (SSR), fall back to the raw
@@ -28,8 +42,17 @@ function hardenMermaidSvg(svg: string): string {
     root.querySelectorAll("script, foreignObject").forEach((node) => node.remove());
     root.querySelectorAll("*").forEach((element) => {
       for (const attribute of Array.from(element.attributes)) {
-        if (attribute.name.toLowerCase().startsWith("on")) {
+        const name = attribute.name.toLowerCase();
+        if (name.startsWith("on")) {
           element.removeAttribute(attribute.name);
+          continue;
+        }
+        // SVG links execute javascript:/data: URLs on click; only allow
+        // http(s), mailto, and same-document fragment references.
+        if (name === "href" || name.endsWith(":href")) {
+          if (!isSafeSvgLinkTarget(attribute.value)) {
+            element.removeAttribute(attribute.name);
+          }
         }
       }
     });

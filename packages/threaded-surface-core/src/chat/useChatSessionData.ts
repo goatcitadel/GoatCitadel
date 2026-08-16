@@ -565,7 +565,13 @@ export function useChatSessionData(input: {
         setPrefs(nextPrefs);
         return true;
       } finally {
-        if (!background) {
+        // Only the newest load may clear the shared loading flag: a superseded
+        // foreground load settling late must not hide the spinner while the
+        // load that superseded it is still in flight. The newest generation
+        // always clears when it settles -- even a background one, so a
+        // foreground load superseded by a background refresh can never strand
+        // the spinner on (clearing an already-false flag is harmless).
+        if (generation === loadCoreGenerationRef.current) {
           setMessagesLoading(false);
         }
       }

@@ -517,7 +517,6 @@ describe("ChatThreadView", () => {
             messageId: "assistant-1",
             text: "",
             visibleText: "",
-            isRunning: true,
             updatedAt: 1,
           }}
           activeStreamingTurnId="turn-1"

@@ -220,7 +220,6 @@ describe("ChatThreadPrimitives", () => {
         messageId: "assistant-1",
         text: "Streaming answer",
         visibleText: "Streaming answer",
-        isRunning: true,
         updatedAt: 1,
       },
       onOpenGeneratedArtifact,
@@ -760,7 +759,6 @@ describe("ChatThreadPrimitives", () => {
         messageId: "assistant-1",
         text: "",
         visibleText: "",
-        isRunning: true,
         updatedAt: 1,
       },
     });
@@ -944,7 +942,6 @@ describe("ChatThreadPrimitives", () => {
         messageId: "assistant-1",
         text: "",
         visibleText: "",
-        isRunning: true,
         updatedAt: 1,
       },
     });
@@ -985,7 +982,11 @@ describe("ChatThreadPrimitives", () => {
     expect(renderer.root.findByProps({ className: "mc-next-thread-tool-activity" })).toBeTruthy();
   });
 
-  it("allows the canonical timeline to suppress the duplicate per-turn live activity rail", () => {
+  it("hands tool rows to Evidence when the timeline suppresses the live activity rail", () => {
+    // When the focused-work summary owns the active turn (hideLiveActivity),
+    // the inline rail must disappear -- but the turn's tool runs must remain
+    // reachable through the Evidence rows. Suppressing both is the regression
+    // this test pins down: a running tool must never be invisible everywhere.
     const toolRuns = [
       {
         toolRunId: "tool-1",
@@ -1010,13 +1011,12 @@ describe("ChatThreadPrimitives", () => {
         messageId: "assistant-1",
         text: "",
         visibleText: "",
-        isRunning: true,
         updatedAt: 1,
       },
     });
 
     expect(renderer.root.findAllByProps({ className: "mc-next-live-activity" })).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ className: "mc-next-thread-tool-activity" })).toHaveLength(0);
+    expect(renderer.root.findByProps({ className: "mc-next-thread-tool-activity" })).toBeTruthy();
     expect(renderer.root.findAllByProps({ className: "mc-next-assistant-streaming-skeleton" })).toHaveLength(0);
   });
 
@@ -1047,7 +1047,6 @@ describe("ChatThreadPrimitives", () => {
         messageId: "assistant-1",
         text: "",
         visibleText: "",
-        isRunning: true,
         updatedAt: 1,
       },
     });
@@ -1127,7 +1126,6 @@ describe("ChatThreadPrimitives", () => {
         messageId: "assistant-1",
         text: "",
         visibleText: "",
-        isRunning: true,
         updatedAt: 1,
       },
     });

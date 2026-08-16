@@ -13,7 +13,12 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { downloadFile } from "../../api/client";
 import { cn } from "../../lib/utils";
-import { normalizeAssistantDisplayText } from "./assistant-display-text";
+import {
+  createIncrementalDisplayTextState,
+  normalizeAssistantDisplayText,
+  normalizeAssistantDisplayTextIncremental,
+  type IncrementalDisplayTextState,
+} from "./assistant-display-text";
 import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
 import {
   canRenderOpenUiStructuredBlock,
@@ -44,10 +49,28 @@ export function AssistantMessageRenderer({
   streamTurnId?: string;
   className?: string;
 }) {
-  const displayContent = useMemo(
-    () => (role === "assistant" ? normalizeAssistantDisplayText(content) : content),
-    [role, content],
-  );
+  // While streaming, `content` grows on every preview flush, so a plain
+  // useMemo on it re-runs the full normalization pipeline over the whole
+  // accumulated message per token (O(n^2) cumulative). Carry incremental
+  // state across tokens of the same streaming turn instead — same pattern
+  // as StreamingMarkdown's splitIncremental below — and reset it when the
+  // turn identity changes. Settled content keeps the one-shot path: it
+  // normalizes once and the memo holds.
+  const normalizeStateRef = useRef<IncrementalDisplayTextState | undefined>(undefined);
+  const normalizeTurnRef = useRef<string | undefined>(undefined);
+  const displayContent = useMemo(() => {
+    if (role !== "assistant") {
+      return content;
+    }
+    if (!running) {
+      return normalizeAssistantDisplayText(content);
+    }
+    if (normalizeStateRef.current === undefined || normalizeTurnRef.current !== streamTurnId) {
+      normalizeStateRef.current = createIncrementalDisplayTextState();
+      normalizeTurnRef.current = streamTurnId;
+    }
+    return normalizeAssistantDisplayTextIncremental(normalizeStateRef.current, content);
+  }, [role, content, running, streamTurnId]);
 
   return (
     <div

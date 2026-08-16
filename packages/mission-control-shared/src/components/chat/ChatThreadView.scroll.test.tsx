@@ -86,7 +86,6 @@ function streamingPreview(turnId: string, visibleText: string): ChatStreamingPre
     messageId: `assistant-${turnId}`,
     text: visibleText,
     visibleText,
-    isRunning: true,
     updatedAt: visibleText.length,
   };
 }

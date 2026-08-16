@@ -310,6 +310,20 @@ function buildChatReadinessCards(props: MissionThreadedActiveSessionSurfaceProps
   ] as const;
 }
 
+// Counts lines without split("\n")'s per-call array allocation: this runs on
+// every streaming-preview flush (~60/s) against text that grows all turn, so
+// the signal computation must stay allocation-free.
+export function countVisibleLines(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  let lines = 1;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    lines += 1;
+  }
+  return lines;
+}
+
 export function resolveStreamingPreviewScrollSignal(
   preview: MissionThreadedActiveSessionSurfaceProps["streamingPreview"],
   activeStreamingTurnId: string | null | undefined,
@@ -317,9 +331,9 @@ export function resolveStreamingPreviewScrollSignal(
   if (!preview) {
     return activeStreamingTurnId ?? null;
   }
-  const visibleLineCount = preview.visibleText.length > 0 ? preview.visibleText.split("\n").length : 0;
+  const visibleLineCount = countVisibleLines(preview.visibleText);
   const visibleCharacterBucket = Math.floor(preview.visibleText.length / STREAM_SCROLL_CHARACTER_BUCKET);
-  return [preview.turnId, visibleLineCount, visibleCharacterBucket, preview.isRunning ? "running" : "idle"].join(":");
+  return [preview.turnId, visibleLineCount, visibleCharacterBucket].join(":");
 }
 
 export type ThreadedTimelineItem =
