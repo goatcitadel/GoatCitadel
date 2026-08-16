@@ -2301,7 +2301,10 @@ export class GatewayService {
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
-      getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
+      // Hook egress is its own trust decision: the tool-sandbox allowlist
+      // (provider hosts only) must neither gate webhook destinations nor be
+      // widened to admit them. Empty/absent means public-https-only.
+      getHookNetworkAllowlist: () => this.config.toolPolicy.hooks?.networkAllowlist ?? [],
       storeWebhookSecret: (value) => hookSecretCustody.storeSecret(value),
       resolveWebhookSecret: (secretRef) => hookSecretCustody.resolveSecret(secretRef),
       deleteWebhookSecret: (secretRef) => hookSecretCustody.deleteSecret(secretRef),
@@ -2549,14 +2552,23 @@ export class GatewayService {
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       onSubagentLifecycle: async (input) => {
-        await this.hooksService.enqueueAfterHooks({
-          workspaceId: input.workspaceId,
-          trigger: input.phase === "start" ? "subagent.start" : "subagent.end",
-          entityType: "chat_subagent",
-          entityId: input.childSessionId,
-          idempotencyDiscriminator: `${input.delegationRunId}:${input.stepId}:${input.status ?? "running"}`,
-          payload: input,
-        });
+        // subagent.start/end are record_only observers: a dispatch failure is
+        // recorded as a failed hook run and must not abort the delegation
+        // step it describes (a throw here would replace the step's committed
+        // result -- or, on the failure path, mask the original step error).
+        try {
+          await this.hooksService.enqueueAfterHooks({
+            workspaceId: input.workspaceId,
+            trigger: input.phase === "start" ? "subagent.start" : "subagent.end",
+            entityType: "chat_subagent",
+            entityId: input.childSessionId,
+            idempotencyDiscriminator: `${input.delegationRunId}:${input.stepId}:${input.status ?? "running"}`,
+            payload: input,
+          });
+        } catch {
+          // Intentionally continue: recorded by the hooks service; the
+          // delegation outcome stands.
+        }
       },
       validateReadOnlyExplorerParent: async ({ sessionId, policyRunId }) => {
         const sessionMeta = await this.storage.chatSessionMeta.get(sessionId);
@@ -7312,6 +7324,10 @@ export class GatewayService {
     return resolveServerOwnedChatTurnCapabilityProfile(
       {
         storage: this.storage,
+        // Same authority the tool-invocation coordinator compares against at
+        // execution time; never recompute this binding from raw storage.
+        resolveToolCallBeforeInterposition: (workspaceId) =>
+          this.hooksService.getToolCallBeforeInterposition(workspaceId),
         listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope),
         resolveToolSchema: (runnerInput) => this.turnRuntime.resolveCapabilityToolSchema(runnerInput),
         resolveToolPolicyContext: async (policyInput) => await this.resolveToolPolicyContext(policyInput),
@@ -12816,38 +12832,48 @@ export class GatewayService {
       buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
       getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
       onCompaction: async (input) => {
-        const sessionMeta = await this.storage.chatSessionMeta.get(input.sessionId);
-        if (!sessionMeta) return;
-        const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
-        const payload = {
-          workspaceId,
-          sessionId: input.sessionId,
-          branchHeadTurnId: input.branchHeadTurnId,
-          startTurnId: input.startTurnId,
-          endTurnId: input.endTurnId,
-          turnCount: input.turnCount,
-          sourceHash: input.sourceHash,
-          ...(input.summaryHash ? { summaryHash: input.summaryHash } : {}),
-        };
-        if (input.phase === "before") {
-          await this.hooksService.runInlineHooks({
+        // Both compaction triggers are record_only observers. Failures were
+        // previously swallowed by the caller's storage catch, which silently
+        // reclassified a hook outage as a storage fault and degraded
+        // compaction to the verbatim prompt; isolate them here instead so a
+        // failed observer is recorded without disturbing compaction at all.
+        try {
+          const sessionMeta = await this.storage.chatSessionMeta.get(input.sessionId);
+          if (!sessionMeta) return;
+          const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
+          const payload = {
             workspaceId,
-            trigger: "context.compaction.before",
+            sessionId: input.sessionId,
+            branchHeadTurnId: input.branchHeadTurnId,
+            startTurnId: input.startTurnId,
+            endTurnId: input.endTurnId,
+            turnCount: input.turnCount,
+            sourceHash: input.sourceHash,
+            ...(input.summaryHash ? { summaryHash: input.summaryHash } : {}),
+          };
+          if (input.phase === "before") {
+            await this.hooksService.runInlineHooks({
+              workspaceId,
+              trigger: "context.compaction.before",
+              entityType: "chat_session",
+              entityId: input.sessionId,
+              payload,
+              parsePatch: () => undefined,
+            });
+            return;
+          }
+          await this.hooksService.enqueueAfterHooks({
+            workspaceId,
+            trigger: "context.compaction.after",
             entityType: "chat_session",
             entityId: input.sessionId,
+            idempotencyDiscriminator: `${input.endTurnId}:${input.sourceHash}`,
             payload,
-            parsePatch: () => undefined,
           });
-          return;
+        } catch {
+          // Intentionally continue: recorded by the hooks service; compaction
+          // proceeds untouched.
         }
-        await this.hooksService.enqueueAfterHooks({
-          workspaceId,
-          trigger: "context.compaction.after",
-          entityType: "chat_session",
-          entityId: input.sessionId,
-          idempotencyDiscriminator: `${input.endTurnId}:${input.sourceHash}`,
-          payload,
-        });
       },
     };
   }

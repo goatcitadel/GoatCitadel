@@ -332,6 +332,13 @@ export interface ToolPolicyConfig {
     /** Intent-based destructive-argument patterns (generalizes riskyShellPatterns to any tool). */
     riskyArgumentPatterns?: ToolRiskyArgumentPattern[];
   };
+  /**
+   * Hooks-scoped webhook egress, distinct from tool-sandbox egress. Non-empty
+   * restricts webhook hosts to the list; empty allows any public https host.
+   */
+  hooks?: {
+    networkAllowlist: string[];
+  };
 }
 
 export interface ToolInvokeRequest {

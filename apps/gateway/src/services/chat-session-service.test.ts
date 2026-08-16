@@ -122,7 +122,37 @@ describe("chat session service", () => {
           payload: { workspaceId: "default", sessionId: created.sessionId, reason: "deleted" },
         }),
       );
-      expect(JSON.stringify(enqueueAfterHooks.mock.calls)).not.toContain("This title must not become hook payload content");
+      expect(JSON.stringify(enqueueAfterHooks.mock.calls)).not.toContain(
+        "This title must not become hook payload content",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("commits session create and delete even when the lifecycle observer dispatch fails", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      deps.hooksService = {
+        runInlineHooks: vi.fn(),
+        enqueueAfterHooks: vi.fn(async () => {
+          throw new Error("observer endpoint unavailable");
+        }),
+      } as never;
+
+      // session.start / session.end are record_only observers: the create and
+      // delete they describe are already committed, so a throwing dispatch
+      // must not make either operation appear to fail.
+      const created = await createChatSession(deps, {
+        workspaceId: "default",
+        title: "Lifecycle observer resilience",
+        mode: "chat",
+      });
+      expect(created.sessionId).toBeTruthy();
+
+      const deletion = await deleteChatSession(deps, created.sessionId, created.revision);
+      expect(deletion).toMatchObject({ deleted: true, sessionId: created.sessionId });
     } finally {
       cleanup();
     }

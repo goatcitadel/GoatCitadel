@@ -610,6 +610,29 @@ describe("resolveChatTurnCapabilityProfile", () => {
     },
   );
 
+  it("freezes the interposition binding through the Gateway-owned seam when provided", async () => {
+    // The frozen binding must come from the SAME authority the tool-invocation
+    // coordinator later compares against (HooksService.getToolCallBeforeInterposition).
+    // Computing it from raw storage here desynced the hash whenever secret
+    // custody rewrote a record between profile freeze and tool call.
+    const { deps } = buildDeps();
+    configureSafeRead(deps);
+    const seamBinding = { hash: "a".repeat(64), count: 3 };
+    const resolveToolCallBeforeInterposition = vi.fn(async () => seamBinding);
+    deps.resolveToolCallBeforeInterposition = resolveToolCallBeforeInterposition;
+    // Raw storage would produce a different (empty) binding; it must not be read.
+    deps.storage.workspaceHooks.listByTrigger = vi.fn(() => []);
+
+    const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+
+    expect(resolveToolCallBeforeInterposition).toHaveBeenCalledWith(buildInput().workspaceId);
+    expect(deps.storage.workspaceHooks.listByTrigger).not.toHaveBeenCalled();
+    expect(resolution.profile.catalog).toMatchObject({
+      runtimeInterpositionHash: seamBinding.hash,
+      toolCallBeforeHookCount: seamBinding.count,
+    });
+  });
+
   it("changes the frozen binding when a hook action changes at the same timestamp", async () => {
     const first = buildDeps();
     configureSafeRead(first.deps);

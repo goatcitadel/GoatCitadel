@@ -39,6 +39,7 @@ import {
   buildToolCallBeforeHookInterpositionBinding,
   TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT,
   TOOL_EFFECT_INTERPOSITION_TRIGGERS,
+  type ToolCallBeforeHookInterpositionBinding,
 } from "./tool-runtime-interposition.js";
 
 type CapabilityProfileStorage = Pick<Storage, "toolGrants" | "skillLifecycle" | "workspaceHooks">;
@@ -146,6 +147,17 @@ export interface ChatTurnCapabilityProfileResolveDeps {
   }): Promise<ChatTurnCapabilityProfileRecord["selection"]["activatedSkills"]>;
   resolveToolRuntimeOwnerBinding?(toolName: string): ChatTurnCapabilityToolRuntimeOwnerBinding;
   /**
+   * Gateway-owned tool-hook interposition binding, computed by the SAME
+   * authority the tool-invocation coordinator later compares against
+   * (HooksService.getToolCallBeforeInterposition). Reading raw storage here
+   * instead produced a hash the coordinator could never reproduce whenever
+   * secret custody rewrote a record between profile freeze and tool call
+   * (legacy secret migration bumps updatedAt and replaces the action), or
+   * when workspace-id normalization differed -- every effect-bearing tool
+   * call then failed "interposition binding drifted".
+   */
+  resolveToolCallBeforeInterposition?(workspaceId: string): Promise<ToolCallBeforeHookInterpositionBinding>;
+  /**
    * Gateway-owned profile-freeze seam. Implementations may return only the
    * secret-free immutable binding; connection resolution remains runtime-only.
    */
@@ -197,15 +209,24 @@ export async function resolveChatTurnCapabilityProfile(
   input: ChatTurnCapabilityProfileResolveInput,
 ): Promise<ChatTurnCapabilityProfileResolution> {
   const createdAt = input.createdAt ?? new Date().toISOString();
-  const toolCallBeforeInterposition = buildToolCallBeforeHookInterpositionBinding(
-    (
-      await Promise.all(
-        TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
-          deps.storage.workspaceHooks.listByTrigger(input.workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-        ),
-      )
-    ).flat(),
-  );
+  // Prefer the Gateway-owned seam so the frozen binding and the coordinator's
+  // later recomputation share one code path; the raw-storage fallback exists
+  // only for isolated tests that construct deps without a HooksService.
+  const toolCallBeforeInterposition = deps.resolveToolCallBeforeInterposition
+    ? await deps.resolveToolCallBeforeInterposition(input.workspaceId)
+    : buildToolCallBeforeHookInterpositionBinding(
+        (
+          await Promise.all(
+            TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
+              deps.storage.workspaceHooks.listByTrigger(
+                input.workspaceId,
+                trigger,
+                TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT,
+              ),
+            ),
+          )
+        ).flat(),
+      );
   const [inspectableCatalog, callableCatalog] = await Promise.all([
     deps.listCapabilityCatalog("inspectable"),
     deps.listCapabilityCatalog("callable"),

@@ -7,6 +7,7 @@ import {
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
+  stopVerificationStack,
 } from "./runtime.mjs";
 
 test("verification process environments remove inherited secrets while allowing explicit fixtures", () => {
@@ -58,6 +59,19 @@ test("verification Gateway launch directly owns the runtime process", () => {
   assert.equal(command[0], process.execPath);
   assert.match(command[1].replaceAll("\\", "/"), /node_modules\/tsx\/dist\/cli\.mjs$/u);
   assert.match(command[2].replaceAll("\\", "/"), /apps\/gateway\/src\/main\.ts$/u);
+});
+
+test("verification stack cleanup never throws; failures are reported and returned", async () => {
+  // Nearly every caller runs cleanup inside `finally`: a throw there would
+  // replace the scenario's real failure or redden a passing lane. An invalid
+  // runtime root makes fs.rm fail with a non-transient error, which must be
+  // captured and returned rather than thrown.
+  const errors = await stopVerificationStack({ runtimeRoot: "\0invalid-root" });
+  assert.equal(errors.length, 1);
+
+  // A clean or absent stack reports no failures.
+  assert.deepEqual(await stopVerificationStack(undefined), []);
+  assert.deepEqual(await stopVerificationStack({}), []);
 });
 
 test("verification dev UI invalidates Vite dependency prebundles while preview stays immutable", () => {

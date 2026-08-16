@@ -125,6 +125,18 @@ export const ToolPolicyConfigSchema = z
           .optional(),
       })
       .passthrough(),
+    /**
+     * Hooks-scoped webhook egress. Distinct from `sandbox.networkAllowlist`
+     * (tool egress): a non-empty list restricts webhook destinations to the
+     * listed hosts; empty means any public https host (the network guard
+     * always blocks loopback/private/reserved hosts).
+     */
+    hooks: z
+      .object({
+        networkAllowlist: z.array(z.string()).default([]),
+      })
+      .passthrough()
+      .default({ networkAllowlist: [] }),
   })
   .passthrough()
   .transform((value) => {

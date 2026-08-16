@@ -104,11 +104,23 @@ export async function startVerificationStack(context, options = {}) {
       uiUrl,
     };
   } catch (error) {
+    // Cleanup problems are reported by stopVerificationStack itself and must
+    // never replace the original startup error thrown below.
     await stopVerificationStack({ runtimeRoot, gateway, ui });
     throw error;
   }
 }
 
+/**
+ * Tears the stack down best-effort and NEVER throws. Nearly every caller sits
+ * in a `finally` block: a cleanup throw there replaces the scenario's real
+ * failure (masking the diagnosis) or converts a passing lane into a red one
+ * because a Windows process lingered past the kill deadline. Cleanup problems
+ * are reported to stderr and returned for callers/tests that want to inspect
+ * them.
+ *
+ * @returns the cleanup errors that occurred (empty when teardown was clean).
+ */
 export async function stopVerificationStack(stack) {
   const errors = [];
   if (stack?.ui) {
@@ -132,9 +144,10 @@ export async function stopVerificationStack(stack) {
       errors.push(error);
     }
   }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "Verification stack cleanup failed");
+  for (const error of errors) {
+    console.warn(`[verification] stack cleanup failure (non-fatal): ${error?.message ?? error}`);
   }
+  return errors;
 }
 
 export async function waitForHttp(url, label, timeoutMs = 180000, handle = null) {

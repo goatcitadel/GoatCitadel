@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deriveHookPhase,
   NotFoundError,
+  ValidationError,
   type DurableRunRecord,
   type HookCreateInput,
   type HookDecision,
@@ -1077,7 +1078,7 @@ describe("HooksService", () => {
   it("keeps webhook secrets in custody references and rejects destinations outside the live allowlist", async () => {
     const storedSecrets = new Map<string, string>();
     const { service, workspaceId } = createHarness({
-      getNetworkAllowlist: () => ["hooks.example.test"],
+      getHookNetworkAllowlist: () => ["hooks.example.test"],
       storeWebhookSecret: (value) => {
         storedSecrets.set("keychain:goatcitadel:hook:test", value);
         return "keychain:goatcitadel:hook:test";
@@ -1175,6 +1176,174 @@ describe("HooksService", () => {
     expect(JSON.stringify(disabled)).not.toContain("must-not-remain");
   });
 
+  it("keeps custody intact when the secret store is transiently unavailable", async () => {
+    const auditEvents: Array<Record<string, unknown>> = [];
+    const { service, workspaceId, hooks } = createHarness({
+      fetchImpl: vi.fn(async () => new Response("{}", { status: 200 })),
+      resolveWebhookSecret: () => {
+        // Mirrors SecretStoreUnavailableError's message family: the store is
+        // unreachable, which says nothing about whether the secret exists.
+        throw new Error("Secret store unavailable: no supported backend");
+      },
+      auditAppend: async (_category, entry) => {
+        auditEvents.push(entry);
+      },
+    });
+    hooks.set("custodied-hook", {
+      hookId: "custodied-hook",
+      workspaceId,
+      label: "custodied",
+      trigger: "tool.call.after",
+      phase: "after",
+      mode: "observe",
+      enabled: true,
+      priority: 100,
+      timeoutMs: 5_000,
+      failPolicy: "open",
+      dataScope: "metadata",
+      action: {
+        type: "webhook",
+        webhook: { url: "https://hooks.example.test/custodied", secretRef: "keychain:goatcitadel:hook:custodied" },
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    // The delivery-shaped probe (test path) sees the transient failure but
+    // must not destroy the reference or disable the hook.
+    await expect(service.testWorkspaceHook(workspaceId, "custodied-hook")).resolves.toMatchObject({
+      status: "failed",
+    });
+    const record = hooks.get("custodied-hook");
+    expect(record?.enabled).toBe(true);
+    expect(record?.action).toMatchObject({
+      webhook: { secretRef: "keychain:goatcitadel:hook:custodied" },
+    });
+    expect(auditEvents.filter((entry) => entry.event === "hook.disabled")).toHaveLength(0);
+  });
+
+  it("destroys the reference only on a permanent custody signal, exactly once", async () => {
+    const auditEvents: Array<Record<string, unknown>> = [];
+    const { service, workspaceId, hooks } = createHarness({
+      resolveWebhookSecret: () => {
+        // The custody service raises ValidationError when the store is
+        // reachable and the secret is genuinely gone or the ref is malformed.
+        throw new ValidationError({ message: "Hook signing secret is unavailable from secure storage." });
+      },
+      auditAppend: async (_category, entry) => {
+        auditEvents.push(entry);
+      },
+    });
+    hooks.set("dangling-hook", {
+      hookId: "dangling-hook",
+      workspaceId,
+      label: "dangling",
+      trigger: "tool.call.after",
+      phase: "after",
+      mode: "observe",
+      enabled: true,
+      priority: 100,
+      timeoutMs: 5_000,
+      failPolicy: "open",
+      dataScope: "metadata",
+      action: {
+        type: "webhook",
+        webhook: { url: "https://hooks.example.test/dangling", secretRef: "keychain:goatcitadel:hook:dangling" },
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    await expect(service.testWorkspaceHook(workspaceId, "dangling-hook")).rejects.toThrow(/disabled/i);
+    expect(hooks.get("dangling-hook")).toMatchObject({
+      enabled: false,
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/dangling" } },
+    });
+
+    // Re-reading the disabled record must not re-disable, re-audit, or
+    // re-publish: a disabled record is inert.
+    await service.listWorkspaceHooks(workspaceId);
+    await service.listWorkspaceHooks(workspaceId);
+    expect(auditEvents.filter((entry) => entry.event === "hook.disabled")).toHaveLength(1);
+  });
+
+  it("does not probe the keychain on list-shaped reads", async () => {
+    const resolveWebhookSecret = vi.fn(() => "resolved-secret");
+    const { service, workspaceId, hooks } = createHarness({ resolveWebhookSecret });
+    hooks.set("hot-path-hook", {
+      hookId: "hot-path-hook",
+      workspaceId,
+      label: "hot path",
+      trigger: "tool.call.before",
+      phase: "before",
+      mode: "observe",
+      enabled: true,
+      priority: 100,
+      timeoutMs: 5_000,
+      failPolicy: "open",
+      dataScope: "metadata",
+      action: {
+        type: "webhook",
+        webhook: { url: "https://hooks.example.test/hot", secretRef: "keychain:goatcitadel:hook:hot" },
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    await service.listWorkspaceHooks(workspaceId);
+    await service.hasMutateHook(workspaceId, "tool.call.before");
+    await service.getToolCallBeforeInterposition(workspaceId);
+    // The keychain probe is a synchronous child-process spawn; list-shaped
+    // and dispatch-gating reads must never pay it (or mutate on its result).
+    expect(resolveWebhookSecret).not.toHaveBeenCalled();
+  });
+
+  it("deletes idempotently and reports false for an unknown hook", async () => {
+    const deleteWebhookSecret = vi.fn();
+    const { service, workspaceId } = createHarness({ deleteWebhookSecret });
+    await expect(service.deleteWorkspaceHook(workspaceId, "never-existed")).resolves.toBe(false);
+    expect(deleteWebhookSecret).not.toHaveBeenCalled();
+  });
+
+  it("allows public https webhook hosts by default and still blocks private hosts", async () => {
+    const { service, workspaceId } = createHarness({
+      storeWebhookSecret: () => "keychain:goatcitadel:hook:egress",
+    });
+
+    // No hooks allowlist configured: a public https destination is accepted.
+    await expect(
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "public destination",
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: { type: "webhook", webhook: { url: "https://hooks.slack.com/services/T000/B000", secret: "s" } },
+      }),
+    ).resolves.toMatchObject({ enabled: true });
+
+    // Loopback/private hosts stay blocked by the network guard.
+    await expect(
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "loopback",
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: { type: "webhook", webhook: { url: "https://127.0.0.1/hook", secret: "s" } },
+      }),
+    ).rejects.toThrow(/blocked|allowlisted/i);
+
+    // Plain http stays rejected.
+    await expect(
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "http",
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: { type: "webhook", webhook: { url: "http://hooks.example.test/insecure", secret: "s" } },
+      }),
+    ).rejects.toThrow(/HTTPS/);
+  });
+
   it("does not expose metadata-only payload text to webhook delivery", async () => {
     const fetchImpl = vi.fn(
       async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200 }),
@@ -1202,7 +1371,10 @@ describe("HooksService", () => {
     const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
     expect(body).not.toContain("never leave the gateway");
     expect(body).not.toContain("private result");
-    expect(body).toContain('"toolName":{"length":6}');
+    // Safe scalar identifiers survive metadata projection verbatim so a
+    // decision webhook can actually see which tool is running; content-bearing
+    // keys stay shape-only (asserted above).
+    expect(body).toContain('"toolName":"search"');
   });
 
   it("redrives only a completed durable post-event observer and creates a fresh delivery", async () => {
@@ -1243,9 +1415,11 @@ function createHarness(input?: {
   durableKernelEnabled?: boolean;
   publishRealtime?: ServiceContext["publishRealtime"];
   failAttachOnce?: boolean;
-  getNetworkAllowlist?: () => string[];
+  getHookNetworkAllowlist?: () => string[];
   storeWebhookSecret?: (value: string) => string;
   resolveWebhookSecret?: (reference: string) => string;
+  deleteWebhookSecret?: (reference: string) => void;
+  auditAppend?: (category: string, entry: Record<string, unknown>) => Promise<void>;
 }) {
   const workspaceId = "ws_test";
   const workspace: WorkspaceRecord = {
@@ -1296,7 +1470,8 @@ function createHarness(input?: {
       get: () => undefined,
     },
     audit: {
-      append: async () => undefined,
+      append: async (category: string, entry: Record<string, unknown>) =>
+        (await input?.auditAppend?.(category, entry)) ?? undefined,
     },
     workspaceHooks: {
       list: (id: string) => [...hooks.values()].filter((hook) => hook.workspaceId === id),
@@ -1307,7 +1482,9 @@ function createHarness(input?: {
       get: (id: string, hookId: string) => {
         const record = hooks.get(hookId);
         if (!record || record.workspaceId !== id) {
-          throw new Error(`Unknown hook ${hookId}`);
+          // Matches the real repository, which throws ValidationError for
+          // unknown ids -- delete idempotency depends on that class.
+          throw new ValidationError({ message: `Unknown hook ${hookId}` });
         }
         return record;
       },
@@ -1513,9 +1690,10 @@ function createHarness(input?: {
       requestedRunIds.push(runId);
     },
     fetchImpl: input?.fetchImpl,
-    getNetworkAllowlist: input?.getNetworkAllowlist,
+    getHookNetworkAllowlist: input?.getHookNetworkAllowlist,
     storeWebhookSecret: input?.storeWebhookSecret,
     resolveWebhookSecret: input?.resolveWebhookSecret,
+    deleteWebhookSecret: input?.deleteWebhookSecret,
   });
 
   return {

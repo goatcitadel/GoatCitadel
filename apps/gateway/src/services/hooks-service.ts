@@ -22,6 +22,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
+import { isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { preserveHookSecretsForPublicUpdate } from "./hooks-public-projection.js";
 import {
@@ -95,8 +96,14 @@ export class HooksService {
       ) => Promise<DurableRunRecord>;
       requestDurableRunProcessing: (runId: string) => void;
       fetchImpl?: typeof fetch;
-      /** Production callers expose the live, Gateway-owned network allowlist. */
-      getNetworkAllowlist?: () => string[];
+      /**
+       * Hooks-scoped egress allowlist. Hook destinations are a different trust
+       * decision from tool-sandbox egress: when this returns a non-empty list,
+       * webhook hosts are restricted to it; when empty or absent, any PUBLIC
+       * https host is allowed (the network guard always blocks loopback,
+       * private, and reserved hosts regardless).
+       */
+      getHookNetworkAllowlist?: () => string[];
       /** Raw values are accepted only at this boundary and immediately placed in keychain custody. */
       storeWebhookSecret?: (value: string) => string;
       resolveWebhookSecret?: (secretRef: string) => string;
@@ -260,7 +267,17 @@ export class HooksService {
 
   public async deleteWorkspaceHook(workspaceId: string, hookId: string): Promise<boolean> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    const current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    let current: HookRecord;
+    try {
+      current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    } catch (error) {
+      // Deleting an already-deleted hook is idempotent: report false rather
+      // than escaping as an error (the repository throws on unknown ids).
+      if (error instanceof ValidationError) {
+        return false;
+      }
+      throw error;
+    }
     const deleted = await this.ctx.storage.workspaceHooks.delete(normalizedWorkspaceId, hookId);
     if (deleted) {
       if (current.action.type === "webhook" && current.action.webhook.secretRef) {
@@ -294,9 +311,10 @@ export class HooksService {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
     const hook = await this.ensureWebhookSecretCustody(
       await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId),
+      { probeSecretRef: true },
     );
     if (!hook.enabled) {
-      throw new ValidationError({ message: "This hook is disabled because its signing secret is unavailable." });
+      throw new ValidationError({ message: "This hook is disabled. Enable it before sending a test delivery." });
     }
     const run = await this.ctx.storage.hookRuns.create({
       hookId: hook.hookId,
@@ -310,7 +328,15 @@ export class HooksService {
       attemptCount: 0,
       requestPayload: { synthetic: true, eventVersion: "goatcitadel.hook.test.v1" },
     });
-    return await this.executeRecordedHookRun(hook, run.runId, run.requestPayload ?? {}, 1);
+    // A test delivery must exercise the same payload projection as production
+    // dispatch: a handler validated against the test envelope has to see the
+    // shapes it will receive for real events.
+    return await this.executeRecordedHookRun(
+      hook,
+      run.runId,
+      this.projectPayloadForHook(hook, run.requestPayload ?? {}),
+      1,
+    );
   }
 
   /** Redrive is limited to durable after-observers; inline control hooks are never replayed. */
@@ -320,6 +346,7 @@ export class HooksService {
     if (original.workspaceId !== normalizedWorkspaceId) throw new NotFoundError({ entity: "hook run", id: hookRunId });
     const hook = await this.ensureWebhookSecretCustody(
       await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, original.hookId),
+      { probeSecretRef: true },
     );
     if (hook.phase !== "after" || hook.mode !== "observe" || original.status !== "completed") {
       throw new ValidationError({ message: "Only completed post-event observe hook deliveries may be redriven." });
@@ -696,6 +723,7 @@ export class HooksService {
     }
     const hook = await this.ensureWebhookSecretCustody(
       await this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId),
+      { probeSecretRef: true },
     );
     if (!hook.enabled) {
       return await this.ctx.storage.hookRuns.markOutcome(hookRunId, {
@@ -891,10 +919,13 @@ export class HooksService {
         body,
         signal: controller.signal,
       };
+      // Re-assert the write-time policy at dispatch so a legacy or imported
+      // record cannot reach a destination the current policy forbids.
+      this.assertWebhookUrlAllowed(hook.action.webhook.url);
       const response = this.deps.fetchImpl
         ? await this.deps.fetchImpl(hook.action.webhook.url, requestInit)
         : await fetchAllowlisted(hook.action.webhook.url, {
-            allowlist: this.deps.getNetworkAllowlist?.() ?? [],
+            allowlist: this.resolveHookEgressAllowlist(),
             timeoutMs: hook.timeoutMs,
             init: requestInit,
           });
@@ -998,18 +1029,40 @@ export class HooksService {
     return await Promise.all(records.map(async (record) => await this.ensureWebhookSecretCustody(record)));
   }
 
-  private async ensureWebhookSecretCustody(record: HookRecord): Promise<HookRecord> {
+  private async ensureWebhookSecretCustody(
+    record: HookRecord,
+    options: { probeSecretRef?: boolean } = {},
+  ): Promise<HookRecord> {
     if (record.action.type !== "webhook") {
+      return record;
+    }
+    // A disabled record is inert: it never dispatches, so re-verifying (and
+    // potentially re-disabling) it on every read would only spam audit and
+    // realtime with no state change.
+    if (!record.enabled) {
       return record;
     }
     const { secret, secretRef, url } = record.action.webhook;
     if (secretRef) {
-      if (!this.deps.resolveWebhookSecret) return record;
+      // Probing the keychain is a synchronous child-process spawn, so it is
+      // reserved for delivery-shaped paths (delivery, test, redrive). List
+      // and dispatch-gating reads take the record at face value; a dangling
+      // reference then surfaces as a failed delivery, not as a mutation
+      // performed by a read.
+      if (!options.probeSecretRef || !this.deps.resolveWebhookSecret) return record;
       try {
         this.deps.resolveWebhookSecret(secretRef);
         return record;
-      } catch {
-        return await this.disableUncustodiedWebhook(record, "hook_secret_reference_unavailable");
+      } catch (error) {
+        // Only a deliberate permanent signal from the custody service may
+        // destroy the reference: ValidationError means the store was reachable
+        // and the secret is genuinely gone or the reference is malformed.
+        // Anything else (store unavailable, locked vault, helper failure) is
+        // transient -- keep the record intact so custody survives the outage.
+        if (error instanceof ValidationError) {
+          return await this.disableUncustodiedWebhook(record, "hook_secret_reference_unavailable");
+        }
+        return record;
       }
     }
     if (!secret?.trim()) {
@@ -1027,18 +1080,24 @@ export class HooksService {
           webhook: { url, secretRef: this.deps.storeWebhookSecret(secret) },
         },
       });
-      void (await this.ctx.storage.audit.append("hooks", {
+      await this.appendHookAuditSafely({
         event: "hook.secret_migrated",
         hookId: migrated.hookId,
         workspaceId: migrated.workspaceId,
-      }));
+      });
       await this.publishRealtimeSafely("system", "hooks", {
         type: "hook_secret_migrated",
         hookId: migrated.hookId,
         workspaceId: migrated.workspaceId,
       });
       return migrated;
-    } catch {
+    } catch (error) {
+      // A temporarily unavailable secret store must not destroy the legacy
+      // secret: the record keeps dispatching exactly as it did before custody
+      // existed, and migration retries on a later pass.
+      if (isSecretStoreUnavailableLikeError(error)) {
+        return record;
+      }
       return await this.disableUncustodiedWebhook(record, "hook_secret_migration_failed");
     }
   }
@@ -1049,6 +1108,7 @@ export class HooksService {
       webhook: { url: record.action.type === "webhook" ? record.action.webhook.url : "" },
     };
     let disabled: HookRecord;
+    let persisted = true;
     try {
       disabled = await this.ctx.storage.workspaceHooks.update(record.workspaceId, record.hookId, {
         enabled: false,
@@ -1057,20 +1117,36 @@ export class HooksService {
     } catch {
       // Do not let a storage failure turn into a plaintext-secret dispatch.
       disabled = { ...record, enabled: false, action: safeAction };
+      persisted = false;
     }
-    void (await this.ctx.storage.audit.append("hooks", {
-      event: "hook.disabled",
-      hookId: record.hookId,
-      workspaceId: record.workspaceId,
-      reason,
-    }));
-    await this.publishRealtimeSafely("system", "hooks", {
-      type: "hook_disabled",
-      hookId: record.hookId,
-      workspaceId: record.workspaceId,
-      reason,
-    });
+    // Audit and realtime announce the durable state change once. When the
+    // update itself failed, the next read will retry the disable and announce
+    // it then -- emitting here on every retry would grow the audit table and
+    // spam realtime without any state change to report.
+    if (persisted) {
+      await this.appendHookAuditSafely({
+        event: "hook.disabled",
+        hookId: record.hookId,
+        workspaceId: record.workspaceId,
+        reason,
+      });
+      await this.publishRealtimeSafely("system", "hooks", {
+        type: "hook_disabled",
+        hookId: record.hookId,
+        workspaceId: record.workspaceId,
+        reason,
+      });
+    }
     return disabled;
+  }
+
+  /** Custody bookkeeping is triggered by reads; an audit outage must not make those reads throw. */
+  private async appendHookAuditSafely(entry: Record<string, unknown>): Promise<void> {
+    try {
+      await this.ctx.storage.audit.append("hooks", entry);
+    } catch {
+      // Best-effort by design: the durable hook record is the authority.
+    }
   }
 
   private async assertModeAllowed(workspaceId: string, mode: HookMode): Promise<void> {
@@ -1166,6 +1242,20 @@ export class HooksService {
     };
   }
 
+  /**
+   * Hooks-scoped egress policy. Webhook destinations are a separate trust
+   * decision from tool-sandbox egress (sharing that list both blocked every
+   * real webhook host and let a webhook allowlisting grant sandboxed tools
+   * network access). Posture: an explicit hooks allowlist restricts to the
+   * listed hosts; otherwise any PUBLIC host is reachable -- the network guard
+   * unconditionally blocks loopback, private-range, and reserved hosts, and
+   * hook URLs are https-only.
+   */
+  private resolveHookEgressAllowlist(): string[] {
+    const configured = this.deps.getHookNetworkAllowlist?.() ?? [];
+    return configured.length > 0 ? [...configured] : ["*"];
+  }
+
   private assertWebhookUrlAllowed(rawUrl: string): void {
     let url: URL;
     try {
@@ -1180,15 +1270,12 @@ export class HooksService {
         message: "Hook webhook URLs must use HTTPS.",
       });
     }
-    const allowlist = this.deps.getNetworkAllowlist?.();
-    if (allowlist) {
-      try {
-        assertHostAllowed(url.toString(), allowlist);
-      } catch (error) {
-        throw new ValidationError({
-          message: error instanceof Error ? error.message : "Webhook destination is not allowed.",
-        });
-      }
+    try {
+      assertHostAllowed(url.toString(), this.resolveHookEgressAllowlist());
+    } catch (error) {
+      throw new ValidationError({
+        message: error instanceof Error ? error.message : "Webhook destination is not allowed.",
+      });
     }
   }
 }
@@ -1319,13 +1406,68 @@ function redactSensitiveHookPayload(payload: Record<string, unknown>): Record<st
   return projectHookValue(payload, false) as Record<string, unknown>;
 }
 
+/**
+ * Keys whose string values survive metadata-only projection verbatim. These
+ * are the routing/identity fields a webhook needs to make a decision
+ * (tool names, model ids, session/turn/run identifiers) -- the documented
+ * "safe scalar identifiers". Everything else remains shape-only. Values are
+ * additionally pattern-guarded below, so a free-text value under one of these
+ * keys still collapses to `{length}`.
+ */
+const HOOK_SAFE_IDENTIFIER_KEYS = new Set([
+  "agentId",
+  "approvalId",
+  "auditEventId",
+  "branchHeadTurnId",
+  "childSessionId",
+  "delegationRunId",
+  "effectiveModel",
+  "effectiveProviderId",
+  "endTurnId",
+  "entityId",
+  "entityType",
+  "eventVersion",
+  "hookId",
+  "messageId",
+  "mode",
+  "model",
+  "origin",
+  "outcome",
+  "parentSessionId",
+  "phase",
+  "providerId",
+  "reason",
+  "role",
+  "runId",
+  "sessionId",
+  "sourceHash",
+  "startTurnId",
+  "status",
+  "stepId",
+  "summaryHash",
+  "taskId",
+  "toolName",
+  "trigger",
+  "turnId",
+  "workspaceId",
+]);
+
+// Identifier-shaped values only: no whitespace, bounded length. Free text
+// under a safe key (e.g. a prose `reason`) fails this and stays shape-only.
+const HOOK_SAFE_IDENTIFIER_VALUE = /^[\w.:/@%+-]{1,256}$/;
+
 function projectHookValue(value: unknown, metadataOnly: boolean, key = ""): unknown {
   if (HOOK_SENSITIVE_KEY.test(key)) {
     if (typeof value === "string") return { redacted: true, length: value.length };
     if (Array.isArray(value)) return { redacted: true, itemCount: value.length };
     if (value && typeof value === "object") return { redacted: true };
   }
-  if (typeof value === "string") return metadataOnly ? { length: value.length } : value;
+  if (typeof value === "string") {
+    if (!metadataOnly) return value;
+    return HOOK_SAFE_IDENTIFIER_KEYS.has(key) && HOOK_SAFE_IDENTIFIER_VALUE.test(value)
+      ? value
+      : { length: value.length };
+  }
   if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
   if (Array.isArray(value)) return value.slice(0, 50).map((entry) => projectHookValue(entry, metadataOnly));
   if (!value || typeof value !== "object") return undefined;

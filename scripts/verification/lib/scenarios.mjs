@@ -3532,7 +3532,13 @@ export async function runUiParityLane(context, _options = {}) {
       },
     );
   } finally {
-    await stopProcess(nextUi.handle);
+    // stopProcess can throw on a stuck Windows process; the lane's own result
+    // must win, and the stack teardown below must still run.
+    try {
+      await stopProcess(nextUi.handle);
+    } catch (error) {
+      console.warn(`[verification] UI process cleanup failure (non-fatal): ${error?.message ?? error}`);
+    }
     await stopVerificationStack(stack);
   }
 }
