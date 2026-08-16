@@ -1353,7 +1353,8 @@ function parseColumnDefinition(definition: string): PostgresSchemaShapeColumn | 
     name,
     type: normalizePostgresType(rawType),
     notNull: primaryKey || hasTopLevelMatch(modifiers, /\bNOT\s+NULL\b/i),
-    hasDefault: /^bigserial$/i.test(rawType) || generated || hasTopLevelMatch(modifiers, /\bDEFAULT\b/i),
+    hasDefault:
+      /^(?:big|small)?serial[248]?$/i.test(rawType) || generated || hasTopLevelMatch(modifiers, /\bDEFAULT\b/i),
     generated,
   };
 }
@@ -1461,7 +1462,11 @@ function parseReferenceAction(input: string, action: "DELETE" | "UPDATE"): strin
 
 function normalizePostgresType(input: string): string {
   const normalized = input.trim().replace(/\s+/g, " ").toLowerCase();
-  if (normalized === "bigserial" || normalized === "int8") return "bigint";
+  // Serial pseudo-types expand to the integer family with a sequence default,
+  // which is how pg_attribute reports them back during shape validation.
+  if (normalized === "bigserial" || normalized === "serial8" || normalized === "int8") return "bigint";
+  if (normalized === "serial" || normalized === "serial4") return "integer";
+  if (normalized === "smallserial" || normalized === "serial2" || normalized === "int2") return "smallint";
   if (normalized === "int" || normalized === "int4") return "integer";
   if (normalized === "timestamptz") return "timestamp with time zone";
   if (normalized === "float8") return "double precision";

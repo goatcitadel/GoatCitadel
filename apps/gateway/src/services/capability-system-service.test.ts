@@ -4784,6 +4784,18 @@ describe("CapabilitySystemService", () => {
         enabled: true,
         image: digestPinnedAiderImage,
       },
+      // Snapshot-drift test, not a sandbox-availability test: stub the
+      // platform probe so Linux CI without firejail cannot fail closed first.
+      resolveSandboxMetadata: () => ({
+        runnerId: "goatcitadel.best-effort-host",
+        runnerVersion: "0.1.0",
+        platform: "win32",
+        isolationProfile: "best_effort_host/temp_only/no_network",
+        required: true,
+        available: true,
+        checksPassed: ["windows_appcontainer_present"],
+        checksFailed: [],
+      }),
     });
     const run = await harness.service.createCodeModeRun({
       language: "typescript",
@@ -4844,6 +4856,19 @@ describe("CapabilitySystemService", () => {
       sandboxConfig: { bestEffortHostEnabled: true },
       dockerBackend,
       aiderAdapter,
+      // This test is about post-approval configuration drift, not host sandbox
+      // availability; stub the platform probe so it cannot fail closed first
+      // on runners without a native sandbox (e.g. Linux CI without firejail).
+      resolveSandboxMetadata: () => ({
+        runnerId: "goatcitadel.best-effort-host",
+        runnerVersion: "0.1.0",
+        platform: "win32",
+        isolationProfile: "best_effort_host/temp_only/no_network",
+        required: true,
+        available: true,
+        checksPassed: ["windows_appcontainer_present"],
+        checksFailed: [],
+      }),
     });
     const run = await harness.service.createCodeModeRun({
       language: "typescript",

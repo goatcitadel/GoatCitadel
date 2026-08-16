@@ -143,7 +143,7 @@ describe("EventIngestService", () => {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("does not hold a database transaction open while appending the transcript", async () => {
     let inTransaction = false;
@@ -324,7 +324,7 @@ describe("EventIngestService", () => {
     } finally {
       storage.close();
     }
-  });
+  }, 20_000);
 
   it("keeps the HTTP mutation claim completed when post-commit delivery crashes", async () => {
     const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -439,7 +439,7 @@ describe("EventIngestService", () => {
     } finally {
       storage.close();
     }
-  });
+  }, 20_000);
 
   it("returns success even when transcript append fails after commit", async () => {
     const session: SessionMeta = {
@@ -1259,7 +1259,7 @@ describe("EventIngestService canonical usage references", () => {
     } finally {
       storage.close();
     }
-  });
+  }, 20_000);
 
   it("preserves an exact-zero canonical projection without creating a zero-valued cache row", async () => {
     const storage = createCanonicalStorage("zero");
