@@ -47,6 +47,9 @@ export function resolveReusableChannelSetupTestResult(input: {
     input.cache.delete(input.draft.draftId);
     return undefined;
   }
+  if (cached.result.draftRevision === input.draft.revision) {
+    return cached.result;
+  }
   return { ...cached.result, draftRevision: input.draft.revision };
 }
 

@@ -179,134 +179,13 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
         <>
           <NativeSectionIndex
             items={[
-              { id: "onboarding-start", label: "Start Here" },
-              { id: "onboarding-outcome", label: "Next outcome" },
-              { id: "onboarding-setup", label: "Setup progress" },
-              { id: "onboarding-first-run", label: "First-run defaults" },
-              { id: "onboarding-reference", label: "Reference checks" },
+              { id: "onboarding-start", label: "Try a safe demo" },
+              { id: "onboarding-model", label: "Connect a model" },
+              { id: "onboarding-later", label: "Optional setup" },
             ]}
           />
           <SettingsGrid variant="detail-wide">
             <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
-            <FirstOutcomePathPanel
-              route={route}
-              navigate={navigate}
-              onboarding={data}
-              demoState={data.demoState}
-              firstRunEvidence={data.firstRunEvidence}
-            />
-            <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
-            <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
-            {data.setupReadiness ? (
-              <NativeDisclosureCard
-                id="onboarding-reference"
-                title="Remote profile readiness"
-                subtitle="Gateway-owned setup profile for local, LAN, tailnet, and remote-hardened use."
-              >
-                <NativeMetricGrid
-                  items={[
-                    { label: "Gateway", value: data.setupReadiness.profile?.gatewayUrl ?? "unknown" },
-                    { label: "Auth", value: data.setupReadiness.profile?.authMode ?? "unknown" },
-                    {
-                      label: "Posture",
-                      value: (data.setupReadiness.profile?.deploymentPosture ?? "unknown").replaceAll("_", " "),
-                    },
-                    {
-                      label: "Blocked",
-                      value: `${data.setupReadiness.summary?.blocked ?? 0} / ${data.setupReadiness.summary?.needsInput ?? 0} input`,
-                    },
-                  ]}
-                />
-                <SettingsWizardSteps
-                  steps={(data.setupReadiness.items ?? []).slice(0, 6).map((item) => ({
-                    label: item.label,
-                    description: `${item.value}: ${item.detail}`,
-                    state:
-                      item.status === "ready"
-                        ? "complete"
-                        : item.status === "blocked"
-                          ? "active"
-                          : item.status === "needs_input"
-                            ? "active"
-                            : "pending",
-                  }))}
-                />
-                <SettingsActionList
-                  ariaLabel="Setup readiness checks"
-                  items={(data.setupReadiness.items ?? []).map((item) => ({
-                    id: item.id,
-                    label: item.label,
-                    description: item.detail,
-                    meta: `${item.status.replaceAll("_", " ")} · ${item.value}`,
-                    actionLabel:
-                      item.status === "ready"
-                        ? "Ready"
-                        : item.status === "blocked"
-                          ? "Blocked"
-                          : item.status === "needs_input"
-                            ? "Needs input"
-                            : "Needs proof",
-                  }))}
-                  maxHeight="min(42vh, 24rem)"
-                />
-              </NativeDisclosureCard>
-            ) : null}
-            <EcosystemProofLanePanel route={route} navigate={navigate} />
-            <NativeCard
-              id="onboarding-first-run"
-              density="compact"
-              className="mc-next-settings-panel"
-              title="First-run setup"
-              subtitle="Configured readiness for the first trustworthy send."
-              stats={[
-                { label: "Status", value: data.completed ? "Complete" : "Open" },
-                { label: "Provider", value: data.settings?.llm?.activeProviderId || "Unset" },
-                { label: "Model", value: data.settings?.llm?.activeModel || "Unset" },
-              ]}
-            >
-              <SettingsWizardSteps
-                steps={(data.checklist ?? []).map((item) => ({
-                  label: item.label,
-                  description: item.detail ?? item.status,
-                  state: item.status === "complete" ? "complete" : item.status === "optional" ? "pending" : "active",
-                }))}
-              />
-              {data.firstRunChecklist?.length ? (
-                <SettingsActionList
-                  ariaLabel="First-run checklist"
-                  items={data.firstRunChecklist.map((item) => ({
-                    id: item.id,
-                    label: item.label,
-                    description: item.detail,
-                    meta: item.proofRefs.map((ref) => ref.label).join(" · "),
-                    actionLabel:
-                      item.status === "complete" ? "Ready" : item.status === "optional" ? "Optional" : "Do next",
-                  }))}
-                  maxHeight=""
-                />
-              ) : null}
-              <SettingsActionList
-                ariaLabel="First-run settings routes"
-                items={[
-                  {
-                    label: "Configure providers",
-                    description: "Select the active provider/model and choose where provider secrets are stored.",
-                    onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
-                  },
-                  {
-                    label: "Check local runtimes",
-                    description: "Inspect daemon, llama.cpp, NPU, and voice runtime readiness before sending work.",
-                    onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
-                  },
-                  {
-                    label: "Review access",
-                    description:
-                      "Confirm gateway auth posture, install tokens, and device access before exposing the app.",
-                    onClick: () => navigate({ area: "settings", section: "access", theme: route.theme }),
-                  },
-                ]}
-              />
-            </NativeCard>
             <GuidedModelSetup
               workspaceId={activeWorkspaceId}
               onboarding={data}
@@ -315,131 +194,261 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
               reloadOnboarding={reload}
               setNotice={setNotice}
             />
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Apply first-run defaults"
-              subtitle="Set the minimum runtime defaults without duplicating advanced setup."
+            <NativeDisclosureCard
+              id="onboarding-later"
+              title="Optional setup and proof"
+              subtitle="Runtime posture, defaults, evidence, and integration setup. None is needed to try the demo or connect your first model."
             >
-              <SettingsFieldGrid>
-                <SettingsField label="Tool profile">
-                  <select
-                    className="mc-next-settings-input"
-                    value={defaultsDraft.defaultToolProfile}
-                    onChange={(event) => {
-                      const nextProfile = normalizeToolProfile(event.target.value);
-                      if (onboardingPromptSkippingRestriction && nextProfile === "danger") {
-                        return;
-                      }
-                      setDefaultsDraft((current) => ({
-                        ...current,
-                        defaultToolProfile: nextProfile,
-                      }));
-                    }}
+              <SettingsGrid variant="detail-wide">
+                <FirstOutcomePathPanel
+                  route={route}
+                  navigate={navigate}
+                  onboarding={data}
+                  demoState={data.demoState}
+                  firstRunEvidence={data.firstRunEvidence}
+                />
+                <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
+                <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
+                {data.setupReadiness ? (
+                  <NativeDisclosureCard
+                    id="onboarding-reference"
+                    title="Remote profile readiness"
+                    subtitle="Gateway-owned setup profile for local, LAN, tailnet, and remote-hardened use."
                   >
-                    {TOOL_PROFILE_OPTIONS.map((profile) => (
-                      <option
-                        key={profile}
-                        value={profile}
-                        disabled={Boolean(onboardingPromptSkippingRestriction && profile === "danger")}
-                      >
-                        {describeToolProfileLabel(profile)}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mc-next-settings-field-note">{describeToolProfile(defaultsDraft.defaultToolProfile)}</p>
-                </SettingsField>
-                <SettingsField label="Tool approvals">
-                  <select
-                    className="mc-next-settings-input"
-                    value={defaultsDraft.toolApprovalMode}
-                    onChange={(event) => {
-                      const nextMode = normalizeToolApprovalMode(event.target.value);
-                      if (onboardingPromptSkippingRestriction && nextMode === "bypass") {
-                        return;
-                      }
-                      setDefaultsDraft((current) => ({
-                        ...current,
-                        toolApprovalMode: nextMode,
-                      }));
-                    }}
-                  >
-                    {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-                      <option
-                        key={mode}
-                        value={mode}
-                        disabled={Boolean(onboardingPromptSkippingRestriction && mode === "bypass")}
-                      >
-                        {describeToolApprovalMode(mode)}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mc-next-settings-field-note">
-                    {describeToolApprovalModeHelp(defaultsDraft.toolApprovalMode)}
-                  </p>
-                  {onboardingPromptSkippingRestriction ? (
-                    <p className="mc-next-settings-field-note">{onboardingPromptSkippingRestriction}</p>
-                  ) : null}
-                </SettingsField>
-                <SettingsField label="Budget mode">
-                  <select
-                    className="mc-next-settings-input"
-                    value={defaultsDraft.budgetMode}
-                    onChange={(event) =>
-                      setDefaultsDraft((current) => ({
-                        ...current,
-                        budgetMode: normalizeBudgetMode(event.target.value),
-                      }))
-                    }
-                  >
-                    {BUDGET_MODE_OPTIONS.map((mode) => (
-                      <option key={mode} value={mode}>
-                        {labelForBudgetMode(mode)}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mc-next-settings-field-note">{describeBudgetMode(defaultsDraft.budgetMode)}</p>
-                </SettingsField>
-                <SettingsField label="Network allowlist" span={2}>
-                  <input
-                    className="mc-next-settings-input"
-                    value={defaultsDraft.networkAllowlist}
-                    onChange={(event) =>
-                      setDefaultsDraft((current) => ({ ...current, networkAllowlist: event.target.value }))
-                    }
-                    placeholder="example.com, api.example.com"
+                    <NativeMetricGrid
+                      items={[
+                        { label: "Gateway", value: data.setupReadiness.profile?.gatewayUrl ?? "unknown" },
+                        { label: "Auth", value: data.setupReadiness.profile?.authMode ?? "unknown" },
+                        {
+                          label: "Posture",
+                          value: (data.setupReadiness.profile?.deploymentPosture ?? "unknown").replaceAll("_", " "),
+                        },
+                        {
+                          label: "Blocked",
+                          value: `${data.setupReadiness.summary?.blocked ?? 0} / ${data.setupReadiness.summary?.needsInput ?? 0} input`,
+                        },
+                      ]}
+                    />
+                    <SettingsWizardSteps
+                      steps={(data.setupReadiness.items ?? []).slice(0, 6).map((item) => ({
+                        label: item.label,
+                        description: `${item.value}: ${item.detail}`,
+                        state:
+                          item.status === "ready"
+                            ? "complete"
+                            : item.status === "blocked"
+                              ? "active"
+                              : item.status === "needs_input"
+                                ? "active"
+                                : "pending",
+                      }))}
+                    />
+                    <SettingsActionList
+                      ariaLabel="Setup readiness checks"
+                      items={(data.setupReadiness.items ?? []).map((item) => ({
+                        id: item.id,
+                        label: item.label,
+                        description: item.detail,
+                        meta: `${item.status.replaceAll("_", " ")} · ${item.value}`,
+                        actionLabel:
+                          item.status === "ready"
+                            ? "Ready"
+                            : item.status === "blocked"
+                              ? "Blocked"
+                              : item.status === "needs_input"
+                                ? "Needs input"
+                                : "Needs proof",
+                      }))}
+                      maxHeight="min(42vh, 24rem)"
+                    />
+                  </NativeDisclosureCard>
+                ) : null}
+                <EcosystemProofLanePanel route={route} navigate={navigate} />
+                <NativeCard
+                  id="onboarding-first-run"
+                  density="compact"
+                  className="mc-next-settings-panel"
+                  title="First-run setup"
+                  subtitle="Configured readiness for the first trustworthy send."
+                  stats={[
+                    { label: "Status", value: data.completed ? "Complete" : "Open" },
+                    { label: "Provider", value: data.settings?.llm?.activeProviderId || "Unset" },
+                    { label: "Model", value: data.settings?.llm?.activeModel || "Unset" },
+                  ]}
+                >
+                  <SettingsWizardSteps
+                    steps={(data.checklist ?? []).map((item) => ({
+                      label: item.label,
+                      description: item.detail ?? item.status,
+                      state:
+                        item.status === "complete" ? "complete" : item.status === "optional" ? "pending" : "active",
+                    }))}
                   />
-                </SettingsField>
-              </SettingsFieldGrid>
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Auth",
-                    value: data.settings?.auth?.mode ?? "unknown",
-                    meta: data.settings?.auth?.tokenConfigured ? "token configured" : "no token configured",
-                  },
-                  {
-                    label: "Mesh",
-                    value: data.settings?.mesh?.enabled ? (data.settings?.mesh?.mode ?? "unknown") : "off",
-                    meta: data.settings?.mesh?.nodeId || "no node id",
-                  },
-                ]}
-              />
-              <SettingsButtonRow>
-                <NativeButton variant="default" onClick={() => void applyDefaults()}>
-                  <Save size={16} />
-                  Apply defaults
-                </NativeButton>
-                <NativeButton variant="secondary" onClick={() => void markComplete()}>
-                  <CheckCircle2 size={16} />
-                  Mark complete
-                </NativeButton>
-                <NativeButton variant="secondary" onClick={() => void reload()}>
-                  <RefreshCw size={16} />
-                  Refresh
-                </NativeButton>
-              </SettingsButtonRow>
-            </NativeCard>
+                  {data.firstRunChecklist?.length ? (
+                    <SettingsActionList
+                      ariaLabel="First-run checklist"
+                      items={data.firstRunChecklist.map((item) => ({
+                        id: item.id,
+                        label: item.label,
+                        description: item.detail,
+                        meta: item.proofRefs.map((ref) => ref.label).join(" · "),
+                        actionLabel:
+                          item.status === "complete" ? "Ready" : item.status === "optional" ? "Optional" : "Do next",
+                      }))}
+                      maxHeight=""
+                    />
+                  ) : null}
+                  <SettingsActionList
+                    ariaLabel="First-run settings routes"
+                    items={[
+                      {
+                        label: "Configure providers",
+                        description: "Select the active provider/model and choose where provider secrets are stored.",
+                        onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+                      },
+                      {
+                        label: "Check local runtimes",
+                        description: "Inspect daemon, llama.cpp, NPU, and voice runtime readiness before sending work.",
+                        onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
+                      },
+                      {
+                        label: "Review access",
+                        description:
+                          "Confirm gateway auth posture, install tokens, and device access before exposing the app.",
+                        onClick: () => navigate({ area: "settings", section: "access", theme: route.theme }),
+                      },
+                    ]}
+                  />
+                </NativeCard>
+                <NativeCard
+                  density="compact"
+                  className="mc-next-settings-panel"
+                  title="Apply first-run defaults"
+                  subtitle="Set the minimum runtime defaults without duplicating advanced setup."
+                >
+                  <SettingsFieldGrid>
+                    <SettingsField label="Tool profile">
+                      <select
+                        className="mc-next-settings-input"
+                        value={defaultsDraft.defaultToolProfile}
+                        onChange={(event) => {
+                          const nextProfile = normalizeToolProfile(event.target.value);
+                          if (onboardingPromptSkippingRestriction && nextProfile === "danger") {
+                            return;
+                          }
+                          setDefaultsDraft((current) => ({
+                            ...current,
+                            defaultToolProfile: nextProfile,
+                          }));
+                        }}
+                      >
+                        {TOOL_PROFILE_OPTIONS.map((profile) => (
+                          <option
+                            key={profile}
+                            value={profile}
+                            disabled={Boolean(onboardingPromptSkippingRestriction && profile === "danger")}
+                          >
+                            {describeToolProfileLabel(profile)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mc-next-settings-field-note">
+                        {describeToolProfile(defaultsDraft.defaultToolProfile)}
+                      </p>
+                    </SettingsField>
+                    <SettingsField label="Tool approvals">
+                      <select
+                        className="mc-next-settings-input"
+                        value={defaultsDraft.toolApprovalMode}
+                        onChange={(event) => {
+                          const nextMode = normalizeToolApprovalMode(event.target.value);
+                          if (onboardingPromptSkippingRestriction && nextMode === "bypass") {
+                            return;
+                          }
+                          setDefaultsDraft((current) => ({
+                            ...current,
+                            toolApprovalMode: nextMode,
+                          }));
+                        }}
+                      >
+                        {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
+                          <option
+                            key={mode}
+                            value={mode}
+                            disabled={Boolean(onboardingPromptSkippingRestriction && mode === "bypass")}
+                          >
+                            {describeToolApprovalMode(mode)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mc-next-settings-field-note">
+                        {describeToolApprovalModeHelp(defaultsDraft.toolApprovalMode)}
+                      </p>
+                      {onboardingPromptSkippingRestriction ? (
+                        <p className="mc-next-settings-field-note">{onboardingPromptSkippingRestriction}</p>
+                      ) : null}
+                    </SettingsField>
+                    <SettingsField label="Budget mode">
+                      <select
+                        className="mc-next-settings-input"
+                        value={defaultsDraft.budgetMode}
+                        onChange={(event) =>
+                          setDefaultsDraft((current) => ({
+                            ...current,
+                            budgetMode: normalizeBudgetMode(event.target.value),
+                          }))
+                        }
+                      >
+                        {BUDGET_MODE_OPTIONS.map((mode) => (
+                          <option key={mode} value={mode}>
+                            {labelForBudgetMode(mode)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mc-next-settings-field-note">{describeBudgetMode(defaultsDraft.budgetMode)}</p>
+                    </SettingsField>
+                    <SettingsField label="Network allowlist" span={2}>
+                      <input
+                        className="mc-next-settings-input"
+                        value={defaultsDraft.networkAllowlist}
+                        onChange={(event) =>
+                          setDefaultsDraft((current) => ({ ...current, networkAllowlist: event.target.value }))
+                        }
+                        placeholder="example.com, api.example.com"
+                      />
+                    </SettingsField>
+                  </SettingsFieldGrid>
+                  <NativeMetricGrid
+                    items={[
+                      {
+                        label: "Auth",
+                        value: data.settings?.auth?.mode ?? "unknown",
+                        meta: data.settings?.auth?.tokenConfigured ? "token configured" : "no token configured",
+                      },
+                      {
+                        label: "Mesh",
+                        value: data.settings?.mesh?.enabled ? (data.settings?.mesh?.mode ?? "unknown") : "off",
+                        meta: data.settings?.mesh?.nodeId || "no node id",
+                      },
+                    ]}
+                  />
+                  <SettingsButtonRow>
+                    <NativeButton variant="default" onClick={() => void applyDefaults()}>
+                      <Save size={16} />
+                      Apply defaults
+                    </NativeButton>
+                    <NativeButton variant="secondary" onClick={() => void markComplete()}>
+                      <CheckCircle2 size={16} />
+                      Mark complete
+                    </NativeButton>
+                    <NativeButton variant="secondary" onClick={() => void reload()}>
+                      <RefreshCw size={16} />
+                      Refresh
+                    </NativeButton>
+                  </SettingsButtonRow>
+                </NativeCard>
+              </SettingsGrid>
+            </NativeDisclosureCard>
           </SettingsGrid>
         </>
       ) : null}
@@ -492,8 +501,8 @@ function DemoStartPanel({
       id="onboarding-start"
       density="compact"
       className="mc-next-settings-panel"
-      title="Start Here"
-      subtitle="Create a safe local demo workspace with sample Work and memory data."
+      title="Try a safe demo"
+      subtitle="Explore GoatCitadel with local sample data first. It does not need a model or any credentials."
       stats={[
         { label: "Demo", value: loading ? "Checking" : humanizeEnumToken(data?.status) || "Unknown" },
         { label: "Workspace", value: workspaceLabel },

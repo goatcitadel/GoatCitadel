@@ -422,6 +422,56 @@ describe("LlmService canonical transport accounting", () => {
     });
   });
 
+  it.each(["JSON", "multipart"] as const)(
+    "observes a fast %s transport rejection while durable acceptance is pending",
+    async (transportKind) => {
+      const { service, storage } = createHarness(
+        transportKind === "JSON" ? openAiChatConfig() : openAiResponsesConfig(),
+      );
+      const originalAccept = storage.modelUsageEvents.acceptTransport.bind(storage.modelUsageEvents);
+      let releaseAccept: (() => void) | undefined;
+      const accept = vi
+        .spyOn(storage.modelUsageEvents, "acceptTransport")
+        .mockImplementationOnce((eventId, ownerId, expiresAt) => {
+          const delayed = new Promise<ModelUsageEventRecord>((resolve) => {
+            releaseAccept = () => resolve(originalAccept(eventId, ownerId, expiresAt));
+          });
+          return delayed as never;
+        });
+      const transportFailure = new Error(`fast ${transportKind} transport rejection`);
+      const pendingFetch = Promise.reject<Response>(transportFailure);
+      const pendingCatch = vi.spyOn(pendingFetch, "catch");
+      const fetchMock = vi.fn(() => pendingFetch);
+      vi.stubGlobal("fetch", fetchMock as typeof fetch);
+
+      const request =
+        transportKind === "JSON"
+          ? service.chatCompletions(
+              { providerId: "openai", model: "gpt-4.1", messages: [{ role: "user", content: "hello" }] },
+              attribution("fast-json-transport-rejection"),
+            )
+          : service.generateImage(
+              {
+                providerId: "openai",
+                model: "gpt-image-2",
+                prompt: "edit goat",
+                referenceImages: [{ bytesBase64: "aW1hZ2U=", mimeType: "image/png", fileName: "goat.png" }],
+              },
+              attribution("fast-multipart-transport-rejection"),
+            );
+
+      for (let attempt = 0; attempt < 20 && fetchMock.mock.calls.length === 0; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(accept).toHaveBeenCalledTimes(1);
+      expect(pendingCatch).toHaveBeenCalledTimes(1);
+
+      releaseAccept?.();
+      await expect(request).rejects.toBe(transportFailure);
+    },
+  );
+
   it("surfaces intent-abandon persistence over a synchronous fetch error", async () => {
     const { service, storage } = createHarness(openAiChatConfig());
     const abandon = vi.spyOn(storage.modelUsageEvents, "abandonTransportIntent").mockImplementationOnce(() => {

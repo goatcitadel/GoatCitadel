@@ -125,6 +125,9 @@ test("visual trace-retention probe forces one successful comparison to retain fa
       async installMissionControlNextBrowserState() {},
       maybeParseBool: () => false,
       async pinVisualRegressionProvider() {},
+      async prepareVerificationRuntime() {
+        return "runtime-root";
+      },
       pollSseConnectionRecoveryEvidence: async (input) => ({
         snapshot: input.snapshot,
         clientSseDiagnostics: input.clientSseDiagnostics,
@@ -150,9 +153,17 @@ test("visual trace-retention probe forces one successful comparison to retain fa
       async setBrowserCorrelation() {},
       async stabilizeVisualRegressionSnapshot() {},
       startBrowserTrace: async () => trace,
+      async startDeterministicLlmStub() {
+        return {
+          providerId: "verification-stub",
+          baseUrl: "http://127.0.0.1:4321/v1",
+          async close() {},
+        };
+      },
       startVerificationStack: async () => ({ gatewayUrl: "http://gateway", uiUrl: "http://ui" }),
       async stopVerificationStack() {},
       async waitForVerificationRouteReady() {},
+      async writeDeterministicLlmProviderConfig() {},
       async writeMissionControlNextManualProofChecklist() {},
     },
   );
@@ -264,6 +275,7 @@ test("mobile visual geometry rejects horizontal document overflow and clipped pe
 test("visual regression returns failure evidence when a browser assertion throws", async () => {
   const results = [];
   let stackOptions;
+  let pinnedProviderId;
   const trace = {
     async retain() {
       return "playwright/visual-regression-chat-desktop-dark-trace.zip";
@@ -331,7 +343,12 @@ test("visual regression returns failure evidence when a browser assertion throws
       }),
       async installMissionControlNextBrowserState() {},
       maybeParseBool: () => false,
-      async pinVisualRegressionProvider() {},
+      async pinVisualRegressionProvider(_gatewayUrl, providerId) {
+        pinnedProviderId = providerId;
+      },
+      async prepareVerificationRuntime() {
+        return "runtime-root";
+      },
       pollSseConnectionRecoveryEvidence: async (input) => ({
         snapshot: input.snapshot,
         clientSseDiagnostics: input.clientSseDiagnostics,
@@ -357,12 +374,20 @@ test("visual regression returns failure evidence when a browser assertion throws
       async setBrowserCorrelation() {},
       async stabilizeVisualRegressionSnapshot() {},
       startBrowserTrace: async () => trace,
+      async startDeterministicLlmStub() {
+        return {
+          providerId: "verification-stub",
+          baseUrl: "http://127.0.0.1:4321/v1",
+          async close() {},
+        };
+      },
       startVerificationStack: async (_context, options) => {
         stackOptions = options;
         return { gatewayUrl: "http://gateway", uiUrl: "http://ui" };
       },
       async stopVerificationStack() {},
       async waitForVerificationRouteReady() {},
+      async writeDeterministicLlmProviderConfig() {},
       async writeMissionControlNextManualProofChecklist() {},
     },
   );
@@ -372,7 +397,9 @@ test("visual regression returns failure evidence when a browser assertion throws
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-visual-regression-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER, "true");
-  assert.equal(stackOptions.gatewayEnv.OPENAI_API_KEY, "sk-visual-regression");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_VERIFY_STUB_LLM_KEY, "verification-visual-regression-stub-key");
+  assert.equal(stackOptions.gatewayEnv.OPENAI_API_KEY, undefined);
+  assert.equal(pinnedProviderId, "verification-stub");
   assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");

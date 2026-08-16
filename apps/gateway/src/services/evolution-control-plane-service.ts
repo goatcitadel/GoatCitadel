@@ -788,12 +788,12 @@ export class EvolutionControlPlaneService {
     try {
       await this.deps.appendAudit?.(event, payload);
     } catch {
-      /* append-only plan/events remain authoritative */
+      /* Preserve the append-only plan/events as authority when optional audit publication fails. */
     }
     try {
       await this.deps.publishRealtime?.(event, payload);
     } catch {
-      /* realtime is retained signal, not authority */
+      /* Intentionally keep realtime best-effort because it is retained signal, not authority. */
     }
   }
 }

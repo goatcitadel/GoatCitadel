@@ -1479,11 +1479,18 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       storage: {
         ...createGatewayHarness().gateway.storage,
         agentProfiles: { seedBuiltins: vi.fn() },
+        channelSetupDrafts: { listByCatalog: vi.fn(async () => []) },
         changePlans: { backfillLegacyChatPlans: vi.fn(async () => 0) },
         close: vi.fn(),
         waitUntilReady: vi.fn(async () => undefined),
       },
     });
+    gateway.routeCompositionPort = {
+      ...gateway.routeCompositionPort,
+      storage: gateway.storage,
+      recentChannelSetupTests: new Map(),
+      secretStore: gateway.secretStore,
+    };
 
     await GatewayService.prototype.init.call(gateway);
     expect(gateway.initCritical).toHaveBeenCalled();

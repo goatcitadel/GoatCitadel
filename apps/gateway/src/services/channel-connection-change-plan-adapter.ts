@@ -191,7 +191,8 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
         };
       }
     } catch {
-      // Missing draft after an interrupted apply is ambiguous without an evidence link.
+      // Intentionally fall through: a missing draft after an interrupted apply is
+      // ambiguous without an evidence link and must not be replayed.
     }
     return {
       effectObserved: false,

@@ -1215,7 +1215,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   }, [turn.turnId]);
 
   return (
-    <article className={turnClassName}>
+    <article className={turnClassName} data-turn-id={turn.turnId}>
       <div
         className="mc-next-thread-turn-surface"
         onClick={(event: ReactMouseEvent<HTMLDivElement>) => {

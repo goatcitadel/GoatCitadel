@@ -3,8 +3,8 @@ const ACCESSIBILITY_STUB_KEY = "verification-accessibility-smoke-stub-key";
 
 const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
-    id: "chat-working-context",
-    title: "Chat Working Context accessibility",
+    id: "chat-activity",
+    title: "Chat Activity accessibility",
     href: "/chat",
     viewport: { width: 1440, height: 1024 },
     route: {
@@ -13,11 +13,11 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
       expectedSection: "root",
     },
     async prepare(page) {
-      const workingContext = page.getByText("Working Context", { exact: true });
-      if (!(await workingContext.isVisible().catch(() => false))) {
-        await page.getByRole("button", { name: "Context", exact: true }).click();
+      const activityDrawer = page.getByLabel("Thread utility drawer", { exact: true });
+      if (!(await activityDrawer.isVisible().catch(() => false))) {
+        await page.getByRole("button", { name: "Activity", exact: true }).click();
       }
-      await workingContext.waitFor();
+      await activityDrawer.waitFor();
     },
   },
   {
@@ -84,17 +84,20 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
       // fixture intentionally contains a blocking approval, so measuring that
       // persisted thread would conflate blocker geometry with virtual-keyboard
       // behavior.
-      await page.getByRole("button", { name: "Sessions", exact: true }).click();
-      await page.getByRole("button", { name: "New thread", exact: true }).click();
-      await page.getByLabel("Sessions", { exact: true }).waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Threads", exact: true }).click();
+      await page.getByRole("button", { name: "New chat", exact: true }).click();
+      await page.getByLabel("Threads", { exact: true }).waitFor({ state: "hidden" });
       await page.locator(".mc-next-composer-blocking-prompt").waitFor({ state: "hidden" });
       const composer = page.getByLabel("Message composer", { exact: true });
       await composer.waitFor({ state: "visible" });
       await composer.fill("Reply with exactly: KEYBOARD_OK");
       await page.getByRole("button", { name: "Send", exact: true }).click();
-      await page.getByText(ACCESSIBILITY_STUB_REPLY, { exact: true }).waitFor();
-      await composer.click();
+      await page
+        .locator(".mc-next-thread-bubble.assistant")
+        .getByText(ACCESSIBILITY_STUB_REPLY, { exact: true })
+        .waitFor();
       await page.setViewportSize({ width: 390, height: 500 });
+      await composer.click();
       await page.evaluate(
         () =>
           new Promise((resolve) =>
@@ -106,7 +109,9 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
         const rect = element instanceof HTMLElement ? element.getBoundingClientRect() : null;
         return {
           activeLabel: element instanceof HTMLElement ? element.getAttribute("aria-label") : null,
-          providerReplyVisible: document.body.textContent?.includes("KEYBOARD_OK") === true,
+          providerReplyVisible: Array.from(document.querySelectorAll(".mc-next-thread-bubble.assistant")).some(
+            (candidate) => candidate.textContent?.includes("KEYBOARD_OK") === true,
+          ),
           viewportWidth: window.innerWidth,
           viewportHeight: window.innerHeight,
           composerRect: rect
@@ -367,13 +372,16 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
       await browser.close();
     }
   } finally {
-    if (stack) {
-      await stopVerificationStack(stack);
-    } else if (runtimeRoot) {
-      await stopVerificationStack({ runtimeRoot });
+    try {
+      if (stack) {
+        await stopVerificationStack(stack);
+      } else if (runtimeRoot) {
+        await stopVerificationStack({ runtimeRoot });
+      }
+    } finally {
+      await stub?.close().catch(() => undefined);
+      restoreUiPackage();
     }
-    await stub?.close().catch(() => undefined);
-    restoreUiPackage();
   }
 }
 

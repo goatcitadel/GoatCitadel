@@ -399,8 +399,8 @@ describe("mission-control-next route model", () => {
     expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
       "needs_release_polish" satisfies ReleaseSurfaceStatus,
     );
-    // Reviewed route-inventory tripwire: every one of the 42 current release-bearing routes must remain classified.
-    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(42);
+    // Reviewed route-inventory tripwire: every one of the 43 current release-bearing routes must remain classified.
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(43);
     // Reviewed route-inventory tripwire: the six intentionally experimental routes must remain explicitly labeled.
     expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(6);
     expect(describeReleaseScopeForOperator(getRouteReleaseScope({ area: "settings", section: "providers" }))).toBe(

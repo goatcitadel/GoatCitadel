@@ -1129,6 +1129,11 @@ export class LlmService {
     let pending: Promise<Response>;
     try {
       pending = fetch(input.target.url, requestInit);
+      // Usage acceptance is durably persisted before the response is consumed.
+      // Observe the transport immediately so a fast rejection during that await
+      // cannot surface as a process-level unhandled rejection. Awaiting the
+      // original promise below still preserves the authoritative failure.
+      void pending.catch(() => undefined);
     } catch (error) {
       await reservation?.abandon();
       rethrowIfProviderNetworkBlocked(error);
@@ -1139,7 +1144,6 @@ export class LlmService {
       usage = await reservation?.accept();
     } catch (cause) {
       dispatchAbort.abort();
-      void pending.catch(() => undefined);
       await reservation?.markDispatchUnknown();
       const error = new ModelUsageDispatchUncertainError(
         "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
@@ -1306,6 +1310,10 @@ export class LlmService {
     let pending: Promise<Response>;
     try {
       pending = fetch(input.target.url, requestInit);
+      // Keep the transport observed while durable usage acceptance is pending.
+      // The original promise remains rejected and is handled below after the
+      // accounting owner has accepted the attempt.
+      void pending.catch(() => undefined);
     } catch (error) {
       await reservation?.abandon();
       rethrowIfProviderNetworkBlocked(error);
@@ -1316,7 +1324,6 @@ export class LlmService {
       usage = await reservation?.accept();
     } catch (cause) {
       dispatchAbort.abort();
-      void pending.catch(() => undefined);
       await reservation?.markDispatchUnknown();
       const error = new ModelUsageDispatchUncertainError(
         "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",

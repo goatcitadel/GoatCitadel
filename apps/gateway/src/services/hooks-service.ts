@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Hook execution, policy, delivery, and durable-run side effects remain one audited service boundary during this focused repair. */
 import { createHmac, randomUUID } from "node:crypto";
 import { assertHostAllowed, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { DurableRunCreateRequest, DurableRunRecord } from "@goatcitadel/contracts";
@@ -167,13 +168,15 @@ export class HooksService {
 
   public async getToolCallBeforeInterposition(workspaceId: string): Promise<ToolCallBeforeHookInterpositionBinding> {
     const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
-    const hooks = await this.ensureWebhookSecretCustodyForHooks((
-      await Promise.all(
-        TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
-          this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-        ),
-      )
-    ).flat());
+    const hooks = await this.ensureWebhookSecretCustodyForHooks(
+      (
+        await Promise.all(
+          TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
+            this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+          ),
+        )
+      ).flat(),
+    );
     return buildToolCallBeforeHookInterpositionBinding(hooks);
   }
 
@@ -268,7 +271,8 @@ export class HooksService {
         try {
           this.deps.deleteWebhookSecret?.(current.action.webhook.secretRef);
         } catch {
-          // An orphaned secret reference is inert and never returned publicly.
+          // Intentionally leave an orphaned secret reference: it is inert and
+          // never returned publicly.
         }
       }
       void (await this.ctx.storage.audit.append("hooks", {
@@ -350,17 +354,21 @@ export class HooksService {
     beforeExternalDispatch?: () => Promise<void>;
   }): Promise<HookInlineDispatchResult<TPatch>> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    const hooks = (await this.ensureWebhookSecretCustodyForHooks(
-      await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200),
-    )).filter((hook) => hook.enabled);
+    const hooks = (
+      await this.ensureWebhookSecretCustodyForHooks(
+        await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200),
+      )
+    ).filter((hook) => hook.enabled);
     if (input.trigger === "tool.call.before" && input.expectedInterposition) {
-      const siblingHooks = await this.ensureWebhookSecretCustodyForHooks((
-        await Promise.all(
-          TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
-            this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-          ),
-        )
-      ).flat());
+      const siblingHooks = await this.ensureWebhookSecretCustodyForHooks(
+        (
+          await Promise.all(
+            TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
+              this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+            ),
+          )
+        ).flat(),
+      );
       const current = buildToolCallBeforeHookInterpositionBinding([...hooks, ...siblingHooks]);
       if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
         throw new Error("Immutable Chat tool-hook interposition binding drifted before dispatch.");
@@ -391,7 +399,12 @@ export class HooksService {
         idempotencyKey,
         attemptCount: 0,
       });
-      const result = await this.executeRecordedHookRun(hook, run.runId, this.projectPayloadForHook(hook, input.payload), 1);
+      const result = await this.executeRecordedHookRun(
+        hook,
+        run.runId,
+        this.projectPayloadForHook(hook, input.payload),
+        1,
+      );
       appliedRuns.push(result);
 
       if (result.decision?.type === "block" && hook.mode === "intercept" && (input.allowDecisionBlock ?? true)) {
@@ -430,20 +443,24 @@ export class HooksService {
     beforeExternalDispatch?: () => Promise<void>;
   }): Promise<HookRunRecord[]> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
-    const hooks = (await this.ensureWebhookSecretCustodyForHooks(
-      await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200),
-    )).filter((hook) => hook.enabled);
+    const hooks = (
+      await this.ensureWebhookSecretCustodyForHooks(
+        await this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200),
+      )
+    ).filter((hook) => hook.enabled);
     if (
       input.expectedInterposition &&
       (TOOL_EFFECT_INTERPOSITION_TRIGGERS as readonly HookTrigger[]).includes(input.trigger)
     ) {
-      const siblingHooks = await this.ensureWebhookSecretCustodyForHooks((
-        await Promise.all(
-          TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
-            this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
-          ),
-        )
-      ).flat());
+      const siblingHooks = await this.ensureWebhookSecretCustodyForHooks(
+        (
+          await Promise.all(
+            TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).map((trigger) =>
+              this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+            ),
+          )
+        ).flat(),
+      );
       const current = buildToolCallBeforeHookInterpositionBinding([...hooks, ...siblingHooks]);
       if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
         throw new Error("Immutable Chat tool-hook interposition binding drifted before enqueue.");
@@ -1027,7 +1044,10 @@ export class HooksService {
   }
 
   private async disableUncustodiedWebhook(record: HookRecord, reason: string): Promise<HookRecord> {
-    const safeAction = { type: "webhook" as const, webhook: { url: record.action.type === "webhook" ? record.action.webhook.url : "" } };
+    const safeAction = {
+      type: "webhook" as const,
+      webhook: { url: record.action.type === "webhook" ? record.action.webhook.url : "" },
+    };
     let disabled: HookRecord;
     try {
       disabled = await this.ctx.storage.workspaceHooks.update(record.workspaceId, record.hookId, {
@@ -1105,7 +1125,8 @@ export class HooksService {
   private assertDataScopeAllowed(dataScope: HookRecord["dataScope"]): void {
     if (dataScope === "content") {
       throw new ValidationError({
-        message: "Content-bearing hook payloads require an approval-backed data grant and are not enabled by this runtime.",
+        message:
+          "Content-bearing hook payloads require an approval-backed data grant and are not enabled by this runtime.",
       });
     }
   }
@@ -1164,7 +1185,9 @@ export class HooksService {
       try {
         assertHostAllowed(url.toString(), allowlist);
       } catch (error) {
-        throw new ValidationError({ message: error instanceof Error ? error.message : "Webhook destination is not allowed." });
+        throw new ValidationError({
+          message: error instanceof Error ? error.message : "Webhook destination is not allowed.",
+        });
       }
     }
   }

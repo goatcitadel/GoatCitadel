@@ -528,6 +528,9 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain("white-space: nowrap;\n    overflow-wrap: normal;");
     expect(css).toContain(".mc-next-status-strip-primary .mc-next-status-pill {\n    max-width: none;");
     expect(css).toContain(".mc-next-status-details summary > span {\n    display: inline;");
+    expect(css).toContain(".mc-next-status-strip:has(.mc-next-status-details[open]) {\n  overflow: visible;");
+    expect(css).toContain(".mc-next-shell .mc-next-status-details-popover {\n    position: fixed;\n    right: 0.5rem;");
+    expect(css).toContain("left: 0.5rem;\n    width: auto;\n    max-width: none;");
   });
 
   it("keeps non-work routes inside the bounded stage scroller", () => {
@@ -812,6 +815,31 @@ describe("MissionControlNextApp", () => {
     await renderApp();
 
     expect(window.location.pathname).toBe("/settings/onboarding");
+  });
+
+  it("redirects an incomplete installation only once so finishing setup can enter Chat", async () => {
+    appMocks.preflightGatewayAccess.mockResolvedValueOnce({
+      status: "ready",
+      message: "Gateway ready",
+      healthDetail: "ok",
+      onboardingState: { completed: false },
+    });
+
+    const renderer = await renderApp();
+    expect(window.location.pathname).toBe("/settings/onboarding");
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
+        )
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(window.location.pathname).toBe("/chat");
   });
 
   it("pauses scoped routes when the active Citadel has no workspaces", async () => {

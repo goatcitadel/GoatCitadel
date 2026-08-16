@@ -34,6 +34,7 @@ import {
   resolveVisualRegressionVariants,
 } from "./release-surface-manifest.mjs";
 import {
+  buildVerificationGatewayCommand,
   delay,
   ensureGatewayWorkspaceBuild,
   prepareVerificationRuntime,
@@ -4669,7 +4670,7 @@ async function waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, request
   );
 }
 
-async function pinVisualRegressionProvider(gatewayUrl) {
+async function pinVisualRegressionProvider(gatewayUrl, providerId = "openai") {
   const state = await requestJson(gatewayUrl, "/api/v1/onboarding/state");
   assertOk(state, "read visual regression settings revision");
   const expectedRevision = state.body?.settings?.revision;
@@ -4681,7 +4682,7 @@ async function pinVisualRegressionProvider(gatewayUrl) {
     body: {
       expectedRevision,
       llm: {
-        activeProviderId: "openai",
+        activeProviderId: providerId,
       },
       completedBy: "verification-visual-regression",
       markComplete: true,
@@ -5177,17 +5178,23 @@ function forceVerificationUiPackage(packageName) {
 async function restartGatewayProcess(context, stack, gatewayEnv = {}) {
   const gatewayPort = Number.parseInt(new URL(stack.gatewayUrl).port, 10);
   await stopProcess(stack.gateway);
-  const gateway = await startProcess(context, "gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], {
-    GOATCITADEL_ROOT_DIR: stack.runtimeRoot,
-    GATEWAY_HOST: "127.0.0.1",
-    GATEWAY_PORT: String(gatewayPort),
-    GOATCITADEL_AUTH_MODE: "none",
-    GOATCITADEL_DATABASE_DRIVER: "sqlite",
-    GOATCITADEL_DISABLE_SECRET_STORE: "true",
-    GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
-    GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
-    ...gatewayEnv,
-  });
+  const gateway = await startProcess(
+    context,
+    "gateway",
+    buildVerificationGatewayCommand(),
+    {
+      GOATCITADEL_ROOT_DIR: stack.runtimeRoot,
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: String(gatewayPort),
+      GOATCITADEL_AUTH_MODE: "none",
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+      ...gatewayEnv,
+    },
+    { cwd: path.join(repoRoot, "apps", "gateway") },
+  );
   await waitForHttp(`${stack.gatewayUrl}/health`, "Gateway health", 180000, gateway);
   return gateway;
 }
@@ -5716,7 +5723,10 @@ async function runMissionControlNextMobileShellProof(context, input) {
           );
           await setBrowserCorrelation(page, correlationId, input.sessionId);
           await assertNoHorizontalOverflow(page, "mobile chat shell");
-          const buildIdentityChip = page.locator('[data-shell-identity-anchor="pinned"] .mc-next-status-pill').first();
+          const systemControl = page.locator(".mc-next-status-system > summary").first();
+          await assertLocatorFullyVisible(page, systemControl, "mobile System disclosure");
+          await systemControl.click();
+          const buildIdentityChip = page.locator(".mc-next-status-system [data-identity-status]").first();
           await assertLocatorFullyVisible(page, buildIdentityChip, "pinned mobile build identity");
           const identityScreenshotPath = path.join(
             context.artifactRoot,
@@ -5725,6 +5735,8 @@ async function runMissionControlNextMobileShellProof(context, input) {
           );
           await fs.mkdir(path.dirname(identityScreenshotPath), { recursive: true });
           await page.screenshot({ path: identityScreenshotPath, fullPage: false });
+          await systemControl.click();
+          await buildIdentityChip.waitFor({ state: "hidden", timeout: 15000 });
           const menuButton = page.locator(".mc-next-nav-toggle").first();
           await assertLocatorFullyVisible(page, menuButton, "mobile menu toggle");
           await menuButton.click();
@@ -5739,7 +5751,7 @@ async function runMissionControlNextMobileShellProof(context, input) {
           await page.screenshot({ path: drawerScreenshotPath, fullPage: false });
           await railCloseButton.click();
           await page.waitForFunction(() => !document.querySelector(".mc-next-rail.open"), { timeout: 15000 });
-          await openMissionControlNextThreadedContext(page);
+          await openMissionControlNextThreadedActivity(page);
           await assertNoHorizontalOverflow(page, "mobile chat shell with threaded context");
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
           artifacts = await captureBrowserArtifacts(context, {
@@ -5953,26 +5965,27 @@ function formatBrowserScenarioFailure(error) {
   return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
-export async function openMissionControlNextThreadedContext(page) {
+export async function openMissionControlNextThreadedActivity(page) {
   const routeDetailsControl = page.getByRole("button", { name: /^(Open|Hide) Route details$/i });
   const shellInspector = page.locator(".mc-next-shell-inspector");
   if ((await routeDetailsControl.count()) > 0 || (await shellInspector.count()) > 0) {
-    throw new Error("mobile Chat exposed the generic Route details inspector instead of threaded Working Context");
+    throw new Error("mobile Chat exposed the generic Route details inspector instead of threaded Activity");
   }
 
-  const contextButton = page
+  const activityButton = page
     .locator(".mc-next-threaded-mobile-bar .mc-next-threaded-menu-button")
-    .filter({ hasText: /^(Context|Hide context)$/i })
+    .filter({ hasText: /^(Activity|Hide activity)$/i })
     .first();
-  await assertLocatorFullyVisible(page, contextButton, "mobile threaded context button");
-  const contextPanel = page.locator('.mc-next-threaded-context-panel[aria-label="Thread context drawer"]').first();
-  if (!(await contextPanel.isVisible().catch(() => false))) {
-    await contextButton.click();
+  await activityButton.scrollIntoViewIfNeeded();
+  await assertLocatorFullyVisible(page, activityButton, "mobile threaded Activity button");
+  const activityPanel = page.locator('.mc-next-threaded-context-panel[aria-label="Thread utility drawer"]').first();
+  if (!(await activityPanel.isVisible().catch(() => false))) {
+    await activityButton.click();
   }
-  await contextPanel.waitFor({ state: "visible", timeout: 15000 });
+  await activityPanel.waitFor({ state: "visible", timeout: 15000 });
   await page
-    .locator(".mc-next-threaded-context-panel .mc-next-context-drawer")
-    .filter({ hasText: /Working Context/i })
+    .locator('.mc-next-threaded-context-panel .mc-next-utility-panel[data-panel="preview"]')
+    .filter({ hasText: /Work Record/i })
     .first()
     .waitFor({ state: "visible", timeout: 15000 });
 }
@@ -6065,7 +6078,7 @@ async function writeMissionControlNextManualProofChecklist(context, entries) {
     "- Check for horizontal overflow or clipped controls.",
     "- Confirm sticky regions stay stable on desktop and mobile.",
     "- Confirm drawer usability at 390x844.",
-    "- Confirm Route details opens on non-Chat routes and Chat opens its threaded Working Context cleanly.",
+    "- Confirm Route details opens on non-Chat routes and Chat opens its threaded Activity drawer cleanly.",
     "- Confirm dark/light contrast remains readable without neon overload.",
     "",
     "## Captured screenshots",

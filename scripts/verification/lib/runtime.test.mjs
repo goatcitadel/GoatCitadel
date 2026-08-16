@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildVerificationGatewayCommand,
   buildVerificationProcessEnv,
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
@@ -52,17 +53,23 @@ test("verification startup force-refreshes the threaded Chat surface before Chro
   ]);
 });
 
+test("verification Gateway launch directly owns the runtime process", () => {
+  const command = buildVerificationGatewayCommand();
+  assert.equal(command[0], process.execPath);
+  assert.match(command[1].replaceAll("\\", "/"), /node_modules\/tsx\/dist\/cli\.mjs$/u);
+  assert.match(command[2].replaceAll("\\", "/"), /apps\/gateway\/src\/main\.ts$/u);
+});
+
 test("verification dev UI invalidates Vite dependency prebundles while preview stays immutable", () => {
   const devCommand = buildVerificationUiCommand("@goatcitadel/mission-control-next", 5173, undefined);
   const previewCommand = buildVerificationUiCommand("@goatcitadel/mission-control-next", 4173, "preview");
-  assert.deepEqual(devCommand.slice(6), ["vite", "--force", "--host", "127.0.0.1", "--port", "5173", "--strictPort"]);
-  assert.deepEqual(previewCommand.slice(6), [
-    "vite",
-    "preview",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    "4173",
-    "--strictPort",
-  ]);
+  assert.equal(devCommand[0], process.execPath);
+  assert.match(devCommand[1].replaceAll("\\", "/"), /apps\/mission-control-next\/node_modules\/vite\/bin\/vite\.js$/u);
+  assert.deepEqual(devCommand.slice(2), ["--force", "--host", "127.0.0.1", "--port", "5173", "--strictPort"]);
+  assert.equal(previewCommand[0], process.execPath);
+  assert.match(
+    previewCommand[1].replaceAll("\\", "/"),
+    /apps\/mission-control-next\/node_modules\/vite\/bin\/vite\.js$/u,
+  );
+  assert.deepEqual(previewCommand.slice(2), ["preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"]);
 });

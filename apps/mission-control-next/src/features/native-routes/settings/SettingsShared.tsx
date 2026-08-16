@@ -640,7 +640,7 @@ export function descriptionForSettingsSection(section: string) {
     case "general":
       return "Core runtime defaults, provider posture, and high-signal setup routes.";
     case "onboarding":
-      return "Safe demo launch, setup center, provider, runtime, channel, and sharing checkpoints.";
+      return "Try a safe demo or connect a model. Everything else is optional.";
     case "budget":
       return "Set the runtime budget mode and inspect cost evidence.";
     case "providers":

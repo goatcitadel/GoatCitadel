@@ -516,7 +516,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-onboarding",
       label: "Start Here",
-      description: "Safe demo, first-run readiness, setup center, and sharing checkpoints.",
+      description: "Try a safe demo or connect a model. Everything else is optional.",
       area: "settings",
       section: "onboarding",
     },

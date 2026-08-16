@@ -1249,13 +1249,13 @@
   .mc-next-thread-turn-surface,
   .mc-next-thread-bubble.assistant,
   .mc-next-attachment-inline-image,
-  .mc-next-thread-citations > article {
+  .mc-next-thread-citations article {
     transition: none;
   }
 
   .mc-next-attachment-inline-image:hover,
   .mc-next-thread-jump-latest:hover,
-  .mc-next-thread-citations > article:hover {
+  .mc-next-thread-citations article:hover {
     transform: none;
   }
 
@@ -1827,7 +1827,7 @@
   margin-top: 0.5rem;
 }
 
-.mc-next-thread-citations > article {
+.mc-next-thread-citations article {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -1845,13 +1845,13 @@
     transform var(--motion-fast) var(--motion-ease);
 }
 
-.mc-next-thread-citations > article:hover {
+.mc-next-thread-citations article:hover {
   border-color: color-mix(in oklab, var(--mc-area-color) 40%, var(--border));
   background: color-mix(in oklab, var(--mc-area-color) 9%, var(--mc-surface-2));
   transform: translateY(-1px);
 }
 
-.mc-next-thread-citations > article.is-memory {
+.mc-next-thread-citations article.is-memory {
   display: grid;
   align-items: start;
   gap: 0.25rem;
@@ -1861,14 +1861,14 @@
   background: color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-2));
 }
 
-.mc-next-thread-citations > article > div {
+.mc-next-thread-citations article > div {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
 }
 
-.mc-next-thread-citations > article > div > strong {
+.mc-next-thread-citations article > div > strong {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1882,8 +1882,8 @@
   flex: 0 0 auto;
 }
 
-.mc-next-thread-citations > article > div > a,
-.mc-next-thread-citations > article > div > span {
+.mc-next-thread-citations article > div > a,
+.mc-next-thread-citations article > div > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1891,7 +1891,7 @@
   color: var(--foreground);
 }
 
-.mc-next-thread-citations > article > p {
+.mc-next-thread-citations article > p {
   margin: 0;
   font-size: var(--text-xs);
   color: var(--text-muted);
@@ -1901,8 +1901,8 @@
   max-width: 14rem;
 }
 
-.mc-next-thread-citations > article.is-memory > p.citation-memory-reason,
-.mc-next-thread-citations > article.is-memory > p.citation-memory-meta {
+.mc-next-thread-citations article.is-memory > p.citation-memory-reason,
+.mc-next-thread-citations article.is-memory > p.citation-memory-meta {
   max-width: min(34rem, 100%);
   white-space: normal;
   overflow: visible;
@@ -1910,12 +1910,20 @@
   line-height: 1.35;
 }
 
-.mc-next-thread-citations > article.is-memory > p.citation-memory-reason {
+.mc-next-thread-citations article.is-memory > p.citation-memory-reason {
   color: var(--text-secondary);
 }
 
 .mc-next-thread-citations-toggle {
   font-size: var(--text-xs);
+}
+
+.mc-next-thread-citations-overflow {
+  display: contents;
+}
+
+.mc-next-thread-citations-overflow[hidden] {
+  display: none;
 }
 
 .mc-next-chat-start-canvas {

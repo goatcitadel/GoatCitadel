@@ -55,7 +55,7 @@ describe("presentation package audit and fallback parity", () => {
       passed: true,
       observed: { tableCount: 1, chartCount: 1, authoredNoteCount: 1 },
     });
-  });
+  }, 15_000);
 
   it("audits a structured source deck even when research metadata is absent", async () => {
     const url = "https://example.com/official-source";

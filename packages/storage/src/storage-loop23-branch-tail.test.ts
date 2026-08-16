@@ -94,12 +94,14 @@ function stepRow(overrides: Record<string, unknown> = {}) {
 function channelDraftRow(overrides: Record<string, unknown> = {}) {
   return {
     draft_id: "draft-1",
+    revision: 1,
     catalog_id: "channel.slack",
     connection_id: null,
     lifecycle_mode: "setup",
     label: null,
     enabled: 0,
     draft_json: "{}",
+    secret_refs_json: "{}",
     hydration_json: null,
     content_version: "content.v1",
     adapter_version: "adapter.v1",

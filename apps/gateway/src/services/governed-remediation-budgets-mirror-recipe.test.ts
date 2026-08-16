@@ -288,9 +288,14 @@ async function createHarness(
     registerCompletionPort?: boolean;
     llmCanary?: string;
     port?: FakeGovernedFilePort;
+    nativeHandleRoot?: boolean;
   } = {},
 ): Promise<Harness> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-budgets-mirror-recipe-"));
+  // Native-handle proofs need an unmediated fixed-volume path. Sandboxed
+  // runners can broker ordinary fs calls in os.tmpdir() while denying the
+  // helper's direct NtCreateFile walk through that same profile directory.
+  const scratchParent = options.nativeHandleRoot === true ? process.cwd() : os.tmpdir();
+  const root = await fs.mkdtemp(path.join(scratchParent, "goat-budgets-mirror-recipe-"));
   cleanupRoots.push(root);
   const payload = JSON.parse(
     await fs.readFile(path.resolve(process.cwd(), "../../config/goatcitadel.example.json"), "utf8"),
@@ -769,7 +774,7 @@ describe("governed budgets mirror recipe", () => {
 
 describe.runIf(process.platform === "win32")("governed budgets mirror recipe over the real native port", () => {
   it("repairs, verifies, and retires through real handle-relative capture and publish", async () => {
-    const harness = await createHarness({ port: undefined });
+    const harness = await createHarness({ port: undefined, nativeHandleRoot: true });
     // Swap in the real native port for the same owner wiring.
     const nativeHarness = await (async () => {
       const { nativeGovernedFileMutationPort } = await import("./governed-remediation-budgets-mirror-recipe.js");

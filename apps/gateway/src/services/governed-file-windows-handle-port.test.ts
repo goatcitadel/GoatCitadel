@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { link, mkdir, mkdtemp, readFile, rm, rename, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -217,7 +216,10 @@ describe("governed file handle port protocol", () => {
 
 describe.runIf(process.platform === "win32")("governed file handle port live Windows proofs", () => {
   async function scratch(prefix: string): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), prefix));
+    // Keep native-handle proofs on the checkout volume. Some test sandboxes
+    // expose os.tmpdir() through mediated file APIs while intentionally
+    // denying the helper's direct NtCreateFile parent walk.
+    const root = await mkdtemp(join(process.cwd(), prefix));
     cleanupRoots.push(root);
     return root;
   }

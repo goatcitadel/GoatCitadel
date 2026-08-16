@@ -59,6 +59,30 @@ export function resolveFocusedActiveTurn(
   return thread.turns.find((turn) => turn.turnId === currentTurnId) ?? thread.turns.at(-1) ?? null;
 }
 
+export function resolvePendingBlockerTurnId(
+  thread: MissionThreadedActiveSessionSurfaceProps["thread"],
+  pendingApproval: MissionThreadedActiveSessionSurfaceProps["pendingApproval"],
+  pendingUserInput: MissionThreadedActiveSessionSurfaceProps["pendingUserInput"],
+): string | null {
+  if (!thread || (!pendingApproval && !pendingUserInput)) {
+    return null;
+  }
+  if (pendingUserInput?.turnId && thread.turns.some((turn) => turn.turnId === pendingUserInput.turnId)) {
+    return pendingUserInput.turnId;
+  }
+  if (pendingApproval?.approvalId) {
+    const approvalTurn = [...thread.turns]
+      .reverse()
+      .find((turn) =>
+        [...turn.toolRuns, ...turn.trace.toolRuns].some((toolRun) => toolRun.approvalId === pendingApproval.approvalId),
+      );
+    if (approvalTurn) {
+      return approvalTurn.turnId;
+    }
+  }
+  return thread.activeLeafTurnId ?? thread.selectedTurnId ?? thread.turns.at(-1)?.turnId ?? null;
+}
+
 function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
   if (!activity) {
     return null;
@@ -127,61 +151,69 @@ function formatCitationSource(citation: ChatCitationRecord): string {
 
 function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {
   const [expanded, setExpanded] = useState(false);
-  const citationsId = useId();
+  const overflowId = useId();
   if (citations.length === 0) {
     return null;
   }
   const collapsedLimit = 6;
-  const visibleCitations = expanded ? citations : citations.slice(0, collapsedLimit);
-  const hiddenCount = citations.length - visibleCitations.length;
+  const primaryCitations = citations.slice(0, collapsedLimit);
+  const overflowCitations = citations.slice(collapsedLimit);
+  const renderCitation = (citation: ChatCitationRecord, index: number) => {
+    const label = normalizeCitationDisplayText(citation.title) || citation.url;
+    const snippet = normalizeCitationDisplayText(citation.snippet);
+    const source = formatCitationSource(citation);
+    const safeHref = isSafeCitationHref(citation.url);
+    const memoryWhyUsed = isMemoryCitation(citation)
+      ? (citation.provenance?.selectionReason ?? "Memory selection reason was not recorded.")
+      : null;
+    const memoryMeta = formatMemoryCitationMeta(citation.provenance);
+    const memorySignals = formatMemorySignals(citation.provenance?.matchSignals);
+    const memoryCitation = isMemoryCitation(citation);
+    return (
+      <article
+        key={citation.citationId || `${citation.url}-${index}`}
+        className={memoryCitation ? "is-memory" : undefined}
+      >
+        <div>
+          <strong>{index + 1}</strong>
+          {safeHref ? (
+            <a href={citation.url} target="_blank" rel="noreferrer">
+              {label}
+            </a>
+          ) : (
+            <span>{label}</span>
+          )}
+        </div>
+        <p>
+          {source}
+          {snippet ? ` · ${snippet}` : ""}
+        </p>
+        {memoryWhyUsed ? <p className="citation-memory-reason">Why used: {memoryWhyUsed}</p> : null}
+        {memoryMeta ? <p className="citation-memory-meta">{memoryMeta}</p> : null}
+        {memorySignals ? <p className="citation-memory-meta">{memorySignals}</p> : null}
+      </article>
+    );
+  };
   return (
-    <div id={citationsId} className="mc-next-thread-citations" aria-label="Citations for this answer">
-      {visibleCitations.map((citation, index) => {
-        const label = normalizeCitationDisplayText(citation.title) || citation.url;
-        const snippet = normalizeCitationDisplayText(citation.snippet);
-        const source = formatCitationSource(citation);
-        const safeHref = isSafeCitationHref(citation.url);
-        const memoryWhyUsed = isMemoryCitation(citation)
-          ? (citation.provenance?.selectionReason ?? "Memory selection reason was not recorded.")
-          : null;
-        const memoryMeta = formatMemoryCitationMeta(citation.provenance);
-        const memorySignals = formatMemorySignals(citation.provenance?.matchSignals);
-        const memoryCitation = isMemoryCitation(citation);
-        return (
-          <article
-            key={citation.citationId || `${citation.url}-${index}`}
-            className={memoryCitation ? "is-memory" : undefined}
+    <div className="mc-next-thread-citations" aria-label="Citations for this answer">
+      {primaryCitations.map(renderCitation)}
+      {overflowCitations.length > 0 ? (
+        <>
+          <div id={overflowId} className="mc-next-thread-citations-overflow" hidden={!expanded}>
+            {expanded
+              ? overflowCitations.map((citation, index) => renderCitation(citation, collapsedLimit + index))
+              : null}
+          </div>
+          <button
+            type="button"
+            className="mc-next-thread-inline-button mc-next-thread-citations-toggle"
+            aria-expanded={expanded}
+            aria-controls={overflowId}
+            onClick={() => setExpanded((current) => !current)}
           >
-            <div>
-              <strong>{index + 1}</strong>
-              {safeHref ? (
-                <a href={citation.url} target="_blank" rel="noreferrer">
-                  {label}
-                </a>
-              ) : (
-                <span>{label}</span>
-              )}
-            </div>
-            <p>
-              {source}
-              {snippet ? ` · ${snippet}` : ""}
-            </p>
-            {memoryWhyUsed ? <p className="citation-memory-reason">Why used: {memoryWhyUsed}</p> : null}
-            {memoryMeta ? <p className="citation-memory-meta">{memoryMeta}</p> : null}
-            {memorySignals ? <p className="citation-memory-meta">{memorySignals}</p> : null}
-          </article>
-        );
-      })}
-      {citations.length > collapsedLimit ? (
-        <button
-          type="button"
-          className="mc-next-thread-inline-button mc-next-thread-citations-toggle"
-          aria-expanded={expanded}
-          aria-controls={citationsId}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Show fewer citations" : `Show ${hiddenCount} more citations`}
-        </button>
+            {expanded ? "Show fewer citations" : `Show ${overflowCitations.length} more citations`}
+          </button>
+        </>
       ) : null}
     </div>
   );
@@ -395,6 +427,10 @@ export function ThreadedTimeline({
       ? "completed"
       : (lastTurn?.trace.status ?? null);
   const sessionId = props.thread?.sessionId ?? visibleOptimisticUserMessage?.sessionId ?? null;
+  const pendingBlockerTurnId = useMemo(
+    () => resolvePendingBlockerTurnId(props.thread, props.pendingApproval, props.pendingUserInput),
+    [props.pendingApproval, props.pendingUserInput, props.thread],
+  );
   /*
    * The host's `props.streamingPreview` only updates on stream start/stop now
    * (see useChatStreamingPreviewState.ts) -- the live, per-flush value comes
@@ -411,6 +447,12 @@ export function ThreadedTimeline({
     () => new Set(props.selectedContextTurnIds ?? []),
     [props.selectedContextTurnIds],
   );
+  const windowPinnedTurnIds = useMemo(() => {
+    const selectedContextTurnIds = props.selectedContextTurnIds ?? [];
+    return pendingBlockerTurnId && !selectedContextTurnIds.includes(pendingBlockerTurnId)
+      ? [...selectedContextTurnIds, pendingBlockerTurnId]
+      : selectedContextTurnIds;
+  }, [pendingBlockerTurnId, props.selectedContextTurnIds]);
   const renderUserMetaAddon = useCallback(
     (turn: ChatThreadTurnRecord) => (
       <TurnChannelActivityBadge sessionId={sessionId} messageId={turn.userMessage.messageId} />
@@ -495,16 +537,16 @@ export function ThreadedTimeline({
         turns: props.thread?.turns ?? [],
         windowStart: effectiveWindowStart,
         selectedTurnId: props.selectedTurnId,
-        contextTurnIds: props.selectedContextTurnIds ?? [],
+        contextTurnIds: windowPinnedTurnIds,
         streamingTurnId: props.activeStreamingTurnId ?? streamingPreview?.turnId ?? null,
       }),
     [
       effectiveWindowStart,
       props.activeStreamingTurnId,
-      props.selectedContextTurnIds,
       props.selectedTurnId,
       streamingPreview?.turnId,
       props.thread?.turns,
+      windowPinnedTurnIds,
     ],
   );
   const timelineItems = useMemo(
@@ -583,6 +625,21 @@ export function ThreadedTimeline({
     : props.pendingUserInput
       ? "Jump to answer prompt"
       : "Jump to latest";
+  const jumpToCurrentTarget = useCallback(() => {
+    if (!pendingBlockerTurnId) {
+      jumpToLatest();
+      return;
+    }
+    const turnElement = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>("[data-turn-id]") ?? []).find(
+      (element) => element.dataset.turnId === pendingBlockerTurnId,
+    );
+    if (!turnElement) {
+      jumpToLatest();
+      return;
+    }
+    turnElement.scrollIntoView({ block: "center", behavior: "auto" });
+    onSelectTurn(pendingBlockerTurnId);
+  }, [jumpToLatest, onSelectTurn, pendingBlockerTurnId, scrollRef]);
 
   const showHiddenTurns = useCallback(() => {
     setManualWindowStart(0);
@@ -730,7 +787,7 @@ export function ThreadedTimeline({
         )}
       </div>
       {!props.followOutput && props.thread && hasThreadContent ? (
-        <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToLatest}>
+        <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToCurrentTarget}>
           {jumpToLatestLabel}
         </button>
       ) : null}

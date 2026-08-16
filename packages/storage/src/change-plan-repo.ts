@@ -222,14 +222,14 @@ export class ChangePlanRepository {
     this.listWorkspaceStmt = db.prepare(`
       SELECT * FROM change_plans
       WHERE workspace_id = @workspaceId
-        AND (@status IS NULL OR status = @status)
+        AND (CAST(@status AS TEXT) IS NULL OR status = @status)
       ORDER BY created_at DESC, plan_id DESC
       LIMIT @limit
     `);
     this.listSessionStmt = db.prepare(`
       SELECT * FROM change_plans
       WHERE workspace_id = @workspaceId AND session_id = @sessionId
-        AND (@status IS NULL OR status = @status)
+        AND (CAST(@status AS TEXT) IS NULL OR status = @status)
       ORDER BY created_at DESC, plan_id DESC
       LIMIT @limit
     `);

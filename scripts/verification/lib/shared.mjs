@@ -385,10 +385,32 @@ async function writeFileAtomically(filePath, value) {
   const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   try {
     await fs.writeFile(temporaryPath, value, { encoding: "utf8", flag: "wx" });
-    await fs.rename(temporaryPath, filePath);
+    await renameFileWithRetry(temporaryPath, filePath);
   } finally {
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
   }
+}
+
+export async function renameFileWithRetry(sourcePath, destinationPath, options = {}) {
+  const attempts = options.attempts ?? 8;
+  const retryDelayMs = options.retryDelayMs ?? 25;
+  const rename = options.rename ?? fs.rename;
+  const wait = options.wait ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  if (!Number.isInteger(attempts) || attempts < 1) throw new Error("atomic rename attempts must be positive");
+  if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0) {
+    throw new Error("atomic rename retry delay must be a nonnegative integer");
+  }
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await rename(sourcePath, destinationPath);
+      return attempt;
+    } catch (error) {
+      const transient = error?.code === "EBUSY" || error?.code === "EPERM" || error?.code === "EACCES";
+      if (!transient || attempt === attempts) throw error;
+      await wait(Math.min(retryDelayMs * 2 ** (attempt - 1), 250));
+    }
+  }
+  throw new Error("atomic rename exhausted without an outcome");
 }
 
 export async function readJson(filePath) {

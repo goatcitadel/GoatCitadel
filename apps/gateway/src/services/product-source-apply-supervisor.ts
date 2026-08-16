@@ -57,7 +57,8 @@ export function readProductSourceApplySupervisorConfiguration(
       const parsed = JSON.parse(rawArgs) as unknown;
       if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) args = parsed;
     } catch {
-      // An invalid installation-owned descriptor is treated as unavailable.
+      // Intentionally fall back to an unavailable restart descriptor when the
+      // installation-owned payload is invalid.
     }
   }
   const timeoutRaw = env.GOATCITADEL_SOURCE_UPDATE_HEALTH_TIMEOUT_MS?.trim();

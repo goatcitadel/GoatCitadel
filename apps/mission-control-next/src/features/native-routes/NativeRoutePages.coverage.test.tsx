@@ -16,6 +16,7 @@ const routeMocks = vi.hoisted(() => {
     approveImprovementCandidate: fn(),
     archiveAgentProfile: fn(),
     createAgentProfile: fn(),
+    createChangePlan: fn({ planId: "plan-capability-1" }),
     createFileFromTemplate: fn(),
     createSkillEvaluationProposal: fn(),
     createTask: fn(),
@@ -69,6 +70,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   approveImprovementCandidate: routeMocks.approveImprovementCandidate,
   archiveAgentProfile: routeMocks.archiveAgentProfile,
   createAgentProfile: routeMocks.createAgentProfile,
+  createChangePlan: routeMocks.createChangePlan,
   createFileFromTemplate: routeMocks.createFileFromTemplate,
   createSkillEvaluationProposal: routeMocks.createSkillEvaluationProposal,
   createTask: routeMocks.createTask,
@@ -1032,7 +1034,8 @@ describe("NativeRoutePages library coverage", () => {
     expect(routeMocks.createSkillEvaluationProposal).toHaveBeenCalledWith("eval-ready");
 
     routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRun] });
-    const skillsWithProposal = await mount("library", "skills");
+    const navigate = vi.fn();
+    const skillsWithProposal = await mount("library", "skills", { navigate });
     await click(findButton(skillsWithProposal.root, "Open proposal"));
     expect(routeMocks.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-1");
     await click(findButton(skillsWithProposal.root, "Trust review"));
@@ -1062,14 +1065,21 @@ describe("NativeRoutePages library coverage", () => {
       "candidate-1",
       expect.objectContaining({ snoozeUntil: expect.any(String) }),
     );
-    expect(routeMocks.activateImprovementCandidate).toHaveBeenCalledWith(
-      "candidate-1",
-      expect.objectContaining({ reason: expect.stringContaining("activate") }),
-    );
-    expect(routeMocks.promoteImprovementCandidate).toHaveBeenCalledWith(
-      "candidate-1",
-      expect.objectContaining({ reason: expect.stringContaining("promote") }),
-    );
+    expect(routeMocks.createChangePlan).toHaveBeenNthCalledWith(1, {
+      workspaceId: "default",
+      surface: "settings",
+      request: { kind: "capability_candidate", proposalId: "proposal-1" },
+      idempotencyKey: "library-skill:proposal-1:activate",
+    });
+    expect(routeMocks.createChangePlan).toHaveBeenNthCalledWith(2, {
+      workspaceId: "default",
+      surface: "settings",
+      request: { kind: "capability_candidate", proposalId: "proposal-1" },
+      idempotencyKey: "library-skill:proposal-1:promote",
+    });
+    expect(routeMocks.activateImprovementCandidate).not.toHaveBeenCalled();
+    expect(routeMocks.promoteImprovementCandidate).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
 
     setupResponses();
     routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRunWithoutProposal, evaluationRun] });

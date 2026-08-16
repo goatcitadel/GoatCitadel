@@ -1813,6 +1813,10 @@
   display: none;
 }
 
+.mc-next-status-strip:has(.mc-next-status-details[open]) {
+  overflow: visible;
+}
+
 .mc-next-status-details-mobile-only {
   display: none;
 }
@@ -3014,6 +3018,27 @@
 
   .mc-next-status-details summary strong::before {
     display: none;
+  }
+
+  .mc-next-shell .mc-next-status-details-popover {
+    position: fixed;
+    right: 0.5rem;
+    bottom: calc(1.75rem + env(safe-area-inset-bottom));
+    left: 0.5rem;
+    width: auto;
+    max-width: none;
+  }
+
+  .mc-next-shell .mc-next-status-details-popover .mc-next-status-pill {
+    width: 100%;
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .mc-next-shell .mc-next-status-details-popover .mc-next-status-pill strong {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .notification-stack {

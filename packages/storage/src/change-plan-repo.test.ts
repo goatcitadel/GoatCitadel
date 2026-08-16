@@ -36,6 +36,17 @@ function createRepo(): { database: DatabaseClient; repo: ChangePlanRepository } 
   return { database, repo: new ChangePlanRepository(database) };
 }
 
+function createPostgresFacade(database: DatabaseClient, preparedSql: string[]): DatabaseClient {
+  return {
+    ...database,
+    dialect: "postgres",
+    prepare(sql: string) {
+      preparedSql.push(sql.replace(/\s+/gu, " ").trim());
+      return database.prepare(sql);
+    },
+  } as DatabaseClient;
+}
+
 function createModelPlan(repo: ChangePlanRepository, overrides: { idempotencyKey?: string; model?: string } = {}) {
   return repo.create({
     origin: { surface: "chat", workspaceId: "default", sessionId: "session-1", actorId: "operator-1" },
@@ -60,6 +71,21 @@ function createModelPlan(repo: ChangePlanRepository, overrides: { idempotencyKey
 }
 
 describe("ChangePlanRepository", () => {
+  it("keeps optional status filters type-resolvable for PostgreSQL", () => {
+    const { database } = createRepo();
+    const preparedSql: string[] = [];
+    const repo = new ChangePlanRepository(createPostgresFacade(database, preparedSql));
+
+    repo.list({ workspaceId: "default" });
+    repo.list({ workspaceId: "default", sessionId: "session-1" });
+
+    const statusFilters = preparedSql.filter((sql) => sql.includes("FROM change_plans") && sql.includes("@status"));
+    assert.equal(statusFilters.length, 2);
+    for (const sql of statusFilters) {
+      assert.match(sql, /CAST\(@status AS TEXT\) IS NULL OR status = @status/u);
+    }
+  });
+
   it("enforces exact CAS and nonce-bound confirmation before releasing the target claim", () => {
     const { repo } = createRepo();
     const plan = createModelPlan(repo);

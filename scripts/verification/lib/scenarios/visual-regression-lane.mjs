@@ -1,3 +1,6 @@
+const VISUAL_STUB_KEY = "verification-visual-regression-stub-key";
+const VISUAL_STUB_REPLY = "# Verification artifact\n\nDeterministic visual-regression content.";
+
 export async function runVisualRegressionLane(context, options = {}, deps) {
   const {
     VISUAL_DIFF_RATIO_THRESHOLD,
@@ -17,6 +20,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     installMissionControlNextBrowserState,
     maybeParseBool,
     pinVisualRegressionProvider,
+    prepareVerificationRuntime,
     resolveVerificationTargetContext,
     resolveVisualRouteHref,
     runScenario,
@@ -24,9 +28,11 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     setBrowserCorrelation,
     stabilizeVisualRegressionSnapshot,
     startBrowserTrace,
+    startDeterministicLlmStub,
     startVerificationStack,
     stopVerificationStack,
     waitForVerificationRouteReady,
+    writeDeterministicLlmProviderConfig,
     writeMissionControlNextManualProofChecklist,
   } = deps;
   const verificationTarget = resolveVerificationTargetContext();
@@ -56,29 +62,39 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   if (!updateBaselines) {
     await assertVisualBaselineCoverage(context, { packageName: verificationTarget.packageName });
   }
-  const stack = await startVerificationStack(context, {
-    includeUi: true,
-    gatewayMode: "built",
-    uiMode: "preview",
-    gatewayEnvOmit: options.secretEnvKeys,
-    uiEnvOmit: options.secretEnvKeys,
-    gatewayEnv: {
-      GOATCITADEL_AUTH_MODE: "token",
-      GOATCITADEL_AUTH_TOKEN: visualOperatorToken,
-      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
-      GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
-      GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
-      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
-      GOATCITADEL_MESH_NODE_ID: "build-main",
-      OPENAI_API_KEY: "sk-visual-regression",
-    },
-    uiEnv: {
-      VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
-    },
-  });
+  let stack;
+  let runtimeRoot;
+  let stub;
   try {
+    stub = await startDeterministicLlmStub({
+      replyText: VISUAL_STUB_REPLY,
+      expectedAuthorization: `Bearer ${VISUAL_STUB_KEY}`,
+    });
+    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-visual-regression`);
+    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
+    stack = await startVerificationStack(context, {
+      runtimeRoot,
+      includeUi: true,
+      gatewayMode: "built",
+      uiMode: "preview",
+      gatewayEnvOmit: options.secretEnvKeys,
+      uiEnvOmit: options.secretEnvKeys,
+      gatewayEnv: {
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: visualOperatorToken,
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+        GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
+        GOATCITADEL_MESH_NODE_ID: "build-main",
+        GOATCITADEL_VERIFY_STUB_LLM_KEY: VISUAL_STUB_KEY,
+      },
+      uiEnv: {
+        VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
+      },
+    });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
-    await pinVisualRegressionProvider(stack.gatewayUrl);
+    await pinVisualRegressionProvider(stack.gatewayUrl, stub.providerId);
     const fixture = verificationTarget.isNext
       ? await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot })
       : null;
@@ -256,7 +272,15 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
       await writeMissionControlNextManualProofChecklist(context, manualProofArtifacts);
     }
   } finally {
-    await stopVerificationStack(stack);
+    try {
+      if (stack) {
+        await stopVerificationStack(stack);
+      } else if (runtimeRoot) {
+        await stopVerificationStack({ runtimeRoot });
+      }
+    } finally {
+      await stub?.close().catch(() => undefined);
+    }
   }
 }
 

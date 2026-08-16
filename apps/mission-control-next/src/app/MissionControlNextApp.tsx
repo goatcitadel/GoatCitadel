@@ -187,6 +187,10 @@ export function MissionControlNextApp() {
   } = useUiPreferences();
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const [route, setRoute] = useState<AppRoute>(() => resolveRouteFromLocation(window.location.href));
+  // The guided setup can complete after the gateway preflight has already
+  // reported `completed: false`. The initial redirect must stay one-way so a
+  // freshly completed setup can enter Chat before that preflight is refreshed.
+  const redirectedIncompleteOnboardingRef = useRef(false);
   useNotificationPresenceLease(activeWorkspaceId, route.area === "chat" ? route.sessionId : undefined);
   const [navOpen, setNavOpen] = useState(false);
   // H-7 (ship punchlist): shell-level command palette opened via Cmd/Ctrl+K
@@ -739,10 +743,12 @@ export function MissionControlNextApp() {
     if (
       gatewayAccess.status !== "ready" ||
       gatewayAccess.onboardingState?.completed !== false ||
+      redirectedIncompleteOnboardingRef.current ||
       route.area !== "chat"
     ) {
       return;
     }
+    redirectedIncompleteOnboardingRef.current = true;
     navigate({ area: "settings", section: "onboarding", theme: route.theme }, { replace: true });
   }, [gatewayAccess, navigate, route.area, route.theme]);
 

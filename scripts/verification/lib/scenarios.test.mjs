@@ -11,7 +11,7 @@ import {
   ensureOnboardingComplete,
   exerciseMissionControlNextMobileRail,
   getNextCoreNavigationRoutes,
-  openMissionControlNextThreadedContext,
+  openMissionControlNextThreadedActivity,
   performVerificationInteraction,
   projectOperatorAuthBoundaryEvidence,
   requireCanonicalMemorySeed,
@@ -293,29 +293,30 @@ test("Mission Control Next shell interaction reaches Route details through the t
   assert.equal(requestedMenuItemName.test("Open Context"), false);
 });
 
-test("mobile Chat proof rejects shell inspector ownership and opens threaded Working Context", async () => {
-  let contextVisible = false;
+test("mobile Chat proof rejects shell inspector ownership and opens threaded Activity", async () => {
+  let activityVisible = false;
   let requestedRouteDetailsName;
-  const contextButton = {
+  const activityButton = {
     async waitFor() {},
+    async scrollIntoViewIfNeeded() {},
     async boundingBox() {
       return { x: 12, y: 20, width: 120, height: 36 };
     },
     async click() {
-      contextVisible = true;
+      activityVisible = true;
     },
   };
-  const contextPanel = {
+  const activityPanel = {
     async isVisible() {
-      return contextVisible;
+      return activityVisible;
     },
     async waitFor() {
-      assert.equal(contextVisible, true);
+      assert.equal(activityVisible, true);
     },
   };
-  const workingContext = {
+  const workRecord = {
     async waitFor() {
-      assert.equal(contextVisible, true);
+      assert.equal(activityVisible, true);
     },
   };
   const page = {
@@ -331,19 +332,19 @@ test("mobile Chat proof rejects shell inspector ownership and opens threaded Wor
       if (selector === ".mc-next-threaded-mobile-bar .mc-next-threaded-menu-button") {
         return {
           filter({ hasText }) {
-            assert.equal(hasText.test("Context"), true);
-            return { first: () => contextButton };
+            assert.equal(hasText.test("Activity"), true);
+            return { first: () => activityButton };
           },
         };
       }
-      if (selector === '.mc-next-threaded-context-panel[aria-label="Thread context drawer"]') {
-        return { first: () => contextPanel };
+      if (selector === '.mc-next-threaded-context-panel[aria-label="Thread utility drawer"]') {
+        return { first: () => activityPanel };
       }
-      if (selector === ".mc-next-threaded-context-panel .mc-next-context-drawer") {
+      if (selector === '.mc-next-threaded-context-panel .mc-next-utility-panel[data-panel="preview"]') {
         return {
           filter({ hasText }) {
-            assert.equal(hasText.test("Working Context"), true);
-            return { first: () => workingContext };
+            assert.equal(hasText.test("Work Record"), true);
+            return { first: () => workRecord };
           },
         };
       }
@@ -355,9 +356,9 @@ test("mobile Chat proof rejects shell inspector ownership and opens threaded Wor
     async waitForTimeout() {},
   };
 
-  await openMissionControlNextThreadedContext(page);
+  await openMissionControlNextThreadedActivity(page);
 
-  assert.equal(contextVisible, true);
+  assert.equal(activityVisible, true);
   assert.equal(requestedRouteDetailsName.test("Open Route details"), true);
 });
 
@@ -373,8 +374,8 @@ test("mobile Chat proof fails closed when the generic Route details control is p
   };
 
   await assert.rejects(
-    () => openMissionControlNextThreadedContext(page),
-    /generic Route details inspector instead of threaded Working Context/,
+    () => openMissionControlNextThreadedActivity(page),
+    /generic Route details inspector instead of threaded Activity/,
   );
 });
 

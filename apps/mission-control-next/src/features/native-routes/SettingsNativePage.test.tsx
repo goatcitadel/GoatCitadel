@@ -2847,6 +2847,11 @@ describe("SettingsNativePage providers", () => {
     });
     await flushAsyncUpdates();
     let text = collectText(renderer!.root);
+    expect(text).toContain("Try a safe demo");
+    expect(text).toContain("Connect a model");
+    expect(text).toContain("Optional setup and proof");
+    expect(renderer!.root.findByProps({ id: "onboarding-later" }).props.open).not.toBe(true);
+    expect(findButton(renderer!.root, "Enter Chat").props.disabled).toBe(false);
     expect(text).toContain("First-run setup");
     expect(text).toContain("First trusted outcome");
     expect(text).toContain("Provider-ready path");

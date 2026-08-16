@@ -644,9 +644,9 @@ describe("ThreadedTimeline", () => {
       (node) => node.type === "button" && node.children.join("") === "Show 2 more citations",
     );
     expect(toggle.props["aria-controls"]).toBeTruthy();
-    expect(renderer.root.findByProps({ id: toggle.props["aria-controls"] }).props.className).toBe(
-      "mc-next-thread-citations",
-    );
+    const collapsedOverflow = renderer.root.findByProps({ id: toggle.props["aria-controls"] });
+    expect(collapsedOverflow.props.className).toBe("mc-next-thread-citations-overflow");
+    expect(collapsedOverflow.props.hidden).toBe(true);
     TestRenderer.act(() => {
       toggle.props.onClick();
     });
@@ -654,6 +654,7 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("Source 7");
     expect(renderedText(renderer)).toContain("Source 8");
     expect(renderedText(renderer)).toContain("Show fewer citations");
+    expect(renderer.root.findByProps({ id: toggle.props["aria-controls"] }).props.hidden).toBe(false);
   });
 
   it("renders the active streaming preview without leaking it to inactive turns", () => {
@@ -1593,48 +1594,71 @@ describe("ThreadedTimeline", () => {
   });
 
   it("labels the jump affordance with pending blockers", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    const approvalProps = buildProps({
+      followOutput: false,
+      pendingApproval: {
+        approvalId: "approval-1",
+        sessionId: "session-1",
+        toolName: "fs.write",
+        kind: "tool",
+        reason: "Needs approval",
+        riskLevel: "caution",
+      },
+    });
+    approvalProps.thread.turns[0].trace.status = "waiting_for_approval";
+    approvalProps.thread.turns[0].trace.toolRuns = [
+      {
+        toolRunId: "tool-1",
+        toolName: "fs.write",
+        status: "approval_required",
+        approvalId: "approval-1",
+      },
+    ];
+    approvalProps.thread.turns[0].toolRuns = approvalProps.thread.turns[0].trace.toolRuns;
     await act(async () => {
-      root?.render(
-        <ThreadedTimeline
-          props={
-            buildProps({
-              followOutput: false,
-              pendingApproval: {
-                approvalId: "approval-1",
-                sessionId: "session-1",
-                turnId: "turn-1",
-                toolName: "fs.write",
-                kind: "tool",
-                reason: "Needs approval",
-                riskLevel: "medium",
-              },
-            }) as any
-          }
-        />,
-      );
+      root?.render(<ThreadedTimeline props={approvalProps as any} />);
       await Promise.resolve();
     });
     expect(container?.textContent).toContain("Jump to approval");
+    const approvalTarget = container?.querySelector('[data-turn-id="turn-1"]');
+    const approvalJump = Array.from(container?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent === "Jump to approval",
+    );
+    await act(async () => {
+      approvalJump?.click();
+      await Promise.resolve();
+    });
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(approvalTarget);
+    expect(approvalProps.onSelectTurn).toHaveBeenCalledWith("turn-1");
+
+    scrollIntoView.mockClear();
+    const inputProps = buildProps({
+      followOutput: false,
+      pendingUserInput: {
+        promptId: "prompt-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        message: "Pick a target.",
+      },
+    });
 
     await act(async () => {
-      root?.render(
-        <ThreadedTimeline
-          props={
-            buildProps({
-              followOutput: false,
-              pendingUserInput: {
-                promptId: "prompt-1",
-                sessionId: "session-1",
-                turnId: "turn-1",
-                message: "Pick a target.",
-              },
-            }) as any
-          }
-        />,
-      );
+      root?.render(<ThreadedTimeline props={inputProps as any} />);
       await Promise.resolve();
     });
     expect(container?.textContent).toContain("Jump to answer prompt");
+    const inputTarget = container?.querySelector('[data-turn-id="turn-1"]');
+    const inputJump = Array.from(container?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent === "Jump to answer prompt",
+    );
+    await act(async () => {
+      inputJump?.click();
+      await Promise.resolve();
+    });
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(inputTarget);
+    expect(inputProps.onSelectTurn).toHaveBeenCalledWith("turn-1");
+    scrollIntoView.mockRestore();
   });
 
   it("covers repaired output, requested routing, fallback reasons, and empty delegation summaries", () => {

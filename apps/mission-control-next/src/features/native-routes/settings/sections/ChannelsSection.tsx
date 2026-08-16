@@ -289,7 +289,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       return selectedDraft;
     }
     try {
-      const secretFieldKeys = new Set(selectedDefinition?.adapter.secretFieldKeys ?? []);
+      const secretFieldKeys = new Set(selectedDefinition?.adapter?.secretFieldKeys ?? []);
       const publicValues = Object.fromEntries(
         Object.entries(nextValues).filter(([fieldKey]) => !secretFieldKeys.has(fieldKey)),
       );

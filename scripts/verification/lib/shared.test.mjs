@@ -3,7 +3,33 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildFastLanePerfPayload, finalizeRunContext, runCommand } from "./shared.mjs";
+import { buildFastLanePerfPayload, finalizeRunContext, renameFileWithRetry, runCommand } from "./shared.mjs";
+
+test("atomic file replacement retries transient Windows-style rename locks", async () => {
+  const calls = [];
+  const waits = [];
+  const attempt = await renameFileWithRetry("source.tmp", "manifest.json", {
+    attempts: 4,
+    retryDelayMs: 5,
+    rename: async (sourcePath, destinationPath) => {
+      calls.push([sourcePath, destinationPath]);
+      if (calls.length <= 2) {
+        throw Object.assign(new Error("locked"), { code: calls.length === 1 ? "EPERM" : "EBUSY" });
+      }
+    },
+    wait: async (milliseconds) => {
+      waits.push(milliseconds);
+    },
+  });
+
+  assert.equal(attempt, 3);
+  assert.deepEqual(calls, [
+    ["source.tmp", "manifest.json"],
+    ["source.tmp", "manifest.json"],
+    ["source.tmp", "manifest.json"],
+  ]);
+  assert.deepEqual(waits, [5, 10]);
+});
 
 test("verification commands omit inherited secrets while retaining explicit safe values", async () => {
   const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gc-command-env-"));

@@ -31,6 +31,32 @@ describe("channel setup recent-test cache", () => {
     expect(cache.size).toBe(1);
   });
 
+  it("rebinds reusable evidence when only the draft revision advanced", () => {
+    const draft = createDraft();
+    const connection = createConnection();
+    const result = createTestResult("ok", draft.revision - 1);
+    const cache = new Map([
+      [
+        draft.draftId,
+        {
+          signature: buildChannelSetupRecentTestSignature(draft, connection, draft.testVersion),
+          result,
+        },
+      ],
+    ]);
+
+    const reusable = resolveReusableChannelSetupTestResult({
+      cache,
+      draft,
+      connection,
+      testVersion: draft.testVersion,
+    });
+
+    expect(reusable).not.toBe(result);
+    expect(reusable).toEqual({ ...result, draftRevision: draft.revision });
+    expect(cache.size).toBe(1);
+  });
+
   it("invalidates a stale cached result when the effective connection config changes", () => {
     const draft = createDraft();
     const originalConnection = createConnection();
@@ -89,11 +115,13 @@ describe("channel setup recent-test cache", () => {
 function createDraft(): ChannelSetupDraft {
   return {
     draftId: "draft-1",
+    revision: 3,
     catalogId: "slack",
     lifecycleMode: "create",
     label: "Slack Alerts",
     enabled: true,
     draft: {},
+    secretState: {},
     contentVersion: "content-v1",
     adapterVersion: "adapter-v1",
     validationVersion: "validation-v1",
@@ -122,9 +150,10 @@ function createConnection(overrides?: Partial<IntegrationConnection>): Integrati
   };
 }
 
-function createTestResult(status: ChannelSetupTestResult["status"]): ChannelSetupTestResult {
+function createTestResult(status: ChannelSetupTestResult["status"], draftRevision = 3): ChannelSetupTestResult {
   return {
     draftId: "draft-1",
+    draftRevision,
     status,
     levels: ["structural", "semantic", "live-auth", "live-send"],
     issues: [],

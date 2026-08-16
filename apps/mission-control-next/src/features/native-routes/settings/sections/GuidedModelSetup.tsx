@@ -68,8 +68,13 @@ export function GuidedModelSetup({
   const catalog = useProviderModelCatalog("system");
   const catalogProviders = catalog.providers;
   const loadModelsForProvider = catalog.loadModelsForProvider;
-  const [providerId, setProviderId] = useState(onboarding.settings.llm.activeProviderId);
-  const [model, setModel] = useState(onboarding.settings.llm.activeModel);
+  // Keep first-run setup usable against an older or partially available
+  // Gateway response. The typed contract requires settings.llm, but the UI is
+  // also the recovery surface when that boundary cannot return a full payload.
+  const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
+  const activeModel = onboarding.settings?.llm?.activeModel ?? "";
+  const [providerId, setProviderId] = useState(activeProviderId);
+  const [model, setModel] = useState(activeModel);
   const [thinkingLevel, setThinkingLevel] = useState<ChatThinkingLevel>(
     catalog.config?.defaultThinkingLevel ?? "standard",
   );
@@ -89,8 +94,10 @@ export function GuidedModelSetup({
       selectedProvider.hasApiKey ||
       ["configured", "ready"].includes(selectedProvider.authReadiness?.status ?? "")),
   );
+  const usesChatGptOAuth = selectedProvider?.authMode === "codex-oauth";
   const defaultPlanCompleted =
-    latestPlan?.request.kind === "installation_default_model" && latestPlan.status === "completed";
+    (Boolean(activeProviderId && activeModel) && activeProviderId === providerId && activeModel === model) ||
+    (latestPlan?.request.kind === "installation_default_model" && latestPlan.status === "completed");
 
   useEffect(() => {
     if (providerId && catalog.providers.some((provider) => provider.providerId === providerId)) return;
@@ -120,8 +127,8 @@ export function GuidedModelSetup({
       setModels(nextModels);
       setModel((current) => {
         if (current && nextModels.includes(current)) return current;
-        if (providerId === onboarding.settings.llm.activeProviderId && onboarding.settings.llm.activeModel) {
-          return onboarding.settings.llm.activeModel;
+        if (providerId === activeProviderId && activeModel) {
+          return activeModel;
         }
         return nextModels[0] ?? "";
       });
@@ -129,13 +136,7 @@ export function GuidedModelSetup({
     return () => {
       cancelled = true;
     };
-  }, [
-    catalogProviders,
-    loadModelsForProvider,
-    onboarding.settings.llm.activeModel,
-    onboarding.settings.llm.activeProviderId,
-    providerId,
-  ]);
+  }, [catalogProviders, loadModelsForProvider, activeModel, activeProviderId, providerId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -217,10 +218,7 @@ export function GuidedModelSetup({
   };
 
   const enterChat = async () => {
-    if (
-      !defaultPlanCompleted &&
-      (onboarding.settings.llm.activeProviderId !== providerId || onboarding.settings.llm.activeModel !== model)
-    ) {
+    if (!defaultPlanCompleted && (activeProviderId !== providerId || activeModel !== model)) {
       setNotice({ tone: "warning", message: "Confirm and verify the future-Chat model default before entering Chat." });
       return;
     }
@@ -243,10 +241,11 @@ export function GuidedModelSetup({
 
   return (
     <NativeCard
+      id="onboarding-model"
       density="compact"
       className="mc-next-settings-panel"
-      title="Connect your first model"
-      subtitle="A guided, Gateway-owned setup. Credentials never enter Chat, and nothing becomes the default until you confirm the exact plan."
+      title="Connect a model"
+      subtitle="Choose a provider, connect it securely, then select the model Chat should use."
       stats={[
         { label: "Provider", value: providerReady ? "Ready" : "Needs setup" },
         { label: "Model", value: model || "Choose one" },
@@ -294,9 +293,11 @@ export function GuidedModelSetup({
             ))}
           </select>
           <p className="mc-next-settings-field-note">
-            {catalog.error ??
-              selectedProvider?.authReadiness?.reasonCode ??
-              "The Gateway will verify this connection before it can be used."}
+            {usesChatGptOAuth
+              ? "Use your ChatGPT account: select Connect ChatGPT, review the plan, then approve the sign-in in OpenAI."
+              : (catalog.error ??
+                selectedProvider?.authReadiness?.reasonCode ??
+                "The Gateway will verify this connection before it can be used.")}
           </p>
         </SettingsField>
         <SettingsField label="Model">
@@ -343,7 +344,7 @@ export function GuidedModelSetup({
       <SettingsButtonRow>
         <NativeButton variant="default" disabled={busy || !providerId} onClick={() => void createProviderPlan()}>
           <Play size={16} />
-          {providerReady ? "Verify provider" : "Connect provider"}
+          {providerReady ? "Verify provider" : usesChatGptOAuth ? "Connect ChatGPT" : "Connect provider"}
         </NativeButton>
         <NativeButton
           variant="secondary"

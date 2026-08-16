@@ -166,7 +166,7 @@ const OWNER_FAILURE_REASONS = new Set<GovernedRemediationOwnerFailureReason>([
 ]);
 
 const SECRET_LIKE_OWNER_VALUE =
-  /(?:(?:api[_-]?key|auth(?:orization)?|cookie|credential|password|secret|token)\s*[:=]\s*["']?[a-z0-9._\/-]{8,}|\bbearer\s+[a-z0-9._~+\/-]{12,}|\bsk-[a-z0-9_-]{16,}|\bghp_[a-z0-9_]{16,}|\bxox[baprs]-[a-z0-9-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/iu;
+  /(?:(?:api[_-]?key|auth(?:orization)?|cookie|credential|password|secret|token)\s*[:=]\s*["']?[a-z0-9._/-]{8,}|\bbearer\s+[a-z0-9._~+/-]{12,}|\bsk-[a-z0-9_-]{16,}|\bghp_[a-z0-9_]{16,}|\bxox[baprs]-[a-z0-9-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/iu;
 
 /**
  * Owner ports are runtime trust boundaries, not TypeScript-only interfaces.
@@ -592,7 +592,6 @@ function ownerIdentifier(value: unknown, label: string, maxLength = 256): string
     value.length > maxLength ||
     value.trim() !== value ||
     !/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/u.test(value) ||
-    /[\u0000-\u001f\u007f]/u.test(value) ||
     SECRET_LIKE_OWNER_VALUE.test(value)
   ) {
     throw new TypeError(`Governed remediation ${label} is not a canonical secret-free identifier.`);

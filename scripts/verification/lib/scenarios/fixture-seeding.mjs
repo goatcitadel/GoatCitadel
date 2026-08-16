@@ -476,6 +476,9 @@ async function enableVerificationMemoryAdmin(gatewayUrl, deps) {
       }
       assertOk(settingsResponse, "read mission-control-next verification settings");
     }
+    if (settingsResponse.body?.features?.memoryLifecycleAdminV1Enabled === true) {
+      return settingsResponse;
+    }
 
     const settingsRevision = settingsResponse.body?.revision;
     if (!Number.isSafeInteger(settingsRevision) || settingsRevision < 1) {
@@ -489,6 +492,41 @@ async function enableVerificationMemoryAdmin(gatewayUrl, deps) {
       },
     });
     if (updatedSettingsResponse.ok) {
+      if (updatedSettingsResponse.body?.features?.memoryLifecycleAdminV1Enabled === true) {
+        return updatedSettingsResponse;
+      }
+      const pendingPlan = readPendingSettingsChangePlan(updatedSettingsResponse.body?.changePlanReceipt);
+      if (pendingPlan) {
+        const approvalResponse = await requestJson(
+          gatewayUrl,
+          `/api/v1/approvals/${encodeURIComponent(pendingPlan.approvalId)}/resolve`,
+          {
+            method: "POST",
+            body: {
+              decision: "approve",
+              resolutionNote: "Approved by the isolated Mission Control verification fixture.",
+            },
+          },
+        );
+        assertOk(approvalResponse, "approve mission-control-next verification memory admin Change Plan");
+        const resumeResponse = await requestJson(
+          gatewayUrl,
+          `/api/v1/change-plans/${encodeURIComponent(pendingPlan.planId)}/responses`,
+          {
+            method: "POST",
+            body: {
+              workspaceId: "default",
+              expectedRevision: pendingPlan.revision,
+              actionId: pendingPlan.actionId,
+              actionNonce: pendingPlan.actionNonce,
+              values: {},
+            },
+          },
+        );
+        assertOk(resumeResponse, "resume mission-control-next verification memory admin Change Plan");
+        await delay(SETTINGS_RECONCILIATION_RETRY_MS);
+        continue;
+      }
       return updatedSettingsResponse;
     }
     if (isSettingsReconciliationConflict(updatedSettingsResponse) && attempt < SETTINGS_RECONCILIATION_ATTEMPTS) {
@@ -498,6 +536,29 @@ async function enableVerificationMemoryAdmin(gatewayUrl, deps) {
     assertOk(updatedSettingsResponse, "enable mission-control-next verification memory admin");
   }
   throw new Error("mission-control-next verification settings reconciliation retry budget was exhausted");
+}
+
+function readPendingSettingsChangePlan(receipt) {
+  const action = receipt?.requiredAction;
+  if (
+    receipt?.status !== "awaiting_approval" ||
+    !receipt?.planId ||
+    !Number.isSafeInteger(receipt?.revision) ||
+    receipt.revision < 1 ||
+    action?.kind !== "approval" ||
+    !action?.approvalId ||
+    !action?.actionId ||
+    !action?.actionNonce
+  ) {
+    return null;
+  }
+  return {
+    planId: receipt.planId,
+    revision: receipt.revision,
+    approvalId: action.approvalId,
+    actionId: action.actionId,
+    actionNonce: action.actionNonce,
+  };
 }
 
 function isSettingsReconciliationConflict(response) {

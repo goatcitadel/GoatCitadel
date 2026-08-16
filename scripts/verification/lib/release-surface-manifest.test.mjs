@@ -65,7 +65,7 @@ test("Projects and Approvals visual proof target populated fixture records", () 
   );
 });
 
-test("Chat owns threaded Working Context while non-Chat routes retain the shell inspector interaction", () => {
+test("Chat owns threaded Activity while non-Chat routes retain the shell inspector interaction", () => {
   const chatRoute = NEXT_RELEASE_SURFACE_MANIFEST.find((route) => route.slug === "chat");
   assert.equal(chatRoute?.interaction, undefined);
   assert.equal(chatRoute?.fixtureSessionKey, "approval");

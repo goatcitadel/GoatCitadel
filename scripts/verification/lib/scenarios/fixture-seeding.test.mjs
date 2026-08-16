@@ -49,6 +49,8 @@ test("seeds the complete fixture and returns its identifiers", async () => {
   let projectRequest;
   const projectSessionRequests = [];
   const settingsPatchRequests = [];
+  let settingsApprovalRequest;
+  let settingsPlanResponseRequest;
   const retryDelays = [];
   const requestJson = async (_gatewayUrl, path, options) => {
     requests.push(path);
@@ -114,9 +116,40 @@ test("seeds the complete fixture and returns its identifiers", async () => {
             },
           };
         }
-        return { ok: true, body: { revision: 8, features: { memoryLifecycleAdminV1Enabled: true } } };
+        return {
+          ok: true,
+          body: {
+            revision: 8,
+            features: { memoryLifecycleAdminV1Enabled: false },
+            changePlanReceipt: {
+              planId: "settings-plan-1",
+              status: "awaiting_approval",
+              revision: 3,
+              requiredAction: {
+                kind: "approval",
+                approvalId: "00000000-0000-0000-0000-000000000001",
+                actionId: "settings-action-1",
+                actionNonce: "settings-action-nonce-1234567890",
+              },
+            },
+          },
+        };
       }
-      return { ok: true, body: { revision: settingsPatchRequests.length === 0 ? 7 : 8 } };
+      return {
+        ok: true,
+        body: {
+          revision: settingsPlanResponseRequest ? 9 : settingsPatchRequests.length === 0 ? 7 : 8,
+          features: { memoryLifecycleAdminV1Enabled: Boolean(settingsPlanResponseRequest) },
+        },
+      };
+    }
+    if (path === "/api/v1/approvals/00000000-0000-0000-0000-000000000001/resolve") {
+      settingsApprovalRequest = options;
+      return { ok: true, body: { status: "approved" } };
+    }
+    if (path === "/api/v1/change-plans/settings-plan-1/responses") {
+      settingsPlanResponseRequest = options;
+      return { ok: true, body: { status: "completed" } };
     }
     if (path === "/api/v1/dev/verification/memory-item-seed") {
       return { ok: true, body: { itemId: "memory-1" } };
@@ -312,6 +345,23 @@ test("seeds the complete fixture and returns its identifiers", async () => {
       },
     },
   ]);
-  assert.deepEqual(retryDelays, [250]);
+  assert.deepEqual(settingsApprovalRequest, {
+    method: "POST",
+    body: {
+      decision: "approve",
+      resolutionNote: "Approved by the isolated Mission Control verification fixture.",
+    },
+  });
+  assert.deepEqual(settingsPlanResponseRequest, {
+    method: "POST",
+    body: {
+      workspaceId: "default",
+      expectedRevision: 3,
+      actionId: "settings-action-1",
+      actionNonce: "settings-action-nonce-1234567890",
+      values: {},
+    },
+  });
+  assert.deepEqual(retryDelays, [250, 250]);
   assert.ok(requests.includes("/api/v1/memory/items?workspaceId=workspace-1&status=all&limit=200"));
 });

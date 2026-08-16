@@ -60,10 +60,11 @@ export async function startVerificationStack(context, options = {}) {
       : await startProcess(
           context,
           buildVerificationProcessLogName("gateway", options.processLogPrefix),
-          [pnpmCommand(), "--dir", repoRoot, "dev:gateway"],
+          buildVerificationGatewayCommand(),
           gatewayEnv,
           {
             omitEnv: options.gatewayEnvOmit,
+            cwd: path.join(repoRoot, "apps", "gateway"),
           },
         );
   let ui;
@@ -91,7 +92,7 @@ export async function startVerificationStack(context, options = {}) {
         buildVerificationProcessLogName("ui", options.processLogPrefix),
         buildVerificationUiCommand(uiTarget.packageName, uiPort, options.uiMode),
         uiEnv,
-        { omitEnv: options.uiEnvOmit },
+        { omitEnv: options.uiEnvOmit, cwd: uiTarget.appDir },
       );
       await waitForHttp(uiUrl, `${uiTarget.displayName} UI`, 180000, ui);
     }
@@ -109,14 +110,30 @@ export async function startVerificationStack(context, options = {}) {
 }
 
 export async function stopVerificationStack(stack) {
+  const errors = [];
   if (stack?.ui) {
-    await stopProcess(stack.ui);
+    try {
+      await stopProcess(stack.ui);
+    } catch (error) {
+      errors.push(error);
+    }
   }
   if (stack?.gateway) {
-    await stopProcess(stack.gateway);
+    try {
+      await stopProcess(stack.gateway);
+    } catch (error) {
+      errors.push(error);
+    }
   }
   if (stack?.runtimeRoot) {
-    await removeRuntimeRootWithRetry(stack.runtimeRoot);
+    try {
+      await removeRuntimeRootWithRetry(stack.runtimeRoot);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Verification stack cleanup failed");
   }
 }
 
@@ -153,7 +170,7 @@ export async function startProcess(context, name, commandArgs, extraEnv, options
   const stdoutChunks = [];
   const stderrChunks = [];
   const child = spawnVerificationProcess(command, args, {
-    cwd: repoRoot,
+    cwd: options.cwd ?? repoRoot,
     env: buildVerificationProcessEnv(process.env, extraEnv, options.omitEnv),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -211,15 +228,20 @@ export function buildVerificationProcessLogName(name, processLogPrefix) {
   return prefix ? `${prefix}-${name}` : name;
 }
 
-export function buildVerificationUiCommand(packageName, port, uiMode) {
+export function buildVerificationGatewayCommand() {
   return [
-    pnpmCommand(),
-    "--dir",
-    repoRoot,
-    "--filter",
-    packageName,
-    "exec",
-    "vite",
+    process.execPath,
+    path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(repoRoot, "apps", "gateway", "src", "main.ts"),
+  ];
+}
+
+export function buildVerificationUiCommand(packageName, port, uiMode) {
+  const packageDirName = packageName.split("/").at(-1) || "mission-control-next";
+  const viteCliPath = path.join(repoRoot, "apps", packageDirName, "node_modules", "vite", "bin", "vite.js");
+  return [
+    process.execPath,
+    viteCliPath,
     ...(uiMode === "preview" ? ["preview"] : ["--force"]),
     "--host",
     "127.0.0.1",
@@ -240,10 +262,40 @@ export async function stopProcess(handle) {
     return;
   }
   if (process.platform === "win32") {
-    spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "taskkill", "/PID", String(handle.child.pid), "/T", "/F"], {
-      stdio: "ignore",
-    });
-    await waitForExit(handle.child, 12000).catch(() => undefined);
+    const treeKill = spawnSync(
+      WINDOWS_CMD_PATH,
+      ["/d", "/s", "/c", "taskkill", "/PID", String(handle.child.pid), "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    if (treeKill.error || treeKill.status !== 0) {
+      try {
+        handle.child.kill("SIGTERM");
+      } catch {
+        // The bounded wait below reports a process that could not be stopped.
+      }
+    }
+    let exited = await waitForExit(handle.child, 12000).then(
+      () => true,
+      () => false,
+    );
+    if (!exited && handle.child.exitCode === null) {
+      try {
+        handle.child.kill("SIGKILL");
+      } catch {
+        // The final bounded wait reports the cleanup failure.
+      }
+      exited = await waitForExit(handle.child, 4000).then(
+        () => true,
+        () => false,
+      );
+    }
+    if (!exited) {
+      handle.child.stdout?.destroy();
+      handle.child.stderr?.destroy();
+      throw new Error(`Verification process ${handle.child.pid} did not stop within the cleanup deadline`);
+    }
     await handle.logsFlushed?.catch(() => undefined);
     handle.child.stdout?.destroy();
     handle.child.stderr?.destroy();
@@ -547,10 +599,18 @@ async function removeRuntimeRootWithRetry(runtimeRoot, attempts = 6) {
 
 function waitForExit(child, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("process exit timeout")), timeoutMs);
-    child.once("exit", () => {
+    if (child.exitCode !== null) {
+      resolve();
+      return;
+    }
+    const onExit = () => {
       clearTimeout(timer);
       resolve();
-    });
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      reject(new Error("process exit timeout"));
+    }, timeoutMs);
+    child.once("exit", onExit);
   });
 }

@@ -65,14 +65,37 @@ export type HookTrigger =
   | "agent.finalize.before";
 
 export const HOOK_TRIGGER_VALUES: readonly HookTrigger[] = [
-  "llm.model.select.before", "llm.request.before", "gateway.dispatch.before", "transform_llm_output",
-  "llm.response.after", "before_prompt_build", "llm_input", "llm_output", "tool.call.before",
-  "tool.call.after", "tool.call.error", "after_tool_call", "approval.request.before",
-  "approval.create.before", "approval.resolve.after", "approval.response.after", "orchestration.run.before",
-  "orchestration.phase.before", "orchestration.phase.after", "orchestration.retry.scheduled",
-  "orchestration.run.woken", "before_message_write", "agent_end", "session.start", "session.end",
-  "prompt.submit.before", "context.compaction.before", "context.compaction.after", "subagent.start",
-  "subagent.end", "agent.finalize.before",
+  "llm.model.select.before",
+  "llm.request.before",
+  "gateway.dispatch.before",
+  "transform_llm_output",
+  "llm.response.after",
+  "before_prompt_build",
+  "llm_input",
+  "llm_output",
+  "tool.call.before",
+  "tool.call.after",
+  "tool.call.error",
+  "after_tool_call",
+  "approval.request.before",
+  "approval.create.before",
+  "approval.resolve.after",
+  "approval.response.after",
+  "orchestration.run.before",
+  "orchestration.phase.before",
+  "orchestration.phase.after",
+  "orchestration.retry.scheduled",
+  "orchestration.run.woken",
+  "before_message_write",
+  "agent_end",
+  "session.start",
+  "session.end",
+  "prompt.submit.before",
+  "context.compaction.before",
+  "context.compaction.after",
+  "subagent.start",
+  "subagent.end",
+  "agent.finalize.before",
 ] as const;
 
 export interface HookEventDefinition {
@@ -92,45 +115,60 @@ export interface HookEventDefinition {
 }
 
 const BEFORE_MUTABLE_TRIGGERS = new Set<HookTrigger>([
-  "llm.model.select.before", "llm.request.before", "transform_llm_output", "tool.call.before",
-  "approval.create.before", "orchestration.run.before", "orchestration.phase.before",
+  "llm.model.select.before",
+  "llm.request.before",
+  "transform_llm_output",
+  "tool.call.before",
+  "approval.create.before",
+  "orchestration.run.before",
+  "orchestration.phase.before",
 ]);
 const BEFORE_INTERCEPTABLE_TRIGGERS = new Set<HookTrigger>([
-  "llm.model.select.before", "llm.request.before", "gateway.dispatch.before", "transform_llm_output",
-  "tool.call.before", "approval.request.before", "approval.create.before", "orchestration.run.before",
-  "orchestration.phase.before", "prompt.submit.before", "agent.finalize.before",
+  "llm.model.select.before",
+  "llm.request.before",
+  "gateway.dispatch.before",
+  "transform_llm_output",
+  "tool.call.before",
+  "approval.request.before",
+  "approval.create.before",
+  "orchestration.run.before",
+  "orchestration.phase.before",
+  "prompt.submit.before",
+  "agent.finalize.before",
 ]);
 
 /** Canonical lifecycle registration contract; runtime dispatch remains Gateway-owned. */
 export const HOOK_EVENT_REGISTRY: Readonly<Record<HookTrigger, HookEventDefinition>> = Object.freeze(
-  Object.fromEntries(HOOK_TRIGGER_VALUES.map((trigger) => {
-    const phase = deriveHookPhase(trigger);
-    const allowedModes: HookMode[] = ["observe"];
-    if (BEFORE_MUTABLE_TRIGGERS.has(trigger)) allowedModes.push("mutate");
-    if (BEFORE_INTERCEPTABLE_TRIGGERS.has(trigger)) allowedModes.push("intercept");
-    const durable = phase === "after";
-    return [
-      trigger,
-      {
+  Object.fromEntries(
+    HOOK_TRIGGER_VALUES.map((trigger) => {
+      const phase = deriveHookPhase(trigger);
+      const allowedModes: HookMode[] = ["observe"];
+      if (BEFORE_MUTABLE_TRIGGERS.has(trigger)) allowedModes.push("mutate");
+      if (BEFORE_INTERCEPTABLE_TRIGGERS.has(trigger)) allowedModes.push("intercept");
+      const durable = phase === "after";
+      return [
         trigger,
-        phase,
-        allowedModes,
-        defaultDataScope: "metadata",
-        durable,
-        ordering: durable ? "durable_async" : "priority_serial",
-        defaultTimeoutMs: 5_000,
-        responseSchema:
-          trigger === "agent.finalize.before"
-            ? "finalize"
-            : allowedModes.includes("mutate")
-              ? "patch"
-              : allowedModes.includes("intercept")
-                ? "block"
-                : "observe",
-        failureSemantics: allowedModes.length === 1 ? "record_only" : "configured_fail_policy",
-      } satisfies HookEventDefinition,
-    ];
-  })) as unknown as Record<HookTrigger, HookEventDefinition>,
+        {
+          trigger,
+          phase,
+          allowedModes,
+          defaultDataScope: "metadata",
+          durable,
+          ordering: durable ? "durable_async" : "priority_serial",
+          defaultTimeoutMs: 5_000,
+          responseSchema:
+            trigger === "agent.finalize.before"
+              ? "finalize"
+              : allowedModes.includes("mutate")
+                ? "patch"
+                : allowedModes.includes("intercept")
+                  ? "block"
+                  : "observe",
+          failureSemantics: allowedModes.length === 1 ? "record_only" : "configured_fail_policy",
+        } satisfies HookEventDefinition,
+      ];
+    }),
+  ) as unknown as Record<HookTrigger, HookEventDefinition>,
 );
 
 export type HookDeliveryStatus =
@@ -327,7 +365,7 @@ export interface SubagentLifecycleHookPayload extends RuntimeLifecycleHookBasePa
   status?: string;
 }
 
-export interface AgentFinalizeBeforeHookPayload extends BeforeMessageWriteHookPayload {}
+export type AgentFinalizeBeforeHookPayload = BeforeMessageWriteHookPayload;
 
 export interface RuntimeLifecycleHookPayloadByTrigger {
   before_prompt_build: BeforePromptBuildHookPayload;

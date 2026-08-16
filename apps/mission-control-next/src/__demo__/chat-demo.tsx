@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
+import { isInteractiveChatEventTarget } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 
 import "@next/styles/mission-control-next-tokens.css";
 import "@next/styles/mission-control-next-foundation.css";
@@ -217,21 +218,26 @@ function InlineMediaCard({
       <p className="mc-next-attachment-preview-meta">{attachment.sizeKb} KB · ready</p>
       <div className="mc-next-attachment-inline-media">
         {attachment.kind === "image" ? (
-          <img
-            src={attachment.src}
-            alt={attachment.fileName}
-            className="mc-next-attachment-inline-image"
-            loading="lazy"
-            decoding="async"
+          <button
+            type="button"
+            className="mc-next-attachment-image-trigger"
+            aria-label={`Open ${attachment.fileName} in full view`}
             onClick={() => onOpenLightbox(attachment)}
-            tabIndex={0}
-            data-demo={`image:${attachment.id}`}
-          />
+          >
+            <img
+              src={attachment.src}
+              alt={attachment.fileName}
+              className="mc-next-attachment-inline-image"
+              loading="lazy"
+              decoding="async"
+              data-demo={`image:${attachment.id}`}
+            />
+          </button>
         ) : attachment.kind === "audio" ? (
           <audio
             className="mc-next-attachment-inline-audio"
             controls
-            preload="auto"
+            preload="metadata"
             src={attachment.src}
             data-demo={`audio:${attachment.id}`}
           />
@@ -239,7 +245,7 @@ function InlineMediaCard({
           <video
             className="mc-next-attachment-inline-video"
             controls
-            preload="auto"
+            preload="metadata"
             src={attachment.src}
             data-demo={`video:${attachment.id}`}
           />
@@ -313,11 +319,21 @@ function DemoTurnCard({
     <article className={classes} data-turn-id={turn.id}>
       <div
         className="mc-next-thread-turn-surface"
-        role="button"
-        tabIndex={0}
-        aria-pressed={turn.selected}
-        onClick={() => onSelect(turn.id)}
+        onClick={(event) => {
+          if (!isInteractiveChatEventTarget(event.target, event.currentTarget)) {
+            onSelect(turn.id);
+          }
+        }}
       >
+        <button
+          type="button"
+          className="mc-next-thread-open-turn"
+          aria-label={`Open turn: ${turn.content.trim().slice(0, 60) || "turn"}`}
+          aria-pressed={turn.selected}
+          onClick={() => onSelect(turn.id)}
+        >
+          Open turn
+        </button>
         {turn.role === "user" ? (
           <div className="mc-next-thread-bubble user">
             <p className="mc-next-thread-meta">

@@ -17,6 +17,50 @@ const settingsMocks = vi.hoisted(() => {
     createExternalSideEffectReplayAuditRun: fn(),
     completeOnboarding: fn(),
     connectMcpServer: fn(),
+    createChangePlan: vi.fn(async (input: any) => ({
+      schemaVersion: 1,
+      planId: "plan-oauth-1",
+      origin: {
+        surface: input.surface ?? "settings",
+        workspaceId: input.workspaceId ?? "default",
+        actorId: "operator-test",
+      },
+      kind: input.request?.kind ?? "provider_connection",
+      scope: "provider",
+      phase: "intent",
+      status: input.request?.credentialAction === "remove_oauth" ? "awaiting_confirmation" : "awaiting_input",
+      revision: 1,
+      adapter: { adapterId: "provider-connection", version: 3 },
+      request: input.request,
+      target: { ownerId: "provider_connection", resourceId: input.request?.providerId ?? "openai-codex" },
+      title: "Connect provider",
+      summary: "Use the dedicated plan-bound credential owner.",
+      impact: "The credential remains outside Chat and model context.",
+      risk: "safe",
+      requiredAction:
+        input.request?.credentialAction === "remove_oauth"
+          ? {
+              kind: "confirmation",
+              actionId: "confirm-oauth",
+              actionNonce: "confirmation-nonce-123456",
+              purpose: "apply",
+              title: "Confirm disconnect",
+              confirmationText: "Disconnect OAuth.",
+            }
+          : {
+              kind: "oauth",
+              actionId: "oauth-action",
+              actionNonce: "oauth-action-nonce-123456",
+              targetId: input.request?.providerId ?? "openai-codex",
+              title: "Authorize provider",
+            },
+      approvalRefs: [],
+      evidenceRefs: [],
+      rollbackRefs: [],
+      links: [],
+      createdAt: "2026-04-24T12:00:00.000Z",
+      updatedAt: "2026-04-24T12:00:00.000Z",
+    })),
     createChannelSetupDraft: fn(),
     createIntegrationConnection: fn(),
     createNotificationRule: fn(),
@@ -49,6 +93,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchLocalCapabilityPackPreview: fn(),
     fetchChannelSetupDefinitions: fn(),
     fetchChannelSetupDrafts: fn(),
+    fetchChangePlans: fn({ items: [] }),
     fetchDaemonStatus: fn(),
     fetchDemoState: fn(),
     fetchEffectivePermissionProfile: fn(),
@@ -104,7 +149,40 @@ const settingsMocks = vi.hoisted(() => {
     materializeStagedCapabilityPack: fn(),
     loadModelsForProvider: fn(["gpt-5.4-mini"]),
     patchSettings: fn(),
+    patchGatewayAuthSettings: fn(),
     pollOpenAICodexOAuthDeviceFlow: fn(),
+    pollChangePlanProviderOAuth: vi.fn(async () => await settingsMocks.pollOpenAICodexOAuthDeviceFlow()),
+    completeChangePlanProviderOAuth: vi.fn(async () => ({
+      schemaVersion: 1,
+      planId: "plan-oauth-1",
+      origin: { surface: "settings", workspaceId: "default", actorId: "operator-test" },
+      kind: "provider_connection",
+      scope: "provider",
+      phase: "authorization",
+      status: "awaiting_confirmation",
+      revision: 2,
+      adapter: { adapterId: "provider-connection", version: 3 },
+      request: { kind: "provider_connection", providerId: "openai-codex" },
+      target: { ownerId: "provider_connection", resourceId: "openai-codex" },
+      title: "Connect OpenAI Codex",
+      summary: "The OAuth credential is staged and awaits exact promotion.",
+      impact: "Promotes the plan-bound credential.",
+      risk: "safe",
+      requiredAction: {
+        kind: "confirmation",
+        actionId: "confirm-oauth",
+        actionNonce: "confirmation-nonce-123456",
+        purpose: "apply",
+        title: "Confirm connection",
+        confirmationText: "Promote OAuth.",
+      },
+      approvalRefs: [],
+      evidenceRefs: ["oauth:staged"],
+      rollbackRefs: [],
+      links: [],
+      createdAt: "2026-04-24T12:00:00.000Z",
+      updatedAt: "2026-04-24T12:01:00.000Z",
+    })),
     refreshLlamaCppRuntime: fn(),
     refreshNpuRuntime: fn(),
     reloadProviderCatalog: fn(),
@@ -129,6 +207,7 @@ const settingsMocks = vi.hoisted(() => {
     startMcpOAuth: fn(),
     startNpuRuntime: fn(),
     startOpenAICodexOAuthDeviceFlow: fn(),
+    startChangePlanProviderOAuth: vi.fn(async () => await settingsMocks.startOpenAICodexOAuthDeviceFlow()),
     startSlackOAuth: fn(),
     stageExternalConnectorAction: fn(),
     stopAddon: fn(),
@@ -184,6 +263,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   bootstrapOnboarding: settingsMocks.bootstrapOnboarding,
   completeOnboarding: settingsMocks.completeOnboarding,
   connectMcpServer: settingsMocks.connectMcpServer,
+  createChangePlan: settingsMocks.createChangePlan,
   createChannelSetupDraft: settingsMocks.createChannelSetupDraft,
   createExternalSideEffectReplayAuditRun: settingsMocks.createExternalSideEffectReplayAuditRun,
   createIntegrationConnection: settingsMocks.createIntegrationConnection,
@@ -217,6 +297,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchLocalCapabilityPackPreview: settingsMocks.fetchLocalCapabilityPackPreview,
   fetchChannelSetupDefinitions: settingsMocks.fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts: settingsMocks.fetchChannelSetupDrafts,
+  fetchChangePlans: settingsMocks.fetchChangePlans,
   fetchDaemonStatus: settingsMocks.fetchDaemonStatus,
   fetchDemoState: settingsMocks.fetchDemoState,
   fetchEffectivePermissionProfile: settingsMocks.fetchEffectivePermissionProfile,
@@ -267,7 +348,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   launchAddon: settingsMocks.launchAddon,
   materializeStagedCapabilityPack: settingsMocks.materializeStagedCapabilityPack,
   patchSettings: settingsMocks.patchSettings,
+  patchGatewayAuthSettings: settingsMocks.patchGatewayAuthSettings,
   pollOpenAICodexOAuthDeviceFlow: settingsMocks.pollOpenAICodexOAuthDeviceFlow,
+  pollChangePlanProviderOAuth: settingsMocks.pollChangePlanProviderOAuth,
+  completeChangePlanProviderOAuth: settingsMocks.completeChangePlanProviderOAuth,
   refreshLlamaCppRuntime: settingsMocks.refreshLlamaCppRuntime,
   refreshNpuRuntime: settingsMocks.refreshNpuRuntime,
   resolveGatewayInstallToken: settingsMocks.resolveGatewayInstallToken,
@@ -289,6 +373,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   startMcpOAuth: settingsMocks.startMcpOAuth,
   startNpuRuntime: settingsMocks.startNpuRuntime,
   startOpenAICodexOAuthDeviceFlow: settingsMocks.startOpenAICodexOAuthDeviceFlow,
+  startChangePlanProviderOAuth: settingsMocks.startChangePlanProviderOAuth,
   startSlackOAuth: settingsMocks.startSlackOAuth,
   stageExternalConnectorAction: settingsMocks.stageExternalConnectorAction,
   stopAddon: settingsMocks.stopAddon,
@@ -867,6 +952,7 @@ function setupResponses() {
     items: [
       {
         draftId: "draft-1",
+        revision: 1,
         catalogId: "channel.telegram",
         label: "Telegram setup",
         enabled: true,
@@ -879,6 +965,7 @@ function setupResponses() {
   });
   settingsMocks.createChannelSetupDraft.mockResolvedValue({
     draftId: "draft-2",
+    revision: 1,
     catalogId: "channel.slack",
     enabled: true,
     draft: {},
@@ -888,14 +975,32 @@ function setupResponses() {
   settingsMocks.discoverTelegramTargets.mockResolvedValue({
     items: [{ id: "chat-1", label: "Ops Chat", chatId: "123", kind: "group" }],
   });
-  settingsMocks.updateChannelSetupDraft.mockResolvedValue({ ok: true });
+  settingsMocks.updateChannelSetupDraft.mockResolvedValue({
+    draftId: "draft-1",
+    revision: 2,
+    catalogId: "channel.telegram",
+    label: "Telegram production",
+    enabled: false,
+    lifecycleMode: "create",
+    draft: { botTokenEnv: "TELEGRAM_TOKEN", setupCode: "SETUP2" },
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:05:00.000Z",
+  });
   settingsMocks.validateChannelSetupDraft.mockResolvedValue({
+    draftId: "draft-1",
+    draftRevision: 2,
     status: "ok",
-    issues: [{ level: "info", message: "Looks good" }],
+    levels: ["semantic"],
+    issues: [{ key: "config-valid", level: "info", message: "Looks good" }],
+    checkedAt: "2026-04-24T12:06:00.000Z",
   });
   settingsMocks.testChannelSetupDraft.mockResolvedValue({
+    draftId: "draft-1",
+    draftRevision: 2,
     status: "warn",
-    issues: [{ level: "warn", message: "Dry run only" }],
+    levels: ["live-send"],
+    issues: [{ key: "dry-run", level: "warn", message: "Dry run only" }],
+    checkedAt: "2026-04-24T12:07:00.000Z",
     recommendedNextAction: "Review target.",
   });
   settingsMocks.finalizeChannelSetupDraft.mockResolvedValue({
@@ -1197,7 +1302,8 @@ async function click(button: ReactTestInstance) {
 
 async function change(node: ReactTestInstance, value: string, checked?: boolean) {
   await act(async () => {
-    node.props.onChange({ target: { value, checked: checked ?? false } });
+    const target = { value, checked: checked ?? false };
+    node.props.onChange({ target, currentTarget: target });
   });
   await flush();
 }
@@ -1279,7 +1385,7 @@ describe("SettingsNativePage broad native sections", () => {
       revision: 42,
       auth: { ...settings.auth, mode: "none", allowLoopbackBypass: true },
     });
-    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(41, 42)).mockResolvedValueOnce({});
+    settingsMocks.patchGatewayAuthSettings.mockRejectedValueOnce(revisionConflict(41, 42)).mockResolvedValueOnce({});
 
     const access = await mount("access");
     const authMode = access.root.findAllByType("select").find((select) => collectText(select).includes("Basic"))!;
@@ -1288,15 +1394,13 @@ describe("SettingsNativePage broad native sections", () => {
     await change(token, "local-token");
     await click(findButton(access.root, "Save access settings"));
 
-    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenNthCalledWith(1, {
       expectedRevision: 41,
-      auth: {
-        mode: "basic",
-        allowLoopbackBypass: false,
-        token: "local-token",
-        basicUsername: undefined,
-        basicPassword: undefined,
-      },
+      mode: "basic",
+      allowLoopbackBypass: false,
+      token: "local-token",
+      basicUsername: undefined,
+      basicPassword: undefined,
     });
     expect(settingsMocks.fetchSettings).toHaveBeenCalledTimes(2);
     const refreshedAuthMode = access.root
@@ -1310,15 +1414,13 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(access.root)).toContain("Your draft is preserved");
 
     await click(findButton(access.root, "Save access settings"));
-    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenNthCalledWith(2, {
       expectedRevision: 42,
-      auth: {
-        mode: "basic",
-        allowLoopbackBypass: false,
-        token: "local-token",
-        basicUsername: undefined,
-        basicPassword: undefined,
-      },
+      mode: "basic",
+      allowLoopbackBypass: false,
+      token: "local-token",
+      basicUsername: undefined,
+      basicPassword: undefined,
     });
   });
 
@@ -1735,9 +1837,13 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(access.root)).toContain("Mobile approval path");
     await change(access.root.findByProps({ placeholder: "New token (only when rotating)" }), "new-token");
     await click(findButton(access.root, "Save access settings"));
-    expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+    expect(settingsMocks.patchGatewayAuthSettings).toHaveBeenCalledWith({
       expectedRevision: 29,
-      auth: expect.objectContaining({ token: "new-token" }),
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: "new-token",
+      basicUsername: undefined,
+      basicPassword: undefined,
     });
     await click(findButton(access.root, "Generate install token"));
     expect(collectText(access.root)).toContain("install-token");
@@ -1919,8 +2025,8 @@ describe("SettingsNativePage broad native sections", () => {
         draft: expect.objectContaining({ setupCode: "SETUP2" }),
       }),
     );
-    expect(settingsMocks.validateChannelSetupDraft).toHaveBeenCalledWith("draft-1");
-    expect(settingsMocks.testChannelSetupDraft).toHaveBeenCalledWith("draft-1");
+    expect(settingsMocks.validateChannelSetupDraft).toHaveBeenCalledWith("draft-1", 1);
+    expect(settingsMocks.testChannelSetupDraft).toHaveBeenCalledWith("draft-1", 2);
     expect(settingsMocks.finalizeChannelSetupDraft).not.toHaveBeenCalled();
 
     const tools = await mount("tools");
@@ -2223,9 +2329,11 @@ describe("SettingsNativePage broad native sections", () => {
     const onboarding = await mount("onboarding", { navigate, setActiveWorkspaceId });
 
     const selects = onboarding.root.findAllByType("select");
-    await change(selects[0]!, "danger");
-    await change(selects[1]!, "bypass");
-    await change(selects[2]!, "power");
+    const selectWithOption = (value: string) =>
+      selects.find((select) => select.findAllByType("option").some((option) => option.props.value === value));
+    await change(selectWithOption("danger")!, "danger");
+    await change(selectWithOption("bypass")!, "bypass");
+    await change(selectWithOption("power")!, "power");
     await change(
       onboarding.root.findByProps({ placeholder: "example.com, api.example.com" }),
       "api.example.com, localhost",
@@ -3256,17 +3364,32 @@ describe("SettingsNativePage broad native sections", () => {
 
       await click(findButton(providers.root, "Open OpenAI page"));
       expect(window.open).toHaveBeenCalledTimes(2);
-      await click(findButton(providers.root, "Get a new code"));
+      await click(findButton(providers.root, "Reopen login"));
       expect(providers.root.findAllByType("input").some((input) => input.props.value === "NEWC-1234")).toBe(true);
       await click(findButton(providers.root, "I approved, check now"));
-      expect(settingsMocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenLastCalledWith("flow-3");
-      expect(collectText(providers.root)).toContain("OpenAI Codex OAuth connected.");
+      expect(settingsMocks.pollChangePlanProviderOAuth).toHaveBeenLastCalledWith(
+        "plan-oauth-1",
+        { workspaceId: "default" },
+        expect.objectContaining({
+          expectedRevision: 1,
+          actionId: "oauth-action",
+          actionNonce: "oauth-action-nonce-123456",
+          flowId: "flow-3",
+        }),
+      );
+      expect(settingsMocks.completeChangePlanProviderOAuth).toHaveBeenCalledTimes(1);
+      expect(collectText(providers.root)).toContain("OpenAI approved the login");
 
       await click(findButton(providers.root, "Advanced details"));
       expect(collectText(providers.root)).toContain("Credential posture");
 
       await click(findButton(providers.root, "Disconnect"));
-      expect(settingsMocks.deleteOpenAICodexOAuthCredential).toHaveBeenCalledTimes(1);
+      expect(settingsMocks.createChangePlan).toHaveBeenLastCalledWith({
+        workspaceId: "default",
+        surface: "settings",
+        request: { kind: "provider_connection", providerId: "openai-codex", credentialAction: "remove_oauth" },
+      });
+      expect(settingsMocks.deleteOpenAICodexOAuthCredential).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
