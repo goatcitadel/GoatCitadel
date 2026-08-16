@@ -194,6 +194,22 @@ describe("hooks routes", () => {
     ).resolves.toMatchObject({ statusCode: 400 });
   });
 
+  it("reports deleted:false for a repeat delete instead of an error", async () => {
+    // The service treats delete as idempotent (unknown hook -> false); the
+    // route must surface that as a 200 rather than escaping as a 500.
+    const hooks = createHooksService({
+      deleteWorkspaceHook: vi.fn(() => false),
+    });
+    app = buildApp(hooks);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/workspaces/workspace-1/hooks/already-gone",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ deleted: false });
+  });
+
   it("runs synthetic tests and only exposes the dedicated redrive operation", async () => {
     const hooks = createHooksService({
       testWorkspaceHook: vi.fn(() => ({ runId: "test-run", requestPayload: { synthetic: true } })),
