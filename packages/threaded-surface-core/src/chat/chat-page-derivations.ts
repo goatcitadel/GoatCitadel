@@ -6,7 +6,7 @@
 
 import type { ChatMessageRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 
-import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 
 function normalizeCoworkText(value: string): string {
   return value.replace(/\s+/g, " ").trim();

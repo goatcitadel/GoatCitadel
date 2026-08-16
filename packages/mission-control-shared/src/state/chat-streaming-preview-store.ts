@@ -27,7 +27,6 @@ export interface ChatStreamingPreviewSnapshot {
   messageId?: string;
   text: string;
   visibleText: string;
-  isRunning: boolean;
   updatedAt: number;
 }
 

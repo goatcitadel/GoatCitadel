@@ -14,7 +14,6 @@ function makeSnapshot(overrides: Partial<ChatStreamingPreviewSnapshot> = {}): Ch
     messageId: "assistant-1",
     text: "Hello",
     visibleText: "Hello",
-    isRunning: true,
     updatedAt: 1,
     ...overrides,
   };

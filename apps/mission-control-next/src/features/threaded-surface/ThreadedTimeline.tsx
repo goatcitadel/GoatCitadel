@@ -310,6 +310,20 @@ function buildChatReadinessCards(props: MissionThreadedActiveSessionSurfaceProps
   ] as const;
 }
 
+// Counts lines without split("\n")'s per-call array allocation: this runs on
+// every streaming-preview flush (~60/s) against text that grows all turn, so
+// the signal computation must stay allocation-free.
+export function countVisibleLines(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  let lines = 1;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    lines += 1;
+  }
+  return lines;
+}
+
 export function resolveStreamingPreviewScrollSignal(
   preview: MissionThreadedActiveSessionSurfaceProps["streamingPreview"],
   activeStreamingTurnId: string | null | undefined,
@@ -317,9 +331,9 @@ export function resolveStreamingPreviewScrollSignal(
   if (!preview) {
     return activeStreamingTurnId ?? null;
   }
-  const visibleLineCount = preview.visibleText.length > 0 ? preview.visibleText.split("\n").length : 0;
+  const visibleLineCount = countVisibleLines(preview.visibleText);
   const visibleCharacterBucket = Math.floor(preview.visibleText.length / STREAM_SCROLL_CHARACTER_BUCKET);
-  return [preview.turnId, visibleLineCount, visibleCharacterBucket, preview.isRunning ? "running" : "idle"].join(":");
+  return [preview.turnId, visibleLineCount, visibleCharacterBucket].join(":");
 }
 
 export type ThreadedTimelineItem =
@@ -676,12 +690,13 @@ export function ThreadedTimeline({
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
-      <div
-        className="mc-next-thread-live-region"
-        role="status"
-        aria-live={liveStatus ? "polite" : "off"}
-        aria-atomic="true"
-      >
+      {/*
+        The region stays permanently polite and only its CONTENT changes:
+        flipping aria-live off->polite in the same commit that populates the
+        text is a known screen-reader failure mode (several AT skip the
+        announcement when the region becomes live and filled at once).
+      */}
+      <div className="mc-next-thread-live-region" role="status" aria-live="polite" aria-atomic="true">
         {liveStatus}
       </div>
       <div className="mc-next-thread-status-lane">
@@ -785,12 +800,18 @@ export function ThreadedTimeline({
             </div>
           </div>
         )}
+        {/*
+          Inside the scroll container (matching the chat demo): position:
+          sticky needs a scrolling ancestor to float against. As a sibling of
+          the scroller it degraded to static and sat in its own row below the
+          transcript instead of hovering over it.
+        */}
+        {!props.followOutput && props.thread && hasThreadContent ? (
+          <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToCurrentTarget}>
+            {jumpToLatestLabel}
+          </button>
+        ) : null}
       </div>
-      {!props.followOutput && props.thread && hasThreadContent ? (
-        <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToCurrentTarget}>
-          {jumpToLatestLabel}
-        </button>
-      ) : null}
     </div>
   );
 }

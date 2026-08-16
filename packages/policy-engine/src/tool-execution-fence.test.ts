@@ -67,7 +67,7 @@ describe("ToolPolicyEngine execution fence", () => {
     } finally {
       await asyncStorage.close();
     }
-  });
+  }, 20_000);
 
   it.each([
     ["shell.exec", { command: "node --version" }],

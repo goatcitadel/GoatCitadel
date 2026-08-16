@@ -29,7 +29,7 @@ import type { ChatModelProviderOption } from "@goatcitadel/mission-control-share
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import type { ChatQueueItemView } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
-import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import type { CoworkAgenticControlItem } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { ThreadedDelegatedScopeControls } from "./useChatDelegatedScopeControls";

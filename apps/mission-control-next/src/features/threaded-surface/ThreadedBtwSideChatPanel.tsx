@@ -312,7 +312,9 @@ function BtwSideChatTurn({
   turn: ChatThreadTurnRecord;
   streamingPreview: ChatStreamingPreview | null;
 }) {
-  const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
+  // A published (non-null) preview means the turn is still streaming or
+  // settling its final reveal; the cleared preview is the idle signal.
+  const isStreamingTurn = streamingPreview?.turnId === turn.turnId;
   const assistantContent = (isStreamingTurn ? streamingPreview?.visibleText : turn.assistantMessage?.content)?.trim();
 
   return (

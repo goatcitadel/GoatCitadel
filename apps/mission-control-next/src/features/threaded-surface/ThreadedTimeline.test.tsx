@@ -10,6 +10,7 @@ import {
   ThreadedTimeline,
   mergeSystemNoticesIntoThreadWindow,
   resolveFocusedActiveTurn,
+  countVisibleLines,
   resolveStreamingPreviewScrollSignal,
 } from "./ThreadedTimeline";
 import {
@@ -667,7 +668,6 @@ describe("ThreadedTimeline", () => {
       messageId: "assistant-1",
       text: "Visible preview tail",
       visibleText: "Visible preview tail",
-      isRunning: true,
       updatedAt: 1234,
     };
     props.activeStreamingTurnId = "turn-1";
@@ -1419,7 +1419,6 @@ describe("ThreadedTimeline", () => {
         messageId: "assistant-1",
         text: "x".repeat(12),
         visibleText: "x".repeat(12),
-        isRunning: true,
         updatedAt: 1,
       },
       "turn-1",
@@ -1431,7 +1430,6 @@ describe("ThreadedTimeline", () => {
         messageId: "assistant-1",
         text: "x".repeat(80),
         visibleText: "x".repeat(80),
-        isRunning: true,
         updatedAt: 2,
       },
       "turn-1",
@@ -1443,7 +1441,6 @@ describe("ThreadedTimeline", () => {
         messageId: "assistant-1",
         text: "x".repeat(140),
         visibleText: "x".repeat(140),
-        isRunning: true,
         updatedAt: 3,
       },
       "turn-1",
@@ -1452,6 +1449,25 @@ describe("ThreadedTimeline", () => {
     expect(sameBucketSignal).toBe(firstSignal);
     expect(nextBucketSignal).not.toBe(firstSignal);
     expect(resolveStreamingPreviewScrollSignal(null, "turn-1")).toBe("turn-1");
+  });
+
+  it("counts visible lines identically to split(newline) without allocating", () => {
+    const samples = [
+      "",
+      "one line",
+      "line\n",
+      "\n",
+      "\n\n\n",
+      "a\nb\nc",
+      "a\nb\nc\n",
+      "trailing spaces \n next\n",
+      "x".repeat(500),
+      `${"row\n".repeat(64)}tail`,
+    ];
+    for (const sample of samples) {
+      const expected = sample.length > 0 ? sample.split("\n").length : 0;
+      expect(countVisibleLines(sample)).toBe(expected);
+    }
   });
 
   it("keeps auto-follow pinned as meaningful visible streaming preview growth crosses buckets", async () => {
@@ -1475,7 +1491,6 @@ describe("ThreadedTimeline", () => {
         messageId: "assistant-1",
         text: "Streaming answer",
         visibleText: "Streaming",
-        isRunning: true,
         updatedAt: 1,
       },
     });
@@ -1726,7 +1741,6 @@ describe("ThreadedTimeline", () => {
         messageId: "assistant-1",
         text: "Streaming answer",
         visibleText: "Streaming answer",
-        isRunning: true,
         updatedAt: 1,
       },
     });
@@ -1783,7 +1797,6 @@ describe("ThreadedTimeline", () => {
         messageId: "assistant-110",
         text: "Streaming answer 110",
         visibleText: "Streaming answer 110",
-        isRunning: true,
         updatedAt: 110,
       },
     });

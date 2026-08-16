@@ -762,6 +762,54 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.result.secondaryLoading).toBe(false);
   });
 
+  it("keeps the spinner up when a superseded load settles while the newer load is in flight", async () => {
+    let resolveFirstThread!: (value: ChatThreadResponse) => void;
+    let resolveSecondThread!: (value: ChatThreadResponse) => void;
+    fetchChatThreadMock
+      .mockReturnValueOnce(
+        new Promise<ChatThreadResponse>((resolve) => {
+          resolveFirstThread = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<ChatThreadResponse>((resolve) => {
+          resolveSecondThread = resolve;
+        }),
+      );
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-superseded-load" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledWith("session-1");
+    expect(latestHarness?.result.messagesLoading).toBe(true);
+
+    await act(async () => {
+      latestHarness?.setSelectedSessionId("session-2");
+      await flushEffects();
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledWith("session-2");
+    expect(latestHarness?.result.messagesLoading).toBe(true);
+
+    // Session 1's superseded load settling must not clear session 2's spinner.
+    await act(async () => {
+      resolveFirstThread(makeThread("session-1"));
+      await flushEffects(6);
+    });
+    expect(latestHarness?.result.messagesLoading).toBe(true);
+    expect(latestHarness?.result.thread).toBeNull();
+
+    // The newest load clears the spinner when it settles.
+    await act(async () => {
+      resolveSecondThread(makeThread("session-2"));
+      await flushEffects(6);
+    });
+    renderer?.unmount();
+    expect(latestHarness?.result.messagesLoading).toBe(false);
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-2");
+  });
+
   it("expires dev bootstrap cache entries and covers guarded/full refresh paths", async () => {
     vi.useFakeTimers();
     let resolveProjects!: (value: unknown) => void;

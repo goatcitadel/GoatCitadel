@@ -399,14 +399,18 @@ export async function runPostgresMigrations(
         await runBatchedMigration(client, pinnedClient, migrationSchema, migration, migration.batchedStatements);
         await client.transaction(async (tx) => {
           await client.configureMigrationTransaction(tx, migrationSchema, false);
-          if (applied.size + newlyApplied.length + 1 === migrations.length) {
-            await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
-          }
           await markApplied(tx, client, migrationSchema, migration.version, migration.name);
           if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
             await assertStrictPostgresLedger(client, tx, migrationSchema, migrations);
           }
+          // Identity first: shape validation is only meaningful against the
+          // schema that was preflighted. A schema swapped mid-run must surface
+          // as the identity violation, not as a confusing shape mismatch
+          // against the replacement schema.
           await client.assertMigrationSchemaIdentity(tx, migrationSchema);
+          if (applied.size + newlyApplied.length + 1 === migrations.length) {
+            await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
+          }
         }, pinnedClient);
         newlyApplied.push(migration.version);
         continue;
@@ -420,9 +424,6 @@ export async function runPostgresMigrations(
           client.getMigrationsTableName(),
           migration,
         );
-        if (applied.size + newlyApplied.length + 1 === migrations.length) {
-          await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
-        }
         await markApplied(tx, client, migrationSchema, migration.version, migration.name);
         if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
           await assertStrictPostgresLedger(client, tx, migrationSchema, migrations);
@@ -430,7 +431,13 @@ export async function runPostgresMigrations(
         if (bridgeActive) {
           await tx.query(POSTGRES_HISTORY_REPAIR_TEMP_VIEW_DROP_SQL);
         }
+        // Identity first (see the batched block above): a schema swapped
+        // mid-run must fail as the identity violation before shape
+        // validation inspects what would be the wrong schema.
         await client.assertMigrationSchemaIdentity(tx, migrationSchema);
+        if (applied.size + newlyApplied.length + 1 === migrations.length) {
+          await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
+        }
       }, pinnedClient);
       newlyApplied.push(migration.version);
     }
@@ -442,11 +449,38 @@ export async function runPostgresMigrations(
   });
 }
 
+/**
+ * Shape validation is only defined over a lineage that fully describes its
+ * own schema. That holds for the complete canonical registry (production
+ * startup) and for ad-hoc lineages that begin at genesis (they carry every
+ * CREATE they expect). It does NOT hold for canonical PREFIXES or slices:
+ * history-repair and ledger-bridge flows re-run a truncated span of the
+ * canonical registry against ledgers whose earlier rows were bridged rather
+ * than materialized, so the parsed manifest would demand tables the lineage
+ * itself never promises to create here.
+ */
+function shouldValidateCanonicalPostgresSchemaShape(migrations: readonly PostgresMigration[]): boolean {
+  if (migrations.length === 0 || migrations[0]!.version !== 1) {
+    return false;
+  }
+  if (migrations === POSTGRES_MIGRATIONS) {
+    return true;
+  }
+  const entirelyCanonical = migrations.every((migration) =>
+    isCanonicalMigration(migration, migration.version, migration.name),
+  );
+  if (entirelyCanonical) {
+    return migrations.length === POSTGRES_MIGRATIONS.length;
+  }
+  return true;
+}
+
 async function assertCanonicalPostgresSchemaShape(
   tx: PoolClient,
   migrationSchema: PostgresMigrationSchemaIdentity,
   migrations: readonly PostgresMigration[],
 ): Promise<void> {
+  if (!shouldValidateCanonicalPostgresSchemaShape(migrations)) return;
   const manifest = buildCanonicalPostgresSchemaShapeManifest(migrations);
   if (manifest.tables.length === 0) return;
   const relationLockSql = buildPostgresSchemaShapeRelationLockSql(migrationSchema, manifest);
@@ -1557,6 +1591,7 @@ function assertCanonicalPostgresSchemaShapeSync(
   migrations: readonly PostgresMigration[],
 ): void {
   if (db.dialect !== "postgres" || !migrationSchema) return;
+  if (!shouldValidateCanonicalPostgresSchemaShape(migrations)) return;
   const manifest = buildCanonicalPostgresSchemaShapeManifest(migrations);
   if (manifest.tables.length === 0) return;
   const relationLockSql = buildPostgresSchemaShapeRelationLockSql(migrationSchema, manifest);

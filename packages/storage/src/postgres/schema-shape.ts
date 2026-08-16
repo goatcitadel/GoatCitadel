@@ -127,7 +127,7 @@ export const POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL = `
       AND relation.relname OPERATOR(pg_catalog.=) expected.name
     WHERE relation.oid IS NULL
       OR relation.relkind OPERATOR(pg_catalog.<>) 'r'
-      OR relation.relowner OPERATOR(pg_catalog.<>) CURRENT_USER::pg_catalog.regrole::pg_catalog.oid
+      OR relation.relowner OPERATOR(pg_catalog.<>) pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid
   ),
   column_issues AS (
     SELECT pg_catalog.format('column %I.%I has a non-canonical shape', expected.table_name, expected.name) AS issue
@@ -230,7 +230,7 @@ export const POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL = `
       ON access_method.oid OPERATOR(pg_catalog.=) index_relation.relam
     WHERE index_relation.oid IS NULL
       OR index_relation.relkind NOT IN ('i', 'I')
-      OR index_relation.relowner OPERATOR(pg_catalog.<>) CURRENT_USER::pg_catalog.regrole::pg_catalog.oid
+      OR index_relation.relowner OPERATOR(pg_catalog.<>) pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid
       OR table_relation.relnamespace OPERATOR(pg_catalog.<>) @schemaOid::pg_catalog.oid
       OR table_relation.relname OPERATOR(pg_catalog.<>) expected."tableName"
       OR index_row.indisunique IS DISTINCT FROM expected."unique"
@@ -697,7 +697,7 @@ export const POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL = `
       OR index_relation.reltablespace OPERATOR(pg_catalog.<>) 0
       OR index_relation.reloptions IS NOT NULL
       OR index_relation.relacl IS NOT NULL
-      OR index_relation.relowner OPERATOR(pg_catalog.<>) CURRENT_USER::pg_catalog.regrole::pg_catalog.oid
+      OR index_relation.relowner OPERATOR(pg_catalog.<>) pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid
       OR NOT index_row.indisvalid
       OR index_row.indcheckxmin
       OR NOT index_row.indisready
@@ -824,7 +824,7 @@ export const POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL = `
       OR relation.reltablespace OPERATOR(pg_catalog.<>) 0
       OR relation.reloptions IS NOT NULL
       OR relation.relacl IS NOT NULL
-      OR relation.relowner OPERATOR(pg_catalog.<>) CURRENT_USER::pg_catalog.regrole::pg_catalog.oid
+      OR relation.relowner OPERATOR(pg_catalog.<>) pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid
       OR EXISTS (
         SELECT 1
         FROM pg_catalog.pg_description AS description
@@ -880,7 +880,7 @@ export const POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL = `
       OR toast_relation.reltablespace OPERATOR(pg_catalog.<>) 0
       OR toast_relation.reloptions IS NOT NULL
       OR toast_relation.relacl IS NOT NULL
-      OR toast_relation.relowner OPERATOR(pg_catalog.<>) CURRENT_USER::pg_catalog.regrole::pg_catalog.oid
+      OR toast_relation.relowner OPERATOR(pg_catalog.<>) pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid
       OR EXISTS (
         SELECT 1
         FROM pg_catalog.pg_description AS description
@@ -912,7 +912,7 @@ export const POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL = `
             OR index_relation.reltablespace OPERATOR(pg_catalog.<>) 0
             OR index_relation.reloptions IS NOT NULL
             OR index_relation.relacl IS NOT NULL
-            OR index_relation.relowner OPERATOR(pg_catalog.<>) CURRENT_USER::pg_catalog.regrole::pg_catalog.oid
+            OR index_relation.relowner OPERATOR(pg_catalog.<>) pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid
             OR NOT toast_index.indisvalid
             OR NOT toast_index.indisready
             OR NOT toast_index.indislive
@@ -1353,7 +1353,8 @@ function parseColumnDefinition(definition: string): PostgresSchemaShapeColumn | 
     name,
     type: normalizePostgresType(rawType),
     notNull: primaryKey || hasTopLevelMatch(modifiers, /\bNOT\s+NULL\b/i),
-    hasDefault: /^bigserial$/i.test(rawType) || generated || hasTopLevelMatch(modifiers, /\bDEFAULT\b/i),
+    hasDefault:
+      /^(?:big|small)?serial[248]?$/i.test(rawType) || generated || hasTopLevelMatch(modifiers, /\bDEFAULT\b/i),
     generated,
   };
 }
@@ -1461,7 +1462,11 @@ function parseReferenceAction(input: string, action: "DELETE" | "UPDATE"): strin
 
 function normalizePostgresType(input: string): string {
   const normalized = input.trim().replace(/\s+/g, " ").toLowerCase();
-  if (normalized === "bigserial" || normalized === "int8") return "bigint";
+  // Serial pseudo-types expand to the integer family with a sequence default,
+  // which is how pg_attribute reports them back during shape validation.
+  if (normalized === "bigserial" || normalized === "serial8" || normalized === "int8") return "bigint";
+  if (normalized === "serial" || normalized === "serial4") return "integer";
+  if (normalized === "smallserial" || normalized === "serial2" || normalized === "int2") return "smallint";
   if (normalized === "int" || normalized === "int4") return "integer";
   if (normalized === "timestamptz") return "timestamp with time zone";
   if (normalized === "float8") return "double precision";

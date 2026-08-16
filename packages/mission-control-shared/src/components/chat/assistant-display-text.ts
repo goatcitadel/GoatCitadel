@@ -95,8 +95,10 @@ function readNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const JSON_UNICODE_ESCAPE_TRIGGER_RE = /\\u[0-9a-fA-F]{4}/;
+
 export function decodeJsonUnicodeEscapes(content: string): string {
-  if (!/\\u[0-9a-fA-F]{4}/.test(content)) {
+  if (!JSON_UNICODE_ESCAPE_TRIGGER_RE.test(content)) {
     return content;
   }
   return content.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) =>
@@ -197,12 +199,21 @@ function matchMarkdownFenceOpening(line: string): { char: "`" | "~"; length: num
 }
 
 function matchMarkdownFenceClosing(line: string, fenceChar: "`" | "~", fenceLength: number): boolean {
-  const marker = fenceChar.repeat(fenceLength);
-  const match = new RegExp(`^ {0,3}${escapeRegExp(marker)}+`).exec(line);
-  if (!match) {
+  // Char-wise equivalent of /^ {0,3}<marker run of >= fenceLength>\s*$/ --
+  // this runs once per line inside every fence, so it must not compile a
+  // RegExp per call.
+  let index = 0;
+  while (index < 3 && line[index] === " ") {
+    index += 1;
+  }
+  let run = 0;
+  while (line[index + run] === fenceChar) {
+    run += 1;
+  }
+  if (run < fenceLength) {
     return false;
   }
-  return line.slice(match[0].length).trim().length === 0;
+  return line.slice(index + run).trim().length === 0;
 }
 
 function hasSameLineFenceClose(line: string, fenceChar: "`" | "~", fenceLength: number, searchStart: number): boolean {
@@ -229,10 +240,6 @@ function preserveMarkdownIndentation(line: string): string {
     .replace(/[ \t\f\v]{2,}/g, " ")
     .trimEnd();
   return `${indent}${rest}`;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function stripRawHtmlComments(content: string): string {
@@ -302,4 +309,348 @@ function decodeCodePoint(value: number): string | undefined {
 
 function looksLikeHtml(content: string): boolean {
   return (content.includes("<!--") && content.includes("-->")) || /<\/?[A-Za-z][^>\n]{0,1000}>/.test(content);
+}
+
+// ---------------------------------------------------------------------------
+// Incremental streaming normalization
+//
+// `normalizeAssistantDisplayText` re-runs the full strip pipeline over the
+// entire accumulated message on every streaming flush (~60/s), which is O(n)
+// per token and O(n^2) cumulative over a long answer — and it sits UPSTREAM of
+// the renderer's O(delta) `splitIncremental` engine, defeating it. The engine
+// below mirrors that engine's carried-state approach: it finalizes the
+// normalized output for completed, append-immutable regions of the input and
+// re-normalizes only the still-mutable tail on each push.
+//
+// Equivalence guarantee: `normalizeAssistantDisplayTextIncremental` returns a
+// value byte-identical to `normalizeAssistantDisplayText(content)` for every
+// prefix of the stream. Safety rests on which regions are append-immutable:
+//   * Only whole, newline-terminated lines are ever consumed. None of the
+//     pipeline's tokens (`\uXXXX` escapes, HTML entities, `<!--`, `-->`,
+//     single tags, fence markers) can span a newline, so a completed line's
+//     decoding and tokenization never change under append.
+//   * A completed fence segment (opened AND closed) is normalized whole; its
+//     bytes are final and `stripHtmlNoise` runs per segment from scratch, so
+//     the result is exact by construction.
+//   * Within the still-growing final text segment, a prefix is finalized only
+//     while it contains NO `<!--` and NO raw-HTML block-element opener
+//     (`<script|style|svg|math|canvas`). Those are the only constructs whose
+//     match can extend forward across lines and retroactively re-interpret
+//     earlier text (comment stripping and RAW_HTML_BLOCK_RE); with none
+//     present, `stripHtmlNoise` distributes over the cut. When one appears,
+//     finalization simply stops until the segment completes — equivalence is
+//     preserved and only the perf win degrades to the from-scratch cost.
+//   * The trailing `\n{3,}` collapse is per-maximal-run, so collapsing within
+//     each finalized piece and again across each seam (including the final
+//     assembly seam) reproduces the global collapse; `.trim()` and the
+//     HTML-only fallback are applied to the assembled value per push and
+//     never baked into carried state.
+// If a push is not a pure append of the previous content, the engine resets
+// and rescans from scratch, so it can never diverge.
+// ---------------------------------------------------------------------------
+
+const TEXT_FINALIZE_BLOCKER_RE = /<(?:script|style|svg|math|canvas)\b|<!--/i;
+
+/**
+ * Blocker detection must see what `stripHtmlNoise` will eventually see: that
+ * pipeline decodes HTML entities BEFORE stripping, so an entity-encoded
+ * opener (`&lt;script&gt;`, `&#60;style&#62;`, `&lt;!--`) materializes only
+ * after decoding. Testing the raw line would finalize the opener's line
+ * separately from its closer and diverge from the one-shot normalizer.
+ * Entities never span newlines, so decoding line-by-line is exact; the raw
+ * test stays first as the cheap fast path (decoding cannot remove a raw `<`).
+ */
+function lineBlocksTextFinalization(line: string): boolean {
+  if (TEXT_FINALIZE_BLOCKER_RE.test(line)) {
+    return true;
+  }
+  return line.includes("&") && TEXT_FINALIZE_BLOCKER_RE.test(decodeBasicHtmlEntities(line));
+}
+
+const TEXT_FINALIZE_CLOSER_CANDIDATE_RE = /-->|<\/(?:script|style|svg|math|canvas)\b/i;
+
+/** A block closer whose terminating `>` has not arrived yet (`</script` at region end). */
+const TEXT_FINALIZE_DANGLING_CLOSER_RE = /<\/(?:script|style|svg|math|canvas)\b[^>]*$/i;
+
+/** Cheap trigger: only lines that could complete a blocked construct pay the region re-check. */
+function lineMayCloseBlockedRegion(line: string): boolean {
+  if (TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(line)) {
+    return true;
+  }
+  return line.includes("&") && TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(decodeBasicHtmlEntities(line));
+}
+
+/**
+ * While a dangling `</name` closer is pending its `>` (RAW_HTML_BLOCK_RE
+ * tolerates whitespace, including newlines, before the terminator), any line
+ * that supplies a `>` may complete the block.
+ */
+function lineMayCompletePendingTagClose(line: string): boolean {
+  if (line.includes(">")) {
+    return true;
+  }
+  return line.includes("&") && decodeBasicHtmlEntities(line).includes(">");
+}
+
+/** True when the decoded region ends in a block closer still awaiting its `>`. */
+function regionEndsWithDanglingCloser(decodedRegion: string): boolean {
+  return TEXT_FINALIZE_DANGLING_CLOSER_RE.test(decodedRegion);
+}
+
+/**
+ * A blocked region may finalize once the multi-line constructs that blocked it
+ * have all closed: run the same first strip stages the one-shot normalizer
+ * applies (entity decode, multi-pass comment removal, block-element removal)
+ * and check that no opener survives. Because consumption seams always fall on
+ * newline boundaries, a residual-opener-free region cannot combine with later
+ * content to form a new construct across the seam (comment/block openers
+ * require literal adjacency, and interior removals never delete the seam
+ * newline), so `stripHtmlNoise(region) + stripHtmlNoise(rest)` matches the
+ * one-shot result. Regions whose residual still carries an opener (e.g. a
+ * genuinely unclosed block, or pathological nested-comment fragments) simply
+ * stay blocked: correctness is preserved by tail re-normalization, only the
+ * O(delta) amortization is deferred.
+ */
+function blockedRegionCanFinalize(region: string): boolean {
+  const residual = stripRawHtmlComments(decodeBasicHtmlEntities(region)).replace(RAW_HTML_BLOCK_RE, " ");
+  return !TEXT_FINALIZE_BLOCKER_RE.test(residual);
+}
+
+export interface IncrementalDisplayTextState {
+  /** Full raw content seen on the previous push; used to detect non-append deltas. */
+  raw: string;
+  /** Decoded prefix bookkeeping: decoded[0, consumedEnd) has been normalized into `completedOut`. */
+  consumedEnd: number;
+  /** Fence-scan position (>= consumedEnd): completed lines before this are classified. */
+  fenceScanEnd: number;
+  /** Fence state at `fenceScanEnd`. */
+  inFence: boolean;
+  fenceChar: "`" | "~" | null;
+  fenceLength: number;
+  /** True when the growing text segment contains a construct that blocks prefix finalization. */
+  textBlocked: boolean;
+  /**
+   * True when the blocked region ends in a `</name` closer still awaiting its
+   * terminating `>` (which RAW_HTML_BLOCK_RE allows on a later line): the
+   * next `>`-bearing line must re-run the region check even though it carries
+   * no closer token of its own.
+   */
+  pendingTagClose: boolean;
+  /** Normalized output for decoded[0, consumedEnd), internally `\n{3,}`-collapsed, untrimmed. */
+  completedOut: string;
+  /** looksLikeHtml component flags over decoded[0, consumedEnd) (monotone under append). */
+  seenCommentOpen: boolean;
+  seenCommentClose: boolean;
+  seenTag: boolean;
+  /** Index the most recent push began its line walk from (perf instrumentation). */
+  lastWalkStart: number;
+  /**
+   * True while no `\uXXXX` escape trigger has been seen anywhere in `raw`.
+   * Lets each append test only the delta (plus a 5-char boundary window for
+   * escapes split across pushes) instead of regex-scanning the whole
+   * accumulated string per flush. Monotone: once false, stays false until a
+   * non-append reset.
+   */
+  rawEscapeFree: boolean;
+}
+
+export function createIncrementalDisplayTextState(): IncrementalDisplayTextState {
+  return {
+    raw: "",
+    consumedEnd: 0,
+    fenceScanEnd: 0,
+    inFence: false,
+    fenceChar: null,
+    fenceLength: 0,
+    textBlocked: false,
+    pendingTagClose: false,
+    completedOut: "",
+    seenCommentOpen: false,
+    seenCommentClose: false,
+    seenTag: false,
+    lastWalkStart: 0,
+    rawEscapeFree: true,
+  };
+}
+
+function resetIncrementalDisplayTextState(state: IncrementalDisplayTextState): void {
+  state.consumedEnd = 0;
+  state.fenceScanEnd = 0;
+  state.inFence = false;
+  state.fenceChar = null;
+  state.fenceLength = 0;
+  state.textBlocked = false;
+  state.pendingTagClose = false;
+  state.completedOut = "";
+  state.seenCommentOpen = false;
+  state.seenCommentClose = false;
+  state.seenTag = false;
+  state.lastWalkStart = 0;
+  state.rawEscapeFree = true;
+}
+
+function countTrailingNewlines(value: string): number {
+  let count = 0;
+  while (count < value.length && value[value.length - 1 - count] === "\n") {
+    count += 1;
+  }
+  return count;
+}
+
+function countLeadingNewlines(value: string): number {
+  let count = 0;
+  while (count < value.length && value[count] === "\n") {
+    count += 1;
+  }
+  return count;
+}
+
+/** Joins two internally-collapsed pieces, collapsing the `\n` run that spans the seam. */
+function joinCollapsed(left: string, right: string): string {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  const trailing = countTrailingNewlines(left);
+  const leading = countLeadingNewlines(right);
+  if (trailing + leading >= 3) {
+    return `${left.slice(0, left.length - trailing)}\n\n${right.slice(leading)}`;
+  }
+  return left + right;
+}
+
+function collapseNewlineRuns(value: string): string {
+  return value.replace(/\n{3,}/g, "\n\n");
+}
+
+function noteLooksLikeHtmlSignals(state: IncrementalDisplayTextState, piece: string): void {
+  state.seenCommentOpen = state.seenCommentOpen || piece.includes("<!--");
+  state.seenCommentClose = state.seenCommentClose || piece.includes("-->");
+  state.seenTag = state.seenTag || /<\/?[A-Za-z][^>\n]{0,1000}>/.test(piece);
+}
+
+/** Consumes decoded[state.consumedEnd, end) as one already-safe piece of normalized output. */
+function consumePiece(state: IncrementalDisplayTextState, decoded: string, end: number, kind: "text" | "code"): void {
+  const piece = decoded.slice(state.consumedEnd, end);
+  if (piece) {
+    const normalized = kind === "code" ? piece : stripHtmlNoise(piece);
+    state.completedOut = joinCollapsed(state.completedOut, collapseNewlineRuns(normalized));
+    noteLooksLikeHtmlSignals(state, piece);
+  }
+  state.consumedEnd = end;
+}
+
+/**
+ * Advance the carried normalization state with the latest accumulated raw
+ * `content` and return the same value as `normalizeAssistantDisplayText`.
+ * Mutates `state` in place.
+ */
+export function normalizeAssistantDisplayTextIncremental(state: IncrementalDisplayTextState, content: string): string {
+  if (content.length < state.raw.length || !content.startsWith(state.raw)) {
+    resetIncrementalDisplayTextState(state);
+    state.raw = "";
+  }
+  // Escape detection scans only the appended delta plus a 5-char boundary
+  // window (a `\uXXXX` token is 6 chars, so any escape completed by new
+  // characters starts at or after previousLength - 5). This keeps the
+  // escape-free common case at O(delta) per flush instead of re-running the
+  // trigger regex over the whole accumulated string.
+  if (state.rawEscapeFree) {
+    const scanFrom = Math.max(0, state.raw.length - 5);
+    if (JSON_UNICODE_ESCAPE_TRIGGER_RE.test(content.slice(scanFrom))) {
+      state.rawEscapeFree = false;
+    }
+  }
+  state.raw = content;
+  // When escapes are present, decoding stays whole-string (escape tokens
+  // never span the completed-line boundary, so the decoded prefix before
+  // `consumedEnd` is append-stable and carried indices stay valid).
+  const decoded = state.rawEscapeFree ? content : decodeJsonUnicodeEscapes(content);
+  state.lastWalkStart = state.fenceScanEnd;
+
+  // Walk newly completed lines, consuming append-immutable regions.
+  let lineStart = state.fenceScanEnd;
+  for (
+    let newlineIndex = decoded.indexOf("\n", lineStart);
+    newlineIndex !== -1;
+    newlineIndex = decoded.indexOf("\n", lineStart)
+  ) {
+    const line = decoded.slice(lineStart, newlineIndex);
+    const lineEnd = newlineIndex + 1;
+    if (!state.inFence) {
+      const opening = matchMarkdownFenceOpening(line);
+      if (opening) {
+        // The pending text region before the fence is now a completed
+        // segment: normalize it whole (openers inside it are fine — the
+        // segment's bytes are final and stripHtmlNoise runs per segment).
+        consumePiece(state, decoded, lineStart, "text");
+        state.textBlocked = false;
+        state.pendingTagClose = false;
+        if (hasSameLineFenceClose(line, opening.char, opening.length, opening.start + opening.length)) {
+          consumePiece(state, decoded, lineEnd, "code");
+        } else {
+          state.inFence = true;
+          state.fenceChar = opening.char;
+          state.fenceLength = opening.length;
+        }
+      } else {
+        if (!state.textBlocked && lineBlocksTextFinalization(line)) {
+          state.textBlocked = true;
+        }
+        // Same-pass close check so an inline `<script>x</script>` line (or the
+        // closing line of a multi-line block) resumes prefix finalization
+        // instead of anchoring the mutable tail at the opener forever. A
+        // dangling `</name` closer keeps `pendingTagClose` armed so the line
+        // that finally supplies the terminating `>` re-runs the check too.
+        if (
+          state.textBlocked &&
+          (lineMayCloseBlockedRegion(line) || (state.pendingTagClose && lineMayCompletePendingTagClose(line)))
+        ) {
+          const region = decoded.slice(state.consumedEnd, lineEnd);
+          if (blockedRegionCanFinalize(region)) {
+            state.textBlocked = false;
+            state.pendingTagClose = false;
+          } else {
+            state.pendingTagClose = regionEndsWithDanglingCloser(decodeBasicHtmlEntities(region));
+          }
+        }
+      }
+    } else if (state.fenceChar && matchMarkdownFenceClosing(line, state.fenceChar, state.fenceLength)) {
+      consumePiece(state, decoded, lineEnd, "code");
+      state.inFence = false;
+      state.fenceChar = null;
+      state.fenceLength = 0;
+    }
+    lineStart = lineEnd;
+  }
+  state.fenceScanEnd = lineStart;
+
+  // Outside a fence and unblocked, every completed line scanned so far is a
+  // safe, opener-free text prefix: finalize it in one batch.
+  if (!state.inFence && !state.textBlocked && state.fenceScanEnd > state.consumedEnd) {
+    consumePiece(state, decoded, state.fenceScanEnd, "text");
+  }
+
+  // Re-normalize the still-mutable tail from scratch each push. Its leading
+  // segment boundary matches the from-scratch scan: an open fence's opening
+  // line and any finalization-blocking text both stay inside the tail.
+  const tail = decoded.slice(state.consumedEnd);
+  let tailOut = "";
+  if (tail) {
+    tailOut = collapseNewlineRuns(
+      splitMarkdownFenceSegments(tail)
+        .map((part) => (part.kind === "code" ? part.value : stripHtmlNoise(part.value)))
+        .join(""),
+    );
+  }
+  const assembled = joinCollapsed(state.completedOut, tailOut).trim();
+  if (assembled) {
+    return assembled;
+  }
+  const commentPair =
+    (state.seenCommentOpen || tail.includes("<!--")) && (state.seenCommentClose || tail.includes("-->"));
+  const anyTag = state.seenTag || /<\/?[A-Za-z][^>\n]{0,1000}>/.test(tail);
+  return commentPair || anyTag ? "HTML-only content omitted." : "";
 }

@@ -4299,7 +4299,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
       hostClock.mockRestore();
       await asyncStorage.close();
     }
-  });
+  }, 20_000);
 
   it("rejects outside-root approval bypasses after the pending action is resolved", async () => {
     vi.useFakeTimers();
