@@ -5,7 +5,7 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
 } from "@goatcitadel/contracts";
 import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import {
   abortActiveChatStream,
   type ActiveChatStreamState,

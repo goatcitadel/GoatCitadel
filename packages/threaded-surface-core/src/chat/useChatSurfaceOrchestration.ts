@@ -10,7 +10,7 @@ import type {
 import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
-import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 
 const ATTACHMENT_ONLY_SEND_PLACEHOLDER = "Please review the attached files and continue.";
 let fallbackQueueItemIdCounter = 0;

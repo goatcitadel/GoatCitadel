@@ -113,7 +113,7 @@ import { PageHeader } from "@goatcitadel/mission-control-shared/components/PageH
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import type { CoworkCanvasPanel as LegacyCoworkCanvasPanelComponent } from "@goatcitadel/mission-control-shared/components/CoworkCanvasPanel";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
-import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import {
   ChatChangePlanActionDialog,
   type ChangePlanPublicValues,

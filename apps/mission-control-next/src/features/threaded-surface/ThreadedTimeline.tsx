@@ -690,12 +690,13 @@ export function ThreadedTimeline({
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
-      <div
-        className="mc-next-thread-live-region"
-        role="status"
-        aria-live={liveStatus ? "polite" : "off"}
-        aria-atomic="true"
-      >
+      {/*
+        The region stays permanently polite and only its CONTENT changes:
+        flipping aria-live off->polite in the same commit that populates the
+        text is a known screen-reader failure mode (several AT skip the
+        announcement when the region becomes live and filled at once).
+      */}
+      <div className="mc-next-thread-live-region" role="status" aria-live="polite" aria-atomic="true">
         {liveStatus}
       </div>
       <div className="mc-next-thread-status-lane">
@@ -799,12 +800,18 @@ export function ThreadedTimeline({
             </div>
           </div>
         )}
+        {/*
+          Inside the scroll container (matching the chat demo): position:
+          sticky needs a scrolling ancestor to float against. As a sibling of
+          the scroller it degraded to static and sat in its own row below the
+          transcript instead of hovering over it.
+        */}
+        {!props.followOutput && props.thread && hasThreadContent ? (
+          <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToCurrentTarget}>
+            {jumpToLatestLabel}
+          </button>
+        ) : null}
       </div>
-      {!props.followOutput && props.thread && hasThreadContent ? (
-        <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToCurrentTarget}>
-          {jumpToLatestLabel}
-        </button>
-      ) : null}
     </div>
   );
 }

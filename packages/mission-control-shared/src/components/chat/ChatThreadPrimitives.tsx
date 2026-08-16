@@ -304,7 +304,7 @@ export function ChatThreadBranchSwitcher({
 
 export function StreamingAssistantSkeleton({ label }: { label: string }) {
   // Visual-only pending indicator. Streaming activity is announced by the single
-  // owning live region per surface (ThreadedTimeline's live region / ChatThreadView's
+  // owning live region per surface (ThreadedTimeline's live region /
   // status bar) and the enclosing assistant bubble's aria-busy, so this skeleton must
   // NOT carry role="status" or it would duplicate that announcement to screen readers.
   return (
