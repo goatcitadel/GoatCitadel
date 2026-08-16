@@ -171,6 +171,11 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     ["entity-encoded comment block", "intro\n&lt;!-- note\nspanning --&gt;\n"],
     ["inline open+close on one line", "intro\n<script>x()</script> same line\n"],
     ["nested multi-pass comment", "intro\na<!<!-- inner -->-- outer -->b\n"],
+    // RAW_HTML_BLOCK_RE tolerates whitespace (including newlines) between the
+    // closing tag name and its `>`: the terminator arriving on a later line
+    // must still resume finalization.
+    ["raw closing tag split before >", "intro\n<script>\nbody()\n</script\n>\nrest\n"],
+    ["encoded closing tag split before >", "intro\n&lt;script&gt;\nbody()\n&lt;/script\n&gt;\nrest\n"],
   ])("resumes prefix finalization after a closed blocker: %s", (_name, blocked) => {
     const state = createIncrementalDisplayTextState();
     const followUp = "later prose line one\nlater prose line two\n";

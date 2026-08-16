@@ -369,12 +369,32 @@ function lineBlocksTextFinalization(line: string): boolean {
 
 const TEXT_FINALIZE_CLOSER_CANDIDATE_RE = /-->|<\/(?:script|style|svg|math|canvas)\b/i;
 
+/** A block closer whose terminating `>` has not arrived yet (`</script` at region end). */
+const TEXT_FINALIZE_DANGLING_CLOSER_RE = /<\/(?:script|style|svg|math|canvas)\b[^>]*$/i;
+
 /** Cheap trigger: only lines that could complete a blocked construct pay the region re-check. */
 function lineMayCloseBlockedRegion(line: string): boolean {
   if (TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(line)) {
     return true;
   }
   return line.includes("&") && TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(decodeBasicHtmlEntities(line));
+}
+
+/**
+ * While a dangling `</name` closer is pending its `>` (RAW_HTML_BLOCK_RE
+ * tolerates whitespace, including newlines, before the terminator), any line
+ * that supplies a `>` may complete the block.
+ */
+function lineMayCompletePendingTagClose(line: string): boolean {
+  if (line.includes(">")) {
+    return true;
+  }
+  return line.includes("&") && decodeBasicHtmlEntities(line).includes(">");
+}
+
+/** True when the decoded region ends in a block closer still awaiting its `>`. */
+function regionEndsWithDanglingCloser(decodedRegion: string): boolean {
+  return TEXT_FINALIZE_DANGLING_CLOSER_RE.test(decodedRegion);
 }
 
 /**
@@ -409,6 +429,13 @@ export interface IncrementalDisplayTextState {
   fenceLength: number;
   /** True when the growing text segment contains a construct that blocks prefix finalization. */
   textBlocked: boolean;
+  /**
+   * True when the blocked region ends in a `</name` closer still awaiting its
+   * terminating `>` (which RAW_HTML_BLOCK_RE allows on a later line): the
+   * next `>`-bearing line must re-run the region check even though it carries
+   * no closer token of its own.
+   */
+  pendingTagClose: boolean;
   /** Normalized output for decoded[0, consumedEnd), internally `\n{3,}`-collapsed, untrimmed. */
   completedOut: string;
   /** looksLikeHtml component flags over decoded[0, consumedEnd) (monotone under append). */
@@ -436,6 +463,7 @@ export function createIncrementalDisplayTextState(): IncrementalDisplayTextState
     fenceChar: null,
     fenceLength: 0,
     textBlocked: false,
+    pendingTagClose: false,
     completedOut: "",
     seenCommentOpen: false,
     seenCommentClose: false,
@@ -452,6 +480,7 @@ function resetIncrementalDisplayTextState(state: IncrementalDisplayTextState): v
   state.fenceChar = null;
   state.fenceLength = 0;
   state.textBlocked = false;
+  state.pendingTagClose = false;
   state.completedOut = "";
   state.seenCommentOpen = false;
   state.seenCommentClose = false;
@@ -558,6 +587,7 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
         // segment's bytes are final and stripHtmlNoise runs per segment).
         consumePiece(state, decoded, lineStart, "text");
         state.textBlocked = false;
+        state.pendingTagClose = false;
         if (hasSameLineFenceClose(line, opening.char, opening.length, opening.start + opening.length)) {
           consumePiece(state, decoded, lineEnd, "code");
         } else {
@@ -571,11 +601,19 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
         }
         // Same-pass close check so an inline `<script>x</script>` line (or the
         // closing line of a multi-line block) resumes prefix finalization
-        // instead of anchoring the mutable tail at the opener forever.
-        if (state.textBlocked && lineMayCloseBlockedRegion(line)) {
+        // instead of anchoring the mutable tail at the opener forever. A
+        // dangling `</name` closer keeps `pendingTagClose` armed so the line
+        // that finally supplies the terminating `>` re-runs the check too.
+        if (
+          state.textBlocked &&
+          (lineMayCloseBlockedRegion(line) || (state.pendingTagClose && lineMayCompletePendingTagClose(line)))
+        ) {
           const region = decoded.slice(state.consumedEnd, lineEnd);
           if (blockedRegionCanFinalize(region)) {
             state.textBlocked = false;
+            state.pendingTagClose = false;
+          } else {
+            state.pendingTagClose = regionEndsWithDanglingCloser(decodeBasicHtmlEntities(region));
           }
         }
       }
