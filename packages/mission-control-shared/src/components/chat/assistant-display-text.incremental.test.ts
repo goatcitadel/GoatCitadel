@@ -163,4 +163,41 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     // The safe intro was finalized before the blocker arrived.
     expect(state.consumedEnd).toBeGreaterThanOrEqual("safe intro\n".length);
   });
+
+  it.each([
+    ["raw script block", "intro\n<script>\nbody()\n</script>\n"],
+    ["raw comment block", "intro\n<!-- note\nspanning -->\n"],
+    ["entity-encoded script block", "intro\n&lt;script&gt;\nbody()\n&lt;/script&gt;\n"],
+    ["entity-encoded comment block", "intro\n&lt;!-- note\nspanning --&gt;\n"],
+    ["inline open+close on one line", "intro\n<script>x()</script> same line\n"],
+    ["nested multi-pass comment", "intro\na<!<!-- inner -->-- outer -->b\n"],
+  ])("resumes prefix finalization after a closed blocker: %s", (_name, blocked) => {
+    const state = createIncrementalDisplayTextState();
+    const followUp = "later prose line one\nlater prose line two\n";
+    const full = blocked + followUp;
+    // Stream in small chunks; equivalence must hold throughout.
+    let streamed = "";
+    while (streamed.length < full.length) {
+      streamed = full.slice(0, streamed.length + 3);
+      expect(normalizeAssistantDisplayTextIncremental(state, streamed)).toBe(normalizeAssistantDisplayText(streamed));
+    }
+    // The blocked region closed, so finalization resumed: the consumed prefix
+    // advanced past the whole blocked construct instead of anchoring the
+    // mutable tail at the opener for the rest of the stream.
+    expect(state.textBlocked).toBe(false);
+    expect(state.consumedEnd).toBe(full.length);
+  });
+
+  it("stays blocked (and correct) while a block element never closes", () => {
+    const state = createIncrementalDisplayTextState();
+    const full = "intro\n<script>\nnever closes\nmore inside\n";
+    let streamed = "";
+    while (streamed.length < full.length) {
+      streamed = full.slice(0, streamed.length + 4);
+      expect(normalizeAssistantDisplayTextIncremental(state, streamed)).toBe(normalizeAssistantDisplayText(streamed));
+    }
+    expect(state.textBlocked).toBe(true);
+    // Only the pre-blocker prefix was consumed.
+    expect(state.consumedEnd).toBe("intro\n".length);
+  });
 });

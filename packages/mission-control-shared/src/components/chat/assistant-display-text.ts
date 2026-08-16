@@ -367,6 +367,35 @@ function lineBlocksTextFinalization(line: string): boolean {
   return line.includes("&") && TEXT_FINALIZE_BLOCKER_RE.test(decodeBasicHtmlEntities(line));
 }
 
+const TEXT_FINALIZE_CLOSER_CANDIDATE_RE = /-->|<\/(?:script|style|svg|math|canvas)\b/i;
+
+/** Cheap trigger: only lines that could complete a blocked construct pay the region re-check. */
+function lineMayCloseBlockedRegion(line: string): boolean {
+  if (TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(line)) {
+    return true;
+  }
+  return line.includes("&") && TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(decodeBasicHtmlEntities(line));
+}
+
+/**
+ * A blocked region may finalize once the multi-line constructs that blocked it
+ * have all closed: run the same first strip stages the one-shot normalizer
+ * applies (entity decode, multi-pass comment removal, block-element removal)
+ * and check that no opener survives. Because consumption seams always fall on
+ * newline boundaries, a residual-opener-free region cannot combine with later
+ * content to form a new construct across the seam (comment/block openers
+ * require literal adjacency, and interior removals never delete the seam
+ * newline), so `stripHtmlNoise(region) + stripHtmlNoise(rest)` matches the
+ * one-shot result. Regions whose residual still carries an opener (e.g. a
+ * genuinely unclosed block, or pathological nested-comment fragments) simply
+ * stay blocked: correctness is preserved by tail re-normalization, only the
+ * O(delta) amortization is deferred.
+ */
+function blockedRegionCanFinalize(region: string): boolean {
+  const residual = stripRawHtmlComments(decodeBasicHtmlEntities(region)).replace(RAW_HTML_BLOCK_RE, " ");
+  return !TEXT_FINALIZE_BLOCKER_RE.test(residual);
+}
+
 export interface IncrementalDisplayTextState {
   /** Full raw content seen on the previous push; used to detect non-append deltas. */
   raw: string;
@@ -536,8 +565,19 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
           state.fenceChar = opening.char;
           state.fenceLength = opening.length;
         }
-      } else if (!state.textBlocked && lineBlocksTextFinalization(line)) {
-        state.textBlocked = true;
+      } else {
+        if (!state.textBlocked && lineBlocksTextFinalization(line)) {
+          state.textBlocked = true;
+        }
+        // Same-pass close check so an inline `<script>x</script>` line (or the
+        // closing line of a multi-line block) resumes prefix finalization
+        // instead of anchoring the mutable tail at the opener forever.
+        if (state.textBlocked && lineMayCloseBlockedRegion(line)) {
+          const region = decoded.slice(state.consumedEnd, lineEnd);
+          if (blockedRegionCanFinalize(region)) {
+            state.textBlocked = false;
+          }
+        }
       }
     } else if (state.fenceChar && matchMarkdownFenceClosing(line, state.fenceChar, state.fenceLength)) {
       consumePiece(state, decoded, lineEnd, "code");
