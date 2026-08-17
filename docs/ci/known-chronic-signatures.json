@@ -3,35 +3,11 @@
   "workflow": "Verification 1.0 Release Proof",
   "updatedAt": "2026-08-16",
   "baseline": {
-    "runId": 31982472019,
-    "headSha": "dbe0061ee",
-    "note": "Reconciled 2026-08-16 against post-merge dispatch 31982472019: agentic-proof and agentic-governance (linux_firejail_missing) cleared by PR #249's resolveSandboxMetadata stub and were removed from this ledger; architecture-metrics appeared as a new ratchet failure and is re-armed in the same PR as this reconciliation."
+    "runId": 31986333839,
+    "headSha": "1cd0a1d70",
+    "note": "Reconciled 2026-08-16 against post-#252 dispatch 31986333839: realtime-truth (both scenarios), surface-regression.settings-onboarding, and architecture-metrics confirmed cleared on CI and removed. Remaining: operator-proof verify-install (keychain hold), operator-proof chat-code-mode-lifecycle (fix in the journeys PR; remove after its post-merge run), visual-regression (Linux baselines)."
   },
   "signatures": [
-    {
-      "lanes": ["architecture-metrics"],
-      "scenarioId": "architecture.metrics.snapshot",
-      "match": "GatewayService line count increased",
-      "classification": "ratchet-stale",
-      "detail": "PRs #249/#250 legitimately grew guarded metrics (GatewayService 13103→13129 lines; chat-turn-capability-profile-service typed dependency accesses 16→18 from the interposition seam) against a stale baseline.",
-      "disposition": "Baseline regenerated via architecture:baseline:update in the same PR as this ledger. Remove after the next scheduled run confirms green; the underlying GatewayService decomposition debt remains tracked separately."
-    },
-    {
-      "lanes": ["realtime-truth"],
-      "scenarioId": "realtime-truth.explicit-compatibility-replay-gap",
-      "match": "expected visible realtime replay recovery or polling fallback copy",
-      "classification": "scenario-drift",
-      "detail": "Realtime pill copy moved into the collapsed System <details> popover of the status strip; body innerText omits it until the popover opens.",
-      "disposition": "Fixed: scenario now opens the System popover before asserting (this PR); lane proven green locally against the real stack. Remove after the next scheduled run confirms."
-    },
-    {
-      "lanes": ["realtime-truth"],
-      "scenarioId": "realtime-truth.disconnect-reconnect-resubscribe",
-      "match": "Live updates: Streaming",
-      "classification": "scenario-drift",
-      "detail": "Same popover containment; additionally the degraded pill aria-label gained an ' (unavailable)' suffix the exact-match selector could never match.",
-      "disposition": "Fixed: popover open + prefix selector (this PR). Remove after confirmation."
-    },
     {
       "lanes": ["operator-proof"],
       "scenarioId": "operator-proof.install.verify-install",
@@ -47,14 +23,6 @@
       "classification": "scenario-drift",
       "detail": "The scenario promoted a staged candidate directly, but review-first evolution governance requires a linked proposal and a driven Change Plan. Driving the real flow also exposed a product defect: the adapter gated activate-plan drafting on candidate.activationBlocked, which is true for every never-promoted candidate, making first-time activation impossible (its unit fixture hand-set activationBlocked:false, concealing this).",
       "disposition": "Fixed (this PR): the scenario creates the linked proposal and drives the Change Plan (artifact review → confirmation → approval), and the adapter now gates on the selected version not being revoked. Scenario passes locally. Remove after the next scheduled run confirms."
-    },
-    {
-      "lanes": ["surface-regression"],
-      "scenarioId": "surface-regression.settings-onboarding",
-      "match": "Failed to load resource: the server responded with a status of 400",
-      "classification": "product-defect",
-      "detail": "Onboarding auto-selects the zero-cost local provider and fetches its models; the local-runtime lease failure ('llama.cpp runtime is disabled in assistant config') escaped the discovery fallback and surfaced as a console 400.",
-      "disposition": "Fixed: lease acquisition moved inside the discovery try so lease failures degrade to error_fallback with a warning (this PR). Remove after confirmation."
     },
     {
       "lanes": ["visual-regression"],
