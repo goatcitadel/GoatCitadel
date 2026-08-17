@@ -15,7 +15,7 @@ import type {
   ToolPolicyActorContext,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { coerceRetryAfterMs, isChangePlanRequest } from "@goatcitadel/contracts";
+import { buildScrubbedSpawnEnv, coerceRetryAfterMs, isChangePlanRequest } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -586,7 +586,7 @@ async function shellExec(
   const parsed = parseExecFileCommand(command);
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
   await assertBeforeProcessSpawn(runtimeHooks, request, "shell.exec", cwd);
-  const outcome = await runShellExecToCompletion(executable, cwd, request.signal);
+  const outcome = await runShellExecToCompletion(executable, cwd, request.signal, buildModelSpawnEnv(config));
   return {
     command,
     cwd,
@@ -596,6 +596,7 @@ async function shellExec(
     stdout: scrubSensitiveOutput(outcome.stdout),
     stderr: scrubSensitiveOutput(outcome.stderr),
     exitCode: outcome.exitCode,
+    envScrubbed: true,
   };
 }
 
@@ -617,11 +618,13 @@ function runShellExecToCompletion(
   executable: { file: string; args: string[] },
   cwd: string | undefined,
   signal: AbortSignal | undefined,
+  env: Record<string, string>,
 ): Promise<ShellExecOutcome> {
   return new Promise<ShellExecOutcome>((resolve) => {
     const posixProcessGroup = process.platform !== "win32";
     const child = spawn(executable.file, executable.args, {
       cwd,
+      env,
       windowsHide: true,
       detached: posixProcessGroup,
     });
@@ -738,6 +741,7 @@ async function shellExecBackground(
   return await new Promise<Record<string, unknown>>((resolve, reject) => {
     const child = spawn(executable.file, executable.args, {
       cwd,
+      env: buildModelSpawnEnv(config),
       detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
@@ -767,6 +771,7 @@ async function shellExecBackground(
         pid: child.pid,
         detached: true,
         started: true,
+        envScrubbed: true,
       });
     }, 20);
   });
@@ -776,6 +781,7 @@ async function gitStatus() {
   const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--branch"], {
     timeout: 15000,
     windowsHide: true,
+    env: buildModelSpawnEnv(),
   });
   return { summary: stdout.slice(0, 10000) };
 }
@@ -788,7 +794,7 @@ async function gitDiff(args: Record<string, unknown>) {
 
 function readGitDiffBounded(args: string[]): Promise<{ stdout: string; truncated: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { windowsHide: true });
+    const child = spawn("git", args, { windowsHide: true, env: buildModelSpawnEnv() });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -864,25 +870,33 @@ async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
   for (const p of resolvedPaths) {
     assertWritePathInJail(path.resolve(p), config.sandbox.writeJailRoots);
   }
-  await execFileAsync("git", ["add", ...resolvedPaths], { timeout: 15000, windowsHide: true });
+  await execFileAsync("git", ["add", ...resolvedPaths], {
+    timeout: 15000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(),
+  });
   return { staged: resolvedPaths };
 }
 
 async function gitCommit(args: Record<string, unknown>) {
   const message = required(args.message, "message");
-  const { stdout } = await execFileAsync("git", ["commit", "-m", message], { timeout: 20000, windowsHide: true });
+  const { stdout } = await execFileAsync("git", ["commit", "-m", message], {
+    timeout: 20000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(),
+  });
   return { committed: true, output: stdout.slice(0, 4000) };
 }
 
 async function gitBranchCreate(args: Record<string, unknown>) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true });
+  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true, env: buildModelSpawnEnv() });
   return { created: true, branch };
 }
 
 async function gitBranchSwitch(args: Record<string, unknown>) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true });
+  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true, env: buildModelSpawnEnv() });
   return { switched: true, branch };
 }
 
@@ -890,14 +904,22 @@ async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPoli
   const p = required(args.path, "path");
   const branch = required(args.branch, "branch");
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "add", p, branch], { timeout: 30000, windowsHide: true });
+  await execFileAsync("git", ["worktree", "add", p, branch], {
+    timeout: 30000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(),
+  });
   return { created: true, path: path.resolve(p), branch };
 }
 
 async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const p = required(args.path, "path");
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "remove", p], { timeout: 30000, windowsHide: true });
+  await execFileAsync("git", ["worktree", "remove", p], {
+    timeout: 30000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(),
+  });
   return { removed: true, path: path.resolve(p) };
 }
 
@@ -927,6 +949,7 @@ async function runRestricted(
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
     cwd,
+    env: buildModelSpawnEnv(config),
   });
   return { manager, kind, cwd, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
 }
@@ -952,6 +975,17 @@ async function assertBeforeProcessSpawn(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Child env for model-driven spawns: the parent's env minus secret-shaped keys,
+ * so harness/operator credentials can never leak into tool output, artifacts,
+ * or audit rows. `sandbox.spawnEnvPassthrough` is the operator opt-out.
+ */
+function buildModelSpawnEnv(config?: ToolPolicyConfig): Record<string, string> {
+  return buildScrubbedSpawnEnv(process.env, {
+    passthroughKeys: config?.sandbox.spawnEnvPassthrough ?? [],
+  });
 }
 
 export function resolveRestrictedCommand(

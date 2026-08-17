@@ -1,3 +1,5 @@
+import { SECRET_ENV_KEY_PATTERN } from "@goatcitadel/contracts";
+
 const ADDON_CHILD_ENV_ALLOWLIST = new Set([
   "APPDATA",
   "COMSPEC",
@@ -22,9 +24,6 @@ const ADDON_CHILD_ENV_ALLOWLIST = new Set([
   "WINDIR",
 ]);
 
-const ADDON_SECRET_ENV_PATTERN =
-  /(?:API[_-]?KEY|AUTH|COOKIE|CREDENTIAL|DATABASE_URL|OPENAI|ANTHROPIC|GOOGLE|GEMINI|MOONSHOT|PERPLEXITY|MISTRAL|OPENROUTER|DEEPSEEK|GLM|GROQ|XAI|POSTGRES|PASSWORD|SECRET|TOKEN)/i;
-
 export function buildAddonChildEnv(extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -41,7 +40,7 @@ export function buildAddonChildEnv(extraEnv: Record<string, string> = {}): NodeJ
 
 function isAllowedAddonChildEnvKey(key: string): boolean {
   const normalized = key.toUpperCase();
-  if (ADDON_SECRET_ENV_PATTERN.test(normalized)) {
+  if (SECRET_ENV_KEY_PATTERN.test(normalized)) {
     return false;
   }
   return ADDON_CHILD_ENV_ALLOWLIST.has(normalized);
