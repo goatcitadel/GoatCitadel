@@ -34,6 +34,11 @@ const FAST_LANE_LIBRARY_TEST_FILTERS = Object.freeze([
 export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.skills-catalog", title: "Skill catalog coverage", args: ["verify:skills:catalog"] },
   { id: "fast.repo-hygiene", title: "Repo hygiene", args: ["verify:repo:hygiene"] },
+  {
+    id: "fast.gateway-async-boundary",
+    title: "Gateway async route boundary",
+    args: ["verify:gateway:async-boundary"],
+  },
   { id: "fast.storage-migration-parity", title: "Storage migration parity", args: ["verify:storage:migration-parity"] },
   {
     id: "fast.extensions-sdk-build",
@@ -139,6 +144,7 @@ export const FAST_LANE_STAGES = Object.freeze([
     commands: [
       "fast.skills-catalog",
       "fast.repo-hygiene",
+      "fast.gateway-async-boundary",
       "fast.storage-migration-parity",
       "fast.extensions-sdk-build",
       "fast.extensions-sdk-package",
