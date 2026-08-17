@@ -148,6 +148,21 @@ describe("LlmService local-service leases", () => {
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(2));
   });
 
+  it("degrades model discovery to the template catalog when the lease cannot be acquired", async () => {
+    server = await startFakeOpenAiCompatibleServer();
+    const acquire = vi.fn<LlmLocalServiceLeaseAcquirer>(async () => {
+      throw new Error("llama.cpp runtime is disabled in assistant config");
+    });
+    const service = createService(server.baseUrl, acquire);
+
+    await expect(service.listModelsWithSource("llamacpp")).resolves.toMatchObject({
+      source: "error_fallback",
+      warning: "llama.cpp runtime is disabled in assistant config",
+      items: expect.arrayContaining([expect.objectContaining({ id: "fake-chat" })]),
+    });
+    expect(server.requests).toHaveLength(0);
+  });
+
   it("never asks the runtime owner to lease a non-llama provider", async () => {
     server = await startFakeOpenAiCompatibleServer();
     const acquire = vi.fn<LlmLocalServiceLeaseAcquirer>();

@@ -13,6 +13,7 @@ import {
   upsertCitadelCharter,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
+import { CitadelBriefPanel } from "./CitadelBriefPanel";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage, humanizeEnumToken } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
@@ -293,6 +294,7 @@ export function CitadelOverviewRoutePage({
       ) : (
         <>
           {actionNotice ? <NoticeBanner tone={actionNotice.tone} message={actionNotice.message} /> : null}
+          <CitadelBriefPanel citadelId={activeCitadelId} />
           <NativeGrid>
             <NativeCard
               title="Charter"

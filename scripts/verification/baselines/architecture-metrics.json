@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-16T03:10:44.393Z",
-  "measuredSourceSha256": "6026e4314a26f1e2dc013bbce6663ae1fde6df08d3826ea4123f71b4dc40ef57",
-  "gatewayLineCount": 13103,
+  "generatedAt": "2026-08-17T00:55:36.190Z",
+  "measuredSourceSha256": "043573827be6a4d118b37dc8b620f0ecb39108b18a6852245ab95b9b87e2245f",
+  "gatewayLineCount": 13129,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
@@ -11,8 +11,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 13103,
-      "bytes": 568229
+      "lineCount": 13129,
+      "bytes": 569822
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
@@ -36,8 +36,8 @@
     },
     {
       "path": "apps/gateway/src/services/llm-service.ts",
-      "lineCount": 6081,
-      "bytes": 229738
+      "lineCount": 6086,
+      "bytes": 230075
     },
     {
       "path": "apps/gateway/src/services/memory-lifecycle-service.ts",
@@ -245,7 +245,7 @@
     "apps/gateway/src/services/chat-turn-agent-runner-test-fixtures.ts": 2,
     "apps/gateway/src/services/chat-turn-agent-runner.ts": 113,
     "apps/gateway/src/services/chat-turn-cancellation.ts": 14,
-    "apps/gateway/src/services/chat-turn-capability-profile-service.ts": 16,
+    "apps/gateway/src/services/chat-turn-capability-profile-service.ts": 18,
     "apps/gateway/src/services/chat-turn-dispatch-service.ts": 62,
     "apps/gateway/src/services/chat-turn-entry-service.ts": 103,
     "apps/gateway/src/services/chat-turn-helpers.ts": 10,
@@ -341,7 +341,7 @@
     "apps/gateway/src/services/heartbeat-occurrence-service.ts": 20,
     "apps/gateway/src/services/hook-secret-custody-service.ts": 3,
     "apps/gateway/src/services/hooks-route-service.ts": 14,
-    "apps/gateway/src/services/hooks-service.ts": 82,
+    "apps/gateway/src/services/hooks-service.ts": 80,
     "apps/gateway/src/services/improvement-candidate-change-plan-adapter.ts": 9,
     "apps/gateway/src/services/improvement-lifecycle-journey-producer.ts": 1,
     "apps/gateway/src/services/improvement-route-service.ts": 35,
@@ -588,8 +588,8 @@
     "apps/gateway/src/services/workspaces-route-service.ts"
   ],
   "sourceTreeState": "clean",
-  "hostCallbackCollectorCorrectedAt": "2026-08-16T03:10:44.393Z",
-  "hostCallbackSourceRevision": "01e54f87cc7efaae9d808254c63628ab0a2bea48",
-  "dependencyMemberCollectorCapturedAt": "2026-08-16T03:10:44.393Z",
-  "dependencyMemberSourceRevision": "01e54f87cc7efaae9d808254c63628ab0a2bea48"
+  "hostCallbackCollectorCorrectedAt": "2026-08-17T00:55:36.190Z",
+  "hostCallbackSourceRevision": "ee8407bbdd8c7be23cb6cf3ed7cabef7b71d76ab",
+  "dependencyMemberCollectorCapturedAt": "2026-08-17T00:55:36.190Z",
+  "dependencyMemberSourceRevision": "ee8407bbdd8c7be23cb6cf3ed7cabef7b71d76ab"
 }

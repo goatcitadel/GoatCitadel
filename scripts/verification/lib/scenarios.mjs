@@ -3805,6 +3805,18 @@ export async function runMemoryTruthLane(context, _options = {}) {
 export async function runRealtimeTruthLane(context, _options = {}) {
   let stack;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
+  // The status-strip realtime pill ("Live updates: …") lives inside the
+  // collapsed "System" <details> popover of the Mission Control status strip.
+  // Until the popover is opened, Playwright resolves the pill as hidden and
+  // page innerText omits its copy, so realtime assertions must open it first.
+  const openSystemStatusPopover = async (page) => {
+    const details = page.locator("details.mc-next-status-system");
+    const isOpen = await details.evaluate((node) => node.open).catch(() => false);
+    if (!isOpen) {
+      await details.locator("summary").click();
+    }
+    await details.locator('[aria-label^="Live updates"]').first().waitFor({ timeout: 5000 });
+  };
   const realtimeGatewayEnv = {
     GOATCITADEL_AUTH_MODE: "token",
     GOATCITADEL_AUTH_TOKEN: "verification-realtime-truth-operator-token",
@@ -3920,6 +3932,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             )
             .first()
             .waitFor({ timeout: 15000 });
+          await openSystemStatusPopover(page);
           const realtimeCopy = (await page.locator("body").innerText({ timeout: 15000 })) ?? "";
           if (!/(Live recovery|Polling|Realtime degraded)/.test(realtimeCopy)) {
             throw new Error("realtime-truth expected visible realtime degraded/recovery posture copy");
@@ -3999,6 +4012,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             NEXT_UI_PACKAGE,
           );
           await setBrowserCorrelation(page, correlationId, fixture.sessionId);
+          await openSystemStatusPopover(page);
           await page.locator('[aria-label="Live updates: Streaming"]').first().waitFor({ timeout: 15000 });
 
           const screenshotDir = path.join(context.artifactRoot, "screenshots");
@@ -4015,7 +4029,7 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           const gatewayPidBefore = stack.gateway?.child?.pid;
           const outageLogCursor = browserLog.mark();
           await stopProcess(stack.gateway);
-          await page.locator('[aria-label="Live updates: Polling fallback"]').first().waitFor({ timeout: 15000 });
+          await page.locator('[aria-label^="Live updates: Polling fallback"]').first().waitFor({ timeout: 15000 });
           await page.screenshot({ path: degradedScreenshot, fullPage: false });
 
           stack.gateway = await restartGatewayProcess(context, stack, realtimeGatewayEnv);

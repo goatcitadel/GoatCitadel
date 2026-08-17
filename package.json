@@ -119,6 +119,7 @@
     "verify:memory:truth": "node scripts/verification/run.mjs memory-truth",
     "verify:realtime:truth": "node scripts/verification/run.mjs realtime-truth",
     "verify:architecture:metrics": "node scripts/verification/run.mjs architecture-metrics",
+    "verify:ci:signature-tripwire": "node --test scripts/ci-signature-tripwire.test.mjs && node scripts/ci-signature-tripwire.mjs",
     "architecture:baseline:update": "node scripts/update-architecture-metrics-baseline.mjs",
     "verify:code-mode:sandbox": "node scripts/verification/run.mjs code-mode-sandbox",
     "verify:code-mode:hostile-sandbox": "node scripts/verification/run.mjs code-mode-hostile-sandbox",
