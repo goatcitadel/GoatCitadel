@@ -13,9 +13,11 @@
 // audited journey (needs the gate's action-string mapping pinned first).
 
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import https from "node:https";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { promisify } from "node:util";
 import {
   prepareVerificationRuntime,
   requestJson,
@@ -25,33 +27,57 @@ import {
 import { runScenario, writeJson } from "../shared.mjs";
 import { ensureOnboardingComplete } from "../scenarios.mjs";
 
+const execFileAsync = promisify(execFile);
+
 export const JOURNEYS_LANE = "journeys";
 
-// Committed loopback-only TLS fixture (SAN IP:127.0.0.1, valid to 2036). Hook
-// webhook URLs are https-only by policy, so the delivery receiver terminates
-// TLS with this pair and the gateway trusts it via NODE_EXTRA_CA_CERTS. This
-// key protects nothing: it exists so a verification receiver on 127.0.0.1 can
-// speak TLS, mirroring the pinned PEM fixtures the remote-worker suites use.
-const LOOPBACK_TLS_CERT = `-----BEGIN CERTIFICATE-----
-MIIBtTCCAVygAwIBAgIUW56pF6kLVBDSNEDhIPwWhyFDJZQwCgYIKoZIzj0EAwIw
-KDEmMCQGA1UEAwwdZ29hdGNpdGFkZWwtam91cm5leXMtbG9vcGJhY2swHhcNMjYw
-ODE3MDEzNTI1WhcNMzYwODE0MDEzNTI1WjAoMSYwJAYDVQQDDB1nb2F0Y2l0YWRl
-bC1qb3VybmV5cy1sb29wYmFjazBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJ9J
-SNyq1FhRoxiNC2u8aPPUvbrlIVXmrC8HZFzKsf9LqTWCG4RoKgme2OVj1IAgaOIs
-HBG5HOxCJr0c6/DqVKajZDBiMB0GA1UdDgQWBBTLgPucov2j+nNMje90OpMEEE/T
-9zAfBgNVHSMEGDAWgBTLgPucov2j+nNMje90OpMEEE/T9zAPBgNVHRMBAf8EBTAD
-AQH/MA8GA1UdEQQIMAaHBH8AAAEwCgYIKoZIzj0EAwIDRwAwRAIgTrHZbBHj+N0n
-WSJb3/1xR+y15JmI7Gh0FcavqNuAWNACIGMi9cuDSuzSUHceG4hS/L6BOuFOQxeM
-DtwlIJATIdPZ
------END CERTIFICATE-----
-`;
+// Hook webhook URLs are https-only by policy, so the delivery receiver must
+// terminate TLS. The loopback-only pair (SAN IP:127.0.0.1) is minted fresh
+// per run with openssl — nothing key-shaped is ever committed, so secret
+// scanning stays fully armed. Hosts without openssl report an honest hold.
+const OPENSSL_CANDIDATES = [
+  "openssl",
+  "C:\\Program Files\\Git\\usr\\bin\\openssl.exe",
+  "C:\\Program Files\\Git\\mingw64\\bin\\openssl.exe",
+];
 
-const LOOPBACK_TLS_KEY = `-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3Z48Yp/qUwgMADTn
-u0fS0FWpLAJAChORv/GXNXLwX0+hRANCAASfSUjcqtRYUaMYjQtrvGjz1L265SFV
-5qwvB2RcyrH/S6k1ghuEaCoJntjlY9SAIGjiLBwRuRzsQia9HOvw6lSm
------END PRIVATE KEY-----
-`;
+async function mintLoopbackTlsMaterial(directory) {
+  const keyPath = path.join(directory, "loopback-key.pem");
+  const certPath = path.join(directory, "loopback-cert.pem");
+  const args = [
+    "req",
+    "-x509",
+    "-newkey",
+    "ec",
+    "-pkeyopt",
+    "ec_paramgen_curve:prime256v1",
+    "-keyout",
+    keyPath,
+    "-out",
+    certPath,
+    "-days",
+    "2",
+    "-nodes",
+    "-subj",
+    "/CN=goatcitadel-journeys-loopback",
+    "-addext",
+    "subjectAltName=IP:127.0.0.1",
+  ];
+  let lastError;
+  for (const candidate of OPENSSL_CANDIDATES) {
+    try {
+      await execFileAsync(candidate, args);
+      return {
+        cert: await fs.readFile(certPath, "utf8"),
+        key: await fs.readFile(keyPath, "utf8"),
+        certPath,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return { unavailable: lastError instanceof Error ? lastError.message : String(lastError ?? "openssl not found") };
+}
 
 function assertOk(response, label) {
   if (!response?.ok) {
@@ -94,9 +120,9 @@ async function writeJourneysRuntimeToolPolicy(runtimeRoot) {
   }
 }
 
-function startLoopbackHookReceiver() {
+function startLoopbackHookReceiver(tls) {
   const deliveries = [];
-  const server = https.createServer({ cert: LOOPBACK_TLS_CERT, key: LOOPBACK_TLS_KEY }, (request, response) => {
+  const server = https.createServer({ cert: tls.cert, key: tls.key }, (request, response) => {
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
     request.on("end", () => {
@@ -140,8 +166,25 @@ export async function runJourneysLane(context) {
   await writeJourneysRuntimeToolPolicy(runtimeRoot);
   const tlsDir = path.join(runtimeRoot, "journeys-tls");
   await fs.mkdir(tlsDir, { recursive: true });
-  const caPath = path.join(tlsDir, "loopback-ca.pem");
-  await fs.writeFile(caPath, LOOPBACK_TLS_CERT, "utf8");
+  const tls = await mintLoopbackTlsMaterial(tlsDir);
+  if ("unavailable" in tls) {
+    await runScenario(
+      context,
+      {
+        id: "journey.hooks.webhook-delivery",
+        lane: JOURNEYS_LANE,
+        title: "An operator creates a webhook hook, test-fires it, and a signed delivery arrives",
+        subsystem: "hooks",
+      },
+      async () => ({
+        status: "skipped",
+        notes: [
+          `HOLD: openssl is unavailable on this host (${String(tls.unavailable).slice(0, 200)}), so the loopback TLS receiver cannot mint its per-run certificate. Install openssl to activate this journey.`,
+        ],
+      }),
+    );
+    return;
+  }
 
   let stack;
   let receiver;
@@ -152,10 +195,10 @@ export async function runJourneysLane(context) {
       // Signed hook custody REQUIRES a real secret store: creating a hook
       // seals its secret into the OS keychain, so the harness default of
       // disabling the store would make every signed-hook outcome unreachable.
-      gatewayEnv: { NODE_EXTRA_CA_CERTS: caPath, GOATCITADEL_DISABLE_SECRET_STORE: "false" },
+      gatewayEnv: { NODE_EXTRA_CA_CERTS: tls.certPath, GOATCITADEL_DISABLE_SECRET_STORE: "false" },
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-journeys");
-    receiver = await startLoopbackHookReceiver();
+    receiver = await startLoopbackHookReceiver(tls);
 
     await runScenario(
       context,
