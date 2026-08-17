@@ -1,12 +1,12 @@
 # Governed Hooks
 
-GoatCitadel hooks are Gateway-owned lifecycle subscriptions. They can observe approved runtime events and, only where the event contract permits, request a bounded mutation or block. Hooks never bypass deny-wins policy, approvals, path jails, or the network allowlist.
+GoatCitadel hooks are Gateway-owned lifecycle subscriptions. They can observe approved runtime events and, only where the event contract permits, request a bounded mutation or block. Hooks never bypass deny-wins policy, approvals, path jails, or the guarded egress path.
 
 ## Current operator surface
 
 Settings → Hooks creates signed HTTPS webhooks and displays their durable delivery evidence. New hooks are metadata-only: identifiers, lifecycle state, and safe scalar fields are delivered; prompt text, messages, tool output, credentials, and secrets are not. Client-facing delivery history exposes status, timestamps, retries, and a safe failure classification only; outbound payloads, remote response bodies, patch/decision data, and raw error text remain Gateway-owned audit evidence.
 
-Webhook destinations must use HTTPS and match the Gateway network allowlist. Delivery follows the guarded egress path, including private-address blocking, DNS-aware checks, redirect validation, bounded responses, idempotency, retries, circuit breaking, and dead-letter truth.
+Webhook destinations must use HTTPS and are governed by the hooks-scoped egress allowlist (`toolPolicy.hooks.networkAllowlist`), which is distinct from the tool-sandbox allowlist: a non-empty list restricts webhook hosts to the listed entries, and an empty list permits any public HTTPS destination. Delivery always follows the guarded egress path regardless of allowlist posture, including private-address blocking, DNS-aware checks, redirect validation, bounded responses, idempotency, retries, circuit breaking, and dead-letter truth.
 
 The signing secret is write-only. It is placed in OS-keychain custody and the hook record stores only an opaque reference. When a Gateway with keychain custody encounters a legacy plaintext signing value, it migrates the value before listing or dispatch; if that cannot happen safely, it disables the hook, strips the stored value, and emits operator-visible evidence. A record with no usable signing secret fails closed at delivery; GoatCitadel never sends an unsigned webhook.
 
