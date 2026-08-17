@@ -2048,6 +2048,49 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     );
   });
 
+  it("bounds oversized result strings in the tool_invocations audit projection only", async () => {
+    const storage = createStorageStub();
+    const runCalls: unknown[][] = [];
+    (storage.db as unknown as { prepare: unknown }).prepare = vi.fn(() => ({
+      run: vi.fn(async (...args: unknown[]) => {
+        runCalls.push(args);
+        return undefined;
+      }),
+    }));
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "bypass" } },
+      storage,
+    );
+
+    const invocation = await engine.invoke({
+      toolName: "shell.exec",
+      args: { command: `"${process.execPath}" -e "process.stdout.write('m'.repeat(60000))"` },
+      agentId: "agent",
+      sessionId: "session-audit-bound",
+    });
+
+    expect(invocation.outcome).toBe("executed");
+    const liveStdout = String(invocation.result?.stdout ?? "");
+    // The live result keeps the full bounded shell window (head+tail retention).
+    expect(Buffer.byteLength(liveStdout, "utf8")).toBeGreaterThan(20_000);
+
+    const resultJson = runCalls
+      .map((args) => args[10])
+      .find((value): value is string => typeof value === "string" && value.includes("stdout"));
+    expect(resultJson).toBeDefined();
+    const persisted = JSON.parse(resultJson!) as { stdout?: string };
+    const persistedStdout = String(persisted.stdout ?? "");
+    expect(persistedStdout).toContain("audit projection truncated");
+    expect(Buffer.byteLength(persistedStdout, "utf8")).toBeLessThanOrEqual(9 * 1024);
+
+    const auditAppend = vi.mocked(storage.audit.append);
+    const auditPayload = auditAppend.mock.calls.find(([table]) => table === "tool_invocations")?.[1] as
+      | { result?: { stdout?: string } }
+      | undefined;
+    expect(auditPayload).toBeDefined();
+    expect(Buffer.byteLength(String(auditPayload?.result?.stdout ?? ""), "utf8")).toBeLessThanOrEqual(9 * 1024);
+  }, 90_000);
+
   it("covers read modes, grant consumption, and host constraint variants", async () => {
     const rootsEngine = new ToolPolicyEngine(policyConfig, createStorageStub());
     expect(

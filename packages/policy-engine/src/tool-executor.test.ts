@@ -6555,6 +6555,48 @@ describe("executeTool", () => {
       expect(probed).toBe("undefined");
     }, 15_000);
   });
+
+  describe("shell output bounding", () => {
+    it("keeps head and tail of large output and flags truncation", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: {
+            command: `"${process.execPath}" -e "process.stdout.write('HEAD-MARK' + 'm'.repeat(80000) + 'TAIL-MARK')"`,
+          },
+          agentId: "agent",
+          sessionId: "sess-output-bound",
+        },
+        policyConfig,
+        storageStub,
+      );
+      const stdout = String(result.stdout ?? "");
+      expect(result).toMatchObject({ exitCode: 0, stdoutTruncated: true });
+      expect(stdout.startsWith("HEAD-MARK")).toBe(true);
+      expect(stdout.endsWith("TAIL-MARK")).toBe(true);
+      expect(stdout).toContain("shell output truncated");
+      expect(Buffer.byteLength(stdout, "utf8")).toBeLessThanOrEqual(48 * 1024 + 256);
+      expect(result.stderrTruncated).toBeUndefined();
+    }, 60_000);
+
+    it("leaves small output unmodified without truncation flags", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: { command: `"${process.execPath}" -e "process.stdout.write('small-output')"` },
+          agentId: "agent",
+          sessionId: "sess-output-small",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stdout: "small-output" });
+      expect(result.stdoutTruncated).toBeUndefined();
+      expect(result.stderrTruncated).toBeUndefined();
+    }, 15_000);
+  });
 });
 
 function extractPid(result: Record<string, unknown>): number | undefined {

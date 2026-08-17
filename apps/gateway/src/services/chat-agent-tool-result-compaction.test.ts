@@ -110,6 +110,54 @@ describe("chat-agent-tool-result-compaction", () => {
     });
   });
 
+  it("virtualizes a shell result whose serialized output exceeds the threshold", () => {
+    const shellResult = {
+      command: "pnpm test",
+      cwd: "C:/workspace",
+      executable: "pnpm",
+      exitCode: 1,
+      stdout: "test output line\n".repeat(1200),
+      stderr: "",
+      stdoutTruncated: true,
+      envScrubbed: true,
+    };
+
+    expect(extractPersistableToolArtifactContent("shell.exec", shellResult)).toMatchObject({
+      contentType: "application/json; charset=utf-8",
+      virtualized: true,
+      compactMode: "structured",
+    });
+  });
+
+  it("preserves shell identity scalars and truncation flags in structured compaction", () => {
+    expect(
+      buildCompactToolResultMetadata({
+        command: "pnpm test",
+        cwd: "C:/workspace",
+        executable: "pnpm",
+        manager: "pnpm",
+        kind: "test",
+        exitCode: 1,
+        pid: 4242,
+        detached: false,
+        stdoutTruncated: true,
+        stderrTruncated: true,
+        stdout: "not-a-scalar-key-so-dropped".repeat(10),
+      }),
+    ).toEqual({
+      command: "pnpm test",
+      cwd: "C:/workspace",
+      executable: "pnpm",
+      manager: "pnpm",
+      kind: "test",
+      exitCode: 1,
+      pid: 4242,
+      detached: false,
+      stdoutTruncated: true,
+      stderrTruncated: true,
+    });
+  });
+
   it("compacts textual artifacts without carrying the original body", () => {
     const compacted = compactToolResultForTurn(
       {

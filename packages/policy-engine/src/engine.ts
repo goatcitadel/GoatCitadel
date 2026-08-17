@@ -20,7 +20,12 @@ import type {
   ToolPolicyConfig,
   ToolRiskLevel,
 } from "@goatcitadel/contracts";
-import { evaluateWards, HEARTBEAT_PERMISSION_PROFILE_ID, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
+import {
+  evaluateWards,
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  HEARTBEAT_RESTRICTED_PROFILE,
+  splitUtf8HeadTail,
+} from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
@@ -2086,7 +2091,7 @@ export class ToolPolicyEngine {
   ): Promise<Record<string, unknown>> {
     const now = new Date().toISOString();
     const sanitizedArgs = sanitizeForModel(request.args);
-    const sanitizedResult = result ? sanitizeForModel(result) : undefined;
+    const sanitizedResult = result ? boundAuditResultStrings(sanitizeForModel(result)) : undefined;
     await this.storage.db
       .prepare(
         `
@@ -2847,4 +2852,26 @@ function toPendingApprovalRequestRecord(value: unknown): Record<string, unknown>
   }
   const { signal: _signal, ...persistable } = value as Record<string, unknown>;
   return persistable;
+}
+
+// Audit rows persist forever; the live tool result the model sees is bounded
+// separately (shell head+tail retention). This projection caps each top-level
+// string field so tool_invocations growth stays bounded regardless of stream
+// retention limits upstream.
+const AUDIT_RESULT_STRING_LIMIT_BYTES = 8 * 1024;
+const AUDIT_RESULT_KEEP_BYTES = 4 * 1024;
+
+function boundAuditResultStrings(result: Record<string, unknown>): Record<string, unknown> {
+  let changed = false;
+  const bounded: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value === "string" && Buffer.byteLength(value, "utf8") > AUDIT_RESULT_STRING_LIMIT_BYTES) {
+      const split = splitUtf8HeadTail(value, AUDIT_RESULT_KEEP_BYTES, AUDIT_RESULT_KEEP_BYTES);
+      bounded[key] = `${split.head}\n…[audit projection truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`;
+      changed = true;
+    } else {
+      bounded[key] = value;
+    }
+  }
+  return changed ? bounded : result;
 }

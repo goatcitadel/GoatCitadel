@@ -168,6 +168,19 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
     "format",
     "mimeType",
     "slideCount",
+    // Shell/process identity: without these a virtualized shell result loses
+    // its exit code and command, leaving the model blind to pass/fail.
+    "command",
+    "cwd",
+    "executable",
+    "manager",
+    "kind",
+    "exitCode",
+    "pid",
+    "detached",
+    "stdoutTruncated",
+    "stderrTruncated",
+    "envScrubbed",
   ] as const;
   for (const key of scalarKeys) {
     const value = result[key];

@@ -15,7 +15,7 @@ import type {
   ToolPolicyActorContext,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { buildScrubbedSpawnEnv, coerceRetryAfterMs, isChangePlanRequest } from "@goatcitadel/contracts";
+import { buildScrubbedSpawnEnv, coerceRetryAfterMs, isChangePlanRequest, splitUtf8HeadTail } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -80,7 +80,12 @@ const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
-const MAX_SHELL_OUTPUT_BYTES = 4096;
+// Post-scrub retention bounds per stream. Large enough that the gateway's
+// tool-artifact virtualization (12 KB threshold) engages and preserves the
+// full window as an artifact; head+tail because build/test logs put the
+// verdict at the end.
+const SHELL_OUTPUT_KEEP_HEAD_BYTES = 16 * 1024;
+const SHELL_OUTPUT_KEEP_TAIL_BYTES = 32 * 1024;
 
 export interface ToolExecutorRuntimeHooks {
   /**
@@ -186,7 +191,23 @@ function scrubSensitiveOutput(text: string): string {
   for (const pattern of SENSITIVE_PATTERNS) {
     scrubbed = scrubbed.replace(pattern, "[REDACTED]");
   }
-  return scrubbed.slice(0, MAX_SHELL_OUTPUT_BYTES);
+  return scrubbed;
+}
+
+/**
+ * Bound one already-scrubbed output stream to head+tail retention. Scrub runs
+ * over the FULL captured window before this cut so a secret straddling either
+ * boundary is already masked.
+ */
+function boundShellStream(scrubbedText: string): { text: string; truncated: boolean } {
+  const split = splitUtf8HeadTail(scrubbedText, SHELL_OUTPUT_KEEP_HEAD_BYTES, SHELL_OUTPUT_KEEP_TAIL_BYTES);
+  if (!split.truncated) {
+    return { text: scrubbedText, truncated: false };
+  }
+  return {
+    text: `${split.head}\n…[shell output truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`,
+    truncated: true,
+  };
 }
 
 function resolveToolActorId(request: ToolInvokeRequest): string {
@@ -587,14 +608,18 @@ async function shellExec(
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
   await assertBeforeProcessSpawn(runtimeHooks, request, "shell.exec", cwd);
   const outcome = await runShellExecToCompletion(executable, cwd, request.signal, buildModelSpawnEnv(config));
+  const stdout = boundShellStream(scrubSensitiveOutput(outcome.stdout));
+  const stderr = boundShellStream(scrubSensitiveOutput(outcome.stderr));
   return {
     command,
     cwd,
     executable: parsed.file,
     argv: parsed.args,
     ...(typeof outcome.pid === "number" ? { pid: outcome.pid } : {}),
-    stdout: scrubSensitiveOutput(outcome.stdout),
-    stderr: scrubSensitiveOutput(outcome.stderr),
+    stdout: stdout.text,
+    stderr: stderr.text,
+    ...(stdout.truncated ? { stdoutTruncated: true } : {}),
+    ...(stderr.truncated ? { stderrTruncated: true } : {}),
     exitCode: outcome.exitCode,
     envScrubbed: true,
   };
@@ -951,7 +976,17 @@ async function runRestricted(
     cwd,
     env: buildModelSpawnEnv(config),
   });
-  return { manager, kind, cwd, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
+  const boundedStdout = boundShellStream(scrubSensitiveOutput(stdout));
+  const boundedStderr = boundShellStream(scrubSensitiveOutput(stderr));
+  return {
+    manager,
+    kind,
+    cwd,
+    stdout: boundedStdout.text,
+    stderr: boundedStderr.text,
+    ...(boundedStdout.truncated ? { stdoutTruncated: true } : {}),
+    ...(boundedStderr.truncated ? { stderrTruncated: true } : {}),
+  };
 }
 
 async function assertBeforeProcessSpawn(
