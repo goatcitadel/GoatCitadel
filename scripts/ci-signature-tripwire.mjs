@@ -51,8 +51,8 @@ export function parseJobLane(jobName) {
  */
 export function normalizeSignatureText(input) {
   let text = String(input ?? "");
-  // eslint-disable-next-line no-control-regex
-  text = text.replace(/\[[0-9;]*m/g, "");
+  const ansiPattern = new RegExp(String.fromCharCode(27) + "?\\[[0-9;]*m", "g");
+  text = text.replace(ansiPattern, "");
   text = text.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<ts>");
   text = text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>");
   text = text.replace(/\b[0-9a-f]{12,64}\b/gi, "<hash>");

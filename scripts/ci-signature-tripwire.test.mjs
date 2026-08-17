@@ -35,6 +35,11 @@ test("normalizeSignatureText strips run-specific noise into stable text", () => 
   assert.equal(normalizeSignatureText(rerun), normalized);
 });
 
+test("normalizeSignatureText strips ANSI color sequences with and without the escape byte", () => {
+  const esc = String.fromCharCode(27);
+  assert.equal(normalizeSignatureText(`${esc}[31mFAIL${esc}[39m plain [2mdim[22m`), "FAIL plain dim");
+});
+
 test("extractLaneSignatures maps review.json items to lane signatures", () => {
   const review = {
     items: [
