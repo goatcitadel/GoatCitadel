@@ -650,6 +650,29 @@ describe("redactSecretText", () => {
     );
     expect(result.redactionCount).toBe(3);
   });
+
+  it("stays linear on long uniform text (bounded assignment-label quantifiers)", () => {
+    // Regression guard: the assignment-shaped patterns previously used an
+    // unbounded label quantifier, making the scan quadratic on long uniform
+    // word-character runs (~29s at 48 KiB). The bounded {0,127} label keeps it
+    // linear (~tens of ms); the 3s ceiling is a wide margin for slow CI while
+    // still an order of magnitude below the broken behavior.
+    const uniform = "m".repeat(48 * 1024);
+    const started = Date.now();
+    const result = redactSecretText(uniform);
+    const elapsedMs = Date.now() - started;
+    expect(result.value).toBe(uniform);
+    expect(result.redactionCount).toBe(0);
+    expect(elapsedMs).toBeLessThan(3000);
+  });
+
+  it("still redacts an assignment whose label sits at the 128-char bound", () => {
+    const label = `x${"a".repeat(120)}_token`;
+    expect(label.length).toBeLessThanOrEqual(128);
+    const result = redactSecretText(`${label}="super-secret-value-123456"`);
+    expect(result.redactionCount).toBeGreaterThan(0);
+    expect(result.value).not.toContain("super-secret-value-123456");
+  });
 });
 
 describe("redactStructuredSecrets", () => {

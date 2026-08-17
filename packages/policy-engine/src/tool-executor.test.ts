@@ -38,6 +38,7 @@ import {
   resolveFixedOutboundHostsForTool,
   resolveRestrictedCommand,
   setShellExecTimeoutMsForTesting,
+  setShellOutputRetentionBytesForTesting,
 } from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 
@@ -6557,13 +6558,20 @@ describe("executeTool", () => {
   });
 
   describe("shell output bounding", () => {
+    afterEach(() => {
+      setShellOutputRetentionBytesForTesting();
+    });
+
     it("keeps head and tail of large output and flags truncation", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
+      // Shrink the retention bounds so truncation is exercised with small,
+      // fast child output — large real output starves the parallel test pool.
+      setShellOutputRetentionBytesForTesting(1024, 2048);
       const result = await executeTool(
         {
           toolName: "shell.exec",
           args: {
-            command: `"${process.execPath}" -e "process.stdout.write('HEAD-MARK' + 'm'.repeat(80000) + 'TAIL-MARK')"`,
+            command: `"${process.execPath}" -e "process.stdout.write('HEAD-MARK' + 'm'.repeat(8000) + 'TAIL-MARK')"`,
           },
           agentId: "agent",
           sessionId: "sess-output-bound",
@@ -6576,9 +6584,9 @@ describe("executeTool", () => {
       expect(stdout.startsWith("HEAD-MARK")).toBe(true);
       expect(stdout.endsWith("TAIL-MARK")).toBe(true);
       expect(stdout).toContain("shell output truncated");
-      expect(Buffer.byteLength(stdout, "utf8")).toBeLessThanOrEqual(48 * 1024 + 256);
+      expect(Buffer.byteLength(stdout, "utf8")).toBeLessThanOrEqual(1024 + 2048 + 256);
       expect(result.stderrTruncated).toBeUndefined();
-    }, 60_000);
+    }, 15_000);
 
     it("leaves small output unmodified without truncation flags", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);

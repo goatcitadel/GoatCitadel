@@ -755,7 +755,11 @@ function containsCredentialAssignmentText(value: string): boolean {
 }
 
 function createCredentialAssignmentPattern(): RegExp {
-  return /(["']?)([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(?!(?:Authorization|Proxy-Authorization)\s*:\s)([rubf]{0,2}"(?:\\.|[^"\\])+"|[rubf]{0,2}'(?:\\.|[^'\\])+'|`(?:\\.|[^`\\])+`|(?:(?:process|Bun)\.env|import\.meta\.env)(?:\.[A-Z_][A-Z0-9_]*|\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\])|Deno\.env\.get\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\)|os\.(?:environ\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\]|getenv\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\))|\$(?:env:)?[A-Z_][A-Z0-9_]*|\$\{(?:env:)?[A-Z_][A-Z0-9_]*\}|%[A-Z_][A-Z0-9_]*%|\$\([^()\r\n]+\)|(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^()\r\n])*\)\??|[^\s,;)"'\]}[]+)(?=$|[\s,;)"'\]}])/gi;
+  // The label quantifier is bounded ({0,127} instead of *): real credential
+  // labels never exceed it, and an unbounded run makes the whole scan
+  // quadratic on long uniform text (every position consumes to the end and
+  // backtracks). Same bound applies to the other assignment-shaped patterns.
+  return /(["']?)([A-Za-z_$][A-Za-z0-9_$-]{0,127})\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(?!(?:Authorization|Proxy-Authorization)\s*:\s)([rubf]{0,2}"(?:\\.|[^"\\])+"|[rubf]{0,2}'(?:\\.|[^'\\])+'|`(?:\\.|[^`\\])+`|(?:(?:process|Bun)\.env|import\.meta\.env)(?:\.[A-Z_][A-Z0-9_]*|\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\])|Deno\.env\.get\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\)|os\.(?:environ\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\]|getenv\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\))|\$(?:env:)?[A-Z_][A-Z0-9_]*|\$\{(?:env:)?[A-Z_][A-Z0-9_]*\}|%[A-Z_][A-Z0-9_]*%|\$\([^()\r\n]+\)|(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^()\r\n])*\)\??|[^\s,;)"'\]}[]+)(?=$|[\s,;)"'\]}])/gi;
 }
 
 function isNonSecretCredentialAssignment(label: string, assignedValue: string, separator = ""): boolean {
@@ -1156,7 +1160,7 @@ function normalizeStructuredKey(key: string): string {
 
 function redactCredentialCollections(value: string, marker: string): SecretTextRedactionResult {
   const assignment =
-    /(\\["']|["']?)((?:\\u[0-9a-f]{4}|[A-Za-z_$][A-Za-z0-9_$-]*))\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)/gi;
+    /(\\["']|["']?)((?:\\u[0-9a-f]{4}|[A-Za-z_$][A-Za-z0-9_$-]{0,127}))\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)/gi;
   const replacements: Array<{ start: number; end: number }> = [];
   for (let match = assignment.exec(value); match; match = assignment.exec(value)) {
     const quote = match[1] ?? "";
@@ -1410,7 +1414,7 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     },
     {
       pattern:
-        /(["']?)([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|(?<![=!<>])=(?!=|>))(\s*)((?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*!?\s*\((?:[rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^()"'`;\r\n]|\([^()\r\n]*\))*\)\??)/gi,
+        /(["']?)([A-Za-z_$][A-Za-z0-9_$-]{0,127})\1(\s*)(:=|(?<![=!<>])=(?!=|>))(\s*)((?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*!?\s*\((?:[rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^()"'`;\r\n]|\([^()\r\n]*\))*\)\??)/gi,
       shouldRedact: (_match, _quote, label, _beforeSeparator, _separator, _afterSeparator, expression) =>
         isSensitiveCredentialLabel(label) &&
         !isSafeCredentialMetadataLabel(label) &&

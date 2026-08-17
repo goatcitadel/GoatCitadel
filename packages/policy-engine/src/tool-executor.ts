@@ -86,6 +86,23 @@ const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 // verdict at the end.
 const SHELL_OUTPUT_KEEP_HEAD_BYTES = 16 * 1024;
 const SHELL_OUTPUT_KEEP_TAIL_BYTES = 32 * 1024;
+let shellOutputKeepHeadBytes = SHELL_OUTPUT_KEEP_HEAD_BYTES;
+let shellOutputKeepTailBytes = SHELL_OUTPUT_KEEP_TAIL_BYTES;
+
+/**
+ * Test-only override for the shell output retention bounds. Production keeps
+ * the 16 KiB head + 32 KiB tail defaults; tests shrink them so truncation is
+ * exercised with small, fast child-process output (large real output is
+ * pathologically slow under the instrumented test runner). Pass no arguments
+ * to restore the production values.
+ */
+export function setShellOutputRetentionBytesForTesting(
+  headBytes: number = SHELL_OUTPUT_KEEP_HEAD_BYTES,
+  tailBytes: number = SHELL_OUTPUT_KEEP_TAIL_BYTES,
+): void {
+  shellOutputKeepHeadBytes = Math.max(1, Math.floor(headBytes));
+  shellOutputKeepTailBytes = Math.max(1, Math.floor(tailBytes));
+}
 
 export interface ToolExecutorRuntimeHooks {
   /**
@@ -200,7 +217,7 @@ function scrubSensitiveOutput(text: string): string {
  * boundary is already masked.
  */
 function boundShellStream(scrubbedText: string): { text: string; truncated: boolean } {
-  const split = splitUtf8HeadTail(scrubbedText, SHELL_OUTPUT_KEEP_HEAD_BYTES, SHELL_OUTPUT_KEEP_TAIL_BYTES);
+  const split = splitUtf8HeadTail(scrubbedText, shellOutputKeepHeadBytes, shellOutputKeepTailBytes);
   if (!split.truncated) {
     return { text: scrubbedText, truncated: false };
   }

@@ -2062,34 +2062,39 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       storage,
     );
 
+    const workspaceRoot = path.resolve("./workspace");
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    const bigFile = path.join(workspaceRoot, `engine-audit-bound-${randomUUID()}.txt`);
+    await fs.writeFile(bigFile, "m".repeat(20_000), "utf8");
+    tempRoots.push(bigFile);
+
     const invocation = await engine.invoke({
-      toolName: "shell.exec",
-      args: { command: `"${process.execPath}" -e "process.stdout.write('m'.repeat(60000))"` },
+      toolName: "fs.read",
+      args: { path: bigFile },
       agentId: "agent",
       sessionId: "session-audit-bound",
     });
 
     expect(invocation.outcome).toBe("executed");
-    const liveStdout = String(invocation.result?.stdout ?? "");
-    // The live result keeps the full bounded shell window (head+tail retention).
-    expect(Buffer.byteLength(liveStdout, "utf8")).toBeGreaterThan(20_000);
+    // The live result keeps the full content; only the audit projection is bounded.
+    expect(Buffer.byteLength(String(invocation.result?.content ?? ""), "utf8")).toBe(20_000);
 
     const resultJson = runCalls
       .map((args) => args[10])
-      .find((value): value is string => typeof value === "string" && value.includes("stdout"));
+      .find((value): value is string => typeof value === "string" && value.includes("content"));
     expect(resultJson).toBeDefined();
-    const persisted = JSON.parse(resultJson!) as { stdout?: string };
-    const persistedStdout = String(persisted.stdout ?? "");
-    expect(persistedStdout).toContain("audit projection truncated");
-    expect(Buffer.byteLength(persistedStdout, "utf8")).toBeLessThanOrEqual(9 * 1024);
+    const persisted = JSON.parse(resultJson!) as { content?: string };
+    const persistedContent = String(persisted.content ?? "");
+    expect(persistedContent).toContain("audit projection truncated");
+    expect(Buffer.byteLength(persistedContent, "utf8")).toBeLessThanOrEqual(9 * 1024);
 
     const auditAppend = vi.mocked(storage.audit.append);
     const auditPayload = auditAppend.mock.calls.find(([table]) => table === "tool_invocations")?.[1] as
-      | { result?: { stdout?: string } }
+      | { result?: { content?: string } }
       | undefined;
     expect(auditPayload).toBeDefined();
-    expect(Buffer.byteLength(String(auditPayload?.result?.stdout ?? ""), "utf8")).toBeLessThanOrEqual(9 * 1024);
-  }, 90_000);
+    expect(Buffer.byteLength(String(auditPayload?.result?.content ?? ""), "utf8")).toBeLessThanOrEqual(9 * 1024);
+  }, 20_000);
 
   it("covers read modes, grant consumption, and host constraint variants", async () => {
     const rootsEngine = new ToolPolicyEngine(policyConfig, createStorageStub());
