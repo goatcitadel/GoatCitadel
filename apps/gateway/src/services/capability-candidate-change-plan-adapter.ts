@@ -60,7 +60,7 @@ export class CapabilityCandidateChangePlanAdapter implements EvolutionControlPla
   public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanCapabilityCandidateRequest) {
     const resolved = await this.resolve(request, context.origin.workspaceId);
     const action = request.action ?? "activate";
-    if (action !== "revoke") assertCandidateReviewable(resolved.candidate);
+    if (action !== "revoke") assertVersionActivatable(resolved.version);
     const copy = actionCopy(action, resolved.proposal.proposal.title);
     return {
       target: {
@@ -280,10 +280,17 @@ function requireRequest(plan: ChangePlanRecord): ChangePlanCapabilityCandidateRe
   return plan.request;
 }
 
-function assertCandidateReviewable(candidate: CandidateSkillDetailRecord): void {
-  if (candidate.activationBlocked) {
-    throw new SemanticValidationError("The capability candidate is not eligible for activation.", {
-      blockers: candidate.activationBlockers,
+// First-time activation is the normal case: a fresh candidate has no approved
+// or trusted version yet, so `candidate.activationBlocked` is true for every
+// candidate that has never been promoted — gating prepare() on it made the
+// activate plan impossible to draft exactly when it is needed. Eligibility for
+// drafting is a property of the SELECTED VERSION (it must not be revoked);
+// the canonical lifecycle approval at stage() still enforces the rest.
+function assertVersionActivatable(version: CandidateSkillVersionRecord): void {
+  if (version.lifecycleState === "revoked") {
+    throw new SemanticValidationError("A revoked candidate version cannot be activated.", {
+      versionId: version.versionId,
+      lifecycleState: version.lifecycleState,
     });
   }
 }
