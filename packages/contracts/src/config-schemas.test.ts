@@ -78,6 +78,33 @@ describe("ToolPolicyConfigSchema", () => {
     expect((result as Record<string, unknown>).futureField).toBe(true);
   });
 
+  it("parses sandbox.spawnEnvPassthrough and defaults it to an empty list", () => {
+    const base = {
+      profiles: {},
+      tools: { profile: "standard", allow: [], deny: [] },
+      agents: {},
+    } as const;
+
+    const defaulted = ToolPolicyConfigSchema.parse({
+      ...base,
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    });
+    expect(defaulted.sandbox.spawnEnvPassthrough).toEqual([]);
+
+    const explicit = ToolPolicyConfigSchema.parse({
+      ...base,
+      sandbox: { writeJailRoots: [], readOnlyRoots: [], spawnEnvPassthrough: ["FAKE_API_KEY"] },
+    });
+    expect(explicit.sandbox.spawnEnvPassthrough).toEqual(["FAKE_API_KEY"]);
+
+    expect(() =>
+      ToolPolicyConfigSchema.parse({
+        ...base,
+        sandbox: { writeJailRoots: [], readOnlyRoots: [], spawnEnvPassthrough: [""] },
+      }),
+    ).toThrow();
+  });
+
   it("accepts an empty jail-root array (fail-closed) and rejects empty-string roots (fail-open)", () => {
     const base = {
       profiles: {},

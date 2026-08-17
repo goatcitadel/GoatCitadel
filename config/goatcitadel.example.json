@@ -295,7 +295,8 @@
         },
         { "toolNamePattern": "terraform.*", "argumentPath": "action", "valuePatterns": ["destroy"] },
         { "toolNamePattern": "pulumi.*", "argumentPath": "action", "valuePatterns": ["destroy"] }
-      ]
+      ],
+      "spawnEnvPassthrough": []
     },
     "hooks": {
       "networkAllowlist": []
