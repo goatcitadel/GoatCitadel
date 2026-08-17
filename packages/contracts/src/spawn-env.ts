@@ -6,7 +6,10 @@
  * redaction (`redactSecretText`) remains the second line of defense.
  */
 export const SECRET_ENV_KEY_PATTERN =
-  /(?:API[_-]?KEY|ACCESS_KEY|PRIVATE_KEY|SIGNING_KEY|PASSPHRASE|CONNECTION_STRING|AUTH|COOKIE|CREDENTIAL|DATABASE_URL|OPENAI|ANTHROPIC|GOOGLE|GEMINI|MOONSHOT|PERPLEXITY|MISTRAL|OPENROUTER|DEEPSEEK|GLM|GROQ|XAI|POSTGRES|PASSWORD|SECRET|TOKEN)/i;
+  // AUTH deliberately excludes AUTHOR-shaped continuations (AUTH(?!OR_|OR\b)):
+  // GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL are identity, not credentials, and git
+  // commit needs them. AUTHORIZATION, OAUTH, AUTH_TOKEN still match.
+  /(?:API[_-]?KEY|ACCESS_KEY|PRIVATE_KEY|SIGNING_KEY|PASSPHRASE|CONNECTION_STRING|AUTH(?!OR_|OR\b)|COOKIE|CREDENTIAL|DATABASE_URL|OPENAI|ANTHROPIC|GOOGLE|GEMINI|MOONSHOT|PERPLEXITY|MISTRAL|OPENROUTER|DEEPSEEK|GLM|GROQ|XAI|POSTGRES|PASSWORD|SECRET|TOKEN)/i;
 
 export interface ScrubbedSpawnEnvOptions {
   /** Merged last with caller intent; not pattern-filtered. */
@@ -27,7 +30,11 @@ export function buildScrubbedSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: ScrubbedSpawnEnvOptions = {},
 ): Record<string, string> {
-  const dropPattern = options.dropPattern ?? SECRET_ENV_KEY_PATTERN;
+  // Re-create the drop pattern without global/sticky flags: a caller-supplied
+  // /g or /y pattern would otherwise carry lastIndex between .test() calls and
+  // silently skip alternate keys.
+  const suppliedPattern = options.dropPattern ?? SECRET_ENV_KEY_PATTERN;
+  const dropPattern = new RegExp(suppliedPattern.source, suppliedPattern.flags.replace(/[gy]/g, ""));
   const passthrough = new Set((options.passthroughKeys ?? []).map((key) => key.toUpperCase()));
   const scrubbed: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {

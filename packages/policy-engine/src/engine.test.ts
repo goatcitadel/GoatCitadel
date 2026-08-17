@@ -12,7 +12,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
-import { ToolPolicyEngine } from "./engine.js";
+import { boundAuditResultStrings, ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 const tempRoots: string[] = [];
@@ -2046,6 +2046,88 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       "tool_invocations",
       expect.objectContaining({ event: "approval_bypass_mode_network_target" }),
     );
+  });
+
+  it("bounds oversized result strings in the tool_invocations audit projection only", async () => {
+    const storage = createStorageStub();
+    const runCalls: unknown[][] = [];
+    (storage.db as unknown as { prepare: unknown }).prepare = vi.fn(() => ({
+      run: vi.fn(async (...args: unknown[]) => {
+        runCalls.push(args);
+        return undefined;
+      }),
+    }));
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "bypass" } },
+      storage,
+    );
+
+    const workspaceRoot = path.resolve("./workspace");
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    const bigFile = path.join(workspaceRoot, `engine-audit-bound-${randomUUID()}.txt`);
+    await fs.writeFile(bigFile, "m".repeat(20_000), "utf8");
+    tempRoots.push(bigFile);
+
+    const invocation = await engine.invoke({
+      toolName: "fs.read",
+      args: { path: bigFile },
+      agentId: "agent",
+      sessionId: "session-audit-bound",
+    });
+
+    expect(invocation.outcome).toBe("executed");
+    // The live result keeps the full content; only the audit projection is bounded.
+    expect(Buffer.byteLength(String(invocation.result?.content ?? ""), "utf8")).toBe(20_000);
+
+    const resultJson = runCalls
+      .map((args) => args[10])
+      .find((value): value is string => typeof value === "string" && value.includes("content"));
+    expect(resultJson).toBeDefined();
+    const persisted = JSON.parse(resultJson!) as { content?: string };
+    const persistedContent = String(persisted.content ?? "");
+    expect(persistedContent).toContain("audit projection truncated");
+    expect(Buffer.byteLength(persistedContent, "utf8")).toBeLessThanOrEqual(9 * 1024);
+
+    const auditAppend = vi.mocked(storage.audit.append);
+    const auditPayload = auditAppend.mock.calls.find(([table]) => table === "tool_invocations")?.[1] as
+      | { result?: { content?: string } }
+      | undefined;
+    expect(auditPayload).toBeDefined();
+    expect(Buffer.byteLength(String(auditPayload?.result?.content ?? ""), "utf8")).toBeLessThanOrEqual(9 * 1024);
+  }, 20_000);
+
+  it("bounds oversized strings nested in audit result objects and arrays", () => {
+    const big = "n".repeat(20_000);
+    const bounded = boundAuditResultStrings({
+      payload: { content: big },
+      rows: [big, { nested: { deep: big } }],
+      small: "kept",
+      count: 3,
+    });
+
+    const serialized = JSON.stringify(bounded);
+    expect(serialized.includes(big)).toBe(false);
+    expect(serialized).toContain("audit projection truncated");
+    expect((bounded.payload as { content: string }).content).toContain("audit projection truncated");
+    expect((bounded.rows as unknown[])[0]).toContain("audit projection truncated");
+    expect(bounded.small).toBe("kept");
+    expect(bounded.count).toBe(3);
+
+    const shallow = { a: "small", b: [1, 2], c: { d: "tiny" } };
+    // Untouched inputs are returned by reference (no needless copies).
+    expect(boundAuditResultStrings(shallow)).toBe(shallow);
+
+    const tooDeep: Record<string, unknown> = {};
+    let cursor = tooDeep;
+    for (let i = 0; i < 12; i += 1) {
+      const next: Record<string, unknown> = {};
+      cursor.child = next;
+      cursor = next;
+    }
+    cursor.value = big;
+    const deepBounded = JSON.stringify(boundAuditResultStrings(tooDeep));
+    expect(deepBounded.includes(big)).toBe(false);
+    expect(deepBounded).toContain("max depth exceeded");
   });
 
   it("covers read modes, grant consumption, and host constraint variants", async () => {

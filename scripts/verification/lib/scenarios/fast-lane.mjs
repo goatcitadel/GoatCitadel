@@ -130,6 +130,11 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   },
   { id: "fast.build", title: "Root build", args: ["build"] },
   { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
+  {
+    id: "fast.gateway-async-boundary",
+    title: "Gateway async boundary",
+    args: ["verify:gateway:async-boundary"],
+  },
 ]);
 
 export const FAST_LANE_STAGES = Object.freeze([
@@ -174,7 +179,7 @@ export const FAST_LANE_STAGES = Object.freeze([
   {
     id: "fast.post-tests",
     mode: "serial",
-    commands: ["fast.smoke", "fast.build", "fast.docs"],
+    commands: ["fast.smoke", "fast.build", "fast.docs", "fast.gateway-async-boundary"],
   },
 ]);
 

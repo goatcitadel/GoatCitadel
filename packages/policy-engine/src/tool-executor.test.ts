@@ -38,6 +38,7 @@ import {
   resolveFixedOutboundHostsForTool,
   resolveRestrictedCommand,
   setShellExecTimeoutMsForTesting,
+  setShellOutputRetentionBytesForTesting,
 } from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 
@@ -6459,6 +6460,151 @@ describe("executeTool", () => {
     expect(String(result.stderr ?? "")).toMatch(/abort/i);
     await expectPidDead(extractPid(result));
   }, 15_000);
+
+  describe("spawn env scrubbing", () => {
+    // Value chosen to dodge SENSITIVE_PATTERNS output redaction (short, no
+    // secret-shaped prefix) so assertions see the raw child-side value.
+    const CANARY_VALUE = "spawn-canary";
+
+    beforeEach(() => {
+      process.env.FAKE_API_KEY = CANARY_VALUE;
+    });
+
+    afterEach(() => {
+      delete process.env.FAKE_API_KEY;
+    });
+
+    it("shell.exec children do not inherit secret-pattern env vars", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: { command: `"${process.execPath}" -e "process.stdout.write(String(process.env.FAKE_API_KEY))"` },
+          agentId: "agent",
+          sessionId: "sess-env-scrub",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ exitCode: 0, envScrubbed: true });
+      expect(String(result.stdout ?? "")).toBe("undefined");
+    }, 15_000);
+
+    it("shell.exec children retain non-secret env such as PATH", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: { command: `"${process.execPath}" -e "process.stdout.write(typeof process.env.PATH)"` },
+          agentId: "agent",
+          sessionId: "sess-env-keep",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(String(result.stdout ?? "")).toBe("string");
+    }, 15_000);
+
+    it("sandbox.spawnEnvPassthrough restores a named secret-pattern key", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const passthroughConfig: ToolPolicyConfig = {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, spawnEnvPassthrough: ["FAKE_API_KEY"] },
+      };
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: { command: `"${process.execPath}" -e "process.stdout.write(String(process.env.FAKE_API_KEY))"` },
+          agentId: "agent",
+          sessionId: "sess-env-passthrough",
+        },
+        passthroughConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(String(result.stdout ?? "")).toBe(CANARY_VALUE);
+    }, 15_000);
+
+    it("shell.exec_background children get a scrubbed env", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      await fs.mkdir(testWorkspaceRoot, { recursive: true });
+      const probePath = path.join(testWorkspaceRoot, `bg-env-probe-${randomUUID()}.txt`).replace(/\\/g, "/");
+      const result = await executeTool(
+        {
+          toolName: "shell.exec_background",
+          args: {
+            command: `"${process.execPath}" -e "require('fs').writeFileSync('${probePath}', String(process.env.FAKE_API_KEY))"`,
+          },
+          agentId: "agent",
+          sessionId: "sess-env-bg",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ started: true, envScrubbed: true });
+
+      let probed: string | undefined;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        try {
+          probed = await fs.readFile(probePath, "utf8");
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      expect(probed).toBe("undefined");
+    }, 15_000);
+  });
+
+  describe("shell output bounding", () => {
+    afterEach(() => {
+      setShellOutputRetentionBytesForTesting();
+    });
+
+    it("keeps head and tail of large output and flags truncation", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      // Shrink the retention bounds so truncation is exercised with small,
+      // fast child output — large real output starves the parallel test pool.
+      setShellOutputRetentionBytesForTesting(1024, 2048);
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: {
+            command: `"${process.execPath}" -e "process.stdout.write('HEAD-MARK' + 'm'.repeat(8000) + 'TAIL-MARK')"`,
+          },
+          agentId: "agent",
+          sessionId: "sess-output-bound",
+        },
+        policyConfig,
+        storageStub,
+      );
+      const stdout = String(result.stdout ?? "");
+      expect(result).toMatchObject({ exitCode: 0, stdoutTruncated: true });
+      expect(stdout.startsWith("HEAD-MARK")).toBe(true);
+      expect(stdout.endsWith("TAIL-MARK")).toBe(true);
+      expect(stdout).toContain("shell output truncated");
+      expect(Buffer.byteLength(stdout, "utf8")).toBeLessThanOrEqual(1024 + 2048 + 256);
+      expect(result.stderrTruncated).toBeUndefined();
+    }, 15_000);
+
+    it("leaves small output unmodified without truncation flags", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: { command: `"${process.execPath}" -e "process.stdout.write('small-output')"` },
+          agentId: "agent",
+          sessionId: "sess-output-small",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ exitCode: 0, stdout: "small-output" });
+      expect(result.stdoutTruncated).toBeUndefined();
+      expect(result.stderrTruncated).toBeUndefined();
+    }, 15_000);
+  });
 });
 
 function extractPid(result: Record<string, unknown>): number | undefined {

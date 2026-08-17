@@ -15,7 +15,7 @@ import type {
   ToolPolicyActorContext,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { coerceRetryAfterMs, isChangePlanRequest } from "@goatcitadel/contracts";
+import { buildScrubbedSpawnEnv, coerceRetryAfterMs, isChangePlanRequest, splitUtf8HeadTail } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -80,7 +80,29 @@ const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
-const MAX_SHELL_OUTPUT_BYTES = 4096;
+// Post-scrub retention bounds per stream. Large enough that the gateway's
+// tool-artifact virtualization (12 KB threshold) engages and preserves the
+// full window as an artifact; head+tail because build/test logs put the
+// verdict at the end.
+const SHELL_OUTPUT_KEEP_HEAD_BYTES = 16 * 1024;
+const SHELL_OUTPUT_KEEP_TAIL_BYTES = 32 * 1024;
+let shellOutputKeepHeadBytes = SHELL_OUTPUT_KEEP_HEAD_BYTES;
+let shellOutputKeepTailBytes = SHELL_OUTPUT_KEEP_TAIL_BYTES;
+
+/**
+ * Test-only override for the shell output retention bounds. Production keeps
+ * the 16 KiB head + 32 KiB tail defaults; tests shrink them so truncation is
+ * exercised with small, fast child-process output (large real output is
+ * pathologically slow under the instrumented test runner). Pass no arguments
+ * to restore the production values.
+ */
+export function setShellOutputRetentionBytesForTesting(
+  headBytes: number = SHELL_OUTPUT_KEEP_HEAD_BYTES,
+  tailBytes: number = SHELL_OUTPUT_KEEP_TAIL_BYTES,
+): void {
+  shellOutputKeepHeadBytes = Math.max(1, Math.floor(headBytes));
+  shellOutputKeepTailBytes = Math.max(1, Math.floor(tailBytes));
+}
 
 export interface ToolExecutorRuntimeHooks {
   /**
@@ -186,7 +208,23 @@ function scrubSensitiveOutput(text: string): string {
   for (const pattern of SENSITIVE_PATTERNS) {
     scrubbed = scrubbed.replace(pattern, "[REDACTED]");
   }
-  return scrubbed.slice(0, MAX_SHELL_OUTPUT_BYTES);
+  return scrubbed;
+}
+
+/**
+ * Bound one already-scrubbed output stream to head+tail retention. Scrub runs
+ * over the FULL captured window before this cut so a secret straddling either
+ * boundary is already masked.
+ */
+function boundShellStream(scrubbedText: string): { text: string; truncated: boolean } {
+  const split = splitUtf8HeadTail(scrubbedText, shellOutputKeepHeadBytes, shellOutputKeepTailBytes);
+  if (!split.truncated) {
+    return { text: scrubbedText, truncated: false };
+  }
+  return {
+    text: `${split.head}\n…[shell output truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`,
+    truncated: true,
+  };
 }
 
 function resolveToolActorId(request: ToolInvokeRequest): string {
@@ -332,17 +370,17 @@ export async function executeTool(
     case "shell.exec_background":
       return finalizeToolResult(await shellExecBackground(request, config, storage, runtimeHooks));
     case "git.status":
-      return finalizeToolResult(await gitStatus());
+      return finalizeToolResult(await gitStatus(config));
     case "git.diff":
-      return finalizeToolResult(await gitDiff(request.args));
+      return finalizeToolResult(await gitDiff(request.args, config));
     case "git.add":
       return finalizeToolResult(await gitAdd(request.args, config));
     case "git.commit":
-      return finalizeToolResult(await gitCommit(request.args));
+      return finalizeToolResult(await gitCommit(request.args, config));
     case "git.branch.create":
-      return finalizeToolResult(await gitBranchCreate(request.args));
+      return finalizeToolResult(await gitBranchCreate(request.args, config));
     case "git.branch.switch":
-      return finalizeToolResult(await gitBranchSwitch(request.args));
+      return finalizeToolResult(await gitBranchSwitch(request.args, config));
     case "git.worktree.create":
       return finalizeToolResult(await gitWorktreeCreate(request.args, config));
     case "git.worktree.remove":
@@ -586,16 +624,21 @@ async function shellExec(
   const parsed = parseExecFileCommand(command);
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
   await assertBeforeProcessSpawn(runtimeHooks, request, "shell.exec", cwd);
-  const outcome = await runShellExecToCompletion(executable, cwd, request.signal);
+  const outcome = await runShellExecToCompletion(executable, cwd, request.signal, buildModelSpawnEnv(config));
+  const stdout = boundShellStream(scrubSensitiveOutput(outcome.stdout));
+  const stderr = boundShellStream(scrubSensitiveOutput(outcome.stderr));
   return {
     command,
     cwd,
     executable: parsed.file,
     argv: parsed.args,
     ...(typeof outcome.pid === "number" ? { pid: outcome.pid } : {}),
-    stdout: scrubSensitiveOutput(outcome.stdout),
-    stderr: scrubSensitiveOutput(outcome.stderr),
+    stdout: stdout.text,
+    stderr: stderr.text,
+    ...(stdout.truncated ? { stdoutTruncated: true } : {}),
+    ...(stderr.truncated ? { stderrTruncated: true } : {}),
     exitCode: outcome.exitCode,
+    envScrubbed: true,
   };
 }
 
@@ -617,11 +660,13 @@ function runShellExecToCompletion(
   executable: { file: string; args: string[] },
   cwd: string | undefined,
   signal: AbortSignal | undefined,
+  env: Record<string, string>,
 ): Promise<ShellExecOutcome> {
   return new Promise<ShellExecOutcome>((resolve) => {
     const posixProcessGroup = process.platform !== "win32";
     const child = spawn(executable.file, executable.args, {
       cwd,
+      env,
       windowsHide: true,
       detached: posixProcessGroup,
     });
@@ -738,6 +783,7 @@ async function shellExecBackground(
   return await new Promise<Record<string, unknown>>((resolve, reject) => {
     const child = spawn(executable.file, executable.args, {
       cwd,
+      env: buildModelSpawnEnv(config),
       detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
@@ -767,28 +813,30 @@ async function shellExecBackground(
         pid: child.pid,
         detached: true,
         started: true,
+        envScrubbed: true,
       });
     }, 20);
   });
 }
 
-async function gitStatus() {
+async function gitStatus(config: ToolPolicyConfig) {
   const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--branch"], {
     timeout: 15000,
     windowsHide: true,
+    env: buildModelSpawnEnv(config),
   });
   return { summary: stdout.slice(0, 10000) };
 }
 
-async function gitDiff(args: Record<string, unknown>) {
+async function gitDiff(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const staged = asBoolean(args.staged, false);
-  const result = await readGitDiffBounded(staged ? ["diff", "--cached"] : ["diff"]);
+  const result = await readGitDiffBounded(staged ? ["diff", "--cached"] : ["diff"], config);
   return { staged, diffSnippet: result.stdout, truncated: result.truncated };
 }
 
-function readGitDiffBounded(args: string[]): Promise<{ stdout: string; truncated: boolean }> {
+function readGitDiffBounded(args: string[], config: ToolPolicyConfig): Promise<{ stdout: string; truncated: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { windowsHide: true });
+    const child = spawn("git", args, { windowsHide: true, env: buildModelSpawnEnv(config) });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -864,25 +912,33 @@ async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
   for (const p of resolvedPaths) {
     assertWritePathInJail(path.resolve(p), config.sandbox.writeJailRoots);
   }
-  await execFileAsync("git", ["add", ...resolvedPaths], { timeout: 15000, windowsHide: true });
+  await execFileAsync("git", ["add", ...resolvedPaths], {
+    timeout: 15000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(config),
+  });
   return { staged: resolvedPaths };
 }
 
-async function gitCommit(args: Record<string, unknown>) {
+async function gitCommit(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const message = required(args.message, "message");
-  const { stdout } = await execFileAsync("git", ["commit", "-m", message], { timeout: 20000, windowsHide: true });
+  const { stdout } = await execFileAsync("git", ["commit", "-m", message], {
+    timeout: 20000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(config),
+  });
   return { committed: true, output: stdout.slice(0, 4000) };
 }
 
-async function gitBranchCreate(args: Record<string, unknown>) {
+async function gitBranchCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true });
+  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true, env: buildModelSpawnEnv(config) });
   return { created: true, branch };
 }
 
-async function gitBranchSwitch(args: Record<string, unknown>) {
+async function gitBranchSwitch(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true });
+  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true, env: buildModelSpawnEnv(config) });
   return { switched: true, branch };
 }
 
@@ -890,14 +946,22 @@ async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPoli
   const p = required(args.path, "path");
   const branch = required(args.branch, "branch");
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "add", p, branch], { timeout: 30000, windowsHide: true });
+  await execFileAsync("git", ["worktree", "add", p, branch], {
+    timeout: 30000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(config),
+  });
   return { created: true, path: path.resolve(p), branch };
 }
 
 async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const p = required(args.path, "path");
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "remove", p], { timeout: 30000, windowsHide: true });
+  await execFileAsync("git", ["worktree", "remove", p], {
+    timeout: 30000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(config),
+  });
   return { removed: true, path: path.resolve(p) };
 }
 
@@ -927,8 +991,19 @@ async function runRestricted(
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
     cwd,
+    env: buildModelSpawnEnv(config),
   });
-  return { manager, kind, cwd, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
+  const boundedStdout = boundShellStream(scrubSensitiveOutput(stdout));
+  const boundedStderr = boundShellStream(scrubSensitiveOutput(stderr));
+  return {
+    manager,
+    kind,
+    cwd,
+    stdout: boundedStdout.text,
+    stderr: boundedStderr.text,
+    ...(boundedStdout.truncated ? { stdoutTruncated: true } : {}),
+    ...(boundedStderr.truncated ? { stderrTruncated: true } : {}),
+  };
 }
 
 async function assertBeforeProcessSpawn(
@@ -952,6 +1027,17 @@ async function assertBeforeProcessSpawn(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Child env for model-driven spawns: the parent's env minus secret-shaped keys,
+ * so harness/operator credentials can never leak into tool output, artifacts,
+ * or audit rows. `sandbox.spawnEnvPassthrough` is the operator opt-out.
+ */
+function buildModelSpawnEnv(config?: ToolPolicyConfig): Record<string, string> {
+  return buildScrubbedSpawnEnv(process.env, {
+    passthroughKeys: config?.sandbox.spawnEnvPassthrough ?? [],
+  });
 }
 
 export function resolveRestrictedCommand(

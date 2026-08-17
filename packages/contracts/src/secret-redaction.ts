@@ -754,8 +754,33 @@ function containsCredentialAssignmentText(value: string): boolean {
   return false;
 }
 
+/**
+ * Expand a quantifier-bounded assignment label to the full identifier run it
+ * terminates. The bounded patterns ({0,127}) can match only a SUFFIX of an
+ * identifier longer than 128 characters; sensitivity checks must still see the
+ * complete label (`SECRET_AAAA…` must not read as `AAAA…`), so guards call
+ * this before classifying. Replacement still rewrites only the matched slice,
+ * which redacts the assigned value either way.
+ */
+function expandBoundedCredentialLabel(input: string, labelStart: number, label: string): string {
+  let runStart = labelStart;
+  while (runStart > 0 && /[A-Za-z0-9_$-]/.test(input.charAt(runStart - 1))) {
+    runStart -= 1;
+  }
+  while (runStart < labelStart && !/[A-Za-z_$]/.test(input.charAt(runStart))) {
+    runStart += 1;
+  }
+  return runStart < labelStart ? `${input.slice(runStart, labelStart)}${label}` : label;
+}
+
 function createCredentialAssignmentPattern(): RegExp {
-  return /(["']?)([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(?!(?:Authorization|Proxy-Authorization)\s*:\s)([rubf]{0,2}"(?:\\.|[^"\\])+"|[rubf]{0,2}'(?:\\.|[^'\\])+'|`(?:\\.|[^`\\])+`|(?:(?:process|Bun)\.env|import\.meta\.env)(?:\.[A-Z_][A-Z0-9_]*|\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\])|Deno\.env\.get\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\)|os\.(?:environ\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\]|getenv\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\))|\$(?:env:)?[A-Z_][A-Z0-9_]*|\$\{(?:env:)?[A-Z_][A-Z0-9_]*\}|%[A-Z_][A-Z0-9_]*%|\$\([^()\r\n]+\)|(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^()\r\n])*\)\??|[^\s,;)"'\]}[]+)(?=$|[\s,;)"'\]}])/gi;
+  // The label quantifier is bounded ({0,127} instead of *): real credential
+  // labels never exceed it, and an unbounded run makes the whole scan
+  // quadratic on long uniform text (every position consumes to the end and
+  // backtracks). Same bound applies to the other assignment-shaped patterns;
+  // longer labels are re-expanded by expandBoundedCredentialLabel before
+  // sensitivity checks so classification still sees the full identifier.
+  return /(["']?)([A-Za-z_$][A-Za-z0-9_$-]{0,127})\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(?!(?:Authorization|Proxy-Authorization)\s*:\s)([rubf]{0,2}"(?:\\.|[^"\\])+"|[rubf]{0,2}'(?:\\.|[^'\\])+'|`(?:\\.|[^`\\])+`|(?:(?:process|Bun)\.env|import\.meta\.env)(?:\.[A-Z_][A-Z0-9_]*|\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\])|Deno\.env\.get\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\)|os\.(?:environ\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\]|getenv\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\))|\$(?:env:)?[A-Z_][A-Z0-9_]*|\$\{(?:env:)?[A-Z_][A-Z0-9_]*\}|%[A-Z_][A-Z0-9_]*%|\$\([^()\r\n]+\)|(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^()\r\n])*\)\??|[^\s,;)"'\]}[]+)(?=$|[\s,;)"'\]}])/gi;
 }
 
 function isNonSecretCredentialAssignment(label: string, assignedValue: string, separator = ""): boolean {
@@ -1156,11 +1181,13 @@ function normalizeStructuredKey(key: string): string {
 
 function redactCredentialCollections(value: string, marker: string): SecretTextRedactionResult {
   const assignment =
-    /(\\["']|["']?)((?:\\u[0-9a-f]{4}|[A-Za-z_$][A-Za-z0-9_$-]*))\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)/gi;
+    /(\\["']|["']?)((?:\\u[0-9a-f]{4}|[A-Za-z_$][A-Za-z0-9_$-]{0,127}))\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)/gi;
   const replacements: Array<{ start: number; end: number }> = [];
   for (let match = assignment.exec(value); match; match = assignment.exec(value)) {
     const quote = match[1] ?? "";
-    const label = decodeJsonUnicodeLabel(match[2] ?? "");
+    const label = decodeJsonUnicodeLabel(
+      expandBoundedCredentialLabel(value, match.index + quote.length, match[2] ?? ""),
+    );
     const separator = match[4] ?? "";
     if (
       !isSensitiveCredentialLabel(label) ||
@@ -1410,12 +1437,16 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     },
     {
       pattern:
-        /(["']?)([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|(?<![=!<>])=(?!=|>))(\s*)((?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*!?\s*\((?:[rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^()"'`;\r\n]|\([^()\r\n]*\))*\)\??)/gi,
-      shouldRedact: (_match, _quote, label, _beforeSeparator, _separator, _afterSeparator, expression) =>
-        isSensitiveCredentialLabel(label) &&
-        !isSafeCredentialMetadataLabel(label) &&
-        credentialCallContainsLiteral(expression) &&
-        !isApprovedCredentialReferenceCall(expression),
+        /(["']?)([A-Za-z_$][A-Za-z0-9_$-]{0,127})\1(\s*)(:=|(?<![=!<>])=(?!=|>))(\s*)((?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*!?\s*\((?:[rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^()"'`;\r\n]|\([^()\r\n]*\))*\)\??)/gi,
+      shouldRedact: (_match, quote, label, _beforeSeparator, _separator, _afterSeparator, expression, offset, input) => {
+        const fullLabel = expandBoundedCredentialLabel(input, Number(offset) + quote.length, label);
+        return (
+          isSensitiveCredentialLabel(fullLabel) &&
+          !isSafeCredentialMetadataLabel(fullLabel) &&
+          credentialCallContainsLiteral(expression) &&
+          !isApprovedCredentialReferenceCall(expression)
+        );
+      },
       replace: (_match, quote, label, beforeSeparator, separator, afterSeparator, expression) =>
         `${quote}${label}${quote}${beforeSeparator}${separator}${afterSeparator}${redactCredentialCallLiterals(expression, marker)}`,
     },
@@ -1439,10 +1470,14 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
         offset,
         input,
       ) =>
-        isSensitiveCredentialLabel(label) &&
+        isSensitiveCredentialLabel(expandBoundedCredentialLabel(input, Number(offset) + quote.length, label)) &&
         !isSafeDynamicAuthorizationStatement(input, Number(offset), label) &&
         !isProjectedCredentialCallPrefix(input, Number(offset), assignedValue, marker) &&
-        !isNonSecretCredentialAssignment(label, assignedValue, separator) &&
+        !isNonSecretCredentialAssignment(
+          expandBoundedCredentialLabel(input, Number(offset) + quote.length, label),
+          assignedValue,
+          separator,
+        ) &&
         !isNonLiteralCredentialDeclaration(input, Number(offset), assignedValue, separator, quote) &&
         !isCredentialTypeAnnotationBeforeInitializer(input, Number(offset), separator, quote) &&
         !isCredentialTypeProperty(input, Number(offset), separator, quote) &&

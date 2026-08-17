@@ -218,6 +218,7 @@ Common proof lanes include:
 - package typecheck
 - `pnpm typecheck`
 - `pnpm verify:fast`
+- `pnpm verify:gateway:async-boundary`
 - `pnpm verify:runtime:truth`
 - `pnpm verify:durable:recovery`
 - `pnpm verify:desktop`

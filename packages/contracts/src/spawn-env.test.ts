@@ -49,6 +49,15 @@ describe("SECRET_ENV_KEY_PATTERN", () => {
       expect(SECRET_ENV_KEY_PATTERN.test(key), key).toBe(false);
     }
   });
+
+  it("keeps git author identity while still matching real auth keys", () => {
+    for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "BOOK_AUTHOR"]) {
+      expect(SECRET_ENV_KEY_PATTERN.test(key), key).toBe(false);
+    }
+    for (const key of ["AUTHORIZATION", "GOATCITADEL_AUTH_TOKEN", "OAUTH_CLIENT_ID", "AUTH", "GIT_AUTH_HEADER"]) {
+      expect(SECRET_ENV_KEY_PATTERN.test(key), key).toBe(true);
+    }
+  });
 });
 
 describe("buildScrubbedSpawnEnv", () => {
@@ -112,5 +121,15 @@ describe("buildScrubbedSpawnEnv", () => {
       { dropPattern: /CUSTOM_BLOCKED/i },
     );
     expect(env).toEqual({ FAKE_API_KEY: "yes-under-override" });
+  });
+
+  it("drops every matching key even when the dropPattern override is global", () => {
+    // A /g pattern carries lastIndex across .test() calls; the scrubber must
+    // neutralize that or alternate matching keys leak through.
+    const env = buildScrubbedSpawnEnv(
+      { BLOCKED_ONE: "a", BLOCKED_TWO: "b", BLOCKED_THREE: "c", KEPT: "d" },
+      { dropPattern: /BLOCKED/g },
+    );
+    expect(env).toEqual({ KEPT: "d" });
   });
 });

@@ -25,6 +25,7 @@ const requiredFiles = [
   "docs/1_0_CONTRACT.md",
   "docs/1_0_RELEASE_EVIDENCE.md",
   "docs/CANONICAL_RUNTIME_STATE_MODEL.md",
+  "docs/DEFENSIVE_PATTERNS.md",
   "docs/DURABLE_RUNS_REPLAY_FOUNDATION.md",
   "docs/ENGINEERING_HANDBOOK.md",
   "docs/security/findings-triage.md",
@@ -57,6 +58,13 @@ const requiredHeadings = {
     "# GitHub Security Findings",
     "## 5. Dependabot Triage",
     "## 6. CodeQL `js/unhandled-error-in-stream-pipeline`",
+  ],
+  "docs/DEFENSIVE_PATTERNS.md": [
+    "# Defensive Patterns",
+    "## A pure read must not mutate state",
+    "## Discriminate transient from permanent before destroying state",
+    "## Never hand a child process the ambient environment",
+    "## Redact before truncating",
   ],
   "docs/EVOLUTION_CONTROL_PLANE.md": [
     "# Evolution Control Plane",
