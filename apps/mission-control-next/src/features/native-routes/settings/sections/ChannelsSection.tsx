@@ -446,7 +446,11 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    // Block-render the loader only while there is nothing to show yet. Reloads
+    // after save/validate/test keep `data` (useAsyncLoad retains it), and the
+    // children must stay mounted through them or the wizard loses its in-flight
+    // step state and resets the operator to step 1.
+    <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid variant="detail-wide">

@@ -331,6 +331,12 @@ export interface ToolPolicyConfig {
     requireApprovalForRiskyShell: boolean;
     /** Intent-based destructive-argument patterns (generalizes riskyShellPatterns to any tool). */
     riskyArgumentPatterns?: ToolRiskyArgumentPattern[];
+    /**
+     * Exact env key names passed through to model-driven child processes even
+     * though they match the secret-key scrub pattern (operator opt-out for
+     * workflows that intentionally hand a credential to shell/test commands).
+     */
+    spawnEnvPassthrough?: string[];
   };
   /**
    * Hooks-scoped webhook egress, distinct from tool-sandbox egress. Non-empty

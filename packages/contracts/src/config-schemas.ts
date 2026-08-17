@@ -123,6 +123,11 @@ export const ToolPolicyConfigSchema = z
             }),
           )
           .optional(),
+        /**
+         * Exact env key names exempted from the secret-key scrub applied to
+         * model-driven child processes (shell/tests/lint/build spawns).
+         */
+        spawnEnvPassthrough: z.array(z.string().min(1).max(256)).max(64).default([]),
       })
       .passthrough(),
     /**
