@@ -838,4 +838,26 @@ describe("ChannelsSection Discord setup lifecycle", () => {
 
     renderer.unmount();
   });
+
+  it("keeps the operator on the active step across the post-action reload", async () => {
+    const renderer = await renderChannelsSection();
+
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(
+      findHostControl(renderer.root, "input", "channel-discord-draft-1-defaultChannelId"),
+      "987654321098765432",
+    );
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    // The save handler reloads section data; the wizard must stay mounted on the
+    // step the operator was working in instead of resetting to the first step.
+    expect(findStepButton(renderer.root, "Paste your connection values").props["aria-current"]).toBe("step");
+    expect(findHostControl(renderer.root, "input", "channel-discord-draft-1-defaultChannelId").props.value).toBe(
+      "987654321098765432",
+    );
+
+    renderer.unmount();
+  });
 });
