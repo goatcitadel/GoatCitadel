@@ -2,6 +2,7 @@ import type {
   BlueprintReviewSummary,
   Citadel,
   CitadelBlueprint,
+  CitadelBrief,
   CitadelBlueprintValidationResult,
   CitadelChamber,
   CitadelChamberInput,
@@ -74,6 +75,24 @@ export async function restoreCitadel(citadelId: string): Promise<CitadelRecord> 
     method: "POST",
     body: JSON.stringify({}),
   });
+}
+
+export async function fetchCitadelBrief(
+  citadelId: string,
+  options: { since?: string; eventLimit?: number; approvalLimit?: number } = {},
+): Promise<CitadelBrief> {
+  const query = new URLSearchParams();
+  if (options.since) {
+    query.set("since", options.since);
+  }
+  if (options.eventLimit) {
+    query.set("eventLimit", String(options.eventLimit));
+  }
+  if (options.approvalLimit) {
+    query.set("approvalLimit", String(options.approvalLimit));
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<CitadelBrief>(`/api/v1/citadels/${id(citadelId)}/brief${suffix}`);
 }
 
 export async function getCitadel(citadelId: string): Promise<Citadel> {

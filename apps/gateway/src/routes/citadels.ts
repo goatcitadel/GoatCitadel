@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { composeCitadelBrief } from "../services/citadel-brief.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -41,6 +42,14 @@ const chamberSchema = z.object({
 const paramsSchema = z.object({
   citadelId: z.string().min(1),
 });
+
+const briefQuerySchema = z.object({
+  since: z.string().datetime({ offset: true }).optional(),
+  eventLimit: z.coerce.number().int().positive().max(500).default(300),
+  approvalLimit: z.coerce.number().int().positive().max(200).default(100),
+});
+
+const DEFAULT_BRIEF_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const fromTemplateSchema = z.object({
   templateId: z.string().min(1),
@@ -179,6 +188,76 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
       }
       return reply.send(citadel);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadels/:citadelId/brief", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const query = briefQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      const citadel = await citadels.getCitadel(params.data.citadelId);
+      if (!citadel) {
+        return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
+      }
+      const generatedAt = new Date().toISOString();
+      const since = query.data.since ?? new Date(Date.parse(generatedAt) - DEFAULT_BRIEF_WINDOW_MS).toISOString();
+
+      const defaultWorkspaceId = citadel.record?.defaultWorkspaceId;
+      const workspaces = await fastify.services.workspaces.listWorkspaces("all", 500, params.data.citadelId);
+      if (defaultWorkspaceId && !workspaces.some((item) => item.workspaceId === defaultWorkspaceId)) {
+        try {
+          workspaces.push(await fastify.services.workspaces.getWorkspace(defaultWorkspaceId));
+        } catch {
+          // Best-effort: a dangling defaultWorkspaceId must not break the brief.
+        }
+      }
+
+      const [events, pendingApprovalsByWorkspace, costSummaries, memory] = await Promise.all([
+        fastify.services.dashboard.listRealtimeEvents(query.data.eventLimit),
+        Promise.all(
+          workspaces.map(async (workspace) => ({
+            workspaceId: workspace.workspaceId,
+            items: await fastify.services.approvals.listApprovals(
+              "pending",
+              query.data.approvalLimit,
+              workspace.workspaceId,
+            ),
+          })),
+        ),
+        fastify.services.costs.costSummary("day", since, generatedAt),
+        fastify.services.memory
+          .listMaintenanceRecommendations(undefined, 50)
+          .then((recommendations) => ({ recommendations }))
+          .catch((error: unknown) => ({
+            // Best-effort: memory lifecycle may be feature-gated off; the brief
+            // reports the section as unavailable instead of failing whole.
+            unavailable: error instanceof Error ? error.message : "Memory recommendations are unavailable.",
+          })),
+      ]);
+
+      return reply.send(
+        composeCitadelBrief({
+          citadelId: params.data.citadelId,
+          citadelName: citadel.record?.name,
+          since,
+          generatedAt,
+          workspaces,
+          pendingApprovalsByWorkspace,
+          events,
+          costSummaries,
+          memory,
+        }),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
