@@ -2978,9 +2978,14 @@ export class LlmService {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
     const discoverySignal = AbortSignal.timeout(15_000);
-    const lease = await this.acquireLocalServiceLease(resolved, "model_discovery", discoverySignal);
+    let lease: LlmLocalServiceLease | undefined;
 
     try {
+      // A local-runtime lease failure (runtime disabled in config, missing
+      // binary, busy port) is a discovery outcome, not a caller error: it must
+      // reach the same error_fallback path as a provider HTTP failure below
+      // instead of escaping to the models route as a 400.
+      lease = await this.acquireLocalServiceLease(resolved, "model_discovery", discoverySignal);
       const requestInit: FetchRequestInitWithDispatcher = {
         method: "GET",
         headers: target.headers,
