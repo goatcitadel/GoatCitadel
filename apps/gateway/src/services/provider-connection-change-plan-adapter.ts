@@ -511,8 +511,11 @@ function isOAuthProvider(provider: LlmProviderSummary): boolean {
   return isOAuthAuthMode(provider.authMode);
 }
 
+// claude-code-oauth is deliberately excluded: its credential is a long-lived pasted
+// token (`claude setup-token`), not a gateway-driven OAuth exchange, so it flows
+// through the secure-input API-key lifecycle like any other secret.
 function isOAuthAuthMode(authMode: LlmProviderSummary["authMode"] | undefined): boolean {
-  return authMode === "codex-oauth" || authMode === "claude-code-oauth";
+  return authMode === "codex-oauth";
 }
 
 function assertRevision(plan: ChangePlanRecord, currentRevision: number): void {

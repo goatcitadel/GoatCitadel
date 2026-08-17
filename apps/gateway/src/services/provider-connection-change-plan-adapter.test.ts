@@ -43,6 +43,22 @@ function runtimeSettings(authReadiness: "missing" | "ready" = "missing") {
   } as any;
 }
 
+function claudeCodeSettings(authReadiness: "missing" | "ready" = "missing") {
+  return {
+    revision: 5,
+    llm: {
+      providers: [
+        {
+          providerId: "claude-code",
+          label: "Claude Code (Claude subscription)",
+          authMode: "claude-code-oauth",
+          authReadiness: { status: authReadiness },
+        },
+      ],
+    },
+  } as any;
+}
+
 describe("ProviderConnectionChangePlanAdapter", () => {
   it("uses a dedicated secure-input action and retains no credential material", async () => {
     const adapter = new ProviderConnectionChangePlanAdapter({
@@ -349,6 +365,160 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     const applied = await adapter.apply(context, { request, target: prepared.target } as ChangePlanRecord);
     expect(removeProviderOAuthCredential).toHaveBeenCalledWith("openai-codex", 5);
     expect(applied.status).toBe("verifying");
+  });
+
+  it("routes the claude-code pasted token through secure input instead of the codex OAuth lifecycle", async () => {
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => claudeCodeSettings("ready")),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => false),
+      promoteTemporarySecret: vi.fn(),
+      removeProviderApiKey: vi.fn(),
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: true, source: "keychain" })),
+      discardTemporarySecret: vi.fn(),
+      verifyProvider: vi.fn(),
+    });
+    const prepared = await adapter.prepare(context, {
+      kind: "provider_connection",
+      providerId: "claude-code",
+      credentialAction: "replace_api_key",
+      credentialStorage: "keychain",
+    });
+    expect(prepared.status).toBe("awaiting_input");
+    expect(prepared.requiredAction?.kind).toBe("secure_input");
+  });
+
+  it("connects an unconfigured claude-code provider through secure input, not an OAuth action", async () => {
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => claudeCodeSettings("missing")),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => false),
+      promoteTemporarySecret: vi.fn(),
+      removeProviderApiKey: vi.fn(),
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+      discardTemporarySecret: vi.fn(),
+      verifyProvider: vi.fn(),
+    });
+    const prepared = await adapter.prepare(context, { kind: "provider_connection", providerId: "claude-code" });
+    expect(prepared.status).toBe("awaiting_input");
+    expect(prepared.requiredAction?.kind).toBe("secure_input");
+  });
+
+  it("promotes the claude-code token through the secret owner and verifies the live catalog", async () => {
+    const promoteTemporarySecret = vi.fn(async () => ({ revision: 6, evidenceRefs: ["secret-owner:6"] }));
+    const promoteTemporaryOAuthCredential = vi.fn();
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => claudeCodeSettings("missing")),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => true),
+      hasTemporaryOAuthCredential: vi.fn(async () => true),
+      promoteTemporarySecret,
+      promoteTemporaryOAuthCredential,
+      removeProviderApiKey: vi.fn(),
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+      discardTemporarySecret: vi.fn(),
+      discardTemporaryOAuthCredential: vi.fn(),
+      verifyProvider: vi.fn(async () => ({ evidenceRefs: ["provider-catalog:claude-code:live"] })),
+    });
+    const request = {
+      kind: "provider_connection" as const,
+      providerId: "claude-code",
+      credentialAction: "replace_api_key" as const,
+      credentialStorage: "keychain" as const,
+    };
+    const applied = await adapter.apply(context, {
+      planId: "plan-claude",
+      request,
+      target: { ownerId: "provider_connection", resourceId: "claude-code", expectedRevision: 5 },
+    } as ChangePlanRecord);
+    expect(promoteTemporarySecret).toHaveBeenCalledWith("plan-claude", "claude-code", 5, "keychain", undefined);
+    expect(promoteTemporaryOAuthCredential).not.toHaveBeenCalled();
+    expect(applied.status).toBe("verifying");
+  });
+
+  it("removes the claude-code token through the API-key owner", async () => {
+    const removeProviderApiKey = vi.fn(async () => ({ revision: 6, evidenceRefs: ["secret-owner:6"] }));
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => claudeCodeSettings("ready")),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => false),
+      promoteTemporarySecret: vi.fn(),
+      removeProviderApiKey,
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+      discardTemporarySecret: vi.fn(),
+      verifyProvider: vi.fn(),
+    });
+    const request = {
+      kind: "provider_connection" as const,
+      providerId: "claude-code",
+      credentialAction: "remove_api_key" as const,
+      credentialDeleteScope: "all" as const,
+    };
+    const prepared = await adapter.prepare(context, request);
+    expect(prepared).toMatchObject({ risk: "caution", status: "awaiting_confirmation" });
+    const applied = await adapter.apply(context, { request, target: prepared.target } as ChangePlanRecord);
+    expect(removeProviderApiKey).toHaveBeenCalledWith("claude-code", 5, "all");
+    expect(applied.status).toBe("verifying");
+  });
+
+  it("rejects OAuth-lifecycle actions for claude-code because its lifecycle is token-based", async () => {
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => claudeCodeSettings("ready")),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => false),
+      promoteTemporarySecret: vi.fn(),
+      removeProviderApiKey: vi.fn(),
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: true, source: "keychain" })),
+      discardTemporarySecret: vi.fn(),
+      verifyProvider: vi.fn(),
+    });
+    await expect(
+      adapter.prepare(context, {
+        kind: "provider_connection",
+        providerId: "claude-code",
+        credentialAction: "replace_oauth",
+      }),
+    ).rejects.toThrow(/OAuth replacement requires an OAuth-backed provider/u);
+    await expect(
+      adapter.prepare(context, {
+        kind: "provider_connection",
+        providerId: "claude-code",
+        credentialAction: "remove_oauth",
+      }),
+    ).rejects.toThrow(/OAuth removal requires an OAuth-backed provider/u);
+  });
+
+  it("still forces the dedicated OAuth lifecycle for codex API-key actions", async () => {
+    const settings = {
+      revision: 5,
+      llm: {
+        providers: [
+          {
+            providerId: "openai-codex",
+            label: "OpenAI Codex",
+            authMode: "codex-oauth",
+            oauthStatus: { connected: true },
+          },
+        ],
+      },
+    } as any;
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => settings),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => false),
+      promoteTemporarySecret: vi.fn(),
+      removeProviderApiKey: vi.fn(),
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+      discardTemporarySecret: vi.fn(),
+      verifyProvider: vi.fn(),
+    });
+    await expect(
+      adapter.prepare(context, {
+        kind: "provider_connection",
+        providerId: "openai-codex",
+        credentialAction: "replace_api_key",
+      }),
+    ).rejects.toThrow(/dedicated OAuth lifecycle/u);
   });
 
   it("fails closed when OAuth removal cannot be proven from the OAuth owner", async () => {
