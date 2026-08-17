@@ -94,6 +94,48 @@ export interface Citadel {
   chambers: CitadelChamber[];
 }
 
+export interface CitadelBriefApprovalEntry {
+  approvalId: string;
+  workspaceId: string;
+  kind: string;
+  riskLevel: "safe" | "caution" | "danger" | "nuclear";
+  createdAt: string;
+  ageMs: number;
+  expiresAt?: string;
+}
+
+/**
+ * Per-Citadel operator brief ("what happened while I was away"): a read-only
+ * summary derived from approvals, realtime events, cost ledger, and memory
+ * maintenance. Approval entries are safe scalars only — no payload/preview.
+ */
+export interface CitadelBrief {
+  citadelId: string;
+  citadelName?: string;
+  since: string;
+  generatedAt: string;
+  workspaces: Array<{ workspaceId: string; name: string }>;
+  approvals: {
+    pendingCount: number;
+    oldestAgeMs: number | null;
+    pending: CitadelBriefApprovalEntry[];
+  };
+  activity: {
+    eventsSince: number;
+    completedSince: number;
+    failedSince: number;
+    wardHitsSince: number;
+    byType: Array<{ eventType: string; count: number }>;
+  };
+  spend: {
+    scope: "instance";
+    sinceUsd: number;
+    sinceTokens: number;
+    complete: boolean;
+  };
+  memory: { pendingRecommendations: number } | { unavailable: string };
+}
+
 export interface CitadelCharterInput {
   citadelId: string;
   purpose: string;
