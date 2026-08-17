@@ -144,11 +144,11 @@ export const FAST_LANE_STAGES = Object.freeze([
     commands: [
       "fast.skills-catalog",
       "fast.repo-hygiene",
-      "fast.gateway-async-boundary",
       "fast.storage-migration-parity",
       "fast.extensions-sdk-build",
       "fast.extensions-sdk-package",
       "fast.typecheck",
+      "fast.gateway-async-boundary",
     ],
   },
   {
