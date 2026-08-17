@@ -63,7 +63,7 @@ jobs:
         env:
           GOATCITADEL_STORAGE_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before) || '' }}
         run: >-
-          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.coverage.gateway.smoke,fast.coverage.gateway.exercise,fast.smoke,fast.build,fast.docs
+          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.coverage.gateway.smoke,fast.coverage.gateway.exercise,fast.smoke,fast.build,fast.docs,fast.gateway-async-boundary
 
       - name: Stage checks part
         if: always()

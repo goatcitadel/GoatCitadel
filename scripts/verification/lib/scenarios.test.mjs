@@ -486,6 +486,7 @@ test("fast verification lane keeps required fast commands", () => {
     "smoke -- --profile fast",
     "build",
     "docs:check",
+    "verify:gateway:async-boundary",
   ]) {
     assert.ok(commandArgs.has(expected), `fast lane should include ${expected}`);
   }
@@ -666,7 +667,7 @@ test("fast verification stage plan isolates policy and schedules every command e
     {
       id: "fast.post-tests",
       mode: "serial",
-      commands: ["fast.smoke", "fast.build", "fast.docs"],
+      commands: ["fast.smoke", "fast.build", "fast.docs", "fast.gateway-async-boundary"],
     },
   ]);
 
