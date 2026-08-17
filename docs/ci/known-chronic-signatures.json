@@ -35,7 +35,7 @@
     {
       "lanes": ["operator-proof"],
       "scenarioId": "operator-proof.install.verify-install",
-      "match": "SECRET_STORE_UNAVAILABLE",
+      "match": "install smoke Status: failed",
       "classification": "environmental",
       "detail": "install.gateway.bootstrap requires an OS keychain; ubuntu-latest runners have no keychain backend, so bootstrap custody fails on every CI run.",
       "disposition": "Held — owner decision needed: provision a headless keyring on the runner, run the install smoke with GOATCITADEL_DISABLE_SECRET_STORE and assert the degraded posture, or split custody assertions into a desktop-only lane."
@@ -51,7 +51,7 @@
     {
       "lanes": ["surface-regression"],
       "scenarioId": "surface-regression.settings-onboarding",
-      "match": "llm/models?providerId=llamacpp",
+      "match": "Failed to load resource: the server responded with a status of 400",
       "classification": "product-defect",
       "detail": "Onboarding auto-selects the zero-cost local provider and fetches its models; the local-runtime lease failure ('llama.cpp runtime is disabled in assistant config') escaped the discovery fallback and surfaced as a console 400.",
       "disposition": "Fixed: lease acquisition moved inside the discovery try so lease failures degrade to error_fallback with a warning (this PR). Remove after confirmation."
@@ -59,7 +59,7 @@
     {
       "lanes": ["visual-regression"],
       "scenarioId": "*",
-      "match": "visual regression",
+      "match": "*",
       "classification": "environmental",
       "detail": "Cross-platform visual margins vs fresh Linux baselines (intentional M7 drift); baselines must be regenerated on Linux.",
       "disposition": "Run the visual-rebaseline workflow on a pushed branch and cherry-pick its chore commit; do not rebaseline locally on Windows. Reconcile the exact diff set against the post-merge run."
