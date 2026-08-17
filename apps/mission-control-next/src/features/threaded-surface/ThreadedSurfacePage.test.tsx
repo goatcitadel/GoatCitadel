@@ -721,6 +721,18 @@ describe("ThreadedSurfacePage", () => {
     );
   });
 
+  it("keeps the closed desktop session rail display:none despite the base display rule", () => {
+    const railCss = readFileSync(new URL("./styles/rail.css", import.meta.url), "utf8");
+    // The desktop-closed rail is hidden only via the HTML `hidden` attribute
+    // (hidden={!railDrawerLayout && !railOpen}). Any author-origin display on
+    // .mc-next-threaded-rail overrides the UA's [hidden] { display: none },
+    // so rail.css must restate the hidden contract or the closed rail renders
+    // full-width above the stage in the single-column surface grid.
+    expect(railCss).toMatch(
+      /\.mc-next-threaded-surface\.unified \.mc-next-threaded-rail\[hidden\]\s*\{[^}]*display: none;/u,
+    );
+  });
+
   it("gives a compact model receipt its own slot above the one scrollable timeline", () => {
     const css = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
     const timelineCss = readFileSync(new URL("./styles/timeline-frame.css", import.meta.url), "utf8");

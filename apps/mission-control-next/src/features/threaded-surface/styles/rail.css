@@ -129,6 +129,12 @@
   box-shadow: none;
 }
 
+/* The desktop-closed rail is hidden only via the HTML hidden attribute; the
+   display: grid above outranks the UA [hidden] rule, so restate it here. */
+.mc-next-threaded-surface.unified .mc-next-threaded-rail[hidden] {
+  display: none;
+}
+
 .mc-next-surface-host-work .mc-next-threaded-surface.unified {
   min-height: 0;
 }
