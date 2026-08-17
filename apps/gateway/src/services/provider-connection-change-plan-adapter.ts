@@ -209,6 +209,19 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     let settings = await this.deps.getSettings();
     assertRevision(plan, settings.revision);
     const before = settings.llm.providers.find((candidate) => candidate.providerId === request.providerId);
+    // Re-validate persisted OAuth-lifecycle actions: a plan staged before the
+    // provider's auth mode changed (or before this validation existed) must not
+    // reach the codex-only OAuth owners.
+    if (request.credentialAction === "replace_oauth" && !isOAuthAuthMode(before?.authMode)) {
+      throw new SemanticValidationError("OAuth replacement requires an OAuth-backed provider.");
+    }
+    if (
+      request.credentialAction === "remove_oauth" &&
+      !isOAuthAuthMode(before?.authMode) &&
+      request.providerId.trim().toLowerCase() !== "openai-codex"
+    ) {
+      throw new SemanticValidationError("OAuth removal requires an OAuth-backed provider.");
+    }
     if (
       request.profile &&
       !providerProfileMatches(before, request, this.deps.getProviderConfig?.(request.providerId))

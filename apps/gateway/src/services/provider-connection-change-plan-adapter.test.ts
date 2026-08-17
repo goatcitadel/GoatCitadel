@@ -488,6 +488,42 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     ).rejects.toThrow(/OAuth removal requires an OAuth-backed provider/u);
   });
 
+  it("rejects a staged claude-code OAuth plan at apply time before any owner side effect", async () => {
+    const removeProviderOAuthCredential = vi.fn();
+    const promoteTemporaryOAuthCredential = vi.fn();
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(async () => claudeCodeSettings("ready")),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(async () => false),
+      hasTemporaryOAuthCredential: vi.fn(async () => true),
+      promoteTemporarySecret: vi.fn(),
+      promoteTemporaryOAuthCredential,
+      removeProviderApiKey: vi.fn(),
+      removeProviderOAuthCredential,
+      getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: true, source: "keychain" })),
+      discardTemporarySecret: vi.fn(),
+      discardTemporaryOAuthCredential: vi.fn(),
+      verifyProvider: vi.fn(),
+    });
+    const target = { ownerId: "provider_connection", resourceId: "claude-code", expectedRevision: 5 };
+    await expect(
+      adapter.apply(context, {
+        planId: "plan-stale-remove",
+        request: { kind: "provider_connection", providerId: "claude-code", credentialAction: "remove_oauth" },
+        target,
+      } as ChangePlanRecord),
+    ).rejects.toThrow(/OAuth removal requires an OAuth-backed provider/u);
+    expect(removeProviderOAuthCredential).not.toHaveBeenCalled();
+    await expect(
+      adapter.apply(context, {
+        planId: "plan-stale-replace",
+        request: { kind: "provider_connection", providerId: "claude-code", credentialAction: "replace_oauth" },
+        target,
+      } as ChangePlanRecord),
+    ).rejects.toThrow(/OAuth replacement requires an OAuth-backed provider/u);
+    expect(promoteTemporaryOAuthCredential).not.toHaveBeenCalled();
+  });
+
   it("still forces the dedicated OAuth lifecycle for codex API-key actions", async () => {
     const settings = {
       revision: 5,
