@@ -142,6 +142,7 @@ describe("chat-agent-tool-result-compaction", () => {
         detached: false,
         stdoutTruncated: true,
         stderrTruncated: true,
+        envScrubbed: true,
         stdout: "not-a-scalar-key-so-dropped".repeat(10),
       }),
     ).toEqual({
@@ -155,7 +156,19 @@ describe("chat-agent-tool-result-compaction", () => {
       detached: false,
       stdoutTruncated: true,
       stderrTruncated: true,
+      envScrubbed: true,
     });
+  });
+
+  it("bounds oversized copied string metadata so a huge command cannot defeat virtualization", () => {
+    const compacted = buildCompactToolResultMetadata({
+      command: "x".repeat(10_000),
+      exitCode: 0,
+    });
+    const command = String(compacted.command ?? "");
+    expect(command.endsWith("…[truncated]")).toBe(true);
+    expect(Buffer.byteLength(command, "utf8")).toBeLessThanOrEqual(2_048 + 64);
+    expect(compacted.exitCode).toBe(0);
   });
 
   it("compacts textual artifacts without carrying the original body", () => {

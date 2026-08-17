@@ -1,6 +1,8 @@
 import type { ChatNormalizationProfile, ChatToolRunRecord, ToolInvokeRequest } from "@goatcitadel/contracts";
+import { truncateUtf8Bytes } from "@goatcitadel/contracts";
 
 const TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES = 12_000;
+const COMPACT_METADATA_STRING_MAX_BYTES = 2_048;
 const TOOL_OUTPUT_INLINE_SUMMARY_CHARS = 1_400;
 const TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS = 4_000;
 const TOOL_RESULT_AGGREGATE_CONTEXT_BUDGET_BYTES = 80_000;
@@ -184,7 +186,15 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
   ] as const;
   for (const key of scalarKeys) {
     const value = result[key];
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (typeof value === "string") {
+      // Bound copied strings: a model-supplied command can be arbitrarily
+      // large, and an unbounded copy here would defeat the whole point of
+      // virtualizing the oversized result body.
+      compacted[key] =
+        Buffer.byteLength(value, "utf8") > COMPACT_METADATA_STRING_MAX_BYTES
+          ? `${truncateUtf8Bytes(value, COMPACT_METADATA_STRING_MAX_BYTES, "keepStart")}…[truncated]`
+          : value;
+    } else if (typeof value === "number" || typeof value === "boolean") {
       compacted[key] = value;
     }
   }

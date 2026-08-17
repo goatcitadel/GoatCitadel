@@ -667,11 +667,30 @@ describe("redactSecretText", () => {
   });
 
   it("still redacts an assignment whose label sits at the 128-char bound", () => {
-    const label = `x${"a".repeat(120)}_token`;
-    expect(label.length).toBeLessThanOrEqual(128);
+    const label = `x${"a".repeat(121)}_token`;
+    expect(label.length).toBe(128);
     const result = redactSecretText(`${label}="super-secret-value-123456"`);
     expect(result.redactionCount).toBeGreaterThan(0);
     expect(result.value).not.toContain("super-secret-value-123456");
+  });
+
+  it("redacts assignments whose sensitive label exceeds the 128-char pattern bound", () => {
+    // The bounded pattern matches only a 128-char suffix of a longer label;
+    // sensitivity classification must expand back to the full identifier or
+    // `SECRET_AAAA…` reads as the non-sensitive `AAAA…` and the value leaks.
+    const longLabel = `SECRET_${"A".repeat(200)}`;
+
+    const assignment = redactSecretText(`${longLabel}="opaque-value-98765432"`);
+    expect(assignment.value).not.toContain("opaque-value-98765432");
+    expect(assignment.redactionCount).toBeGreaterThan(0);
+
+    const collection = redactSecretText(`${longLabel}: ["opaque-item-98765432"]`);
+    expect(collection.value).not.toContain("opaque-item-98765432");
+    expect(collection.redactionCount).toBeGreaterThan(0);
+
+    const credentialCall = redactSecretText(`${longLabel} = decode("opaque-literal-98765432")`);
+    expect(credentialCall.value).not.toContain("opaque-literal-98765432");
+    expect(credentialCall.redactionCount).toBeGreaterThan(0);
   });
 });
 

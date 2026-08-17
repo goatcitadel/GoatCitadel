@@ -370,17 +370,17 @@ export async function executeTool(
     case "shell.exec_background":
       return finalizeToolResult(await shellExecBackground(request, config, storage, runtimeHooks));
     case "git.status":
-      return finalizeToolResult(await gitStatus());
+      return finalizeToolResult(await gitStatus(config));
     case "git.diff":
-      return finalizeToolResult(await gitDiff(request.args));
+      return finalizeToolResult(await gitDiff(request.args, config));
     case "git.add":
       return finalizeToolResult(await gitAdd(request.args, config));
     case "git.commit":
-      return finalizeToolResult(await gitCommit(request.args));
+      return finalizeToolResult(await gitCommit(request.args, config));
     case "git.branch.create":
-      return finalizeToolResult(await gitBranchCreate(request.args));
+      return finalizeToolResult(await gitBranchCreate(request.args, config));
     case "git.branch.switch":
-      return finalizeToolResult(await gitBranchSwitch(request.args));
+      return finalizeToolResult(await gitBranchSwitch(request.args, config));
     case "git.worktree.create":
       return finalizeToolResult(await gitWorktreeCreate(request.args, config));
     case "git.worktree.remove":
@@ -819,24 +819,24 @@ async function shellExecBackground(
   });
 }
 
-async function gitStatus() {
+async function gitStatus(config: ToolPolicyConfig) {
   const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--branch"], {
     timeout: 15000,
     windowsHide: true,
-    env: buildModelSpawnEnv(),
+    env: buildModelSpawnEnv(config),
   });
   return { summary: stdout.slice(0, 10000) };
 }
 
-async function gitDiff(args: Record<string, unknown>) {
+async function gitDiff(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const staged = asBoolean(args.staged, false);
-  const result = await readGitDiffBounded(staged ? ["diff", "--cached"] : ["diff"]);
+  const result = await readGitDiffBounded(staged ? ["diff", "--cached"] : ["diff"], config);
   return { staged, diffSnippet: result.stdout, truncated: result.truncated };
 }
 
-function readGitDiffBounded(args: string[]): Promise<{ stdout: string; truncated: boolean }> {
+function readGitDiffBounded(args: string[], config: ToolPolicyConfig): Promise<{ stdout: string; truncated: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { windowsHide: true, env: buildModelSpawnEnv() });
+    const child = spawn("git", args, { windowsHide: true, env: buildModelSpawnEnv(config) });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -915,30 +915,30 @@ async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
   await execFileAsync("git", ["add", ...resolvedPaths], {
     timeout: 15000,
     windowsHide: true,
-    env: buildModelSpawnEnv(),
+    env: buildModelSpawnEnv(config),
   });
   return { staged: resolvedPaths };
 }
 
-async function gitCommit(args: Record<string, unknown>) {
+async function gitCommit(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const message = required(args.message, "message");
   const { stdout } = await execFileAsync("git", ["commit", "-m", message], {
     timeout: 20000,
     windowsHide: true,
-    env: buildModelSpawnEnv(),
+    env: buildModelSpawnEnv(config),
   });
   return { committed: true, output: stdout.slice(0, 4000) };
 }
 
-async function gitBranchCreate(args: Record<string, unknown>) {
+async function gitBranchCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true, env: buildModelSpawnEnv() });
+  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true, env: buildModelSpawnEnv(config) });
   return { created: true, branch };
 }
 
-async function gitBranchSwitch(args: Record<string, unknown>) {
+async function gitBranchSwitch(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true, env: buildModelSpawnEnv() });
+  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true, env: buildModelSpawnEnv(config) });
   return { switched: true, branch };
 }
 
@@ -949,7 +949,7 @@ async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPoli
   await execFileAsync("git", ["worktree", "add", p, branch], {
     timeout: 30000,
     windowsHide: true,
-    env: buildModelSpawnEnv(),
+    env: buildModelSpawnEnv(config),
   });
   return { created: true, path: path.resolve(p), branch };
 }
@@ -960,7 +960,7 @@ async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPoli
   await execFileAsync("git", ["worktree", "remove", p], {
     timeout: 30000,
     windowsHide: true,
-    env: buildModelSpawnEnv(),
+    env: buildModelSpawnEnv(config),
   });
   return { removed: true, path: path.resolve(p) };
 }

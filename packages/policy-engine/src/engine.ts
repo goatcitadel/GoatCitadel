@@ -2855,23 +2855,48 @@ function toPendingApprovalRequestRecord(value: unknown): Record<string, unknown>
 }
 
 // Audit rows persist forever; the live tool result the model sees is bounded
-// separately (shell head+tail retention). This projection caps each top-level
-// string field so tool_invocations growth stays bounded regardless of stream
-// retention limits upstream.
+// separately (shell head+tail retention). This projection caps every string
+// field — including strings nested in objects and arrays — so tool_invocations
+// growth stays bounded regardless of stream retention limits upstream. Depth
+// is capped defensively; anything deeper is replaced with a marker rather
+// than persisted unbounded.
 const AUDIT_RESULT_STRING_LIMIT_BYTES = 8 * 1024;
 const AUDIT_RESULT_KEEP_BYTES = 4 * 1024;
+const AUDIT_RESULT_MAX_DEPTH = 8;
 
-function boundAuditResultStrings(result: Record<string, unknown>): Record<string, unknown> {
+export function boundAuditResultStrings(result: Record<string, unknown>): Record<string, unknown> {
+  return boundAuditValue(result, 0) as Record<string, unknown>;
+}
+
+function boundAuditValue(value: unknown, depth: number): unknown {
+  if (typeof value === "string") {
+    if (Buffer.byteLength(value, "utf8") <= AUDIT_RESULT_STRING_LIMIT_BYTES) {
+      return value;
+    }
+    const split = splitUtf8HeadTail(value, AUDIT_RESULT_KEEP_BYTES, AUDIT_RESULT_KEEP_BYTES);
+    return `${split.head}\n…[audit projection truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`;
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (depth >= AUDIT_RESULT_MAX_DEPTH) {
+    return "[audit projection truncated: max depth exceeded]";
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const bounded = value.map((entry) => {
+      const next = boundAuditValue(entry, depth + 1);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? bounded : value;
+  }
   let changed = false;
   const bounded: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(result)) {
-    if (typeof value === "string" && Buffer.byteLength(value, "utf8") > AUDIT_RESULT_STRING_LIMIT_BYTES) {
-      const split = splitUtf8HeadTail(value, AUDIT_RESULT_KEEP_BYTES, AUDIT_RESULT_KEEP_BYTES);
-      bounded[key] = `${split.head}\n…[audit projection truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`;
-      changed = true;
-    } else {
-      bounded[key] = value;
-    }
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const next = boundAuditValue(entry, depth + 1);
+    changed ||= next !== entry;
+    bounded[key] = next;
   }
-  return changed ? bounded : result;
+  return changed ? bounded : value;
 }
