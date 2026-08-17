@@ -37,16 +37,16 @@
       "scenarioId": "operator-proof.install.verify-install",
       "match": "install smoke Status: failed",
       "classification": "environmental",
-      "detail": "install.gateway.bootstrap requires an OS keychain; ubuntu-latest runners have no keychain backend, so bootstrap custody fails on every CI run.",
-      "disposition": "Held — owner decision needed: provision a headless keyring on the runner, run the install smoke with GOATCITADEL_DISABLE_SECRET_STORE and assert the degraded posture, or split custody assertions into a desktop-only lane."
+      "detail": "install.gateway.bootstrap asserts OS-keychain custody, but the verification stack itself runs with GOATCITADEL_DISABLE_SECRET_STORE=true, so SECRET_STORE_UNAVAILABLE reproduces on every harness host (confirmed locally on Windows, not only ubuntu runners) — the lane contradicts its own environment.",
+      "disposition": "Held — owner decision needed: run the install smoke with the secret store enabled (real keychain on desktop, headless keyring on CI), or make the bootstrap check assert the explicit degraded posture when the store is disabled."
     },
     {
       "lanes": ["operator-proof"],
       "scenarioId": "operator-proof.api.chat-code-mode-lifecycle",
       "match": "The capability candidate has no linked Code Mode proposal",
       "classification": "scenario-drift",
-      "detail": "The scenario stages a Code Mode candidate and promotes it directly, but review-first evolution governance now requires a linked capability proposal (POST /api/v1/capabilities/proposals) and a confirmed Change Plan before promotion; Code Mode staging deliberately creates no proposal.",
-      "disposition": "Scenario rework queued into the verify:journeys build-out (B2 of the 2026-08-16 program): create the linked proposal, then drive the Change Plan confirmation flow instead of expecting a direct pendingApproval."
+      "detail": "The scenario promoted a staged candidate directly, but review-first evolution governance requires a linked proposal and a driven Change Plan. Driving the real flow also exposed a product defect: the adapter gated activate-plan drafting on candidate.activationBlocked, which is true for every never-promoted candidate, making first-time activation impossible (its unit fixture hand-set activationBlocked:false, concealing this).",
+      "disposition": "Fixed (this PR): the scenario creates the linked proposal and drives the Change Plan (artifact review → confirmation → approval), and the adapter now gates on the selected version not being revoked. Scenario passes locally. Remove after the next scheduled run confirms."
     },
     {
       "lanes": ["surface-regression"],

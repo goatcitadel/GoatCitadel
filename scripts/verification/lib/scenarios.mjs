@@ -4781,6 +4781,11 @@ async function exerciseCapabilityCandidatePromotionAndRevocation(gatewayUrl, can
     throw new Error(`${label} did not expose a candidate version to review`);
   }
 
+  // Review-first evolution governance requires a linked proposal before a
+  // candidate may be promoted; Code Mode staging deliberately creates none, so
+  // mirror the operator's review step here.
+  await ensureCandidateActivationProposal(gatewayUrl, candidateId, label);
+
   const promotionRequest = await requestJson(
     gatewayUrl,
     `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`,
@@ -4790,9 +4795,9 @@ async function exerciseCapabilityCandidatePromotionAndRevocation(gatewayUrl, can
     },
   );
   assertOk(promotionRequest, `request ${label} promotion`);
-  const promotionResolution = await resolveCapabilityLifecycleApproval(
+  const promotionResolution = await resolveCapabilityLifecycleGovernance(
     gatewayUrl,
-    promotionRequest.body?.pendingApproval,
+    promotionRequest.body,
     `${label} promotion`,
   );
   const promotedDetail = await waitForCapabilityCandidateState(
@@ -4816,9 +4821,9 @@ async function exerciseCapabilityCandidatePromotionAndRevocation(gatewayUrl, can
     },
   );
   assertOk(revocationRequest, `request ${label} revocation`);
-  const revocationResolution = await resolveCapabilityLifecycleApproval(
+  const revocationResolution = await resolveCapabilityLifecycleGovernance(
     gatewayUrl,
-    revocationRequest.body?.pendingApproval,
+    revocationRequest.body,
     `${label} revocation`,
   );
   const revokedDetail = await waitForCapabilityCandidateState(
@@ -4847,6 +4852,106 @@ async function exerciseCapabilityCandidatePromotionAndRevocation(gatewayUrl, can
     revocationResolution,
     revokedDetail,
   };
+}
+
+async function ensureCandidateActivationProposal(gatewayUrl, candidateId, label) {
+  const existing = await requestJson(gatewayUrl, "/api/v1/capabilities/proposals?limit=200");
+  assertOk(existing, `list proposals before ${label}`);
+  const linked = existing.body?.items?.find(
+    (item) => item?.candidateId === candidateId || item?.activationTargetId === candidateId,
+  );
+  if (linked) {
+    return linked;
+  }
+  const created = await requestJson(gatewayUrl, "/api/v1/capabilities/proposals", {
+    method: "POST",
+    body: {
+      proposalKind: "skill",
+      title: `${label} activation review`,
+      summary: `Review-first activation proposal for candidate ${candidateId}.`,
+      payload: { candidateId },
+      candidateId,
+    },
+  });
+  assertOk(created, `create ${label} activation proposal`);
+  return created.body;
+}
+
+// A promotion/revocation request resolves through one of two governance
+// shapes: the direct pending-approval path, or (with the Evolution Control
+// Plane enabled) a Change Plan whose required actions must be driven —
+// exact confirmation with the plan's action nonce, and approval resolution —
+// until the plan reaches a terminal applied state.
+async function resolveCapabilityLifecycleGovernance(gatewayUrl, responseBody, label) {
+  const planId = responseBody?.changePlan?.planId;
+  if (typeof planId === "string" && planId.trim()) {
+    // Plan reads and exact actions are visibility-scoped to the plan's origin
+    // workspace; the promotion response carries that origin on the plan record.
+    const workspaceId = responseBody?.changePlan?.origin?.workspaceId ?? "default";
+    return await driveChangePlanToTerminal(gatewayUrl, planId, workspaceId, label);
+  }
+  return await resolveCapabilityLifecycleApproval(gatewayUrl, responseBody?.pendingApproval, label);
+}
+
+const CHANGE_PLAN_FAILURE_STATUSES = new Set([
+  "failed",
+  "cancelled",
+  "rolled_back",
+  "rollback_failed",
+  "manual_required",
+]);
+
+async function driveChangePlanToTerminal(gatewayUrl, planId, workspaceId, label, attempts = 60) {
+  let lastActionId = null;
+  const planQuery = `?workspaceId=${encodeURIComponent(workspaceId)}`;
+  for (let index = 0; index < attempts; index += 1) {
+    const plan = await requestJson(gatewayUrl, `/api/v1/change-plans/${encodeURIComponent(planId)}${planQuery}`);
+    assertOk(plan, `read ${label} change plan`);
+    const status = plan.body?.status;
+    if (status === "completed" || status === "applied") {
+      return plan;
+    }
+    if (CHANGE_PLAN_FAILURE_STATUSES.has(status)) {
+      throw new Error(`${label} change plan ${planId} ended ${status}: ${JSON.stringify(plan.body ?? null)}`);
+    }
+    const action = plan.body?.requiredAction;
+    const revision = plan.body?.revision;
+    if (action?.actionNonce && Number.isSafeInteger(revision) && action.actionId !== lastActionId) {
+      lastActionId = action.actionId ?? null;
+      if (action.kind === "confirmation") {
+        const confirmed = await requestJson(gatewayUrl, `/api/v1/change-plans/${encodeURIComponent(planId)}/confirmations`, {
+          method: "POST",
+          body: {
+            workspaceId,
+            expectedRevision: revision,
+            actionNonce: action.actionNonce,
+          },
+        });
+        assertOk(confirmed, `confirm ${label} change plan`);
+        continue;
+      }
+      if (action.kind === "approval" || action.kind === "artifact_review") {
+        if (action.kind === "approval" && action.approvalId) {
+          await resolveCapabilityLifecycleApproval(gatewayUrl, { approvalId: action.approvalId }, label);
+        }
+        const responded = await requestJson(gatewayUrl, `/api/v1/change-plans/${encodeURIComponent(planId)}/responses`, {
+          method: "POST",
+          body: {
+            workspaceId,
+            expectedRevision: revision,
+            actionId: action.actionId,
+            actionNonce: action.actionNonce,
+            values: {},
+          },
+        });
+        assertOk(responded, `acknowledge ${label} change plan ${action.kind} action`);
+        continue;
+      }
+      throw new Error(`${label} change plan ${planId} requires unsupported action kind ${action.kind}`);
+    }
+    await delay(250);
+  }
+  throw new Error(`${label} change plan ${planId} did not reach a terminal state in time`);
 }
 
 async function resolveCapabilityLifecycleApproval(gatewayUrl, pendingApproval, label) {

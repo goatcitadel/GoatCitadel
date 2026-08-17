@@ -2,6 +2,7 @@
 import path from "node:path";
 import { generateVerificationReview, loadManifestForReview, validateExplicitReviewTarget } from "./lib/review.mjs";
 import { collectVerificationSecretEnvKeys } from "./lib/scenarios/usability-coverage.mjs";
+import { runJourneysLane } from "./lib/scenarios/journeys-lane.mjs";
 import { runUsabilityDiskCapacityPreflight } from "./lib/scenarios/usability-disk-preflight.mjs";
 import {
   beginUsabilitySourceGuard,
@@ -75,6 +76,7 @@ import { acquireWorktreeOutputLock } from "../lib/worktree-output-lock.mjs";
 
 const VALID_LANES = new Set([
   "fast",
+  "journeys",
   "desktop",
   "extensions-package",
   "orchestration-performance",
@@ -379,6 +381,8 @@ async function runLockedVerification(lane, options) {
       await runMemoryTruthLane(context, { profile });
     } else if (lane === "realtime-truth") {
       await runRealtimeTruthLane(context, { profile });
+    } else if (lane === "journeys") {
+      await runJourneysLane(context);
     } else if (lane === "architecture-metrics") {
       await runArchitectureMetricsLane(context);
     } else if (lane === "code-mode-sandbox") {

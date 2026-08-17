@@ -80,6 +80,31 @@ function planFrom(
 }
 
 describe("CapabilityCandidateChangePlanAdapter", () => {
+  it("drafts a first-time activation plan for a fresh, never-promoted candidate", async () => {
+    const { adapter, candidate, context } = fixture();
+    // buildCandidateDetail marks every never-promoted candidate as
+    // activation-blocked (no approved/trusted version yet) — the normal
+    // first-activation input, which prepare() must accept.
+    candidate.activationBlocked = true;
+    candidate.activationBlockers = [
+      "No candidate version has been promoted into an approved or trusted lifecycle state.",
+    ];
+    candidate.latestVersion.lifecycleState = "candidate";
+
+    const prepared = await adapter.prepare(context, { kind: "capability_candidate", proposalId: "proposal-1" });
+    expect(prepared.status).toBe("awaiting_input");
+    expect(prepared.requiredAction?.kind).toBe("artifact_review");
+  });
+
+  it("refuses to draft activation for a revoked candidate version", async () => {
+    const { adapter, candidate, context } = fixture();
+    candidate.latestVersion.lifecycleState = "revoked";
+
+    await expect(adapter.prepare(context, { kind: "capability_candidate", proposalId: "proposal-1" })).rejects.toThrow(
+      "A revoked candidate version cannot be activated.",
+    );
+  });
+
   it("keeps generated capabilities non-callable through review and confirmation", async () => {
     const { adapter, context, promoteCandidate } = fixture();
     const prepared = await adapter.prepare(context, { kind: "capability_candidate", proposalId: "proposal-1" });
