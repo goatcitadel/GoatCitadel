@@ -1,6 +1,16 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-05-26
+Last updated: 2026-08-15
+
+## Scope and Instruction Precedence
+
+This is the repository-wide baseline for coding agents.
+
+- A nested `AGENTS.md` specializes these instructions for its directory tree.
+- The closest applicable `AGENTS.md` wins when instructions conflict.
+- Explicit user instructions in the active conversation override this file.
+- Product security boundaries, deny-wins policy, approval requirements, and runtime authority are implementation invariants; documentation or prompts do not bypass them.
+- Treat `AGENTS.md` files as living standard Markdown. Keep them aligned with the current repository instead of preserving stale architecture for historical consistency.
 
 ## Project Overview
 
@@ -93,6 +103,35 @@ When changing this repo:
 7. Validate proportionally to risk.
 8. Report what changed, what was tested, and what remains uncertain.
 9. Before acting on a GitHub Security finding (code scanning, secret scanning, Dependabot), read [`docs/security/findings-triage.md`](docs/security/findings-triage.md). It captures recurring CodeQL patterns such as `js/missing-rate-limiting` and `js/unhandled-error-in-stream-pipeline`, Dependabot triage, the narrow `secret_scanning.yml` allowlist convention, and the rules around the synthetic token fixtures in the redaction tests. Do not re-derive these decisions from scratch.
+
+## Repository, Worktree, and Multi-Agent Safety
+
+Assume a checkout may contain work owned by the user or another agent, even when the task sounds isolated.
+
+- Inspect `git status --short --branch` before editing and again before handoff.
+- Inspect both tracked diffs and untracked files; ordinary `git diff` output does not include untracked content.
+- Treat every pre-existing tracked or untracked change as someone else's work unless the user explicitly assigns it to you.
+- Never reset, restore, checkout, clean, stash, delete, or overwrite unrelated changes to make a task easier.
+- Do not stage, commit, rebase, merge, push, or force-push unless the user explicitly asks for that operation.
+- Keep edits surgical. Avoid unrelated formatting, generated-output churn, dependency changes, or broad mechanical rewrites.
+- Re-read a target file immediately before patching it. If it changed since inspection, preserve the new content and reconcile deliberately rather than replacing it from an older snapshot.
+- When several agents share a checkout, prefer disjoint file ownership. If overlap is unavoidable, communicate the exact files and wait for a safe handoff before editing.
+- Do not delete, move, or repurpose another agent's worktree, scratch files, test artifacts, logs, locks, or running processes.
+- Use the repository's output-lock wrappers for build and typecheck commands that provide them. Do not bypass a live lock with a second writer.
+- Before stopping a server, database, worker, or watcher, establish that this task started and owns the exact process tree or port. Leave pre-existing processes alone.
+
+## Windows and PowerShell Defaults
+
+The primary local development environment is Windows.
+
+- Default to PowerShell and Windows paths for repository work. From an arbitrary directory, use `Set-Location -LiteralPath 'F:\code\personal-ai'`; do not translate it into a Unix-style `/f/...` path.
+- Run workspace commands from the repository root unless a package script explicitly requires a package directory.
+- Prefer repository `pnpm` scripts over hand-built command chains, and use the package names from the live `package.json` files.
+- Use `rg` and `rg --files` for search. Use `-LiteralPath` for filesystem operations when a path is already known.
+- Preserve `.editorconfig` line endings: LF by default, CRLF for `*.bat`, `*.cmd`, and `*.ps1`.
+- Quote paths that contain spaces. Avoid unresolved globs, broad recursive operations, and commands whose target depends on an unchecked environment variable.
+- PowerShell success must be checked through the command's real exit code when external tools are involved; output text alone is not proof.
+- Do not casually mutate `config/`, `data/`, `runtime/`, generated evidence, installed payloads, credentials, or OS keychain state while validating source changes.
 
 ## Source of Truth Order
 
@@ -245,9 +284,13 @@ Do not claim:
 
 ## Project Conventions
 
-Applies to all runtime agents unless a workspace override exists in `workspaces/<workspaceId>/AGENTS.md`.
+This section describes GoatCitadel's runtime guidance injection. It is separate from the source-tree `AGENTS.md` precedence used by coding agents above.
+
+`GuidanceService` resolves each supported runtime guidance document independently: a workspace copy under `workspaces/<workspaceId>/` takes precedence over the same global document type. That selection changes model context for the workspace; it does not change source-tree instruction scope or weaken the immutable approval, deny-wins, tool-grant, host, network, or path boundaries.
 
 ## Agent Roles
+
+The built-in profile catalog is owned by `packages/contracts/src/agents.ts`; keep this summary synchronized with that owner. `Goatherder` is the coordinator identity used by the runtime. These roles guide runtime routing and handoffs; they do not require a repository coding agent to spawn subagents or role-play on every task.
 
 Primary default roles:
 
@@ -259,6 +302,7 @@ Primary default roles:
 - `Researcher`: external/source analysis with confidence labels.
 - `Product`: requirements, prioritization, scope boundaries.
 - `Personal Assistant`: operator support tasks and summaries.
+- `Memory Maintainer`: memory curation, source attribution, dedupe, and context hygiene.
 
 Routing rules:
 
