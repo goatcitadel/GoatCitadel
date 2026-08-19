@@ -124,7 +124,7 @@ Assume a checkout may contain work owned by the user or another agent, even when
 
 The primary local development environment is Windows.
 
-- Default to PowerShell and Windows paths for repository work. From an arbitrary directory, use `Set-Location -LiteralPath 'F:\code\personal-ai'`; do not translate it into a Unix-style `/f/...` path.
+- Default to PowerShell and Windows paths for repository work. From an arbitrary directory, return to the checkout with `Set-Location -LiteralPath` and the repository root's native Windows path; do not translate that root into an MSYS-style `/<drive>/...` path.
 - Run workspace commands from the repository root unless a package script explicitly requires a package directory.
 - Prefer repository `pnpm` scripts over hand-built command chains, and use the package names from the live `package.json` files.
 - Use `rg` and `rg --files` for search. Use `-LiteralPath` for filesystem operations when a path is already known.
