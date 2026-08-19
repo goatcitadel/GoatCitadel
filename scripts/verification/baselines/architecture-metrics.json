@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-17T00:55:36.190Z",
-  "measuredSourceSha256": "043573827be6a4d118b37dc8b620f0ecb39108b18a6852245ab95b9b87e2245f",
-  "gatewayLineCount": 13129,
+  "generatedAt": "2026-08-19T19:59:51.299Z",
+  "measuredSourceSha256": "00fde48b8643d156deb8273df17f07e9045c102bce41f028de3ddc9f3e99a67b",
+  "gatewayLineCount": 13132,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
@@ -11,8 +11,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 13129,
-      "bytes": 569822
+      "lineCount": 13132,
+      "bytes": 570106
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
@@ -159,7 +159,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4,
     "apps/gateway/src/services/gateway/chat-stream-runtime.ts": 24
   },
-  "totalDependencyMemberAccesses": 10007,
+  "totalDependencyMemberAccesses": 10013,
   "dependencyMemberAccessesByFile": {
     "apps/gateway/src/services/a2a-grpc-client.ts": 2,
     "apps/gateway/src/services/a2a-grpc-outbound-service.ts": 10,
@@ -417,6 +417,7 @@
     "apps/gateway/src/services/prompt-pack-service.ts": 240,
     "apps/gateway/src/services/provider-connection-change-plan-adapter.ts": 31,
     "apps/gateway/src/services/provider-secret-persistence.ts": 95,
+    "apps/gateway/src/services/provider-secret-staging.ts": 6,
     "apps/gateway/src/services/realtime-event-service.ts": 9,
     "apps/gateway/src/services/remote-worker-admission-composition.ts": 18,
     "apps/gateway/src/services/remote-worker-admission-handler.ts": 1,
@@ -588,8 +589,8 @@
     "apps/gateway/src/services/workspaces-route-service.ts"
   ],
   "sourceTreeState": "clean",
-  "hostCallbackCollectorCorrectedAt": "2026-08-17T00:55:36.190Z",
-  "hostCallbackSourceRevision": "ee8407bbdd8c7be23cb6cf3ed7cabef7b71d76ab",
-  "dependencyMemberCollectorCapturedAt": "2026-08-17T00:55:36.190Z",
-  "dependencyMemberSourceRevision": "ee8407bbdd8c7be23cb6cf3ed7cabef7b71d76ab"
+  "hostCallbackCollectorCorrectedAt": "2026-08-19T19:59:51.299Z",
+  "hostCallbackSourceRevision": "e96c78a7f1a78f738ef64f13b131a5b7dd744a64",
+  "dependencyMemberCollectorCapturedAt": "2026-08-19T19:59:51.299Z",
+  "dependencyMemberSourceRevision": "e96c78a7f1a78f738ef64f13b131a5b7dd744a64"
 }
