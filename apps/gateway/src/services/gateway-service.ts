@@ -413,6 +413,7 @@ import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { ProviderSecretStaging } from "./provider-secret-staging.js";
 import { parseChannelSecretRef } from "./channel-secret-custody-service.js";
 import { enqueueMobilePushApprovalRefresh, MobilePushService } from "./mobile-push-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
@@ -1328,6 +1329,7 @@ export class GatewayService {
   public readonly modelUsageAccounting: ModelUsageAccountingService;
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
+  private readonly providerSecretStaging: ProviderSecretStaging;
   public readonly runtimeConfigurationService: RuntimeConfigurationService;
   public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
@@ -1661,6 +1663,7 @@ export class GatewayService {
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
+    this.providerSecretStaging = new ProviderSecretStaging(secretStore);
     const runtimeConfigurationInstallationScopeId = `root-${createHash("sha256")
       .update(path.resolve(config.rootDir))
       .digest("hex")
@@ -6549,7 +6552,7 @@ export class GatewayService {
       throw new ValidationError({ message: "Provider credential is empty or exceeds the secure-input limit." });
     }
     const account = providerTemporarySecretAccount(plan.planId, plan.request.providerId);
-    this.secretStore.setSecret(account, secret);
+    this.providerSecretStaging.stage(account, secret, plan.request.credentialStorage ?? "keychain");
     try {
       const evidenceRefs = await this.verifyTemporaryProviderSecret(plan.planId, plan.request.providerId);
       return await this.evolutionControlPlaneService.resumeOwnerInput(
@@ -6566,7 +6569,7 @@ export class GatewayService {
         },
       );
     } catch (error) {
-      this.secretStore.deleteSecret(account);
+      this.providerSecretStaging.clear(account);
       throw error;
     }
   }
@@ -6710,11 +6713,11 @@ export class GatewayService {
   }
 
   private hasTemporaryProviderSecret(planId: string, providerId: string): boolean {
-    return Boolean(this.secretStore.getSecret(providerTemporarySecretAccount(planId, providerId))?.trim());
+    return Boolean(this.providerSecretStaging.read(providerTemporarySecretAccount(planId, providerId))?.trim());
   }
 
   private discardTemporaryProviderSecret(planId: string, providerId: string): void {
-    this.secretStore.deleteSecret(providerTemporarySecretAccount(planId, providerId));
+    this.providerSecretStaging.clear(providerTemporarySecretAccount(planId, providerId));
   }
 
   private hasTemporaryProviderOAuthCredential(planId: string, providerId: string): boolean {
@@ -6764,7 +6767,7 @@ export class GatewayService {
   }
 
   private async verifyTemporaryProviderSecret(planId: string, providerId: string): Promise<readonly string[]> {
-    const secret = this.secretStore.getSecret(providerTemporarySecretAccount(planId, providerId));
+    const secret = this.providerSecretStaging.read(providerTemporarySecretAccount(planId, providerId));
     if (!secret?.trim()) throw new ValidationError({ message: "Temporary provider credential is unavailable." });
     const provider = this.llmService
       .exportConfigFile()
@@ -6791,7 +6794,7 @@ export class GatewayService {
     envVar?: string,
   ): Promise<{ revision: number; evidenceRefs: readonly string[] }> {
     const account = providerTemporarySecretAccount(planId, providerId);
-    const secret = this.secretStore.getSecret(account);
+    const secret = this.providerSecretStaging.read(account);
     if (!secret?.trim()) throw new ValidationError({ message: "Temporary provider credential is unavailable." });
     const result = await this.saveProviderSecret({
       providerId,
@@ -6800,7 +6803,7 @@ export class GatewayService {
       storage,
       ...(envVar ? { envVar } : {}),
     });
-    this.secretStore.deleteSecret(account);
+    this.providerSecretStaging.clear(account);
     return {
       revision: result.revision,
       evidenceRefs: [`provider:${providerId}:secret_owner_revision:${result.revision}`],

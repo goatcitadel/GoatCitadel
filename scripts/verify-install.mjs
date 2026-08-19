@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { createRunContext, finalizeRunContext, runScenario } from "./verification/lib/shared.mjs";
 import { requestJson, startVerificationStack, stopVerificationStack } from "./verification/lib/runtime.mjs";
+import { startDeterministicLlmStub } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
 
 async function main() {
   const context = await createRunContext("install-smoke", {
@@ -10,6 +11,7 @@ async function main() {
   });
 
   let stack;
+  let llmStub;
   let manifest = null;
 
   try {
@@ -23,6 +25,11 @@ async function main() {
         GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
       },
     });
+
+    // Saving a provider credential runs a live model-catalog check before the
+    // owner is promoted, so the smoke key needs a catalog it can actually
+    // reach. This loopback stub keeps that check deterministic and offline.
+    llmStub = await startDeterministicLlmStub();
 
     await runScenario(
       context,
@@ -92,6 +99,7 @@ async function main() {
               upsertProvider: {
                 providerId: "openai",
                 apiKeyEnv: "OPENAI_API_KEY",
+                baseUrl: llmStub.baseUrl,
               },
             },
             markComplete: true,
@@ -303,6 +311,7 @@ async function main() {
     throw error;
   } finally {
     await stopVerificationStack(stack).catch(() => undefined);
+    await llmStub?.close().catch(() => undefined);
   }
 
   console.log("GoatCitadel install smoke");
