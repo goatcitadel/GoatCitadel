@@ -5079,13 +5079,14 @@ async function assertNextVisualScenarioChrome(page, route) {
   }
   const result = await page.evaluate(() => {
     const text = document.body?.textContent ?? "";
-    const buttonTexts = Array.from(document.querySelectorAll("button")).map((button) =>
-      (button.textContent ?? "").replace(/\s+/g, " ").trim(),
-    );
+    // Assert the structural contract, not the control's label. The dock ships
+    // closed on this route, so the panel is the id-only placeholder that keeps
+    // `aria-controls` resolvable; the visible control has been renamed before
+    // (Context -> Activity) and will be again.
     return {
       hasThreadedSurface: Boolean(document.querySelector(".mc-next-threaded-surface")),
-      hasContextPanel: Boolean(document.querySelector(".mc-next-threaded-context-panel")),
-      hasMobileContextControl: buttonTexts.some((value) => value === "Context" || value.endsWith(" Context")),
+      hasContextPanel: Boolean(document.querySelector("#mc-next-threaded-context-panel")),
+      hasContextControl: Boolean(document.querySelector('[aria-controls="mc-next-threaded-context-panel"]')),
       hasWorkingContextCopy: /Working Context|WORKING CONTEXT/.test(text),
       legacyNeedles: ["GOATCITADEL / Mission Control", "New session", "MODE Chat"].filter((needle) =>
         text.includes(needle),
@@ -5095,8 +5096,8 @@ async function assertNextVisualScenarioChrome(page, route) {
   if (!result.hasThreadedSurface) {
     throw new Error("chat-pending-user-input rendered outside the Mission Control Next threaded surface");
   }
-  if (!result.hasContextPanel && !result.hasMobileContextControl && !result.hasWorkingContextCopy) {
-    throw new Error("chat-pending-user-input did not expose the new Working Context surface or mobile control");
+  if (!result.hasContextPanel && !result.hasContextControl && !result.hasWorkingContextCopy) {
+    throw new Error("chat-pending-user-input did not expose the Working Context panel or its control");
   }
   if (result.legacyNeedles.length > 0) {
     throw new Error(`chat-pending-user-input rendered legacy shell copy: ${result.legacyNeedles.join(", ")}`);
