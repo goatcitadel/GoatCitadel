@@ -160,6 +160,13 @@ Charter, template, blueprint and mutable access-rule owners, integration/MCP
 preconditions, C5/C6 source work and full C1-C6 acceptance remain open. See
 [Citadel profile revisions](CITADEL_RECORD_REVISIONS.md).
 
+Blueprint import and Mason staging now validate the full portable structure before
+the first persistence call, including every Chamber and the Charter's policy and
+collection fields. Malformed input preserves the current Charter and Chambers;
+valid Mason drafts still stage successfully. This closes the malformed-input
+preflight gap only. Atomic setup writes and required reviewed revisions for
+Charter/template/blueprint changes remain open.
+
 [Implementation evidence and remaining work](testing/COMPARISON_IMPLEMENTATION_STATUS.md)
 records the controlled skill-reuse journey, real local Browser QA execution,
 stdio session ownership, and the exact limits of the Windows/PostgreSQL receipts.

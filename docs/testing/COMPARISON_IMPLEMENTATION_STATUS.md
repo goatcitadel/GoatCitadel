@@ -10378,6 +10378,35 @@ full-repository lint fixes, local validation, dependency review and remaining
 hosted test failures. Publication preserves the work; the comparison program
 and drive-formatting pause remain active.
 
+## Blueprint validation before persistence
+
+The previous validator accepted incomplete Charters, malformed Chambers and
+unsupported policy values. Ten focused regression cases reproduced those gaps.
+The full v1 structure is now validated before import, review or Mason staging:
+required metadata and collections, supported policy/sensitivity values, nonblank
+Charter and Chamber names/purposes, and actual boolean sealing flags. Undeclared
+fields, including nonportable identity, are rejected. Secret-pattern checks remain
+a conservative safety net; diagnostics are capped at 20 and do not echo input
+values or unknown field names.
+
+The real Gateway service over temporary SQLite rejects a malformed second Chamber
+without calling either write method or changing the existing Charter/Chambers.
+Both import and Mason staging enforce that boundary. A complete Mason draft still
+stages and preserves pre-existing Chambers without connecting integrations.
+
+Fresh local proof: all 837 contract tests across 79 files and 60 focused Gateway
+tests across three files pass. Strict lint and locked contracts/Gateway typechecks
+pass. Evidence: `.tmp/comparison-blueprint-validation-before.log` (ten reproduced
+failures), `.tmp/comparison-blueprint-contracts-final.log`,
+`.tmp/comparison-blueprint-gateway-final.log`,
+`.tmp/comparison-blueprint-validation-lint.log`, and
+`.tmp/comparison-blueprint-validation-typecheck.log`.
+
+No storage schema or repository behavior changed in this preflight repair. It
+does not establish transactional rollback, concurrent-write protection or browser
+conflict recovery. Charter/template/blueprint atomicity and required reviewed
+revisions remain open, as do mutable access-rule owners and full C1-C6 acceptance.
+
 ## Remaining acceptance inputs
 
 Telegram is the initial channel. The operator has a mini PC available, but its

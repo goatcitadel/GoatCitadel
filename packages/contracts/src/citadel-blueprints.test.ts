@@ -13,6 +13,7 @@ import {
   exportCitadelBlueprint,
   validateCitadelBlueprint,
 } from "./citadel-blueprints.js";
+import { draftBlueprintFromAnswers } from "./citadel-mason.js";
 
 function sampleCitadel(): Citadel {
   const charter: CitadelCharter = {
@@ -70,6 +71,55 @@ describe("exportCitadelBlueprint", () => {
 });
 
 describe("validateCitadelBlueprint", () => {
+  it.each([
+    ["missing metadata", { metadata: undefined }],
+    ["missing risk notes", { riskNotes: undefined }],
+    ["incomplete charter", { charter: { purpose: "Keep the valid purpose" } }],
+    ["null chamber", { chambers: [null] }],
+    ["invalid chamber after a valid one", { chambers: [
+      { name: "General", sensitivity: "private", sealed: false },
+      { name: " ", sensitivity: "restricted", sealed: true },
+    ] }],
+    ["string sealing flag", { chambers: [{ name: "Finance", sensitivity: "restricted", sealed: "false" }] }],
+    ["unsupported sensitivity", { chambers: [{ name: "Finance", sensitivity: "unknown", sealed: false }] }],
+    ["nonportable identity", { citadelId: "foreign-citadel" }],
+  ] as const)("rejects %s before a blueprint can be applied", (_label, patch) => {
+    const blueprint = { ...exportCitadelBlueprint(sampleCitadel()), ...patch };
+    expect(validateCitadelBlueprint(blueprint).ok).toBe(false);
+  });
+
+  it("rejects invalid Charter collections and policy values without echoing their contents", () => {
+    const blueprint = exportCitadelBlueprint(sampleCitadel());
+    const unsafeValue = "api_key=private-value-for-validation";
+    const result = validateCitadelBlueprint({ ...blueprint, charter: {
+      ...blueprint.charter, kind: "unsupported", goals: "not a list", boundaries: [1],
+      successDefinition: null, riskPosture: "unsupported", modelPolicyDefault: unsafeValue,
+    } });
+    expect(result.ok).toBe(false);
+    for (const field of ["kind", "goals", "boundaries", "successDefinition", "riskPosture", "modelPolicyDefault"]) {
+      expect(result.errors.join(" ")).toContain(field);
+    }
+    expect(result.errors.join(" ")).not.toContain(unsafeValue);
+  });
+
+  it("accepts a complete Mason draft without mutating it", () => {
+    const blueprint = draftBlueprintFromAnswers({ kind: "company", purpose: "Ship the release", goals: ["Ship"] });
+    const before = structuredClone(blueprint);
+    expect(validateCitadelBlueprint(blueprint)).toEqual({ ok: true, errors: [] });
+    expect(blueprint).toEqual(before);
+  });
+
+  it("bounds malformed-row diagnostics and rejects non-JSON input", () => {
+    const blueprint = exportCitadelBlueprint(sampleCitadel());
+    const malformed = { ...blueprint, chambers: Array.from({ length: 200 }, () => null) };
+    const result = validateCitadelBlueprint(malformed);
+    expect(result.ok).toBe(false);
+    expect(result.errors.length).toBeLessThanOrEqual(20);
+    const cyclic: Record<string, unknown> = { ...blueprint };
+    cyclic.extra = cyclic;
+    expect(validateCitadelBlueprint(cyclic).ok).toBe(false);
+  });
+
   it("rejects an unsupported schema version", () => {
     const result = validateCitadelBlueprint({ schemaVersion: "nope", charter: { purpose: "x" }, chambers: [] });
     expect(result.ok).toBe(false);
@@ -77,7 +127,8 @@ describe("validateCitadelBlueprint", () => {
   });
 
   it("requires a charter purpose", () => {
-    const result = validateCitadelBlueprint({ schemaVersion: CITADEL_BLUEPRINT_SCHEMA_VERSION, chambers: [] });
+    const blueprint = exportCitadelBlueprint(sampleCitadel());
+    const result = validateCitadelBlueprint({ ...blueprint, charter: { ...blueprint.charter, purpose: undefined } });
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toMatch(/purpose/i);
   });

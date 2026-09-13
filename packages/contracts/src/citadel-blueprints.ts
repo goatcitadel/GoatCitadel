@@ -2,6 +2,7 @@
 // A Blueprint captures structure only (Charter + Chambers) — never credentials,
 // tokens, private data, or identity (citadelId/chamberId/timestamps). See spec §8.
 
+import { z } from "zod";
 import type {
   ChamberSensitivity,
   Citadel,
@@ -46,6 +47,31 @@ export interface CitadelBlueprintValidationResult {
   errors: string[];
 }
 
+const blueprintText = z.string().refine((value) => value.trim().length > 0);
+const blueprintSchema: z.ZodType<CitadelBlueprint> = z.object({
+  schemaVersion: z.literal(CITADEL_BLUEPRINT_SCHEMA_VERSION),
+  metadata: z.object({
+    name: blueprintText,
+    description: z.string().optional(),
+    exportedAt: z.string().optional(),
+  }).strict(),
+  charter: z.object({
+    purpose: blueprintText,
+    kind: z.enum(["personal", "company", "project", "household", "client", "creator", "learning", "team", "custom"]),
+    goals: z.array(blueprintText),
+    boundaries: z.array(blueprintText),
+    successDefinition: z.array(blueprintText),
+    riskPosture: z.enum(["conservative", "balanced", "collaborative", "automation_forward"]),
+    modelPolicyDefault: z.enum(["local_only", "hybrid_guarded", "approved_cloud", "hosted_team"]),
+  }).strict(),
+  chambers: z.array(z.object({
+    name: blueprintText,
+    sensitivity: z.enum(["public", "internal", "private", "sensitive", "restricted", "secret"]),
+    sealed: z.boolean(),
+  }).strict()),
+  riskNotes: z.array(z.string()),
+}).strict();
+
 // Conservative secret-shaped patterns. The scan is a safety net, not a guarantee.
 const SECRET_PATTERNS: RegExp[] = [
   /\bsk-[a-z0-9-]{8,}/i,
@@ -85,32 +111,24 @@ export function exportCitadelBlueprint(
 }
 
 export function validateCitadelBlueprint(value: unknown): CitadelBlueprintValidationResult {
-  const errors: string[] = [];
-  if (!value || typeof value !== "object") {
-    return { ok: false, errors: ["Blueprint must be an object."] };
-  }
-  const blueprint = value as Partial<CitadelBlueprint>;
-  if (blueprint.schemaVersion !== CITADEL_BLUEPRINT_SCHEMA_VERSION) {
-    errors.push(`Unsupported schemaVersion (expected ${CITADEL_BLUEPRINT_SCHEMA_VERSION}).`);
-  }
-  if (
-    !blueprint.charter ||
-    typeof blueprint.charter !== "object" ||
-    typeof (blueprint.charter as { purpose?: unknown }).purpose !== "string" ||
-    ((blueprint.charter as { purpose: string }).purpose ?? "").trim().length === 0
-  ) {
-    errors.push("Blueprint charter.purpose is required.");
-  }
-  if (!Array.isArray(blueprint.chambers)) {
-    errors.push("Blueprint chambers must be an array.");
-  }
+  const result = blueprintSchema.safeParse(value);
+  // Schema issue messages can echo invalid enum values or unknown key names.
+  // Report only schema-owned paths, never caller-provided values or keys.
+  const errors: string[] = result.success ? [] : result.error.issues.slice(0, 20).map((issue) => {
+    const field = issue.path.length > 0 ? issue.path.join(".") : "root";
+    return issue.code === "unrecognized_keys"
+      ? `Blueprint ${field} contains unsupported fields.`
+      : `Blueprint ${field} is missing or invalid.`;
+  });
 
   const serialized = safeStringify(value);
-  if (SECRET_PATTERNS.some((pattern) => pattern.test(serialized))) {
+  if (serialized === undefined) {
+    errors.push("Blueprint must be serializable as JSON.");
+  } else if (SECRET_PATTERNS.some((pattern) => pattern.test(serialized))) {
     errors.push("Blueprint appears to contain a secret-like value; Blueprints must never include secrets.");
   }
 
-  return { ok: errors.length === 0, errors };
+  return { ok: errors.length === 0, errors: errors.slice(0, 20) };
 }
 
 /**
@@ -147,10 +165,10 @@ export function applyCitadelBlueprint(
   return citadel;
 }
 
-function safeStringify(value: unknown): string {
+function safeStringify(value: unknown): string | undefined {
   try {
-    return JSON.stringify(value) ?? "";
+    return JSON.stringify(value);
   } catch {
-    return "";
+    return undefined;
   }
 }
