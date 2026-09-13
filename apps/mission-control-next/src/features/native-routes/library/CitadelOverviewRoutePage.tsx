@@ -376,7 +376,7 @@ export function CitadelOverviewRoutePage({
                     {citadel?.record?.lifecycleStatus === "archived" ? (
                       <NativeButton
                         variant="outline"
-                        disabled={lifecycleAction !== null}
+                        disabled={lifecycleAction !== null || !citadel?.record?.revision}
                         onClick={() => void handleRestore()}
                       >
                         <RotateCcw size={16} />
@@ -385,7 +385,7 @@ export function CitadelOverviewRoutePage({
                     ) : (
                       <NativeButton
                         variant="destructive"
-                        disabled={lifecycleAction !== null}
+                        disabled={lifecycleAction !== null || !citadel?.record?.revision}
                         onClick={() => citadel?.record?.revision && setConfirmArchive({ id: citadel.record.citadelId, label: citadel.record.name, expectedRevision: citadel.record.revision })}
                       >
                         <Archive size={16} />

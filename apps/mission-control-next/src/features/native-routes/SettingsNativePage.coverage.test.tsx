@@ -567,6 +567,7 @@ function setupResponses() {
       {
         citadelId: "personal",
         slug: "personal",
+        revision: "a".repeat(64),
         name: "Personal",
         kind: "personal",
         description: "Personal operating world",
@@ -577,6 +578,7 @@ function setupResponses() {
       {
         citadelId: "company",
         slug: "company",
+        revision: "b".repeat(64),
         name: "Company",
         kind: "company",
         description: "Company operating world",
@@ -592,6 +594,7 @@ function setupResponses() {
   settingsMocks.restoreWorkspace.mockResolvedValue({ ...workspaces[1], lifecycleStatus: "active" });
   settingsMocks.createCitadel.mockResolvedValue({
     citadelId: "created-citadel",
+    revision: "c".repeat(64),
     slug: "created-citadel",
     name: "Created Citadel",
     kind: "custom",
@@ -601,6 +604,7 @@ function setupResponses() {
   });
   settingsMocks.updateCitadel.mockResolvedValue({
     citadelId: "company",
+    revision: "c".repeat(64),
     slug: "company",
     name: "Company updated",
     kind: "company",
@@ -608,8 +612,8 @@ function setupResponses() {
     createdAt: "2026-05-01T00:00:00.000Z",
     updatedAt: "2026-05-01T00:00:00.000Z",
   });
-  settingsMocks.archiveCitadel.mockResolvedValue({ citadelId: "company", lifecycleStatus: "archived" });
-  settingsMocks.restoreCitadel.mockResolvedValue({ citadelId: "company", lifecycleStatus: "active" });
+  settingsMocks.archiveCitadel.mockResolvedValue({ citadelId: "company", revision: "c".repeat(64), lifecycleStatus: "archived" });
+  settingsMocks.restoreCitadel.mockResolvedValue({ citadelId: "company", revision: "d".repeat(64), lifecycleStatus: "active" });
   settingsMocks.fetchIntegrationCatalog.mockResolvedValue({
     items: [
       {
@@ -1398,6 +1402,92 @@ afterEach(() => {
 });
 
 describe("SettingsNativePage broad native sections", () => {
+  it("retains a Citadel draft on conflict and submits only after explicit review of the winner", async () => {
+    const initial = { citadelId: "personal", name: "Personal", slug: "personal", kind: "personal", lifecycleStatus: "active",
+      description: "Original description", revision: "a".repeat(64), createdAt: "t", updatedAt: "t" };
+    const winner = { ...initial, name: "Remote Citadel", description: "Peer description", revision: "b".repeat(64) };
+    settingsMocks.listCitadels.mockResolvedValue({ items: [initial] });
+    const page = await mount("workspaces");
+    await click(findButton(page.root, "Citadel manager"));
+    await click(findButton(page.root, "Personal"));
+    await click(findButton(page.root, "Edit Citadel"));
+    await change(page.root.findByProps({ value: "Personal" }), "Local Citadel draft");
+    await change(page.root.findByProps({ value: "Original description" }), "");
+    settingsMocks.updateCitadel.mockRejectedValueOnce(new ApiRequestError("Citadel changed", { kind: "http", method: "PATCH",
+      path: "/api/v1/citadels/personal", status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } } }));
+    settingsMocks.listCitadels.mockResolvedValue({ items: [winner] });
+    await click(findButton(page.root, "Save Citadel"));
+    expect(settingsMocks.updateCitadel).toHaveBeenCalledExactlyOnceWith("personal", {
+      expectedRevision: initial.revision, name: "Local Citadel draft", description: "", slug: "personal", kind: "personal",
+    });
+    expect(page.root.findByProps({ value: "Local Citadel draft" })).toBeTruthy();
+    expect(collectText(page.root)).toContain("Peer description");
+    expect(findButton(page.root, "Save Citadel").props.disabled).toBe(true);
+    await click(findButton(page.root, "Save Citadel"));
+    expect(settingsMocks.updateCitadel).toHaveBeenCalledTimes(1);
+    await click(findButton(page.root, "Apply draft to current Citadel"));
+    settingsMocks.updateCitadel.mockResolvedValueOnce({ ...winner, name: "Local Citadel draft", description: "", revision: "c".repeat(64) });
+    await click(findButton(page.root, "Save Citadel"));
+    expect(settingsMocks.updateCitadel).toHaveBeenNthCalledWith(2, "personal", expect.objectContaining({ expectedRevision: winner.revision, description: "" }));
+  });
+
+  it("keeps a rejected Citadel review latched when the reload still returns the rejected token", async () => {
+    const page = await mount("workspaces");
+    await click(findButton(page.root, "Citadel manager"));
+    await click(findButton(page.root, "Personal"));
+    await click(findButton(page.root, "Edit Citadel"));
+    await change(page.root.findByProps({ value: "Personal" }), "Retained local draft");
+    settingsMocks.updateCitadel.mockRejectedValueOnce(new ApiRequestError("Citadel changed", { kind: "http", method: "PATCH",
+      path: "/api/v1/citadels/personal", status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } } }));
+    await click(findButton(page.root, "Save Citadel"));
+    expect(findButton(page.root, "Apply draft to current Citadel").props.disabled).toBe(true);
+    expect(findButton(page.root, "Save Citadel").props.disabled).toBe(true);
+    settingsMocks.listCitadels.mockResolvedValueOnce({ items: [{ citadelId: "personal", name: "Reviewed peer", slug: "personal",
+      kind: "personal", lifecycleStatus: "active", revision: "e".repeat(64), createdAt: "t", updatedAt: "t" }] });
+    await click(findButton(page.root, "Reload latest Citadel"));
+    expect(page.root.findByProps({ value: "Retained local draft" })).toBeTruthy();
+    expect(findButton(page.root, "Apply draft to current Citadel").props.disabled).toBe(false);
+    expect(findButton(page.root, "Save Citadel").props.disabled).toBe(true);
+  });
+
+  it("retains typing made while a Citadel save is in flight and uses the returned revision next", async () => {
+    const initial = { citadelId: "personal", name: "Personal", slug: "personal", kind: "personal", lifecycleStatus: "active",
+      revision: "a".repeat(64), createdAt: "t", updatedAt: "t" };
+    settingsMocks.listCitadels.mockResolvedValue({ items: [initial] });
+    const page = await mount("workspaces");
+    await click(findButton(page.root, "Citadel manager"));
+    await click(findButton(page.root, "Personal"));
+    await click(findButton(page.root, "Edit Citadel"));
+    await change(page.root.findByProps({ value: "Personal" }), "Submitted draft");
+    let resolveSave!: (value: typeof initial) => void;
+    settingsMocks.updateCitadel.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    await click(findButton(page.root, "Save Citadel"));
+    await change(page.root.findByProps({ value: "Submitted draft" }), "Newer typing");
+    const acknowledged = { ...initial, name: "Submitted draft", revision: "b".repeat(64) };
+    settingsMocks.listCitadels.mockResolvedValue({ items: [acknowledged] });
+    await act(async () => { resolveSave(acknowledged); });
+    await flush();
+    expect(page.root.findByProps({ value: "Newer typing" })).toBeTruthy();
+    expect(findButton(page.root, "Save Citadel").props.disabled).toBe(false);
+    settingsMocks.updateCitadel.mockResolvedValueOnce({ ...acknowledged, name: "Newer typing", revision: "c".repeat(64) });
+    await click(findButton(page.root, "Save Citadel"));
+    expect(settingsMocks.updateCitadel).toHaveBeenNthCalledWith(2, "personal", expect.objectContaining({ expectedRevision: acknowledged.revision, name: "Newer typing" }));
+  });
+
+  it("does not mistake a duplicate Citadel slug for a stale review", async () => {
+    const page = await mount("workspaces");
+    await click(findButton(page.root, "Citadel manager"));
+    await click(findButton(page.root, "Personal"));
+    await click(findButton(page.root, "Edit Citadel"));
+    await change(page.root.findAll((node) => node.type === "input" && node.props.value === "personal")[0]!, "taken-slug");
+    settingsMocks.updateCitadel.mockRejectedValueOnce(new ApiRequestError("Slug already in use", { kind: "http", method: "PATCH",
+      path: "/api/v1/citadels/personal", status: 409, body: { code: "ALREADY_EXISTS" } }));
+    await click(findButton(page.root, "Save Citadel"));
+    expect(findButton(page.root, "Save Citadel").props.disabled).toBe(false);
+    expect(collectText(page.root)).not.toContain("Apply draft to current Citadel");
+    expect(page.root.findByProps({ value: "taken-slug" })).toBeTruthy();
+  });
+
   it("preserves a workspace draft, reloads the current revision, and retries after a 409", async () => {
     const page = await mount("workspaces");
     await click(findButton(page.root, "Default"));
@@ -2098,7 +2188,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(workspaceSetter).toHaveBeenCalledWith("default");
     await click(findButton(workspacesPage.root, "Default"));
     await click(workspacesPage.root.findByProps({ "aria-label": "Archive workspace Default" }));
-    let archiveModal = workspacesPage.root.findByType(ConfirmModal);
+    const archiveModal = workspacesPage.root.findByType(ConfirmModal);
     expect(archiveModal.props.open).toBe(true);
     expect(archiveModal.props.confirmLabel).toBe("Confirm archive workspace");
     await act(async () => archiveModal.props.onCancel());
@@ -2855,7 +2945,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(hasDirtySections()).toBe(true);
 
     await click(findButton(providers.root, "Back to list"));
-    let leaveDialog = providers.root.findAllByType(DraftLeaveDialog).find((dialog) => dialog.props.open)!;
+    const leaveDialog = providers.root.findAllByType(DraftLeaveDialog).find((dialog) => dialog.props.open)!;
     expect(leaveDialog).toBeDefined();
     await act(async () => {
       leaveDialog.props.onCancel();
@@ -3820,7 +3910,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     const onboarding = await mount("onboarding");
 
     await click(findButton(onboarding.root, "Try a safe demo"));
-    let text = collectText(onboarding.root);
+    const text = collectText(onboarding.root);
     expect(text).toContain("Start Here");
     expect(text).toContain("Not created");
   });
@@ -4053,7 +4143,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     const onboarding = await mount("onboarding");
 
     await click(findButton(onboarding.root, "Verification evidence"));
-    let text = collectText(onboarding.root);
+    const text = collectText(onboarding.root);
     expect(text).toContain("First trusted outcome");
     expect(text).toContain("First-run setup");
     expect(text).toContain("No proof artifact or trace is recorded yet.");
@@ -4065,7 +4155,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     const onboarding = await mount("onboarding");
 
     await click(findButton(onboarding.root, "Verification evidence"));
-    let text = collectText(onboarding.root);
+    const text = collectText(onboarding.root);
     expect(text).toContain("Remote profile readiness");
     expect(text).toContain("unknown");
   });

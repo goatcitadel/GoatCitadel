@@ -38,6 +38,7 @@ describe("citadels routes", () => {
   });
 
   it("creates, updates, archives, and restores Citadel identity records", async () => {
+    const expectedRevision = "a".repeat(64);
     const createRecord = vi.fn((input: Record<string, unknown>) => ({ citadelId: "client", ...input }));
     const updateRecord = vi.fn((citadelId: string, input: Record<string, unknown>) => ({ citadelId, ...input }));
     const archiveRecord = vi.fn((citadelId: string) => ({ citadelId, lifecycleStatus: "archived" }));
@@ -54,10 +55,10 @@ describe("citadels routes", () => {
     const updateResponse = await app.inject({
       method: "PATCH",
       url: "/api/v1/citadels/client",
-      payload: { name: "Client One" },
+      payload: { name: "Client One", expectedRevision },
     });
-    const archiveResponse = await app.inject({ method: "POST", url: "/api/v1/citadels/client/archive" });
-    const restoreResponse = await app.inject({ method: "POST", url: "/api/v1/citadels/client/restore" });
+    const archiveResponse = await app.inject({ method: "POST", url: "/api/v1/citadels/client/archive", payload: { expectedRevision } });
+    const restoreResponse = await app.inject({ method: "POST", url: "/api/v1/citadels/client/restore", payload: { expectedRevision } });
 
     expect(createResponse.statusCode).toBe(201);
     expect(updateResponse.statusCode).toBe(200);
@@ -69,9 +70,9 @@ describe("citadels routes", () => {
       kind: "client",
       defaultWorkspaceId: "delivery",
     });
-    expect(updateRecord).toHaveBeenCalledWith("client", { name: "Client One" });
-    expect(archiveRecord).toHaveBeenCalledWith("client");
-    expect(restoreRecord).toHaveBeenCalledWith("client");
+    expect(updateRecord).toHaveBeenCalledWith("client", { name: "Client One", expectedRevision });
+    expect(archiveRecord).toHaveBeenCalledWith("client", expectedRevision);
+    expect(restoreRecord).toHaveBeenCalledWith("client", expectedRevision);
   });
 
   it("returns 404 when the citadel has no charter", async () => {

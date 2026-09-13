@@ -150,6 +150,16 @@ local personality revision slice. Citadel, integration and MCP mutation owners,
 C5/C6 source work and full C1-C6 acceptance remain open. See
 [Personality catalog revisions](PERSONALITY_CATALOG_REVISIONS.md).
 
+Citadel profile edits, archive and restore now enforce reviewed record revisions
+across storage, Gateway and both operator surfaces. SQLite and actual PostgreSQL
+prove five competing-writer pairs; the named Gateway/browser lane rejects five
+stale writes and accepts five explicitly reviewed retries. Settings retains edit
+drafts and Library retains an unsaved Charter during lifecycle conflicts, with
+desktop and 390 px proof. This completes the local profile-record slice only:
+Charter, template, blueprint and mutable access-rule owners, integration/MCP
+preconditions, C5/C6 source work and full C1-C6 acceptance remain open. See
+[Citadel profile revisions](CITADEL_RECORD_REVISIONS.md).
+
 [Implementation evidence and remaining work](testing/COMPARISON_IMPLEMENTATION_STATUS.md)
 records the controlled skill-reuse journey, real local Browser QA execution,
 stdio session ownership, and the exact limits of the Windows/PostgreSQL receipts.

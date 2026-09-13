@@ -121,6 +121,7 @@
     "verify:memory:truth": "node scripts/verification/run.mjs memory-truth",
     "verify:permissions:revisions": "node scripts/verification/run.mjs permission-profile-revisions",
     "verify:personalities:revisions": "node scripts/verification/run.mjs personality-catalog-revisions",
+    "verify:citadels:revisions": "node scripts/verification/run.mjs citadel-record-revisions",
     "verify:realtime:truth": "node scripts/verification/run.mjs realtime-truth",
     "verify:journeys": "node scripts/verification/run.mjs journeys",
     "verify:architecture:metrics": "node scripts/verification/run.mjs architecture-metrics",

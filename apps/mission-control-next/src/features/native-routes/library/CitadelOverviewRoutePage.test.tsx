@@ -68,6 +68,7 @@ const CITADEL = {
   citadelId: "default",
   record: {
     citadelId: "default",
+    revision: "a".repeat(64),
     name: "Acme",
     slug: "default",
     kind: "company",
@@ -167,12 +168,14 @@ describe("CitadelOverviewRoutePage", () => {
     }));
     apiMocks.archiveCitadel.mockResolvedValue({
       ...CITADEL.record,
+      revision: "b".repeat(64),
       lifecycleStatus: "archived",
       archivedAt: "t2",
       updatedAt: "t2",
     });
     apiMocks.restoreCitadel.mockResolvedValue({
       ...CITADEL.record,
+      revision: "c".repeat(64),
       updatedAt: "t3",
     });
   });
@@ -238,7 +241,7 @@ describe("CitadelOverviewRoutePage", () => {
     });
     expect(apiMocks.archiveCitadel).not.toHaveBeenCalled();
     await act(async () => { renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
-    expect(apiMocks.archiveCitadel).toHaveBeenCalledWith("default");
+    expect(apiMocks.archiveCitadel).toHaveBeenCalledWith("default", CITADEL.record.revision);
     expect(treeString(renderer!)).toContain("Citadel archived");
     expect(buttonContaining(renderer!, "Restore Citadel")).toBeDefined();
 
@@ -246,8 +249,50 @@ describe("CitadelOverviewRoutePage", () => {
       buttonContaining(renderer!, "Restore Citadel").props.onClick();
       await Promise.resolve();
     });
-    expect(apiMocks.restoreCitadel).toHaveBeenCalledWith("default");
+    expect(apiMocks.restoreCitadel).toHaveBeenCalledWith("default", "b".repeat(64));
     expect(treeString(renderer!)).toContain("Citadel restored");
+  });
+
+  it("retains a Charter draft after an archive conflict and requires a new confirmation of the current profile", async () => {
+    apiMocks.getCitadel.mockResolvedValue(CITADEL);
+    apiMocks.getCitadelGatehouse.mockResolvedValue(GATEHOUSE);
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer!, "Edit Charter").props.onClick(); });
+    await act(async () => { renderer!.root.findByType("textarea").props.onChange({ target: { value: "Unsaved Charter purpose" } }); });
+    await act(async () => { buttonContaining(renderer!, "Archive Citadel").props.onClick(); });
+    expect(renderer!.root.findByType(ConfirmModal).props.message).toContain("Acme");
+    const winner = { ...CITADEL, record: { ...CITADEL.record, name: "Peer Citadel", revision: "d".repeat(64) } };
+    apiMocks.archiveCitadel.mockRejectedValueOnce({ status: 409 });
+    apiMocks.getCitadel.mockResolvedValueOnce(winner);
+    await act(async () => { await renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
+    expect(apiMocks.archiveCitadel).toHaveBeenCalledExactlyOnceWith("default", CITADEL.record.revision);
+    expect(renderer!.root.findByType(ConfirmModal).props.open).toBe(false);
+    expect(renderer!.root.findByType("textarea").props.value).toBe("Unsaved Charter purpose");
+    expect(treeString(renderer!)).toContain("open a new archive confirmation");
+    await act(async () => { buttonContaining(renderer!, "Archive Citadel").props.onClick(); });
+    expect(renderer!.root.findByType(ConfirmModal).props.message).toContain("Peer Citadel");
+    await act(async () => { await renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
+    expect(apiMocks.archiveCitadel).toHaveBeenNthCalledWith(2, "default", winner.record.revision);
+    await act(async () => { renderer!.unmount(); });
+  });
+
+  it("refreshes a rejected restore without retrying it automatically", async () => {
+    const archived = { ...CITADEL, record: { ...CITADEL.record, lifecycleStatus: "archived" } };
+    apiMocks.getCitadel.mockResolvedValue(archived);
+    apiMocks.getCitadelGatehouse.mockResolvedValue(GATEHOUSE);
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer!, "Edit Charter").props.onClick(); });
+    apiMocks.restoreCitadel.mockRejectedValueOnce({ status: 409 });
+    const winner = { ...archived, record: { ...archived.record, revision: "e".repeat(64) } };
+    apiMocks.getCitadel.mockResolvedValueOnce(winner);
+    await act(async () => { await buttonContaining(renderer!, "Restore Citadel").props.onClick(); });
+    expect(apiMocks.restoreCitadel).toHaveBeenCalledExactlyOnceWith("default", archived.record.revision);
+    expect(treeString(renderer!)).toContain("before restoring it again");
+    await act(async () => { await buttonContaining(renderer!, "Restore Citadel").props.onClick(); });
+    expect(apiMocks.restoreCitadel).toHaveBeenNthCalledWith(2, "default", winner.record.revision);
+    await act(async () => { renderer!.unmount(); });
   });
 
   it("shows the staged setup state without fetching detail when the active Citadel has no Charter", async () => {

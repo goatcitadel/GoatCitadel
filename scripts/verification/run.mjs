@@ -50,6 +50,7 @@ import {
   runMemoryTruthLane,
   runPermissionProfileRevisionsLane,
   runPersonalityCatalogRevisionsLane,
+  runCitadelRecordRevisionsLane,
   runMeshReadinessLane,
   runOperatorProofLane,
   runOrchestrationPerformanceLane,
@@ -114,6 +115,7 @@ const VALID_LANES = new Set([
   "memory-truth",
   "permission-profile-revisions",
   "personality-catalog-revisions",
+  "citadel-record-revisions",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -188,6 +190,7 @@ const REVIEW_LANES = new Set([
   "memory-truth",
   "permission-profile-revisions",
   "personality-catalog-revisions",
+  "citadel-record-revisions",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -389,6 +392,8 @@ async function runLockedVerification(lane, options) {
       await runPermissionProfileRevisionsLane(context);
     } else if (lane === "personality-catalog-revisions") {
       await runPersonalityCatalogRevisionsLane(context);
+    } else if (lane === "citadel-record-revisions") {
+      await runCitadelRecordRevisionsLane(context);
     } else if (lane === "realtime-truth") {
       await runRealtimeTruthLane(context, { profile });
     } else if (lane === "journeys") {

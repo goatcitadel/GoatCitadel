@@ -10306,6 +10306,65 @@ process: `.tmp/comparison-personality-cleanup-v1.json`. The scoped audit records
 `.tmp/comparison-personality-audit-v1.json`. See the
 [operator and API contract](../PERSONALITY_CATALOG_REVISIONS.md).
 
+## Citadel profile record revisions
+
+The local profile-record portion of GATE-02 now has a required review contract
+for edits, archive and restore. The record token excludes derived Charter
+presence; directory and detail reads agree. SQLite immediate transactions and
+PostgreSQL row locks protect comparison, mutation and the returned acknowledgement
+together. Timestamps advance for same-value saves and backdated clocks, so ABA
+edits cannot revive old reviews. Creation preserves unique identity and cannot
+overwrite an existing id or slug. No schema migration is required.
+
+Settings retains stale and in-flight drafts, requires explicit rebase, and keeps
+a rejected token latched while refresh still returns that token. Duplicate-slug
+errors remain distinct from revision conflicts. Empty descriptions can be
+cleared. Both Settings and Library capture archive confirmation identity and
+revision and require fresh review after conflict. Library refreshes the profile
+without replacing an unsaved Charter. Lifecycle buttons require a loaded review.
+
+Current evidence:
+
+- SQLite revision/concurrency and existing Citadel repository tests: 16 passed
+  (`.tmp/comparison-citadel-record-sqlite-v1.log`). Five independent writer pairs
+  cover edit/edit, edit/archive, edit/restore, archive/archive and restore/restore.
+- Actual PostgreSQL owner and the same five races passed with no skips
+  (`.tmp/comparison-citadel-record-postgres-v1.log`). The owned temporary cluster
+  on port 58313 stopped after data-directory, PID, executable and port checks.
+- Gateway existing routes/services: 57 passed; new mutation validation,
+  forwarding, conflict and commit-truth tests: 27 passed. Shared client: 17 passed.
+- Canonical UI: 73 tests passed across Settings and Citadel Overview, including
+  retained drafts, explicit review, stale-refresh latching, in-flight typing,
+  duplicate-slug distinction, archive confirmation and restore retry.
+- `pnpm verify:citadels:revisions`: 1/1 passed in
+  `artifacts/verification/2026-09-13T17-20-15-553Z-citadel-record-revisions-13efc67f/manifest.json`.
+  Three missing-review requests were rejected; five actual competing API writes
+  caused browser 409s, followed by five reviewed successful mutations. Desktop
+  and 390 px screenshots record Settings edits and Library lifecycle review.
+- Async Gateway boundary: 10 tests passed; 996 production TypeScript files scanned.
+- Final contracts/storage/shared/Gateway/UI typecheck, scoped strict lint,
+  `pnpm docs:check` (including nine Docker-secret source tests), and diff checks
+  passed. The newly tracked sidebar fallback comment now states its intentional
+  in-memory behavior in the repository's required rationale form.
+
+The first two browser attempts failed on verifier-only heading and tab selectors;
+their artifacts remain available. The successful run used the actual accessible
+roles and completed every planned profile conflict and recovery assertion.
+
+This completes the local profile-record slice, not all Citadel revisions or the
+overall comparison program. Charter/template/blueprint and mutable access-rule
+owners, integration/MCP revisions, Windows worker source work, matched comparison
+benchmarks and full C1-C6 live acceptance remain open. No drive was attached,
+partitioned, formatted or mounted. No installed service, user database, provider
+credential or external channel was changed. See the
+[operator and API contract](../CITADEL_RECORD_REVISIONS.md).
+
+The read-only cleanup audit found zero remaining owned listeners, matching
+processes, verification runtime roots or PostgreSQL PID files and stopped no
+additional process (`.tmp/comparison-citadel-record-cleanup-v1.json`). A scoped
+18-file source audit and separate local backup follow the operator-requested
+GitHub preservation checkpoint `a15fdb851`. The program remains active.
+
 ## Remaining acceptance inputs
 
 Telegram is the initial channel. The operator has a mini PC available, but its

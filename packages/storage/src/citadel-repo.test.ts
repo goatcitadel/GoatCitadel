@@ -58,7 +58,7 @@ describe("CitadelRepository", () => {
 
     const updated = repo.updateRecord(
       created.citadelId,
-      { name: "Client Alpha HQ", slug: "client-alpha-hq", description: "  ", kind: "company" },
+      { expectedRevision: created.revision, name: "Client Alpha HQ", slug: "client-alpha-hq", description: "  ", kind: "company" },
       "2026-06-20T00:05:00.000Z",
     );
     assert.equal(updated.name, "Client Alpha HQ");
@@ -68,7 +68,7 @@ describe("CitadelRepository", () => {
 
     assert.throws(() => repo.createRecord({ name: "Client Alpha HQ" }), /already in use/);
 
-    const archived = repo.archiveRecord(created.citadelId, "2026-06-20T00:10:00.000Z");
+    const archived = repo.archiveRecord(created.citadelId, updated.revision, "2026-06-20T00:10:00.000Z");
     assert.equal(archived.lifecycleStatus, "archived");
     assert.equal(
       repo.listRecords("active").some((record) => record.citadelId === created.citadelId),
@@ -76,7 +76,7 @@ describe("CitadelRepository", () => {
     );
     assert.equal(repo.listRecords("archived")[0]?.citadelId, created.citadelId);
 
-    const restored = repo.restoreRecord(created.citadelId, "2026-06-20T00:15:00.000Z");
+    const restored = repo.restoreRecord(created.citadelId, archived.revision, "2026-06-20T00:15:00.000Z");
     assert.equal(restored.lifecycleStatus, "active");
   });
 

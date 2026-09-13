@@ -55,7 +55,7 @@ export function UnifiedSidebarProvider({ children, mobile, navOpen, openNav, clo
   });
   const changeCollapsed = useCallback((value: boolean) => {
     setCollapsed(value);
-    try { window.localStorage.setItem(PREFERENCE, String(value)); } catch { /* Presentation remains usable when storage is unavailable. */ }
+    try { window.localStorage.setItem(PREFERENCE, String(value)); } catch { /* Keep the in-memory preference when optional browser storage is unavailable. */ }
   }, []);
   const effectiveCollapsed = collapsed || (narrowDesktop && inspectors.size > 0);
   const value = useMemo<Sidebar>(() => ({ target, setTarget, collapsed: effectiveCollapsed, mobile, navOpen, detailOpen: inspectors.size > 0, activeInspectorId, registerInspector,

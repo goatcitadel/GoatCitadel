@@ -29,23 +29,26 @@ describe("citadel api client", () => {
   });
 
   it("creates, updates, archives, and restores Citadel identity records", async () => {
+    const expectedRevision = "a".repeat(64);
     await citadels.createCitadel({ citadelId: "client", name: "Client", kind: "client" } as never);
     expect(lastCall()[0]).toBe("/api/v1/citadels");
     expect(lastCall()[1]?.method).toBe("POST");
     expect(body(lastCall()[1])).toEqual({ citadelId: "client", name: "Client", kind: "client" });
 
-    await citadels.updateCitadel("client/one", { name: "Client One" } as never);
+    await citadels.updateCitadel("client/one", { name: "Client One", expectedRevision });
     expect(lastCall()[0]).toBe("/api/v1/citadels/client%2Fone");
     expect(lastCall()[1]?.method).toBe("PATCH");
-    expect(body(lastCall()[1])).toEqual({ name: "Client One" });
+    expect(body(lastCall()[1])).toEqual({ name: "Client One", expectedRevision });
 
-    await citadels.archiveCitadel("client/one");
+    await citadels.archiveCitadel("client/one", expectedRevision);
     expect(lastCall()[0]).toBe("/api/v1/citadels/client%2Fone/archive");
     expect(lastCall()[1]?.method).toBe("POST");
+    expect(body(lastCall()[1])).toEqual({ expectedRevision });
 
-    await citadels.restoreCitadel("client/one");
+    await citadels.restoreCitadel("client/one", expectedRevision);
     expect(lastCall()[0]).toBe("/api/v1/citadels/client%2Fone/restore");
     expect(lastCall()[1]?.method).toBe("POST");
+    expect(body(lastCall()[1])).toEqual({ expectedRevision });
   });
 
   it("getCitadel reads the citadel resource", async () => {

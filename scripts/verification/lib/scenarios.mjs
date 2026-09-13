@@ -116,6 +116,7 @@ import { runMemoryPolicyRevisionScenario } from "./scenarios/memory-policy-revis
 import { runWorkbenchFileRevisionScenario } from "./scenarios/workbench-file-revision-scenario.mjs";
 import { runPermissionProfileRevisionsLane as runPermissionProfileRevisionsLaneImpl } from "./scenarios/permission-profile-revisions-lane.mjs";
 import { runPersonalityCatalogRevisionsLane as runPersonalityCatalogRevisionsLaneImpl } from "./scenarios/personality-catalog-revisions-lane.mjs";
+import { runCitadelRecordRevisionsLane as runCitadelRecordRevisionsLaneImpl } from "./scenarios/citadel-record-revisions-lane.mjs";
 import { runAuthMatrixLane as runAuthMatrixLaneImpl } from "./scenarios/auth-matrix-lane.mjs";
 import { runArchitectureMetricsLane as runArchitectureMetricsLaneImpl } from "./scenarios/architecture-metrics-lane.mjs";
 import { runCatalogParityLane as runCatalogParityLaneImpl } from "./scenarios/catalog-parity-lane.mjs";
@@ -472,6 +473,10 @@ export async function runPermissionProfileRevisionsLane(context) {
 
 export async function runPersonalityCatalogRevisionsLane(context) {
   await runPersonalityCatalogRevisionsLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runCitadelRecordRevisionsLane(context) {
+  await runCitadelRecordRevisionsLaneImpl(context, verificationLaneDeps());
 }
 
 // Scope caveat (Phase 6 doc-truth): this lane proves the channel-AGNOSTIC durable
