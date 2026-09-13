@@ -56,6 +56,7 @@ export function CitadelVaultRoutePage({
   const secretDraft = useSessionDraft(`vault-secret:${activeCitadelId}:new`, EMPTY_SECRET, undefined, { label: "New secret", active: formOpen, onSave: (): Promise<boolean> => store() });
   const draft = secretDraft.value;
   const setDraft = secretDraft.setValue;
+  const acceptSavedSecret = secretDraft.acceptSaved;
   const revealGeneration = useRef(0);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   // Reveal failures are tracked separately from revealed plaintext so an error message is
@@ -99,7 +100,7 @@ export function CitadelVaultRoutePage({
     setBusy(true); setStoreError(null);
     try {
       await storeCitadelVaultSecret(activeCitadelId, draft.name.trim(), draft.value);
-      const clean = secretDraft.acceptSaved(EMPTY_SECRET, undefined, draft);
+      const clean = acceptSavedSecret(EMPTY_SECRET, undefined, draft);
       if (clean) setFormOpen(false);
       await load();
       return true;
@@ -109,7 +110,7 @@ export function CitadelVaultRoutePage({
     } finally {
       setBusy(false);
     }
-  }, [activeCitadelId, draft, load, secretDraft.acceptSaved]);
+  }, [activeCitadelId, draft, load, acceptSavedSecret]);
 
   const clearRevealError = useCallback((secretId: string) => {
     setRevealErrors((current) => {

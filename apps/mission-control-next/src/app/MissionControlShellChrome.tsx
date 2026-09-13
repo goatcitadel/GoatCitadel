@@ -75,15 +75,7 @@ function describeWorkspaceSelectionStatus(status: WorkspaceSelectionStatus): str
 }
 
 export function ShellTopbar({
-  activeCitadelId,
-  activeCitadelName,
-  activeWorkspaceId,
-  activeWorkspaceName,
-  buildPrimaryAreaRoute,
-  citadelOptions,
   handleOpenStartHere,
-  handleSelectCitadel,
-  handleSelectWorkspace,
   handleToggleMode,
   handleToggleNotificationSound,
   handleToggleTheme,
@@ -97,14 +89,11 @@ export function ShellTopbar({
   onToggleInspector,
   operatorNotificationCount,
   pendingApprovals,
-  preloadRouteChunk,
   realtimeBadge,
   realtimeDegraded,
   route,
   soundEnabled,
   theme,
-  workspaceOptions,
-  workspaceSelectionStatus = "ready",
 }: {
   activeCitadelId: string;
   activeCitadelName: string;
@@ -137,8 +126,6 @@ export function ShellTopbar({
   workspaceOptions: Array<{ workspaceId: string; name: string }>;
   workspaceSelectionStatus?: WorkspaceSelectionStatus;
 }) {
-  const workspaceSelectionReady = workspaceSelectionStatus === "ready";
-  const workspacePlaceholder = describeWorkspaceSelectionStatus(workspaceSelectionStatus);
   const topbarOverflowItems: TopbarOverflowItem[] = [
     {
       id: "start-here",
@@ -202,7 +189,6 @@ export function ShellRail({
   activeWorkspaceName,
   buildPrimaryAreaRoute,
   citadelOptions,
-  currentAreaMeta,
   groupedRailItems,
   handleSelectCitadel,
   handleSelectWorkspace,

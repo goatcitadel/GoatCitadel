@@ -76,3 +76,15 @@ it("returns to the latest record opener when switching within a desktop inspecto
   await click("Close details");
   expect(document.activeElement).toBe(buttons[1]);
 });
+
+it("returns focus to a connected opener when an open inspector unmounts", async () => {
+  const opener = document.createElement("button");
+  document.body.append(opener);
+  opener.focus();
+  await act(async () => root.render(
+    <DetailInspector open title="Temporary details" onClose={() => {}}>Evidence</DetailInspector>,
+  ));
+  expect(document.activeElement).toBe(document.querySelector(".mc-next-detail-inspector h2"));
+  await act(async () => root.render(null));
+  expect(document.activeElement).toBe(opener);
+});

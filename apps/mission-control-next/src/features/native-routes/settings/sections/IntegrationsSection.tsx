@@ -1,8 +1,7 @@
-/* eslint-disable max-lines -- Integrations coordinates catalog, connection drafts, diagnostics, side-effect evidence, and meeting setup in one owner pending a later surface split. */
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { Play, Plus, RefreshCw, Save, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Play, Plus, RefreshCw, SlidersHorizontal, Trash2 } from "lucide-react";
 import type {
   ConnectorDiagnosticReport,
   ExternalConnectorActionSummary,
@@ -214,7 +213,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         ? current
         : createableCatalog[0]?.catalogId || "",
     );
-  }, [createableCatalog]);
+  }, [createableCatalog, setCreateCatalogId]);
 
   useEffect(() => {
     if (!createCatalogId || panel !== "create") {
@@ -858,8 +857,4 @@ function isGoogleMeetBrowserTransportReady(): boolean {
     typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.getUserMedia === "function"
   );
-}
-
-function areIntegrationValuesEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }

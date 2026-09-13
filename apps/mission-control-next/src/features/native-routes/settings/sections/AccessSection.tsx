@@ -26,7 +26,6 @@ import {
   SettingsCodeBlock,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,

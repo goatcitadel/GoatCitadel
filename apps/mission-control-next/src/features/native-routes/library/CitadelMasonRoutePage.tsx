@@ -108,6 +108,7 @@ export function CitadelMasonRoutePage({
   const messageDraft = useSessionDraft(`mason:${activeCitadelId}:${sessionId ?? "new"}:question:${questionIndex}`, "", undefined, { label: "Mason answer", onSave: (): Promise<boolean> => submitMessage() });
   const message = messageDraft.value;
   const setMessage = messageDraft.setValue;
+  const acceptSavedMessage = messageDraft.acceptSaved;
   const [review, setReview] = useState<ReviewState>({ loading: false, error: null, summary: null });
 
   useEffect(() => {
@@ -135,7 +136,7 @@ export function CitadelMasonRoutePage({
     setSessionState((current) => ({ ...current, busy: true, error: null }));
     void getMasonSession(sessionId).then((session) => { if (!cancelled) setSessionState({ session, busy: false, error: null }); }).catch((error) => { if (!cancelled) setSessionState((current) => ({ ...current, busy: false, error: getErrorMessage(error) })); });
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, sessionState.session?.sessionId]);
 
   const startSession = useCallback(async () => {
     setSessionState((current) => ({ ...current, busy: true, error: null }));
@@ -148,7 +149,7 @@ export function CitadelMasonRoutePage({
     } catch (error) {
       setSessionState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
     }
-  }, []);
+  }, [setQuestionIndex, setSessionId]);
 
   const submitMessage = useCallback(async (): Promise<boolean> => {
     const session = sessionState.session;
@@ -160,13 +161,13 @@ export function CitadelMasonRoutePage({
     try {
       const updated = await sendMasonMessage(session.sessionId, trimmed);
       setSessionState({ session: updated, busy: false, error: null });
-      if (messageDraft.acceptSaved("", undefined, message)) setQuestionIndex((current) => Math.min(current + 1, Math.max(0, questions.items.length - 1)));
+      if (acceptSavedMessage("", undefined, message)) setQuestionIndex((current) => Math.min(current + 1, Math.max(0, questions.items.length - 1)));
       return true;
     } catch (error) {
       setSessionState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
       return false;
     }
-  }, [message, sessionState.session, messageDraft.acceptSaved, questions.items.length, setQuestionIndex]);
+  }, [message, sessionState.session, acceptSavedMessage, questions.items.length, setQuestionIndex]);
 
   const draftAndReview = useCallback(async () => {
     const session = sessionState.session;

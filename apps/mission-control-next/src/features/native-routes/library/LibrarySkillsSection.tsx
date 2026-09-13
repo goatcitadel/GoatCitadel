@@ -29,7 +29,7 @@ import type {
   CuratorReviewItem,
   ImprovementCandidateLifecycleAction,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { NativeCard, NativeDisclosureCard, NativeSectionIndex, QuickJumpCard } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, QuickJumpCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
   formatDateTime,

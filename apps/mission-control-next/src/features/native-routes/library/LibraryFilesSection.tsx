@@ -19,7 +19,6 @@ import {
   getErrorMessage,
   nativeLoad,
   nativeLoadIssues,
-  truncateText,
   useAsyncLoad,
   type LoadState,
   type Notice,

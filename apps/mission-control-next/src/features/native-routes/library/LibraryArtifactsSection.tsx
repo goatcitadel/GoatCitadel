@@ -13,7 +13,6 @@ import {
   formatDateTime,
   nativeLoad,
   nativeLoadIssues,
-  truncateText,
   useAsyncLoad,
 } from "../shared/native-helpers";
 import {

@@ -6,7 +6,6 @@ import { DetailInspector } from "../../../../components/DetailInspector";
 // per-section settings decomposition.
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Plus, Save } from "lucide-react";
-import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import {
   createToolGrant,
   fetchSettings,
@@ -28,7 +27,6 @@ import {
   SettingsEmptyState,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,

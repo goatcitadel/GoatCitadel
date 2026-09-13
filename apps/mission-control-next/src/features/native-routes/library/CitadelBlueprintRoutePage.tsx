@@ -69,6 +69,7 @@ export function CitadelBlueprintRoutePage({
   const blueprintDraft = useSessionDraft(`blueprint-import:${activeCitadelId}`, "", undefined, { label: "Blueprint import", active: view === "import" });
   const importText = blueprintDraft.value;
   const setImportText = blueprintDraft.setValue;
+  const acceptSavedBlueprint = blueprintDraft.acceptSaved;
   const [importState, setImportState] = useState<ImportState>(INITIAL_IMPORT);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const exportProofItems = buildBlueprintProofItems(exportState.json, activeCitadelId);
@@ -137,14 +138,14 @@ export function CitadelBlueprintRoutePage({
     setImportState((current) => ({ ...current, busy: true, error: null }));
     try {
       await importCitadelBlueprint(activeCitadelId, parsed.blueprint as CitadelBlueprint);
-      blueprintDraft.acceptSaved("", undefined, submitted);
+      acceptSavedBlueprint("", undefined, submitted);
       setValidatedText(null);
       setImportState((current) => ({ ...current, validation: null, busy: false, done: true }));
       setConfirmImport(false);
     } catch (error) {
       setImportState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
     }
-  }, [activeCitadelId, importText, validatedText, importState.validation, importState.busy, blueprintDraft.acceptSaved]);
+  }, [activeCitadelId, importText, validatedText, importState.validation, importState.busy, acceptSavedBlueprint]);
 
   const canApply = validatedText === importText && importState.validation?.ok === true && !importState.busy;
 

@@ -61,6 +61,7 @@ export function CitadelWardsRoutePage({
   const wardDraft = useSessionDraft(`ward:${activeCitadelId}:new`, EMPTY_WARD, undefined, { label: "New Ward", active: view === "new", onSave: (): Promise<boolean> => addWard() });
   const draft = wardDraft.value;
   const setDraft = wardDraft.setValue;
+  const acceptSavedWard = wardDraft.acceptSaved;
   const [probe, setProbe] = useState("");
   const [probeResult, setProbeResult] = useState<{ action: string; effect: string } | null>(null);
   const [selectedWardId, setSelectedWardId] = useState<string | null>(null);
@@ -106,7 +107,7 @@ export function CitadelWardsRoutePage({
       });
       setWards((current) => ({ ...current, items: [...current.items, record] }));
       setSelectedWardId(record.wardId);
-      if (wardDraft.acceptSaved(EMPTY_WARD, undefined, draft)) setView("rule");
+      if (acceptSavedWard(EMPTY_WARD, undefined, draft)) setView("rule");
       return true;
     } catch (error) {
       setDraftError(getErrorMessage(error));
@@ -114,7 +115,7 @@ export function CitadelWardsRoutePage({
     } finally {
       setBusy(false);
     }
-  }, [activeCitadelId, draft, wardDraft.acceptSaved]);
+  }, [activeCitadelId, draft, acceptSavedWard]);
 
   const deleteWard = useCallback(async () => {
     if (!pendingDeleteWard) {

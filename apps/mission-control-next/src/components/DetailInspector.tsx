@@ -24,6 +24,7 @@ export function DetailInspector({ open, title, subtitle, children, actions, pinn
   useModalDialogBehavior({ open: visible && compact, onClose, containerRef: ref });
   useEffect(() => {
     if (!visible || compact || typeof document === "undefined" || typeof document.addEventListener !== "function") return;
+    const inspector = ref.current;
     let opener = typeof HTMLElement !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null;
     headingRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
@@ -40,7 +41,7 @@ export function DetailInspector({ open, title, subtitle, children, actions, pinn
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("focusin", onOutsideFocus);
       // A viewport transition must not replace the current record opener.
-      if ((!visibleRef.current || !ref.current) && opener?.isConnected) opener.focus({ preventScroll: true });
+      if ((!visibleRef.current || !inspector?.isConnected) && opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [visible, compact]);
   const registerInspector = sidebar?.registerInspector;

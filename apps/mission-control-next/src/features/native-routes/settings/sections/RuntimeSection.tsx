@@ -31,7 +31,6 @@ import {
   SettingsButtonRow,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
   SettingsNotice,
   type SettingsSectionProps,
   SettingsSectionShell,
@@ -206,7 +205,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
         alias: nextModel ? deriveLlamaCppAlias(nextModel.relativePath ?? nextModel.modelId) : current.alias,
       }));
     },
-    [discoveredLlamaModels],
+    [discoveredLlamaModels, setLlamaForm],
   );
 
   const runAndReload = async (
@@ -620,10 +619,6 @@ export function RuntimeSection(props: SettingsSectionProps) {
       {leave.dialog}
     </SettingsSectionShell>
   );
-}
-
-function areRuntimeFormsEqual(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function LlamaCppLeaseDiagnostics({ diagnostics }: { diagnostics?: LlamaCppRuntimeLeaseDiagnostics }) {

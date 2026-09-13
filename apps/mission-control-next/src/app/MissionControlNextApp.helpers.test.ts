@@ -13,7 +13,7 @@ import {
   resolveShellThemeClass,
   usesEmbeddedRouteHeader,
 } from "./MissionControlNextApp";
-import { RAIL_ITEMS, navigationRailItems, getRouteReleaseScope, isExperimentalRoute } from "./route-model";
+import { navigationRailItems, getRouteReleaseScope, isExperimentalRoute } from "./route-model";
 
 const item = (section: string) => ({ section }) as any;
 

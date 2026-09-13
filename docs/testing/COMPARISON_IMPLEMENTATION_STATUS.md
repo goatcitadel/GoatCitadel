@@ -10365,6 +10365,15 @@ additional process (`.tmp/comparison-citadel-record-cleanup-v1.json`). A scoped
 18-file source audit and separate local backup follow the operator-requested
 GitHub preservation checkpoint `a15fdb851`. The program remains active.
 
+## GitHub preservation and CI recovery
+
+The operator-requested combined comparison/UI checkpoint is on GitHub `main` as
+`a15fdb851`, followed by the verified Citadel profile slice `136494173`. The
+follow-up [CI recovery report](CHECKPOINT_CI_RECOVERY_2026_09_13.md) records the
+full-repository lint fixes, local validation, dependency review and remaining
+hosted test failures. Publication preserves the work; the comparison program
+and drive-formatting pause remain active.
+
 ## Remaining acceptance inputs
 
 Telegram is the initial channel. The operator has a mini PC available, but its

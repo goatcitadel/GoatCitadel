@@ -369,7 +369,8 @@ export function ThreadedSurfacePage({
   const statusWasOpen = useRef(false);
   const workflowPanelOpen = Boolean(workflowPanel && codeWorkbenchOpen);
   const workbenchEvidenceRequested = codeWorkbenchOpen || ["files", "diff", "runlog", "background"].includes(activeUtilityPanel ?? "");
-  useEffect(() => { input.onWorkbenchOpenChange?.(workbenchEvidenceRequested); }, [input.onWorkbenchOpenChange, workbenchEvidenceRequested]);
+  const onWorkbenchOpenChange = input.onWorkbenchOpenChange;
+  useEffect(() => { onWorkbenchOpenChange?.(workbenchEvidenceRequested); }, [onWorkbenchOpenChange, workbenchEvidenceRequested]);
   const missionSessionGroups = useMemo(
     () => groupDelegatedSessionsForRail(input.sessionRail.missionSessions),
     [input.sessionRail.missionSessions],

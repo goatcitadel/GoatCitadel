@@ -29,7 +29,6 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { RecentCrossProjectSessionsRow } from "./RecentCrossProjectSessionsRow";
 import {
-  NewSessionButton,
   ProjectGlyphButton,
   ProjectThreadGroup,
   filterEmptyLabel,

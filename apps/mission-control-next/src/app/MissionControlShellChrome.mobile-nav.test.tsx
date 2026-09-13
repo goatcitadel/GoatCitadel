@@ -112,7 +112,6 @@ describe("ShellRail mobile drawer focus behavior", () => {
 
   it("contains forward and reverse Tab focus within the open drawer", async () => {
     await openNavigation();
-    const drawer = requiredElement<HTMLElement>('aside[aria-label="Navigation"]');
     const first = requiredElement<HTMLButtonElement>('button[aria-label="Close navigation"]');
     const last = requiredElement<HTMLElement>(".mc-next-rail-signal-card > summary");
     expect(first).toBeDefined();

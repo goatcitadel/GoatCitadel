@@ -44,7 +44,6 @@ import {
   type WorkspaceSelectionStatus,
 } from "./MissionControlShellChrome";
 import {
-  useAnySectionDirty,
   useBeforeUnloadGuard,
   useNavigateGuard,
 } from "../features/native-routes/library/use-form-dirty";

@@ -70,7 +70,7 @@ import {
   SettingsStack,
   SettingsWizardSteps,
 } from "../SettingsShared";
-import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import { SettingsChangeStatus, useSettingsChange } from "../use-settings-change";
 import { providerSaveInput, matchesProviderSave, matchesProviderSavePlan } from "./provider-save-contract";
@@ -111,14 +111,6 @@ type ProviderEditorTransition =
   | { kind: "select"; providerId: string }
   | { kind: "new" }
   | { kind: "routing"; providerId: string; model?: string };
-
-function areProviderEditorDraftsEqual(a: ProviderEditorDraft, b: ProviderEditorDraft): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function areProviderTransportDraftsEqual(a: LlmTransportDraft, b: LlmTransportDraft): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 
 export function ProvidersSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const { config, providers, loading, error, reload, loadModelsForProvider, getCachedModelProbe } =
@@ -200,10 +192,7 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
     acceptSaved: () => true, reload,
   });
   const codexSetup = useSettingsChange({ key: "provider-setup:system:openai-codex", read: fetchLlmConfig, matchesPlan: matchesProviderSavePlan, matches: matchesProviderSave, acceptSaved: () => true, reload });
-  const providerEditorDirty = providerEditor.isDirty;
   const routingDirty = routingEditor.isDirty;
-  const secretDraftDirty = secretEditor.isDirty;
-  const editorSelectionDirty = providerEditorDirty || secretDraftDirty;
   const editorKeys = [providerEditor.key, secretEditor.key];
   const availableModels = selectedProvider?.models ?? [];
   const routingProvider = providers.find((item) => item.providerId === routingProviderId) ?? null;
@@ -668,7 +657,7 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       }
       return true;
     },
-    [activeWorkspaceId, codexOAuthPlan],
+    [codexOAuthPlan],
   );
 
   const openCodexOAuthVerificationUrl = useCallback((verificationUrl: string) => {
