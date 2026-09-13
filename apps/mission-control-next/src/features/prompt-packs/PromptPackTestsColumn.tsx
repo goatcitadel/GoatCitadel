@@ -33,6 +33,7 @@ export interface PromptPackTestsColumnProps {
   running: boolean;
   onSetTestResultFilter: (filter: TestResultFilter) => void;
   onSelectTest: (testId: string) => void;
+  hasDraft?: (testId: string) => boolean;
   onRunOne: (test: PromptPackTestRecord) => void;
 }
 
@@ -49,6 +50,7 @@ export function PromptPackTestsColumn({
   running,
   onSetTestResultFilter,
   onSelectTest,
+  hasDraft,
   onRunOne,
 }: PromptPackTestsColumnProps) {
   return (
@@ -62,30 +64,7 @@ export function PromptPackTestsColumn({
           </p>
         </div>
       </div>
-      <div className="mc-pp-filter-scroller">
-        <div className="mc-pp-filter-row" role="tablist" aria-label="Prompt pack test filters">
-          {FILTER_OPTIONS.map((option) => {
-            const count = option.count(testOutcomeSummary, testsLength);
-            const active = testResultFilter === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                className={`mc-pp-filter-chip${active ? " active" : ""}`}
-                onClick={() => onSetTestResultFilter(option.value)}
-              >
-                <span>{option.label}</span>
-                <strong>{count}</strong>
-              </button>
-            );
-          })}
-        </div>
-        <span className="mc-pp-filter-hint" aria-hidden="true">
-          Swipe for more filters
-        </span>
-      </div>
+      <label className="mc-pp-field"><span>Test status</span><select value={testResultFilter} onChange={(event) => onSetTestResultFilter(event.target.value as TestResultFilter)}>{FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label} ({option.count(testOutcomeSummary, testsLength)})</option>)}</select></label>
       <div className="mc-pp-test-list" role="list" aria-label="Prompt pack tests">
         {filteredTests.map((test) => {
           const run = latestRunByTest.get(test.testId);
@@ -121,7 +100,7 @@ export function PromptPackTestsColumn({
                         {formatRunStatus(run?.status)}
                       </span>
                     </span>
-                    <strong>{test.title}</strong>
+                    <strong>{test.title}{hasDraft?.(test.testId) ? " · Unsaved" : ""}</strong>
                     <span className="mc-pp-test-meta">
                       <span
                         className={`mc-pp-chip ${score || assessment?.legacyScore ? "score-ready" : "score-missing"}`}

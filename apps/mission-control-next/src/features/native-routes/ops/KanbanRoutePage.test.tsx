@@ -1,3 +1,5 @@
+import { fetchTasksByView, createTask } from "@goatcitadel/mission-control-shared/api/tasks";
+import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
@@ -6,6 +8,13 @@ import { KanbanRoutePage } from "./KanbanRoutePage";
 
 const fetchAgenticRuns = vi.fn();
 const bulkTaskAction = vi.fn();
+
+vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({
+  fetchTasksByView: vi.fn(async () => ({ items: [] })),
+  createTask: vi.fn(),
+  fetchTaskActivities: vi.fn(async () => ({ items: [] })),
+  fetchTaskDeliverables: vi.fn(async () => ({ items: [] })),
+}));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
@@ -77,10 +86,20 @@ const baseProps = {
 };
 
 beforeEach(() => {
+  __resetSessionDraftsForTests();
+  vi.mocked(fetchTasksByView).mockReset().mockResolvedValue({ items: [], view: "active" });
+  vi.mocked(createTask).mockReset();
+  baseProps.navigate.mockClear();
   fetchAgenticRuns.mockReset();
   bulkTaskAction.mockReset();
   fetchAgenticRuns.mockResolvedValue({ items: baseRuns });
-  bulkTaskAction.mockResolvedValue({ tasks: [] });
+  bulkTaskAction.mockImplementation(async (input) => ({
+    tasks: input.taskIds.map((taskId: string) => ({
+      taskId,
+      workspaceId: "default",
+      revision: input.expectedRevisionsByTaskId[taskId] + 1,
+    })),
+  }));
 });
 
 function collectText(node: ReactTestInstance | unknown): string {
@@ -119,6 +138,40 @@ function findRequiredButton(renderer: ReactTestRenderer, label: string): ReactTe
 }
 
 describe("KanbanRoutePage", () => {
+  it("keeps standalone tasks inspectable without inventing a run", async () => {
+    vi.mocked(fetchTasksByView).mockResolvedValue({
+      view: "active",
+      items: [
+        {
+          taskId: "standalone",
+          workspaceId: "default",
+          revision: 1,
+          title: "Plan the launch",
+          status: "inbox",
+          priority: "normal",
+          updatedAt: "2026-09-12T00:00:00Z",
+        } as any,
+      ],
+    });
+    const renderer = await renderPage();
+    await act(async () => findRequiredButton(renderer, "Plan the launch").props.onClick());
+    expect(collectText(renderer.root)).toContain("No run attached");
+    expect(
+      renderer.root.findAll((node) => node.type === "button" && collectText(node) === "Run evidence"),
+    ).toHaveLength(0);
+    act(() => renderer.unmount());
+  });
+  it("keeps selection when a bulk response cannot confirm all changes", async () => {
+    bulkTaskAction.mockResolvedValueOnce({ tasks: [] });
+    const renderer = await renderPage();
+    await act(async () => findRequiredByTestId(renderer, "kanban-select-t-3").props.onChange());
+    await act(async () => findRequiredButton(renderer, "Unblock").props.onClick());
+    expect(collectText(renderer.root)).toContain("did not confirm every selected task");
+    expect(findRequiredByTestId(renderer, "kanban-select-t-3").props.checked).toBe(true);
+    expect(collectText(renderer.root)).not.toContain("selected task updated.");
+    act(() => renderer.unmount());
+  });
+
   it("offers a working retry when the canonical run list is unavailable", async () => {
     fetchAgenticRuns.mockRejectedValueOnce(new Error("run list offline")).mockResolvedValueOnce({ items: baseRuns });
     const renderer = await renderPage();
@@ -143,24 +196,38 @@ describe("KanbanRoutePage", () => {
     expect(text).toContain("Working");
     expect(text).toContain("Failed handoff");
     expect(text).toContain("Closed run");
+    expect(renderer.root.findAllByProps({ "aria-label": "Agentic run bulk actions" })).toHaveLength(0);
+    await act(async () => findRequiredByTestId(renderer, "kanban-select-t-1").props.onChange());
     expect(renderer.root.findByProps({ "aria-label": "Agentic run bulk actions" }).props.role).toBe("toolbar");
     expect(findRequiredButton(renderer, "unblock").props["data-variant"]).toBe("default");
     expect(findRequiredButton(renderer, "retry").props["data-variant"]).toBe("outline");
     expect(findRequiredButton(renderer, "close").props["data-variant"]).toBe("outline");
-    expect(findRequiredButton(renderer, "refresh").props["data-variant"]).toBe("secondary");
+    expect(findRequiredButton(renderer, "refresh").props["data-variant"]).toBe("ghost");
     act(() => renderer.unmount());
   });
 
-  it("signposts the Run Board from the Kanban header (5.4)", async () => {
+  it("opens creation on request and gives each real run an evidence entry point", async () => {
     const renderer = await renderPage();
-    const signpost = findRequiredButton(renderer, "run board");
-    await act(async () => {
-      signpost.props.onClick();
+    expect(renderer.root.findAllByType("form")).toHaveLength(0);
+    await act(async () => findRequiredButton(renderer, "New task").props.onClick());
+    expect(renderer.root.findAllByType("form")).toHaveLength(1);
+    await act(async () =>
+      renderer.root
+        .findAll((node) => node.type === "button" && node.props["aria-label"] === "Close details")[0]!
+        .props.onClick(),
+    );
+    await act(async () => findRequiredButton(renderer, "Working").props.onClick());
+    expect(collectText(renderer.root)).toContain("run-working");
+    await act(async () => findRequiredButton(renderer, "Run evidence").props.onClick());
+    expect(baseProps.navigate).toHaveBeenCalledWith({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "run-working",
+      theme: "ops",
     });
-    expect(baseProps.navigate).toHaveBeenCalledWith({ area: "ops", section: "kanban", theme: "ops" });
     act(() => renderer.unmount());
   });
-
   it("shows a critical diagnostic chip on cards with unresolved critical diagnostics", async () => {
     const renderer = await renderPage();
     const chip = renderer.root.findAll((node) => node.props?.["data-testid"] === "diagnostic-chip-t-2")[0];
@@ -222,7 +289,7 @@ describe("KanbanRoutePage", () => {
           status: 409,
         }),
       )
-      .mockResolvedValueOnce({ tasks: [] });
+      .mockResolvedValueOnce({ tasks: [{ taskId: "t-3", workspaceId: "default", revision: 10 }] });
     const renderer = await renderPage();
     await act(async () => {
       findRequiredByTestId(renderer, "kanban-select-t-3").props.onChange();

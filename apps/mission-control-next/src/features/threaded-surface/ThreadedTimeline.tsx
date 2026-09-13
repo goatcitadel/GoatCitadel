@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { WorkflowSkillCaptureControl } from "./WorkflowSkillCaptureControl";
 import {
   type ChatCitationRecord,
   type ChatThreadSystemNoticeRecord,
@@ -397,10 +398,12 @@ export function ThreadedTimeline({
   props,
   onOpenActivity,
   onOpenUniversalRunDetail,
+  onReviewChangePlan,
 }: {
   props: MissionThreadedActiveSessionSurfaceProps;
   onOpenActivity?: (turnId?: string) => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
+  onReviewChangePlan?: (plan: import("@goatcitadel/contracts").ChangePlanRecord) => void;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
@@ -775,6 +778,21 @@ export function ThreadedTimeline({
                     onStartNewThreadFromTurn={onStartNewThreadFromTurn}
                     onSwitchBranch={onSwitchBranch}
                     onRetryTurn={onRetryTurn}
+                    renderSkillCapture={(turn) =>
+                      sessionId ? (
+                        <WorkflowSkillCaptureControl
+                          turn={turn}
+                          sessionId={sessionId}
+                          workspaceId={props.workspaceId}
+                          draftEmpty={!props.draft.trim()}
+                          onReviewPlan={onReviewChangePlan}
+                          onPrepare={(prompt) => {
+                            props.onDraftChange(prompt);
+                            props.composerRef.current?.focus();
+                          }}
+                        />
+                      ) : null
+                    }
                     onEditTurn={onEditTurn}
                     onOpenRunDetails={onOpenRunDetails}
                     onOpenUniversalRunDetail={onOpenUniversalRunDetailStable}

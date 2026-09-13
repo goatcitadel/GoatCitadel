@@ -13,6 +13,7 @@ import {
   fetchCodeModeRunArtifact,
   fetchCodeModeRunVerificationEvidence,
 } from "@goatcitadel/mission-control-shared/api/capabilities";
+import { DraftLeaveDialog } from "../native-routes/library/DraftLeaveDialog";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import {
@@ -748,8 +749,8 @@ describe("ThreadedWorkflowPanel", () => {
     });
     expect(onSelectFile).not.toHaveBeenCalled();
 
-    const openConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
-    expect(openConfirm?.props.title).toBe("Discard unsaved file changes?");
+    const openConfirm = renderer!.root.findAllByType(DraftLeaveDialog).find((modal) => modal.props.open);
+    expect(openConfirm).toBeDefined();
     act(() => {
       openConfirm?.props.onCancel();
     });
@@ -759,9 +760,9 @@ describe("ThreadedWorkflowPanel", () => {
     act(() => {
       fileTree.props.onSelectFile("src/other.ts");
     });
-    const reopenedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    const reopenedConfirm = renderer!.root.findAllByType(DraftLeaveDialog).find((modal) => modal.props.open);
     act(() => {
-      reopenedConfirm?.props.onConfirm();
+      reopenedConfirm?.props.onDiscard();
     });
     expect(onDiscardDraft).toHaveBeenCalled();
     expect(onSelectFile).toHaveBeenCalledWith("src/other.ts");
@@ -769,12 +770,14 @@ describe("ThreadedWorkflowPanel", () => {
 
   it("routes file-tree actions through the governed workbench operation callback", async () => {
     const onFileOperation = vi.fn().mockResolvedValue(true);
+    const onFileOperationPreview = vi.fn(async (input) => ({ input, revision: "a".repeat(64), sourceKind: "absent" as const, affectedPaths: [], totalBytes: 0 }));
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = create(
         <ThreadedWorkflowPanel
           panel={buildCodePanel({
             onFileOperation,
+            onFileOperationPreview,
             selectedFile: {
               state: buildCodePanel().props.workbenchState,
               path: "src/app.ts",
@@ -803,12 +806,16 @@ describe("ThreadedWorkflowPanel", () => {
     });
     const runButton = renderer!.root
       .findAllByType("button")
-      .find((button) => instanceText(button.children).includes("Run action"));
+      .find((button) => instanceText(button.children).includes("Review file action"));
     await act(async () => {
       runButton?.props.onClick();
       await Promise.resolve();
     });
-    expect(onFileOperation).toHaveBeenCalledWith({ operation: "create_file", path: "src/new.ts" });
+    await act(async () => {
+      renderer!.root.findAllByType("button").find((button) => instanceText(button.children) === "Apply reviewed action")!.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onFileOperation).toHaveBeenCalledWith({ operation: "create_file", path: "src/new.ts", expectedRevision: "a".repeat(64) });
 
     const actionSelect = renderer!.root.findAllByType("select").find((select) => select.props.value === "create_file");
     await act(async () => {
@@ -828,7 +835,12 @@ describe("ThreadedWorkflowPanel", () => {
       runButton?.props.onClick();
       await Promise.resolve();
     });
+    await act(async () => {
+      renderer!.root.findAllByType("button").find((button) => instanceText(button.children) === "Apply reviewed action")!.props.onClick();
+      await Promise.resolve();
+    });
     expect(onFileOperation).toHaveBeenLastCalledWith({
+      expectedRevision: "a".repeat(64),
       operation: "rename",
       path: "src/app.ts",
       targetPath: "src/renamed.ts",
@@ -1348,7 +1360,7 @@ describe("ThreadedWorkflowPanel", () => {
       await Promise.resolve();
     });
     expect(JSON.stringify(renderer!.toJSON())).toContain(
-      "Project-bound workbench for GoatCitadel. Create a worktree to begin repo operations.",
+      "GoatCitadel · Create a worktree to begin editing.",
     );
 
     const nullRenderer = create(<ThreadedWorkflowPanel panel={null as any} />);
@@ -1716,6 +1728,8 @@ describe("ThreadedWorkflowPanel", () => {
         await Promise.resolve();
       });
 
+      expect(JSON.stringify(renderer!.toJSON())).not.toContain("Session inspector");
+      await act(async () => { findButton(renderer!, "Inspector")?.props.onClick(); });
       const rendered = JSON.stringify(renderer!.toJSON());
       expect(rendered).toContain("Session inspector");
       expect(rendered).toContain("Progress");
@@ -1729,18 +1743,15 @@ describe("ThreadedWorkflowPanel", () => {
       expect(rendered).toContain("Not wired in Build workbench v1");
       expect(rendered).toContain("backend unavailable");
 
-      const progressSection = renderer!.root.findAllByType("details")[0];
+      const progressSection = renderer!.root.findAllByType("details").find((node) => node.findAllByType("summary").some((summary) => summary.findAllByType("span").some((span) => span.children.includes("Progress"))));
       await act(async () => {
         progressSection?.props.onToggle({ currentTarget: { open: true } });
         await Promise.resolve();
       });
       expect(storedValues.get("goatcitadel.code-workbench.inspector.v1")).toContain("progress");
 
-      await act(async () => {
-        findButton(renderer!, "Inspector")?.props.onClick();
-      });
-      expect(JSON.stringify(renderer!.toJSON())).toContain("Close inspector");
-      const closeButton = renderer!.root.findAllByProps({ "aria-label": "Close inspector" })[0];
+      expect(JSON.stringify(renderer!.toJSON())).toContain("Close details");
+      const closeButton = renderer!.root.findAllByProps({ "aria-label": "Close details" })[0];
       await act(async () => {
         closeButton?.props.onClick();
       });

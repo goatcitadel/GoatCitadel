@@ -29,6 +29,8 @@ export function ProjectHomeBasePanel({
   pendingApprovals,
   projectName,
   onContinue,
+  onNewChat,
+  onOpenSession,
   onStartIntake,
   onOpenMemory,
   onOpenArtifacts,
@@ -37,6 +39,8 @@ export function ProjectHomeBasePanel({
   pendingApprovals: number;
   projectName: string;
   onContinue: (mode: ChatMode) => void;
+  onNewChat: () => void;
+  onOpenSession: (sessionId: string) => void;
   onStartIntake: (intent: ProjectIntakeMode) => void;
   onOpenMemory: () => void;
   onOpenArtifacts: () => void;
@@ -51,11 +55,9 @@ export function ProjectHomeBasePanel({
         <p>{home.healthDetail}</p>
       </div>
 
-      <div className="mc-next-project-intake-panel" aria-label="Project intake modes">
-        <div className="mc-next-project-intake-head">
-          <strong>Start from intent</strong>
-          <span>Ask / plan / implement / proof in Chat</span>
-        </div>
+      <details className="mc-next-project-intake-panel" aria-label="Project intake modes">
+        <summary>New chat</summary>
+        <NativeButton onClick={onNewChat}>New Chat</NativeButton>
         <div className="mc-next-project-intake-grid">
           {PROJECT_INTAKE_MODES.map((intent) => {
             const Icon = iconForIntake(intent.id);
@@ -75,8 +77,58 @@ export function ProjectHomeBasePanel({
             );
           })}
         </div>
+      </details>
+
+      <div className="mc-next-project-lane-resume-shell">
+        <div className="mc-next-directory-lane-head">
+          <strong>Latest continuation</strong>
+          <span>Chat</span>
+        </div>
+        <div className="mc-next-project-lane-resume-list" aria-label="Latest project continuation points">
+          {SURFACES.map((surface) => {
+            const latest = home.latestByMode[surface.mode];
+            return (
+              <button
+                key={`latest-${surface.mode}`}
+                type="button"
+                className={`mc-next-project-lane-resume is-${surface.mode}`}
+                aria-label={latest ? `Continue ${surface.label}` : `Start ${surface.label}`}
+                onClick={() => onContinue(surface.mode)}
+              >
+                <span>{latest ? `Continue ${surface.label}` : `Start ${surface.label}`}</span>
+                <strong>{latest ? latest.title?.trim() || latest.sessionKey : `Start ${surface.label}`}</strong>
+                <p>
+                  {latest
+                    ? `${formatDateTime(latest.lastActivityAt)} · ${latest.lifecycleStatus} · ${countHomeArtifacts(home, latest)} artifacts`
+                    : "No continuation point yet."}
+                </p>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
+      <div className="mc-next-project-recent-list">
+        <div className="mc-next-directory-lane-head">
+          <strong>Recent work</strong>
+          <span>{home.recentSessions.length}</span>
+        </div>
+        {home.recentSessions.length ? (
+          home.recentSessions.map((session) => (
+            <button type="button" key={session.sessionId} className="mc-next-project-recent-item" onClick={() => onOpenSession(session.sessionId)}>
+              <span>{labelForMode(normalizeMode(session.mode))}</span>
+              <strong>{session.title?.trim() || session.sessionKey}</strong>
+              <p>
+                {formatDateTime(session.lastActivityAt)} · {countHomeArtifacts(home, session)} artifacts
+              </p>
+            </button>
+          ))
+        ) : (
+          <EmptyState size="compact" title="No recent project threads yet." />
+        )}
+      </div>
+
+      <details className="mc-next-project-evidence"><summary>Project status and readiness</summary>
       <div className="mc-next-project-home-metrics">
         <ProjectMetric label="Active threads" value={String(home.activeCount)} detail="Chat work still in motion." />
         <ProjectMetric
@@ -96,43 +148,6 @@ export function ProjectHomeBasePanel({
         />
       </div>
 
-      <div className="mc-next-project-continue-row">
-        {SURFACES.map((surface) => (
-          <NativeButton key={surface.mode} onClick={() => onContinue(surface.mode)}>
-            <MessageSquarePlus size={16} />
-            {home.latestByMode[surface.mode] ? `Continue ${surface.label}` : `Start ${surface.label}`}
-          </NativeButton>
-        ))}
-      </div>
-
-      <div className="mc-next-project-lane-resume-shell">
-        <div className="mc-next-directory-lane-head">
-          <strong>Latest continuation</strong>
-          <span>Chat</span>
-        </div>
-        <div className="mc-next-project-lane-resume-list" aria-label="Latest project continuation points">
-          {SURFACES.map((surface) => {
-            const latest = home.latestByMode[surface.mode];
-            return (
-              <button
-                key={`latest-${surface.mode}`}
-                type="button"
-                className={`mc-next-project-lane-resume is-${surface.mode}`}
-                onClick={() => onContinue(surface.mode)}
-              >
-                <span>{surface.label}</span>
-                <strong>{latest ? latest.title?.trim() || latest.sessionKey : `Start ${surface.label}`}</strong>
-                <p>
-                  {latest
-                    ? `${formatDateTime(latest.lastActivityAt)} · ${latest.lifecycleStatus} · ${countHomeArtifacts(home, latest)} artifacts`
-                    : "No continuation point yet."}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="mc-next-project-readiness-list">
         {home.readiness.map((item) => (
           <div key={item.id} className={`mc-next-project-readiness-item is-${item.status}`}>
@@ -145,25 +160,7 @@ export function ProjectHomeBasePanel({
         ))}
       </div>
 
-      <div className="mc-next-project-recent-list">
-        <div className="mc-next-directory-lane-head">
-          <strong>Recent work</strong>
-          <span>{home.recentSessions.length}</span>
-        </div>
-        {home.recentSessions.length ? (
-          home.recentSessions.map((session) => (
-            <div key={session.sessionId} className="mc-next-project-recent-item">
-              <span>{labelForMode(normalizeMode(session.mode))}</span>
-              <strong>{session.title?.trim() || session.sessionKey}</strong>
-              <p>
-                {formatDateTime(session.lastActivityAt)} · {countHomeArtifacts(home, session)} artifacts
-              </p>
-            </div>
-          ))
-        ) : (
-          <EmptyState size="compact" title="No recent project threads yet." />
-        )}
-      </div>
+      </details>
 
       <div className="mc-next-settings-button-row">
         <button type="button" className="mc-next-settings-filter" onClick={onOpenMemory}>

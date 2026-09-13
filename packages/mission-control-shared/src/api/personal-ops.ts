@@ -10,8 +10,10 @@ import type {
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
-export async function listNotes(workspaceId = "default"): Promise<{ items: NoteRecord[] }> {
-  return request<{ items: NoteRecord[] }>(`/api/v1/notes?workspaceId=${encodeURIComponent(workspaceId)}`);
+export async function listNotes(workspaceId = "default", options: { lifecycleStatus?: "active" | "archived" | "all" } = {}): Promise<{ items: NoteRecord[] }> {
+  const query = new URLSearchParams({ workspaceId });
+  if (options.lifecycleStatus) query.set("lifecycleStatus", options.lifecycleStatus);
+  return request<{ items: NoteRecord[] }>(`/api/v1/notes?${query}`);
 }
 
 export async function createNote(input: NoteMutationInput): Promise<NoteRecord> {
@@ -47,8 +49,10 @@ export async function archiveNote(noteId: string, workspaceId?: string): Promise
   });
 }
 
-export async function listReminders(workspaceId = "default"): Promise<{ items: ReminderRecord[] }> {
-  return request<{ items: ReminderRecord[] }>(`/api/v1/reminders?workspaceId=${encodeURIComponent(workspaceId)}`);
+export async function listReminders(workspaceId = "default", options: { status?: ReminderRecord["status"] | "all" } = {}): Promise<{ items: ReminderRecord[] }> {
+  const query = new URLSearchParams({ workspaceId });
+  if (options.status) query.set("status", options.status);
+  return request<{ items: ReminderRecord[] }>(`/api/v1/reminders?${query}`);
 }
 
 export async function createReminder(input: ReminderMutationInput): Promise<ReminderRecord> {

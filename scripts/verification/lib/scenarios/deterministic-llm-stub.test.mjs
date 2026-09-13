@@ -3,6 +3,32 @@ import test from "node:test";
 
 import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 
+test("deterministic text and tool replies declare zero cached input for settled model cost", async () => {
+  for (const route of ["responses", "chat/completions"]) {
+    for (const stream of [false, true]) {
+      for (const behavior of [{ type: "success", replyText: "Reply" }, { type: "tool_call", name: "fixture_read", arguments: {} }]) {
+        const stub = await startDeterministicLlmStub({ dispatchPlan: [behavior] });
+        try {
+          const response = await fetch(`${stub.baseUrl}/${route}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: stub.model, stream, input: "fixture", messages: [{ role: "user", content: "fixture" }] }),
+          });
+          assert.equal(response.status, 200);
+          const body = await response.text();
+          const frames = stream ? body.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6))) : [JSON.parse(body)];
+          const usages = frames.flatMap((frame) => frame.usage ? [frame.usage] : frame.response?.usage ? [frame.response.usage] : []);
+          assert.equal(usages.length, 1);
+          assert.equal(usages[0].input_tokens_details?.cached_tokens ?? usages[0].prompt_tokens_details?.cached_tokens, 0);
+          assert.equal(usages[0].input_tokens ?? usages[0].prompt_tokens, 12);
+        } finally {
+          await stub.close();
+        }
+      }
+    }
+  }
+});
+
 test("deterministic provider serves a valid PNG through the image-generation route", async () => {
   const stub = await startDeterministicLlmStub();
   try {
@@ -336,6 +362,42 @@ test("dispatchPlanModel isolates fault dispatches from auxiliary Responses reque
     assert.equal(stub.dispatchPlanDispatchRecords().length, 1);
   } finally {
     await stub.close();
+  }
+});
+
+test("required tool isolates approval dispatches from setup and background traffic", async () => {
+  for (const route of ["responses", "chat/completions"]) {
+    const stub = await startDeterministicLlmStub({
+      dispatchPlanRequiredTool: "fs_read",
+      dispatchPlan: [{ type: "tool_call", name: "fs_read", arguments: { path: "fixture.txt" } }],
+    });
+    const send = (tools) =>
+      fetch(`${stub.baseUrl}/${route}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: stub.model,
+          input: "fixture",
+          messages: [{ role: "user", content: "fixture" }],
+          tools,
+        }),
+      });
+    try {
+      for (const tools of [undefined, [], [{ type: "function", name: "unrelated" }]]) {
+        const response = await send(tools);
+        assert.equal(response.status, 200);
+        assert.doesNotMatch(await response.text(), /"fs_read"/u);
+      }
+      assert.equal(stub.dispatchPlanDispatches(), 0);
+      const offered =
+        route === "responses"
+          ? { type: "function", name: "fs_read" }
+          : { type: "function", function: { name: "fs_read" } };
+      assert.match(await (await send([offered])).text(), /"fs_read"/u);
+      assert.equal(stub.dispatchPlanDispatches(), 1);
+    } finally {
+      await stub.close();
+    }
   }
 });
 

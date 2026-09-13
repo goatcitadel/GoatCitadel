@@ -1,3 +1,7 @@
+import { FocusedDetail } from "../shared/FocusedDetail";
+import { NativeButton } from "../primitives";
+import { useSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
 import { useEffect, useMemo, useState } from "react";
 import { Download, FileText, Upload } from "lucide-react";
 import {
@@ -41,10 +45,15 @@ export function LibraryFilesSection({
   activeWorkspaceName,
 }: NativeRoutePagesProps) {
   const [selectedFilePath, setSelectedFilePath] = useState("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState("");
-  const [targetPath, setTargetPath] = useState("");
-  const [uploadPath, setUploadPath] = useState("");
-  const [uploadContent, setUploadContent] = useState("");
+  const [view, setView] = useState<"preview" | "upload" | "template" | null>(null);
+  const leave = useDraftLeave();
+  const uploadDraft = useSessionDraft("file-upload:" + activeCitadelId + ":" + activeWorkspaceId, { path: "", content: "" }, undefined, { label: "Text file", active: view === "upload", onSave: () => handleUpload() });
+  const templateDraft = useSessionDraft("file-template:" + activeCitadelId + ":" + activeWorkspaceId, { templateId: "", path: "" }, undefined, { label: "File from template", active: view === "template", onSave: () => handleCreateFromTemplate() });
+  const uploadPath = uploadDraft.value.path, uploadContent = uploadDraft.value.content, targetPath = templateDraft.value.path;
+  const setUploadPath = (path: string) => uploadDraft.setValue((current) => ({ ...current, path }));
+  const setUploadContent = (content: string) => uploadDraft.setValue((current) => ({ ...current, content }));
+  const setTargetPath = (path: string) => templateDraft.setValue((current) => ({ ...current, path }));
+  const setSelectedTemplateId = (templateId: string) => templateDraft.setValue((current) => ({ ...current, templateId }));
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -83,18 +92,10 @@ export function LibraryFilesSection({
     );
   }, [visibleFiles]);
 
-  useEffect(() => {
-    if (!data?.templates.length) {
-      setSelectedTemplateId("");
-      return;
-    }
-    setSelectedTemplateId((current) =>
-      data.templates.some((item) => item.templateId === current) ? current : (data.templates[0]?.templateId ?? ""),
-    );
-  }, [data?.templates]);
+  const selectedTemplateId = templateDraft.value.templateId || data?.templates[0]?.templateId || "";
 
   useEffect(() => {
-    if (!selectedFilePath) {
+    if (!selectedFilePath || view !== "preview") {
       setPreview({ loading: false, error: null, data: null });
       return;
     }
@@ -122,42 +123,47 @@ export function LibraryFilesSection({
     return () => {
       cancelled = true;
     };
-  }, [activeCitadelId, activeWorkspaceId, selectedFilePath]);
+  }, [activeCitadelId, activeWorkspaceId, selectedFilePath, view]);
 
-  const handleCreateFromTemplate = async () => {
+  const handleCreateFromTemplate = async (): Promise<boolean> => {
     if (!selectedTemplateId) {
       setNotice({ tone: "warning", message: "Choose a template before creating a file." });
-      return;
+      return false;
     }
+    const submitted = templateDraft.value;
     try {
       const created = await createFileFromTemplate(selectedTemplateId, targetPath.trim() || undefined, {
         citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
       });
       setNotice({ tone: "success", message: `${created.relativePath} created from template.` });
-      setTargetPath("");
+      const clean = templateDraft.acceptSaved({ templateId: "", path: "" }, undefined, submitted);
       await reload();
-      setSelectedFilePath(created.relativePath);
+      if (clean) { setSelectedFilePath(created.relativePath); setView("preview"); }
+      return clean;
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
+      return false;
     }
   };
 
-  const handleUpload = async () => {
+  const handleUpload = async (): Promise<boolean> => {
     if (!uploadPath.trim() || !uploadContent) {
       setNotice({ tone: "warning", message: "Upload path and text content are required." });
-      return;
+      return false;
     }
+    const submitted = uploadDraft.value;
     setUploading(true);
     try {
       const uploaded = await uploadFile(uploadPath.trim(), uploadContent);
       setNotice({ tone: "success", message: `${uploaded.relativePath} uploaded.` });
-      setUploadPath("");
-      setUploadContent("");
+      const clean = uploadDraft.acceptSaved({ path: "", content: "" }, undefined, submitted);
       await reload();
-      setSelectedFilePath(uploaded.relativePath);
+      if (clean) { setSelectedFilePath(uploaded.relativePath); setView("preview"); }
+      return clean;
     } catch (uploadError) {
       setNotice({ tone: "error", message: getErrorMessage(uploadError) });
+      return false;
     } finally {
       setUploading(false);
     }
@@ -170,11 +176,11 @@ export function LibraryFilesSection({
   };
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <div className="mc-next-settings-grid">
-        <NativeCard
+      <div className="mc-next-calm-directory">
+        {!view ? <NativeCard actions={<details className="mc-next-inline-details"><summary>Add file{uploadDraft.isDirty || templateDraft.isDirty ? " · Unsaved" : ""}</summary><NativeButton variant="ghost" onClick={() => setView("upload")}>{uploadDraft.isDirty ? "Resume text file" : "Upload text file"}</NativeButton><NativeButton variant="ghost" onClick={() => setView("template")}>{templateDraft.isDirty ? "Resume template" : "Create from template"}</NativeButton></details>}
           title="Workspace files"
           subtitle="Browsable shared files outside the active Code surface."
           stats={[
@@ -202,12 +208,12 @@ export function LibraryFilesSection({
               body: `${formatDateTime(item.modifiedAt)} · ${activeWorkspaceName}`,
             }))}
             selectedId={selectedFilePath}
-            onSelect={setSelectedFilePath}
+            onSelect={(id) => leave.request(() => { setSelectedFilePath(id); setView("preview"); })}
             emptyLabel="No files returned from the workspace."
           />
-        </NativeCard>
+        </NativeCard> : null}
         <div className="mc-next-settings-stack">
-          <NativeCard
+          {view === "preview" ? <FocusedDetail title={selectedFilePath || "File unavailable"} onClose={() => leave.request(() => setView(null))}><NativeCard
             title={selectedFilePath || "File preview"}
             subtitle={preview.data?.contentType ?? "Select a file to preview it."}
           >
@@ -262,14 +268,14 @@ export function LibraryFilesSection({
                     Download file
                   </button>
                 </LibraryButtonRow>
-                <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2600)}</LibraryCodeBlock>
+                <LibraryCodeBlock label="Preview">{preview.data.content}</LibraryCodeBlock>
               </>
             ) : null}
             {!preview.loading && !preview.error && !preview.data ? (
               <LibraryEmptyState label="Select a file to preview it." />
             ) : null}
-          </NativeCard>
-          <NativeCard
+          </NativeCard></FocusedDetail> : null}
+          {view === "upload" ? <FocusedDetail title={"Upload text file"} onClose={() => leave.request(() => setView(null))}><NativeCard
             title="Upload text file"
             subtitle="Writes through the Gateway path jail into the isolated workspace."
           >
@@ -303,8 +309,8 @@ export function LibraryFilesSection({
                 {uploading ? "Uploading..." : "Upload file"}
               </button>
             </LibraryButtonRow>
-          </NativeCard>
-          <NativeCard
+          </NativeCard></FocusedDetail> : null}
+          {view === "template" ? <FocusedDetail title={"Create from template"} onClose={() => leave.request(() => setView(null))}><NativeCard
             title="Create from template"
             subtitle="File creation stays accessible here instead of forcing you into Code first."
           >
@@ -333,7 +339,7 @@ export function LibraryFilesSection({
             </LibraryFieldGrid>
             <LibraryActionList
               ariaLabel="File templates"
-              items={(data?.templates ?? []).slice(0, 4).map((item) => ({
+              items={(data?.templates ?? []).map((item) => ({
                 id: item.templateId,
                 label: item.title,
                 description: item.description,
@@ -347,10 +353,10 @@ export function LibraryFilesSection({
                 Create file
               </button>
             </LibraryButtonRow>
-          </NativeCard>
+          </NativeCard></FocusedDetail> : null}
         </div>
       </div>
-    </LibrarySectionShell>
+    {leave.dialog}</LibrarySectionShell>
   );
 }
 

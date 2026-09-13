@@ -13,15 +13,16 @@ import {
   resolveShellThemeClass,
   usesEmbeddedRouteHeader,
 } from "./MissionControlNextApp";
-import { RAIL_ITEMS, getRouteReleaseScope, isExperimentalRoute } from "./route-model";
+import { RAIL_ITEMS, navigationRailItems, getRouteReleaseScope, isExperimentalRoute } from "./route-model";
 
 const item = (section: string) => ({ section }) as any;
 
 describe("MissionControlNextApp shell helpers", () => {
   it("groups rail sections by product area", () => {
     expect(buildRailSections("settings", [item("general"), item("channels"), item("tools")])).toEqual([
-      { id: "settings-foundations", label: "Foundations", items: [item("general")] },
-      { id: "settings-surfaces", label: "Surfaces", items: [item("channels"), item("tools")] },
+      { id: "settings-preferences", label: "Preferences", items: [item("general")] },
+      { id: "settings-connections", label: "Connections", items: [item("channels")] },
+      { id: "settings-security", label: "Security", items: [item("tools")] },
     ]);
     expect(
       buildRailSections("settings", [
@@ -38,17 +39,18 @@ describe("MissionControlNextApp shell helpers", () => {
         item("addons"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
-      ["onboarding", "workspaces"],
-      ["permissions", "providers", "trust-policy", "personalities", "access"],
-      ["integrations", "mcp"],
-      ["runtime", "addons"],
+      ["personalities"],
+      ["onboarding", "providers", "integrations", "mcp", "addons"],
+      ["permissions", "trust-policy", "access"],
+      ["workspaces"],
+      ["runtime"],
     ]);
     expect(
       buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator")]).map((group) => group.id),
-    ).toEqual(["library-knowledge", "library-assets"]);
+    ).toEqual(["library-agents", "library-knowledge"]);
     expect(buildRailSections("ops", [item("activity"), item("approvals")]).map((group) => group.id)).toEqual([
-      "ops-observe",
-      "ops-control",
+      "ops-monitor",
+      "ops-decisions",
     ]);
     expect(
       buildRailSections("ops", [
@@ -63,16 +65,17 @@ describe("MissionControlNextApp shell helpers", () => {
         item("kanban"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
-      ["sessions", "schedules"],
-      ["improvement", "notifications", "costs", "quality", "runtime", "diagnostics", "kanban"],
+      ["sessions", "notifications", "costs", "runtime", "diagnostics"],
+      ["schedules", "kanban"],
+      ["improvement", "quality"],
     ]);
     expect(buildRailSections("chat", [item("thread")])).toEqual([{ id: "chat-primary", items: [item("thread")] }]);
   });
 
   it("renders every declared grouped rail item exactly once", () => {
     for (const area of ["settings", "library", "ops"] as const) {
-      const groupedItems = buildRailSections(area, RAIL_ITEMS[area]).flatMap((group) => group.items);
-      const expectedIds = RAIL_ITEMS[area].map((entry) => entry.id).sort();
+      const groupedItems = buildRailSections(area, navigationRailItems(area)).flatMap((group) => group.items);
+      const expectedIds = navigationRailItems(area).map((entry) => entry.id).sort();
       expect(groupedItems.map((entry) => entry.id).sort()).toEqual(expectedIds);
       expect(new Set(groupedItems.map((entry) => entry.id)).size).toBe(expectedIds.length);
     }
@@ -83,11 +86,11 @@ describe("MissionControlNextApp shell helpers", () => {
 
     for (const area of ["settings", "library", "ops"] as const) {
       const groupedIds = new Set(
-        buildRailSections(area, RAIL_ITEMS[area])
+        buildRailSections(area, navigationRailItems(area))
           .flatMap((group) => group.items)
           .map((entry) => entry.id),
       );
-      for (const entry of RAIL_ITEMS[area]) {
+      for (const entry of navigationRailItems(area)) {
         const route = { area: entry.area, section: entry.section };
         const releaseScope = getRouteReleaseScope(route);
         const routeKey = `${entry.area}/${entry.section ?? "root"}`;

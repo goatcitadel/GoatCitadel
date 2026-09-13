@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, Download, Upload, X } from "lucide-react";
 import type { CitadelBlueprint, CitadelBlueprintValidationResult } from "@goatcitadel/contracts";
 import {
@@ -11,6 +11,9 @@ import {
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { useSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -58,7 +61,14 @@ export function CitadelBlueprintRoutePage({
     staged: false,
     json: null,
   });
-  const [importText, setImportText] = useState("");
+  const [view, setView] = useState<"export" | "import">("export");
+  const [confirmImport, setConfirmImport] = useState(false);
+  const [validatedText, setValidatedText] = useState<string | null>(null);
+  const validationGeneration = useRef(0);
+  const leave = useDraftLeave();
+  const blueprintDraft = useSessionDraft(`blueprint-import:${activeCitadelId}`, "", undefined, { label: "Blueprint import", active: view === "import" });
+  const importText = blueprintDraft.value;
+  const setImportText = blueprintDraft.setValue;
   const [importState, setImportState] = useState<ImportState>(INITIAL_IMPORT);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const exportProofItems = buildBlueprintProofItems(exportState.json, activeCitadelId);
@@ -100,6 +110,8 @@ export function CitadelBlueprintRoutePage({
   }, [activeCitadelId]);
 
   const validate = useCallback(async () => {
+    const generation = ++validationGeneration.current;
+    setValidatedText(null);
     const parsed = parseBlueprint(importText);
     if ("parseError" in parsed) {
       setImportState({ ...INITIAL_IMPORT, validation: { ok: false, errors: [`Invalid JSON: ${parsed.parseError}`] } });
@@ -107,13 +119,17 @@ export function CitadelBlueprintRoutePage({
     }
     try {
       const validation = await validateCitadelBlueprint(parsed.blueprint);
+      if (generation !== validationGeneration.current) return;
+      setValidatedText(importText);
       setImportState({ ...INITIAL_IMPORT, validation });
     } catch (error) {
-      setImportState({ ...INITIAL_IMPORT, error: getErrorMessage(error) });
+      if (generation === validationGeneration.current) setImportState({ ...INITIAL_IMPORT, error: getErrorMessage(error) });
     }
   }, [importText]);
 
   const applyImport = useCallback(async () => {
+    if (validatedText !== importText || !importState.validation?.ok || importState.busy) return;
+    const submitted = importText;
     const parsed = parseBlueprint(importText);
     if ("parseError" in parsed) {
       return;
@@ -121,21 +137,26 @@ export function CitadelBlueprintRoutePage({
     setImportState((current) => ({ ...current, busy: true, error: null }));
     try {
       await importCitadelBlueprint(activeCitadelId, parsed.blueprint as CitadelBlueprint);
-      setImportState((current) => ({ ...current, busy: false, done: true }));
+      blueprintDraft.acceptSaved("", undefined, submitted);
+      setValidatedText(null);
+      setImportState((current) => ({ ...current, validation: null, busy: false, done: true }));
+      setConfirmImport(false);
     } catch (error) {
       setImportState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
     }
-  }, [activeCitadelId, importText]);
+  }, [activeCitadelId, importText, validatedText, importState.validation, importState.busy, blueprintDraft.acceptSaved]);
 
-  const canApply = importState.validation?.ok === true && !importState.busy;
+  const canApply = validatedText === importText && importState.validation?.ok === true && !importState.busy;
 
   const loadExportForImport = useCallback(() => {
     if (!exportState.json) {
       return;
     }
-    setImportText(exportState.json);
-    setImportState(INITIAL_IMPORT);
-  }, [exportState.json]);
+    leave.request(() => {
+      setImportText(exportState.json!); setView("import");
+      validationGeneration.current += 1; setValidatedText(null); setImportState(INITIAL_IMPORT);
+    }, [blueprintDraft.key]);
+  }, [exportState.json, leave, blueprintDraft.key, setImportText]);
 
   const downloadExport = useCallback(() => {
     if (!exportState.json) {
@@ -155,8 +176,9 @@ export function CitadelBlueprintRoutePage({
       loading={exportState.loading}
       error={exportState.error}
     >
-      <NativeGrid>
-        <NativeCard title="Export" subtitle="The current Citadel as a Blueprint. Secrets are never included.">
+      <div className="mc-next-settings-button-row" role="group" aria-label="Blueprint view">{(["export", "import"] as const).map((item) => <NativeButton key={item} variant="ghost" aria-pressed={view === item} onClick={() => leave.request(() => setView(item), [blueprintDraft.key])}>{item === "export" ? "Export" : `Import${blueprintDraft.isDirty ? " · Unsaved" : ""}`}</NativeButton>)}</div>
+      <NativeGrid className="mc-next-calm-directory">
+        {view === "export" ? <NativeCard title="Export" subtitle="The current Citadel as a Blueprint. Secrets are never included.">
           {exportState.staged && exportState.json ? (
             <>
               <NativeList items={exportProofItems} emptyLabel="No export proof available." density="compact" />
@@ -171,16 +193,16 @@ export function CitadelBlueprintRoutePage({
                 </NativeButton>
               </div>
               {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
-              <pre className="mc-next-blueprint-json" aria-label="Exported Blueprint">
+              <details className="mc-next-inline-disclosure"><summary>Export preview</summary><pre className="mc-next-blueprint-json" aria-label="Exported Blueprint">
                 {exportState.json}
-              </pre>
+              </pre></details>
             </>
           ) : (
             <EmptyState size="compact" title={`${activeCitadelName} needs a Charter before export.`} />
           )}
-        </NativeCard>
+        </NativeCard> : null}
 
-        <NativeCard
+        {view === "import" ? <NativeCard
           title="Import"
           subtitle="Paste a Blueprint, validate it, then apply. Validation runs a schema check and a secret scan."
         >
@@ -193,6 +215,7 @@ export function CitadelBlueprintRoutePage({
               rows={6}
               placeholder='{ "schemaVersion": "goatcitadel.blueprint.v1", ... }'
               onChange={(event) => {
+                validationGeneration.current += 1; setValidatedText(null);
                 setImportText(event.target.value);
                 setImportState(INITIAL_IMPORT);
               }}
@@ -203,9 +226,9 @@ export function CitadelBlueprintRoutePage({
               <Check size={16} />
               Validate
             </NativeButton>
-            <NativeButton variant="outline" disabled={!canApply} onClick={() => void applyImport()}>
+            <NativeButton variant="outline" disabled={!canApply} onClick={() => setConfirmImport(true)}>
               <Upload size={16} />
-              {importState.busy ? "Importing…" : "Import"}
+              {importState.busy ? "Importing…" : "Review import"}
             </NativeButton>
           </div>
 
@@ -231,8 +254,10 @@ export function CitadelBlueprintRoutePage({
               </div>
             )
           ) : null}
-        </NativeCard>
+        </NativeCard> : null}
       </NativeGrid>
+      {leave.dialog}
+      <ConfirmModal open={confirmImport} title="Apply this Blueprint?" message={`Apply the validated Blueprint to ${activeCitadelName}? External connections and grants still require their existing setup and approval steps.`} confirmLabel={importState.busy ? "Importing…" : "Apply Blueprint"} pending={importState.busy} disableDismiss={importState.busy} cancelDisabled={importState.busy} onCancel={() => setConfirmImport(false)} onConfirm={() => void applyImport()} />
     </NativePageFrame>
   );
 }

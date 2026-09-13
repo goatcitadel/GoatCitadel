@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createDatabase, SystemSettingsRepository, type DatabaseClient } from "@goatcitadel/storage";
 import {
   getChannelSetupDefinition,
   listChannelSetupDefinitions,
@@ -130,14 +131,13 @@ describe("Loop 19 channel setup definition tails", () => {
 });
 
 describe("Loop 19 channel personality tails", () => {
+  const databases: DatabaseClient[] = [];
+  afterEach(() => { for (const db of databases.splice(0)) db.close(); });
   function createSettings(initial?: unknown) {
-    let value = initial;
-    return {
-      get: () => (value === undefined ? undefined : { value }),
-      set: (_key: string, next: unknown) => {
-        value = next;
-      },
-    };
+    const db = createDatabase({ dbPath: ":memory:" }); databases.push(db);
+    const settings = new SystemSettingsRepository(db);
+    if (initial !== undefined) settings.set("personality.catalog.v1", initial);
+    return settings;
   }
 
   it("normalizes overlay ids, default fallbacks, and custom personality mutations", async () => {
@@ -185,12 +185,12 @@ describe("Loop 19 channel personality tails", () => {
   it("keeps personality writes reviewable through explicit service calls", async () => {
     const service = new PersonalityCatalogService(createSettings() as never);
 
-    await expect(service.setDefaultPersonality("missing")).rejects.toThrow("Unknown personality");
-    await expect(service.createPersonality({ id: "default", label: "Default" })).rejects.toThrow(
+    await expect(service.setDefaultPersonality("missing", (await service.getCatalog()).revision)).rejects.toThrow("Unknown personality");
+    await expect(service.createPersonality({ expectedRevision: (await service.getCatalog()).revision, id: "default", label: "Default" })).rejects.toThrow(
       "Custom personality id cannot be default.",
     );
 
-    const created = await service.createPersonality({
+    const created = await service.createPersonality({ expectedRevision: (await service.getCatalog()).revision,
       label: "Incident Commander",
       category: "execution",
       systemOverlay: "Keep incident response terse.",
@@ -199,37 +199,37 @@ describe("Loop 19 channel personality tails", () => {
       category: "execution",
       visibility: "custom",
     });
-    await expect(service.createPersonality({ id: "incident-commander", label: "Duplicate" })).rejects.toThrow(
+    await expect(service.createPersonality({ expectedRevision: (await service.getCatalog()).revision, id: "incident-commander", label: "Duplicate" })).rejects.toThrow(
       "already exists",
     );
-    expect((await service.setDefaultPersonality("incident-commander")).defaultPersonalityId).toBe("incident-commander");
+    expect((await service.setDefaultPersonality("incident-commander", (await service.getCatalog()).revision)).defaultPersonalityId).toBe("incident-commander");
     expect(
       (
-        await service.updatePersonality("incident-commander", {
+        await service.updatePersonality("incident-commander", { expectedRevision: (await service.getCatalog()).revision,
           id: "incident-lead",
           label: "Incident Lead",
           category: "critical",
         })
       ).defaultPersonalityId,
     ).toBe("incident-lead");
-    await service.createPersonality({ id: "second-custom", label: "Second Custom" });
-    await expect(service.updatePersonality("incident-lead", { id: "technical" })).rejects.toThrow("already exists");
-    await expect(service.updatePersonality("incident-lead", { id: "second-custom" })).rejects.toThrow("already exists");
-    await expect(service.updatePersonality("missing", { label: "Missing" })).rejects.toThrow("Unknown personality");
-    await expect(service.updatePersonality("default", { label: "Default" })).rejects.toThrow("cannot be edited");
+    await service.createPersonality({ expectedRevision: (await service.getCatalog()).revision, id: "second-custom", label: "Second Custom" });
+    await expect(service.updatePersonality("incident-lead", { expectedRevision: (await service.getCatalog()).revision, id: "technical" })).rejects.toThrow("already exists");
+    await expect(service.updatePersonality("incident-lead", { expectedRevision: (await service.getCatalog()).revision, id: "second-custom" })).rejects.toThrow("already exists");
+    await expect(service.updatePersonality("missing", { expectedRevision: (await service.getCatalog()).revision, label: "Missing" })).rejects.toThrow("Unknown personality");
+    await expect(service.updatePersonality("default", { expectedRevision: (await service.getCatalog()).revision, label: "Default" })).rejects.toThrow("cannot be edited");
     expect(
-      (await service.updatePersonality("technical", { label: "Tech Voice" })).items.find(
+      (await service.updatePersonality("technical", { expectedRevision: (await service.getCatalog()).revision, label: "Tech Voice" })).items.find(
         (item) => item.id === "technical",
       ),
     ).toMatchObject({
       label: "Tech Voice",
       modified: true,
     });
-    expect((await service.deletePersonality("technical")).items.find((item) => item.id === "technical")?.modified).toBe(
+    expect((await service.deletePersonality("technical", (await service.getCatalog()).revision)).items.find((item) => item.id === "technical")?.modified).toBe(
       false,
     );
-    expect((await service.deletePersonality("incident-lead")).defaultPersonalityId).toBe("default");
-    await expect(service.deletePersonality("missing")).rejects.toThrow("Unknown personality");
-    await expect(service.deletePersonality("default")).rejects.toThrow("cannot be removed");
+    expect((await service.deletePersonality("incident-lead", (await service.getCatalog()).revision)).defaultPersonalityId).toBe("default");
+    await expect(service.deletePersonality("missing", (await service.getCatalog()).revision)).rejects.toThrow("Unknown personality");
+    await expect(service.deletePersonality("default", (await service.getCatalog()).revision)).rejects.toThrow("cannot be removed");
   });
 });

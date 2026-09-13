@@ -9,7 +9,8 @@ import type {
 import { fetchJourneyTimeline } from "@goatcitadel/mission-control-shared";
 import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import { getRouteReleaseScope } from "@next/app/route-model";
-import { NativeCard, ReleaseScopeBadge } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, ReleaseScopeBadge } from "../NativeRoutePageLayout";
+import { DetailInspector } from "../../../components/DetailInspector";
 import type { NativeRoutePagesProps } from "../types";
 import { getErrorMessage } from "../shared/native-helpers";
 import {
@@ -37,18 +38,26 @@ const EMPTY_PAGE: JourneyTimelinePage = {
   generatedAt: "1970-01-01T00:00:00.000Z",
 };
 
-export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRoutePagesProps) {
-  const [category, setCategory] = useState<JourneyCategoryFilter>("all");
-  const [evidenceFilter, setEvidenceFilter] = useState<JourneyEvidenceFilter>("all");
-  const [includeGlobal, setIncludeGlobal] = useState(false);
-  const [sessionDraft, setSessionDraft] = useState("");
-  const [sessionId, setSessionId] = useState("");
+export function JourneyTimelineRoutePage({ route, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
+  const [category, setCategory] = useState<JourneyCategoryFilter>(normalizeJourneyCategory(route.category));
+  const [evidenceFilter, setEvidenceFilter] = useState<JourneyEvidenceFilter>(normalizeJourneyPosture(route.evidence));
+  const [includeGlobal, setIncludeGlobal] = useState(route.includeGlobal === "true");
+  const [sessionDraft, setSessionDraft] = useState(route.sessionId ?? "");
+  const [sessionId, setSessionId] = useState(route.sessionId ?? "");
   const [page, setPage] = useState<JourneyTimelinePage>(EMPTY_PAGE);
-  const [selectedEventId, setSelectedEventId] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState(route.eventId ?? "");
+  const [detailOpen, setDetailOpen] = useState(Boolean(route.eventId));
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
+
+  useEffect(() => {
+    setCategory(normalizeJourneyCategory(route.category)); setEvidenceFilter(normalizeJourneyPosture(route.evidence));
+    setIncludeGlobal(route.includeGlobal === "true"); setSessionId(route.sessionId ?? ""); setSessionDraft(route.sessionId ?? "");
+  }, [route.category, route.evidence, route.includeGlobal, route.sessionId]);
+  useEffect(() => { setSelectedEventId(route.eventId ?? ""); setDetailOpen(Boolean(route.eventId)); }, [route.eventId]);
+  const updateFilters = (patch: Partial<typeof route>) => navigate({ ...route, category: category === "all" ? undefined : category, evidence: evidenceFilter === "all" ? undefined : evidenceFilter, includeGlobal: includeGlobal ? "true" : undefined, sessionId: sessionId || undefined, ...patch });
 
   const load = useCallback(
     async (cursor?: string) => {
@@ -95,15 +104,6 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
     void load();
   }, [load]);
 
-  useEffect(() => {
-    if (!page.items.length) {
-      setSelectedEventId("");
-      return;
-    }
-    setSelectedEventId((current) =>
-      page.items.some((item) => item.eventId === current) ? current : (page.items[0]?.eventId ?? ""),
-    );
-  }, [page.items]);
 
   const selected = useMemo(
     () => page.items.find((item) => item.eventId === selectedEventId) ?? null,
@@ -114,12 +114,12 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
 
   return (
     <LibrarySectionShell
-      loading={loading}
+      loading={loading && page.generatedAt === EMPTY_PAGE.generatedAt}
       error={error}
       onRetry={() => void load()}
       persistentHeader={<ReleaseScopeBadge status={getRouteReleaseScope(route).status} />}
     >
-      <div className="mc-next-settings-grid">
+      <div className="mc-next-calm-directory">
         <NativeCard
           title="Journey timeline"
           subtitle="Experimental read-only governance history for captured skill learning, approvals, effects, and Skills Hub lifecycle evidence."
@@ -134,7 +134,7 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
               <select
                 className="mc-next-settings-input"
                 value={category}
-                onChange={(event) => setCategory(event.target.value as JourneyCategoryFilter)}
+                onChange={(event) => { setCategory(normalizeJourneyCategory(event.target.value)); updateFilters({ category: event.target.value === "all" ? undefined : event.target.value }); }}
               >
                 <option value="all">All events</option>
                 <option value="memory">Memory</option>
@@ -148,7 +148,7 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
               <select
                 className="mc-next-settings-input"
                 value={evidenceFilter}
-                onChange={(event) => setEvidenceFilter(event.target.value as JourneyEvidenceFilter)}
+                onChange={(event) => { setEvidenceFilter(normalizeJourneyPosture(event.target.value)); updateFilters({ evidence: event.target.value === "all" ? undefined : event.target.value }); }}
               >
                 <option value="all">All postures</option>
                 <option value="clean">Clean</option>
@@ -170,7 +170,7 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
             <button
               type="button"
               className="mc-next-settings-filter"
-              onClick={() => setSessionId(sessionDraft.normalize("NFKC").trim())}
+              onClick={() => { const value = sessionDraft.normalize("NFKC").trim(); setSessionId(value); updateFilters({ sessionId: value || undefined }); }}
             >
               Apply session
             </button>
@@ -178,7 +178,7 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
               type="button"
               className={`mc-next-settings-filter${includeGlobal ? " active" : ""}`}
               aria-pressed={includeGlobal}
-              onClick={() => setIncludeGlobal((current) => !current)}
+              onClick={() => { setIncludeGlobal(!includeGlobal); updateFilters({ includeGlobal: !includeGlobal ? "true" : undefined }); }}
             >
               Include global evidence
             </button>
@@ -195,7 +195,7 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
               body: `${item.subjectKind} · ${item.subjectId} · ${formatTimestamp(item.occurredAt)}`,
             }))}
             selectedId={selectedEventId}
-            onSelect={setSelectedEventId}
+            onSelect={(id) => { setSelectedEventId(id); setDetailOpen(true); updateFilters({ eventId: id }); }}
             emptyLabel="No canonical Journey events match these filters."
           />
           {page.nextCursor ? (
@@ -213,13 +213,10 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
         </NativeCard>
 
         <div className="mc-next-settings-stack">
-          <NativeCard
-            title={selected ? humanizeAction(selected.action) : "Event evidence"}
-            subtitle={selected ? `${selected.eventType} · ${formatTimestamp(selected.recordedAt)}` : "Select an event."}
-          >
-            {selected ? <JourneyEventDetail item={selected} /> : <LibraryEmptyState label="Select a Journey event." />}
-          </NativeCard>
-          <NativeCard
+          <DetailInspector open={detailOpen} title={selected ? humanizeAction(selected.action) : "Event unavailable"} subtitle={selected ? `${selected.eventType} · ${formatTimestamp(selected.recordedAt)}` : undefined} onClose={() => setDetailOpen(false)}>
+            {selected ? <JourneyEventDetail item={selected} /> : <LibraryEmptyState label="This event is not in the loaded results. Load older events or adjust the filters to locate its canonical evidence." />}
+          </DetailInspector>
+          <NativeDisclosureCard id="journey-boundary"
             title="Experimental read-only boundary"
             subtitle="Journey explains only the canonical producers currently wired; it does not activate skills or promote memory."
           >
@@ -232,7 +229,7 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
               source producer coverage is not yet complete. This view must not be used as release-bearing parity
               evidence.
             </p>
-          </NativeCard>
+          </NativeDisclosureCard>
         </div>
       </div>
     </LibrarySectionShell>
@@ -305,7 +302,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
           },
           {
             label: "Recurrence scan",
-            value: recurrence?.complete === false ? "Bounded / partial" : "Complete",
+            value: recurrence ? recurrence.complete ? "Complete" : "Bounded / partial" : "Unavailable",
             meta: recurrence ? `${recurrence.blockedObservationCount} blocked observations excluded` : undefined,
           },
         ]}
@@ -313,6 +310,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
       <EvidenceRows title="Evidence references" rows={item.evidenceRefs.map((ref) => [ref.owner, ref.refId])} />
       <EvidenceRows title="Provenance" rows={semanticRecordRows(item.provenance)} />
       <EvidenceRows title="Event summary" rows={semanticRecordRows(item.summary)} />
+      <details className="mc-next-inline-disclosure"><summary>Complete event payload</summary><LibraryCodeBlock label="Canonical Journey event">{JSON.stringify(item, null, 2)}</LibraryCodeBlock></details>
     </>
   );
 }
@@ -407,3 +405,6 @@ function formatTimestamp(value: string): string {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
 }
+
+function normalizeJourneyCategory(value?: string): JourneyCategoryFilter { return ["all", "memory", "skills", "imports", "approvals", "provenance"].includes(value ?? "") ? value as JourneyCategoryFilter : "all"; }
+function normalizeJourneyPosture(value?: string): JourneyEvidenceFilter { return ["all", "clean", "blocked", "quarantined", "conflicting"].includes(value ?? "") ? value as JourneyEvidenceFilter : "all"; }

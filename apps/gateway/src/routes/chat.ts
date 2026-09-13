@@ -10,6 +10,7 @@ import { registerChatToolRoutes } from "./chat.tools.js";
 import { registerChatMiscRoutes } from "./chat.misc.js";
 import { registerChatCompactionBreakerActionRoutes } from "./chat.compaction-breaker-actions.js";
 import { registerChatChangePlanRoutes } from "./chat.change-plans.js";
+import { registerWorkflowSkillCaptureRoutes } from "./chat.skill-capture.js";
 
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatProjectRoutes(fastify);
@@ -19,6 +20,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatDelegateRoutes(fastify);
   registerChatFanoutRoutes(fastify);
   registerChatChangePlanRoutes(fastify);
+  registerWorkflowSkillCaptureRoutes(fastify);
   registerChatMiscRoutes(fastify);
   await registerChatCompactionBreakerActionRoutes(fastify);
   registerChatToolRoutes(fastify);

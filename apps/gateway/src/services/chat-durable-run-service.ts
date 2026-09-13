@@ -14,6 +14,8 @@ import type {
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
 import {
+  sealRemoteWorkerChatContextForTurn,
+  trySealRemoteWorkerChatContextForTurn,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
   isDurableRunTerminal,
@@ -345,6 +347,7 @@ export interface ChatDurableRunBeginDeps {
   chatTurnCapabilityProfiles?: Pick<Storage["chatTurnCapabilityProfiles"], "create">;
   sessionMutationAdmissions?: Pick<Storage["sessionMutationAdmissions"], "bindCapabilityProfile">;
   routedContextSnapshots?: Pick<Storage["routedContextSnapshots"], "create">;
+  remoteWorkerChatContexts?: Pick<Storage["remoteWorkerChatContexts"], "freezeForAdmission">;
   skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
   assertTurnAdmissionWrite?(prepared: PreparedAgentChatTurn): Promise<void>;
   bindTurnAdmissionToDurableRun?(prepared: PreparedAgentChatTurn, durableRunId: string): Promise<void>;
@@ -367,6 +370,8 @@ export interface ChatDurableRunFinalizeDeps {
   ): Promise<void>;
   chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">;
   resolvePostCommitEligibility(sessionId: string): Promise<PostCommitEligibility>;
+  /** Internal materialization owner; participates in the terminal transaction. */
+  recordTerminalResultMaterialization?(runId: string, prepared: PreparedAgentChatTurn): Promise<void>;
 }
 
 export async function beginDurableChatRun(
@@ -491,6 +496,11 @@ export async function beginDurableChatRun(
     const remoteWorkerParentContext = remoteWorkerParentContextInput
       ? buildRemoteWorkerAssignmentParentContext(remoteWorkerParentContextInput)
       : undefined;
+    const remoteWorkerChatContext =
+      prepared.turnAdmission && prepared.capabilityProfile && deps.remoteWorkerChatContexts
+        ? (input.policyTaskId ? sealRemoteWorkerChatContextForTurn : trySealRemoteWorkerChatContextForTurn)(
+            runId, durablePayload, prepared.history)
+        : undefined;
     run = await deps.createDurableRun({
       runId,
       workflowKey: "chat.turn.execute",
@@ -499,6 +509,7 @@ export async function beginDurableChatRun(
         surface: mode,
         autoPromoted: mode === "chat",
         objective: prepared.content,
+        ...(remoteWorkerChatContext ? { remoteWorkerChatContextSha256: remoteWorkerChatContext.contextSha256 } : {}),
         ...(remoteWorkerParentContext && remoteWorkerParentContextInput
           ? {
               remoteWorkerAssignmentParentContext: remoteWorkerParentContext,
@@ -514,6 +525,15 @@ export async function beginDurableChatRun(
           : {}),
       },
     });
+    if (remoteWorkerChatContext && deps.remoteWorkerChatContexts) {
+      if (!prepared.turnAdmission?.requestClaim)
+        throw new Error(`Remote Chat context for ${prepared.turnId} requires its request-runtime admission.`);
+      await deps.remoteWorkerChatContexts.freezeForAdmission({
+        durableRunId: run.runId,
+        messages: prepared.history,
+        requestRuntimeClaim: prepared.turnAdmission.requestClaim,
+      });
+    }
     if (prepared.turnAdmission) {
       if (!deps.bindTurnAdmissionToDurableRun) {
         throw new Error(`Durable Chat turn ${prepared.turnId} cannot bind its mutation admission.`);
@@ -877,13 +897,19 @@ export async function finalizeDurableChatRun(
   const heartbeatIdentity =
     currentRun && admittedPayload ? readExactSystemHeartbeatFinalizeIdentity(currentRun, admittedPayload) : undefined;
   if (currentRun && isDurableRunTerminal(currentRun.status)) {
-    await verifyTerminalDurableChatReplayAuthority(deps, currentRun, prepared, trace);
-    await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
-      durable: {
-        runId,
-        status: currentRun.status,
-        checkpointKind: checkpointKindForTerminalDurableChatRunStatus(currentRun.status),
-      },
+    await runChatFinalizeTransaction(deps, async () => {
+      const terminalRun = (await deps.durableRuns.getRun?.(runId)) ?? currentRun;
+      await verifyTerminalDurableChatReplayAuthority(deps, terminalRun, prepared, trace);
+      await patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
+        durable: {
+          runId,
+          status: terminalRun.status,
+          checkpointKind: checkpointKindForTerminalDurableChatRunStatus(terminalRun.status),
+        },
+      });
+      if (terminalRun.status === "completed") {
+        await deps.recordTerminalResultMaterialization?.(runId, prepared);
+      }
     });
     return;
   }
@@ -1222,6 +1248,9 @@ export async function finalizeDurableChatRun(
         checkpointKind,
       },
     });
+    if (nextStatus === "completed") {
+      await deps.recordTerminalResultMaterialization?.(runId, prepared);
+    }
   });
 }
 

@@ -221,6 +221,12 @@ const requestSchema = z.discriminatedUnion("kind", [
         z.object({ operation: z.literal("llama_cpp_configuration"), config: llamaCppConfigurationSchema }).strict(),
         z
           .object({
+            operation: z.literal("feature_flags"),
+            flags: z.record(z.enum(CHANGE_PLAN_RUNTIME_FEATURE_FLAGS), z.boolean()),
+          })
+          .strict(),
+        z
+          .object({
             operation: z.literal("feature_flag"),
             flag: z.enum(CHANGE_PLAN_RUNTIME_FEATURE_FLAGS),
             enabled: z.boolean(),
@@ -237,6 +243,14 @@ const requestSchema = z.discriminatedUnion("kind", [
       proposalId: identifier,
       action: z.enum(["activate", "revoke", "rollback"]).optional(),
       versionId: identifier.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("capability_pack"),
+      packId: identifier,
+      manifestHash: z.string().regex(/^[a-f0-9]{64}$/u),
+      assetIds: z.array(identifier).min(1).max(32),
     })
     .strict(),
   z.object({ kind: z.literal("improvement_candidate"), candidateId: identifier }).strict(),
@@ -561,14 +575,12 @@ export function registerChangePlanRoutes(fastify: FastifyInstance): void {
     const params = paramsSchema.safeParse(request.params);
     const query = actorBodySchema.safeParse(request.query);
     if (!params.success || !query.success)
-      return reply
-        .code(400)
-        .send({
-          error: {
-            params: params.success ? undefined : params.error.flatten(),
-            query: query.success ? undefined : query.error.flatten(),
-          },
-        });
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     try {
       return reply.send(
         await requireService(fastify).get(actorFor(request, { ...query.data, surface: "chat" }), params.data.planId),
@@ -629,6 +641,23 @@ export function registerChangePlanRoutes(fastify: FastifyInstance): void {
           params.data.planId,
           body.data.expectedRevision,
           body.data.actionNonce,
+        ),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/change-plans/:planId/verifications", async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const body = rollbackSchema.safeParse(request.body);
+    if (!params.success || !body.success) return badPair(reply, params, body);
+    try {
+      return reply.send(
+        await requireService(fastify).verifyMonitoringPlan(
+          actorFor(request, { ...body.data, surface: "chat" }),
+          params.data.planId,
+          body.data.expectedRevision,
         ),
       );
     } catch (error) {

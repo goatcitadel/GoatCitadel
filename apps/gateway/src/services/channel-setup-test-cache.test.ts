@@ -6,6 +6,32 @@ import {
 } from "./channel-setup-test-cache.js";
 
 describe("channel setup recent-test cache", () => {
+  it.each(["2026-01-01T00:00:00.000Z", "not-a-time", "2099-01-01T00:00:00.000Z"])(
+    "invalidates expired or invalid probe time %s",
+    (checkedAt) => {
+      const draft = createDraft();
+      const connection = createConnection();
+      const cache = new Map([
+        [
+          draft.draftId,
+          {
+            signature: buildChannelSetupRecentTestSignature(draft, connection, draft.testVersion),
+            result: { ...createTestResult("ok"), checkedAt },
+          },
+        ],
+      ]);
+      expect(
+        resolveReusableChannelSetupTestResult({
+          cache,
+          draft,
+          connection,
+          testVersion: draft.testVersion,
+          nowMs: Date.parse("2026-09-08T00:00:00.000Z"),
+        }),
+      ).toBeUndefined();
+      expect(cache.size).toBe(0);
+    },
+  );
   it("reuses a cached non-error result when the effective connection shape matches", () => {
     const draft = createDraft();
     const connection = createConnection();
@@ -157,7 +183,7 @@ function createTestResult(status: ChannelSetupTestResult["status"], draftRevisio
     status,
     levels: ["structural", "semantic", "live-auth", "live-send"],
     issues: [],
-    checkedAt: "2026-03-29T08:12:00.000Z",
+    checkedAt: new Date().toISOString(),
     recommendedNextAction: "Finalize the connection.",
   };
 }

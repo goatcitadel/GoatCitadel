@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, Castle, Hammer, Lock, RotateCcw, Save, Shield, Sparkles } from "lucide-react";
 import type { Citadel, CitadelGatehouseSummary, CitadelTemplate } from "@goatcitadel/contracts";
 import {
@@ -12,10 +12,14 @@ import {
   restoreCitadel,
   upsertCitadelCharter,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { CitadelBriefPanel } from "./CitadelBriefPanel";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage, humanizeEnumToken } from "../shared/native-helpers";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { useSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -67,9 +71,18 @@ export function CitadelOverviewRoutePage({
 }: NativeRoutePagesProps) {
   const [state, setState] = useState<OverviewState>(INITIAL);
   const [templateState, setTemplateState] = useState<TemplateState>(INITIAL_TEMPLATES);
-  const [charterPurpose, setCharterPurpose] = useState("");
+  const [view, setView] = useState(route.view ?? "charter");
+  const [editing, setEditing] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState<{ id: string; label: string; expectedRevision: string } | null>(null);
+  const lifecycleBusyRef = useRef(false);
+  const [approvedRevision, setApprovedRevision] = useState<string | undefined>();
+  const leave = useDraftLeave();
+  const charterDraft = useSessionDraft(`charter:${activeCitadelId}:purpose`, state.citadel?.charter.purpose ?? "", state.citadel?.charter.updatedAt, { label: "Charter purpose", active: editing, available: Boolean(state.citadel), onSave: (): Promise<boolean> => handleSaveCharter() });
+  const charterPurpose = charterDraft.value;
+  const setCharterPurpose = charterDraft.setValue;
+  useEffect(() => setView(route.view ?? "charter"), [route.view]);
   const [lifecycleAction, setLifecycleAction] = useState<"save" | "archive" | "restore" | null>(null);
-  const [actionNotice, setActionNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [actionNotice, setActionNotice] = useState<{ tone: "success" | "error" | "warning"; message: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,9 +154,6 @@ export function CitadelOverviewRoutePage({
     };
   }, []);
 
-  useEffect(() => {
-    setCharterPurpose(state.citadel?.charter.purpose ?? "");
-  }, [state.citadel?.charter.purpose]);
 
   const { citadel, gatehouse } = state;
   const defaultTemplates = useMemo(() => selectDefaultTemplates(templateState.items), [templateState.items]);
@@ -176,9 +186,9 @@ export function CitadelOverviewRoutePage({
     }
   };
 
-  const handleSaveCharter = async () => {
-    if (!charter || charterPurpose.trim().length === 0) {
-      return;
+  const handleSaveCharter = async (): Promise<boolean> => {
+    if (!charter || charterPurpose.trim().length === 0 || (charterDraft.hasRemoteChanges && approvedRevision !== charter.updatedAt)) {
+      return false;
     }
     setLifecycleAction("save");
     setActionNotice(null);
@@ -196,38 +206,63 @@ export function CitadelOverviewRoutePage({
       setState((current) =>
         current.citadel ? { ...current, citadel: { ...current.citadel, charter: saved } } : current,
       );
+      if (charterDraft.acceptSaved(saved.purpose, saved.updatedAt, charterPurpose)) setEditing(false);
       setActionNotice({ tone: "success", message: "Citadel Charter saved." });
+      return true;
     } catch (error) {
       setActionNotice({ tone: "error", message: getErrorMessage(error) });
+      return false;
     } finally {
       setLifecycleAction(null);
     }
   };
 
+  const refreshRecord = async (citadelId: string): Promise<boolean> => {
+    try {
+      const refreshed = await getCitadel(citadelId);
+      setState((current) => current.citadel?.citadelId === citadelId
+        ? { ...current, citadel: { ...current.citadel, record: refreshed.record } } : current);
+      return true;
+    } catch (error) { setActionNotice({ tone: "error", message: getErrorMessage(error) }); return false; }
+  };
   const handleArchive = async () => {
+    if (!confirmArchive || lifecycleBusyRef.current) return;
+    const reviewed = confirmArchive;
+    lifecycleBusyRef.current = true;
     setLifecycleAction("archive");
     setActionNotice(null);
     try {
-      const record = await archiveCitadel(activeCitadelId);
-      setState((current) => (current.citadel ? { ...current, citadel: { ...current.citadel, record } } : current));
+      const record = await archiveCitadel(reviewed.id, reviewed.expectedRevision);
+      setConfirmArchive(null);
+      setState((current) => (current.citadel?.citadelId === reviewed.id ? { ...current, citadel: { ...current.citadel, record } } : current));
       setActionNotice({ tone: "success", message: "Citadel archived. Restore it before using it for new work." });
     } catch (error) {
-      setActionNotice({ tone: "error", message: getErrorMessage(error) });
+      setConfirmArchive(null);
+      if (isApiRequestError(error) && error.status === 409) {
+        if (await refreshRecord(reviewed.id)) setActionNotice({ tone: "warning", message: "The Citadel changed. Review its current profile and open a new archive confirmation. Your Charter draft is preserved." });
+      } else setActionNotice({ tone: "error", message: getErrorMessage(error) });
     } finally {
+      lifecycleBusyRef.current = false;
       setLifecycleAction(null);
     }
   };
 
   const handleRestore = async () => {
+    const reviewed = state.citadel?.record;
+    if (!reviewed?.revision || lifecycleBusyRef.current) return;
+    lifecycleBusyRef.current = true;
     setLifecycleAction("restore");
     setActionNotice(null);
     try {
-      const record = await restoreCitadel(activeCitadelId);
-      setState((current) => (current.citadel ? { ...current, citadel: { ...current.citadel, record } } : current));
+      const record = await restoreCitadel(reviewed.citadelId, reviewed.revision);
+      setState((current) => (current.citadel?.citadelId === reviewed.citadelId ? { ...current, citadel: { ...current.citadel, record } } : current));
       setActionNotice({ tone: "success", message: "Citadel restored." });
     } catch (error) {
-      setActionNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isApiRequestError(error) && error.status === 409) {
+        if (await refreshRecord(reviewed.citadelId)) setActionNotice({ tone: "warning", message: "The Citadel changed. Review its current profile before restoring it again." });
+      } else setActionNotice({ tone: "error", message: getErrorMessage(error) });
     } finally {
+      lifecycleBusyRef.current = false;
       setLifecycleAction(null);
     }
   };
@@ -239,7 +274,7 @@ export function CitadelOverviewRoutePage({
       kicker={routeKicker(route)}
       title="Citadel"
       description={`How ${activeCitadelName} is governed as a Citadel — its Charter, Chambers, and Gatehouse posture. Active workspace: ${activeWorkspaceName}.`}
-      loading={state.loading}
+      loading={state.loading && !state.citadel}
       error={state.error}
     >
       {!state.staged ? (
@@ -255,12 +290,12 @@ export function CitadelOverviewRoutePage({
               </NativeButton>
             }
           />
-          <NativeCard
+          <NativeDisclosureCard id="citadel-defaults"
             title="Default Citadels"
             subtitle="Personal and Company are the two default starting points; both stay approval-governed until you connect Gates."
             className="mc-next-citadel-default-card"
             stats={[
-              { label: "Defaults", value: String(defaultTemplates.length || 2) },
+              { label: "Defaults", value: templateState.error ? "Unavailable" : String(defaultTemplates.length) },
               { label: "Posture", value: "governed" },
             ]}
           >
@@ -289,14 +324,15 @@ export function CitadelOverviewRoutePage({
             ) : (
               <EmptyState size="compact" title="Default Citadel templates are unavailable." />
             )}
-          </NativeCard>
+          </NativeDisclosureCard>
         </div>
       ) : (
         <>
           {actionNotice ? <NoticeBanner tone={actionNotice.tone} message={actionNotice.message} /> : null}
-          <CitadelBriefPanel citadelId={activeCitadelId} />
-          <NativeGrid>
-            <NativeCard
+          <div className="mc-next-settings-button-row" role="group" aria-label="Citadel view">{(["charter", "chambers", "gatehouse"] as const).map((item) => <NativeButton key={item} variant="ghost" aria-pressed={view === item} onClick={() => leave.request(() => { setView(item); navigate({ ...route, view: item }); }, [charterDraft.key])}>{item[0]!.toUpperCase() + item.slice(1)}</NativeButton>)}</div>
+          <NativeDisclosureCard id="citadel-brief" lazy title="Citadel brief"><CitadelBriefPanel citadelId={activeCitadelId} /></NativeDisclosureCard>
+          <NativeGrid className="mc-next-calm-directory">
+            {view === "charter" ? <NativeCard
               title="Charter"
               subtitle="The purpose and boundaries that define this Citadel."
               stats={
@@ -314,6 +350,10 @@ export function CitadelOverviewRoutePage({
             >
               {charter ? (
                 <>
+                  <p>{charter.purpose}</p>
+                  <NativeButton variant="outline" onClick={() => setEditing(true)}>Edit Charter{charterDraft.isDirty ? " · Unsaved" : ""}</NativeButton>
+                  <DetailInspector open={editing} title="Edit Charter" subtitle={charterDraft.isDirty ? "Unsaved changes" : activeCitadelName} onClose={() => leave.request(() => setEditing(false), [charterDraft.key])}>
+                    {charterDraft.hasRemoteChanges && approvedRevision !== charter.updatedAt ? <><NoticeBanner tone="warning" message="The Charter changed after this draft began. Review the latest purpose before applying your draft." /><p>{charter.purpose}</p><NativeButton variant="outline" onClick={() => setApprovedRevision(charter.updatedAt)}>Apply draft to current Charter</NativeButton></> : null}
                   <label className="mc-next-mason-field">
                     <span>Purpose</span>
                     <textarea
@@ -346,21 +386,22 @@ export function CitadelOverviewRoutePage({
                       <NativeButton
                         variant="destructive"
                         disabled={lifecycleAction !== null}
-                        onClick={() => void handleArchive()}
+                        onClick={() => citadel?.record?.revision && setConfirmArchive({ id: citadel.record.citadelId, label: citadel.record.name, expectedRevision: citadel.record.revision })}
                       >
                         <Archive size={16} />
                         {lifecycleAction === "archive" ? "Archiving…" : "Archive Citadel"}
                       </NativeButton>
                     )}
                   </div>
+                  </DetailInspector>
                   <NativeList items={charterRows} emptyLabel="No goals or boundaries captured yet." density="compact" />
                 </>
               ) : (
                 <EmptyState size="compact" title="No Charter found." />
               )}
-            </NativeCard>
+            </NativeCard> : null}
 
-            <NativeCard
+            {view === "chambers" ? <NativeCard
               title="Chambers"
               subtitle="Areas of work, each with its own sensitivity. Sealed Chambers stay restricted."
               stats={[
@@ -376,9 +417,9 @@ export function CitadelOverviewRoutePage({
                 emptyLabel="No Chambers yet."
                 density="compact"
               />
-            </NativeCard>
+            </NativeCard> : null}
 
-            {gatehouse ? (
+            {gatehouse && view === "gatehouse" ? (
               <NativeCard
                 title="Gatehouse"
                 subtitle="The default posture every Chamber inherits until a Ward overrides it."
@@ -406,13 +447,13 @@ export function CitadelOverviewRoutePage({
           member it pinned the auto-fit track count at its maximum, leaving a
           permanently empty fourth track beside the three posture cards. */}
       {state.staged ? (
-        <NativeGrid>
-          <NativeCard
+        <NativeGrid className="mc-next-calm-directory">
+          <NativeDisclosureCard id="citadel-defaults"
             title="Default Citadels"
             subtitle="Personal and Company are the default operating spaces available from the Mason."
             className="mc-next-citadel-default-card mc-next-citadel-default-card-promoted"
             stats={[
-              { label: "Defaults", value: String(defaultTemplates.length || 2) },
+              { label: "Defaults", value: templateState.error ? "Unavailable" : String(defaultTemplates.length) },
               { label: "Active", value: charter?.kind ?? "workspace" },
             ]}
           >
@@ -441,7 +482,7 @@ export function CitadelOverviewRoutePage({
               <Hammer size={16} />
               Open the Mason
             </NativeButton>
-          </NativeCard>
+          </NativeDisclosureCard>
         </NativeGrid>
       ) : null}
 
@@ -452,6 +493,8 @@ export function CitadelOverviewRoutePage({
           access.
         </p>
       ) : null}
+      {leave.dialog}
+      <ConfirmModal open={confirmArchive !== null} title="Archive Citadel?" message={`Archive ${confirmArchive?.label ?? activeCitadelName}? Restore it before using it for new work.`} confirmLabel="Archive Citadel" danger pending={lifecycleAction === "archive"} disableDismiss={lifecycleAction === "archive"} onCancel={() => setConfirmArchive(null)} onConfirm={() => void handleArchive()} />
     </NativePageFrame>
   );
 }

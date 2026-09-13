@@ -4,6 +4,16 @@ import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } 
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT } from "./llm-completion-helpers.js";
 import { createChatCompletion, createChatCompletionStream, type LlmCompletionHost } from "./llm-completion-service.js";
+import {
+  createGovernedChatCompletion,
+  createGovernedChatCompletionStream,
+  type GovernedLlmCompletionHost,
+} from "./llm-completion-service.js";
+import {
+  LlmDispatchGuardScope,
+  LlmDispatchGuardRejectedError,
+  type LlmDispatchGuardInput,
+} from "./llm-dispatch-guard.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -139,6 +149,123 @@ async function collectStream(stream: AsyncGenerator<Record<string, unknown>>): P
     };
   }
 }
+
+describe("governed canonical completion pipeline", () => {
+  const dispatch: LlmDispatchGuardInput = {
+    usageEventId: "main",
+    attribution: {},
+    transportAttemptIndex: 0,
+    route: {
+      providerId: "primary",
+      modelId: "primary-model",
+      apiStyle: "openai-chat-completions",
+      credential: { credentialType: "api_key", usagePool: "standard", credentialSource: "keychain" },
+    },
+  };
+  function govern(host: LlmCompletionHost, scope: LlmDispatchGuardScope): GovernedLlmCompletionHost {
+    return {
+      ...host,
+      llmService: {
+        ...host.llmService,
+        runWithDispatchGuard: scope.run.bind(scope),
+        streamWithDispatchGuard: scope.stream.bind(scope),
+      },
+    };
+  }
+
+  it("retains the canonical memory and hook pipeline inside model dispatch authority", async () => {
+    const scope = new LlmDispatchGuardScope();
+    const stages: string[] = [];
+    const host = createCompletionHost({
+      memoryEnabled: true,
+      fallbacks: [],
+      completion: async (request) => {
+        await scope.get()!(dispatch);
+        expect(request.messages.some((message) => String(message.content).includes("Use concise answers."))).toBe(true);
+        return { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }], usage: {} };
+      },
+    });
+    const memory = await host.memoryLifecycleService.composeContext({} as never);
+    vi.mocked(host.memoryLifecycleService.composeContext).mockImplementation(async () => {
+      await scope.get()!({ ...dispatch, usageEventId: "memory-utility" });
+      return memory;
+    });
+    vi.mocked(host.hooksService.runInlineHooks).mockImplementation(async (request) => {
+      if (request.trigger === "llm.request.before") await scope.get()!({ ...dispatch, usageEventId: "hook-utility" });
+      return { runs: [] } as never;
+    });
+    const response = await createGovernedChatCompletion(
+      govern(host, scope),
+      {
+        ...createRequest(),
+        providerId: "primary",
+        model: "primary-model",
+        memory: { enabled: true, sessionId: "session" },
+      },
+      {},
+      async ({ usageEventId }) => {
+        stages.push(usageEventId);
+      },
+    );
+    expect(response.choices[0]?.message.content).toBe("done");
+    expect(stages).toEqual(["memory-utility", "hook-utility", "main"]);
+    expect(scope.get()).toBeUndefined();
+  });
+
+  it("keeps parent authority through deferred preparation and provider iteration", async () => {
+    const scope = new LlmDispatchGuardScope();
+    const stages: string[] = [];
+    const host = createHost(async function* () {
+      await scope.get()!(dispatch);
+      yield { choices: [{ delta: { content: "done" }, finish_reason: "stop" }] };
+    }, []);
+    vi.mocked(host.hooksService.runInlineHooks).mockImplementation(async (request) => {
+      if (request.trigger === "gateway.dispatch.before") await scope.get()!({ ...dispatch, usageEventId: "hook" });
+      return { runs: [] } as never;
+    });
+    const stream = await scope.run(
+      async ({ usageEventId }) => {
+        stages.push(`parent:${usageEventId}`);
+      },
+      async () =>
+        createGovernedChatCompletionStream(govern(host, scope), createRequest(), {}, async ({ usageEventId }) => {
+          stages.push(`child:${usageEventId}`);
+        }),
+    );
+    expect(host.hooksService.runInlineHooks).not.toHaveBeenCalled();
+    const result = await collectStream(stream);
+    expect(result.error).toBeUndefined();
+    expect(stages).toEqual(["parent:hook", "child:hook", "parent:main", "child:main"]);
+    expect(scope.get()).toBeUndefined();
+  });
+});
+
+describe("execution authority rejection", () => {
+  it.each(["stream", "completion"] as const)("stops %s without protocol retry or provider fallback", async (kind) => {
+    const error = new LlmDispatchGuardRejectedError(
+      new Error("policy service unavailable (503): invalid tool_call_id; request timeout"),
+    );
+    const host =
+      kind === "stream"
+        ? createHost(async function* () {
+            yield await Promise.reject(error);
+          })
+        : createCompletionHost({
+            completion: async () => {
+              throw error;
+            },
+          });
+    if (kind === "stream") {
+      const result = await collectStream(await createChatCompletionStream(host, createRequest()));
+      expect(result.error).toBe(error);
+      expect(host.llmService.chatCompletionsStream).toHaveBeenCalledOnce();
+    } else {
+      await expect(createChatCompletion(host, createRequest())).rejects.toBe(error);
+      expect(host.llmService.chatCompletions).toHaveBeenCalledOnce();
+    }
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+});
 
 describe("createChatCompletionStream", () => {
   it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
@@ -1107,6 +1234,7 @@ describe("createChatCompletion", () => {
         sessionId: "session-1",
         workspace: "workspace",
       }),
+      expect.objectContaining({ workspaceId: "workspace", sessionId: "session-1" }),
     );
     expect(host.persistContextManifestForCompletionRequest).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -7,18 +7,21 @@
   </head>
   <body>
     <div id="app">
-      <section id="startup" class="desktop-shell">
+      <section id="startup" class="desktop-shell" aria-labelledby="startup-heading">
         <div class="status-panel">
           <div class="brand-row">
-            <span class="brand-mark"></span>
+            <span class="brand-mark" aria-hidden="true"></span>
             <div>
               <p class="eyebrow">GoatCitadel</p>
-              <h1>Mission Control</h1>
+              <h1 id="startup-heading">Mission Control</h1>
             </div>
           </div>
-          <p id="status-copy" class="status-copy">Starting the local runtime...</p>
-          <div class="progress-track"><span id="progress-bar"></span></div>
-          <div id="runtime-meta" class="runtime-meta"></div>
+          <p id="status-copy" class="status-copy" role="status" aria-live="polite">Starting the local runtime...</p>
+          <div class="progress-track" aria-hidden="true"><span id="progress-bar" class="is-starting"></span></div>
+          <details class="runtime-details">
+            <summary>Runtime details</summary>
+            <div id="runtime-meta" class="runtime-meta"></div>
+          </details>
           <div id="recovery-actions" class="actions is-hidden">
             <button id="retry-button" type="button">Retry</button>
             <button id="open-browser-button" type="button">Open in Browser</button>

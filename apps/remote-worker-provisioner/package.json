@@ -4,6 +4,11 @@
   "private": true,
   "goatcitadelOwner": "runtime",
   "type": "module",
+  "exports": {
+    "./windows-service-client": "./dist/windows-service-client.js",
+    "./windows-helper-protocol": "./dist/windows-helper-protocol.js",
+    "./windows-tls-key-identifier": "./dist/windows-tls-key-identifier.js"
+  },
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*"
   },

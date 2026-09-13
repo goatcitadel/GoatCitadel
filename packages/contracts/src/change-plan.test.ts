@@ -18,6 +18,7 @@ describe("Evolution Control Plane Change Plan contract", () => {
       "channel_connection",
       "runtime_remediation",
       "capability_candidate",
+      "capability_pack",
       "improvement_candidate",
       "managed_source_registration",
       "product_source_update",
@@ -35,6 +36,7 @@ describe("Evolution Control Plane Change Plan contract", () => {
     expect(changePlanScopeForKind("channel_connection")).toBe("channel");
     expect(changePlanScopeForKind("runtime_remediation")).toBe("remediation");
     expect(changePlanScopeForKind("capability_candidate")).toBe("capability");
+    expect(changePlanScopeForKind("capability_pack")).toBe("capability");
     expect(changePlanScopeForKind("improvement_candidate")).toBe("improvement");
     expect(changePlanScopeForKind("managed_source_registration")).toBe("product_source");
     expect(changePlanScopeForKind("product_source_update")).toBe("product_source");

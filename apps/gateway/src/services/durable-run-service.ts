@@ -46,6 +46,8 @@ import type { DurableWorkflowExecutorRegistry } from "./durable-execution-servic
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
+import { verifySettledChatWaitingAuthority } from "./chat-durable-waiting-authority.js";
+import { recordRemoteWorkerChatApprovalWake } from "./remote-worker-chat-approval-resume.js";
 import {
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
   HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
@@ -3514,7 +3516,6 @@ export class DurableRunService {
   ): Promise<Record<string, unknown>> {
     this.assertExactAdmittedChatRetryAuthority(run);
     const metadata = { ...(run.metadata ?? {}) };
-    const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const hasAutonomousAdmission = metadata.autonomousAdmission !== undefined;
     const admittedV2 = isAdmittedV2ChatRun(run);
     const admittedAutonomousV2 = admittedV2 && hasAutonomousAdmission;
@@ -3523,47 +3524,7 @@ export class DurableRunService {
       metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
       (metadata.waitForEvent !== undefined && metadata.waitForEvent !== null);
     if (admittedV2 && (transition === "wake" || carriesWaitingAuthority)) {
-      const authority = readChatTurnRuntimeAuthoritySeal(metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
-      if (
-        !authority ||
-        authority.material.transitionKind !== "waiting" ||
-        authority.material.durableStatus !== "waiting" ||
-        authority.material.runId !== run.runId ||
-        authority.material.turnId !== payload?.turnId
-      ) {
-        throw new Error(`Admitted Chat run ${run.runId} has no exact waiting runtime authority.`);
-      }
-      if (canonicalJsonString(metadata.waitForEvent) !== canonicalJsonString(authority.material.waitForEvent)) {
-        throw new Error(`Admitted Chat run ${run.runId} wait registration drifted from its runtime authority.`);
-      }
-      const waitingCheckpoint = await this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
-      if (!waitingCheckpoint) {
-        throw new Error(`Admitted Chat run ${run.runId} has no authority-anchored waiting checkpoint.`);
-      }
-      verifyCheckpointAnchoredChatTurnRuntimeAuthority(metadata, waitingCheckpoint.state);
-      if (metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined) {
-        throw new Error(`Admitted Chat run ${run.runId} cannot queue before its waiting generation settles.`);
-      }
-      if (
-        metadata[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
-        metadata.linkedFinalizationPending !== undefined ||
-        metadata.chatTurnAdmissionHandoff !== undefined
-      ) {
-        throw new Error(`Admitted Chat run ${run.runId} carries terminal finalization evidence while waiting.`);
-      }
-      const settlement = readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
-      if (
-        !settlement ||
-        settlement.generationId !== authority.material.postCommitGenerationId ||
-        settlement.traceStatus !== authority.material.traceStatus ||
-        settlement.requestedAt !== authority.material.transitionAt ||
-        settlement.settlementStatus !== "completed" ||
-        typeof settlement.completedAt !== "string" ||
-        canonicalJsonString(settlement.postCommitEligibility) !==
-          canonicalJsonString(authority.material.postCommitEligibility)
-      ) {
-        throw new Error(`Admitted Chat run ${run.runId} has no exact settled waiting generation.`);
-      }
+      await verifySettledChatWaitingAuthority(this.ctx.storage, run);
       delete metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
     } else if (!admittedV2 && metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
       throw new Error(`Durable run ${run.runId} carries runtime authority without an admitted v2 Chat run.`);
@@ -4013,6 +3974,7 @@ export class DurableRunService {
     let next!: DurableRunRecord;
     try {
       await this.ctx.storage.runImmediateTransaction(async () => {
+        await recordRemoteWorkerChatApprovalWake(this.ctx.storage, current, event);
         const metadata = await this.prepareQueuedTransitionMetadata(current, "wake");
         next = await this.ctx.storage.durableRuns.updateRun({
           runId,

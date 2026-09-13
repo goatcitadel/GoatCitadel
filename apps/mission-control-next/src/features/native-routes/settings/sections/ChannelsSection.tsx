@@ -1,10 +1,11 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, Plus, RefreshCw } from "lucide-react";
 import type { ChannelSetupDraft } from "@goatcitadel/contracts";
 import {
   createChannelSetupDraft,
+  isApiRequestError,
   createChangePlan,
   discoverTelegramTargets,
   fetchChannelSetupDefinitions,
@@ -17,7 +18,6 @@ import {
   updateChannelSetupDraft,
   validateChannelSetupDraft,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   nativeLoad,
@@ -27,7 +27,6 @@ import {
   SettingsButtonRow,
   SettingsEmptyState,
   SettingsField,
-  SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,
@@ -35,18 +34,25 @@ import {
   SettingsStack,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList } from "../../primitives";
 import { ChannelSetupWizard, type ChannelSetupWizardFeedback } from "../channel-setup/ChannelSetupWizard";
 import { DiscordConnectionOperationsPanel } from "../channel-setup/DiscordConnectionOperationsPanel";
+import { ChannelJourneyPanel } from "../channel-setup/ChannelJourneyPanel";
 import {
   delay,
   formatDateTime,
+  formatJson,
+  parseJsonObject,
   preferredChannelDefinition,
   readConnectionConfigString,
   readDraftString,
 } from "../../SettingsNativePage";
-import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
+import { hasSessionDraft, useSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { useSessionViewState } from "../../../../hooks/use-session-view-state";
+import { FocusedDetail } from "../../shared/FocusedDetail";
+import { DetailInspector } from "../../../../components/DetailInspector";
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const load = useCallback(async () => {
@@ -64,55 +70,80 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [selectedDraftId, setSelectedDraftId] = useState("");
+  const [panel, setPanel] = useState<"create" | "editor" | "connection" | null>(null);
+  const panelRef = useRef(panel);
+  panelRef.current = panel;
+  const [selectedConnectionId, setSelectedConnectionId] = useSessionViewState(
+    "channels:" + activeWorkspaceId + ":connection",
+    "",
+  );
+  const [selectedDraftId, setSelectedDraftId] = useSessionViewState("channels:" + activeWorkspaceId + ":draft", "");
+  const selectionRef = useRef(selectedDraftId);
+  selectionRef.current = selectedDraftId;
+  const busyRef = useRef(false);
+  const oauthGeneration = useRef(0);
+  const oauthBusy = useRef(false);
+  const leave = useDraftLeave();
   const [createCatalogId, setCreateCatalogId] = useState("");
-  const [draftLabel, setDraftLabel] = useState("");
-  const [draftEnabled, setDraftEnabled] = useState(true);
-  const [draftValues, setDraftValues] = useState<Record<string, unknown>>({});
-  const [draftDirty, setDraftDirty] = useState(false);
-  const [draftOwnerId, setDraftOwnerId] = useState("");
   const [validationResult, setValidationResult] = useState<ChannelSetupWizardFeedback | null>(null);
+  const [validationRevision, setValidationRevision] = useState<number | null>(null);
   const [busyAction, setBusyAction] = useState<"save" | "validate" | "test" | "finalize" | null>(null);
-  const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? data?.drafts?.[0] ?? null;
+  const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? null;
   const createDefinition = data?.definitions?.find((item) => item.catalog.catalogId === createCatalogId) ?? null;
   const selectedDefinition = selectedDraft
     ? (data?.definitions?.find((item) => item.catalog.catalogId === selectedDraft.catalogId) ?? null)
     : createDefinition;
 
-  const hasDraftChanges = Boolean(selectedDraft && draftOwnerId === selectedDraft.draftId && draftDirty);
-  const draftHasChanges = useCallback(
-    (valuesOverride?: Record<string, unknown>): boolean => {
-      if (!selectedDraft || draftOwnerId !== selectedDraft.draftId) {
-        return false;
-      }
-      const nextValues = valuesOverride ?? draftValues;
-      return (
-        draftDirty ||
-        draftLabel.trim() !== (selectedDraft.label ?? "").trim() ||
-        draftEnabled !== selectedDraft.enabled ||
-        JSON.stringify(nextValues) !== JSON.stringify(selectedDraft.draft)
-      );
+  const selectedConnection = data?.connections?.find((item) => item.connectionId === selectedConnectionId) ?? null;
+  const channelDraft = useSessionDraft(
+    "channel:" + activeWorkspaceId + ":" + selectedDraftId + ":setup",
+    {
+      label: selectedDraft?.label ?? "",
+      enabled: selectedDraft?.enabled ?? true,
+      values: selectedDraft?.draft ?? ({} as Record<string, unknown>),
+      advancedText: formatJson(selectedDraft?.draft ?? {}),
     },
-    [draftDirty, draftEnabled, draftLabel, draftOwnerId, draftValues, selectedDraft],
+    selectedDraft?.revision,
+    {
+      label: selectedDraft?.label ?? "Channel setup",
+      active: panel === "editor",
+      available: Boolean(selectedDraft),
+      onSave: () => handleSave(),
+    },
   );
-  useFormDirty("settings:channels", hasDraftChanges, { label: "Channels" });
-
-  const resetSelectedDraft = useCallback(() => {
-    if (!selectedDraft) {
-      return;
-    }
-    setDraftLabel(selectedDraft.label ?? "");
-    setDraftEnabled(selectedDraft.enabled);
-    setDraftValues(selectedDraft.draft);
-    setDraftDirty(false);
+  const { label: draftLabel, enabled: draftEnabled, values: draftValues } = channelDraft.value;
+  const draftDirty = channelDraft.isDirty;
+  const [advancedMode] = useSessionViewState(
+    "channel:" + activeWorkspaceId + ":" + selectedDraftId + ":advanced-mode",
+    false,
+  );
+  const setDraftLabel = (label: string) => channelDraft.setValue((current) => ({ ...current, label }));
+  const setDraftEnabled = (enabled: boolean) => channelDraft.setValue((current) => ({ ...current, enabled }));
+  const setDraftValues = (values: Record<string, unknown>) =>
+    channelDraft.setValue((current) => ({ ...current, values, advancedText: formatJson(values) }));
+  const draftHasChanges = (valuesOverride?: Record<string, unknown>): boolean =>
+    Boolean(
+      selectedDraft &&
+      (channelDraft.isDirty || JSON.stringify(valuesOverride ?? draftValues) !== JSON.stringify(selectedDraft.draft)),
+    );
+  const draftSelectionGuard = {
+    requestTransition: (id: string) =>
+      leave.request(() => {
+        setSelectedDraftId(id);
+        setPanel("editor");
+        setValidationResult(null);
+      }),
+  };
+  const closePanel = () => leave.request(() => setPanel(null));
+  useEffect(() => {
+    setPanel(null);
     setValidationResult(null);
-  }, [selectedDraft]);
-  const applyDraftSelection = useCallback((draftId: string) => {
-    setSelectedDraftId(draftId);
-    setValidationResult(null);
-  }, []);
-  const draftSelectionGuard = useDraftTransitionGuard(hasDraftChanges, applyDraftSelection, resetSelectedDraft);
-
+    oauthGeneration.current += 1;
+    oauthBusy.current = false;
+    return () => {
+      oauthGeneration.current += 1;
+    };
+  }, [activeWorkspaceId]);
   useEffect(() => {
     if (!data?.definitions?.length) {
       setCreateCatalogId("");
@@ -125,35 +156,6 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       return preferredChannelDefinition(data.definitions)?.catalog?.catalogId || "";
     });
   }, [data?.definitions]);
-
-  useEffect(() => {
-    if (!data?.drafts?.length) {
-      setSelectedDraftId("");
-      return;
-    }
-    setSelectedDraftId((current) =>
-      current && data.drafts.some((item) => item.draftId === current) ? current : data.drafts[0]?.draftId || "",
-    );
-  }, [data?.drafts]);
-
-  useEffect(() => {
-    if (!selectedDraft) {
-      setDraftLabel("");
-      setDraftEnabled(true);
-      setDraftValues({});
-      setDraftDirty(false);
-      setDraftOwnerId("");
-      return;
-    }
-    if (draftOwnerId === selectedDraft.draftId && hasDraftChanges) {
-      return;
-    }
-    setDraftLabel(selectedDraft.label ?? "");
-    setDraftEnabled(selectedDraft.enabled);
-    setDraftValues(selectedDraft.draft);
-    setDraftDirty(false);
-    setDraftOwnerId(selectedDraft.draftId);
-  }, [draftOwnerId, hasDraftChanges, selectedDraft]);
 
   useEffect(() => {
     setValidationResult(null);
@@ -169,12 +171,16 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       setNotice({ tone: "success", message: "Channel setup draft created." });
       await reload();
       setSelectedDraftId(created.draftId);
+      if (panelRef.current === "create") setPanel("editor");
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
     }
   };
 
   const handleStartSlackOAuth = async () => {
+    if (oauthBusy.current) return;
+    oauthBusy.current = true;
+    const generation = ++oauthGeneration.current;
     try {
       const status = await fetchSlackOAuthStatus();
       if (!status.configured) {
@@ -196,17 +202,21 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         tone: "success",
         message: "Slack authorization opened. Approve the workspace, then target setup will open here.",
       });
-      void waitForSlackOAuthInstall(previousConnections);
+      void waitForSlackOAuthInstall(previousConnections, generation);
     } catch (oauthError) {
       setNotice({ tone: "error", message: getErrorMessage(oauthError) });
+    } finally {
+      oauthBusy.current = false;
     }
   };
 
-  const waitForSlackOAuthInstall = async (previousConnections: Map<string, string>) => {
+  const waitForSlackOAuthInstall = async (previousConnections: Map<string, string>, generation: number) => {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       await delay(2000);
+      if (generation !== oauthGeneration.current) return;
       try {
         const status = await fetchSlackOAuthStatus();
+        if (generation !== oauthGeneration.current) return;
         const installed = status.connections.find((item) => {
           const previousConnectedAt = previousConnections.get(item.connection.connectionId);
           const nextConnectedAt = readConnectionConfigString(item.connection.config, "oauthConnectedAt") ?? "";
@@ -226,7 +236,9 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
           message: "Slack workspace connected. Add channel targets, then validate and test.",
         });
         await reload();
+        if (generation !== oauthGeneration.current) return;
         setSelectedDraftId(created.draftId);
+        if (panelRef.current === "create") setPanel("editor");
         return;
       } catch {
         // Keep polling so callback timing or a short gateway blip does not interrupt setup.
@@ -249,6 +261,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         botTokenEnv: readDraftString(draftObject, "botTokenEnv") ?? readDraftString(draftObject, "tokenEnv"),
         setupCode: readDraftString(draftObject, "setupCode"),
       });
+      if (selectedDraft.draftId !== selectionRef.current) return;
       if (result.items.length === 0) {
         setNotice({
           tone: "warning",
@@ -269,7 +282,6 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         targets,
         defaultChatId: targets[0]?.chatId ?? readDraftString(draftObject, "defaultChatId"),
       });
-      setDraftDirty(true);
       setValidationResult(null);
       setNotice({
         tone: "success",
@@ -284,10 +296,30 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     if (!selectedDraft) {
       return undefined;
     }
-    const nextValues = valuesOverride ?? draftValues;
+    let nextValues: Record<string, unknown>;
+    try {
+      nextValues = valuesOverride ?? (advancedMode ? parseJsonObject(channelDraft.value.advancedText) : draftValues);
+    } catch (cause) {
+      setNotice({ tone: "error", message: getErrorMessage(cause) });
+      return undefined;
+    }
+    if (channelDraft.hasRemoteChanges) {
+      setNotice({
+        tone: "warning",
+        message: "This channel draft changed elsewhere. Review its current revision before applying your changes.",
+      });
+      return undefined;
+    }
+    const submitted = {
+      label: draftLabel,
+      enabled: draftEnabled,
+      values: nextValues,
+      advancedText: formatJson(nextValues),
+    };
     if (!draftHasChanges(nextValues)) {
       return selectedDraft;
     }
+    channelDraft.setValue(submitted);
     try {
       const secretFieldKeys = new Set(selectedDefinition?.adapter?.secretFieldKeys ?? []);
       const publicValues = Object.fromEntries(
@@ -304,7 +336,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         ),
       );
       let savedDraft = await updateChannelSetupDraft(selectedDraft.draftId, {
-        expectedRevision: selectedDraft.revision,
+        expectedRevision: channelDraft.baseRevision as number,
         label: draftLabel.trim() || undefined,
         enabled: draftEnabled,
         draft: publicValues,
@@ -315,18 +347,35 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
           values: secureValues,
         });
       }
-      setDraftLabel(savedDraft.label ?? draftLabel.trim());
-      setDraftEnabled(savedDraft.enabled ?? draftEnabled);
-      setDraftValues(savedDraft.draft ?? nextValues);
-      setDraftDirty(false);
+      const clean = channelDraft.acceptSaved(
+        {
+          label: savedDraft.label ?? draftLabel.trim(),
+          enabled: savedDraft.enabled ?? draftEnabled,
+          values: savedDraft.draft ?? nextValues,
+          advancedText: formatJson(savedDraft.draft ?? nextValues),
+        },
+        savedDraft.revision,
+        submitted,
+      );
+      if (!clean) {
+        setNotice({
+          tone: "warning",
+          message: "The submitted channel draft was saved. Newer edits remain; save them before continuing.",
+        });
+        await reload();
+        return undefined;
+      }
       return savedDraft;
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) await reload();
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
       return undefined;
     }
   };
 
   const handleSave = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
     setBusyAction("save");
     try {
       const savedDraft = await persistDraft(valuesOverride);
@@ -336,6 +385,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       }
       return Boolean(savedDraft);
     } finally {
+      busyRef.current = false;
       setBusyAction(null);
     }
   };
@@ -344,6 +394,8 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     if (!selectedDraft) {
       return;
     }
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyAction("validate");
     try {
       const currentDraft = await persistDraft(valuesOverride);
@@ -351,6 +403,8 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         return;
       }
       const result = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
+      if (currentDraft.draftId !== selectionRef.current) return;
+      setValidationRevision(result.draftRevision);
       setValidationResult({
         kind: "validate",
         status: result.status,
@@ -364,6 +418,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     } catch (validateError) {
       setNotice({ tone: "error", message: getErrorMessage(validateError) });
     } finally {
+      busyRef.current = false;
       setBusyAction(null);
     }
   };
@@ -372,6 +427,8 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     if (!selectedDraft) {
       return;
     }
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyAction("test");
     try {
       const currentDraft = await persistDraft(valuesOverride);
@@ -379,7 +436,9 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         return;
       }
       const validation = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
+      if (currentDraft.draftId !== selectionRef.current) return;
       if (validation.status === "error") {
+        setValidationRevision(validation.draftRevision);
         setValidationResult({
           kind: "validate",
           status: validation.status,
@@ -390,6 +449,8 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         return;
       }
       const result = await testChannelSetupDraft(currentDraft.draftId, validation.draftRevision);
+      if (currentDraft.draftId !== selectionRef.current) return;
+      setValidationRevision(result.draftRevision);
       setValidationResult({
         kind: "test",
         status: result.status,
@@ -405,6 +466,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     } catch (testError) {
       setNotice({ tone: "error", message: getErrorMessage(testError) });
     } finally {
+      busyRef.current = false;
       setBusyAction(null);
     }
   };
@@ -417,10 +479,16 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       setNotice({ tone: "warning", message: "Save these changes and run the live test again before finalizing." });
       return;
     }
-    if (validationResult?.kind !== "test" || validationResult.status !== "ok") {
+    if (
+      validationResult?.kind !== "test" ||
+      validationResult.status !== "ok" ||
+      validationRevision !== selectedDraft.revision
+    ) {
       setNotice({ tone: "warning", message: "A passing live test is required before finalizing this connection." });
       return;
     }
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyAction("finalize");
     try {
       const plan = await createChangePlan({
@@ -441,7 +509,35 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     } catch (finalizeError) {
       setNotice({ tone: "error", message: getErrorMessage(finalizeError) });
     } finally {
+      busyRef.current = false;
       setBusyAction(null);
+    }
+  };
+
+  const editConnection = async () => {
+    if (!selectedConnection || busyRef.current) return;
+    const existing = data?.drafts?.find((item) => item.connectionId === selectedConnection.connectionId);
+    if (existing) {
+      setSelectedDraftId(existing.draftId);
+      setPanel("editor");
+      return;
+    }
+    busyRef.current = true;
+    try {
+      const created = await createChannelSetupDraft({
+        catalogId: selectedConnection.catalogId,
+        connectionId: selectedConnection.connectionId,
+        lifecycleMode: "edit",
+      });
+      await reload();
+      if (panelRef.current === "connection") {
+        setSelectedDraftId(created.draftId);
+        setPanel("editor");
+      }
+    } catch (cause) {
+      setNotice({ tone: "error", message: getErrorMessage(cause) });
+    } finally {
+      busyRef.current = false;
     }
   };
 
@@ -453,168 +549,228 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid variant="detail-wide">
+        <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <SettingsStack>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Channel definitions"
-              subtitle="Available guided setup definitions for supported channel integrations."
-              stats={[
-                { label: "Definitions", value: String(data.definitions?.length ?? 0) },
-                { label: "Existing channels", value: String(data.connections?.length ?? 0) },
-              ]}
-            >
-              <SettingsField label="Create draft from">
-                <select
-                  className="mc-next-settings-input"
-                  value={createCatalogId}
-                  onChange={(event) => setCreateCatalogId(event.target.value)}
-                  disabled={(data.definitions?.length ?? 0) === 0}
-                >
-                  <option value="" disabled>
-                    {(data.definitions?.length ?? 0) > 0
-                      ? "Choose a channel definition"
-                      : "No channel definitions available"}
-                  </option>
-                  {(data.definitions ?? []).map((item) => (
-                    <option key={item.catalog.catalogId} value={item.catalog.catalogId}>
-                      {item.catalog.label}
+          {panel === "create" ? (
+            <FocusedDetail title="Connect channel" onClose={closePanel}>
+              <SettingsStack>
+                <SettingsField label="Create draft from">
+                  <select
+                    className="mc-next-settings-input"
+                    value={createCatalogId}
+                    onChange={(event) => setCreateCatalogId(event.target.value)}
+                    disabled={(data.definitions?.length ?? 0) === 0}
+                  >
+                    <option value="" disabled>
+                      {(data.definitions?.length ?? 0) > 0
+                        ? "Choose a channel definition"
+                        : "No channel definitions available"}
                     </option>
-                  ))}
-                </select>
-              </SettingsField>
-              <SettingsNotice
-                notice={{
-                  tone: "info",
-                  message:
-                    "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Slack uses OAuth and Telegram can discover targets.",
-                }}
-              />
-              <SettingsButtonRow>
-                {createCatalogId === "channel.slack" ? (
-                  <NativeButton variant="default" onClick={() => void handleStartSlackOAuth()}>
-                    <ExternalLink size={16} />
-                    Connect Slack
+                    {(data.definitions ?? []).map((item) => (
+                      <option key={item.catalog.catalogId} value={item.catalog.catalogId}>
+                        {item.catalog.label}
+                      </option>
+                    ))}
+                  </select>
+                </SettingsField>
+                <SettingsNotice
+                  notice={{
+                    tone: "info",
+                    message:
+                      "Choose a channel, start its guided setup, then save, validate, test, and finalize before runtime use. Slack uses OAuth and Telegram can discover targets.",
+                  }}
+                />
+                <SettingsButtonRow>
+                  {createCatalogId === "channel.slack" ? (
+                    <NativeButton variant="default" onClick={() => void handleStartSlackOAuth()}>
+                      <ExternalLink size={16} />
+                      Connect Slack
+                    </NativeButton>
+                  ) : null}
+                  <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
+                    <Plus size={16} />
+                    {createDefinition ? `Start ${createDefinition.catalog.label} setup` : "Start guided setup"}
                   </NativeButton>
+                </SettingsButtonRow>
+                <SettingsActionList
+                  ariaLabel="Channel setup definitions"
+                  items={(data.definitions ?? []).map((item) => ({
+                    label: item.catalog.label,
+                    description: item.catalog.description,
+                    meta: `${item.wizard.difficulty} · ${item.wizard.estimatedMinutes} min`,
+                    onClick: () => setCreateCatalogId(item.catalog.catalogId),
+                    actionLabel: createCatalogId === item.catalog.catalogId ? "Selected" : "Use",
+                  }))}
+                  emptyLabel="No channel setup definitions returned."
+                  maxHeight="min(34vh, 18rem)"
+                />
+              </SettingsStack>
+            </FocusedDetail>
+          ) : panel === "editor" ? (
+            <FocusedDetail
+              title={selectedDraft?.label || selectedDefinition?.catalog?.label || "Channel setup"}
+              onClose={closePanel}
+            >
+              <SettingsStack>
+                {validationResult && validationRevision !== selectedDraft?.revision ? (
+                  <p role="status">
+                    The previous check belongs to a different draft revision. Run the live test again.
+                  </p>
                 ) : null}
-                <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
+                {channelDraft.hasRemoteChanges ? (
+                  <NativeCard
+                    title="Channel draft changed"
+                    subtitle="Your input is retained. Review the saved revision before retrying."
+                  >
+                    <p>
+                      {selectedDraft?.label} · revision {selectedDraft?.revision} ·{" "}
+                      {formatDateTime(selectedDraft?.updatedAt)}
+                    </p>
+                    <NativeButton onClick={channelDraft.rebaseToCurrent}>Apply draft to current channel</NativeButton>
+                  </NativeCard>
+                ) : null}
+
+                {selectedDraft && selectedDefinition ? (
+                  <ChannelSetupWizard
+                    scopeId={activeWorkspaceId}
+                    advancedValue={channelDraft.value.advancedText}
+                    onAdvancedValueChange={(advancedText) =>
+                      channelDraft.setValue((current) => ({ ...current, advancedText }))
+                    }
+                    definition={selectedDefinition}
+                    draft={selectedDraft}
+                    values={draftValues}
+                    label={draftLabel}
+                    enabled={draftEnabled}
+                    dirty={draftDirty}
+                    feedback={validationRevision === selectedDraft.revision ? validationResult : null}
+                    busyAction={busyAction}
+                    onValuesChange={(next) => {
+                      setDraftValues(next);
+                      setValidationResult(null);
+                    }}
+                    onLabelChange={(next) => {
+                      setDraftLabel(next);
+                      setValidationResult(null);
+                    }}
+                    onEnabledChange={(next) => {
+                      setDraftEnabled(next);
+                      setValidationResult(null);
+                    }}
+                    onDirty={() => {
+                      setValidationResult(null);
+                    }}
+                    onSave={handleSave}
+                    onValidate={handleValidate}
+                    onTest={handleTest}
+                    onFinalize={handleFinalize}
+                    supplementaryActions={
+                      <>
+                        {selectedDraft.catalogId === "channel.slack" ? (
+                          <NativeButton variant="secondary" onClick={() => void handleStartSlackOAuth()}>
+                            <ExternalLink size={16} />
+                            Connect Slack
+                          </NativeButton>
+                        ) : null}
+                        {selectedDraft.catalogId === "channel.telegram" ? (
+                          <NativeButton variant="secondary" onClick={() => void handleDiscoverTelegramTargets()}>
+                            <RefreshCw size={16} />
+                            Detect Telegram chats
+                          </NativeButton>
+                        ) : null}
+                      </>
+                    }
+                  />
+                ) : selectedDraft ? (
+                  <SettingsEmptyState label="The setup definition for this draft is unavailable. Refresh or repair the Gateway catalog." />
+                ) : (
+                  <SettingsEmptyState label="Create or select a channel setup draft to continue." />
+                )}
+              </SettingsStack>
+            </FocusedDetail>
+          ) : (
+            <>
+              <SettingsButtonRow>
+                <NativeButton onClick={() => leave.request(() => setPanel("create"))}>
                   <Plus size={16} />
-                  {createDefinition ? `Start ${createDefinition.catalog.label} setup` : "Start guided setup"}
+                  Connect channel
+                </NativeButton>
+                <NativeButton variant="secondary" onClick={() => void reload()}>
+                  Refresh
                 </NativeButton>
               </SettingsButtonRow>
-              <SettingsActionList
-                ariaLabel="Channel setup definitions"
-                items={(data.definitions ?? []).map((item) => ({
-                  label: item.catalog.label,
-                  description: item.catalog.description,
-                  meta: `${item.wizard.difficulty} · ${item.wizard.estimatedMinutes} min`,
-                  onClick: () => setCreateCatalogId(item.catalog.catalogId),
-                  actionLabel: createCatalogId === item.catalog.catalogId ? "Selected" : "Use",
-                }))}
-                emptyLabel="No channel setup definitions returned."
-                maxHeight="min(34vh, 18rem)"
-              />
-            </NativeCard>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Drafts"
-              subtitle="Saved setup drafts, readiness checks, trial sends, and finalization."
-            >
-              <NativeSelectableList
-                items={(data.drafts ?? []).map((item) => ({
-                  id: item.draftId,
-                  title: item.label || item.catalogId,
-                  meta: item.lifecycleMode,
-                  body: `${item.enabled ? "enabled" : "disabled"} · ${formatDateTime(item.updatedAt)}`,
-                }))}
-                selectedId={selectedDraftId}
-                onSelect={(draftId) => {
-                  if (draftId !== selectedDraftId) {
+              <NativeCard title="Channel connections" subtitle="Saved connections and their observed status." stats={[{label:"Definitions",value:data.issues.some(issue=>issue.label === "Channel definitions") ? "Unavailable" : (Array.isArray(data.definitions) ? String(data.definitions.length) : "Unavailable")},{label:"Existing channels",value:data.issues.some(issue=>issue.label === "Channel connections") ? "Unavailable" : (Array.isArray(data.connections) ? String(data.connections.length) : "Unavailable")}]}>
+                <NativeSelectableList
+                  items={(data.connections ?? []).map((item) => ({
+                    id: item.connectionId,
+                    title: item.label,
+                    meta: item.status,
+                    body: item.key + " · " + (item.enabled ? "enabled" : "disabled"),
+                  }))}
+                  selectedId={panel === "connection" ? selectedConnectionId : undefined}
+                  onSelect={(id) => {
+                    setSelectedConnectionId(id);
+                    setPanel("connection");
+                  }}
+                  emptyLabel="No connected channels yet."
+                  maxHeight="min(45vh, 28rem)"
+                />
+              </NativeCard>
+              <NativeCard title="Drafts" subtitle="Saved setup work, including retained edits.">
+                <NativeSelectableList
+                  items={(data.drafts ?? []).map((item) => ({
+                    id: item.draftId,
+                    title: item.label || item.catalogId,
+                    meta:
+                      item.lifecycleMode +
+                      (hasSessionDraft("channel:" + activeWorkspaceId + ":" + item.draftId + ":setup") ||
+                      hasSessionDraft("channel:" + activeWorkspaceId + ":" + item.draftId + ":advanced")
+                        ? " · Unsaved"
+                        : ""),
+                    body: `${item.enabled ? "enabled" : "disabled"} · ${formatDateTime(item.updatedAt)}`,
+                  }))}
+                  selectedId={selectedDraftId}
+                  onSelect={(draftId) => {
                     draftSelectionGuard.requestTransition(draftId);
-                  }
-                }}
-                emptyLabel="No channel drafts yet."
-              />
-            </NativeCard>
-            <DiscordConnectionOperationsPanel connections={data.connections ?? []} />
-          </SettingsStack>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title={selectedDraft?.label || selectedDefinition?.catalog?.label || "Channel draft"}
-            subtitle="Follow the guided setup, prove the connection, then finalize it into the live runtime."
+                  }}
+                  emptyLabel="No channel drafts yet."
+                />
+              </NativeCard>
+            </>
+          )}
+          <DetailInspector
+            open={panel === "connection"}
+            title={selectedConnection?.label ?? "Channel unavailable"}
+            onClose={closePanel}
           >
-            {selectedDraft && selectedDefinition ? (
-              <ChannelSetupWizard
-                definition={selectedDefinition}
-                draft={selectedDraft}
-                values={draftValues}
-                label={draftLabel}
-                enabled={draftEnabled}
-                dirty={draftDirty}
-                feedback={validationResult}
-                busyAction={busyAction}
-                onValuesChange={(next) => {
-                  setDraftValues(next);
-                  setDraftDirty(true);
-                  setValidationResult(null);
-                }}
-                onLabelChange={(next) => {
-                  setDraftLabel(next);
-                  setDraftDirty(true);
-                  setValidationResult(null);
-                }}
-                onEnabledChange={(next) => {
-                  setDraftEnabled(next);
-                  setDraftDirty(true);
-                  setValidationResult(null);
-                }}
-                onDirty={() => {
-                  setDraftDirty(true);
-                  setValidationResult(null);
-                }}
-                onSave={handleSave}
-                onValidate={handleValidate}
-                onTest={handleTest}
-                onFinalize={handleFinalize}
-                supplementaryActions={
-                  <>
-                    {selectedDraft.catalogId === "channel.slack" ? (
-                      <NativeButton variant="secondary" onClick={() => void handleStartSlackOAuth()}>
-                        <ExternalLink size={16} />
-                        Connect Slack
-                      </NativeButton>
-                    ) : null}
-                    {selectedDraft.catalogId === "channel.telegram" ? (
-                      <NativeButton variant="secondary" onClick={() => void handleDiscoverTelegramTargets()}>
-                        <RefreshCw size={16} />
-                        Detect Telegram chats
-                      </NativeButton>
-                    ) : null}
-                  </>
-                }
-              />
-            ) : selectedDraft ? (
-              <SettingsEmptyState label="The setup definition for this draft is unavailable. Refresh or repair the Gateway catalog." />
+            {selectedConnection ? (
+              <SettingsStack>
+                <p>
+                  {selectedConnection.key} · {selectedConnection.status} ·{" "}
+                  {selectedConnection.enabled ? "Enabled" : "Disabled"}
+                </p>
+                <p>{selectedConnection.lastError}</p>
+                <NativeButton onClick={() => void editConnection()}>Edit setup</NativeButton>
+                <ChannelJourneyPanel connections={[selectedConnection]} />
+                <NativeDisclosureCard id="channel-operations" title="Connection operations">
+                  <DiscordConnectionOperationsPanel connections={[selectedConnection]} />
+                  <dl>
+                    <dt>Connection ID</dt>
+                    <dd>{selectedConnection.connectionId}</dd>
+                    <dt>Last sync</dt>
+                    <dd>{formatDateTime(selectedConnection.lastSyncAt)}</dd>
+                    <dt>Updated</dt>
+                    <dd>{formatDateTime(selectedConnection.updatedAt)}</dd>
+                  </dl>
+                </NativeDisclosureCard>
+              </SettingsStack>
             ) : (
-              <SettingsEmptyState label="Create or select a channel setup draft to continue." />
+              <SettingsEmptyState label="This connection is unavailable. Refresh or choose another channel." />
             )}
-          </NativeCard>
-        </SettingsGrid>
+          </DetailInspector>
+        </SettingsStack>
       ) : null}
-      <ConfirmModal
-        open={draftSelectionGuard.pendingTransition !== null}
-        danger
-        title="Discard channel draft changes?"
-        message="The selected channel setup has unsaved edits. Discard them and open another draft?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={draftSelectionGuard.cancelDiscard}
-        onConfirm={draftSelectionGuard.confirmDiscard}
-      />
+      {leave.dialog}
     </SettingsSectionShell>
   );
 }

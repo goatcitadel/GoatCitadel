@@ -517,227 +517,9 @@
   max-width: 100%;
 }
 
-.mc-next-brand {
-  position: relative;
-  display: grid;
-  gap: 0;
-  width: 9.7rem;
-  min-width: 0;
-  padding-left: 1.55rem;
-  padding-right: 0.4rem;
-  border-right: 1px solid var(--mc-border-subtle);
-}
-
-.mc-next-brand::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.08rem;
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: var(--r-xs);
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.78), transparent 34%),
-    linear-gradient(135deg, var(--brand), var(--brand-deep));
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24),
-    0 0 18px rgba(244, 234, 214, 0.16);
-}
-
-.mc-next-brand p {
-  margin: 0;
-  /* F5: brand eyebrow ("GoatCitadel") is chrome — render it in the mono family
-     alongside the other kickers. */
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  font-weight: 650;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.mc-next-brand h1 {
-  margin: 0;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.05;
-}
-
-.mc-next-primary-nav {
-  display: inline-flex;
-  align-items: center;
-  flex: 1 1 auto;
-  gap: 0.12rem;
-  min-width: 0;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  padding: 0.1rem;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--mc-border-subtle);
-  background: color-mix(in oklab, var(--mc-surface-1) 74%, transparent);
-  box-shadow: none;
-  scrollbar-width: none;
-}
-
-.mc-next-primary-nav::-webkit-scrollbar {
-  display: none;
-}
-
-.mc-next-primary-link {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 0.24rem;
-  /* Design pass: taller hit target (~34px, was ~30px) */
-  min-height: 2.1rem;
-  padding: 0 0.55rem;
-  border: 0;
-  border-radius: var(--r-xs);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--text-2xs);
-  cursor: pointer;
-  transition:
-    background-color var(--motion-base) var(--motion-ease),
-    color var(--motion-base) var(--motion-ease),
-    transform var(--motion-base) var(--motion-ease);
-}
-
-.mc-next-primary-link span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mc-next-primary-link:hover,
-.mc-next-primary-link:focus-visible {
-  background: var(--mc-surface-3);
-  color: var(--foreground);
-}
-
-.mc-next-primary-link:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-ring-offset);
-}
-
-.mc-next-primary-link.active {
-  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-3));
-  color: var(--foreground);
-  box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--mc-area-color) 44%, transparent);
-}
-
-.mc-next-command-search {
-  order: -1;
-  flex: 1 1 12rem;
-  /* S2 (visual review 2026-06-25): was min-width 8.25rem, which protected the
-     palette label while the Citadel/Workspace selects (min-width:0) collapsed to
-     nothing — leaving "WORKSPACE" with no value visible. The selects carry more
-     important context than the palette label (which has the Ctrl+K hint and its
-     own icon), so let the search yield/ellipsize first. It still grows to its
-     12rem basis whenever there is room. */
-  min-width: 3rem;
-  max-width: 20rem;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 0.38rem;
-  padding: 0 0.48rem;
-  border: 1px solid var(--mc-border-subtle);
-  border-radius: var(--r-xs);
-  background: color-mix(in oklab, var(--mc-surface-1) 82%, transparent);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--text-2xs);
-  cursor: pointer;
-}
-
-.mc-next-command-search span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mc-next-command-search kbd {
-  padding: 0.02rem 0.24rem;
-  border-radius: 0.2rem;
-  border: 1px solid var(--mc-border-subtle);
-  background: color-mix(in oklab, var(--mc-surface-3) 70%, transparent);
-  color: var(--text-muted);
-  font: var(--text-2xs) var(--mc-font-mono);
-}
-
-.mc-next-select-field {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  flex: 0 1 10.2rem;
-  /* S2 (visual review 2026-06-25): was min-width:0, which let the field (and the
-     select inside it) collapse to ~14px so the active Citadel/Workspace value
-     vanished entirely when the top bar was tight. Floor the whole field so the
-     value stays at least partially legible; the select inside is width:100% and
-     ellipsizes within the field, so it never overflows onto the next control. */
-  min-width: 7rem;
-  max-width: 10.2rem;
-}
-
-.mc-next-select-field span {
-  flex: 0 0 auto;
-  font-size: var(--text-2xs);
-  font-weight: 700;
-  line-height: 1;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.mc-next-select-field select {
-  width: 100%;
-  min-width: 0;
-  min-height: 1.55rem;
-  border-radius: var(--r-pill);
-  border: 1px solid var(--mc-border-subtle);
-  background: var(--mc-surface-1);
-  color: var(--foreground);
-  padding: 0.14rem 0.45rem;
-  box-shadow: none;
-  font-size: var(--text-2xs);
-}
-
-.mc-next-topbar-status {
-  /* Restored quick-glance status cluster (release scope, degraded-realtime
-     escalation, pending approvals). Kept on a single nowrap line so it never
-     spills out of the 38px topbar row; the overflow ⋯ More menu (F1) collapses
-     the lower-priority controls instead, leaving room for this cluster. */
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  flex-wrap: nowrap;
-  /* S1 (visual review 2026-06-25): keep this cluster rigid. When the degraded
-     "Live fallback" badge appears the right cluster runs ~60px over budget; with
-     min-width:0 the status box collapsed below its badges, which then spilled
-     visibly over the bell/audio icons ("0 approvals" overlapping the mute icon).
-     Pinning it to content width pushes the shrink onto the Citadel/Workspace
-     selects (which already ellipsize) instead of overlapping the utility icons. */
-  flex: 0 0 auto;
-  min-width: max-content;
-}
-
 /* TOP-01: a quiet vertical rule separating the primary action controls
    (search / Start Here / mode / workspace) from the utility cluster
    (notifications, audio, context, theme). */
-.mc-next-topbar-divider {
-  flex: 0 0 auto;
-  align-self: center;
-  width: 1px;
-  height: 1.5rem;
-  margin-inline: 0.1rem;
-  /* --border-strong is canonical in-shell (not re-aliased by the [data-area]
-     block, unlike --border/--border-default which cycle to transparent there). */
-  background: var(--border-strong);
-}
 
 .mc-next-topbar-right > .mc-next-icon-button {
   display: inline-flex;
@@ -755,41 +537,6 @@
 .mc-next-topbar-right > .mc-next-icon-button svg {
   width: 0.8rem;
   height: 0.8rem;
-}
-
-.mc-next-audio-toggle.active {
-  border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--mc-border-subtle));
-  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-1));
-  color: var(--mc-area-color);
-}
-
-.mc-next-topbar-right > button.mc-next-start-button,
-.mc-next-topbar-right > button.mc-next-mode-toggle,
-.mc-next-topbar-right > button.mc-next-wa-button {
-  width: auto;
-  min-width: 4.6rem;
-  flex-shrink: 0;
-  overflow: visible;
-  padding: 0.15rem 0.5rem;
-  font-size: var(--text-2xs);
-  white-space: nowrap;
-}
-
-.mc-next-topbar-right > button.mc-next-mode-toggle {
-  min-width: 3.7rem;
-}
-
-.mc-next-topbar-right > button.mc-next-wa-button {
-  width: 1.9rem;
-  min-width: 1.9rem;
-  padding: 0;
-  font-size: 0;
-  overflow: hidden;
-}
-
-.mc-next-topbar-right > button.mc-next-wa-button svg {
-  width: 0.85rem;
-  height: 0.85rem;
 }
 
 /* F1: topbar overflow ("⋯ More") menu. Lives in a positioned wrapper so the
@@ -904,21 +651,12 @@
   white-space: nowrap;
 }
 
-.mc-next-release-badge[data-release-status="needs_release_polish"],
-.mc-next-release-badge[data-release-status="experimental"] {
-  border-color: color-mix(in oklab, var(--gc-risk-caution) 34%, var(--mc-border-subtle));
-  color: color-mix(in oklab, var(--gc-risk-caution) 75%, var(--foreground));
-}
-
 /* F2: the topbar realtime badge surfaces only as the degraded/fallback
    escalation (the healthy "Live" state is carried once by the footer status
    strip), so when present it always reads as a caution signal. */
-.mc-next-realtime-badge[data-realtime="degraded"] {
-  border-color: color-mix(in oklab, var(--gc-risk-caution) 36%, var(--mc-border-subtle));
-  color: color-mix(in oklab, var(--gc-risk-caution) 75%, var(--foreground));
-}
 
 .mc-next-badge-button {
+  min-height: 2rem;
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -954,7 +692,7 @@
   gap: 0.28rem;
   min-width: 0;
   max-width: 100%;
-  min-height: 1.45rem;
+  min-height: 2rem;
   padding: 0.16rem 0.42rem;
   border-radius: var(--r-xs);
   border: 1px solid var(--mc-border-subtle);
@@ -1170,7 +908,6 @@
 }
 
 .mc-next-rail-head p,
-.mc-next-stage-header p,
 .side-inspector-drawer-kicker {
   margin: 0;
   /* F5: chrome eyebrow/kicker labels render in the mono family — the shell's
@@ -1184,7 +921,6 @@
 }
 
 .mc-next-rail-head h2,
-.mc-next-stage-header h2,
 .side-inspector-drawer-title {
   margin: 0.18rem 0 0;
   font-size: var(--text-sm);
@@ -1364,7 +1100,6 @@
   overflow: hidden;
 }
 
-.mc-next-stage-header span,
 .side-inspector-drawer-subtitle,
 .mc-next-inspector-subtitle,
 .mc-next-inspector-list,
@@ -1428,10 +1163,6 @@
   opacity: 0.7;
   border-radius: 0 0 1px 1px;
   pointer-events: none;
-}
-
-.mc-next-inspector-scrim {
-  display: none;
 }
 
 .mc-next-nav-scrim {
@@ -1617,46 +1348,11 @@
   display: none;
 }
 
-.mc-next-status-strip-primary {
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
-  gap: 0.42rem;
-  min-width: 0;
-  padding-inline-end: 0.2rem;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
 /* Build identity is shell truth, not a scrollable metric. Keep it outside the
    horizontally scrolling runtime pills so it remains visible at every width. */
-.mc-next-status-strip-identity {
-  position: relative;
-  z-index: 2;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: min(34rem, 70vw);
-  background: inherit;
-}
-
-.mc-next-status-strip-identity .mc-next-status-pill,
-.mc-next-status-strip-identity .mc-next-status-pill > div {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.mc-next-status-strip-identity .mc-next-status-pill strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .mc-next-status-value-compact {
   display: none !important;
-}
-
-.mc-next-status-strip-primary::-webkit-scrollbar {
-  display: none;
 }
 
 .mc-next-status-pill {
@@ -1817,10 +1513,6 @@
   overflow: visible;
 }
 
-.mc-next-status-details-mobile-only {
-  display: none;
-}
-
 /* OD 2026-07-04 shell frame: bright high-trust operations console. This layer
    ports the prototype's coherent chrome without changing route contracts,
    threaded timeline rendering, or generated artifact display internals. */
@@ -1839,34 +1531,9 @@
   box-shadow: 0 1px 0 color-mix(in oklab, var(--foreground) 4%, transparent);
 }
 
-.mc-next-brand {
-  width: 10.2rem;
-}
-
-.mc-next-brand::before {
-  border-radius: var(--r-sm);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, white 34%, transparent),
-    0 0 0 3px color-mix(in oklab, var(--brand) 12%, transparent);
-}
-
-.mc-next-primary-nav,
-.mc-next-command-search,
-.mc-next-select-field select,
 .mc-next-topbar-more-menu {
   border-color: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-border-subtle));
   background: color-mix(in oklab, var(--mc-surface-2) 78%, var(--background));
-}
-
-.mc-next-primary-link {
-  min-height: 2.25rem;
-  border-radius: var(--r-sm);
-}
-
-.mc-next-primary-link.active,
-.mc-next-primary-link:hover,
-.mc-next-primary-link:focus-visible {
-  background: color-mix(in oklab, var(--mc-area-color) 13%, var(--mc-surface-1));
 }
 
 .mc-next-body {
@@ -1893,7 +1560,6 @@
 }
 
 .mc-next-rail-head h2,
-.mc-next-stage-header h2,
 .side-inspector-drawer-title {
   font-size: var(--text-lg);
   font-weight: 780;
@@ -2592,16 +2258,6 @@
     flex-basis: min(39rem, 62vw);
   }
 
-  .mc-next-command-search {
-    min-width: 8rem;
-    max-width: 14rem;
-  }
-
-  .mc-next-select-field {
-    flex-basis: 6.4rem;
-    max-width: 6.4rem;
-  }
-
   .mc-next-status-strip {
     gap: 0.55rem;
   }
@@ -2614,9 +2270,6 @@
 @media (max-width: 1180px) {
   /* F1: collapse the workspace switcher to a compact trigger before the ≤1023
      tier folds it (and command search) into the nav drawer entirely. */
-  .mc-next-select-field select {
-    width: 6.6rem;
-  }
 
   .mc-next-shell-inspector.side-inspector-drawer {
     top: auto;
@@ -2628,15 +2281,6 @@
     /* Keep in sync with SIDE_INSPECTOR_DOCKED_MAX_WIDTH (SideInspectorDrawer.tsx):
        drag affordance is disabled at or below this width. */
     transform: none;
-  }
-
-  .mc-next-inspector-scrim.open {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-scrim);
-    border: 0;
-    background: var(--bg-scrim);
   }
 }
 
@@ -2662,10 +2306,6 @@
     display: inline-flex;
   }
 
-  .mc-next-primary-nav {
-    display: none;
-  }
-
   .mc-next-topbar {
     flex-wrap: nowrap;
   }
@@ -2680,16 +2320,6 @@
     gap: 0.35rem;
     margin-left: auto;
     min-width: 0;
-  }
-
-  .mc-next-command-search,
-  .mc-next-select-field {
-    display: none;
-  }
-
-  .mc-next-select-field {
-    min-width: 0;
-    flex: 0 0 auto;
   }
 
   .mc-next-body {
@@ -2843,60 +2473,6 @@
     overflow: hidden;
   }
 
-  .mc-next-brand {
-    width: auto;
-    max-width: 6.9rem;
-    padding-left: 1.35rem;
-    padding-right: 0;
-    border-right: 0;
-  }
-
-  .mc-next-brand p {
-    display: none;
-  }
-
-  .mc-next-brand h1 {
-    overflow: hidden;
-    font-size: var(--text-2xs);
-    line-height: 1.05;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mc-next-topbar-divider,
-  .mc-next-topbar-status .mc-next-release-badge {
-    display: none;
-  }
-
-  .mc-next-topbar-status {
-    gap: 0.24rem;
-    min-width: 0;
-  }
-
-  .mc-next-topbar-status .mc-next-badge-button {
-    width: auto;
-    min-width: 1.65rem;
-    justify-content: center;
-    padding-inline: 0.32rem;
-  }
-
-  .mc-next-topbar-status .mc-next-badge-label {
-    display: inline;
-  }
-
-  .mc-next-topbar-right > button.mc-next-start-button,
-  .mc-next-topbar-right > button.mc-next-mode-toggle,
-  .mc-next-topbar-right > button.mc-next-wa-button {
-    width: 1.65rem;
-    min-width: 1.65rem;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .mc-next-topbar-right > button.mc-next-theme-toggle {
-    display: none;
-  }
-
   .mc-next-inline-metrics {
     grid-template-columns: 1fr;
   }
@@ -2970,34 +2546,6 @@
     overflow-wrap: normal;
   }
 
-  .mc-next-status-strip-identity {
-    flex: 1 1 0;
-    max-width: none;
-    overflow: hidden;
-  }
-
-  .mc-next-status-strip-primary {
-    flex: 0 0 auto;
-    min-width: 0;
-    overflow: visible;
-  }
-
-  .mc-next-status-strip-primary .mc-next-status-pill {
-    max-width: none;
-  }
-
-  .mc-next-status-strip-primary .mc-next-status-pill:nth-child(n + 2) {
-    display: none;
-  }
-
-  .mc-next-status-strip-identity .mc-next-status-value-full {
-    display: none;
-  }
-
-  .mc-next-status-strip-identity .mc-next-status-value-compact {
-    display: block !important;
-  }
-
   .mc-next-status-details summary {
     min-height: 1.15rem;
     padding: 0.08rem 0.3rem;
@@ -3010,10 +2558,6 @@
 
   .mc-next-status-details summary strong {
     display: none;
-  }
-
-  .mc-next-status-details-mobile-only {
-    display: contents;
   }
 
   .mc-next-status-details summary strong::before {
@@ -3053,7 +2597,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mc-next-primary-link,
   .mc-next-button,
   .mc-next-button-secondary,
   .mc-next-button-ghost,
@@ -3186,8 +2729,7 @@
   border-bottom-color: var(--border);
 }
 
-.mc-next-nav-toggle,
-.mc-next-brand {
+.mc-next-nav-toggle {
   display: none;
 }
 
@@ -3199,111 +2741,6 @@
 .mc-next-topbar-right {
   flex: 1 1 auto;
   gap: 8px;
-}
-
-.mc-next-citadel-field {
-  position: relative;
-  flex: 0 0 178px;
-  min-width: 178px;
-  max-width: 178px;
-  gap: 7px;
-  min-height: 34px;
-  padding: 0 9px 0 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--background);
-}
-
-.mc-next-citadel-field::before {
-  content: "";
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  transform: translateY(-50%);
-  border-radius: var(--r-pill);
-  background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent);
-}
-
-.mc-next-citadel-field span {
-  display: none;
-}
-
-.mc-next-citadel-field select {
-  min-height: 2rem;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: var(--text-xs);
-  font-weight: 650;
-}
-
-.mc-next-primary-nav {
-  flex: 0 0 auto;
-  gap: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.mc-next-primary-link {
-  min-height: 56px;
-  padding: 0 9px;
-  border-radius: 0;
-  border-top: 2px solid transparent;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-}
-
-.mc-next-primary-link:hover,
-.mc-next-primary-link:focus-visible {
-  background: transparent;
-  border-bottom-color: var(--border);
-}
-
-.mc-next-primary-link.active {
-  background: transparent;
-  border-bottom-color: var(--mc-area-color);
-  box-shadow: none;
-  color: var(--foreground);
-}
-
-.mc-next-command-search {
-  order: 0;
-  flex: 1 1 12rem;
-  max-width: 18rem;
-  height: 34px;
-  border-color: var(--border);
-  border-radius: var(--r-sm);
-  background: var(--background);
-  font-size: var(--text-xs);
-}
-
-.mc-next-workspace-field {
-  flex: 0 1 11rem;
-  min-width: 7rem;
-  max-width: 11rem;
-}
-
-.mc-next-workspace-field span {
-  display: none;
-}
-
-.mc-next-topbar-status .mc-next-badge-button {
-  min-height: 1.9rem;
-  border-radius: var(--r-sm);
-  background: transparent;
-}
-
-.mc-next-topbar-right > button.mc-next-wa-button {
-  border-color: transparent;
-  background: transparent;
 }
 
 .mc-next-topbar-more {
@@ -3329,7 +2766,6 @@
   border-radius: var(--r-sm);
 }
 
-.mc-next-brand h1,
 .mc-next-rail-head h2,
 .native-page-header h1,
 .threaded-surface-title,
@@ -3338,24 +2774,8 @@
   letter-spacing: -0.02em;
 }
 
-.mc-next-audio-toggle span {
-  display: none;
-}
-
 @media (max-width: 1023px) {
   .mc-next-nav-toggle {
     display: inline-flex;
-  }
-
-  .mc-next-citadel-field {
-    flex-basis: 150px;
-    min-width: 132px;
-    max-width: 150px;
-  }
-
-  .mc-next-primary-nav {
-    order: 3;
-    width: 100%;
-    overflow-x: auto;
   }
 }

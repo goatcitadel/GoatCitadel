@@ -152,6 +152,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
   it("clears the reaper timers on gateway shutdown", async () => {
     const { gateway, reapOrphaned, closeWorktrees, backgroundTasks } = createReaperHarness();
     const closable = gateway as unknown as {
+      mcpStdioSessions: { close: () => void };
       chatProactiveService: { stopScheduler: () => void };
       improvementService: { stopScheduler: () => void };
       durableRunService: { stopWorker: () => void };
@@ -165,6 +166,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
       storage: { close: () => void };
       orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
     };
+    closable.mcpStdioSessions = { close: vi.fn() };
     closable.chatProactiveService = { stopScheduler: vi.fn() };
     closable.improvementService = { stopScheduler: vi.fn() };
     closable.durableRunService = { stopWorker: vi.fn() };
@@ -187,6 +189,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
 
     await GatewayService.prototype.close.call(gateway);
 
+    expect(closable.mcpStdioSessions.close).toHaveBeenCalledTimes(1);
     expect(stopSpy).toHaveBeenCalledTimes(1);
     expect(closeWorktrees).toHaveBeenCalledTimes(1);
     expect(closable.orchestrationWorktreeReapScheduler).toBeUndefined();

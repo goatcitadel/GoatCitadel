@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import { ConflictError, type PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { listChatCommandCatalog, parseChatCommand, type ChatCommandDependencies } from "./chat-command-service.js";
 
 const catalog: PersonalityCatalogResponse = {
+  revision: "a".repeat(64),
   defaultPersonalityId: "operator",
   items: [
     {
@@ -75,12 +76,12 @@ describe("chat personality command", () => {
     let result = await parseChatCommand(deps, "session-1", "/personality operator");
     expect(result.ok).toBe(true);
     expect(result.message).toContain("Chat personality set to Operator (operator).");
-    expect(deps.setDefaultPersonality).toHaveBeenCalledWith("operator");
+    expect(deps.setDefaultPersonality).toHaveBeenCalledWith("operator", catalog.revision);
 
     result = await parseChatCommand(deps, "session-1", "/personality none");
     expect(result.ok).toBe(true);
     expect(result.message).toContain("Chat personality cleared.");
-    expect(deps.setDefaultPersonality).toHaveBeenCalledWith("default");
+    expect(deps.setDefaultPersonality).toHaveBeenCalledWith("default", catalog.revision);
   });
 
   it("rejects unknown personality ids", async () => {
@@ -91,5 +92,13 @@ describe("chat personality command", () => {
     expect(result.ok).toBe(false);
     expect(result.message).toContain('Unknown personality "not-real"');
     expect(deps.setDefaultPersonality).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh and retry a default command after its catalog revision conflicts", async () => {
+    const deps = createDeps();
+    vi.mocked(deps.setDefaultPersonality).mockRejectedValue(new ConflictError({ code: "WRITE_CONFLICT", message: "Catalog changed" }));
+    await expect(parseChatCommand(deps, "session-1", "/personality teacher")).resolves.toMatchObject({ ok: false });
+    await expect(parseChatCommand(deps, "session-1", "/personality operator")).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect(deps.setDefaultPersonality).toHaveBeenCalledExactlyOnceWith("operator", catalog.revision);
   });
 });

@@ -1,5 +1,6 @@
+import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserSessionMocks = vi.hoisted(() => ({
   closeBrowserSession: vi.fn(),
@@ -14,6 +15,14 @@ const browserSessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => browserSessionMocks);
+
+const renderedPages: ReactTestRenderer[] = [];
+afterEach(async () => {
+  await act(async () => {
+    renderedPages.splice(0).forEach((page) => page.unmount());
+  });
+  __resetSessionDraftsForTests();
+});
 
 beforeEach(() => {
   browserSessionMocks.fetchBrowserSessions.mockReset();
@@ -136,7 +145,11 @@ beforeEach(() => {
 describe("BrowserSessionsRoutePage", () => {
   it("renders sessions, grants, and events without exposing browser state contents", async () => {
     const renderer = await renderPage();
-    const text = collectText(renderer.root);
+    let text = collectText(renderer.root);
+    await act(async () => findExactButton(renderer.root, "State").props.onClick());
+    text += collectText(renderer.root);
+    await act(async () => findExactButton(renderer.root, "Events").props.onClick());
+    text += collectText(renderer.root);
 
     expect(browserSessionMocks.fetchBrowserSessions).toHaveBeenCalledWith({
       workspaceId: "default",
@@ -189,6 +202,7 @@ describe("BrowserSessionsRoutePage", () => {
       createdAt: "2026-05-30T18:11:00.000Z",
     });
     const renderer = await renderPage();
+    await act(async () => findExactButton(renderer.root, "New session").props.onClick());
 
     await act(async () => {
       findInput(renderer.root, "Research browser").props.onChange({ target: { value: "New browser" } });
@@ -203,6 +217,8 @@ describe("BrowserSessionsRoutePage", () => {
       label: "New browser",
     });
 
+    await act(async () => findButton(renderer.root, "Research browser").props.onClick());
+    await act(async () => findExactButton(renderer.root, "New grant").props.onClick());
     await act(async () => {
       findInput(renderer.root, "operator or agent id").props.onChange({ target: { value: "agent-2" } });
       findInput(renderer.root, "example.com, docs.example.com").props.onChange({
@@ -265,6 +281,7 @@ describe("BrowserSessionsRoutePage", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    await act(async () => findExactButton(renderer.root, "New session").props.onClick());
     await act(async () => {
       findInput(renderer.root, "Research browser").props.onChange({ target: { value: "New browser" } });
     });
@@ -337,6 +354,7 @@ describe("BrowserSessionsRoutePage", () => {
 
   it("blocks scoped grant creation without an actor or selected scope", async () => {
     const renderer = await renderPage();
+    await act(async () => findExactButton(renderer.root, "New grant").props.onClick());
 
     await act(async () => {
       findInput(renderer.root, "operator or agent id").props.onChange({ target: { value: "" } });
@@ -400,15 +418,29 @@ describe("BrowserSessionsRoutePage", () => {
       },
     });
     const renderer = await renderPage();
+    await act(async () => findExactButton(renderer.root, "State").props.onClick());
     const text = collectText(renderer.root);
 
     expect(text).toContain("Not retained");
     expect(text).toContain("no domains");
     expect(text).not.toContain("Empty state");
   });
+  it("starts with a directory and keeps dismissed details closed through refresh", async () => {
+    const renderer = await renderPage(false);
+    expect(browserSessionMocks.fetchBrowserSessionGrants).not.toHaveBeenCalled();
+    expect(renderer.root.findAllByType("input")).toHaveLength(0);
+    await act(async () => findButton(renderer.root, "Research browser").props.onClick());
+    expect(browserSessionMocks.fetchBrowserSessionGrants).toHaveBeenCalledOnce();
+    const close = renderer.root.findAllByType("button").find((node) => node.props["aria-label"] === "Close details")!;
+    await act(async () => close.props.onClick());
+    await act(async () => findExactButton(renderer.root, "Refresh").props.onClick());
+    expect(renderer.root.findAllByType("button").some((node) => node.props["aria-label"] === "Close details")).toBe(
+      false,
+    );
+  });
 });
 
-async function renderPage(): Promise<ReactTestRenderer> {
+async function renderPage(select = true): Promise<ReactTestRenderer> {
   const { BrowserSessionsRoutePage } = await import("./BrowserSessionsRoutePage");
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
@@ -425,6 +457,14 @@ async function renderPage(): Promise<ReactTestRenderer> {
     await Promise.resolve();
     await Promise.resolve();
   });
+  renderedPages.push(renderer!);
+  if (select)
+    await act(async () => {
+      const row = renderer!.root.findAll(
+        (node) => node.type === "button" && String(node.props.className).includes("mc-next-browser-session-row"),
+      )[0];
+      if (row) row.props.onClick();
+    });
   return renderer!;
 }
 

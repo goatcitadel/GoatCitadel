@@ -1917,6 +1917,27 @@ describe("useChatDelegationPolicyActions", () => {
     expect(latestHarness?.errors).toContain("delegation down");
   });
 
+  it.each(["ask_when_useful", "auto_when_useful"] as const)(
+    "does not delegate captured workflow evidence under %s",
+    async (subagentPolicy) => {
+      await act(async () => {
+        create(
+          <Harness
+            draft=""
+            prefs={makePrefs({ subagentPolicy })}
+            messages={makeMessages(
+              'WORKFLOW_SKILL_CAPTURE_V1 {"sourceTurnId":"source"}\n\nDraft a reusable skill from this evidence: research, implement, test, and review with several parallel agents.',
+            )}
+          />,
+        );
+        await flushEffects();
+      });
+      expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+      expect(runChatDelegationMock).not.toHaveBeenCalled();
+      expect(streamChatDelegationMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("auto-suggests for cowork surfaces and long chat tasks with few explicit complexity terms", async () => {
     await act(async () => {
       create(

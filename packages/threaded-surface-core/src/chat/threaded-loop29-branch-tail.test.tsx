@@ -18,6 +18,7 @@ const apiMocks = vi.hoisted(() => ({
   revertChatSessionWorkbenchChanges: vi.fn(),
   revertChatSessionWorkbenchFile: vi.fn(),
   runChatSessionWorkbenchCommand: vi.fn(),
+  previewChatSessionWorkbenchFileOperation: vi.fn(),
   runChatSessionWorkbenchFileOperation: vi.fn(),
   saveChatSessionWorkbenchFile: vi.fn(),
 }));
@@ -39,6 +40,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   revertChatSessionWorkbenchChanges: apiMocks.revertChatSessionWorkbenchChanges,
   revertChatSessionWorkbenchFile: apiMocks.revertChatSessionWorkbenchFile,
   runChatSessionWorkbenchCommand: apiMocks.runChatSessionWorkbenchCommand,
+  previewChatSessionWorkbenchFileOperation: apiMocks.previewChatSessionWorkbenchFileOperation,
   runChatSessionWorkbenchFileOperation: apiMocks.runChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile: apiMocks.saveChatSessionWorkbenchFile,
 }));

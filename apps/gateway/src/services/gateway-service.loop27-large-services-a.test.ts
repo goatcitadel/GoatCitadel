@@ -8,6 +8,23 @@ vi.mock("node:sqlite", () => ({
 import { GatewayService } from "./gateway-service.js";
 import { McpServerStore } from "./mcp-server-store.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
+import { commsSend, type CommsHost } from "./comms-service.js";
+import { sendQueuedChannelDelivery as sendQueuedChannelDeliveryHelper } from "./gateway/channel-delivery-helpers.js";
+import type { ChannelDeliveryRuntimeSendInput } from "./channel-delivery-runtime-service.js";
+
+// These formatting/error cases exercise the chunk helper with their synthetic
+// sender. The durable storage/approval boundary has real-repository coverage in
+// channel-delivery-part-service.test.ts and the native delivery acceptance lane.
+function sendQueuedChannelDeliveryWithCommsHost(
+  this: GatewayService & Record<string, any>,
+  input: Record<string, any>,
+) {
+  const host = Reflect.get(this, "buildCommsHost").call(this) as CommsHost;
+  return sendQueuedChannelDeliveryHelper(
+    (sendInput) => commsSend(host, sendInput),
+    input as ChannelDeliveryRuntimeSendInput,
+  );
+}
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const settings = new Map<string, unknown>();
@@ -85,6 +102,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
       systemSettings: {
         get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),
         set: vi.fn((key: string, value: unknown) => settings.set(key, value)),
+        compareAndSet: vi.fn((key: string, expected: { value: unknown } | undefined, value: unknown) => {
+          if (JSON.stringify(settings.get(key)) !== JSON.stringify(expected?.value)) return undefined;
+          settings.set(key, value);
+          return { key, value, updatedAt: "fixture" };
+        }),
       },
       transcripts: { read: vi.fn(async () => []) },
     },
@@ -93,7 +115,8 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   if (!gateway.mcpServerStore) {
     // Real store over the harness's map-backed systemSettings (B5a): MCP
     // read/write behavior assertions keep flowing through `settings`.
-    gateway.mcpServerStore = new McpServerStore({ systemSettings: gateway.storage.systemSettings });
+    gateway.mcpServerStore = new McpServerStore({ systemSettings: gateway.storage.systemSettings,
+      runImmediateTransaction: async (callback) => await callback() });
   }
   return { gateway, settings };
 }
@@ -634,11 +657,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         readChatAttachmentContent: vi.fn(),
       })),
     });
-    const sendQueuedChannelDelivery = (
-      GatewayService.prototype as unknown as {
-        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
-      }
-    ).sendQueuedChannelDelivery;
+    const sendQueuedChannelDelivery = sendQueuedChannelDeliveryWithCommsHost;
 
     const result = await sendQueuedChannelDelivery.call(gateway, {
       attempts: 1,
@@ -708,11 +727,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         readChatAttachmentContent: vi.fn(),
       })),
     });
-    const sendQueuedChannelDelivery = (
-      GatewayService.prototype as unknown as {
-        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
-      }
-    ).sendQueuedChannelDelivery;
+    const sendQueuedChannelDelivery = sendQueuedChannelDeliveryWithCommsHost;
 
     await sendQueuedChannelDelivery.call(gateway, {
       attempts: 1,
@@ -769,11 +784,7 @@ describe("GatewayService loop 27 large service coverage", () => {
           readChatAttachmentContent: vi.fn(),
         })),
       });
-      const sendQueuedChannelDelivery = (
-        GatewayService.prototype as unknown as {
-          sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
-        }
-      ).sendQueuedChannelDelivery;
+      const sendQueuedChannelDelivery = sendQueuedChannelDeliveryWithCommsHost;
 
       const send = sendQueuedChannelDelivery.call(gateway, {
         attempts: 1,
@@ -836,11 +847,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         readChatAttachmentContent: vi.fn(),
       })),
     });
-    const sendQueuedChannelDelivery = (
-      GatewayService.prototype as unknown as {
-        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
-      }
-    ).sendQueuedChannelDelivery;
+    const sendQueuedChannelDelivery = sendQueuedChannelDeliveryWithCommsHost;
 
     const send = sendQueuedChannelDelivery.call(gateway, {
       attempts: 1,
@@ -890,11 +897,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         readChatAttachmentContent: vi.fn(),
       })),
     });
-    const sendQueuedChannelDelivery = (
-      GatewayService.prototype as unknown as {
-        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
-      }
-    ).sendQueuedChannelDelivery;
+    const sendQueuedChannelDelivery = sendQueuedChannelDeliveryWithCommsHost;
 
     await expect(
       sendQueuedChannelDelivery.call(gateway, {
@@ -937,11 +940,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         readChatAttachmentContent: vi.fn(),
       })),
     });
-    const sendQueuedChannelDelivery = (
-      GatewayService.prototype as unknown as {
-        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
-      }
-    ).sendQueuedChannelDelivery;
+    const sendQueuedChannelDelivery = sendQueuedChannelDeliveryWithCommsHost;
 
     await expect(
       sendQueuedChannelDelivery.call(gateway, {

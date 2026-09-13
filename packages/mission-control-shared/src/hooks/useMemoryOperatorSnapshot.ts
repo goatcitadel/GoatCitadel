@@ -31,7 +31,8 @@ import {
   runMemoryMaintenanceNow,
   runMemoryQualityScan,
 } from "../api/client";
-import { MEMORY_BATCH_MAX_OPERATIONS } from "@goatcitadel/contracts";
+import { MEMORY_BATCH_MAX_OPERATIONS, type MemoryItemListPage } from "@goatcitadel/contracts";
+import { isApiRequestError } from "../api/http-internal";
 import {
   buildMemoryMaintenancePolicyPatch,
   type MemoryMaintenancePolicyDraft,
@@ -75,6 +76,8 @@ type MemoryOperatorSnapshot = {
   qmdStats: Awaited<ReturnType<typeof fetchMemoryQmdStats>> | null;
   memoryRetrievalStatus: Awaited<ReturnType<typeof fetchMemoryRetrievalStatus>> | null;
   memoryItems: Awaited<ReturnType<typeof fetchMemoryItems>>["items"];
+  memoryItemsPage: Omit<MemoryItemListPage, "items"> | null;
+  memoryItemsScopeKey: string;
   memoryEntities: Awaited<ReturnType<typeof fetchMemoryEntities>>["items"];
   memoryRelations: Awaited<ReturnType<typeof fetchMemoryRelations>>["items"];
   memoryDecisions: Awaited<ReturnType<typeof fetchMemoryDecisions>>["items"];
@@ -95,12 +98,22 @@ type MemoryOperatorSnapshot = {
   sectionErrors: MemoryOperatorSectionErrors;
 };
 
-export function useMemoryOperatorSnapshot(workspaceId = "default") {
+export type MemoryOperatorView = "all" | "items" | "quality" | "maintenance" | "graph";
+function readWhen<T>(enabled: boolean, read: () => Promise<T>, fallback: T): Promise<T> { return enabled ? read() : Promise.resolve(fallback); }
+export function useMemoryOperatorSnapshot(workspaceId = "default", options: { view?: MemoryOperatorView; query?: string; sourcesOpen?: boolean; itemDetailsOpen?: boolean } = {}) {
+  const { view = "all", query = "", sourcesOpen = false, itemDetailsOpen = true } = options;
+  const qualityOpen = view === "all" || view === "quality";
+  const graphOpen = view === "all" || view === "graph";
+  const maintenanceOpen = view === "all" || view === "maintenance";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [data, setData] = useState<MemoryOperatorSnapshot | null>(null);
+  const [loadingMoreMemoryItems, setLoadingMoreMemoryItems] = useState(false);
+  const [memoryItemsPageError, setMemoryItemsPageError] = useState<string | null>(null);
+  const itemsPageRequestRef = useRef<object | null>(null);
+  const itemsScopeKey = JSON.stringify([workspaceId, query.trim().toLowerCase(), view]);
   // HX-402 P1: mutation verbs request `memory.lifecycle` approvals instead of
   // mutating directly. Pending approvals are surfaced honestly so the page can
   // show that nothing changed yet and where to resolve the request.
@@ -109,6 +122,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [policyDraft, setPolicyDraft] = useState<MemoryMaintenancePolicyDraft | null>(null);
   const [policyDirty, setPolicyDirty] = useState(false);
+  const policyBaseRevision = useRef<string | undefined>(undefined);
+  const policyDraftState = useRef({ draft: policyDraft, dirty: policyDirty });
+  policyDraftState.current = { draft: policyDraft, dirty: policyDirty };
+  const policySavePending = useRef(false);
   // Monotonic load id: results from a superseded load (overlapping reloads, or a
   // reload that resolves after unmount/workspace switch) are dropped. Mirrors the
   // guard in useCrossProjectRecentSessions / useApprovalQueue.
@@ -121,11 +138,11 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         sectionErrors.settings = getErrorMessage(settingsError);
         return null;
       }),
-      fetchMemoryFiles("memory").catch((filesError) => {
+      readWhen(view === "all" || sourcesOpen, () => fetchMemoryFiles("memory"), { items: [] }).catch((filesError) => {
         sectionErrors.files = getErrorMessage(filesError);
         return { items: [] };
       }),
-      fetchMemoryQmdStats(undefined, undefined, 8).catch((qmdError) => {
+      readWhen(qualityOpen, () => fetchMemoryQmdStats(undefined, undefined, 8), null).catch((qmdError) => {
         sectionErrors.qmdStats = getErrorMessage(qmdError);
         return null;
       }),
@@ -147,31 +164,31 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     const [itemsRes, entitiesRes, relationsRes, decisionsRes, feedbackRes, qualityIssuesRes, traceCandidatesRes] =
       memoryAdminEnabled
         ? await Promise.all([
-            fetchMemoryItems({ workspaceId, limit: 200, status: "all" }).catch((itemsError) => {
+            fetchMemoryItems({ workspaceId, limit: view === "all" ? 200 : 500, status: "all", ...(query.trim() ? { query: query.trim() } : {}) }).catch((itemsError) => {
               sectionErrors.memoryItems = getErrorMessage(itemsError);
               return { items: [] };
             }),
-            fetchMemoryEntities({ workspaceId, status: "all", limit: 80 }).catch((entitiesError) => {
+            readWhen(graphOpen, () => fetchMemoryEntities({ workspaceId, status: "all", limit: 80 }), { items: [] }).catch((entitiesError) => {
               sectionErrors.memoryEntities = getErrorMessage(entitiesError);
               return { items: [] };
             }),
-            fetchMemoryRelations({ workspaceId, status: "all", limit: 80 }).catch((relationsError) => {
+            readWhen(graphOpen, () => fetchMemoryRelations({ workspaceId, status: "all", limit: 80 }), { items: [] }).catch((relationsError) => {
               sectionErrors.memoryRelations = getErrorMessage(relationsError);
               return { items: [] };
             }),
-            fetchMemoryDecisions({ workspaceId, status: "all", limit: 80 }).catch((decisionsError) => {
+            readWhen(graphOpen, () => fetchMemoryDecisions({ workspaceId, status: "all", limit: 80 }), { items: [] }).catch((decisionsError) => {
               sectionErrors.memoryDecisions = getErrorMessage(decisionsError);
               return { items: [] };
             }),
-            fetchMemoryFeedback({ workspaceId, status: "all", limit: 40 }).catch((feedbackError) => {
+            readWhen(qualityOpen, () => fetchMemoryFeedback({ workspaceId, status: "all", limit: 40 }), { items: [] }).catch((feedbackError) => {
               sectionErrors.memoryFeedback = getErrorMessage(feedbackError);
               return { items: [] };
             }),
-            fetchMemoryQualityIssues({ workspaceId, status: "all", limit: 40 }).catch((qualityError) => {
+            readWhen(qualityOpen, () => fetchMemoryQualityIssues({ workspaceId, status: "all", limit: 40 }), { items: [] }).catch((qualityError) => {
               sectionErrors.memoryQualityIssues = getErrorMessage(qualityError);
               return { items: [] };
             }),
-            fetchTraceMemoryCandidates({ workspaceId, status: "all", limit: 40 }).catch((traceError) => {
+            readWhen(qualityOpen, () => fetchTraceMemoryCandidates({ workspaceId, status: "all", limit: 40 }), { items: [] }).catch((traceError) => {
               sectionErrors.traceMemoryCandidates = getErrorMessage(traceError);
               return { items: [] };
             }),
@@ -179,7 +196,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         : [{ items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }];
 
     const [maintenanceStatusRes, maintenanceRunsRes, maintenanceRecommendationsRes] =
-      maintenanceEnabled && maintenanceDurableReady
+      maintenanceOpen && maintenanceEnabled && maintenanceDurableReady
         ? await Promise.all([
             fetchMemoryMaintenanceStatus(workspaceId).catch((statusError) => {
               sectionErrors.maintenanceStatus = getErrorMessage(statusError);
@@ -201,6 +218,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       qmdStats,
       memoryRetrievalStatus,
       memoryItems: memoryAdminEnabled ? itemsRes.items : [],
+      memoryItemsPage: memoryAdminEnabled && "total" in itemsRes && "snapshotAt" in itemsRes
+        ? { total: itemsRes.total, snapshotAt: itemsRes.snapshotAt, nextCursor: itemsRes.nextCursor }
+        : null,
+      memoryItemsScopeKey: itemsScopeKey,
       memoryEntities: memoryAdminEnabled ? entitiesRes.items : [],
       memoryRelations: memoryAdminEnabled ? relationsRes.items : [],
       memoryDecisions: memoryAdminEnabled ? decisionsRes.items : [],
@@ -220,11 +241,14 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       maintenanceDurableReady,
       sectionErrors,
     } satisfies MemoryOperatorSnapshot;
-  }, [workspaceId]);
+  }, [workspaceId, view, query, sourcesOpen, qualityOpen, graphOpen, maintenanceOpen, itemsScopeKey]);
 
   const reload = useCallback(async () => {
     const loadId = loadSequenceRef.current + 1;
     loadSequenceRef.current = loadId;
+    itemsPageRequestRef.current = null;
+    setLoadingMoreMemoryItems(false);
+    setMemoryItemsPageError(null);
     setError(null);
     try {
       const next = await load();
@@ -244,10 +268,11 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       // loader reflect data availability regardless of how mount and reload
       // interleave (mirrors useOpsRuntimeSnapshot's commitData).
       setLoading(false);
-      setSelectedItemId((current) => current ?? next.memoryItems[0]?.itemId ?? null);
-      setSelectedRunId((current) => current ?? next.maintenanceRuns[0]?.runId ?? null);
-      if (!policyDirty && next.maintenanceStatus?.policy) {
+      setSelectedItemId((current) => current ?? (view === "all" ? next.memoryItems[0]?.itemId ?? null : null));
+      setSelectedRunId((current) => current ?? (view === "all" ? next.maintenanceRuns[0]?.runId ?? null : null));
+      if (!policyDraftState.current.dirty && next.maintenanceStatus?.policy) {
         setPolicyDraft(toMemoryMaintenancePolicyDraft(next.maintenanceStatus.policy));
+        policyBaseRevision.current = next.maintenanceStatus.policy.revision;
       }
     } catch (loadError) {
       if (loadSequenceRef.current !== loadId) {
@@ -255,11 +280,51 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       }
       setError(getErrorMessage(loadError));
     }
-  }, [load, policyDirty]);
+  }, [load, view]);
+
+  const loadMoreMemoryItems = useCallback(async () => {
+    const previous = data?.memoryItemsPage;
+    if (loading || memoryItemsPageError || itemsPageRequestRef.current || !previous?.nextCursor || data?.memoryItemsScopeKey !== itemsScopeKey) return;
+    const requestToken = {};
+    const loadId = loadSequenceRef.current;
+    itemsPageRequestRef.current = requestToken;
+    setLoadingMoreMemoryItems(true);
+    try {
+      const page = await fetchMemoryItems({
+        workspaceId, status: "all", limit: view === "all" ? 200 : 500,
+        ...(query.trim() ? { query: query.trim() } : {}), cursor: previous.nextCursor,
+      });
+      if (loadId !== loadSequenceRef.current || itemsPageRequestRef.current !== requestToken) return;
+      const items = [...data.memoryItems, ...page.items];
+      if (page.snapshotAt !== previous.snapshotAt || page.total !== previous.total ||
+          new Set(items.map(item => item.itemId)).size !== items.length || items.length > page.total ||
+          (page.nextCursor && (page.nextCursor === previous.nextCursor || page.items.length === 0)) ||
+          (!page.nextCursor && items.length !== page.total)) {
+        throw new Error("Memory pages no longer agree. Reload memory before continuing.");
+      }
+      setData(current => current?.memoryItemsScopeKey === itemsScopeKey && current.memoryItemsPage?.nextCursor === previous.nextCursor
+        ? { ...current, memoryItems: items, memoryItemsPage: { total: page.total, snapshotAt: page.snapshotAt, nextCursor: page.nextCursor } }
+        : current);
+    } catch (pageError) {
+      if (loadId === loadSequenceRef.current && itemsPageRequestRef.current === requestToken) {
+        setMemoryItemsPageError(isApiRequestError(pageError) && (pageError.status === 400 || pageError.status === 409)
+          ? "Memory changed or this page expired. Reload memory before continuing."
+          : "Could not load more memory. Reload memory to try again.");
+      }
+    } finally {
+      if (itemsPageRequestRef.current === requestToken) {
+        itemsPageRequestRef.current = null;
+        setLoadingMoreMemoryItems(false);
+      }
+    }
+  }, [data, itemsScopeKey, loading, memoryItemsPageError, query, view, workspaceId]);
 
   useEffect(() => {
     const loadId = loadSequenceRef.current + 1;
     loadSequenceRef.current = loadId;
+    itemsPageRequestRef.current = null;
+    setLoadingMoreMemoryItems(false);
+    setMemoryItemsPageError(null);
     setLoading(true);
     setError(null);
     void load()
@@ -268,10 +333,11 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
           return;
         }
         setData(next);
-        setSelectedItemId(next.memoryItems[0]?.itemId ?? null);
-        setSelectedRunId(next.maintenanceRuns[0]?.runId ?? null);
-        if (next.maintenanceStatus?.policy) {
+        setSelectedItemId((current) => current ?? (view === "all" ? next.memoryItems[0]?.itemId ?? null : null));
+        setSelectedRunId((current) => current ?? (view === "all" ? next.maintenanceRuns[0]?.runId ?? null : null));
+        if (!policyDraftState.current.dirty && next.maintenanceStatus?.policy) {
           setPolicyDraft(toMemoryMaintenancePolicyDraft(next.maintenanceStatus.policy));
+          policyBaseRevision.current = next.maintenanceStatus.policy.revision;
         }
       })
       .catch((loadError) => {
@@ -290,10 +356,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       // after unmount or workspace switch cannot setState on an unmounted hook.
       loadSequenceRef.current += 1;
     };
-  }, [load]);
+  }, [load, view]);
 
   useEffect(() => {
-    if (!selectedItemId) {
+    if (!selectedItemId || !itemDetailsOpen) {
       setData((current) => (current ? { ...current, memoryHistory: [] } : current));
       return;
     }
@@ -330,7 +396,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     return () => {
       cancelled = true;
     };
-  }, [selectedItemId]);
+  }, [selectedItemId, itemDetailsOpen]);
 
   // Derive the selected run's *stable identity* (its primitive ids) so the
   // provenance/durable-run fetch effect below depends on those primitives rather
@@ -664,29 +730,43 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     [data?.memoryAdminState],
   );
 
-  const savePolicy = useCallback(async () => {
-    if (!policyDraft) {
-      return;
-    }
+  const savePolicy = useCallback(async (submitted: MemoryMaintenancePolicyDraft | null = policyDraft, expectedRevision = policyBaseRevision.current) => {
+    if (!submitted || policySavePending.current) return null;
     if (!data?.maintenanceEnabled || !data.maintenanceDurableReady) {
-      setNotice({
-        tone: "warning",
-        message: "Memory maintenance settings are not confirmed, so policy changes are locked.",
-      });
-      return;
+      setNotice({ tone: "warning", message: "Memory maintenance settings are not confirmed, so policy changes are locked." });
+      return null;
     }
-    setBusyKey("maintenance:policy");
-    setNotice(null);
+    policySavePending.current = true;
+    const draftAtSubmit = policyDraftState.current.draft;
+    setBusyKey("maintenance:policy"); setNotice(null);
     try {
-      const updated = await patchMemoryMaintenancePolicy(workspaceId, buildMemoryMaintenancePolicyPatch(policyDraft));
-      setPolicyDraft(toMemoryMaintenancePolicyDraft(updated));
-      setPolicyDirty(false);
+      if (!expectedRevision) throw new Error("The policy revision is unavailable. Your draft is preserved; reload the policy before saving.");
+      const current = await fetchMemoryMaintenanceStatus(workspaceId);
+      if (current.workspaceId !== workspaceId || current.policy.workspaceId !== workspaceId || current.policy.revision !== expectedRevision) {
+        throw new Error("The maintenance policy changed. Your draft is preserved; refresh and review the current policy before saving.");
+      }
+      const patch = buildMemoryMaintenancePolicyPatch(submitted);
+      const updated = await patchMemoryMaintenancePolicy(workspaceId, { ...patch, expectedRevision });
+      const saved = toMemoryMaintenancePolicyDraft(updated);
+      if (updated.workspaceId !== workspaceId || !updated.revision || updated.revision === expectedRevision || JSON.stringify(buildMemoryMaintenancePolicyPatch(saved)) !== JSON.stringify(patch)) {
+        throw new Error("The policy response does not confirm the submitted settings. Your draft is preserved; refresh to inspect the outcome.");
+      }
+      const newerDraft = JSON.stringify(policyDraftState.current.draft) !== JSON.stringify(draftAtSubmit);
+      if (!newerDraft) setPolicyDraft(saved);
+      policyDraftState.current.dirty = newerDraft;
+      policyBaseRevision.current = updated.revision;
+      setPolicyDirty(newerDraft);
       setNotice({ tone: "success", message: "Memory maintenance policy saved." });
       await reload();
+      return updated;
     } catch (policyError) {
-      setNotice({ tone: "error", message: getErrorMessage(policyError) });
+      if (isApiRequestError(policyError) && policyError.status === 409) {
+        setNotice({ tone: "warning", message: "The maintenance policy changed. Your draft is preserved; review the current policy before saving again." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(policyError) });
+      return null;
     } finally {
-      setBusyKey(null);
+      policySavePending.current = false; setBusyKey(null);
     }
   }, [data?.maintenanceDurableReady, data?.maintenanceEnabled, policyDraft, reload, workspaceId]);
 
@@ -702,10 +782,17 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       setBusyKey(`recommendation:${recommendationId}:${decision}`);
       setNotice(null);
       try {
+        const recommendation = data.maintenanceRecommendations.find((item) => item.recommendationId === recommendationId && item.workspaceId === workspaceId);
+        if (!recommendation?.revision || recommendation.status !== "queued") {
+          throw new Error("The recommendation is unavailable or already resolved. Reload and review it before deciding.");
+        }
+        const input = { expectedRevision: recommendation.revision };
         if (decision === "accept") {
-          await acceptMemoryMaintenanceRecommendation(recommendationId);
+          const policy = data.maintenanceStatus?.policy;
+          if (!policy?.revision || policy.workspaceId !== workspaceId) throw new Error("The current policy is unavailable. Reload it before accepting a recommendation.");
+          await acceptMemoryMaintenanceRecommendation(recommendationId, { ...input, expectedPolicyRevision: policy.revision });
         } else {
-          await rejectMemoryMaintenanceRecommendation(recommendationId);
+          await rejectMemoryMaintenanceRecommendation(recommendationId, input);
         }
         setNotice({
           tone: "success",
@@ -713,12 +800,15 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         });
         await reload();
       } catch (recommendationError) {
-        setNotice({ tone: "error", message: getErrorMessage(recommendationError) });
+        if (isApiRequestError(recommendationError) && recommendationError.status === 409) {
+          setNotice({ tone: "warning", message: "The recommendation or policy changed. Review the current state before deciding again." });
+          await reload();
+        } else setNotice({ tone: "error", message: getErrorMessage(recommendationError) });
       } finally {
         setBusyKey(null);
       }
     },
-    [data?.maintenanceDurableReady, data?.maintenanceEnabled, reload],
+    [data?.maintenanceDurableReady, data?.maintenanceEnabled, data?.maintenanceRecommendations, data?.maintenanceStatus, reload, workspaceId],
   );
 
   const reviewDecision = useCallback(
@@ -789,6 +879,9 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     notice,
     busyKey,
     data,
+    loadingMoreMemoryItems,
+    memoryItemsPageError,
+    loadMoreMemoryItems,
     pendingMutationApprovals,
     dismissPendingMutationApproval,
     selectedItem,

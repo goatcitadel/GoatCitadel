@@ -6,6 +6,8 @@ export interface ChannelSetupRecentTestCacheEntry {
   result: ChannelSetupTestResult;
 }
 
+export const CHANNEL_SETUP_TEST_MAX_AGE_MS = 5 * 60_000;
+
 export function buildChannelSetupRecentTestSignature(
   draft: ChannelSetupDraft,
   connection: IntegrationConnection,
@@ -37,9 +39,15 @@ export function resolveReusableChannelSetupTestResult(input: {
   draft: ChannelSetupDraft;
   connection: IntegrationConnection;
   testVersion: string;
+  nowMs?: number;
 }): ChannelSetupTestResult | undefined {
   const cached = input.cache.get(input.draft.draftId);
   if (!cached || cached.result.status === "error") {
+    return undefined;
+  }
+  const age = (input.nowMs ?? Date.now()) - Date.parse(cached.result.checkedAt);
+  if (!Number.isFinite(age) || age < 0 || age > CHANNEL_SETUP_TEST_MAX_AGE_MS) {
+    input.cache.delete(input.draft.draftId);
     return undefined;
   }
   const signature = buildChannelSetupRecentTestSignature(input.draft, input.connection, input.testVersion);

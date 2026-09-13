@@ -42,7 +42,10 @@ function createPostgresFacade(database: DatabaseClient, preparedSql: string[]): 
     dialect: "postgres",
     prepare(sql: string) {
       preparedSql.push(sql.replace(/\s+/gu, " ").trim());
-      return database.prepare(sql);
+      // Execute equivalent predicates only in this SQL-shape fixture. Real
+      // PostgreSQL execution is covered by the dedicated repository proof.
+      return database.prepare(sql.replace(/required_action_json::jsonb ->> '(kind|approvalId)'/gu,
+        (_match, key: string) => `json_extract(required_action_json, '$.${key}')`));
     },
   } as DatabaseClient;
 }
@@ -84,6 +87,21 @@ describe("ChangePlanRepository", () => {
     for (const sql of statusFilters) {
       assert.match(sql, /CAST\(@status AS TEXT\) IS NULL OR status = @status/u);
     }
+  });
+
+  it("looks up only current approval waits, ignoring historical links and terminal plans", () => {
+    const { repo } = createRepo();
+    const plan = createModelPlan(repo);
+    const waiting = repo.transition(plan.planId, { expectedRevision: plan.revision, status: "awaiting_approval", internal: true,
+      requiredAction: { kind: "approval", actionId: "approval-action", actionNonce: "approval-action-nonce", title: "Approve reviewed change",
+        risk: "caution", approvalId: "current-approval" }, approvalRefs: ["old-approval", "current-approval"] });
+    assert.deepEqual(repo.listAwaitingApproval("old-approval"), []);
+    assert.deepEqual(repo.listAwaitingApproval("current-approval").map(item => item.planId), [plan.planId]);
+    assert.throws(() => repo.listAwaitingApproval("current-approval", 0));
+    assert.throws(() => repo.listAwaitingApproval("current-approval", 501));
+    assert.throws(() => repo.listAwaitingApproval("current-approval", NaN));
+    repo.transition(plan.planId, { expectedRevision: waiting.revision, status: "cancelled", internal: true, requiredAction: null });
+    assert.deepEqual(repo.listAwaitingApproval("current-approval"), []);
   });
 
   it("enforces exact CAS and nonce-bound confirmation before releasing the target claim", () => {

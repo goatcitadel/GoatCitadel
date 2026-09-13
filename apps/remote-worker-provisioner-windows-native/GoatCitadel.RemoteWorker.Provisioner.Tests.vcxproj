@@ -131,12 +131,16 @@
     <ClCompile Include="src\ed25519_runtime.test.cpp" />
     <ClCompile Include="src\local_transport.cpp" />
     <ClCompile Include="src\local_transport.test.cpp" />
+    <ClCompile Include="src\caller_authority.test.cpp" />
     <ClCompile Include="src\availability_broker.cpp" />
     <ClCompile Include="src\availability_broker.test.cpp" />
     <ClCompile Include="src\protocol.cpp" />
     <ClCompile Include="src\protocol.test.cpp" />
     <ClCompile Include="src\service_runtime.cpp" />
     <ClCompile Include="src\service_runtime.test.cpp" />
+    <ClCompile Include="src\signer_inspection.cpp" />
+    <ClCompile Include="..\remote-worker-windows-host-native\src\service_inspection.cpp" />
+    <ClCompile Include="src\signer_inspection.test.cpp" />
   </ItemGroup>
   <ItemGroup Condition="'$(VendorPreflight)' == 'true'">
     <ClCompile Include="src\ed25519_runtime.test.cpp" />
@@ -152,6 +156,8 @@
     <ClInclude Include="src\protected_operations.hpp" />
     <ClInclude Include="src\protocol.hpp" />
     <ClInclude Include="src\service_runtime.hpp" />
+    <ClInclude Include="src\signer_inspection.hpp" />
+    <ClInclude Include="..\remote-worker-windows-host-native\src\service_inspection.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

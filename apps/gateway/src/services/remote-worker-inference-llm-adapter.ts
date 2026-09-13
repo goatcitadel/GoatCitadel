@@ -1,4 +1,8 @@
-import type { ModelUsageAttributionContext, RemoteWorkerInferenceMessage } from "@goatcitadel/contracts";
+import type {
+  ModelUsageAttributionContext,
+  RemoteWorkerInferenceMessage,
+  RemoteWorkerInferenceToolCall,
+} from "@goatcitadel/contracts";
 import type {
   BeginModelUsageDispatchInput,
   ModelUsageCredentialLineage,
@@ -91,6 +95,10 @@ export interface RemoteWorkerInferenceDispatchRequest {
   readonly reasoningTokenCeiling: number;
   readonly temperatureMilli: number;
   readonly signal?: AbortSignal;
+  /** Derived by the Gateway from the admitted profile, never from worker JSON. */
+  readonly memory?: import("@goatcitadel/contracts").ChatCompletionRequest["memory"];
+  /** Exact frozen provider definitions supplied by the Gateway profile owner. */
+  readonly tools?: readonly Record<string, unknown>[];
 }
 
 export type RemoteWorkerInferenceDispatchTerminal = "completed" | "failed" | "cancelled" | "dispatch_unknown";
@@ -104,6 +112,7 @@ export interface RemoteWorkerInferenceDispatchOutcome {
   /** Every HX-306 attempt event id, including recovery attempts. */
   readonly usageEventIds: readonly string[];
   readonly transportAttempts: number;
+  readonly toolCalls?: readonly RemoteWorkerInferenceToolCall[];
   /** Classified error code on failure; never a raw provider body. */
   readonly errorCode?: string;
 }

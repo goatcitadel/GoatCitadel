@@ -201,6 +201,7 @@ const EFFECT_TRANSITIONS: Readonly<
   approval_wait: ["dispatch_claimed", "blocked_before_dispatch", "failed_before_boundary"],
   dispatch_claimed: [
     "external_boundary_started",
+    "completed_no_effect",
     "blocked_before_dispatch",
     "failed_before_boundary",
     "manual_reconciliation",

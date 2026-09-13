@@ -18,6 +18,9 @@ import {
   remoteWorkerRuntimeCredentialClaimsSha256,
   type AppendRemoteWorkerAssignmentEventsCommand,
   type RemoteWorkerAssignmentAppendOutcome,
+  type RemoteWorkerAssignmentApprovalWaitRecord,
+  type RemoteWorkerAssignmentApprovalResumeRecord,
+  type RemoteWorkerAssignmentParentRecoveryRecord,
   type RemoteWorkerAssignmentControlRecord,
   type RemoteWorkerAssignmentGenerationRecord,
   type RemoteWorkerAssignmentLeaseRecord,
@@ -28,6 +31,7 @@ import {
   type RemoteWorkerRuntimeCredentialClaims,
   type RenewRemoteWorkerAssignmentLeaseCommand,
   type ResolvedRemoteWorkerAssignmentAuthority,
+  type ResolvedRemoteWorkerAssignmentParentRecovery,
   type SettleRemoteWorkerAssignmentWorkerCommand,
 } from "@goatcitadel/contracts";
 import type {
@@ -54,6 +58,7 @@ import type {
   RemoteWorkerCurrentRuntimeCredentialAuthorityPort,
 } from "./remote-worker-current-authority-service.js";
 import type { RemoteWorkerRequestHeaders, RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
+import type { RemoteWorkerChatApprovalWaitReadPort } from "./remote-worker-chat-approval-wait-read-service.js";
 
 export const REMOTE_WORKER_ASSIGNMENT_RPC_RESPONSE_SCHEMA_VERSION =
   "goatcitadel.remote-worker-assignment-rpc-response.v1" as const;
@@ -113,6 +118,10 @@ export type RemoteWorkerAssignmentRuntimeCredentialAuthority = CurrentRemoteWork
 export type RemoteWorkerAssignmentRuntimeCredentialAuthorityPort = RemoteWorkerCurrentRuntimeCredentialAuthorityPort;
 
 export interface RemoteWorkerAssignmentProtocolStorePort {
+  resolveChatParentRecoveryByLeaseTokenHash(
+    input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
+  ): ResolvedRemoteWorkerAssignmentParentRecovery | undefined | Promise<ResolvedRemoteWorkerAssignmentParentRecovery | undefined>;
   resolveActiveAuthorityByLeaseTokenHash(
     leaseTokenSha256: string,
     expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
@@ -157,6 +166,7 @@ export interface RemoteWorkerAssignmentProtocolRequest {
 }
 
 export interface RemoteWorkerAssignmentProtocolServiceDependencies {
+  readonly approvalWait?: RemoteWorkerChatApprovalWaitReadPort;
   readonly credentialAuthority: RemoteWorkerAssignmentRuntimeCredentialAuthorityPort;
   readonly meshAdmissions: RemoteWorkerAssignmentMeshAuthorityPort;
   readonly nonceConsumer: RemoteWorkerDurableNonceConsumePort;
@@ -170,6 +180,27 @@ type BaseResponse = Readonly<{
 }>;
 
 export type RemoteWorkerAssignmentProtocolResponse =
+  | (BaseResponse & Readonly<{
+      disposition: "parent_recovery_pending" | "parent_recovery_ready";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+      recovery: RemoteWorkerAssignmentParentRecoveryRecord;
+    }>)
+  | (BaseResponse & Readonly<{
+      disposition: "approval_resume_pending" | "approval_resume_ready";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+      resume: RemoteWorkerAssignmentApprovalResumeRecord;
+    }>)
+  | (BaseResponse & Readonly<{
+      disposition: "waiting_approval";
+      assignment: RemoteWorkerAssignmentRecord;
+      generation: RemoteWorkerAssignmentGenerationRecord;
+      lease: RemoteWorkerAssignmentLeaseRecord;
+      waiting: RemoteWorkerAssignmentApprovalWaitRecord;
+    }>)
   | (BaseResponse &
       Readonly<{
         disposition: "synchronized";
@@ -336,6 +367,34 @@ export class RemoteWorkerAssignmentProtocolService {
       advisory.assignment,
       advisory.generation,
     );
+    const recovery = await this.dependencies.assignments.resolveChatParentRecoveryByLeaseTokenHash({
+      registryWorkspaceId: command.registryWorkspaceId, assignmentId: command.assignmentId,
+      expectedAssignmentGeneration: command.assignmentGeneration, expectedLeaseRevision: command.leaseRevision,
+      leaseTokenSha256: command.leaseTokenSha256,
+    }, expectedProtectedAuthority);
+    if (recovery) {
+      const records = snapshotResolvedAssignmentAuthority(recovery);
+      assertRequestBinding(records, command);
+      return Object.freeze({ ...responseBase(route),
+        disposition: recovery.phase === "renew" ? "parent_recovery_ready" : "parent_recovery_pending", ...records,
+        recovery: Object.freeze({ bindingSha256: recovery.recovery.bindingSha256 }) });
+    }
+    const waiting = await this.dependencies.approvalWait?.read({
+      registryWorkspaceId: command.registryWorkspaceId, assignmentId: command.assignmentId,
+      expectedAssignmentGeneration: command.assignmentGeneration, expectedLeaseRevision: command.leaseRevision,
+      leaseTokenSha256: command.leaseTokenSha256,
+    }, expectedProtectedAuthority);
+    if (waiting) {
+      const records = snapshotResolvedAssignmentAuthority(waiting);
+      assertRequestBinding(records, command);
+      if ("resume" in waiting) return Object.freeze({ ...responseBase(route),
+        disposition: waiting.phase === "renew" ? "approval_resume_ready" : "approval_resume_pending", ...records,
+        resume: Object.freeze({ approvalId: waiting.resume.approvalId,
+          runtimeAuthoritySha256: waiting.resume.runtimeAuthoritySha256, resumeSha256: waiting.resume.resumeSha256 }) });
+      return Object.freeze({ ...responseBase(route), disposition: "waiting_approval", ...records,
+        waiting: Object.freeze({ approvalId: waiting.waiting.approvalId,
+          runtimeAuthoritySha256: waiting.waiting.runtimeAuthoritySha256 }) });
+    }
     const resolved = await this.dependencies.assignments.resolveActiveAuthorityByLeaseTokenHash(
       command.leaseTokenSha256,
       expectedProtectedAuthority,
@@ -699,7 +758,7 @@ function normalizeSettlementPayload(value: unknown, idempotencyKey: string): Set
       "finalEventSequence",
       "finalEventSha256",
     ],
-    ["resultSha256", "outputManifestSha256", "failureSha256"],
+    ["resultSha256", "outputManifestSha256", "failureSha256", "renewalLeaseToken"],
     "assignment settlement payload",
   );
   if (fields.schemaVersion !== REMOTE_WORKER_ASSIGNMENT_WORKER_SETTLEMENT_SCHEMA_VERSION) {
@@ -711,6 +770,11 @@ function normalizeSettlementPayload(value: unknown, idempotencyKey: string): Set
     expectedAssignmentGeneration: positiveInteger(fields.assignmentGeneration, "assignmentGeneration"),
     expectedLeaseRevision: positiveInteger(fields.leaseRevision, "leaseRevision"),
     leaseTokenSha256: leaseTokenSha256(fields.leaseToken, "leaseToken"),
+    ...(fields.renewalLeaseToken === undefined
+      ? {}
+      : {
+          renewalLeaseTokenSha256: leaseTokenSha256(fields.renewalLeaseToken, "renewalLeaseToken"),
+        }),
     outcome: fields.outcome as RemoteWorkerAssignmentSettlementOutcome,
     origin: "worker",
     finalEventSequence: nonNegativeInteger(fields.finalEventSequence, "finalEventSequence"),

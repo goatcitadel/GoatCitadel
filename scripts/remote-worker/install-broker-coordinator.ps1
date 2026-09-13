@@ -21,8 +21,8 @@
                               pre-existing GoatCitadel root owner, or a
                               coordinator-principal derivation mismatch.
     2. stage                - Creates the protected directory chain, copies
-                              exactly the two service images (never the
-                              untrusted client), re-verifies their SHA-256,
+                              exactly the service, client and broker images,
+                              re-verifies their SHA-256,
                               size, single-hard-link and single-stream
                               closure at the destination, then applies the
                               frozen owner+protected-DACL descriptors.
@@ -54,8 +54,8 @@
   rollback failure in the evidence bundle.
 
   Production-dark guarantees: no service is ever started; the untrusted
-  helper/client executable is never deployed and never granted any service
-  right; the broker and one-exchange signer remain dark until the
+  helper/client is installed without service-control rights; the broker and
+  one-exchange signer remain dark until the
   administrator-owned installed-host proof row completes.
 
   Exit codes: 0 = passed, 1 = failed, 2 = refused.
@@ -65,14 +65,15 @@
     -File scripts\remote-worker\install-broker-coordinator.ps1 `
     -Target windows-x64 `
     -StagedTrioDir artifacts\remote-worker\windows-x64 `
-    -PackageResultPath artifacts\remote-worker\windows-x64\build-result.json
+    -PackageResultPath artifacts\remote-worker\windows-x64\app\provisioner\install-receipt.json
 
 .EXAMPLE
   # Prove the refusal branches without touching the SCM or the filesystem.
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass `
     -File scripts\remote-worker\install-broker-coordinator.ps1 `
     -Target windows-x64 -StagedTrioDir artifacts\remote-worker\windows-x64 `
-    -BrokerImageSha256 <64-hex> -SignerImageSha256 <64-hex> -Preflight
+    -BrokerImageSha256 <64-hex> -SignerImageSha256 <64-hex> `
+    -ClientImageSha256 <64-hex> -Preflight
 #>
 [CmdletBinding()]
 param(
@@ -89,6 +90,9 @@ param(
 
   [ValidatePattern("^[0-9a-fA-F]{64}$")]
   [string]$SignerImageSha256,
+
+  [ValidatePattern("^[0-9a-fA-F]{64}$")]
+  [string]$ClientImageSha256,
 
   [string]$OutputRoot,
 
@@ -108,6 +112,9 @@ $script:CleanupFailures = New-Object System.Collections.Generic.List[string]
 $script:CreatedServices = New-Object System.Collections.Generic.List[string]
 $script:CreatedDirectories = New-Object System.Collections.Generic.List[string]
 $script:CopiedFiles = New-Object System.Collections.Generic.List[string]
+$script:DirectoryLeases = New-Object System.Collections.Generic.List[System.IDisposable]
+$script:ImageLeases = New-Object System.Collections.Generic.List[System.IDisposable]
+$script:GoatCitadelRootWasPresent = $false
 $script:ReadBack = $null
 $script:Pins = $null
 $script:Paths = $null
@@ -137,10 +144,16 @@ function Invoke-RecipeStep {
     [Parameter(Mandatory = $true)][scriptblock]$Body
   )
   $stepStart = (Get-Date).ToUniversalTime()
+  $refusalCountBefore = $script:Refusals.Count
   try {
     $detail = & $Body
     if ($null -eq $detail) { $detail = "" }
-    Add-StepRecord -Name $Name -Status "passed" -StartedAtUtc $stepStart -Detail ([string]$detail)
+    $status = "passed"
+    if ($script:Refusals.Count -gt $refusalCountBefore) {
+      $status = "refused"
+      $detail = $script:Refusals.GetRange($refusalCountBefore, $script:Refusals.Count - $refusalCountBefore).ToArray() -join "; "
+    }
+    Add-StepRecord -Name $Name -Status $status -StartedAtUtc $stepStart -Detail ([string]$detail)
   }
   catch {
     $message = $_.Exception.Message
@@ -187,7 +200,12 @@ function Test-RecipeElevation {
 
 function Test-RecipeSystemDrive {
   try {
-    $script:Paths = Get-BrokerCoordinatorPaths -SystemDrive $env:SystemDrive
+    $systemRoot = [System.Environment]::GetFolderPath("Windows")
+    $systemDrive = [System.IO.Path]::GetPathRoot($systemRoot).TrimEnd("\")
+    $script:Paths = Get-BrokerCoordinatorPaths -SystemDrive $systemDrive
+    if (-not [string]::Equals($env:SystemDrive, $systemDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "REFUSED: SystemDrive does not match the Windows system directory volume."
+    }
   }
   catch {
     Add-RefusalFinding $_.Exception.Message.Replace("REFUSED: ", "")
@@ -202,31 +220,71 @@ function Test-RecipeSystemDrive {
 function Resolve-RecipePins {
   $manifestBroker = $null
   $manifestSigner = $null
+  $manifestClient = $null
   $packageConsistent = $null
+  $packageClientConsistent = $null
   if ($PackageResultPath) {
     if (-not (Test-Path -LiteralPath $PackageResultPath)) {
       Add-RefusalFinding ("The package result '{0}' does not exist; the deterministic package proof is the only pin source." -f $PackageResultPath)
       return
     }
-    $manifest = Get-Content -LiteralPath $PackageResultPath -Raw | ConvertFrom-Json
+    if ((Get-Item -LiteralPath $PackageResultPath).Length -gt 2097152) {
+      Add-RefusalFinding "The package result exceeds the 2 MiB limit. Use app/provisioner/install-receipt.json from the portable package."
+      return
+    }
+    try {
+      $manifest = Get-Content -LiteralPath $PackageResultPath -Raw | ConvertFrom-Json
+    }
+    catch {
+      Add-RefusalFinding "The package result is not readable JSON."
+      return
+    }
+    if ($null -eq $manifest -or $manifest -isnot [System.Management.Automation.PSCustomObject]) {
+      Add-RefusalFinding "The package result must be a JSON object."
+      return
+    }
     $availabilityProperty = $manifest.PSObject.Properties["availability"]
     $serviceProperty = $manifest.PSObject.Properties["service"]
-    if ($null -eq $availabilityProperty -or $null -eq $serviceProperty) {
-      Add-RefusalFinding "The package result does not carry the availability/service trio sections."
+    $clientProperty = $manifest.PSObject.Properties["client"]
+    $targetProperty = $manifest.PSObject.Properties["target"]
+    if ($null -eq $availabilityProperty -or $null -eq $serviceProperty -or $null -eq $clientProperty -or $null -eq $targetProperty) {
+      Add-RefusalFinding "The package result does not carry the target and availability/service/client trio sections."
+      return
+    }
+    if ($manifest.target -cne $Target) {
+      Add-RefusalFinding "The package result target does not match -Target."
+      return
+    }
+    foreach ($section in @($manifest.availability, $manifest.service, $manifest.client)) {
+      if ($null -eq $section -or $null -eq $section.PSObject.Properties["sha256"] -or [string]$section.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        Add-RefusalFinding "The package result carries a missing or malformed image SHA-256."
+        return
+      }
+    }
+    if ($null -eq $manifest.availability.PSObject.Properties["targetServiceSha256"] -or
+        $null -eq $manifest.service.PSObject.Properties["targetClientSha256"]) {
+      Add-RefusalFinding "The package result does not bind both broker-to-signer and signer-to-client image pins. Rebuild the trio."
       return
     }
     $manifestBroker = ([string]$manifest.availability.sha256).ToLowerInvariant()
     $manifestSigner = ([string]$manifest.service.sha256).ToLowerInvariant()
+    $manifestClient = ([string]$manifest.client.sha256).ToLowerInvariant()
     $embeddedPin = ([string]$manifest.availability.targetServiceSha256).ToLowerInvariant()
     $packageConsistent = [string]::Equals($embeddedPin, $manifestSigner, [System.StringComparison]::Ordinal)
     if (-not $packageConsistent) {
       Add-RefusalFinding ("The package result is internally inconsistent: availability.targetServiceSha256 '{0}' does not equal service.sha256 '{1}'." -f $embeddedPin, $manifestSigner)
     }
+    $packageClientConsistent = [string]::Equals([string]$manifest.service.targetClientSha256, $manifestClient, [System.StringComparison]::Ordinal)
+    if (-not $packageClientConsistent) {
+      Add-RefusalFinding "The package result is internally inconsistent: service.targetClientSha256 does not equal client.sha256."
+    }
   }
   $resolvedBroker = $null
   $resolvedSigner = $null
+  $resolvedClient = $null
   if ($BrokerImageSha256) { $resolvedBroker = $BrokerImageSha256.ToLowerInvariant() }
   if ($SignerImageSha256) { $resolvedSigner = $SignerImageSha256.ToLowerInvariant() }
+  if ($ClientImageSha256) { $resolvedClient = $ClientImageSha256.ToLowerInvariant() }
   if ($manifestBroker) {
     if ($resolvedBroker -and -not [string]::Equals($resolvedBroker, $manifestBroker, [System.StringComparison]::Ordinal)) {
       Add-RefusalFinding "The explicit -BrokerImageSha256 pin conflicts with the package result; refusing to guess which pin is authoritative."
@@ -239,15 +297,23 @@ function Resolve-RecipePins {
     }
     $resolvedSigner = $manifestSigner
   }
-  if (-not $resolvedBroker -or -not $resolvedSigner) {
-    Add-RefusalFinding "No SHA-256 pin source: provide -PackageResultPath from the deterministic package proof, or both -BrokerImageSha256 and -SignerImageSha256."
+  if ($manifestClient) {
+    if ($resolvedClient -and -not [string]::Equals($resolvedClient, $manifestClient, [System.StringComparison]::Ordinal)) {
+      Add-RefusalFinding "The explicit -ClientImageSha256 pin conflicts with the package result; refusing to guess which pin is authoritative."
+    }
+    $resolvedClient = $manifestClient
+  }
+  if (-not $resolvedBroker -or -not $resolvedSigner -or -not $resolvedClient) {
+    Add-RefusalFinding "No SHA-256 pin source: provide -PackageResultPath from the deterministic package proof, or all three -BrokerImageSha256, -SignerImageSha256 and -ClientImageSha256 pins."
     return
   }
   $script:Pins = [ordered]@{
     brokerImageSha256 = $resolvedBroker
     signerImageSha256 = $resolvedSigner
+    clientImageSha256 = $resolvedClient
     packageResultPath = $PackageResultPath
     packageTargetServiceSha256Consistent = $packageConsistent
+    packageTargetClientSha256Consistent = $packageClientConsistent
   }
 }
 
@@ -273,6 +339,14 @@ function Test-RecipeStagedImage {
     return
   }
   $item = Get-Item -LiteralPath $Path
+  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    Add-RefusalFinding ("The staged {0} is a reparse point." -f $Description)
+    return
+  }
+  if ([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::GetFileHardLinkCount($Path) -ne 1) {
+    Add-RefusalFinding ("The staged {0} does not have exactly one hard link." -f $Description)
+    return
+  }
   if ($item.Length -le 0 -or $item.Length -gt $script:MaximumImageBytes) {
     Add-RefusalFinding ("The staged {0} is {1} bytes; the broker only accepts images between 1 and {2} bytes." -f $Description, $item.Length, $script:MaximumImageBytes)
     return
@@ -290,7 +364,7 @@ function Test-RecipeStagedImage {
 
 function Test-RecipeStagedTrio {
   if (-not $StagedTrioDir) {
-    Add-RefusalFinding "-StagedTrioDir is required: it must point at the deterministic package output containing the proven service/broker images."
+    Add-RefusalFinding "-StagedTrioDir is required: it must point at the deterministic package output containing the proven service/client/broker images."
     return
   }
   if (-not (Test-Path -LiteralPath $StagedTrioDir -PathType Container)) {
@@ -302,8 +376,7 @@ function Test-RecipeStagedTrio {
   }
   Test-RecipeStagedImage -Path (Join-Path $StagedTrioDir $script:BrokerExecutableName) -ExpectedSha256 $script:Pins.brokerImageSha256 -Description "availability-broker image"
   Test-RecipeStagedImage -Path (Join-Path $StagedTrioDir $script:SignerExecutableName) -ExpectedSha256 $script:Pins.signerImageSha256 -Description "signer image"
-  # The untrusted client may sit beside the trio; it is intentionally never
-  # deployed by this recipe and no check grants it anything.
+  Test-RecipeStagedImage -Path (Join-Path $StagedTrioDir $script:ClientExecutableName) -ExpectedSha256 $script:Pins.clientImageSha256 -Description "client image"
 }
 
 function Test-RecipeScmClean {
@@ -326,34 +399,96 @@ function Test-RecipeFilesystemClean {
   if (Test-Path -LiteralPath $script:Paths.ProvisionerDirectory) {
     Add-RefusalFinding ("The install footprint '{0}' already exists; refusing to compose over a pre-existing tree." -f $script:Paths.ProvisionerDirectory)
   }
-  if (Test-Path -LiteralPath $script:Paths.GoatCitadelDirectory) {
-    $acl = Get-Acl -LiteralPath $script:Paths.GoatCitadelDirectory
-    $owner = $acl.Owner
-    $trustedOwners = @("NT AUTHORITY\SYSTEM", "BUILTIN\Administrators")
-    if ($trustedOwners -notcontains $owner) {
-      Add-RefusalFinding ("The pre-existing directory '{0}' is owned by '{1}', not SYSTEM or Administrators; an untrusted principal may have planted it, refusing." -f $script:Paths.GoatCitadelDirectory, $owner)
+  foreach ($directory in @(($script:Paths.Drive + "\"), ($script:Paths.Drive + "\ProgramData"), $script:Paths.GoatCitadelDirectory)) {
+    if (Test-Path -LiteralPath $directory) {
+      try {
+        $lease = Get-BrokerCoordinatorDirectoryLease -Path $directory -GoatCitadelLevel:($directory -eq $script:Paths.GoatCitadelDirectory)
+        $script:DirectoryLeases.Add($lease)
+        if ($directory -eq $script:Paths.GoatCitadelDirectory) { $script:GoatCitadelRootWasPresent = $true }
+      }
+      catch {
+        Add-RefusalFinding $_.Exception.Message
+      }
     }
   }
 }
 
 # --- Mutating phases (install mode only, after a clean preflight) ------------
 
-function Invoke-RecipeStage {
+function Copy-RecipePinnedImage {
+  param(
+    [Parameter(Mandatory = $true)][string]$Source,
+    [Parameter(Mandatory = $true)][string]$Destination,
+    [Parameter(Mandatory = $true)][string]$Sddl
+  )
+  $inputStream = $null
+  $outputStream = $null
+  try {
+    $inputStream = [System.IO.File]::Open($Source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    if ($inputStream.Length -le 0 -or $inputStream.Length -gt $script:MaximumImageBytes) {
+      throw "The staged image changed outside the accepted size bound."
+    }
+    $outputStream = [System.IO.File]::Open($Destination, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $script:CopiedFiles.Add($Destination)
+    # A held source excludes writers; CREATE_NEW refuses any raced destination.
+    $buffer = New-Object byte[] 65536
+    $total = 0L
+    while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $total += $count
+      if ($total -gt $script:MaximumImageBytes) { throw "The staged image grew outside the accepted size bound." }
+      $outputStream.Write($buffer, 0, $count)
+    }
+    if ($total -eq 0) { throw "The staged image became empty." }
+    $outputStream.Flush($true)
+    # Protect before releasing the destination writer, so another caller cannot
+    # retain a writable handle across the ACL transition.
+    [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::SetFileSddl($Destination, $Sddl)
+  }
+  finally {
+    if ($null -ne $outputStream) { $outputStream.Dispose() }
+    if ($null -ne $inputStream) { $inputStream.Dispose() }
+  }
+  $script:ImageLeases.Add([System.IO.File]::Open($Destination, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read))
+}
+
+function Close-RecipeLeases {
+  param([switch]$ImagesOnly)
+  foreach ($lease in $script:ImageLeases) { $lease.Dispose() }
+  $script:ImageLeases.Clear()
+  if (-not $ImagesOnly) {
+    for ($index = $script:DirectoryLeases.Count - 1; $index -ge 0; $index--) {
+      $script:DirectoryLeases[$index].Dispose()
+    }
+    $script:DirectoryLeases.Clear()
+  }
+}
+
+function New-RecipeInstallDirectories {
   $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
   foreach ($directory in @($script:Paths.GoatCitadelDirectory, $script:Paths.ProvisionerDirectory, $script:Paths.BinDirectory)) {
-    if (-not (Test-Path -LiteralPath $directory)) {
-      New-Item -ItemType Directory -Path $directory | Out-Null
-      $script:CreatedDirectories.Add($directory)
-    }
+    # Only a root already verified and held during preflight can be reused.
+    # A root planted after preflight must fail exclusive creation.
+    if ($directory -eq $script:Paths.GoatCitadelDirectory -and $script:GoatCitadelRootWasPresent) { continue }
+    $native::CreateProtectedDirectory($directory, $script:SharedRootSddl)
+    $script:CreatedDirectories.Add($directory)
+    $script:DirectoryLeases.Add((Get-BrokerCoordinatorDirectoryLease -Path $directory -GoatCitadelLevel))
   }
-  Copy-Item -LiteralPath (Join-Path $StagedTrioDir $script:BrokerExecutableName) -Destination $script:Paths.BrokerImagePath
-  $script:CopiedFiles.Add($script:Paths.BrokerImagePath)
-  Copy-Item -LiteralPath (Join-Path $StagedTrioDir $script:SignerExecutableName) -Destination $script:Paths.SignerImagePath
-  $script:CopiedFiles.Add($script:Paths.SignerImagePath)
+}
+
+function Invoke-RecipeStage {
+  $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  # SYSTEM ownership is present at creation, before any child is staged.
+  $native::EnablePrivilege("SeRestorePrivilege")
+  $native::EnablePrivilege("SeTakeOwnershipPrivilege")
+  New-RecipeInstallDirectories
+  Copy-RecipePinnedImage -Source (Join-Path $StagedTrioDir $script:BrokerExecutableName) -Destination $script:Paths.BrokerImagePath -Sddl $script:BrokerImageSddl
+  Copy-RecipePinnedImage -Source (Join-Path $StagedTrioDir $script:SignerExecutableName) -Destination $script:Paths.SignerImagePath -Sddl $script:SignerImageSddl
+  Copy-RecipePinnedImage -Source (Join-Path $StagedTrioDir $script:ClientExecutableName) -Destination $script:Paths.ClientImagePath -Sddl $script:ClientImageSddl
 
   foreach ($image in @(
       @{ Path = $script:Paths.BrokerImagePath; Sha256 = $script:Pins.brokerImageSha256; Sddl = $script:BrokerImageSddl },
-      @{ Path = $script:Paths.SignerImagePath; Sha256 = $script:Pins.signerImageSha256; Sddl = $script:SignerImageSddl })) {
+      @{ Path = $script:Paths.SignerImagePath; Sha256 = $script:Pins.signerImageSha256; Sddl = $script:SignerImageSddl },
+      @{ Path = $script:Paths.ClientImagePath; Sha256 = $script:Pins.clientImageSha256; Sddl = $script:ClientImageSddl })) {
     $destinationHash = Get-BrokerCoordinatorFileSha256 -Path $image.Path
     if (-not [string]::Equals($destinationHash, $image.Sha256, [System.StringComparison]::Ordinal)) {
       throw ("The copied image '{0}' hash '{1}' does not match the pin '{2}'." -f $image.Path, $destinationHash, $image.Sha256)
@@ -372,11 +507,6 @@ function Invoke-RecipeStage {
     }
   }
 
-  # Owner SYSTEM requires SeRestorePrivilege even for an administrator.
-  $native::EnablePrivilege("SeRestorePrivilege")
-  $native::EnablePrivilege("SeTakeOwnershipPrivilege")
-  $native::SetFileSddl($script:Paths.BrokerImagePath, $script:BrokerImageSddl)
-  $native::SetFileSddl($script:Paths.SignerImagePath, $script:SignerImageSddl)
   $native::SetFileSddl($script:Paths.BinDirectory, $script:ProtectedDirectorySddl)
   $native::SetFileSddl($script:Paths.ProvisionerDirectory, $script:ProtectedDirectorySddl)
   if ($script:CreatedDirectories -contains $script:Paths.GoatCitadelDirectory) {
@@ -393,7 +523,7 @@ function Invoke-RecipeInstallServices {
   $script:CreatedServices.Add($script:SignerServiceName)
   $native::SetServiceSidTypeUnrestricted($script:SignerServiceName)
   $native::SetServiceRequiredPrivilegesChangeNotify($script:SignerServiceName)
-  $native::SetServiceSddl($script:SignerServiceName, $script:ServiceObjectSddl)
+  $native::SetServiceSddl($script:SignerServiceName, $script:SignerServiceObjectSddl)
 
   $native::CreateCoordinatorService($script:BrokerServiceName, $script:BrokerDisplayName, $script:Paths.BrokerQuotedBinaryPath)
   $script:CreatedServices.Add($script:BrokerServiceName)
@@ -406,7 +536,8 @@ function Invoke-RecipeInstallServices {
 function Get-ServiceReadBack {
   param(
     [Parameter(Mandatory = $true)][string]$ServiceName,
-    [Parameter(Mandatory = $true)][string]$ExpectedQuotedBinaryPath
+    [Parameter(Mandatory = $true)][string]$ExpectedQuotedBinaryPath,
+    [Parameter(Mandatory = $true)][string]$ExpectedServiceSddl
   )
   $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
   $configLine = $native::GetServiceConfigLine($ServiceName)
@@ -416,7 +547,7 @@ function Get-ServiceReadBack {
   $sddl = $native::GetServiceSddl($ServiceName)
   $statusLine = $native::GetServiceStatusLine($ServiceName)
   $status = $statusLine -split "\|"
-  $canonicalExpectedSddl = ConvertTo-CanonicalSddl -Sddl $script:ServiceObjectSddl
+  $canonicalExpectedSddl = ConvertTo-CanonicalSddl -Sddl $ExpectedServiceSddl
 
   if ([int]$config[0] -ne $script:ExpectedServiceType) { throw ("Service '{0}' type read back {1}, expected {2} (SERVICE_WIN32_OWN_PROCESS)." -f $ServiceName, $config[0], $script:ExpectedServiceType) }
   if ([int]$config[1] -ne $script:ExpectedStartType) { throw ("Service '{0}' start type read back {1}, expected {2} (SERVICE_DEMAND_START)." -f $ServiceName, $config[1], $script:ExpectedStartType) }
@@ -446,27 +577,28 @@ function Get-ServiceReadBack {
     processId = [int]$status[1]
     serviceFlags = [int]$status[2]
     # ERROR_SERVICE_NEVER_STARTED (1077) is the expected value on a service
-    # that has never started since boot. The broker's StatusMetadataIsExact
-    # requires NO_ERROR (0), so the installed-host broker contract proof
-    # (held) must cover the first signer start/stop cycle explicitly.
+    # that has never started since boot. The broker permits this only for a
+    # stopped signer with no process or failure metadata; active states
+    # still require NO_ERROR. Real first-start acceptance remains unproven.
     win32ExitCode = [int]$status[4]
   }
 }
 
 function Invoke-RecipeVerify {
   $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
-  $signerReadBack = Get-ServiceReadBack -ServiceName $script:SignerServiceName -ExpectedQuotedBinaryPath $script:Paths.SignerQuotedBinaryPath
-  $brokerReadBack = Get-ServiceReadBack -ServiceName $script:BrokerServiceName -ExpectedQuotedBinaryPath $script:Paths.BrokerQuotedBinaryPath
+  $signerReadBack = Get-ServiceReadBack -ServiceName $script:SignerServiceName -ExpectedQuotedBinaryPath $script:Paths.SignerQuotedBinaryPath -ExpectedServiceSddl $script:SignerServiceObjectSddl
+  $brokerReadBack = Get-ServiceReadBack -ServiceName $script:BrokerServiceName -ExpectedQuotedBinaryPath $script:Paths.BrokerQuotedBinaryPath -ExpectedServiceSddl $script:ServiceObjectSddl
 
   $fileReadBack = New-Object System.Collections.Generic.List[object]
   foreach ($entry in @(
       @{ Path = $script:Paths.BrokerImagePath; Sddl = $script:BrokerImageSddl; Sha256 = $script:Pins.brokerImageSha256 },
       @{ Path = $script:Paths.SignerImagePath; Sddl = $script:SignerImageSddl; Sha256 = $script:Pins.signerImageSha256 },
+      @{ Path = $script:Paths.ClientImagePath; Sddl = $script:ClientImageSddl; Sha256 = $script:Pins.clientImageSha256 },
       @{ Path = $script:Paths.BinDirectory; Sddl = $script:ProtectedDirectorySddl; Sha256 = $null },
       @{ Path = $script:Paths.ProvisionerDirectory; Sddl = $script:ProtectedDirectorySddl; Sha256 = $null })) {
     $actualSddl = $native::GetFileSddl($entry.Path)
-    $canonical = ConvertTo-CanonicalSddl -Sddl $entry.Sddl
-    if (-not [string]::Equals($actualSddl, $canonical, [System.StringComparison]::Ordinal)) {
+    $canonical = ConvertTo-CanonicalFileSddl -Sddl $entry.Sddl
+    if (-not [string]::Equals((ConvertTo-CanonicalFileSddl -Sddl $actualSddl), $canonical, [System.StringComparison]::Ordinal)) {
       throw ("The path '{0}' security descriptor read back '{1}', expected canonical '{2}'." -f $entry.Path, $actualSddl, $canonical)
     }
     $record = [ordered]@{ path = $entry.Path; securityDescriptor = $actualSddl }
@@ -507,6 +639,7 @@ function Invoke-RecipeVerify {
 
 function Invoke-RecipeRollback {
   $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  Close-RecipeLeases -ImagesOnly
   for ($index = $script:CreatedServices.Count - 1; $index -ge 0; $index--) {
     $serviceName = $script:CreatedServices[$index]
     try {
@@ -535,6 +668,7 @@ function Invoke-RecipeRollback {
       $script:CleanupFailures.Add(("rollback: failed to remove file '{0}': {1}" -f $filePath, $_.Exception.Message))
     }
   }
+  Close-RecipeLeases
   for ($index = $script:CreatedDirectories.Count - 1; $index -ge 0; $index--) {
     $directory = $script:CreatedDirectories[$index]
     try {
@@ -572,8 +706,11 @@ function Write-InstallEvidence {
       signerServiceName = $script:SignerServiceName
       signerServiceSid = $script:SignerServiceSid
       serviceObjectSddl = $script:ServiceObjectSddl
+      signerServiceObjectSddl = $script:SignerServiceObjectSddl
+      runtimeWorkerServiceSid = $script:RuntimeWorkerServiceSid
       brokerImageSddl = $script:BrokerImageSddl
       signerImageSddl = $script:SignerImageSddl
+      clientImageSddl = $script:ClientImageSddl
       protectedDirectorySddl = $script:ProtectedDirectorySddl
       sharedRootSddl = $script:SharedRootSddl
       serviceType = "SERVICE_WIN32_OWN_PROCESS"
@@ -584,13 +721,17 @@ function Write-InstallEvidence {
       requiredPrivileges = @($script:ExpectedRequiredPrivilege)
       neverStartedWin32ExitCode = $script:ServiceNeverStartedExitCode
       startsAnyService = $false
-      deploysUntrustedClient = $false
+      deploysUntrustedClient = $true
+      clientServiceControlRights = "none"
+      runtimeWorkerSignerQueryRights = "SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL"
+      runtimeWorkerBrokerRights = "none"
     }
     paths = $(if ($null -ne $script:Paths) {
       [ordered]@{
         binDirectory = $script:Paths.BinDirectory
         brokerImagePath = $script:Paths.BrokerImagePath
         signerImagePath = $script:Paths.SignerImagePath
+        clientImagePath = $script:Paths.ClientImagePath
         brokerQuotedBinaryPath = $script:Paths.BrokerQuotedBinaryPath
         signerQuotedBinaryPath = $script:Paths.SignerQuotedBinaryPath
       }
@@ -663,15 +804,16 @@ try {
     else {
       $script:Verdict = "failed"
       $exitCode = 1
-      if (-not $Preflight) {
-        Invoke-RecipeRollback
-      }
+    }
+    if (-not $Preflight -and ($script:CreatedServices.Count -gt 0 -or $script:CopiedFiles.Count -gt 0 -or $script:CreatedDirectories.Count -gt 0)) {
+      Invoke-RecipeRollback
     }
     Write-Error $message -ErrorAction Continue
   }
 }
 finally {
-  Write-InstallEvidence
+  try { Write-InstallEvidence }
+  finally { Close-RecipeLeases }
 }
 
 exit $exitCode

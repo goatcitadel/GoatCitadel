@@ -3,10 +3,13 @@ import type {
   ApprovalRequest,
   LocalOperatorOverrideCreateInput,
   LocalOperatorOverrideRecord,
-  PermissionProfileActivationInput,
+  PermissionProfileReviewedActivationInput,
+  PermissionProfileSelectionReview,
+  PermissionProfileSelectionReviewRequest,
   PermissionProfileActivationRecord,
   PermissionProfileCreateInput,
-  PermissionProfileRecord,
+  PermissionProfileSnapshotRecord,
+  PermissionProfileArchiveInput,
   PermissionProfileUpdateInput,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
@@ -115,7 +118,7 @@ export async function fetchToolGrants(input?: {
 export async function fetchPermissionProfiles(input?: {
   includeArchived?: boolean;
   workspaceId?: string;
-}): Promise<{ items: PermissionProfileRecord[] }> {
+}): Promise<{ items: PermissionProfileSnapshotRecord[] }> {
   const search = new URLSearchParams();
   if (input?.includeArchived) {
     search.set("includeArchived", "true");
@@ -123,7 +126,7 @@ export async function fetchPermissionProfiles(input?: {
   if (input?.workspaceId) {
     search.set("workspaceId", input.workspaceId);
   }
-  return request<{ items: PermissionProfileRecord[] }>(
+  return request<{ items: PermissionProfileSnapshotRecord[] }>(
     `/api/v1/tools/permission-profiles${search.size > 0 ? `?${search.toString()}` : ""}`,
   );
 }
@@ -152,8 +155,8 @@ export async function fetchActiveLocalOperatorOverrides(): Promise<{ items: Loca
 
 export async function createPermissionProfile(
   input: PermissionProfileCreateRequestInput,
-): Promise<PermissionProfileRecord> {
-  return request<PermissionProfileRecord>("/api/v1/tools/permission-profiles", {
+): Promise<PermissionProfileSnapshotRecord> {
+  return request<PermissionProfileSnapshotRecord>("/api/v1/tools/permission-profiles", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -162,29 +165,35 @@ export async function createPermissionProfile(
 export async function updatePermissionProfile(
   profileId: string,
   input: Omit<PermissionProfileUpdateInput, "updatedBy">,
-): Promise<PermissionProfileRecord> {
-  return request<PermissionProfileRecord>(`/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}`, {
+): Promise<PermissionProfileSnapshotRecord> {
+  return request<PermissionProfileSnapshotRecord>(`/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });
 }
 
-export async function archivePermissionProfile(profileId: string): Promise<{ archived: boolean; profileId: string }> {
+export async function archivePermissionProfile(profileId: string, input: PermissionProfileArchiveInput): Promise<{ archived: boolean; profileId: string }> {
   return request<{ archived: boolean; profileId: string }>(
     `/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}/archive`,
     {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(input),
     },
   );
 }
 
 export async function activatePermissionProfile(
-  input: Omit<PermissionProfileActivationInput, "createdBy">,
+  input: Omit<PermissionProfileReviewedActivationInput, "createdBy">,
 ): Promise<PermissionProfileActivationRecord> {
   return request<PermissionProfileActivationRecord>("/api/v1/tools/permission-profiles/activate", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function reviewPermissionProfileSelection(input: PermissionProfileSelectionReviewRequest): Promise<PermissionProfileSelectionReview> {
+  return request<PermissionProfileSelectionReview>("/api/v1/tools/permission-profiles/selection-review", {
+    method: "POST", body: JSON.stringify(input),
   });
 }
 

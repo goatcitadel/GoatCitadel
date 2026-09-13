@@ -1,3 +1,5 @@
+import { resolveReleaseSurfaceHref } from "../release-surface-manifest.mjs";
+
 const INITIAL_ROUTE_NAVIGATION_MAX_ATTEMPTS = 2;
 const INITIAL_ROUTE_READINESS_GRACE_MS = 5_000;
 const INITIAL_ROUTE_TIMEOUT_REASON = "initial_navigation_timeout";
@@ -106,10 +108,11 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
             try {
               // Only the first read-only boot navigation can recover. Correlation and
               // interaction hooks run after this boundary and are never retried.
+              const fixtureHref = resolveReleaseSurfaceHref(route, {}, fixture ?? {});
               const routeHref =
                 verificationTarget.isNext && route.slug === "settings-providers"
-                  ? `${route.href}#providers-routing`
-                  : route.href;
+                  ? `${fixtureHref}#providers-routing`
+                  : fixtureHref;
               navigationEvidence = await navigateSurfaceRoute(page, buildVerificationUiUrl(stack.uiUrl, routeHref), {
                 allowInitialColdStartRecovery: routeIndex === 0,
               });

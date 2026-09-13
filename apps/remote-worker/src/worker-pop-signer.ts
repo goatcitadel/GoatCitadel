@@ -41,6 +41,8 @@ export class WorkerPopSignerError extends Error {
 }
 
 export function workerPopSigningContext(credential: RetainedRuntimeCredential): WorkerPopSigningContext {
+  if (credential.protectedKey || typeof credential.signingPrivateKeyPem !== "string")
+    throw new WorkerPopSignerError("A protected key requires its native owner; PEM fallback is unavailable.");
   return Object.freeze({
     signingPrivateKeyPem: credential.signingPrivateKeyPem,
     credentialId: credential.credentialId,

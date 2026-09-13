@@ -926,7 +926,8 @@ describe("MemoryContextService", () => {
       workspaceId: "workspace-a",
       forceRefresh: true,
       queryEmbedding: [0.1, 0.2, 0.3],
-    });
+    }, { parentOperationId: "worker-answer", workerId: "worker-a", turnId: "turn-a", durableRunId: "run-a",
+      contextIntentHash: "worker-context-hash" });
 
     expect(pack.citations).toEqual([
       expect.objectContaining({
@@ -963,6 +964,8 @@ describe("MemoryContextService", () => {
         callKind: "utility",
         utilityKind: "memory_context_distillation",
         workspaceId: "workspace-a",
+        parentOperationId: "worker-answer", workerId: "worker-a", turnId: "turn-a", durableRunId: "run-a",
+        contextIntentHash: "worker-context-hash",
       }),
     );
     expect(JSON.stringify(llmService.chatCompletions.mock.calls[0]?.[0])).not.toContain("FOREIGN_WORKSPACE_SENTINEL");

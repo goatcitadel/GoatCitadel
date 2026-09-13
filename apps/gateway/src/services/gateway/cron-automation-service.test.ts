@@ -587,6 +587,26 @@ describe("cron schedule helpers", () => {
     }
   });
 
+  it.each([
+    ["43 8 * * * UTC", "2026-09-12T08:41:39.704Z", "2026-09-12T08:43:00.000Z"],
+    ["* * * * * UTC", "2026-09-12T08:41:59.999Z", "2026-09-12T08:42:00.000Z"],
+    ["0 */6 * * * UTC", "2026-05-14T12:04:39.704Z", "2026-05-14T18:00:00.000Z"],
+    ["15 9 * * * America/Los_Angeles", "2026-05-14T16:14:39.704Z", "2026-05-14T16:15:00.000Z"],
+    ["0 12 * * * UTC", "2026-05-14T12:03:39.704Z", "2026-05-14T12:04:00.000Z"],
+  ])("aligns the next occurrence of %s to a whole minute", (schedule, from, expected) => {
+    const input = new Date(from);
+    expect(computeNextCronRunAt(schedule, input)).toBe(expected);
+    expect(input.toISOString()).toBe(from);
+  });
+
+  it("applies the end time to the whole-minute occurrence", () => {
+    const from = new Date("2026-09-12T08:42:39.704Z");
+    expect(computeNextCronRunAt("43 8 * * * UTC", from, "2026-09-12T08:43:00.000Z")).toBe(
+      "2026-09-12T08:43:00.000Z",
+    );
+    expect(computeNextCronRunAt("43 8 * * * UTC", from, "2026-09-12T08:42:59.999Z")).toBeUndefined();
+  });
+
   it("matches due windows, suppresses duplicate runs, and computes the next run before endAt", () => {
     const now = new Date("2026-05-14T12:03:00.000Z");
     const job = buildTaskJob({
@@ -1865,7 +1885,7 @@ describe("findCronRunById", () => {
     expect(await service.findCronRunById("missing-run-id")).toBeUndefined();
   });
 
-  it("returns the job snapshot when a run id matches lastRunId", async () => {
+  it("keeps canonical occurrence evidence separate from legacy last-run telemetry", async () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),
       runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
@@ -1883,6 +1903,21 @@ describe("findCronRunById", () => {
     expect(lookup?.runId).toBe(result.runId);
     expect(lookup?.status).toBe("ok");
     expect(lookup?.output).toBe("alert");
+    expect(lookup?.canonical).toMatchObject({
+      runId: result.runId,
+      jobId: "found-job",
+      trigger: "manual",
+      status: "completed",
+      jobRevision: 1,
+    });
+    const missingCanonical = vi.spyOn(FakeCronRuns.prototype, "get").mockReturnValue(undefined);
+    try {
+      const legacy = await service.findCronRunById(result.runId);
+      expect(legacy).toMatchObject({ runId: result.runId, jobId: "found-job", status: "ok", output: "alert" });
+      expect(legacy?.canonical).toBeUndefined();
+    } finally {
+      missingCanonical.mockRestore();
+    }
   });
 
   it("returns failed run status and failure metadata when the last run failed", async () => {

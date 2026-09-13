@@ -1,3 +1,8 @@
+import { useState } from "react";
+import { NativeButton, NoticeBanner } from "../native-routes/primitives";
+import { NativeDisclosureCard } from "../native-routes/NativeRoutePageLayout";
+import { FocusedDetail } from "../native-routes/shared/FocusedDetail";
+import { useDraftLeave } from "../native-routes/library/DraftLeaveDialog";
 import type { AppRoute } from "@next/app/route-model";
 import { EmptyState } from "../native-routes/primitives";
 import { AdvancedQualityOpsPanel } from "./AdvancedQualityOpsPanel";
@@ -48,12 +53,15 @@ interface PromptPacksWorkbenchPageProps {
 }
 
 export function PromptPacksWorkbenchPage({
-  workspaceId: _workspaceId,
+  workspaceId,
   variant = "library",
   navigate,
   initialPackId,
 }: PromptPacksWorkbenchPageProps) {
-  const state = usePromptPacksWorkbenchState({ variant: variant ?? "library", navigate, initialPackId });
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<"prompt" | "output" | "assessment" | "review" | "evidence">("prompt");
+  const leave = useDraftLeave();
+  const state = usePromptPacksWorkbenchState({ variant: variant ?? "library", navigate, initialPackId, workspaceId, reviewOpen: detailOpen });
 
   if (state.initialLoading) {
     return (
@@ -72,7 +80,7 @@ export function PromptPacksWorkbenchPage({
 
   return (
     <section className="mc-prompt-packs" data-variant={variant}>
-      <PromptPacksHero
+      {!detailOpen ? <PromptPacksHero
         isOpsVariant={state.isOpsVariant}
         title={state.title}
         subtitle={state.subtitle}
@@ -94,7 +102,7 @@ export function PromptPacksWorkbenchPage({
         onRunAll={() => void state.runAll()}
         onAutoScoreUnscored={() => void state.autoScoreUnscored()}
         onRefresh={() => void state.load({ background: true })}
-      />
+      /> : null}
 
       <PromptPacksStatusRow
         activeRun={state.activeRun}
@@ -103,16 +111,16 @@ export function PromptPacksWorkbenchPage({
         isFallbackRefreshing={state.isFallbackRefreshing}
       />
 
-      <section className="mc-pp-command-deck" aria-label="Prompt pack setup">
+      {!detailOpen ? <section className="mc-pp-command-deck" aria-label="Prompt pack setup">
         <PromptPackLibraryPanel
           isOpsVariant={state.isOpsVariant}
           packs={state.packs}
           selectedPackId={state.selectedPackId}
           compact
-          onSelectPack={state.selectPack}
+          onSelectPack={(id) => leave.request(() => state.selectPack(id))}
         />
 
-        <RunSettingsPanel
+        <NativeDisclosureCard id="prompt-pack-run-settings" title="Run settings"><RunSettingsPanel
           isOpsVariant={state.isOpsVariant}
           providerOptions={state.providerOptions}
           selectedProviderId={state.selectedProviderId}
@@ -128,7 +136,7 @@ export function PromptPacksWorkbenchPage({
           onSetReuseLastModel={state.setReuseLastModel}
           onSetAutoScoreOnRun={state.setAutoScoreOnRun}
           onSetExecutionStyle={state.setExecutionStyle}
-        />
+        /></NativeDisclosureCard>
 
         <div className="mc-pp-command-secondary">
           <AdvancedQualityOpsPanel
@@ -180,6 +188,7 @@ export function PromptPacksWorkbenchPage({
 
           {!state.isOpsVariant ? (
             <ImportPackPanel
+              dirty={state.importDirty}
               importText={state.importText}
               importing={state.importing}
               onSetImportText={state.setImportText}
@@ -187,10 +196,10 @@ export function PromptPacksWorkbenchPage({
             />
           ) : null}
         </div>
-      </section>
+      </section> : null}
 
-      <div className="mc-pp-layout">
-        <PromptPackTestsColumn
+      <div className="mc-pp-layout mc-next-prompt-directory">
+        {!detailOpen ? <PromptPackTestsColumn
           selectedPackName={state.selectedPack?.name}
           testsLength={state.tests.length}
           filteredTests={state.filteredTests}
@@ -202,11 +211,13 @@ export function PromptPacksWorkbenchPage({
           activeRun={state.activeRun}
           running={state.running}
           onSetTestResultFilter={state.setTestResultFilter}
-          onSelectTest={state.setSelectedTestId}
+          hasDraft={state.hasReviewDraft}
+          onSelectTest={(id) => leave.request(() => { state.setSelectedTestId(id); setDetailTab("prompt"); setDetailOpen(true); }, [state.reviewDraftKey])}
           onRunOne={(test) => void state.runOne(test, "single")}
-        />
+        /> : null}
 
-        <section className="mc-pp-detail">
+        {detailOpen ? <FocusedDetail title={state.selectedTest?.title ?? "Test details"} onClose={() => leave.request(() => setDetailOpen(false), [state.reviewDraftKey])}><section className="mc-pp-detail">
+          {state.error ? <NoticeBanner tone="error" message={state.error} /> : null}{state.success ? <NoticeBanner tone="success" message={state.success} /> : null}
           {state.selectedTest ? (
             <>
               <PromptPackDetailHeader
@@ -225,8 +236,10 @@ export function PromptPacksWorkbenchPage({
                 onCopySelectedRunLink={() => void state.copySelectedRunLink()}
               />
 
+              <div className="mc-next-view-tabs" role="group" aria-label="Test details">{([ ["prompt", "Prompt"], ["output", "Output"], ["assessment", "Assessment"], ["review", state.reviewDirty ? "Review · Unsaved" : "Review"], ["evidence", "Evidence"] ] as const).map(([id, label]) => <NativeButton key={id} variant="ghost" aria-pressed={detailTab === id} onClick={() => setDetailTab(id)}>{label}</NativeButton>)}</div>
+              {state.reviewRevisionConflict ? <div><NoticeBanner tone="warning" message="Your review draft belongs to an earlier run. Inspect the current output before applying it." /><NativeButton variant="outline" onClick={state.confirmReviewRevision}>Apply draft to current run</NativeButton></div> : null}
               <div className="mc-pp-merged-evidence">
-                <PromptTab
+                {detailTab === "prompt" ? <PromptTab
                   selectedTest={state.selectedTest}
                   selectedPlaceholders={state.selectedPlaceholders}
                   selectedMissingPlaceholders={state.selectedMissingPlaceholders}
@@ -241,17 +254,17 @@ export function PromptPacksWorkbenchPage({
                     }))
                   }
                   onRunVariableChange={state.setRunVariableBindings}
-                />
+                /> : null}
 
-                <OutputTab
+                {detailTab === "output" ? <OutputTab
                   selectedRun={state.selectedRun}
                   selectedRunModelUsage={state.selectedRunModelUsage}
                   executionStyle={state.executionStyle}
-                />
+                /> : null}
 
-                <AssessmentTab selectedAssessment={state.selectedAssessment} />
+                {detailTab === "assessment" ? <AssessmentTab selectedAssessment={state.selectedAssessment} /> : null}
 
-                <ReviewTab
+                {detailTab === "review" ? <ReviewTab
                   v2UiEnabled={state.v2UiEnabled}
                   scoreDraft={state.scoreDraft}
                   draftWeightedScore={state.draftWeightedScore}
@@ -263,15 +276,10 @@ export function PromptPacksWorkbenchPage({
                   onSetScoreDraft={state.setScoreDraft}
                   onSubmitScore={() => void state.submitScore()}
                   onAutoScoreSelected={() => void state.autoScoreSelected()}
-                />
+                /> : null}
 
-                <details className="mc-pp-panel mc-pp-panel-collapsible mc-pp-merged-insights">
-                  <summary>
-                    <div>
-                      <h4>Insights and regression evidence</h4>
-                      <p>Pack-level trends, benchmark summaries, and replay regression stay secondary.</p>
-                    </div>
-                  </summary>
+                {detailTab === "evidence" ? <div>
+
                   <InsightsTab
                     report={state.report}
                     testOutcomeSummary={state.testOutcomeSummary}
@@ -282,7 +290,7 @@ export function PromptPacksWorkbenchPage({
                     retuneEnabled={state.retuneEnabled}
                     retuneCampaign={state.retuneCampaign}
                   />
-                </details>
+                </div> : null}
               </div>
             </>
           ) : (
@@ -291,8 +299,9 @@ export function PromptPacksWorkbenchPage({
               description="Pick a test from the list to inspect the prompt, output, scoring, and review controls."
             />
           )}
-        </section>
+        </section></FocusedDetail> : null}
       </div>
+      {leave.dialog}
     </section>
   );
 }

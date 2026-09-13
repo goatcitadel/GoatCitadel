@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChangePlanPublicFormField, ChangePlanRecord, ChangePlanRequiredAction } from "@goatcitadel/contracts";
 import { GCModal } from "../ui";
+import { fetchCandidateSkillArtifactReview, fetchCapabilityCandidate } from "../../api/capabilities";
+import type { CandidateSkillArtifactReview } from "@goatcitadel/contracts";
 
 export type ChangePlanPublicValues = Readonly<Record<string, string | number | boolean>>;
 
@@ -48,6 +50,47 @@ export function ChatChangePlanActionDialog({
   const publicFormFields = action?.kind === "public_form" ? action.fields : undefined;
   const [values, setValues] = useState<Record<string, string | number | boolean>>({});
   const [secureValues, setSecureValues] = useState<Record<string, string>>({});
+  const [artifactReview, setArtifactReview] = useState<{
+    key: string;
+    data?: CandidateSkillArtifactReview;
+    error?: string;
+  } | null>(null);
+  const needsCandidatePreview = action?.kind === "artifact_review" && plan?.request.kind === "capability_candidate";
+  useEffect(() => {
+    if (
+      !needsCandidatePreview ||
+      !plan ||
+      action?.kind !== "artifact_review" ||
+      plan.request.kind !== "capability_candidate"
+    )
+      return;
+    let cancelled = false;
+    const request = plan.request;
+    void (async () => {
+      const candidate = await fetchCapabilityCandidate(plan.target.resourceId);
+      const versionId = request.versionId ?? candidate.latestVersion?.versionId;
+      if (!versionId) throw new Error("The candidate version is unavailable.");
+      const data = await fetchCandidateSkillArtifactReview(candidate.candidateId, versionId, plan.origin.workspaceId);
+      const refs = data.artifacts.map((item) => item.artifactRef).sort();
+      if (
+        data.revision !== plan.target.expectedRevision ||
+        JSON.stringify(refs) !== JSON.stringify([...action.artifactRefs].sort())
+      ) {
+        throw new Error("The reviewed artifacts changed. Reopen a current activation plan.");
+      }
+      if (!cancelled) setArtifactReview({ key: actionKey, data });
+    })().catch((failure) => {
+      if (!cancelled)
+        setArtifactReview({
+          key: actionKey,
+          error: failure instanceof Error ? failure.message : "Artifact preview failed.",
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [actionKey, needsCandidatePreview, plan, action]);
+  const previewReady = !needsCandidatePreview || (artifactReview?.key === actionKey && Boolean(artifactReview.data));
 
   useEffect(() => {
     setValues(
@@ -70,6 +113,7 @@ export function ChatChangePlanActionDialog({
   if (!plan || !action) return null;
 
   const submit = async () => {
+    if (!previewReady) return;
     switch (action.kind) {
       case "confirmation":
         await onConfirm(plan);
@@ -100,6 +144,7 @@ export function ChatChangePlanActionDialog({
 
   return (
     <GCModal
+      className="chat-change-plan-modal"
       open
       onOpenChange={(open) => {
         if (!open && !pending) onClose();
@@ -112,6 +157,7 @@ export function ChatChangePlanActionDialog({
       danger={plan.risk === "danger" || linkedPlan?.risk === "danger"}
       confirmPending={pending}
       confirmDisabled={
+        !previewReady ||
         missingRequired ||
         (action.kind === "secure_input" &&
           secureFields(action).some((field) => field.required !== false && !secureValues[field.fieldId]?.trim())) ||
@@ -196,6 +242,33 @@ export function ChatChangePlanActionDialog({
         {action.kind === "artifact_review" ? (
           <div className="chat-change-plan-artifact-review">
             <p>Review these immutable evidence references before continuing:</p>
+            {needsCandidatePreview ? (
+              artifactReview?.key === actionKey && artifactReview.data ? (
+                <div aria-label="Verified candidate artifacts">
+                  {artifactReview.data.artifacts.map((artifact) => (
+                    <details key={artifact.artifactRef} open={artifact.label === "Instructions"}>
+                      <summary>{artifact.label}</summary>
+                      <pre
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                          maxHeight: "24rem",
+                          overflow: "auto",
+                        }}
+                      >
+                        {artifact.content}
+                      </pre>
+                    </details>
+                  ))}
+                </div>
+              ) : (
+                <p role="status">
+                  {artifactReview?.key === actionKey && artifactReview.error
+                    ? artifactReview.error
+                    : "Loading verified artifacts…"}
+                </p>
+              )
+            ) : null}
             <ul>
               {action.artifactRefs.map((reference) => (
                 <li key={reference}>{reference}</li>
@@ -313,7 +386,9 @@ function confirmLabel(action: ChangePlanRequiredAction): string {
 }
 
 function dialogDescription(plan: ChangePlanRecord, action: ChangePlanRequiredAction): string {
-  if (action.kind === "confirmation") return `${action.confirmationText}\n\n${plan.impact}`;
+  if (action.kind === "confirmation") {
+    return action.purpose === "rollback" ? action.confirmationText : `${action.confirmationText}\n\n${plan.impact}`;
+  }
   return `${plan.summary} ${plan.impact}`;
 }
 

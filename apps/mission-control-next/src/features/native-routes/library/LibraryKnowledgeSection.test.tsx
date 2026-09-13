@@ -86,6 +86,8 @@ function journeyPage(items: unknown[]) {
 }
 
 const baseProps = {
+  route: { area: "library", section: "knowledge", theme: "dark" },
+  navigate: vi.fn(),
   activeWorkspaceId: "workspace-1",
   activeWorkspaceName: "Workspace One",
 } as unknown as NativeRoutePagesProps;

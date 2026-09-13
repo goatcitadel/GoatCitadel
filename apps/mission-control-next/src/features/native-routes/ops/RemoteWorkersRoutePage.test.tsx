@@ -19,6 +19,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/remote-workers", () => ({
   fetchRemoteWorkerAssignments: vi.fn(),
   fetchRemoteWorkerReconciliation: vi.fn(),
   fetchRemoteWorkerAssignmentEvents: vi.fn(),
+  fetchRemoteWorkerAssignmentRuntime: vi.fn(async () => {
+    throw new Error("fixture unavailable");
+  }),
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/remote-worker-budgets", () => ({
+  fetchRemoteWorkerBudgets: vi.fn(async () => []),
+  authorizeRemoteWorkerBudget: vi.fn(),
+  revokeRemoteWorkerBudget: vi.fn(),
 }));
 vi.mock("../../../app/remote-worker-realtime", () => ({
   REMOTE_WORKER_REALTIME_COALESCE_MS: 0,
@@ -176,6 +184,9 @@ describe("RemoteWorkersRoutePage", () => {
     mockedRegistry.mockReturnValue({
       page: { items: [item()] } as never,
       loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
       error: null,
       reload: vi.fn(),
     });
@@ -186,7 +197,7 @@ describe("RemoteWorkersRoutePage", () => {
     const text = textOf(renderer!.toJSON());
     expect(text).toContain("Registry");
     expect(text).toContain("Office worker");
-    expect(text).toContain("Select a worker");
+    expect(text).not.toContain("Worker details");
     expect(mockedDetail).not.toHaveBeenCalled();
   });
 
@@ -194,6 +205,9 @@ describe("RemoteWorkersRoutePage", () => {
     mockedRegistry.mockReturnValue({
       page: { items: [item()] } as never,
       loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
       error: null,
       reload: vi.fn(),
     });
@@ -213,6 +227,12 @@ describe("RemoteWorkersRoutePage", () => {
     expect(mockedAssignments).toHaveBeenCalledWith("workspace-a", { workerId: "worker-a", limit: 50 });
     expect(mockedReconciliation).toHaveBeenCalledWith("workspace-a", "worker-a");
 
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((node) => textOf(node) === "Worker details")!
+        .props.onClick();
+    });
     const text = textOf(renderer!.toJSON());
     expect(text).toContain("Identity");
     expect(text).toContain("node-a");
@@ -229,6 +249,9 @@ describe("RemoteWorkersRoutePage", () => {
     mockedRegistry.mockReturnValue({
       page: null,
       loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
       error: "The remote-worker registry is unavailable.",
       reload: vi.fn(),
     });
@@ -247,6 +270,9 @@ describe("RemoteWorkersRoutePage", () => {
     mockedRegistry.mockReturnValue({
       page: { items: [item(), workerB] } as never,
       loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
       error: null,
       reload: vi.fn(),
     });
@@ -272,7 +298,20 @@ describe("RemoteWorkersRoutePage", () => {
     });
     await flush();
     expect(textOf(renderer!.toJSON())).toContain("assign-a");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((node) => textOf(node) === "Worker details")!
+        .props.onClick();
+    });
     expect(textOf(renderer!.toJSON())).toContain("node-a");
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Close details" }).props.onClick();
+      renderer!.root
+        .findAllByType("button")
+        .find((node) => textOf(node).includes("Back to list"))!
+        .props.onClick();
+    });
 
     const travelWorker = renderer!.root.findAllByType("button").find((node) => textOf(node).includes("Travel worker"));
     await act(async () => {
@@ -293,6 +332,12 @@ describe("RemoteWorkersRoutePage", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((node) => textOf(node) === "Worker details")!
+        .props.onClick();
+    });
     const resolvedText = textOf(renderer!.toJSON());
     expect(resolvedText).toContain("node-b");
     expect(resolvedText).toContain("assign-b");
@@ -309,6 +354,9 @@ describe("RemoteWorkersRoutePage", () => {
     mockedRegistry.mockImplementation((workspaceId) => ({
       page: { items: workspaceId === "workspace-a" ? [item()] : [workspaceBWorker] } as never,
       loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
       error: null,
       reload: vi.fn(),
     }));
@@ -337,7 +385,7 @@ describe("RemoteWorkersRoutePage", () => {
 
     const text = textOf(renderer!.toJSON());
     expect(text).toContain("Workspace B worker");
-    expect(text).toContain("Select a worker");
+    expect(text).not.toContain("Worker details");
     expect(text).not.toContain("node-a");
   });
 });

@@ -137,6 +137,43 @@ describe("RemoteWorkerArtifactRepository live PostgreSQL (skips without GOATCITA
           }),
         );
 
+        for (const changed of [
+          { expiresAt: "2098-01-01T00:00:00.000Z" },
+          { declaredFileCount: 2 },
+          { declaredTotalBytes: 11 },
+        ]) {
+          assert.throws(() =>
+            artifacts.openUpload({
+              ...key,
+              uploadAttempt: 1,
+              declaredFileCount: 1,
+              declaredTotalBytes: 10,
+              stagingRootSha256: D("staging"),
+              expiresAt: FUTURE,
+              idempotencyKey: "open-1",
+              ...changed,
+            }),
+          );
+        }
+        for (const changed of [{ globalSequence: 2 }, { logicalPathSha256: D("changed-path") }]) {
+          assert.throws(() =>
+            artifacts.appendPart({
+              ...key,
+              uploadId: opened.uploadId,
+              part: {
+                globalSequence: 1,
+                logicalPathSha256: D(canonicalJsonString({ logicalPath: "dir/file.bin" })),
+                filePartIndex: 0,
+                isFinalPart: true,
+                partBytes: 10,
+                partSha256: D("blob-content"),
+                ...changed,
+              },
+              idempotencyKey: "part-1",
+            }),
+          );
+        }
+
         // Composite-FK isolation on the live cluster: a forged worker row is rejected.
         assert.throws(() =>
           scope.db
@@ -195,29 +232,37 @@ describe("RemoteWorkerArtifactRepository live PostgreSQL (skips without GOATCITA
             .verificationGateState,
           "pending",
         );
+        const manifestSha256 = artifacts.getManifestSha256(
+          key.registryWorkspaceId,
+          key.assignmentId,
+          key.assignmentGeneration,
+        )!;
         const attempt = artifacts.openGatewayVerification({
           ...key,
           attemptIndex: 1,
           verifierProfileSha256: D("verifier-profile"),
           wallDeadlineAt: FUTURE,
-          evidence: gatewayEvidence("queued", 0),
+          evidence: gatewayEvidence("queued", 0, manifestSha256),
           idempotencyKey: "attempt-1",
         });
+        assert.equal(artifacts.getVerifiedManifest(key.registryWorkspaceId, key.assignmentId, key.assignmentGeneration), undefined);
         artifacts.advanceGatewayVerification({
           ...key,
           verificationId: attempt.verificationId,
           expectedAttemptRevision: 1,
           nextState: "running",
-          evidence: gatewayEvidence("running", 5),
+          evidence: gatewayEvidence("running", 5, manifestSha256),
         });
         const passed = artifacts.advanceGatewayVerification({
           ...key,
           verificationId: attempt.verificationId,
           expectedAttemptRevision: 2,
           nextState: "passed",
-          evidence: gatewayEvidence("passed", 10),
+          evidence: gatewayEvidence("passed", 10, manifestSha256),
         });
         assert.equal(passed.gateState, "satisfied");
+        assert.deepEqual(artifacts.getVerifiedManifest(key.registryWorkspaceId, key.assignmentId, key.assignmentGeneration),
+          buildManifest(opened.identity, D("verifier-profile")));
 
         // Cleanup claim uses the live database clock.
         const claimed = artifacts.claimCleanup({
@@ -279,14 +324,18 @@ describe("RemoteWorkerArtifactRepository live PostgreSQL (skips without GOATCITA
   );
 });
 
-function gatewayEvidence(attemptState: "queued" | "running" | "passed", capturedOutputBytes: number) {
+function gatewayEvidence(
+  attemptState: "queued" | "running" | "passed",
+  capturedOutputBytes: number,
+  manifestSha256: string,
+) {
   return {
     schemaVersion: REMOTE_WORKER_VERIFICATION_EVIDENCE_SCHEMA_VERSION,
     kind: "gateway_attempt" as const,
     attemptState,
     verifierProfileSha256: D("verifier-profile"),
-    preExecutionManifestSha256: D("pre"),
-    postExecutionManifestSha256: D("post"),
+    preExecutionManifestSha256: manifestSha256,
+    postExecutionManifestSha256: manifestSha256,
     summary: attemptState,
     capturedOutputBytes,
   };

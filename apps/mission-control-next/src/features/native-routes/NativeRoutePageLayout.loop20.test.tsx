@@ -143,6 +143,6 @@ describe("NativeRoutePageLayout loop 20 branch tails", () => {
           actions={[{ label: "Runtime", route: { area: "ops", section: "runtime" } as any }]}
         />,
       ),
-    ).not.toContain("mc-next-directory-quickjump-inline");
+    ).toContain("mc-next-directory-quickjump-inline");
   });
 });

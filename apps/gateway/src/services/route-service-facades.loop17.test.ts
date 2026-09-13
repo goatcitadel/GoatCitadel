@@ -37,7 +37,7 @@ describe("route service facades", () => {
       "listMaintenanceRecommendations",
       "listMaintenanceRuns",
       "listMemoryItemHistory",
-      "listMemoryItems",
+      "listMemoryItemsPage",
       "listRecentContexts",
       "patchMaintenancePolicy",
       "rejectMaintenanceRecommendation",
@@ -78,13 +78,13 @@ describe("route service facades", () => {
       method: "listMaintenanceRecommendations",
       args: ["workspace-1", 10],
     });
-    expect(service.acceptMaintenanceRecommendation("rec-1")).toEqual({
+    expect(service.acceptMaintenanceRecommendation("rec-1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) })).toEqual({
       method: "acceptMaintenanceRecommendation",
-      args: ["rec-1"],
+      args: ["rec-1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }],
     });
-    expect(service.rejectMaintenanceRecommendation("rec-2")).toEqual({
+    expect(service.rejectMaintenanceRecommendation("rec-2", { expectedRevision: "a".repeat(64) })).toEqual({
       method: "rejectMaintenanceRecommendation",
-      args: ["rec-2"],
+      args: ["rec-2", { expectedRevision: "a".repeat(64) }],
     });
     expect(service.getQmdStats("2026-05-01", "2026-05-14")).toEqual({
       method: "getContextStats",
@@ -117,7 +117,7 @@ describe("route service facades", () => {
       args: ["trace-1", "operator"],
     });
     expect(service.listItems({ workspaceId: "workspace-1" } as never)).toEqual({
-      method: "listMemoryItems",
+      method: "listMemoryItemsPage",
       args: [{ workspaceId: "workspace-1" }],
     });
     // HX-402 P1: mutation verbs delegate to the approval-request surface.

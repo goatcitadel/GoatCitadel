@@ -51,7 +51,8 @@ describe("memory routes", () => {
   });
 
   it("defaults the item-list status to active so forgotten content is not returned by default", async () => {
-    const listItems = vi.fn(async () => []);
+    const page = { items: [], total: 0, snapshotAt: "2026-09-13T00:00:00.000Z" };
+    const listItems = vi.fn(async () => page);
     const built = buildApp({ listItems });
     app = built.app;
     await app.register(memoryRoutes);
@@ -59,6 +60,7 @@ describe("memory routes", () => {
     const response = await app.inject({ method: "GET", url: "/api/v1/memory/items?workspaceId=workspace-a" });
 
     expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(page);
     expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", status: "active" }));
   });
 

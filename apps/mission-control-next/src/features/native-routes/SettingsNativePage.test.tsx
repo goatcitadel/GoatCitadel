@@ -1,10 +1,30 @@
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord } from "@goatcitadel/contracts";
+import { __resetSettingsChangesForTests } from "./settings/use-settings-change";
+import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
+import { __resetSessionDraftsForTests } from "./library/session-drafts";
+import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord, PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
+
+const mountedSettingsRenderers: ReactTestRenderer[] = [];
+function create(...args: Parameters<typeof createRenderer>): ReactTestRenderer {
+  const renderer = createRenderer(...args);
+  mountedSettingsRenderers.push(renderer);
+  return renderer;
+}
+beforeAll(async () => {
+  // These suites exercise loaded editors; browser/bundle lanes cover lazy loading.
+  await Promise.all(Object.values(import.meta.glob("./settings/sections/*Section.tsx")).map((load) => load()));
+});
+afterEach(async () => {
+  await act(async () => {
+    for (const renderer of mountedSettingsRenderers.splice(0)) renderer.unmount();
+  });
+});
 
 const mocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(async () => ({
@@ -25,6 +45,7 @@ const mocks = vi.hoisted(() => ({
       providerConfigs: [],
     },
   })),
+  fetchLlmConfig: vi.fn(),
   fetchLlmProviderAdvice: vi.fn(async () => ({
     generatedAt: "2026-05-22T00:00:00.000Z",
     preference: "low_cost",
@@ -190,6 +211,7 @@ const mocks = vi.hoisted(() => ({
   fetchPermissionProfiles: vi.fn(async () => ({
     items: [
       {
+        revision: "a".repeat(64),
         profileId: "safe",
         label: "Safe",
         scope: "global",
@@ -200,6 +222,7 @@ const mocks = vi.hoisted(() => ({
         updatedAt: "2026-05-02T18:00:00.000Z",
       },
       {
+        revision: "a".repeat(64),
         profileId: "trusted_local_power",
         label: "Trusted Local Power",
         description: "Run allowed local tools without normal prompts.",
@@ -235,6 +258,7 @@ const mocks = vi.hoisted(() => ({
     expiresAt: "2099-05-02T18:10:00.000Z",
   })),
   createPermissionProfile: vi.fn(async (input) => ({
+    revision: "a".repeat(64),
     profileId: "profile-created",
     scope: "workspace",
     scopeRef: "default",
@@ -245,6 +269,7 @@ const mocks = vi.hoisted(() => ({
     ...input,
   })),
   updatePermissionProfile: vi.fn(async (profileId: string, input) => ({
+    revision: "a".repeat(64),
     profileId,
     label: input.label ?? "Updated profile",
     scope: "workspace",
@@ -254,6 +279,12 @@ const mocks = vi.hoisted(() => ({
     toolPatterns: input.toolPatterns ?? ["session.status"],
     createdAt: "2026-05-02T18:00:00.000Z",
     updatedAt: "2026-05-02T18:10:00.000Z",
+  })),
+  reviewPermissionProfileSelection: vi.fn(async (input) => ({
+    revision: "d".repeat(64), input, target: { workspaceId: input.workspaceId ?? input.scopeRef }, activeProfiles: [],
+    profile: input.operation === "activate" ? { profileId: input.profileId, label: "Safe", revision: "a".repeat(64),
+      builtin: true, status: "active", scope: "global", approvalMode: "approve_all", toolPatterns: ["*"], allow: [], deny: [],
+      createdBy: "system", createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.000Z" } : undefined,
   })),
   activatePermissionProfile: vi.fn(async (input) => ({
     activationId: "activation-1",
@@ -295,14 +326,13 @@ const mocks = vi.hoisted(() => ({
   patchSettings: vi.fn(async () => ({})),
   patchGatewayAuthSettings: vi.fn(async (input: any) => ({
     revision: 42,
-    auth: {
-      mode: input.mode,
-      allowLoopbackBypass: input.allowLoopbackBypass,
-      tokenConfigured: Boolean(input.token),
-      basicConfigured: Boolean(input.basicUsername && input.basicPassword),
-    },
+    mode: input.mode,
+    allowLoopbackBypass: input.allowLoopbackBypass,
+    tokenConfigured: Boolean(input.token),
+    basicConfigured: Boolean(input.basicUsername && input.basicPassword),
   })),
-  fetchPersonalities: vi.fn(async () => ({
+  fetchPersonalities: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({
+    revision: "e".repeat(64),
     defaultPersonalityId: "operator",
     items: [
       {
@@ -337,10 +367,10 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
-  createPersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
-  updatePersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
-  deletePersonality: vi.fn(async () => ({ defaultPersonalityId: "default", items: [] })),
-  setDefaultPersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
+  createPersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] })),
+  updatePersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] })),
+  deletePersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "default", items: [] })),
+  setDefaultPersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] })),
   saveProviderSecret: vi.fn(async () => ({
     revision: 44,
     providerId: "openai",
@@ -1139,6 +1169,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     deleteProviderSecret: mocks.deleteProviderSecret,
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
     fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
+    fetchLlmConfig: mocks.fetchLlmConfig,
     fetchLlmProviderAdvice: mocks.fetchLlmProviderAdvice,
     fetchSettings: mocks.fetchSettings,
     fetchToolCatalog: mocks.fetchToolCatalog,
@@ -1156,6 +1187,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     createPermissionProfile: mocks.createPermissionProfile,
     updatePermissionProfile: mocks.updatePermissionProfile,
     activatePermissionProfile: mocks.activatePermissionProfile,
+    reviewPermissionProfileSelection: mocks.reviewPermissionProfileSelection,
     archivePermissionProfile: mocks.archivePermissionProfile,
     revokeLocalOperatorOverride: mocks.revokeLocalOperatorOverride,
     revokeAutonomousActivationGrant: mocks.revokeAutonomousActivationGrant,
@@ -1401,6 +1433,7 @@ function collectText(node: ReactTestInstance): string {
 
 async function flushAsyncUpdates() {
   await act(async () => {
+    await vi.dynamicImportSettled();
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -1448,8 +1481,22 @@ function installBrowserStorageMock(
   };
 }
 
+const resetSettingsUnitMocks = Object.values(mocks).flatMap((mock) => {
+  if (!vi.isMockFunction(mock)) return [];
+  const implementation = mock.getMockImplementation();
+  return [
+    () => {
+      mock.mockReset();
+      if (implementation) mock.mockImplementation(implementation);
+    },
+  ];
+});
 beforeEach(async () => {
+  __resetSettingsChangesForTests();
   vi.clearAllMocks();
+  for (const reset of resetSettingsUnitMocks) reset();
+  __resetSessionDraftsForTests();
+  __resetSessionViewStateForTests();
   mocks.fetchSettings.mockResolvedValue({
     revision: 41,
     features: {
@@ -1469,6 +1516,7 @@ beforeEach(async () => {
     },
   });
   mocks.fetchPersonalities.mockResolvedValue({
+    revision: "e".repeat(64),
     defaultPersonalityId: "operator",
     items: [
       {
@@ -1518,14 +1566,15 @@ beforeEach(async () => {
       },
     ],
   });
-  mocks.createPersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
-  mocks.updatePersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
-  mocks.deletePersonality.mockResolvedValue({ defaultPersonalityId: "default", items: [] });
-  mocks.setDefaultPersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
+  mocks.createPersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
+  mocks.updatePersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
+  mocks.deletePersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "default", items: [] });
+  mocks.setDefaultPersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
   mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
   mocks.fetchPermissionProfiles.mockResolvedValue({
     items: [
       {
+        revision: "a".repeat(64),
         profileId: "safe",
         label: "Safe",
         scope: "global",
@@ -1536,6 +1585,7 @@ beforeEach(async () => {
         updatedAt: "2026-05-02T18:00:00.000Z",
       },
       {
+        revision: "a".repeat(64),
         profileId: "trusted_local_power",
         label: "Trusted Local Power",
         description: "Run allowed local tools without normal prompts.",
@@ -1772,6 +1822,112 @@ afterEach(() => {
 });
 
 describe("SettingsNativePage personalities", () => {
+  it.each(["creation", "rename"])("keeps newer typing under the committed personality ID after %s", async (operation) => {
+    const catalog = await mocks.fetchPersonalities();
+    const custom = { ...catalog.items.find((item) => item.id === "operator")!, id: "draft-source", label: "Draft source",
+      builtin: false, visibility: "custom" as const, soulFile: "" };
+    const before = { ...catalog, items: [...catalog.items, custom] };
+    mocks.fetchPersonalities.mockResolvedValue(before);
+    let finish!: (value: PersonalityCatalogResponse) => void;
+    const pending = new Promise<PersonalityCatalogResponse>((resolve) => { finish = resolve; });
+    const owner = operation === "creation" ? mocks.createPersonality : mocks.updatePersonality;
+    owner.mockImplementationOnce(() => pending);
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => { renderer = renderPage("personalities"); });
+    await flushAsyncUpdates();
+    await act(async () => { findButton(renderer!.root, operation === "creation" ? "Add custom personality" : "Draft source").props.onClick(); });
+    const name = () => findInputByPlaceholder(renderer!.root, "Direct Operator");
+    const id = () => findInputByPlaceholder(renderer!.root, "direct-operator");
+    await act(async () => {
+      name().props.onChange({ target: { value: "Submitted name" } });
+      id().props.onChange({ target: { value: "retained-key" } });
+    });
+    await act(async () => { findButton(renderer!.root, operation === "creation" ? "Create personality" : "Save edits").props.onClick(); });
+    await act(async () => { name().props.onChange({ target: { value: "Newer typing" } }); });
+    const savedPreset = { ...custom, id: "retained-key", label: "Submitted name" };
+    const saved = { ...before, revision: "f".repeat(64), items: [...catalog.items, savedPreset] };
+    mocks.fetchPersonalities.mockResolvedValue(saved);
+    await act(async () => { finish(saved); });
+    await flushAsyncUpdates();
+    expect(name().props.value).toBe("Newer typing");
+    expect(id().props.value).toBe("retained-key");
+    expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(false);
+    const final = { ...saved, revision: "a".repeat(64), items: [...catalog.items, { ...savedPreset, label: "Newer typing" }] };
+    mocks.fetchPersonalities.mockResolvedValue(final);
+    mocks.updatePersonality.mockResolvedValueOnce(final);
+    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(mocks.updatePersonality).toHaveBeenLastCalledWith("retained-key", expect.objectContaining({
+      label: "Newer typing", expectedRevision: saved.revision,
+    }));
+    expect(mocks.createPersonality).toHaveBeenCalledTimes(operation === "creation" ? 1 : 0);
+  });
+
+  it("shows the retained draft when another writer removes its personality", async () => {
+    const catalog = await mocks.fetchPersonalities();
+    const custom = { ...catalog.items.find((item) => item.id === "operator")!, id: "removed-draft", label: "Removed draft",
+      builtin: false, visibility: "custom" as const, soulFile: "" };
+    mocks.fetchPersonalities.mockResolvedValue({ ...catalog, items: [...catalog.items, custom] });
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => { renderer = renderPage("personalities"); });
+    await flushAsyncUpdates();
+    await act(async () => { findButton(renderer!.root, "Removed draft").props.onClick(); });
+    await act(async () => { findInputByPlaceholder(renderer!.root, "Direct Operator").props.onChange({ target: { value: "Retained removed text" } }); });
+    mocks.updatePersonality.mockRejectedValueOnce(new ApiRequestError("Catalog changed", {
+      kind: "http", method: "PATCH", path: "/api/v1/personalities/removed-draft", status: 409,
+    }));
+    mocks.fetchPersonalities.mockResolvedValue({ ...catalog, revision: "f".repeat(64) });
+    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await flushAsyncUpdates();
+    const text = collectText(renderer!.root);
+    expect(text).toContain("The selected personality was removed. Your unsaved draft is retained for review.");
+    expect(text).toContain("Retained removed text");
+    expect(text).toContain("removed-draft");
+    expect(mocks.updatePersonality).toHaveBeenCalledTimes(1);
+    expect(mocks.createPersonality).not.toHaveBeenCalled();
+  });
+
+  it("preserves a rejected personality draft until a different catalog revision is explicitly reviewed", async () => {
+    const before = await mocks.fetchPersonalities();
+    mocks.updatePersonality.mockRejectedValueOnce(new ApiRequestError("Catalog changed", {
+      kind: "http", method: "PATCH", path: "/api/v1/personalities/operator", status: 409,
+    }));
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => { renderer = renderPage("personalities"); });
+    await flushAsyncUpdates();
+    await act(async () => { findButton(renderer!.root, "Operator").props.onClick(); });
+    const label = () => findInputByPlaceholder(renderer!.root, "Direct Operator");
+    await act(async () => { label().props.onChange({ target: { value: "Retained personality draft" } }); });
+    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(mocks.updatePersonality).toHaveBeenCalledWith("operator", expect.objectContaining({
+      label: "Retained personality draft", expectedRevision: before.revision,
+    }));
+    expect(label().props.value).toBe("Retained personality draft");
+    expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Apply draft to current personality").props.disabled).toBe(true);
+    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    expect(mocks.updatePersonality).toHaveBeenCalledTimes(1);
+    const current = { ...before, revision: "f".repeat(64), items: before.items.map((item) => item.id === "operator"
+      ? { ...item, label: "Competing writer", systemOverlay: "Keep these newly saved instructions." } : item) };
+    mocks.fetchPersonalities.mockResolvedValue(current);
+    await act(async () => { findButton(renderer!.root, "Reload latest catalog").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(label().props.value).toBe("Retained personality draft");
+    expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Apply draft to current personality").props.disabled).toBe(false);
+    await act(async () => { findButton(renderer!.root, "Apply draft to current personality").props.onClick(); });
+    const saved = { ...current, revision: "a".repeat(64), items: current.items.map((item) => item.id === "operator"
+      ? { ...item, label: "Retained personality draft" } : item) };
+    mocks.updatePersonality.mockResolvedValueOnce(saved);
+    mocks.fetchPersonalities.mockResolvedValue(saved);
+    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(mocks.updatePersonality).toHaveBeenLastCalledWith("operator", expect.objectContaining({
+      label: "Retained personality draft", expectedRevision: current.revision,
+    }));
+  });
+
   it("renders the catalog and calls create, save, reset, remove, and default APIs", async () => {
     const previousWindow = globalThis.window;
     const confirmSpy = vi.fn(() => true);
@@ -1797,6 +1953,9 @@ describe("SettingsNativePage personalities", () => {
         findButton(renderer!.root, "Refresh").props.onClick();
       });
       expect(mocks.fetchPersonalities).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        findButton(renderer!.root, "Operator").props.onClick();
+      });
 
       await act(async () => {
         findInputByPlaceholder(renderer!.root, "Direct Operator").props.onChange({
@@ -1848,7 +2007,11 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         findButton(renderer!.root, "Set as Work default").props.onClick();
       });
-      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator");
+      expect(mocks.setDefaultPersonality).not.toHaveBeenCalled();
+      await act(async () => {
+        renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Change Work default?")!.props.onConfirm();
+      });
+      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator", "e".repeat(64));
 
       await act(async () => {
         findButton(renderer!.root, "Reset built-in").props.onClick();
@@ -1859,7 +2022,7 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         await personalityRemoveModal?.props.onConfirm();
       });
-      expect(mocks.deletePersonality).toHaveBeenCalledWith("operator");
+      expect(mocks.deletePersonality).toHaveBeenCalledWith("operator", "e".repeat(64));
 
       await act(async () => {
         findButton(renderer!.root, "Direct Custom").props.onClick();
@@ -1873,7 +2036,7 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         await personalityRemoveModal?.props.onConfirm();
       });
-      expect(mocks.deletePersonality).toHaveBeenCalledWith("direct-custom");
+      expect(mocks.deletePersonality).toHaveBeenCalledWith("direct-custom", "e".repeat(64));
 
       await act(async () => {
         findButton(renderer!.root, "Add custom personality").props.onClick();
@@ -1936,7 +2099,7 @@ describe("SettingsNativePage personalities", () => {
       );
 
       text = collectText(renderer!.root);
-      expect(text).toContain("Personality overlays affect Work tone and framing only");
+      expect(text).toContain("Custom personality created.");
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }
@@ -1971,6 +2134,9 @@ describe("SettingsNativePage personalities", () => {
       });
       expect(collectText(renderer!.root)).toContain("Operator");
 
+      await act(async () => {
+        findButton(renderer!.root, "Operator").props.onClick();
+      });
       mocks.updatePersonality.mockRejectedValueOnce(new Error("save failed"));
       await act(async () => {
         findButton(renderer!.root, "Save edits").props.onClick();
@@ -1990,7 +2156,11 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         findButton(renderer!.root, "Clear Work default").props.onClick();
       });
-      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("default");
+      expect(mocks.setDefaultPersonality).not.toHaveBeenCalled();
+      await act(async () => {
+        renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Change Work default?")!.props.onConfirm();
+      });
+      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("default", "e".repeat(64));
       expect(collectText(renderer!.root)).toContain("Work personality cleared.");
 
       await act(async () => {
@@ -2032,17 +2202,25 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => {
+      findButton(renderer!.root, "Effective policy contexts").props.onClick();
+    });
+    const effectiveText = collectText(renderer!.root);
+    const effectiveRegions = collectRegionLandmarkNames(renderer!.root);
+    await act(async () => {
+      findButton(renderer!.root, "Safe").props.onClick();
+    });
     const activationLabels = renderer!.root
       .findAll((node) => node.type === "button" && collectText(node).includes("Use for"))
       .map((node) => collectText(node).trim().toLowerCase());
-    const text = collectText(renderer!.root);
+    const text = effectiveText + collectText(renderer!.root);
     expect(text).toContain("Effective policy contexts");
     expect(text).toContain("Chat includes conversation, agentic work, and Chat-launched Code Mode");
     expect(text).toContain("Direct tools");
     expect(text).toContain("MCP");
     expect(text).toContain("Legacy compatibility contexts");
     expect(text).toContain("not separate Mission Control surfaces");
-    const regionNames = collectRegionLandmarkNames(renderer!.root);
+    const regionNames = [...effectiveRegions, ...collectRegionLandmarkNames(renderer!.root)];
     expect(regionNames).toEqual(
       expect.arrayContaining(["Safe tool patterns", "Safe policy details", "Effective primary policy contexts"]),
     );
@@ -2061,6 +2239,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Use for Chat").props.onClick();
     });
     await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(0);
+    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "chat" }),
     );
@@ -2068,6 +2249,9 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findButton(renderer!.root, "Direct tools").props.onClick();
     });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(1);
+    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "tools" }),
@@ -2077,6 +2261,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "MCP").props.onClick();
     });
     await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(2);
+    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "mcp" }),
     );
@@ -2085,6 +2272,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Legacy Code compatibility").props.onClick();
     });
     await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(3);
+    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "code" }),
     );
@@ -2092,6 +2282,9 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findButton(renderer!.root, "Use across all policy contexts").props.onClick();
     });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(4);
+    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "all" }),
@@ -2102,6 +2295,7 @@ describe("SettingsNativePage permissions", () => {
     mocks.fetchPermissionProfiles.mockResolvedValueOnce({
       items: [
         {
+          revision: "a".repeat(64),
           profileId: "profile-legacy",
           label: "Legacy-only profile",
           description: "Imported policy profile",
@@ -2144,6 +2338,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => {
+      findButton(renderer!.root, "Legacy-only profile").props.onClick();
+    });
     const text = collectText(renderer!.root);
     expect(text).toContain("Legacy Code compatibility");
     expect(text).toContain("Legacy Cowork compatibility");
@@ -2153,10 +2350,60 @@ describe("SettingsNativePage permissions", () => {
     expect(mocks.activatePermissionProfile).not.toHaveBeenCalled();
   });
 
+  it("retains a rejected profile draft until a different server revision is explicitly reviewed", async () => {
+    const before = {
+      profileId: "revision-profile", label: "Revision profile", description: "Initial profile",
+      scope: "workspace", scopeRef: "default", builtin: false, status: "active",
+      approvalMode: "approve_all", toolPatterns: ["session.status"], deny: ["shell.exec"],
+      defaultForSurfaces: [], createdBy: "operator", createdAt: "2026-09-13T00:00:00.000Z",
+      updatedAt: "2026-09-13T00:00:00.000Z", revision: "a".repeat(64),
+    };
+    mocks.fetchPermissionProfiles.mockResolvedValue({ items: [before] } as any);
+    mocks.updatePermissionProfile.mockRejectedValueOnce(Object.assign(new Error("Profile changed"), { status: 409 }));
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => { renderer = renderPage("permissions"); });
+    await flushAsyncUpdates();
+    await act(async () => { findButton(renderer!.root, "Revision profile").props.onClick(); });
+    await act(async () => { findButton(renderer!.root, "Edit profile").props.onClick(); });
+    const name = () => renderer!.root.findAll((node) => node.type === "input" && node.props["aria-label"] === "Edit profile name")[0]!;
+    await act(async () => { name().props.onChange({ target: { value: "Retained draft" } }); });
+    await act(async () => { findButton(renderer!.root, "Save profile").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(mocks.updatePermissionProfile).toHaveBeenCalledWith("revision-profile", expect.objectContaining({
+      label: "Retained draft", expectedRevision: before.revision,
+    }));
+    expect(name().props.value).toBe("Retained draft");
+    expect(collectText(renderer!.root)).toContain("The saved profile changed. Your draft is preserved.");
+    expect(findButton(renderer!.root, "Save profile").props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Apply draft to current profile").props.disabled).toBe(true);
+    await act(async () => { findButton(renderer!.root, "Save profile").props.onClick(); });
+    expect(mocks.updatePermissionProfile).toHaveBeenCalledTimes(1);
+
+    const current = { ...before, label: "Another writer", revision: "b".repeat(64) };
+    mocks.fetchPermissionProfiles.mockResolvedValue({ items: [current] } as any);
+    await act(async () => { findButton(renderer!.root, "Reload latest profile").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(name().props.value).toBe("Retained draft");
+    expect(findButton(renderer!.root, "Save profile").props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Apply draft to current profile").props.disabled).toBe(false);
+    await act(async () => { findButton(renderer!.root, "Apply draft to current profile").props.onClick(); });
+    const accepted = { ...current, label: "Retained draft", revision: "c".repeat(64) };
+    mocks.updatePermissionProfile.mockResolvedValueOnce(accepted as any);
+    mocks.fetchPermissionProfiles.mockResolvedValue({ items: [accepted] } as any);
+    await act(async () => { findButton(renderer!.root, "Save profile").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(mocks.updatePermissionProfile).toHaveBeenLastCalledWith("revision-profile", expect.objectContaining({
+      label: "Retained draft", expectedRevision: current.revision,
+    }));
+    expect(mocks.updatePermissionProfile).toHaveBeenCalledTimes(2);
+    expect(collectText(renderer!.root)).toContain("Permission profile updated.");
+  });
+
   it("edits and archives custom permission profiles", async () => {
     mocks.fetchPermissionProfiles.mockResolvedValue({
       items: [
         {
+          revision: "a".repeat(64),
           profileId: "safe",
           label: "Safe",
           scope: "global",
@@ -2167,6 +2414,7 @@ describe("SettingsNativePage permissions", () => {
           updatedAt: "2026-05-02T18:00:00.000Z",
         },
         {
+          revision: "a".repeat(64),
           profileId: "profile-review",
           label: "Review profile",
           description: "Initial profile",
@@ -2190,6 +2438,9 @@ describe("SettingsNativePage permissions", () => {
       renderer = renderPage("permissions");
     });
     await flushAsyncUpdates();
+    await act(async () => {
+      findButton(renderer!.root, "New profile").props.onClick();
+    });
 
     await act(async () => {
       findInputByPlaceholder(renderer!.root, "Review mode, research mode, release captain").props.onChange({
@@ -2215,6 +2466,9 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findCheckboxByLabel(renderer!.root, "Legacy Code compatibility").props.onChange({ target: { checked: true } });
     });
+    expect(findButton(renderer!.root, "Create profile").props.disabled).toBe(true);
+    await act(async () => { findButton(renderer!.root, "Review default selection").props.onClick(); });
+    await flushAsyncUpdates();
     await act(async () => {
       findButton(renderer!.root, "Create profile").props.onClick();
     });
@@ -2234,6 +2488,9 @@ describe("SettingsNativePage permissions", () => {
 
     await act(async () => {
       findButton(renderer!.root, "Review profile").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Edit profile").props.onClick();
     });
     expect(collectText(renderer!.root)).toContain("Edit custom profile");
 
@@ -2274,6 +2531,9 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findCheckboxByLabel(renderer!.root, "Chat").props.onChange({ target: { checked: true } });
     });
+    expect(findButton(renderer!.root, "Save profile").props.disabled).toBe(true);
+    await act(async () => { findButton(renderer!.root, "Review default selection").props.onClick(); });
+    await flushAsyncUpdates();
     await act(async () => {
       findButton(renderer!.root, "Save profile").props.onClick();
     });
@@ -2313,7 +2573,7 @@ describe("SettingsNativePage permissions", () => {
       await archiveModal?.props.onConfirm();
     });
     await flushAsyncUpdates();
-    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review");
+    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review", { expectedRevision: "a".repeat(64) });
   });
 
   it("keeps skip-routine custom profiles unavailable in Remote Hardened mode", async () => {
@@ -2337,6 +2597,7 @@ describe("SettingsNativePage permissions", () => {
     mocks.fetchPermissionProfiles.mockResolvedValue({
       items: [
         {
+          revision: "a".repeat(64),
           profileId: "safe",
           label: "Safe",
           scope: "global",
@@ -2347,6 +2608,7 @@ describe("SettingsNativePage permissions", () => {
           updatedAt: "2026-05-02T18:00:00.000Z",
         },
         {
+          revision: "a".repeat(64),
           profileId: "trusted_local_power",
           label: "Trusted Local Power",
           scope: "global",
@@ -2357,6 +2619,7 @@ describe("SettingsNativePage permissions", () => {
           updatedAt: "2026-05-02T18:00:00.000Z",
         },
         {
+          revision: "a".repeat(64),
           profileId: "profile-fast",
           label: "Fast profile",
           scope: "workspace",
@@ -2376,6 +2639,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => {
+      findButton(renderer!.root, "New profile").props.onClick();
+    });
     const bypassOptions = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass");
     expect(bypassOptions.length).toBeGreaterThan(0);
     expect(bypassOptions.every((node) => node.props.disabled === true)).toBe(true);
@@ -2404,6 +2670,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Fast profile").props.onClick();
     });
     await act(async () => {
+      findButton(renderer!.root, "Edit profile").props.onClick();
+    });
+    await act(async () => {
       findButton(renderer!.root, "Save profile").props.onClick();
     });
     await flushAsyncUpdates();
@@ -2413,6 +2682,9 @@ describe("SettingsNativePage permissions", () => {
       "Remote Hardened keeps profiles that skip normal prompts unavailable.",
     );
 
+    await act(async () => {
+      findButton(renderer!.root, "Temporary override").props.onClick();
+    });
     const overrideButton = findButton(renderer!.root, "Start temporary override");
     expect(overrideButton.props.disabled).toBe(true);
     await act(async () => {
@@ -2449,6 +2721,9 @@ describe("SettingsNativePage permissions", () => {
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).not.toHaveBeenCalled();
 
+    await act(async () => {
+      findButton(renderer!.root, "Temporary override").props.onClick();
+    });
     const overrideButton = findButton(renderer!.root, "Start temporary override");
     expect(overrideButton.props.disabled).toBe(true);
     await act(async () => {
@@ -2468,6 +2743,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => {
+      findButton(renderer!.root, "Temporary override").props.onClick();
+    });
     const scopeSelect = renderer!.root.findAllByType("select").find((node) => node.props.value === "workspace");
     expect(scopeSelect).toBeDefined();
     await act(async () => {
@@ -2643,7 +2921,7 @@ describe("SettingsNativePage tools", () => {
     expect(bypassOption!.props.disabled).toBe(true);
     const text = collectText(renderer!.root);
     expect(text).toContain("Settings could not be loaded, so routine prompt skipping stays unavailable.");
-    expect(text).toContain("Unavailable Current");
+    expect(text).toContain("Current Unavailable");
 
     const approvalSelect = renderer!.root.findAll(
       (node) => node.type === "select" && node.props.value === "approve_risky",
@@ -2721,6 +2999,9 @@ describe("SettingsNativePage tools", () => {
     await act(async () => {
       renderer = renderPage("tools");
     });
+    await act(async () => {
+      findButton(renderer!.root, "browser.search").props.onClick();
+    });
     await flushAsyncUpdates();
 
     const availableMetric = renderer!.root
@@ -2735,6 +3016,12 @@ describe("SettingsNativePage tools", () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
       renderer = renderPage("tools");
+    });
+    await act(async () => {
+      findButton(renderer!.root, "browser.search").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create tool grant").props.onClick();
     });
     await flushAsyncUpdates();
 
@@ -2752,6 +3039,13 @@ describe("SettingsNativePage tools", () => {
     await act(async () => {
       findButton(renderer!.root, "Create grant").props.onClick();
     });
+    await act(async () => {
+      await renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.open && modal.props.title === "Confirm tool grant")!
+        .props.onConfirm();
+      await flushAsyncUpdates();
+    });
     await flushAsyncUpdates();
 
     expect(mocks.createToolGrant).toHaveBeenCalledWith(
@@ -2768,6 +3062,12 @@ describe("SettingsNativePage tools", () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
       renderer = renderPage("tools");
+    });
+    await act(async () => {
+      findButton(renderer!.root, "browser.search").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create tool grant").props.onClick();
     });
     await flushAsyncUpdates();
 
@@ -2790,6 +3090,13 @@ describe("SettingsNativePage tools", () => {
     await act(async () => {
       findButton(renderer!.root, "Create grant").props.onClick();
     });
+    await act(async () => {
+      await renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.open && modal.props.title === "Confirm tool grant")!
+        .props.onConfirm();
+      await flushAsyncUpdates();
+    });
     await flushAsyncUpdates();
     expect(mocks.createToolGrant).not.toHaveBeenCalled();
     expect(collectText(renderer!.root)).toContain("Add a session id before creating this tool grant.");
@@ -2799,6 +3106,13 @@ describe("SettingsNativePage tools", () => {
     });
     await act(async () => {
       findButton(renderer!.root, "Create grant").props.onClick();
+    });
+    await act(async () => {
+      await renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.open && modal.props.title === "Confirm tool grant")!
+        .props.onConfirm();
+      await flushAsyncUpdates();
     });
     await flushAsyncUpdates();
 
@@ -2818,6 +3132,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage("providers");
     });
+    await openProviderPanel(renderer!, "advice");
     await flushAsyncUpdates();
 
     expect(collectText(renderer!.root)).toContain("Provider advice");
@@ -2849,9 +3164,14 @@ describe("SettingsNativePage providers", () => {
     let text = collectText(renderer!.root);
     expect(text).toContain("Try a safe demo");
     expect(text).toContain("Connect a model");
-    expect(text).toContain("Optional setup and proof");
-    expect(renderer!.root.findByProps({ id: "onboarding-later" }).props.open).not.toBe(true);
+    expect(text).toContain("Verification evidence");
+    expect(renderer!.root.findAllByProps({ id: "onboarding-first-run" })).toHaveLength(0);
     expect(findButton(renderer!.root, "Enter Chat").props.disabled).toBe(false);
+    await act(async () => findButton(renderer!.root, "Verification evidence").props.onClick());
+    text += collectText(renderer!.root);
+    await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
+    await act(async () => findButton(renderer!.root, "First-run defaults").props.onClick());
+    text += collectText(renderer!.root);
     expect(text).toContain("First-run setup");
     expect(text).toContain("First trusted outcome");
     expect(text).toContain("Provider-ready path");
@@ -2985,6 +3305,7 @@ describe("SettingsNativePage providers", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => findButton(renderer!.root, "Verification evidence").props.onClick());
     const text = collectText(renderer!.root);
     expect(text).toContain("Provider missing");
     expect(text).not.toContain("provider-missing");
@@ -2994,6 +3315,8 @@ describe("SettingsNativePage providers", () => {
     expect(text).not.toContain("hostile-code sandboxing");
     expect(text).not.toContain("autonomous high-risk");
 
+    await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
+    await act(async () => findButton(renderer!.root, "Try a safe demo").props.onClick());
     const demoSteps = renderer!.root
       .findByProps({ id: "onboarding-start" })
       .findAll(
@@ -3001,6 +3324,8 @@ describe("SettingsNativePage providers", () => {
           typeof node.props.className === "string" &&
           node.props.className.includes("mc-next-settings-wizard-step active"),
       );
+    await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
+    await act(async () => findButton(renderer!.root, "Verification evidence").props.onClick());
     const outcomeSteps = renderer!.root
       .findByProps({ id: "onboarding-outcome" })
       .findAll(
@@ -3060,6 +3385,7 @@ describe("SettingsNativePage providers", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => findButton(renderer!.root, "Verification evidence").props.onClick());
     const text = collectText(renderer!.root);
     expect(text).toContain("Proof complete");
     expect(text).not.toContain("proof-complete");
@@ -3258,6 +3584,7 @@ describe("SettingsNativePage providers", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => findButton(renderer!.root, "First-run defaults").props.onClick());
     const dangerOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "danger")[0];
     const bypassOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass")[0];
     expect(dangerOption?.props.disabled).toBe(true);
@@ -3313,6 +3640,9 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage("access");
       });
+      await act(async () => {
+        findButton(renderer!.root, "Configure access").props.onClick();
+      });
 
       const text = collectText(renderer!.root);
       expect(text).toContain("Approved devices");
@@ -3337,7 +3667,7 @@ describe("SettingsNativePage providers", () => {
     });
 
     await act(async () => {
-      findButton(renderer!.root, "New provider draft").props.onClick();
+      findButton(renderer!.root, "Custom provider").props.onClick();
     });
 
     await act(async () => {
@@ -3377,11 +3707,13 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("can add the ChatGPT OAuth provider from Settings when it is not already configured", async () => {
+    mocks.fetchLlmConfig.mockResolvedValueOnce({ revision: 44, activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers: [], providerConfigs: [{ providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", baseUrl: "https://chatgpt.com/backend-api/codex", apiStyle: "openai-codex-responses", authMode: "codex-oauth", defaultModel: "gpt-5.5" }] });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
 
     await act(async () => {
       findButton(renderer!.root, "Add provider and continue").props.onClick();
@@ -3418,8 +3750,15 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage();
       });
+      await openProviderPanel(renderer!, "trust");
 
-      const initialText = collectText(renderer!.root);
+      const trustText = collectText(renderer!.root);
+      await openProviderPanel(renderer!, "editor");
+      const initialText = trustText + collectText(renderer!.root);
+      await act(async () => {
+        findButton(renderer!.root, "Back to list").props.onClick();
+      });
+      await openProviderPanel(renderer!, "trust");
       expect(initialText).toContain("Providers & Models");
       expect(initialText).toContain("Provider API style");
       expect(initialText).toContain("Use for modern OpenAI-compatible Responses endpoints");
@@ -3512,6 +3851,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "trust");
     const text = collectText(renderer!.root);
 
     expect(text).toContain("Configured API");
@@ -3520,7 +3860,10 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("openai-chat-completions");
     expect(text).toContain("Gateway executes openai-chat-completions");
     expect(text).toContain("Not probed");
-    expect(text).toContain("Codex Responses is only executed for the built-in OpenAI Codex OAuth provider");
+    await openProviderPanel(renderer!, "editor");
+    expect(collectText(renderer!.root)).toContain(
+      "Codex Responses is only executed for the built-in OpenAI Codex OAuth provider",
+    );
   });
 
   it("renders OAuth controls and hides API-key controls for OpenAI Codex", async () => {
@@ -3574,8 +3917,11 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "trust");
 
-    const text = collectText(renderer!.root);
+    const trustText = collectText(renderer!.root);
+    await openProviderPanel(renderer!, "oauth");
+    const text = trustText + collectText(renderer!.root);
 
     expect(mocks.fetchOpenAICodexOAuthStatus).toHaveBeenCalledTimes(1);
     expect(text).toContain("OpenAI Codex (ChatGPT OAuth)");
@@ -3632,6 +3978,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "routing");
 
     const routingProvider = renderer!.root
       .findAllByType("select")
@@ -3675,6 +4022,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
     await flushAsyncUpdates();
 
     expect(collectText(renderer!.root)).toContain("it is not active for Chat yet");
@@ -3713,6 +4061,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
 
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
@@ -3744,6 +4093,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
     });
@@ -3766,6 +4116,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
       await Promise.resolve();
@@ -3800,6 +4151,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
       await Promise.resolve();
@@ -3850,6 +4202,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
       await Promise.resolve();
@@ -3927,6 +4280,7 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage();
       });
+      await openProviderPanel(renderer!, "oauth");
 
       const text = collectText(renderer!.root);
       expect(text).toContain("Start ChatGPT login");
@@ -3975,6 +4329,7 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage();
       });
+      await openProviderPanel(renderer!, "oauth");
 
       const text = collectText(renderer!.root);
       expect(text).not.toContain("SESSION-CODE");
@@ -4007,6 +4362,7 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage();
       });
+      await openProviderPanel(renderer!, "oauth");
 
       const text = collectText(renderer!.root);
       expect(text).toContain("Start ChatGPT login");
@@ -4036,6 +4392,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
       await Promise.resolve();
@@ -4082,6 +4439,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "oauth");
 
     const text = collectText(renderer!.root);
     expect(text).toContain("credential exists in secure storage");
@@ -4118,6 +4476,7 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage();
     });
+    await openProviderPanel(renderer!, "trust");
 
     let text = collectText(renderer!.root);
     expect(text).toContain("Suggested");
@@ -4146,13 +4505,17 @@ describe("SettingsNativePage providers", () => {
     });
 
     expect(collectText(renderer!.root)).toContain("No providers returned from runtime settings.");
-    expect(collectText(renderer!.root)).toContain("Choose a provider to inspect routing and secret posture.");
+    expect(renderer!.root.findAllByType("input")).toHaveLength(0);
+    await openProviderPanel(renderer!, "routing");
 
     await act(async () => {
       findButton(renderer!.root, "Save routing").props.onClick();
     });
     expect(collectText(renderer!.root)).toContain("Choose both a provider and a model before saving routing.");
 
+    await act(async () => {
+      findButton(renderer!.root, "Custom provider").props.onClick();
+    });
     await act(async () => {
       findButton(renderer!.root, "Probe from editor").props.onClick();
     });
@@ -4163,9 +4526,6 @@ describe("SettingsNativePage providers", () => {
     });
     expect(collectText(renderer!.root)).toContain("Provide both a provider id and base URL before saving.");
 
-    await act(async () => {
-      findButton(renderer!.root, "New provider draft").props.onClick();
-    });
     await act(async () => {
       findInputByPlaceholder(renderer!.root, "openai-compatible").props.onChange({ target: { value: "local" } });
       findInputByPlaceholder(renderer!.root, "https://llm.example.test/v1").props.onChange({
@@ -4212,16 +4572,19 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage();
       });
+      await openProviderPanel(renderer!, "trust");
       await act(async () => undefined);
 
       expect(collectText(renderer!.root)).toContain("secret status offline");
 
+      await openProviderPanel(renderer!, "routing");
       await act(async () => {
         findButton(renderer!.root, "Save routing").props.onClick();
       });
       await flushAsyncUpdates();
       expect(collectText(renderer!.root)).toContain("routing save failed");
 
+      await openProviderPanel(renderer!, "trust");
       await act(async () => {
         findButton(renderer!.root, "Save secret").props.onClick();
       });
@@ -4280,6 +4643,9 @@ describe("SettingsNativePage access", () => {
     await act(async () => {
       renderer = renderPage("access");
     });
+    await act(async () => {
+      findButton(renderer!.root, "Configure access").props.onClick();
+    });
     expect(findLoopbackCheckbox(renderer!.root).props.checked).toBe(false);
     expect(collectText(renderer!.root)).toContain("trusted single-machine development");
     expect(collectText(renderer!.root)).toContain("Disabled");
@@ -4287,6 +4653,9 @@ describe("SettingsNativePage access", () => {
     mockSettingsLoopback(true);
     await act(async () => {
       renderer = renderPage("access");
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Configure access").props.onClick();
     });
     expect(findLoopbackCheckbox(renderer!.root).props.checked).toBe(true);
     expect(collectText(renderer!.root)).toContain("Enabled");
@@ -4321,6 +4690,9 @@ describe("SettingsNativePage access", () => {
     try {
       await act(async () => {
         renderer = renderPage("access");
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Configure access").props.onClick();
       });
       expect(collectText(renderer!.root)).toContain("Desktop runtime anchor");
       expect(collectText(renderer!.root)).toContain("Operator tablet");
@@ -4447,6 +4819,13 @@ describe("SettingsNativePage Trust & Policy", () => {
   });
 });
 
+async function openIntegrationPanel(root: ReactTestInstance, label: string) {
+  await act(async () => {
+    findButton(root, label).props.onClick();
+  });
+  await flushAsyncUpdates();
+}
+
 describe("SettingsNativePage integrations", () => {
   it("keeps an empty integration catalog truthful and non-actionable", async () => {
     mocks.fetchIntegrationCatalog.mockResolvedValueOnce({ items: [] } as any);
@@ -4456,6 +4835,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Add integration");
 
     const catalogSelect = renderer!.root
       .findAllByType("select")
@@ -4475,36 +4855,39 @@ describe("SettingsNativePage integrations", () => {
 
   it("renders plugin trust metadata and blocked Google Meet prerequisites", async () => {
     let renderer: ReactTestRenderer | null = null;
-
     await act(async () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
-
-    const text = collectText(renderer!.root);
-
+    expect(mocks.fetchIntegrationPlugins).not.toHaveBeenCalled();
+    expect(mocks.fetchGoogleMeetPrerequisiteStatus).not.toHaveBeenCalled();
+    expect(mocks.fetchExternalSideEffectRuns).not.toHaveBeenCalled();
+    await openIntegrationPanel(renderer!.root, "Plugin trust");
+    const pluginText = collectText(renderer!.root);
     expect(mocks.fetchIntegrationPlugins).toHaveBeenCalledTimes(1);
-    expect(mocks.fetchExternalSideEffectRuns).toHaveBeenCalledWith({ workspaceId: "default", limit: 25 });
-    expect(mocks.fetchIntegrationFormSchema).toHaveBeenCalledWith("github");
+    expect(pluginText).toContain("Dashboard Plugin");
+    expect(pluginText).toContain("Integrity: verified");
+    expect(pluginText).toContain("Theme: compact");
+    await openIntegrationPanel(renderer!.root, "Google Meet");
+    const meetText = collectText(renderer!.root);
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).toHaveBeenCalledTimes(1);
+    expect(meetText).toContain("Google Meet voice");
+    expect(meetText).toContain("OAuth profile");
+    expect(meetText).toContain("Blocked");
+    await openIntegrationPanel(renderer!.root, "Delivery history");
+    expect(mocks.fetchExternalSideEffectRuns).toHaveBeenCalledWith({ workspaceId: "default", limit: 25 });
+    expect(collectText(renderer!.root)).toContain("No external side-effect run records are available.");
+    await openIntegrationPanel(renderer!.root, "Add integration");
+    expect(mocks.fetchIntegrationFormSchema).toHaveBeenCalledWith("github");
     const catalogSelect = renderer!.root
       .findAllByType("select")
       .find((select) => collectText(select).includes("Choose an integration"))!;
     expect(catalogSelect.props.value).toBe("github");
     expect(catalogSelect.props.disabled).toBe(false);
     expect(findButton(renderer!.root, "Create connection").props.disabled).toBe(false);
-    expect(text).toContain("GitHub setup");
-    expect(text).toContain("Token environment variable");
-    expect(text).toContain("Advanced JSON");
-    expect(text).toContain("Plugin trust");
-    expect(text).toContain("Dashboard Plugin");
-    expect(text).toContain("Integrity: verified");
-    expect(text).toContain("Theme: compact");
-    expect(text).toContain("Google Meet voice");
-    expect(text).toContain("OAuth profile");
-    expect(text).toContain("Blocked");
-    expect(text).toContain("External side effects");
-    expect(text).toContain("No external side-effect run records are available.");
+    expect(collectText(renderer!.root)).toContain("GitHub setup");
+    expect(collectText(renderer!.root)).toContain("Token environment variable");
+    expect(collectText(renderer!.root)).toContain("Advanced JSON");
   });
 
   it("shows manual posture for post-boundary side-effect outcomes", async () => {
@@ -4556,6 +4939,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Delivery history");
 
     const text = collectText(renderer!.root);
     expect(text).toContain("External side effects");
@@ -4618,6 +5002,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations", navigate);
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Delivery history");
 
     expect(collectText(renderer!.root)).toContain("Failed before boundary");
     expect(findButton(renderer!.root, "Start replay audit").props.disabled).toBe(false);
@@ -4705,6 +5090,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Delivery history");
 
     const text = collectText(renderer!.root);
     expect(text).toContain("Completed · trigger_webhook");
@@ -4811,6 +5197,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Activepieces");
 
     const root = renderer!.root;
     const payloadInput = root.findAll(
@@ -4916,6 +5303,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Activepieces");
 
     const root = renderer!.root;
     const runIdInput = root.findAll(
@@ -4955,6 +5343,7 @@ describe("SettingsNativePage integrations", () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
+    await openIntegrationPanel(renderer!.root, "Add integration");
 
     const schemaInput = renderer!.root.findAll(
       (node) => node.type === "input" && node.props?.id === "integration-field-tokenEnv",
@@ -4985,11 +5374,27 @@ describe("SettingsNativePage MCP", () => {
       renderer = renderPage("mcp");
     });
 
+    await act(async () => findButton(renderer!.root, "Add server").props.onClick());
     const optionValues = renderer!.root.findAllByType("option").map((option) => option.props.value);
     expect(optionValues).not.toContain("http");
     expect(optionValues).not.toContain("sse");
 
-    const text = collectText(renderer!.root);
+    let text = collectText(renderer!.root);
+    await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
+    await act(async () => findButton(renderer!.root, "Remote HTTP").props.onClick());
+    expect(
+      renderer!.root.findAllByType("button").find((node) => collectText(node).trim() === "Connect")!.props.disabled,
+    ).toBe(false);
+    expect(findButton(renderer!.root, "Health check").props.disabled).toBe(false);
+    await act(async () => findButton(renderer!.root, "Edit server").props.onClick());
+    text += collectText(renderer!.root);
+    await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
+    await act(async () => findButton(renderer!.root, "MCP diagnostics").props.onClick());
+    text += collectText(renderer!.root);
+    await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
+    text += collectText(renderer!.root);
+    await act(async () => findButton(renderer!.root, "Choose the repository to inspect.").props.onClick());
+    text += collectText(renderer!.root);
     expect(text).toContain("Server can be used by the operator.");
     expect(text).toContain("governed remote http/sse servers");
     expect(text).toContain("Remote MCP preview");
@@ -5004,12 +5409,10 @@ describe("SettingsNativePage MCP", () => {
     expect(text).toContain("MCP elicitation inbox");
     expect(text).toContain("Choose the repository to inspect.");
     expect(text).toContain("repo.inspect");
-    expect(text).toContain("Pending prompts");
+    expect(text).toContain("Pending prompts need an explicit operator response.");
     expect(findButton(renderer!.root, "Accept")).toBeDefined();
     expect(findButton(renderer!.root, "Decline")).toBeDefined();
     expect(findButton(renderer!.root, "Cancel")).toBeDefined();
-    expect(findButton(renderer!.root, "Connect").props.disabled).toBe(false);
-    expect(findButton(renderer!.root, "Health check").props.disabled).toBe(false);
 
     const responseInput = renderer!.root.findByType("textarea");
     await act(async () => {
@@ -5026,3 +5429,36 @@ describe("SettingsNativePage MCP", () => {
     });
   });
 });
+
+async function openProviderPanel(
+  renderer: ReactTestRenderer,
+  view: "trust" | "oauth" | "editor" | "routing" | "advice" | "models",
+) {
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+  if (view === "trust" || view === "editor") {
+    await act(async () => {
+      renderer.root
+        .findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-settings-selectable"))[0]
+        ?.props.onClick();
+    });
+    if (view === "editor")
+      await act(async () => {
+        findButton(renderer.root, "Edit connection").props.onClick();
+      });
+  } else {
+    const label = {
+      oauth: "ChatGPT setup",
+      routing: "Default routing",
+      advice: "Provider advice",
+      models: "Browse models",
+    }[view];
+    await act(async () => {
+      findButton(renderer.root, label).props.onClick();
+    });
+  }
+  await act(async () => {
+    await Promise.resolve();
+  });
+}

@@ -1,3 +1,5 @@
+import { installVisualLocalAiFixture } from "./visual-host-fixture.mjs";
+
 const VISUAL_STUB_KEY = "verification-visual-regression-stub-key";
 const VISUAL_STUB_REPLY = "# Verification artifact\n\nDeterministic visual-regression content.";
 
@@ -112,6 +114,9 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
         }
         try {
           const page = await browserContext.newPage();
+          if (verificationTarget.isNext && visualRoutes.some(route => route.slug === "settings-local-ai")) {
+            await installVisualLocalAiFixture(page);
+          }
           const browserLog = attachBrowserLogging(page);
           for (const route of visualRoutes) {
             const scenarioRecord = await runScenario(
@@ -218,6 +223,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                       : thresholdExceeded
                         ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
                         : undefined,
+                    notes: route.slug === "settings-local-ai" ? ["Successful hardware readiness uses the deterministic visual-only fixture; failed Gateway responses remain unchanged. Real host detection is separate surface/desktop evidence."] : [],
                     metrics: {
                       route: route.href,
                       variant: variant.slug,

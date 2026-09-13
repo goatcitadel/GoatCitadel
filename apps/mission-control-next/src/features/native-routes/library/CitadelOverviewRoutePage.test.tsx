@@ -1,3 +1,5 @@
+import { __resetSessionDraftsForTests } from "./session-drafts";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,6 +151,7 @@ const TEMPLATES = [
 describe("CitadelOverviewRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionDraftsForTests();
     apiMocks.isApiRequestError.mockImplementation(
       (error: unknown) => typeof error === "object" && error !== null && "status" in error,
     );
@@ -190,10 +193,12 @@ describe("CitadelOverviewRoutePage", () => {
     });
     const tree = treeString(renderer!);
     expect(tree).toContain("Run the company");
-    expect(tree).toContain("Finance");
-    expect(tree).toContain("sealed");
+    await act(async () => { buttonContaining(renderer!, "Chambers").props.onClick(); });
+    expect(treeString(renderer!)).toContain("Finance");
+    expect(treeString(renderer!)).toContain("sealed");
+    await act(async () => { buttonContaining(renderer!, "Gatehouse").props.onClick(); });
     // Gatehouse enums are humanized for operators (was raw "approval_required").
-    expect(tree).toContain("Approval required");
+    expect(treeString(renderer!)).toContain("Approval required");
     expect(tree).not.toContain("approval_required");
   });
 
@@ -204,6 +209,7 @@ describe("CitadelOverviewRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelOverviewRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonContaining(renderer!, "Edit Charter").props.onClick(); });
 
     await act(async () => {
       renderer!.root.findByType("textarea").props.onChange({
@@ -224,11 +230,14 @@ describe("CitadelOverviewRoutePage", () => {
       }),
     );
     expect(treeString(renderer!)).toContain("Citadel Charter saved");
+    await act(async () => { buttonContaining(renderer!, "Edit Charter").props.onClick(); });
 
     await act(async () => {
       buttonContaining(renderer!, "Archive Citadel").props.onClick();
       await Promise.resolve();
     });
+    expect(apiMocks.archiveCitadel).not.toHaveBeenCalled();
+    await act(async () => { renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
     expect(apiMocks.archiveCitadel).toHaveBeenCalledWith("default");
     expect(treeString(renderer!)).toContain("Citadel archived");
     expect(buttonContaining(renderer!, "Restore Citadel")).toBeDefined();

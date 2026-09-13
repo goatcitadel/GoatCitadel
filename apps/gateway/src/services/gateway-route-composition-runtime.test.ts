@@ -349,7 +349,11 @@ describe("composeRuntimeAdminRouteDependencies", () => {
 
     expect(deps.onboarding.bootstrapOnboarding({ level: "beginner" })).toMatchObject({ bootstrapped: true });
     expect(deps.onboarding.getOnboardingStartupState()).toEqual({ startup: true });
-    expect(deps.onboarding.getOnboardingState()).toEqual({ complete: false });
+    await expect(deps.onboarding.getOnboardingState()).resolves.toEqual({
+      complete: false,
+      firstTask: { status: "not_observed", checkedAt: expect.any(String) },
+      firstRunChecklist: undefined,
+    });
     await expect(deps.onboarding.markOnboardingComplete("operator")).resolves.toMatchObject({
       completedBy: "operator",
     });

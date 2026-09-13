@@ -2,6 +2,8 @@ export * from "./tool-registry.js";
 export * from "./policy-resolver.js";
 export * from "./approval-gate.js";
 export * from "./engine.js";
+export { createMcpToolPolicyBinding, type McpToolPolicyBinding } from "./mcp-tool-policy-binding.js";
+export { createMeshToolPolicyBinding, MESH_TOOL_POLICY_DEFINITION, type MeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
 export * from "./tool-executor.js";
 export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";

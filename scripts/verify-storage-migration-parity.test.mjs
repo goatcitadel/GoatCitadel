@@ -464,6 +464,25 @@ test("SQLite implementation hashes detect imported helper body changes", () => {
   );
 });
 
+test("SQLite implementation closures follow local export aliases without dropping their source", () => {
+  const sourcePath = "packages/storage/src/sqlite.ts";
+  const source = `import { createOne } from "./helper.js";
+    const SCHEMA_MIGRATION_GROUPS = [{ name: "canonical",
+      migrations: [{ version: 1, name: "one", up: createOne }] }];`;
+  const extract = (sql) => extractSqliteMigrationRegistry(source, {
+    sourcePath, sourceFiles: new Map([
+      [sourcePath, source],
+      ["packages/storage/src/helper.ts", `const unrelated = 1; export { unrelated };
+        function implementation(db) { db.exec(${JSON.stringify(sql)}); }
+        export { implementation as createOne };`],
+    ]),
+  });
+  const original = extract("SELECT 1").migrations[0];
+  const changed = extract("SELECT 2").migrations[0];
+  assert.equal(original.definitionSha256, changed.definitionSha256);
+  assert.notEqual(original.implementationSha256, changed.implementationSha256);
+});
+
 test("SQLite implementation closures include workspace package exports", async () => {
   const [sourceFiles, sqliteSourceText] = await Promise.all([
     loadStorageTypeScriptSourceFiles(new URL("../", import.meta.url)),
@@ -989,10 +1008,12 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 204);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 204]);
-  assert.equal(postgres.migrations.length, 149);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 149]);
+  assert.equal(sqlite.migrations.length, 228);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 228]);
+  assert.equal(postgres.migrations.length, 173);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 173]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "permission_profile_selection");
+  assert.equal(postgres.migrations.at(-1)?.name, "permission_profile_selection");
   assert.equal(
     postgres.migrations.find((record) => record.version === 62)?.name,
     "chat_delegation_step_degraded_handoff_repairs",
@@ -1005,7 +1026,7 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(postgres.migrations.find((record) => record.version === 2)?.sqlPayloadSha256, undefined);
   assert.deepEqual(
     postgres.migrations.filter((record) => !record.sqlPayloadSha256).map((record) => record.version),
-    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149],
+    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173],
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(

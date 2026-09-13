@@ -1,6 +1,7 @@
+import { __resetWorkbenchSessionDraftsForTests } from "./workbench-session-drafts";
 import React from "react";
-import { act, create } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, create as createRenderer, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeWorkbenchActionError, useChatWorkbench } from "./useChatWorkbench";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -18,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   revertChatSessionWorkbenchChanges: vi.fn(),
   revertChatSessionWorkbenchFile: vi.fn(),
   runChatSessionWorkbenchCommand: vi.fn(),
+  previewChatSessionWorkbenchFileOperation: vi.fn(),
   runChatSessionWorkbenchFileOperation: vi.fn(),
   saveChatSessionWorkbenchFile: vi.fn(),
 }));
@@ -39,6 +41,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   revertChatSessionWorkbenchChanges: apiMocks.revertChatSessionWorkbenchChanges,
   revertChatSessionWorkbenchFile: apiMocks.revertChatSessionWorkbenchFile,
   runChatSessionWorkbenchCommand: apiMocks.runChatSessionWorkbenchCommand,
+  previewChatSessionWorkbenchFileOperation: apiMocks.previewChatSessionWorkbenchFileOperation,
   runChatSessionWorkbenchFileOperation: apiMocks.runChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile: apiMocks.saveChatSessionWorkbenchFile,
 }));
@@ -67,8 +70,12 @@ const workbenchTree = {
 
 const workbenchDiff = { state: workbenchState, patch: "diff --git" };
 const workbenchOutput = { state: workbenchState, output: "ok" };
-const workbenchFile = { state: workbenchState, path: "src/index.ts", content: "export const value = 1;" };
+const workbenchFile = { revision: "a".repeat(64), state: workbenchState, path: "src/index.ts", content: "export const value = 1;" };
 const workbenchFileDiff = { state: workbenchState, path: "src/index.ts", patch: "@@ diff" };
+
+const renderers: ReactTestRenderer[] = [];
+function create(...args: Parameters<typeof createRenderer>) { const result = createRenderer(...args); renderers.push(result); return result; }
+afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
 
 let latest: ReturnType<typeof useChatWorkbench> | null = null;
 let storage = new Map<string, string>();
@@ -120,8 +127,8 @@ function primeSuccessMocks() {
   apiMocks.fetchChatSessionWorkbenchTree.mockResolvedValue(workbenchTree);
   apiMocks.fetchChatSessionWorkbenchDiff.mockResolvedValue(workbenchDiff);
   apiMocks.fetchChatSessionWorkbenchOutput.mockResolvedValue(workbenchOutput);
-  apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValue(workbenchFile);
-  apiMocks.fetchChatSessionWorkbenchFileDiff.mockResolvedValue(workbenchFileDiff);
+  apiMocks.fetchChatSessionWorkbenchFile.mockImplementation(async (sessionId, path) => ({ ...workbenchFile, path, state: { ...workbenchState, sessionId } }));
+  apiMocks.fetchChatSessionWorkbenchFileDiff.mockImplementation(async (sessionId, path) => ({ ...workbenchFileDiff, path, state: { ...workbenchState, sessionId } }));
   apiMocks.saveChatSessionWorkbenchFile.mockResolvedValue({ ...workbenchFile, content: "changed" });
   apiMocks.createChatSessionWorkbenchWorktree.mockResolvedValue({ state: workbenchState });
   apiMocks.runChatSessionWorkbenchCommand.mockResolvedValue({
@@ -161,6 +168,7 @@ function primeSuccessMocks() {
 
 describe("useChatWorkbench", () => {
   beforeEach(() => {
+    __resetWorkbenchSessionDraftsForTests();
     latest = null;
     storage = new Map<string, string>();
     addEventListener.mockClear();
@@ -196,6 +204,36 @@ describe("useChatWorkbench", () => {
       expect.any(Function),
       expect.objectContaining({ enabled: true, coalesceMs: 900 }),
     );
+  });
+
+  it("reviews without applying and ignores a pending review after the active session changes", async () => {
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => { renderer = create(<Harness sessionId="path-review-a" />); await flushAsyncEffects(); });
+    const input = { operation: "rename" as const, path: "src/index.ts", targetPath: "src/next.ts" };
+    const review = { input, revision: "a".repeat(64), sourceKind: "file" as const, affectedPaths: [], totalBytes: 0 };
+    apiMocks.previewChatSessionWorkbenchFileOperation.mockResolvedValueOnce(review);
+    await act(async () => { await expect(latest!.previewWorkbenchFileOperation(input)).resolves.toEqual(review); });
+    expect(apiMocks.previewChatSessionWorkbenchFileOperation).toHaveBeenCalledWith("path-review-a", input);
+    expect(apiMocks.runChatSessionWorkbenchFileOperation).not.toHaveBeenCalled();
+    const pending = deferred<typeof review>();
+    apiMocks.previewChatSessionWorkbenchFileOperation.mockReturnValueOnce(pending.promise);
+    let result!: ReturnType<NonNullable<typeof latest>["previewWorkbenchFileOperation"]>;
+    await act(async () => { result = latest!.previewWorkbenchFileOperation(input); renderer.update(<Harness sessionId="path-review-b" />); await flushAsyncEffects(); });
+    await act(async () => { pending.resolve(review); await expect(result).resolves.toBeNull(); });
+    expect(latest!.workbenchError).toBeNull();
+  });
+
+  it("keeps a rejected path operation visible without automatically reviewing or retrying it", async () => {
+    await act(async () => { create(<Harness />); await flushAsyncEffects(); });
+    apiMocks.runChatSessionWorkbenchFileOperation.mockRejectedValueOnce(Object.assign(new Error("API error 409"), { status: 409 }));
+    await act(async () => {
+      await expect(latest!.runWorkbenchFileOperation({ operation: "delete", path: "src/index.ts", expectedRevision: "a".repeat(64) })).resolves.toBe(false);
+    });
+    expect(latest!.workbenchError).toContain("Review the action again");
+    expect(latest!.workbenchError).not.toContain("API error");
+    expect(apiMocks.previewChatSessionWorkbenchFileOperation).not.toHaveBeenCalled();
+    expect(apiMocks.runChatSessionWorkbenchFileOperation).toHaveBeenCalledTimes(1);
+    expect(latest!.selectedWorkbenchFile).toEqual(workbenchFile);
   });
 
   it("rehydrates a ready workbench and changed files after a reload remount", async () => {
@@ -249,6 +287,7 @@ describe("useChatWorkbench", () => {
     expect(apiMocks.saveChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", {
       path: "src/index.ts",
       content: "changed",
+      expectedRevision: workbenchFile.revision,
     });
     expect(latest!.workbenchDraftContent).toBe("changed");
     expect(latest!.hasDirtyWorkbenchDraft).toBe(false);
@@ -273,7 +312,7 @@ describe("useChatWorkbench", () => {
         state: workbenchState,
         patch: "diff --git exported",
       });
-      await expect(latest!.runWorkbenchFileOperation({ operation: "create_file", path: "src/new.ts" })).resolves.toBe(
+      await expect(latest!.runWorkbenchFileOperation({ operation: "create_file", path: "src/new.ts", expectedRevision: "a".repeat(64) })).resolves.toBe(
         true,
       );
       await expect(latest!.revertWorkbenchFile()).resolves.toBe(true);
@@ -289,10 +328,11 @@ describe("useChatWorkbench", () => {
     expect(apiMocks.applyChatSessionWorkbenchPatch).toHaveBeenCalledWith("session-1", { patch: "diff --git" });
     expect(apiMocks.exportChatSessionWorkbenchPatch).toHaveBeenCalledWith("session-1");
     expect(apiMocks.runChatSessionWorkbenchFileOperation).toHaveBeenCalledWith("session-1", {
+      expectedRevision: "a".repeat(64),
       operation: "create_file",
       path: "src/new.ts",
     });
-    expect(apiMocks.revertChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", { path: "src/index.ts" });
+    expect(apiMocks.revertChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", { path: "src/new.ts" });
     expect(apiMocks.revertChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", { path: "README.md" });
     expect(apiMocks.revertChatSessionWorkbenchChanges).toHaveBeenCalledWith("session-1");
   });
@@ -370,6 +410,7 @@ describe("useChatWorkbench", () => {
     expect(latest!.workbenchTree).toBeNull();
     expect(latest!.selectedWorkbenchFile).toBeNull();
     expect(latest!.workbenchDraftContent).toBe("");
+    await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); });
 
     apiMocks.fetchChatSessionWorkbench.mockResolvedValue({ state: workbenchState });
     apiMocks.fetchChatSessionWorkbenchTree.mockResolvedValueOnce({
@@ -386,6 +427,7 @@ describe("useChatWorkbench", () => {
       await flushAsyncEffects();
     });
     expect(latest!.selectedWorkbenchFile).toBeNull();
+    await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); });
 
     apiMocks.fetchChatSessionWorkbenchTree.mockResolvedValueOnce({
       state: workbenchState,
@@ -395,14 +437,16 @@ describe("useChatWorkbench", () => {
         { path: "src/index.ts", kind: "file" },
       ],
     });
+    apiMocks.fetchChatSessionWorkbenchOutput.mockResolvedValueOnce({ ...workbenchOutput, state: { ...workbenchState, activeFilePath: "bad.ts" } });
     apiMocks.fetchChatSessionWorkbenchFile.mockRejectedValueOnce(new Error("bad candidate"));
-    apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValueOnce(workbenchFile);
+    apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValueOnce({ ...workbenchFile, state: { ...workbenchState, sessionId: "session-fallback" } });
     await act(async () => {
       create(<Harness sessionId="session-fallback" />);
-      await flushAsyncEffects(6);
+      await flushAsyncEffects(16);
     });
     expect(apiMocks.fetchChatSessionWorkbenchFile).toHaveBeenCalledWith("session-fallback", "bad.ts");
     expect(apiMocks.fetchChatSessionWorkbenchFile).toHaveBeenCalledWith("session-fallback", "src/index.ts");
+    expect(latest!.workbenchError).toBeNull();
     expect(latest!.selectedWorkbenchFile?.path).toBe("src/index.ts");
   });
 
@@ -426,8 +470,22 @@ describe("useChatWorkbench", () => {
       await flushAsyncEffects();
     });
 
-    expect(latest!.workbenchExpandedPaths).toEqual(["src"]);
-    expect(latest!.selectedWorkbenchFile?.path).toBe("src/index.ts");
+    expect(latest!.workbenchExpandedPaths).toEqual([]);
+    expect(latest!.selectedWorkbenchFile?.path).toBe("README.md");
+  });
+
+  it("rejects file evidence from a different session or path", async () => {
+    await act(async () => { create(<Harness />); await flushAsyncEffects(); });
+    for (const response of [
+      { ...workbenchFile, path: "other.ts" },
+      { ...workbenchFile, state: { ...workbenchState, sessionId: "other-session" } },
+    ]) {
+      apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValueOnce(response);
+      await act(async () => { await expect(latest!.openWorkbenchFile("src/index.ts")).resolves.toBe(false); });
+      expect(latest!.workbenchError).toContain("does not match");
+      expect(latest!.selectedWorkbenchFile).toEqual(workbenchFile);
+    }
+    expect(apiMocks.saveChatSessionWorkbenchFile).not.toHaveBeenCalled();
   });
 
   it("clears file state and reports the last candidate error when all file candidates fail", async () => {
@@ -544,7 +602,7 @@ describe("useChatWorkbench", () => {
       resolveInitialWorkbench({ state: workbenchState });
       await flushAsyncEffects(8);
     });
-    expect(latest!.workbenchState?.sessionId).toBe("session-1");
+    expect(latest!.workbenchState?.sessionId).toBe("session-stale-b");
 
     let resolveTree!: (value: unknown) => void;
     apiMocks.fetchChatSessionWorkbench.mockResolvedValueOnce({ state: workbenchState });
@@ -843,4 +901,83 @@ describe("useChatWorkbench", () => {
     });
     expect(storage.size).toBe(existingStorageSize);
   });
+  it("retains drafts and their base content across refresh, session changes and reopening", async () => {
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness />); await flushAsyncEffects(); });
+    await act(async () => latest!.setWorkbenchDraftContent("my draft"));
+    apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValue({ ...workbenchFile, content: "remote change" });
+    await act(async () => latest!.refreshWorkbench());
+    expect(latest!.workbenchDraftContent).toBe("my draft"); expect(latest!.workbenchHasRemoteChanges).toBe(true);
+    await act(async () => renderer.update(<Harness sessionId="session-2" />));
+    await act(async () => renderer.update(<Harness />));
+    await act(async () => { await flushAsyncEffects(); });
+    expect(latest!.workbenchDraftContent).toBe("my draft");
+    await act(async () => { expect(await latest!.saveWorkbenchFile()).toBe(false); });
+    expect(apiMocks.saveChatSessionWorkbenchFile).not.toHaveBeenCalled();
+    await act(async () => latest!.rebaseWorkbenchDraft());
+    expect(latest!.workbenchHasRemoteChanges).toBe(false); expect(latest!.workbenchDraftContent).toBe("my draft");
+  });
+  it("preserves newer input and does not call a confirmed file save a failure when evidence refresh fails", async () => {
+    const pending = deferred<typeof workbenchFile>(); let saving: Promise<boolean>;
+    await act(async () => { create(<Harness />); await flushAsyncEffects(); });
+    await act(async () => latest!.setWorkbenchDraftContent("submitted"));
+    apiMocks.saveChatSessionWorkbenchFile.mockReturnValueOnce(pending.promise);
+    await act(async () => { saving = latest!.saveWorkbenchFile(); await flushAsyncEffects(); });
+    await act(async () => latest!.setWorkbenchDraftContent("newer input"));
+    apiMocks.fetchChatSessionWorkbenchTree.mockRejectedValueOnce(new Error("Evidence unavailable"));
+    await act(async () => { pending.resolve({ ...workbenchFile, content: "submitted" }); expect(await saving!).toBe(false); });
+    expect(latest!.workbenchDraftContent).toBe("newer input"); expect(latest!.hasDirtyWorkbenchDraft).toBe(true);
+    expect(latest!.workbenchError).toContain("File saved.");
+    expect(apiMocks.saveChatSessionWorkbenchFile).toHaveBeenCalledTimes(1);
+  });
+  it("reopens a retained draft even when its file is unavailable", async () => {
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness />); await flushAsyncEffects(); });
+    await act(async () => latest!.setWorkbenchDraftContent("keep this"));
+    await act(async () => renderer.unmount());
+    apiMocks.fetchChatSessionWorkbenchFile.mockRejectedValue(new Error("Missing file"));
+    await act(async () => { create(<Harness />); await flushAsyncEffects(); });
+    expect(latest!.workbenchDraftPaths).toContain(workbenchFile.path);
+    await act(async () => latest!.openWorkbenchFile(workbenchFile.path));
+    expect(latest!.workbenchDraftContent).toBe("keep this"); expect(latest!.workbenchError).toContain("Current file unavailable");
+    await act(async () => { expect(await latest!.saveWorkbenchFile()).toBe(false); });
+    expect(apiMocks.saveChatSessionWorkbenchFile).not.toHaveBeenCalled();
+  });
+
+  it("retains the draft on a Gateway conflict after preflight and saves only the explicitly reviewed revision", async () => {
+    await act(async () => { create(<Harness />); await flushAsyncEffects(); });
+    await act(async () => latest!.setWorkbenchDraftContent("operator draft"));
+    const winner = { ...workbenchFile, revision: "b".repeat(64), content: "concurrent writer" };
+    apiMocks.saveChatSessionWorkbenchFile.mockImplementationOnce(async () => {
+      apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValue(winner);
+      throw Object.assign(new Error('API error 409: {"error":"conflict"}'), { status: 409 });
+    });
+    await act(async () => { expect(await latest!.saveWorkbenchFile()).toBe(false); });
+    expect(apiMocks.saveChatSessionWorkbenchFile).toHaveBeenLastCalledWith("session-1", {
+      path: workbenchFile.path, content: "operator draft", expectedRevision: workbenchFile.revision,
+    });
+    expect(latest!.workbenchDraftContent).toBe("operator draft");
+    expect(latest!.workbenchHasRemoteChanges).toBe(true);
+    expect(latest!.workbenchError).not.toContain("API error");
+    await act(async () => { expect(await latest!.saveWorkbenchFile()).toBe(false); });
+    expect(apiMocks.saveChatSessionWorkbenchFile).toHaveBeenCalledTimes(1);
+    await act(async () => latest!.rebaseWorkbenchDraft());
+    apiMocks.saveChatSessionWorkbenchFile.mockResolvedValueOnce({ ...winner, revision: "c".repeat(64), content: "operator draft" });
+    await act(async () => { expect(await latest!.saveWorkbenchFile()).toBe(true); });
+    expect(apiMocks.saveChatSessionWorkbenchFile).toHaveBeenLastCalledWith("session-1", {
+      path: workbenchFile.path, content: "operator draft", expectedRevision: winner.revision,
+    });
+    expect(latest!.hasDirtyWorkbenchDraft).toBe(false);
+  });
+
+  it("detects a new file identity even when its contents match the draft's original version", async () => {
+    await act(async () => { create(<Harness />); await flushAsyncEffects(); });
+    await act(async () => latest!.setWorkbenchDraftContent("local draft"));
+    apiMocks.fetchChatSessionWorkbenchFile.mockResolvedValue({ ...workbenchFile, revision: "b".repeat(64) });
+    await act(async () => { expect(await latest!.saveWorkbenchFile()).toBe(false); });
+    expect(latest!.workbenchHasRemoteChanges).toBe(true);
+    expect(latest!.workbenchDraftContent).toBe("local draft");
+    expect(apiMocks.saveChatSessionWorkbenchFile).not.toHaveBeenCalled();
+  });
+
 });

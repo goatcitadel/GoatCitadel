@@ -55,6 +55,9 @@ import {
 } from "./ProjectsRoutePage.helpers";
 import { PROJECT_FILTER_VIEWS, useProjectPinController, type ProjectFilterView } from "./use-project-pin-archive";
 import { useProjectRevisionConflict } from "./use-project-revision-conflict";
+import { hasSessionDraft, useSessionDraft } from "../library/session-drafts";
+import { useSessionViewState } from "../../../hooks/use-session-view-state";
+import { useDraftLeave } from "../library/DraftLeaveDialog";
 import "../native-routes.css";
 
 export { deriveProjectHome } from "./ProjectsRoutePage.helpers";
@@ -74,7 +77,13 @@ type ProjectSessionStartOptions = {
   intakeId?: ProjectIntakeModeId;
 };
 
-export function ProjectsRoutePage({
+const EMPTY_PROJECT_DRAFT = { name: "", workspacePath: "", description: "" };
+
+export function ProjectsRoutePage(props: NativeRoutePagesProps) {
+  return <ProjectsWorkspace key={JSON.stringify([props.activeCitadelId, props.activeWorkspaceId])} {...props} />;
+}
+
+function ProjectsWorkspace({
   route,
   activeCitadelId,
   activeCitadelName,
@@ -94,9 +103,14 @@ export function ProjectsRoutePage({
   const [actionError, setActionError] = useState<string | null>(null);
   const [projectActionBusy, setProjectActionBusy] = useState<string | null>(null);
   const [cardActionBusy, setCardActionBusy] = useState<string | null>(null);
-  const [createDraft, setCreateDraft] = useState({ name: "", workspacePath: "", description: "" });
-  const [editDraft, setEditDraft] = useState({ name: "", workspacePath: "", description: "" });
-  const [filterView, setFilterView] = useState<ProjectFilterView>("all");
+  const [editor, setEditor] = useState<"create" | "edit" | null>(null);
+  const [query, setQuery] = useSessionViewState(`projects:${activeCitadelId}:${activeWorkspaceId}:query`, "");
+  const leave = useDraftLeave();
+  const creation = useSessionDraft(JSON.stringify([activeCitadelId, activeWorkspaceId, "project", "create"]), EMPTY_PROJECT_DRAFT, undefined, {
+    label: "New project", active: editor === "create", onSave: () => handleCreateProject(),
+  });
+  const { value: createDraft, setValue: setCreateDraft } = creation;
+  const [filterView, setFilterView] = useSessionViewState<ProjectFilterView>(`projects:${activeCitadelId}:${activeWorkspaceId}:filter`, "all");
   const createProjectNameRef = useRef<HTMLInputElement | null>(null);
   const isMounted = useIsMounted();
 
@@ -112,10 +126,9 @@ export function ProjectsRoutePage({
 
   const pinController = useProjectPinController(activeWorkspaceId);
 
-  const handleFocusCreateProject = useCallback(() => {
-    createProjectNameRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    createProjectNameRef.current?.focus();
-  }, []);
+  const handleFocusCreateProject = () => leave.request(() => setEditor("create"));
+  useEffect(() => { if (editor === "create") createProjectNameRef.current?.focus(); }, [editor]);
+  useEffect(() => { setEditor(null); }, [route.projectId]);
 
   const handleOpenSurface = useCallback(
     (mode: ChatMode) => {
@@ -237,6 +250,7 @@ export function ProjectsRoutePage({
 
   const visibleProjects = useMemo(() => {
     return state.projects.filter((project) => {
+      if (query.trim() && ![project.name, project.description, project.workspacePath].join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) return false;
       switch (filterView) {
         case "pinned":
           return pinController.isPinned(project.projectId);
@@ -248,7 +262,7 @@ export function ProjectsRoutePage({
           return true;
       }
     });
-  }, [filterView, pinController, state.projects]);
+  }, [filterView, pinController, query, state.projects]);
 
   const fallbackProject =
     visibleProjects.find((project) => project.lifecycleStatus !== "archived") ??
@@ -259,6 +273,10 @@ export function ProjectsRoutePage({
   const routedProject = state.projects.find((project) => project.projectId === route.projectId) ?? null;
   const selectedProject = routedProject ?? fallbackProject;
   const isProjectDetailRoute = routedProject !== null;
+  const editing = useSessionDraft(JSON.stringify([activeCitadelId, activeWorkspaceId, "project", selectedProject?.projectId, "edit"]), {
+    name: selectedProject?.name ?? "", workspacePath: selectedProject?.workspacePath ?? "", description: selectedProject?.description ?? "",
+  }, selectedProject?.revision, { label: selectedProject?.name ?? "Project", available: Boolean(selectedProject), active: isProjectDetailRoute && editor === "edit", onSave: () => handleSaveProject() });
+  const { value: editDraft, setValue: setEditDraft } = editing;
 
   useEffect(() => {
     if (state.loading || !route.projectId || routedProject) {
@@ -293,11 +311,6 @@ export function ProjectsRoutePage({
     if (revisionConflict && revisionConflict.projectId !== selectedProject?.projectId) {
       clearRevisionConflict();
     }
-    setEditDraft({
-      name: selectedProject?.name ?? "",
-      workspacePath: selectedProject?.workspacePath ?? "",
-      description: selectedProject?.description ?? "",
-    });
   }, [
     revisionConflict,
     clearRevisionConflict,
@@ -378,12 +391,12 @@ export function ProjectsRoutePage({
     await handleNewSession(mode);
   };
 
-  const handleCreateProject = async () => {
+  const handleCreateProject = async (): Promise<boolean> => {
     const name = createDraft.name.trim();
     const workspacePath = createDraft.workspacePath.trim();
     if (!name || !workspacePath) {
       setActionError("Project name and workspace path are required.");
-      return;
+      return false;
     }
     setActionError(null);
     setProjectActionBusy("create");
@@ -396,21 +409,23 @@ export function ProjectsRoutePage({
         description: createDraft.description.trim() || undefined,
       });
       if (!isMounted()) {
-        return;
+        return false;
       }
       setState((current) => ({
         ...current,
         projects: [project, ...current.projects.filter((item) => item.projectId !== project.projectId)],
       }));
-      setCreateDraft({ name: "", workspacePath: "", description: "" });
+      const clean = creation.acceptSaved(EMPTY_PROJECT_DRAFT, undefined, createDraft);
       recordRouteAction("projects", "project.created", {
         projectId: project.projectId,
       });
-      navigate({ area: "projects", projectId: project.projectId, theme: route.theme });
+      if (clean) { setEditor(null); navigate({ area: "projects", projectId: project.projectId, theme: route.theme }); }
+      return clean;
     } catch (error) {
       if (isMounted()) {
         setActionError(getErrorMessage(error));
       }
+      return false;
     } finally {
       if (isMounted()) {
         setProjectActionBusy(null);
@@ -418,21 +433,23 @@ export function ProjectsRoutePage({
     }
   };
 
-  const handleSaveProject = async () => {
+  const handleSaveProject = async (): Promise<boolean> => {
     if (!selectedProject) {
-      return;
+      return false;
     }
     const name = editDraft.name.trim();
     const workspacePath = editDraft.workspacePath.trim();
     if (!name || !workspacePath) {
       setActionError("Project name and workspace path are required.");
-      return;
+      return false;
     }
     setActionError(null);
     setProjectActionBusy("save");
     try {
       const project = await updateChatProject(selectedProject.projectId, {
-        expectedRevision: selectedProject.revision,
+        expectedRevision: revisionConflict?.projectId === selectedProject.projectId
+          ? selectedProject.revision
+          : editing.baseRevision as number,
         citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
         name,
@@ -440,23 +457,26 @@ export function ProjectsRoutePage({
         description: editDraft.description.trim() || undefined,
       });
       if (!isMounted()) {
-        return;
+        return false;
       }
       setState((current) => ({
         ...current,
         projects: current.projects.map((item) => (item.projectId === project.projectId ? project : item)),
       }));
       clearRevisionConflict();
+      const clean = editing.acceptSaved({ name: project.name, workspacePath: project.workspacePath, description: project.description ?? "" }, project.revision, editDraft);
       recordRouteAction("projects", "project.updated", {
         projectId: project.projectId,
       });
+      return clean;
     } catch (error) {
       if (isMounted()) {
         if (await handleRevisionConflict(error, selectedProject.projectId, true, "save")) {
-          return;
+          return false;
         }
         setActionError(getErrorMessage(error));
       }
+      return false;
     } finally {
       if (isMounted()) {
         setProjectActionBusy(null);
@@ -660,7 +680,7 @@ export function ProjectsRoutePage({
     <NativePageFrame
       area="projects"
       kicker={isProjectDetailRoute ? "Projects · Detail" : "Projects · Containers"}
-      title={routedProject?.name ?? "Project containers"}
+      title={editor === "create" ? "New project" : editor === "edit" ? `Edit ${routedProject?.name ?? "project"}` : routedProject?.name ?? "Projects"}
       description={
         routedProject
           ? `Threads, artifacts, and controls for ${routedProject.name} inside ${activeWorkspaceName}.`
@@ -668,30 +688,13 @@ export function ProjectsRoutePage({
       }
       loading={state.loading}
       error={state.error}
-      lead={leadContent}
+      lead={!editor && state.projects.length === 0 ? leadContent : undefined}
       metrics={[
         { label: "Projects", value: String(state.projects.length) },
         { label: "Project sessions", value: String(totalProjectSessions) },
         { label: "Citadel", value: activeCitadelId ?? "legacy" },
       ]}
-      actions={
-        state.projects.length === 0 ? (
-          <NativeButton onClick={handleFocusCreateProject}>
-            <FolderPlus size={16} />
-            Create project
-          </NativeButton>
-        ) : (
-          SURFACES.map((surface) => (
-            <NewSessionButton
-              key={`head-${surface.mode}`}
-              mode={surface.mode}
-              label={surface.action}
-              disabled={!selectedProject}
-              onSelect={() => void handleNewSession(surface.mode)}
-            />
-          ))
-        )
-      }
+      actions={editor ? <NativeButton variant="ghost" onClick={() => leave.request(() => setEditor(null))}>{(editor === "create" ? creation : editing).isDirty ? "Keep draft and close" : "Close editor"}</NativeButton> : routedProject ? <><NativeButton variant="ghost" onClick={() => navigate({ area: "projects", theme: route.theme })}>All projects</NativeButton><NativeButton variant="outline" onClick={() => setEditor("edit")}>{editing.isDirty ? "Resume edit · Unsaved" : "Edit project"}</NativeButton></> : <NativeButton onClick={handleFocusCreateProject}><FolderPlus size={16} />{creation.isDirty ? "Resume new project" : "New project"}</NativeButton>}
     >
       {revisionConflict ? <NoticeBanner tone="warning" message={revisionConflict.message} /> : null}
       {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
@@ -699,7 +702,7 @@ export function ProjectsRoutePage({
         <NoticeBanner tone="warning" message={`Project artifact records could not load: ${state.artifactIssue}`} />
       ) : null}
       <NativeGrid className="mc-next-native-projects-grid">
-        <NativeCard
+        {!routedProject && !editor ? <NativeCard
           title="Projects"
           subtitle="Containers that bind Chat threads, files, and proof together."
           density="compact"
@@ -714,6 +717,7 @@ export function ProjectsRoutePage({
             </button>
           }
         >
+          <label className="mc-next-settings-field"><span>Search projects</span><input type="search" className="mc-next-settings-input" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <FilterPillGroup
             label="Filter projects by state"
             idPrefix="projects-filter"
@@ -747,7 +751,7 @@ export function ProjectsRoutePage({
                       onClick={() => navigate({ area: "projects", projectId: project.projectId, theme: route.theme })}
                     >
                       <div className="mc-next-settings-selectable-head">
-                        <strong>{project.name}</strong>
+                        <strong>{project.name}{hasSessionDraft(JSON.stringify([activeCitadelId, activeWorkspaceId, "project", project.projectId, "edit"])) ? " · Unsaved" : ""}</strong>
                         <span>{counts.chat + counts.cowork + counts.code} threads</span>
                       </div>
                       <p>{project.description?.trim() || project.workspacePath}</p>
@@ -803,9 +807,9 @@ export function ProjectsRoutePage({
               </>
             )}
           </NativeSelectableList>
-        </NativeCard>
+        </NativeCard> : null}
 
-        {routedProject ? (
+        {routedProject && !editor ? (
           <NativeCard
             title={routedProject.name}
             subtitle={routedProject.workspacePath}
@@ -817,12 +821,15 @@ export function ProjectsRoutePage({
               value: String((countsByProject.get(routedProject.projectId) ?? createEmptyCounts())[surface.mode]),
             }))}
           >
+            <details className="mc-next-project-menu"><summary>Project actions</summary><div className="mc-next-settings-button-row"><NativeButton variant="ghost" onClick={handleFocusCreateProject}>New project</NativeButton><NativeButton variant="ghost" onClick={() => void loadProjects()}>Refresh</NativeButton><NativeButton variant="ghost" aria-label={`${pinController.isPinned(routedProject.projectId) ? "Unpin" : "Pin"} project ${routedProject.name}`} onClick={() => handleTogglePin(routedProject)}>{pinController.isPinned(routedProject.projectId) ? "Unpin" : "Pin"}</NativeButton><NativeButton variant="ghost" aria-label={`${routedProject.lifecycleStatus === "archived" ? "Unarchive" : "Archive"} project ${routedProject.name}`} onClick={() => void (routedProject.lifecycleStatus === "archived" ? handleRestoreProject(routedProject) : handleArchiveProject(routedProject))}>{routedProject.lifecycleStatus === "archived" ? "Unarchive" : "Archive"}</NativeButton></div></details>
             {projectHome ? (
               <ProjectHomeBasePanel
                 home={projectHome}
                 pendingApprovals={pendingApprovals}
                 projectName={routedProject.name}
+                onNewChat={() => void handleNewSession("chat")}
                 onContinue={(mode) => void handleContinueSession(mode)}
+                onOpenSession={(sessionId) => navigate({ area: "chat", projectId: routedProject.projectId, sessionId, theme: route.theme })}
                 onStartIntake={(intent) => void handleStartIntake(intent)}
                 onOpenMemory={() => navigate({ area: "library", section: "memory", theme: route.theme })}
                 onOpenArtifacts={() =>
@@ -835,15 +842,7 @@ export function ProjectsRoutePage({
                 }
               />
             ) : null}
-            <ProjectAutomaticFanoutCard project={routedProject} workspaceId={activeWorkspaceId} />
-            <div className="mc-next-settings-button-row">
-              {SURFACES.map((surface) => (
-                <NativeButton key={surface.mode} onClick={() => void handleNewSession(surface.mode)}>
-                  <MessageSquarePlus size={16} />
-                  {surface.action}
-                </NativeButton>
-              ))}
-            </div>
+            <NativeDisclosureCard id="project-governance" title="Project settings" subtitle="Governed delegation and project scope" lazy><ProjectAutomaticFanoutCard project={routedProject} workspaceId={activeWorkspaceId} /></NativeDisclosureCard>
             <div className="mc-next-project-thread-groups">
               {SURFACES.map((surface) => (
                 <ProjectThreadGroup
@@ -859,9 +858,9 @@ export function ProjectsRoutePage({
           </NativeCard>
         ) : null}
 
-        <NativeCard
+        {editor ? <NativeCard
           className="mc-next-project-controls-card"
-          title="Project controls"
+          title={editor === "create" ? "Create project" : "Project details"}
           subtitle={
             routedProject
               ? "Create a new project or rename the selected one. Pin and archive live on each card."
@@ -872,7 +871,7 @@ export function ProjectsRoutePage({
           bodyMaxHeight="min(70vh, 42rem)"
         >
           <div className="mc-next-project-controls">
-            <section className="mc-next-project-control-section">
+            {editor === "create" ? <section className="mc-next-project-control-section">
               <div className="mc-next-project-control-heading">
                 <FolderPlus size={16} />
                 <strong>Create project</strong>
@@ -916,9 +915,9 @@ export function ProjectsRoutePage({
                 <FolderPlus size={16} />
                 {projectActionBusy === "create" ? "Creating..." : "Create project"}
               </NativeButton>
-            </section>
+            </section> : null}
 
-            {routedProject ? (
+            {routedProject && editor === "edit" ? (
               <section className="mc-next-project-control-section">
                 <div className="mc-next-project-control-heading">
                   <Pencil size={16} />
@@ -964,11 +963,12 @@ export function ProjectsRoutePage({
               </section>
             ) : null}
           </div>
-        </NativeCard>
+        </NativeCard> : null}
       </NativeGrid>
-      {!routedProject ? (
+      {!routedProject && !editor ? (
         <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
       ) : null}
+      {leave.dialog}
     </NativePageFrame>
   );
 }

@@ -217,10 +217,10 @@ describe("MemoryLifecycleService", () => {
     });
     expect(await service.getMaintenanceRunProvenance("maint-run-1")).toMatchObject({ run: { runId: "maint-run-1" } });
     expect(await service.listMaintenanceRecommendations("workspace-1", 4)).toEqual([{ recommendationId: "rec-1" }]);
-    expect((await service.acceptMaintenanceRecommendation("rec-1")).recommendation).toMatchObject({
+    expect((await service.acceptMaintenanceRecommendation("rec-1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) })).recommendation).toMatchObject({
       recommendationId: "rec-1",
     });
-    expect(await service.rejectMaintenanceRecommendation("rec-1")).toMatchObject({ status: "rejected" });
+    expect(await service.rejectMaintenanceRecommendation("rec-1", { expectedRevision: "a".repeat(64) })).toMatchObject({ status: "rejected" });
     await expect(service.runDueEvaluation()).resolves.toBeUndefined();
     await expect(service.noteSuccessfulRootTurn("session-1")).resolves.toBeUndefined();
     expect(service.parseMaintenanceWorkflowPayload({ runId: "durable-1" } as never)).toEqual({

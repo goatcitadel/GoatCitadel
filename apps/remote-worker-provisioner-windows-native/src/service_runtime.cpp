@@ -5,6 +5,7 @@
 
 #include "ed25519_runtime.hpp"
 #include "local_transport.hpp"
+#include "signer_inspection.hpp"
 
 #include <array>
 #include <cstddef>
@@ -1388,6 +1389,10 @@ DWORD WINAPI ServiceStartupWorker(void* raw_context) noexcept {
     return FinishStartupWorker(
         context, static_cast<std::uint32_t>(validation));
   }
+  if (!GrantCurrentSignerInspectionAccess()) {
+    return FinishStartupWorker(
+        context, static_cast<std::uint32_t>(ServiceIdentityValidation::ServiceIdentity));
+  }
   if (IsDeadlineExpired(context->startup_deadline)) {
     return FinishStartupWorker(
         context, TransportResultCode(ServiceTransportResult::Deadline));
@@ -2583,18 +2588,24 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
     return ServiceIdentityValidation::ServiceIdentity;
   }
 
-  if (snapshot.service_ace_count != 2U) {
+  if (snapshot.service_ace_count != 3U) {
     return ServiceIdentityValidation::ServiceIdentity;
   }
   const ServiceAceSnapshot& system_ace = snapshot.service_aces[0];
   const ServiceAceSnapshot& administrators_ace = snapshot.service_aces[1];
+  const ServiceAceSnapshot& worker_ace = snapshot.service_aces[2];
+  const SidSnapshot worker = MakeNtSidSnapshot(
+      kRuntimeWorkerSidParts.data(), kRuntimeWorkerSidParts.size());
   if (system_ace.type != ACCESS_ALLOWED_ACE_TYPE || system_ace.flags != 0U ||
       system_ace.mask != SERVICE_ALL_ACCESS ||
       !EqualSidSnapshot(system_ace.sid, local_system) ||
       administrators_ace.type != ACCESS_ALLOWED_ACE_TYPE ||
       administrators_ace.flags != 0U ||
       administrators_ace.mask != kAdministratorServiceMask ||
-      !EqualSidSnapshot(administrators_ace.sid, administrators)) {
+      !EqualSidSnapshot(administrators_ace.sid, administrators) ||
+      worker_ace.type != ACCESS_ALLOWED_ACE_TYPE || worker_ace.flags != 0U ||
+      worker_ace.mask != kRuntimeWorkerSignerQueryMask ||
+      !EqualSidSnapshot(worker_ace.sid, worker)) {
     return ServiceIdentityValidation::ServiceIdentity;
   }
   return ServiceIdentityValidation::Valid;

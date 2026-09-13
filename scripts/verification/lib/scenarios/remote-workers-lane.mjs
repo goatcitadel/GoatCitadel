@@ -25,7 +25,7 @@
 //   * a proof-matrix row with no passing checks and no declared skipReason is a
 //     table bug and FAILS — no row can be silently dropped;
 //   * the live-PostgreSQL check must EXECUTE (hermetically provisioned or via
-//     GOATCITADEL_TEST_POSTGRES_URL) with `requireAllExecuted` so its bootstrap bridge plus seven
+//     GOATCITADEL_TEST_POSTGRES_URL) with `requireAllExecuted` so its bootstrap bridge and worker
 //     `.postgres.test.ts` suites may never self-skip inside the lane;
 //   * the connected-worker end-to-end row (scenario 12) must EXECUTE with
 //     `requireAllExecuted`, so its spawned second process can never self-skip;
@@ -64,7 +64,9 @@ export const REMOTE_WORKER_LIVE_POSTGRES_SUITES = [
   "remote-worker-nonce-repo.postgres.test.ts",
   "remote-worker-admission-repo.postgres.test.ts",
   "remote-worker-assignment-repo.postgres.test.ts",
+  "remote-worker-chat-offer-repo.postgres.test.ts",
   "remote-worker-inference-repo.postgres.test.ts",
+  "remote-worker-budget-repo.postgres.test.ts",
   "remote-worker-cell-repo.postgres.test.ts",
   "remote-worker-artifact-repo.postgres.test.ts",
   "remote-worker-effect-repo.postgres.test.ts",
@@ -145,7 +147,7 @@ export function buildRemoteWorkersLaneChecks() {
       // Runs FIRST on purpose: tsc -b also EMITS the workspace dist/ outputs the
       // tsx-based storage checks and the UI packages resolve, so a fresh clone
       // (or a fresh worktree) self-bootstraps instead of failing on missing
-      // builds. The remote-worker owners span all six packages below.
+      // builds. The remote-worker owners span all seven packages below.
       title:
         "Release hygiene: contracts, storage, gateway, policy-engine, shared-client, mission-control-next, and the connected-worker runtime (apps/remote-worker) boundary typechecks over the remote-worker span",
       args: [
@@ -179,9 +181,12 @@ export function buildRemoteWorkersLaneChecks() {
         "src/remote-worker-admission.test.ts",
         "src/remote-worker-assignment.test.ts",
         "src/remote-worker-inference.test.ts",
+        "src/remote-worker-chat-context.test.ts",
+        "src/remote-worker-chat-workflow.test.ts",
         "src/remote-worker-cell.test.ts",
         "src/remote-worker-settlement.test.ts",
         "src/remote-worker-ops.test.ts",
+        "src/mesh-schema-node.test.ts",
       ],
       count: "vitest",
     },
@@ -200,8 +205,12 @@ export function buildRemoteWorkersLaneChecks() {
         "remote-worker-admission-repo.test.ts",
         "remote-worker-admission-schema-parity.test.ts",
         "remote-worker-assignment-repo.test.ts",
+        "remote-worker-chat-resume-repo.test.ts",
+        "remote-worker-chat-offer-repo.test.ts",
         "remote-worker-assignment-schema-parity.test.ts",
         "remote-worker-inference-repo.test.ts",
+        "remote-worker-budget-repo.test.ts",
+        "remote-worker-budget-related.test.ts",
         "remote-worker-inference-schema-parity.test.ts",
         "remote-worker-cell-repo.test.ts",
         "remote-worker-cell-schema-parity.test.ts",
@@ -223,6 +232,7 @@ export function buildRemoteWorkersLaneChecks() {
         "Gateway owners: HX-501/501B1 protocol (durable nonce, transport/PoP evidence, secret-free diagnostics); native-listener composition (routes 2-6 + 8-10 + 11-12 mux registration, fail-closed admission composition, flag-gated assignment-runtime composition); routes 11-12 execution wire (contract-owned codes, in-transaction M2/evidence/mesh fence recheck, replayed-nonce refusal, bounded collapsed failures); HX-503 inference proxy (one effective route, secret isolation, atomic-budget recheck, no redispatch after ambiguous acceptance, HX-306 accounting); HX-505 execution cell (server-owned profiles, capacity, deny-by-default egress, bounded capture, container-only, hash-bound backup/restore); HX-506 settlement (CAS store, Gateway-trusted verification, generation-fenced artifact/effect settlement, worker-claim non-authority, integration); HX-507 visibility (authority labels, bounded redacted events, stable cursors, idempotent controls, access-class isolation, no-store)",
       args: gatewayVitest([
         "services/remote-worker-protocol.test.ts",
+        "services/remote-worker-native-tls-listener.test.ts",
         "services/remote-worker-native-handler-mux.test.ts",
         "services/remote-worker-admission-composition.test.ts",
         "services/remote-worker-assignment-runtime-composition.test.ts",
@@ -230,6 +240,22 @@ export function buildRemoteWorkersLaneChecks() {
         "services/remote-worker-assignment-execution-protocol-service.test.ts",
         "services/remote-worker-inference-service.test.ts",
         "services/remote-worker-inference-llm-adapter.test.ts",
+        "services/remote-worker-inference-llm-service-adapter.test.ts",
+        "services/remote-worker-chat-offer-service.test.ts",
+        "services/remote-worker-chat-placement-service.test.ts",
+        "services/gateway-service.remote-worker-policy.test.ts",
+        "services/remote-worker-chat-execution-service.test.ts",
+        "services/remote-worker-chat-output-service.test.ts",
+        "services/remote-worker-chat-sequence.test.ts",
+        "services/remote-worker-approved-action-guard.test.ts",
+        "services/gateway-service.approvals-facade.test.ts",
+        "services/approval-resolution-effects-service.test.ts",
+        "services/gateway-service.low-hanging-facade.test.ts",
+        "services/chat-turn-stream-service.test.ts",
+        "services/chat-turn-dispatch-service.test.ts",
+        "services/chat-durable-run-service.test.ts",
+        "services/durable-chat-routed-context.test.ts",
+        "services/remote-worker-budget-operator-service.test.ts",
         "services/remote-worker-cell-service.test.ts",
         "services/remote-worker-cell-filesystem.security.test.ts",
         "services/remote-worker-cell-terminal-capture.test.ts",
@@ -240,6 +266,10 @@ export function buildRemoteWorkersLaneChecks() {
         "services/remote-worker-artifact-settlement-service.test.ts",
         "services/remote-worker-verification-service.test.ts",
         "services/remote-worker-effect-settlement-service.test.ts",
+        "services/remote-worker-effect-runtime.test.ts",
+        "services/remote-worker-chat-approval-wait-read-service.test.ts",
+        "services/remote-worker-chat-approval-resume.test.ts",
+        "services/tool-invocation-coordinator-service.test.ts",
         "services/remote-worker-settlement.integration.test.ts",
         "services/remote-workers-route-service.test.ts",
         "routes/remote-workers.test.ts",
@@ -247,13 +277,20 @@ export function buildRemoteWorkersLaneChecks() {
       count: "vitest",
     },
     {
+      id: "remote-workers.worker-runtime",
+      title: "Connected-worker package: admission, transport, durable state, mesh execution deadlines, cancellation and no-retry recovery",
+      args: ["--filter", "@goatcitadel/remote-worker", "test"],
+      count: "vitest",
+      requireAllExecuted: true,
+    },
+    {
       id: "remote-workers.connected-worker-e2e",
       // Scenario 12. Spawns the real `apps/remote-worker` process against a
       // composed native TLS listener on this host, so `requireAllExecuted`
       // guards it: a self-skipped E2E can never pass the row.
       title:
-        "Connected-worker end-to-end (scenario 12): a spawned apps/remote-worker process admits over native mTLS, binds its mesh node, claims a scheduler-shaped offer, reads its workload, ships an ordered transcript, dies mid-loop, restarts, replays byte-identically, renews its lease, and settles exactly once — asserted from durable state",
-      args: gatewayVitest(["services/remote-worker-connected-worker-e2e.test.ts"]),
+        "Connected-worker end-to-end (scenario 12): a spawned apps/remote-worker process admits over native mTLS, binds its mesh node, claims a scheduler-shaped offer, reads its workload, ships an ordered transcript, dies mid-loop, restarts, replays byte-identically, renews its lease, and settles exactly once. Destination mesh effects continue during assignment waits and recover interrupted settlement without repeating effects — asserted from durable state",
+      args: gatewayVitest(["services/remote-worker-connected-worker-e2e.test.ts", "services/mesh-capability-destination-e2e.test.ts"]),
       count: "vitest",
       requireAllExecuted: true,
     },
@@ -282,6 +319,7 @@ export function buildRemoteWorkersLaneChecks() {
         "vitest",
         "run",
         "src/api/remote-workers.test.ts",
+        "src/api/remote-worker-budgets.test.ts",
         "src/hooks/useRemoteWorkerRegistry.test.ts",
         "src/state/realtime-derived.test.ts",
       ],
@@ -298,6 +336,7 @@ export function buildRemoteWorkersLaneChecks() {
         "vitest",
         "run",
         "src/features/native-routes/ops/RemoteWorkersRoutePage.test.tsx",
+        "src/features/native-routes/ops/RemoteWorkerBudgetPanel.test.tsx",
         "src/features/threaded-surface/RemoteWorkerInlineActivity.test.tsx",
         "src/features/threaded-surface/useRemoteWorkerInlineActivity.test.ts",
         "src/app/remote-worker-realtime.test.ts",
@@ -453,10 +492,8 @@ export function buildRemoteWorkersProofMatrix() {
       title:
         "Hermetic live PostgreSQL: every remote-worker generation-fenced owner .postgres.test.ts run against ONE self-provisioned native cluster (not an optional skip)",
       checks: ["remote-workers.live-postgres"],
-      suites: [
-        "packages/storage/src/postgres-bootstrap-bridge.postgres.test.ts plus remote-worker-{nonce,admission,assignment,inference,cell,artifact,effect}-repo.postgres.test.ts (eight suites, one hermetic initdb/pg_ctl cluster, requireAllExecuted so no PostgreSQL side self-skips)",
-      ],
-      note: "The live-PostgreSQL check provisions a hermetic native cluster on a distinct port (or honours GOATCITADEL_TEST_POSTGRES_URL) and runs the bootstrap bridge plus all seven owner .postgres.test.ts suites with requireAllExecuted; a self-skipped PostgreSQL side fails the lane.",
+      suites: [...REMOTE_WORKER_LIVE_POSTGRES_SUITES],
+      note: "The live-PostgreSQL check provisions a hermetic native cluster on a distinct port (or honours GOATCITADEL_TEST_POSTGRES_URL) and runs every registered owner .postgres.test.ts suite with requireAllExecuted; a self-skipped PostgreSQL side fails the lane.",
     },
     {
       row: 9,
@@ -473,7 +510,7 @@ export function buildRemoteWorkersProofMatrix() {
     {
       row: 10,
       title:
-        "Release hygiene: remote-worker-span typechecks (six packages), eslint over the lane artifacts and remote-worker source, and git diff --check",
+        "Release hygiene: remote-worker-span typechecks (seven packages), eslint over the lane artifacts and remote-worker source, and git diff --check",
       checks: ["remote-workers.typecheck", "remote-workers.eslint", "remote-workers.diff"],
       suites: [
         "pnpm --filter contracts/storage/gateway/policy-engine/mission-control-shared/mission-control-next typecheck",
@@ -493,16 +530,18 @@ export function buildRemoteWorkersProofMatrix() {
     {
       row: 12,
       title:
-        "Live connected-worker end-to-end (single-host, routes 1-10 of the declared journey): a real second process admits -> binds its mesh node -> claims a scheduler-shaped offer -> reads its workload -> ships ordered transcript events -> is killed mid-loop -> restarts -> replays byte-identically -> renews -> settles once, with no duplicate accounting. Inference (route 11) and artifact/effect settlement submission (route 12) are NOT executed and stay held — see the note",
-      checks: ["remote-workers.connected-worker-e2e"],
+        "Connected-worker end-to-end on one host: native mTLS admission, mesh binding, canonical offer and workload, lease renewal, ordered transcript recovery, real LlmService execution with controlled provider output, verified CAS artifact publication, and terminal settlement recovery without redispatch",
+      checks: ["remote-workers.worker-runtime", "remote-workers.connected-worker-e2e"],
       suites: [
+        "apps/remote-worker/src/worker-mesh-capability-runtime.test.ts (one deadline across input, policy and execution; monotonic late-result rejection, cancellation and retained no-retry recovery, alongside the complete worker package)",
         "apps/gateway/src/services/remote-worker-connected-worker-e2e.test.ts (composes the shipped admission service, protected-evidence verifier, mesh-node admission owner, and the flag-gated routes 2-6 / 8-10 owners over the canonical SQLite repositories, starts the native TLS 1.3 listener, and spawns apps/remote-worker three times)",
         "run 1: the one-time bootstrap exchange (route 1) from a real second process over native mTLS with a protected admission envelope bound to that channel's exporter",
         "run 2: reconnect on the RETAINED credential (never the bootstrap secret) -> mesh-node admission (route 7) -> offer poll (8) -> claim (9) -> workload read (10) -> first transcript batch (4), then exit holding a live lease and an unacknowledged tail",
         "run 3: restart -> assignment sync (2) -> byte-identical replay of the first batch plus the fresh tail (4) -> lease renewal with secret rotation (3) -> control read (5) -> terminal settlement (6)",
-        "durable-state assertions (never logs): exactly one runtime credential, exactly one assignment generation, exactly one settlement, three contiguous non-duplicated events, and zero HX-306 model_usage_events / remote-worker inference request rows",
+        "protocol-probe durable-state assertions: exactly one runtime credential, assignment generation and settlement, three contiguous events, and zero model attempts",
+        "text-execution durable-state assertions: exactly one accounted provider attempt, satisfied artifact verification, released unused budget capacity, and exactly one completed settlement across restart",
       ],
-      note: "EXECUTED single-host, and deliberately narrower than the row title. What runs: admission, mesh-node binding, scheduler-shaped dispatch (the harness creates the offer through the canonical storage owners exactly as a scheduler eventually would — there is still no production scheduler), ordered exactly-once transcript transport across a kill and a restart, and one generation-fenced terminal settlement. What does NOT run and remains held: routes 11-12. The harness composes a fail-closed execution owner that refuses every call, because the HX-503 inference owner needs governance/approval/budget/routing/HX-306-accounting adapters and the HX-506 owners need a CAS store plus an effect coordinator, none of which production composes. A consequence is visible in the executed settlement itself: a `completed` outcome must cite a committed HX-506 artifact manifest, so with no artifact owner composed the worker settles the outcome it can actually evidence. Running the loop for the first time also surfaced two real defects in the composed path, both fixed here: the transport header allowlist omitted the route-7 join-credential header (making route 7 unreachable through the listener), and the mesh-node admission owner's `admittedByActorId` postcondition disagreed with the canonical storage value (committing the effect and then answering 403). Two-machine mTLS stays scenario 11's hold; this row is single-host by construction.",
+      note: "EXECUTED on one host. The protocol probe covers kill/restart and ordered transport. A separate spawned worker executes route 11 through canonical LlmService, spending grant and HX-306 accounting owners, and route 12 through CAS and its exact-output verifier. Its 32.5-second controlled provider response overlaps a parent heartbeat; restart replays terminal settlement without another model call. Production shares the inference, artifact and canonical tool-effect composition behind explicit activation. The continuous worker completes two assignments and stops before dispatch when retry capacity is unavailable. The heartbeat harness seeds an admitted task-bound Chat turn and admits an idle worker before production placement creates its assignment through the canonical offer owner and the operator's spending grant. Gateway scheduling preflight and dual-dialect placement/offer/replay/rollback checks run separately. Frozen prepared Chat history crosses the worker and provider boundary. The spawned worker verifies canonical completion hooks with memory disabled; separate owner tests cover memory utility budgets. Verified output reaches canonical Chat messages and the durable finalizer, with atomic transcript/result receipts, rollback and exact replay. The normal Chat stream writer is covered separately. Controlled built-in and requester MCP tool cases exercise the bounded model/tool loop, approval continuation and revocation. Destination mesh cases prove one local effect across process death and settlement replay; a controlled workload dependency proves an assignment can await mesh work on its own worker without blocking the destination poll. The local mesh tool and credential custody are test fixtures. Separate controlled built-Gateway mesh Chat approval/restart proof is recorded in docs/testing/COMPARISON_IMPLEMENTATION_STATUS.md and is not executed by this check. Shipped destination adapters, broader delegation/council, protected native execution/custody and the installed service remain pending. These controlled local outcomes do not prove live-provider quality. Physical two-machine mTLS remains scenario 11's hold.",
     },
   ];
 }

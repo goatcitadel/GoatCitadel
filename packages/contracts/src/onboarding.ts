@@ -75,6 +75,8 @@ export interface OnboardingState {
   completed: boolean;
   completedAt?: string;
   completedBy?: string;
+  /** Derived from canonical Chat records; setup and catalog checks are not inference proof. */
+  firstTask?: OnboardingFirstTaskEvidence;
   checklist: OnboardingChecklistItem[];
   firstRunChecklist?: OnboardingFirstRunChecklistItem[];
   setupReadiness?: OnboardingSetupReadiness;
@@ -112,6 +114,18 @@ export interface OnboardingState {
     };
   };
 }
+
+export type OnboardingFirstTaskEvidence =
+  | { status: "not_observed"; checkedAt: string }
+  | {
+      status: "verified";
+      checkedAt: string;
+      completedAt: string;
+      sessionId: string;
+      turnId: string;
+      providerId: string;
+      model: string;
+    };
 
 export interface OnboardingStartupState {
   completed: boolean;

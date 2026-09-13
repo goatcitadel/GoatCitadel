@@ -24,8 +24,36 @@ export function isSuspiciousEncodedPath(rawUrl: string): boolean {
   return segments.some(
     (segment, index) =>
       !isOpaqueDurableWatcherIdSegment(segments, index) &&
+      !isOpaqueDurableRunIdSegment(segments, index) &&
       (hasNtfsAlternateDataStream(segment) || isWindowsReservedDeviceSegment(segment)),
   );
+}
+
+// These route parameters are database keys. Native connector runs include
+// colon-delimited provenance; no filesystem path is selected by these routes.
+function isOpaqueDurableRunIdSegment(segments: string[], index: number): boolean {
+  if (
+    segments[0] !== "api" ||
+    segments[1] !== "v1" ||
+    segments[2] !== "durable" ||
+    segments[3] !== "runs" ||
+    !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(segments[index] ?? "") ||
+    isWindowsReservedDeviceSegment(segments[index] ?? "")
+  )
+    return false;
+  if (index === 4) {
+    if (segments.length === 5) return true;
+    if (
+      segments.length === 6 &&
+      ["checkpoints", "timeline", "child-watchers", "background-tasks", "pause", "resume", "cancel", "retry"].includes(
+        segments[5] ?? "",
+      )
+    )
+      return true;
+    if (segments.length === 7 && segments[5] === "events" && segments[6] === "wake") return true;
+    if (segments.length === 8 && segments[5] === "background-tasks" && segments[7] === "control") return true;
+  }
+  return (index === 4 || index === 6) && segments.length === 8 && segments[5] === "children" && segments[7] === "watch";
 }
 
 /**

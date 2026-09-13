@@ -26,9 +26,11 @@ export const WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_REQUEST_BYTES = 384;
 export const WINDOWS_PROTECTED_SIGN_ADMISSION_EVIDENCE_RESULT_BYTES = 320;
 export const WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES = 384;
 export const WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_RESULT_BYTES = 184;
+export const WINDOWS_PROTECTED_SIGN_TLS_CLIENT_CERTIFICATE_VERIFY_REQUEST_BYTES = 280;
+export const WINDOWS_PROTECTED_SIGN_TLS_CLIENT_CERTIFICATE_VERIFY_RESULT_BYTES = 184;
 export const WINDOWS_PROTECTED_ADMISSION_EVIDENCE_SIGNATURE_DOMAIN =
   "goatcitadel.remote-worker.provisioning-evidence.signature.v1";
-export const WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP = 0x0000_0000_001d_0002n;
+export const WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP = 0x0000_0000_003d_0002n;
 export const WINDOWS_HELPER_ERROR_PAYLOAD_BYTES = 4;
 export const WINDOWS_HELPER_INSPECT_ARGUMENT = "--inspect-stdio";
 
@@ -44,6 +46,7 @@ export const WINDOWS_HELPER_OPCODE = Object.freeze({
   SIGN_ADMISSION_EVIDENCE: 0x12,
   REVOKE_LOCAL_KEYSET: 0x13,
   SIGN_RUNTIME_POP_V2: 0x14,
+  SIGN_TLS_CLIENT_CERTIFICATE_VERIFY: 0x15,
   BEGIN_INSTALL: 0x20,
   SEAL_AND_PUBLISH_INSTALL: 0x21,
   ABANDON_TO_QUARANTINE: 0x22,
@@ -71,7 +74,7 @@ export const WINDOWS_HELPER_PE_MACHINE = Object.freeze({
 
 export type WindowsHelperPeMachine = (typeof WINDOWS_HELPER_PE_MACHINE)[keyof typeof WINDOWS_HELPER_PE_MACHINE];
 
-export const WINDOWS_HELPER_RECOGNIZED_OPCODE_BITMAP = 0x0007_0007_001f_0002n;
+export const WINDOWS_HELPER_RECOGNIZED_OPCODE_BITMAP = 0x0007_0007_003f_0002n;
 export const WINDOWS_HELPER_CALLABLE_OPCODE_BITMAP = 0x0000_0000_0000_0002n;
 
 const MAGIC_BYTES = Buffer.from(WINDOWS_HELPER_MAGIC, "ascii");
@@ -253,6 +256,10 @@ export interface WindowsProtectedSignRuntimePopV2Request {
   preimage: Uint8Array;
 }
 
+export interface WindowsProtectedSignTlsClientCertificateVerifyRequest extends WindowsProtectedSignRuntimePopV2Request {
+  readonly expectedWorkerPublicKeySpkiSha256: Uint8Array;
+}
+
 export type WindowsProtectedSignRuntimePopV2Disposition =
   | "signed"
   | "stale_state"
@@ -267,6 +274,8 @@ export interface WindowsProtectedSignRuntimePopV2Result {
   runtimeManifestSpki: Uint8Array;
   signature: Uint8Array;
 }
+
+export type WindowsProtectedSignTlsClientCertificateVerifyResult = WindowsProtectedSignRuntimePopV2Result;
 
 export type WindowsHelperResponse =
   | {
@@ -303,6 +312,7 @@ export type WindowsHelperProcessErrorReason =
   | "stdin_failed"
   | "process_error"
   | "timed_out"
+  | "cancelled"
   | "stdout_limit"
   | "stderr_limit"
   | "termination_failed";
@@ -805,6 +815,29 @@ export function validateWindowsProtectedRequestPayload(opcode: WindowsHelperRequ
     }
     return;
   }
+  if (opcode === WINDOWS_HELPER_OPCODE.SIGN_TLS_CLIENT_CERTIFICATE_VERIFY) {
+    if (body.byteLength !== WINDOWS_PROTECTED_SIGN_TLS_CLIENT_CERTIFICATE_VERIFY_REQUEST_BYTES) {
+      throw new WindowsHelperProtocolError("TLS client CertificateVerify request length is invalid");
+    }
+    requireZero(body, 0, 16, "TLS client CertificateVerify caller operation placeholder");
+    requireNonzero(body, 16, 32, "TLS client CertificateVerify protected state");
+    if (
+      body.readUInt16LE(48) !== 1 ||
+      body[50] !== 4 ||
+      body[51] !== 0 ||
+      body.readBigUInt64LE(52) === 0n ||
+      body.readBigUInt64LE(52) > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new WindowsHelperProtocolError("TLS client CertificateVerify authority header is invalid");
+    }
+    requireNonzero(body, 60, 32, "TLS client CertificateVerify keyset receipt");
+    requireNonzero(body, 96, 32, "TLS client CertificateVerify worker SPKI");
+    const length = body.readUInt32LE(92);
+    validateWindowsProtectedTlsClientCertificateVerifyPreimage(body.subarray(128, 128 + length));
+    requireZero(body, 128 + length, body.length - 128 - length, "TLS client CertificateVerify trailing padding");
+    return;
+  }
+
   if (opcode === WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2) {
     if (body.byteLength !== WINDOWS_PROTECTED_SIGN_RUNTIME_POP_V2_REQUEST_BYTES) {
       throw new WindowsHelperProtocolError("sign runtime PoP-v2 request payload length is invalid");
@@ -916,6 +949,91 @@ export function encodeWindowsProtectedSignRuntimePopV2Request(input: WindowsProt
   body.writeUInt32LE(REMOTE_WORKER_POP_V2_PREIMAGE_BYTES, 92);
   preimage.copy(body, 96);
   return encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2, body);
+}
+
+/** RFC 8446 section 4.4.3: client purpose only, with SHA-256 or SHA-384 transcript hashes. */
+export function validateWindowsProtectedTlsClientCertificateVerifyPreimage(value: Uint8Array): Buffer {
+  if (!(value instanceof Uint8Array) || (value.byteLength !== 130 && value.byteLength !== 146)) {
+    throw new WindowsHelperProtocolError("TLS client CertificateVerify preimage length is invalid");
+  }
+  const preimage = Buffer.from(value);
+  if (
+    !preimage.subarray(0, 64).equals(Buffer.alloc(64, 0x20)) ||
+    !preimage.subarray(64, 98).equals(Buffer.from("TLS 1.3, client CertificateVerify\0", "ascii"))
+  ) {
+    throw new WindowsHelperProtocolError("TLS client CertificateVerify preimage purpose is invalid");
+  }
+  return preimage;
+}
+
+export function encodeWindowsProtectedSignTlsClientCertificateVerifyRequest(
+  input: WindowsProtectedSignTlsClientCertificateVerifyRequest,
+): Buffer {
+  const preimage = validateWindowsProtectedTlsClientCertificateVerifyPreimage(input.preimage);
+  const generation = exactU64(input.expectedGeneration, "expectedGeneration", true);
+  if (generation > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new WindowsHelperProtocolError("expectedGeneration is outside the contract-safe integer range");
+  }
+  const body = Buffer.alloc(WINDOWS_PROTECTED_SIGN_TLS_CLIENT_CERTIFICATE_VERIFY_REQUEST_BYTES);
+  exactBytes(input.expectedStateSha256, 32, "expectedStateSha256", true).copy(body, 16);
+  body.writeUInt16LE(1, 48);
+  body[50] = 4;
+  body.writeBigUInt64LE(generation, 52);
+  exactBytes(input.expectedKeysetReceiptSha256, 32, "expectedKeysetReceiptSha256", true).copy(body, 60);
+  body.writeUInt32LE(preimage.byteLength, 92);
+  exactBytes(input.expectedWorkerPublicKeySpkiSha256, 32, "expectedWorkerPublicKeySpkiSha256", true).copy(body, 96);
+  preimage.copy(body, 128);
+  return encodeWindowsHelperRequest(WINDOWS_HELPER_OPCODE.SIGN_TLS_CLIENT_CERTIFICATE_VERIFY, body);
+}
+
+export function decodeWindowsProtectedSignTlsClientCertificateVerifyResponse(
+  bytes: Uint8Array,
+  expectedRequest: WindowsProtectedSignTlsClientCertificateVerifyRequest,
+): WindowsProtectedSignTlsClientCertificateVerifyResult {
+  // Snapshot and validate the exact request before checking a native receipt.
+  const requestBody =
+    encodeWindowsProtectedSignTlsClientCertificateVerifyRequest(expectedRequest).subarray(WINDOWS_HELPER_HEADER_BYTES);
+  const preimage = requestBody.subarray(128, 128 + requestBody.readUInt32LE(92));
+  const payload = protectedSuccessPayload(
+    bytes,
+    WINDOWS_HELPER_OPCODE.SIGN_TLS_CLIENT_CERTIFICATE_VERIFY,
+    WINDOWS_PROTECTED_SIGN_TLS_CLIENT_CERTIFICATE_VERIFY_RESULT_BYTES,
+  );
+  const disposition =
+    SIGN_RUNTIME_POP_V2_DISPOSITIONS[payload.readUInt16LE(2) as keyof typeof SIGN_RUNTIME_POP_V2_DISPOSITIONS];
+  if (payload.readUInt16LE(0) !== 1 || payload.readUInt32LE(4) !== 0 || disposition === undefined) {
+    throw new WindowsHelperProtocolError("TLS client CertificateVerify result header is invalid");
+  }
+  requireZero(payload, 180, 4, "TLS client CertificateVerify result padding");
+  const spki = payload.subarray(72, 116);
+  if (disposition === "signed") {
+    if (
+      !payload.subarray(8, 40).equals(requestBody.subarray(60, 92)) ||
+      !payload.subarray(40, 72).equals(requestBody.subarray(96, 128)) ||
+      !payload.subarray(40, 72).equals(sha256(spki)) ||
+      !spki.subarray(0, 12).equals(Buffer.from("302a300506032b6570032100", "hex"))
+    ) {
+      throw new WindowsHelperProtocolError("TLS client CertificateVerify signing authority differs from the request");
+    }
+    requireNonzero(spki, 12, 32, "TLS client CertificateVerify public key");
+    requireNonzero(payload, 116, 64, "TLS client CertificateVerify signature");
+    if (
+      !verify(null, preimage, createPublicKey({ key: spki, format: "der", type: "spki" }), payload.subarray(116, 180))
+    ) {
+      throw new WindowsHelperProtocolError(
+        "TLS client CertificateVerify signature does not verify over the exact preimage",
+      );
+    }
+  } else {
+    requireZero(payload, 8, 172, "TLS client CertificateVerify rejection authority");
+  }
+  return {
+    disposition,
+    keysetReceiptSha256: Buffer.from(payload.subarray(8, 40)),
+    runtimeManifestSpkiSha256: Buffer.from(payload.subarray(40, 72)),
+    runtimeManifestSpki: Buffer.from(spki),
+    signature: Buffer.from(payload.subarray(116, 180)),
+  };
 }
 
 export function decodeWindowsProtectedInspectResponse(bytes: Uint8Array): WindowsProtectedInspect {

@@ -33,7 +33,7 @@ import type {
   WardEffect,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -145,6 +145,7 @@ interface IntegrationGrantRow {
 export class CitadelRepository {
   private readonly listRecordsStmt;
   private readonly getRecordStmt;
+  private readonly getRecordForUpdateStmt;
   private readonly getRecordBySlugStmt;
   private readonly insertRecordStmt;
   private readonly updateRecordStmt;
@@ -203,6 +204,9 @@ export class CitadelRepository {
       LIMIT @limit
     `);
     this.getRecordStmt = db.prepare("SELECT * FROM citadel_records WHERE citadel_id = ?");
+    this.getRecordForUpdateStmt = db.prepare(
+      `SELECT * FROM citadel_records WHERE citadel_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+    );
     this.getRecordBySlugStmt = db.prepare("SELECT * FROM citadel_records WHERE slug = ?");
     this.insertRecordStmt = db.prepare(`
       INSERT INTO citadel_records (
@@ -212,6 +216,7 @@ export class CitadelRepository {
         @citadelId, @name, @description, @slug, @kind, 'active', NULL,
         @defaultWorkspaceId, @createdAt, @updatedAt
       )
+      ON CONFLICT DO NOTHING
     `);
     this.updateRecordStmt = db.prepare(`
       UPDATE citadel_records
@@ -391,68 +396,87 @@ export class CitadelRepository {
   }
 
   public createRecord(input: CitadelCreateInput, now = new Date().toISOString()): CitadelRecord {
-    const name = sanitizeRequired(input.name, "name");
-    const slug = normalizeSlug(input.slug ?? input.name);
-    const citadelId = slug;
-    this.assertRecordSlugAvailable(slug);
-    if (this.findRecord(citadelId)) {
-      throw new ConflictError({ code: "ALREADY_EXISTS", message: `Citadel id "${citadelId}" is already in use` });
-    }
-    this.insertRecordStmt.run({
-      citadelId,
-      name,
-      description: sanitizeOptional(input.description),
-      slug,
-      kind: input.kind ?? "custom",
-      defaultWorkspaceId: sanitizeOptional(input.defaultWorkspaceId),
-      createdAt: now,
-      updatedAt: now,
+    return this.db.transaction("immediate", () => {
+      const name = sanitizeRequired(input.name, "name");
+      const slug = normalizeSlug(input.slug ?? input.name);
+      const citadelId = slug;
+      this.assertRecordSlugAvailable(slug);
+      const inserted = this.insertRecordStmt.run({
+        citadelId, name, description: sanitizeOptional(input.description), slug, kind: input.kind ?? "custom",
+        defaultWorkspaceId: sanitizeOptional(input.defaultWorkspaceId), createdAt: now, updatedAt: now,
+      });
+      if (inserted.changes !== 1) {
+        throw new ConflictError({ code: "ALREADY_EXISTS", message: `Citadel id or slug "${slug}" is already in use` });
+      }
+      return this.getRecord(citadelId);
     });
-    return this.getRecord(citadelId);
   }
 
   public updateRecord(citadelId: string, input: CitadelUpdateInput, now = new Date().toISOString()): CitadelRecord {
-    const current = this.getRecord(citadelId);
-    const nextName = input.name !== undefined ? sanitizeRequired(input.name, "name") : current.name;
-    const nextSlug =
-      input.slug !== undefined
-        ? normalizeSlug(input.slug)
-        : input.name !== undefined
-          ? normalizeSlug(input.name)
-          : current.slug;
-    this.assertRecordSlugAvailable(nextSlug, citadelId);
-    this.updateRecordStmt.run({
-      citadelId,
-      name: nextName,
-      description:
-        input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
-      slug: nextSlug,
-      kind: input.kind ?? current.kind,
-      defaultWorkspaceId:
-        input.defaultWorkspaceId !== undefined
-          ? sanitizeOptional(input.defaultWorkspaceId)
-          : (current.defaultWorkspaceId ?? null),
-      updatedAt: now,
+    try {
+      return this.withReviewedRecord(citadelId, input.expectedRevision, now, (current, updatedAt) => {
+        const nextName = input.name !== undefined ? sanitizeRequired(input.name, "name") : current.name;
+        const nextSlug =
+          input.slug !== undefined
+            ? normalizeSlug(input.slug)
+            : input.name !== undefined
+              ? normalizeSlug(input.name)
+              : current.slug;
+        this.assertRecordSlugAvailable(nextSlug, citadelId);
+        this.updateRecordStmt.run({
+          citadelId,
+          name: nextName,
+          description: input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
+          slug: nextSlug,
+          kind: input.kind ?? current.kind,
+          defaultWorkspaceId: input.defaultWorkspaceId !== undefined
+            ? sanitizeOptional(input.defaultWorkspaceId) : (current.defaultWorkspaceId ?? null),
+          updatedAt,
+        });
+        return this.getRecord(citadelId);
+      });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error
+        && (error.code === "23505" || error.code === "SQLITE_CONSTRAINT_UNIQUE")) {
+        throw new ConflictError({ code: "ALREADY_EXISTS", message: "That Citadel slug is already in use." });
+      }
+      throw error;
+    }
+  }
+
+  public archiveRecord(citadelId: string, expectedRevision: string, now = new Date().toISOString()): CitadelRecord {
+    return this.withReviewedRecord(citadelId, expectedRevision, now, (current, updatedAt) => {
+      if (current.lifecycleStatus === "archived") return current;
+      this.archiveRecordStmt.run({ citadelId, archivedAt: updatedAt, updatedAt });
+      return this.getRecord(citadelId);
     });
-    return this.getRecord(citadelId);
   }
 
-  public archiveRecord(citadelId: string, now = new Date().toISOString()): CitadelRecord {
-    const current = this.getRecord(citadelId);
-    if (current.lifecycleStatus === "archived") {
-      return current;
-    }
-    this.archiveRecordStmt.run({ citadelId, archivedAt: now, updatedAt: now });
-    return this.getRecord(citadelId);
+  public restoreRecord(citadelId: string, expectedRevision: string, now = new Date().toISOString()): CitadelRecord {
+    return this.withReviewedRecord(citadelId, expectedRevision, now, (current, updatedAt) => {
+      if (current.lifecycleStatus === "active") return current;
+      this.restoreRecordStmt.run({ citadelId, updatedAt });
+      return this.getRecord(citadelId);
+    });
   }
 
-  public restoreRecord(citadelId: string, now = new Date().toISOString()): CitadelRecord {
-    const current = this.getRecord(citadelId);
-    if (current.lifecycleStatus === "active") {
-      return current;
+  private withReviewedRecord<T>(citadelId: string, expectedRevision: string, now: string,
+    write: (current: CitadelRecord, updatedAt: string) => T): T {
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) {
+      throw new ValidationError({ message: "Review the Citadel before changing it. An expected revision is required." });
     }
-    this.restoreRecordStmt.run({ citadelId, updatedAt: now });
-    return this.getRecord(citadelId);
+    return this.db.transaction("immediate", () => {
+      const row = this.getRecordForUpdateStmt.get(citadelId) as CitadelRecordRow | undefined;
+      if (!row) throw new NotFoundError({ entity: "Citadel", id: citadelId });
+      const current = mapCitadelRecord(row);
+      if (current.revision !== expectedRevision) {
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Citadel changed. Review its current profile before applying your change.",
+          details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } });
+      }
+      const previous = Date.parse(current.updatedAt);
+      const updatedAt = new Date(Math.max(Date.parse(now), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+      return write(current, updatedAt);
+    });
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
@@ -752,8 +776,13 @@ export class CitadelRepository {
 }
 
 function mapCitadelRecord(row: CitadelRecordRow): CitadelRecord {
+  // Derived hasCharter is intentionally excluded, so list/detail reviews agree.
+  const revision = createHash("sha256").update(JSON.stringify(["citadel-record-review-v1", row.citadel_id,
+    row.name, row.description, row.slug, row.kind, row.lifecycle_status, row.archived_at,
+    row.default_workspace_id, row.created_at, row.updated_at])).digest("hex");
   return {
     citadelId: row.citadel_id,
+    revision,
     name: row.name,
     description: row.description ?? undefined,
     slug: row.slug,

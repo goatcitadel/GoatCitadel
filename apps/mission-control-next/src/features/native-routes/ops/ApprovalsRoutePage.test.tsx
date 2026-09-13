@@ -177,7 +177,15 @@ vi.mock("@goatcitadel/mission-control-shared/content/approval-helpers", () => ({
 function renderPage(extras: Record<string, unknown> = {}) {
   return (
     <ApprovalsRoutePage
-      route={{ area: "ops", section: "approvals", theme: "ops", approvalId: "approval-route" } as any}
+      route={
+        {
+          area: "ops",
+          section: "approvals",
+          theme: "ops",
+          approvalId:
+            (approvalHarness.overrides.selectedApproval as any)?.approvalId ?? approvalHarness.approval.approvalId,
+        } as any
+      }
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       pendingApprovals={1}
@@ -561,7 +569,7 @@ describe("ApprovalsRoutePage", () => {
     };
     text = renderText();
     expect(text).toContain("parameter this model provider does not accept");
-    expect(text).toContain("Wake failed");
+    expect(text).toContain("Follow-up failed");
     expect(text).not.toContain("Open live session");
 
     approvalHarness.overrides = {
@@ -575,8 +583,18 @@ describe("ApprovalsRoutePage", () => {
     };
     text = renderText();
     expect(text).toContain("Explainer detail: provider timed out");
-    expect(text).toContain("Wake skipped");
+    expect(text).toContain("Follow-up skipped");
     expect(text).toContain("Loading...");
+  });
+
+  it("keeps a completed rejection follow-up distinct from successful execution", () => {
+    approvalHarness.overrides = {
+      selectedApproval: { ...approvalHarness.approval, status: "rejected", followUp: { status: "completed", reason: "woke" } },
+    };
+    const text = renderText();
+    expect(text).toContain("rejected");
+    expect(text).toContain("Follow-up completed");
+    expect(text).not.toContain("Worker resumed");
   });
 
   it("requires durable status inspection before resuming a paused approval run", async () => {
@@ -672,7 +690,7 @@ describe("ApprovalsRoutePage", () => {
     expect(text).not.toContain("Human decision required");
     expect(text).toContain("Approval summary unavailable");
     expect(text).toContain("optional plain-English summary");
-    expect(text).toContain("Worker wake running");
+    expect(text).toContain("Follow-up running");
     expect(text).not.toContain("Reject all pending");
     expect(text).not.toContain("Approve now");
 
@@ -766,5 +784,47 @@ describe("ApprovalsRoutePage", () => {
     expect(text).toContain("expired");
     expect(text).toContain("Approval expired");
     expect(text).not.toContain("No follow-up");
+  });
+  it("opens only requested approvals, keeps dismissal through refresh, and never substitutes a decision", async () => {
+    const route = { area: "ops", section: "approvals", theme: "ops" };
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(renderPage({ route }));
+    });
+    expect(collectText(renderer!.root)).not.toContain("Approve now");
+    await act(async () => {
+      findExactButton(renderer!.root, "Review next").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Approve now");
+    await act(async () => {
+      approvalHarness.overrides = { selectedApproval: approvalHarness.expired };
+      renderer!.update(renderPage({ route }));
+    });
+    expect(collectText(renderer!.root)).toContain("Approve now");
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Close details" }).props.onClick();
+      approvalHarness.overrides = {};
+      renderer!.update(renderPage({ route }));
+    });
+    expect(collectText(renderer!.root)).not.toContain("Approve now");
+    await act(async () => {
+      renderer!.update(renderPage({ route: { ...route, approvalId: approvalHarness.approval.approvalId } }));
+    });
+    expect(collectText(renderer!.root)).toContain("Approve now");
+    await act(async () => {
+      approvalHarness.overrides = {
+        selectedApproval: approvalHarness.expired,
+        pendingItems: [],
+        recoveryItems: [],
+        visibleItems: [approvalHarness.expired],
+      };
+      renderer!.update(renderPage({ route: { ...route, approvalId: approvalHarness.approval.approvalId } }));
+    });
+    expect(collectText(renderer!.root)).toContain("This approval is unavailable");
+    expect(collectText(renderer!.root)).not.toContain("Approve now");
+    expect(approvalHarness.onResolve).not.toHaveBeenCalled();
+    await act(async () => {
+      renderer!.unmount();
+    });
   });
 });

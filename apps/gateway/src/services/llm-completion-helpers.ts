@@ -6,6 +6,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { coerceDurationMs } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./chat-agent-completion-adapters.js";
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
@@ -15,6 +16,10 @@ import type { HooksService } from "./hooks-service.js";
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
 export const CHAT_COMPLETION_MIN_SECONDARY_ATTEMPT_WINDOW_MS = 5_000;
 export { isAuthoritativeModelUsageAccountingError };
+
+export function isAuthoritativeChatDispatchError(error: unknown): boolean {
+  return error instanceof LlmDispatchGuardRejectedError || isAuthoritativeModelUsageAccountingError(error);
+}
 const MAX_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
 const CHAT_COMPLETION_FAILURE_CONTEXT = Symbol("goatcitadel.chat-completion-failure-context");
 
@@ -141,7 +146,7 @@ function countLeadingSystemMessages(messages: ChatCompletionRequest["messages"])
 }
 
 export function shouldRetryToolProtocolError(error: Error): boolean {
-  if (isAuthoritativeModelUsageAccountingError(error)) return false;
+  if (isAuthoritativeChatDispatchError(error)) return false;
   const providerFailure = (
     error as Error & {
       providerFailure?: { code?: unknown; message?: unknown; type?: unknown };
@@ -215,7 +220,7 @@ export function isProviderQuotaExhaustedError(error: Error): boolean {
 }
 
 export function shouldRetryTransientProviderError(error: Error): boolean {
-  if (isAuthoritativeModelUsageAccountingError(error)) return false;
+  if (isAuthoritativeChatDispatchError(error)) return false;
   if (error instanceof StreamIdleTimeoutError) return true;
   if (isProviderQuotaExhaustedError(error)) return false;
   const providerFailure = (error as Error & { providerFailure?: { code?: unknown } }).providerFailure;
@@ -251,6 +256,7 @@ export function shouldRetryTransientProviderError(error: Error): boolean {
 }
 
 export type ProviderFailureClass =
+  | "authority_denied"
   | "auth_denial"
   | "business_denial"
   | "context_overflow"
@@ -262,6 +268,7 @@ export type ProviderFailureClass =
   | "unknown";
 
 export function classifyProviderFailure(error: Error): ProviderFailureClass {
+  if (error instanceof LlmDispatchGuardRejectedError) return "authority_denied";
   if (isModelUsageDispatchUncertainError(error)) {
     return "dispatch_uncertain";
   }
@@ -311,6 +318,7 @@ export function isModelUsageAccountingPersistenceError(error: Error): boolean {
 }
 
 export function shouldAttemptCrossProviderFallback(error: Error): boolean {
+  if (isAuthoritativeChatDispatchError(error)) return false;
   const failureClass = classifyProviderFailure(error);
   return failureClass === "rate_limited" || failureClass === "transient" || failureClass === "unknown";
 }
@@ -495,7 +503,7 @@ export function getRemainingChatCompletionTimeoutMs(
 
 export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number | undefined): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
-  if (isChatTurnCancelledError(normalized) || isAuthoritativeModelUsageAccountingError(normalized)) {
+  if (isChatTurnCancelledError(normalized) || isAuthoritativeChatDispatchError(normalized)) {
     return normalized;
   }
   if (normalized instanceof StreamIdleTimeoutError) {

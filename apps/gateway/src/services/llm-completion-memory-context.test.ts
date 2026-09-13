@@ -34,6 +34,36 @@ function buildRequest(sessionId: string): ChatCompletionRequest {
 }
 
 describe("composeChatCompletionMemoryContext workspace scoping (Finding 1)", () => {
+  it("forwards cancellation and server-owned utility lineage outside the memory request body", async () => {
+    const composeContext = vi.fn();
+    const host = buildHost({ composeContext, resolveWorkspaceId: () => "workspace-b" });
+    const signal = new AbortController().signal;
+    const request = {
+      ...buildRequest("session-b"),
+      signal,
+      memory: { ...buildRequest("session-b").memory, turnId: "turn-b", taskId: "task-b", runId: "run-b" },
+    };
+    await composeChatCompletionMemoryContext(host, request, request.memory, {
+      operationId: "answer-operation",
+      workerId: "worker-b",
+      durableRunId: "run-b",
+      contextIntentHash: "context-b",
+    });
+    expect(composeContext).toHaveBeenCalledWith(
+      expect.objectContaining({ signal, runId: "run-b", workspaceId: "workspace-b" }),
+      expect.objectContaining({
+        parentOperationId: "answer-operation",
+        workerId: "worker-b",
+        durableRunId: "run-b",
+        turnId: "turn-b",
+        sessionId: "session-b",
+        taskId: "task-b",
+        contextIntentHash: "context-b",
+      }),
+    );
+    expect(composeContext.mock.calls[0][0]).not.toHaveProperty("workerId");
+  });
+
   it("does not compose retrieval context when the turn disables memory", async () => {
     const composeContext = vi.fn();
     const host = buildHost({ composeContext, resolveWorkspaceId: () => "workspace-b" });

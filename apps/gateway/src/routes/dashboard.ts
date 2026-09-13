@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectSettingsPublicValue } from "../services/provider-settings-public-projection.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { preserveKnownPublicProjectionSecretsForUpdate } from "../services/integration-connection-public-projection.js";
@@ -146,6 +147,7 @@ const personalityParamsSchema = z.object({
 });
 
 const personalityMutationSchema = z.object({
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
   id: z.string().min(1).optional(),
   label: z.string().min(1).optional(),
   category: personalityCategorySchema.optional(),
@@ -158,7 +160,10 @@ const personalityMutationSchema = z.object({
 
 const personalityDefaultSchema = z.object({
   personalityId: z.string().min(1),
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
 });
+
+const personalityRevisionSchema = personalityDefaultSchema.pick({ expectedRevision: true });
 
 export const updateSettingsSchema = z.object({
   expectedRevision: z.number().int().positive(),
@@ -715,6 +720,20 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/cron/runs/:runId", async (request, reply) => {
+    const parsed = cronRunParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const run = await fastify.services.cron.findCronRunById(parsed.data.runId);
+      if (!run) return reply.code(404).send({ error: "Cron run not found." });
+      return reply.send(projectPublicSecretValue(run));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/cron/runs/:runId/diff", async (request, reply) => {
     const parsed = cronRunParamsSchema.safeParse(request.params);
     if (!parsed.success) {
@@ -905,9 +924,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await fastify.services.settings.createPersonality(parsed.data));
+      const saved = await fastify.services.settings.createPersonality(parsed.data);
+      await markMutationCommitted(request);
+      return reply.code(201).send(saved);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -917,9 +939,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.settings.setDefaultPersonality(parsed.data.personalityId));
+      const saved = await fastify.services.settings.setDefaultPersonality(parsed.data.personalityId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(saved);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -935,21 +960,31 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(await fastify.services.settings.updatePersonality(params.data.personalityId, body.data));
+      const saved = await fastify.services.settings.updatePersonality(params.data.personalityId, body.data);
+      await markMutationCommitted(request);
+      return reply.send(saved);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.delete("/api/v1/personalities/:personalityId", async (request, reply) => {
     const params = personalityParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = personalityRevisionSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({ error: {
+        params: params.success ? undefined : params.error.flatten(),
+        body: body.success ? undefined : body.error.flatten(),
+      } });
     }
     try {
-      return reply.send(await fastify.services.settings.deletePersonality(params.data.personalityId));
+      const saved = await fastify.services.settings.deletePersonality(params.data.personalityId, body.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(saved);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 };

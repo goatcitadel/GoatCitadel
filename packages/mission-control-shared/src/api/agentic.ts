@@ -46,6 +46,7 @@ export type AgenticChannelDeliveryRuntimeStatus =
   | "queued"
   | "running"
   | "retrying"
+  | "waiting_approval"
   | "sent"
   | "failed"
   | "stale"

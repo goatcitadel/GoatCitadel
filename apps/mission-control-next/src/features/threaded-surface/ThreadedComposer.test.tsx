@@ -1,3 +1,4 @@
+vi.mock("./ChatOptionsPopover", () => ({ ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 import React, { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
@@ -257,6 +258,22 @@ afterEach(() => {
 });
 
 describe("ThreadedComposer", () => {
+  it("shows a readable prepared skill request while preserving its exact submit payload", () => {
+    const draft =
+      "WORKFLOW_SKILL_CAPTURE_V1 " +
+      JSON.stringify({ sourceTurnId: "source", guidance: "Keep the checks", actorSha256: "private-binding" }) +
+      "\n\nDraft instructions.\n\n<workflow_evidence>\n\n" +
+      JSON.stringify({ request: "Review the task", result: "All checks passed" }) +
+      "\n\n</workflow_evidence>";
+    const markup = buildMarkup({ draft });
+    expect(markup).toContain("Draft reusable skill instructions");
+    expect(markup).toContain("Keep the checks");
+    expect(markup).toContain("Review the source task");
+    expect(markup).toContain("All checks passed");
+    expect(markup).toContain("Clear prepared request");
+    expect(markup).not.toContain("WORKFLOW_SKILL_CAPTURE_V1");
+    expect(markup).not.toContain("private-binding");
+  });
   it("renders an inline preview shell for pending image attachments", () => {
     const markup = buildMarkup({
       pendingAttachments: [
@@ -332,7 +349,7 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain("Subagent policy");
     expect(markup).not.toContain("Thinking level");
     expect(markup).toContain("OpenAI / gpt-test");
-    expect(markup).toContain("0 tokens / $0.00");
+    expect(markup).toContain("Tokens unavailable / Cost unavailable");
     expect(markup).toContain("Attach files");
     expect(markup).toContain("Send");
     expect(markup).not.toContain(">Delegate<");
@@ -1747,11 +1764,11 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
 
     expect(
       renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
-    ).toHaveLength(1);
-    const attachPicker = findButton(renderer.root, "Attach imported item");
-    expect(attachPicker.props["aria-expanded"]).toBe(false);
+    ).toHaveLength(0);
+    await click(findButton(renderer.root, "Attach imported item"));
+    const attachPicker = findButton(renderer.root, "Close picker");
+    expect(attachPicker.props["aria-expanded"]).toBe(true);
     expect(attachPicker.props["aria-controls"]).toBeTruthy();
-    await click(attachPicker);
     expect(renderer.root.findByProps({ id: attachPicker.props["aria-controls"] }).props.className).toBe(
       "mc-next-composer-external-attach-form",
     );

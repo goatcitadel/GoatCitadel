@@ -16,6 +16,13 @@ export interface GovernedMutationInventoryEntry {
  */
 export const EVOLUTION_GOVERNED_MUTATION_INVENTORY: readonly GovernedMutationInventoryEntry[] = [
   {
+    kind: "capability_pack",
+    owner: "capability_pack_execution",
+    canonicalEntryPoints: ["POST /api/v1/change-plans", "change.request"],
+    compatibilityEntryPoints: [],
+    mutationBoundary: "CapabilityPackChangePlanAdapter.apply",
+  },
+  {
     kind: "session_model",
     owner: "chat_session_prefs",
     canonicalEntryPoints: ["POST /api/v1/change-plans", "change.request"],

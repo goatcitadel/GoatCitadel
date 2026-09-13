@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 204,
+      "expectedCount": 228,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 204,
+      "expectedLastVersion": 228,
       "migrations": [
         {
           "version": 1,
@@ -1436,15 +1436,183 @@
           "groupName": "canonical",
           "definitionSha256": "8ca81a61fa52aa7bb4b070d7c7f66e842e7a20e757f01881d20239849a744f53",
           "implementationSha256": "0135825590772b790c43e058b355047d081dc789c81739d61983fa4159b8ed57"
+        },
+        {
+          "version": 205,
+          "name": "capability_pack_execution_plans",
+          "groupName": "canonical",
+          "definitionSha256": "9cb34466bf94a51d7976401d65b58ef05e16081e2ac9953099b6184b93687789",
+          "implementationSha256": "1408c4ef0b65cf455e1b40b14de7a47a8182be26dc3893bc4501b246c0150f4a"
+        },
+        {
+          "version": 206,
+          "name": "native_windows_worker_cells",
+          "groupName": "canonical",
+          "definitionSha256": "6e7b9aaec4300d3620ace497d27797aaefff9bdd37be5c84e90cee02f764b818",
+          "implementationSha256": "82d79c5e3315665eb164d45ad876eadc01eaa54604257001833934067349100a"
+        },
+        {
+          "version": 207,
+          "name": "remote_worker_budget_authority",
+          "groupName": "canonical",
+          "definitionSha256": "9295a41f35953676e17d5838864bf737f416da718f9f63587e7d8dd7d7a0d469",
+          "implementationSha256": "0688d7557fd848950c1f825114d7a38c0fdeb534b7162ca330ff3250bb827e2f"
+        },
+        {
+          "version": 208,
+          "name": "remote_worker_chat_context",
+          "groupName": "canonical",
+          "definitionSha256": "39fa2f2c2d6103601dfa1466d2f2ce8b8f2579afdb0fe150d33dc3c8021d78b9",
+          "implementationSha256": "eed4d99125463035c577333fbdee92ca1b8ecb13e4ff846e52a8fe397e26c326"
+        },
+        {
+          "version": 209,
+          "name": "remote_worker_budget_dispatches",
+          "groupName": "canonical",
+          "definitionSha256": "f5dddde8f610b7585c722cf800f423a07c30d3a25bec9765771955678a0de695",
+          "implementationSha256": "87cc3fdffadf22ae51b59fa3df48a9bde5c0ec562c7e7ee969afea6bc3bdba69"
+        },
+        {
+          "version": 210,
+          "name": "chat_execution_placement",
+          "groupName": "canonical",
+          "definitionSha256": "03d53c5c3ed225d69f3994fdf764a8e155646c164a0e408a52428bef9935adeb",
+          "implementationSha256": "648a5f206a5032ab04a353229b1e500f7b0499e26a2f7d7dc525f27bd0395da7"
+        },
+        {
+          "version": 211,
+          "name": "remote_worker_chat_resume",
+          "groupName": "canonical",
+          "definitionSha256": "e2fffc5c3982917f2c0bce91a8a1f1e2c145481c6006019ed4b7f5cffe87529f",
+          "implementationSha256": "cd477c37321a890b01ae090c2c9e22c3e1c4345f4764618328e2fa06328e56d7"
+        },
+        {
+          "version": 212,
+          "name": "remote_worker_chat_resume_recovery",
+          "groupName": "canonical",
+          "definitionSha256": "29ee30d1d645343b7871c9591abd9f01473eb8a419cb7a6d9cf43a557acac838",
+          "implementationSha256": "e25d7de4e241351028d4ec35c920f8924f4b07cd4898dbaf9066bf8589524983"
+        },
+        {
+          "version": 213,
+          "name": "remote_worker_chat_parent_recovery",
+          "groupName": "canonical",
+          "definitionSha256": "58d64f1b0cb1aeb9d536bbb3648076045c547138c1c47e7909bf0a508d8d8d8c",
+          "implementationSha256": "76a70b8a7c05834239ecd1ea288c84c10fb0767ddc8fd43fc2466e3b8a9e2fcc"
+        },
+        {
+          "version": 214,
+          "name": "remote_worker_canonical_bounds",
+          "groupName": "canonical",
+          "definitionSha256": "43e131ff5bff4f304a0d2198934fa8f98d5af2829869a5448768e3031bb6516b",
+          "implementationSha256": "fe680e726337a435b30295eeace693d3555ae46ad07a6017e37558a7a4815f32"
+        },
+        {
+          "version": 215,
+          "name": "remote_worker_tool_budget_dispatches",
+          "groupName": "canonical",
+          "definitionSha256": "69e7a1b7fffe8359630bb651f47ec78aabb18d6d3b8f30bf8050d0b7382f1013",
+          "implementationSha256": "c365ed2efa1a5866c7d073eda334d8bb723b74625ed25d4c0f503daeb68d7a9b"
+        },
+        {
+          "version": 216,
+          "name": "remote_worker_chat_tasks",
+          "groupName": "canonical",
+          "definitionSha256": "c8d2359896dfeb4b4112aab584daa6d43738cd7d2ebb0c45aee9ba7d5bab3ba9",
+          "implementationSha256": "b459e2d5010d0f30ae93d850189c80eb235336f78e3fe4197da948c706e6b790"
+        },
+        {
+          "version": 217,
+          "name": "tool_policy_identity",
+          "groupName": "canonical",
+          "definitionSha256": "a8eee565ac107f554fd7aa263bc7c60977ccbf78029cb39a9317f5d03d60ea62",
+          "implementationSha256": "c61ceae63a3101bbb703a5e0cd881446e3cde140dbde5bc814f5afe27cfe928f"
+        },
+        {
+          "version": 218,
+          "name": "remote_worker_cancellation_settlement",
+          "groupName": "canonical",
+          "definitionSha256": "3c5eae82dfac822e13c573569d8410f786cef06d706cf8c8b8898c6ae7485c52",
+          "implementationSha256": "b53901a6ab849aa67ffb6509449465b0ded4759564bd0741b21b2b142bec5370"
+        },
+        {
+          "version": 219,
+          "name": "mesh_tool_policy_identity",
+          "groupName": "canonical",
+          "definitionSha256": "80cd6d46339769c5809ae19319bb4e8caa1fe11524afdccdae71d1f721b58597",
+          "implementationSha256": "87cabc53e6457377a2de82fda6a67e6a44f57a06359d4c7a0afdb4496d0b834f"
+        },
+        {
+          "version": 220,
+          "name": "channel_delivery_parts",
+          "groupName": "canonical",
+          "definitionSha256": "19c541324a3047360fb71166e86d53dfd8121fc8b63af0d05ceadbc63c0ab29e",
+          "implementationSha256": "9958bd702086c3eec620055498536d4292f1abd91cf77dc4d66e631492800f34"
+        },
+        {
+          "version": 221,
+          "name": "remote_worker_cell_provisioning",
+          "groupName": "canonical",
+          "definitionSha256": "d662a6e9732e34220a303de8833fcc7f96841db14d59f6a5100cbe6ce8b7b98d",
+          "implementationSha256": "b0ba94a21f7bfc83e2ae20898cc10d8a5a93efd9cd85271ddd6acabdaae812ea"
+        },
+        {
+          "version": 222,
+          "name": "remote_worker_cell_volume_checkpoints",
+          "groupName": "canonical",
+          "definitionSha256": "e6ae61d5e78185dd8389685cfee25e5b7ae4b68719f445c3cf6d095462d6bd5d",
+          "implementationSha256": "74cbbcdd80a98dcfd285893b0be8905c1c83fd86885d8c0ea88a45060f21129b"
+        },
+        {
+          "version": 223,
+          "name": "remote_worker_cell_format_checkpoints",
+          "groupName": "canonical",
+          "definitionSha256": "e4e6768514e8dfa7684519187e16f4e01c132431cf267ccb9abcbc617c2587f0",
+          "implementationSha256": "8548a9fd043693baa9dda96558a7419ec5574920409b093d190c11adc4e2ceb5"
+        },
+        {
+          "version": 224,
+          "name": "remote_worker_cell_protection_checkpoints",
+          "groupName": "canonical",
+          "definitionSha256": "ac4de84586745968a678dad36cec8f9aef9c083e0bd853f47065c5a4639e1642",
+          "implementationSha256": "40c25358fc4c1b3a471d80df05235608b25ff230a5f2dc0448ab85bba6b3e31f"
+        },
+        {
+          "version": 225,
+          "name": "remote_worker_cell_mount_checkpoints",
+          "groupName": "canonical",
+          "definitionSha256": "009ea83aa8d7886ee61eefdf8fdc6963b5975490af575b249d9b35d8cd67ee13",
+          "implementationSha256": "5133eb015df09f97bd05b810c4f85e26488a20c43e21f32102d1e650896f0132"
+        },
+        {
+          "version": 226,
+          "name": "remote_worker_cell_mounted_workspace_checkpoints",
+          "groupName": "canonical",
+          "definitionSha256": "eb1002d158faf46d1e0444e7a7c730414acf4e7fbef04e7cf193ca9e6638fca6",
+          "implementationSha256": "5d6847a6e9054bfb0f02b391f43de21b364644ecd7235e783f615d22c1572317"
+        },
+        {
+          "version": 227,
+          "name": "memory_item_enumeration",
+          "groupName": "canonical",
+          "definitionSha256": "1d0f8325ca0ba0b1b77aa516f4b0c3c3f61908d20c65d1193746633fd218f494",
+          "implementationSha256": "083952074fcd833bb745ec06b2f36da35820c3355b932f7ffc5515b9834260a1"
+        },
+        {
+          "version": 228,
+          "name": "permission_profile_selection",
+          "groupName": "canonical",
+          "definitionSha256": "87c0f4eafd900148c72e3f868fc16669fe4bdd11153399942e52b78d02758da4",
+          "implementationSha256": "a9bd1c3ddc9c4412726c54c948d72a55a669115f9cf4136c4586133efc58bd45"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 149,
+      "expectedCount": 173,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 149,
+      "expectedLastVersion": 173,
       "migrations": [
         {
           "version": 1,
@@ -2341,6 +2509,150 @@
           "name": "canonical_postgres_schema_authority_v2",
           "definitionSha256": "3287cbd1a801b4c10a82c1be1cd4e7004100d7c4b48cf1ce37174cd81c1bd582",
           "runtimeIntegritySha256": "d412902ccfbd03f6e8a80c512c692d03c483e95de70c44a3013e9433560f58b5"
+        },
+        {
+          "version": 150,
+          "name": "capability_pack_execution_plans",
+          "definitionSha256": "a1d5868866e6090050cffeaac04dd40e1368adad9e827e992fcc8ad9a643261e",
+          "runtimeIntegritySha256": "24c803bfc6b60dacacf06c43fa08fb262d52902b0540d65b03af9a440e8d73b9"
+        },
+        {
+          "version": 151,
+          "name": "native_windows_worker_cells",
+          "definitionSha256": "501dc0ca84e482b0d5bc0baf2b9327315ccb44eec625517412eba7d5800a1992",
+          "runtimeIntegritySha256": "9438737d654e9bb55b5da9de2c6fa67a3ed5a99c6b4d14848cad31568b92903c"
+        },
+        {
+          "version": 152,
+          "name": "remote_worker_budget_authority",
+          "definitionSha256": "94f9785fc6c7aafbf639c09d9c80f673ab98ebcd479089d2eb726b6d92a17392",
+          "runtimeIntegritySha256": "c4217299aa8b47f7a7097ebd6041fd1f1ce4a136e67971feadd35261d2a9528b"
+        },
+        {
+          "version": 153,
+          "name": "remote_worker_chat_context",
+          "definitionSha256": "c4fb9b1f6969f6c2fb1b63670a7a3fcc69391ef05964b77dc595d2d2da49b02e",
+          "runtimeIntegritySha256": "7b1473172599c676622440a88c771914604e6ef61bcb45aa480347316e043fc0"
+        },
+        {
+          "version": 154,
+          "name": "remote_worker_budget_dispatches",
+          "definitionSha256": "e93893bd25ae74b5fec6c6100766dbf027ddad8b42170a0cf1da40d00912c43b",
+          "runtimeIntegritySha256": "372e37948bb318591b96b7dfd71b8cfbcae80e7aa02f89764f62b489c1a9928e"
+        },
+        {
+          "version": 155,
+          "name": "chat_execution_placement",
+          "definitionSha256": "335fbb906ae4adbcca84c9b8c1e2748d4dfc8a68c81e4843e6544f97fb98a4e4",
+          "runtimeIntegritySha256": "a7f24e47454a25930da80ab169abfa68cb45b85ffd9d58d2c69401d19752818d"
+        },
+        {
+          "version": 156,
+          "name": "remote_worker_chat_resume",
+          "definitionSha256": "41ec80ba4f46eb53b545f6de1e1b4de7d5bb0a3311421ed0f3ab3a5e87f3a860",
+          "runtimeIntegritySha256": "4cb0cf5353ae1efcc9274219eb784431aa7d1793228c9f6443362528249fefe0"
+        },
+        {
+          "version": 157,
+          "name": "remote_worker_chat_resume_recovery",
+          "definitionSha256": "09e9e3d01652b47a0d49e7ec15c01a2be403144d2aa930c2176376c455f90f9d",
+          "runtimeIntegritySha256": "cb5e677c80cebe636c9f06d1dc7213f2a309a0beecaf1939e558684d93970e27"
+        },
+        {
+          "version": 158,
+          "name": "remote_worker_chat_parent_recovery",
+          "definitionSha256": "1f659901f19baa098e8f318f9153b87ac82ece2400431115a61b143cb7a2845c",
+          "runtimeIntegritySha256": "71805b20dc81048ca69a0e1e2d5adfa71ace629c858f8ec97d8f48fd09f87697"
+        },
+        {
+          "version": 159,
+          "name": "remote_worker_canonical_bounds",
+          "definitionSha256": "ea45f4f40a32d205268b4338c8302ed9337ab97a4a2cbe46aa6666f6ea5c9612",
+          "runtimeIntegritySha256": "3b79fa233a325068bcabc2ecdb33bfec9ccb7def71436910dce399f06d5bfec2"
+        },
+        {
+          "version": 160,
+          "name": "remote_worker_tool_budget_dispatches",
+          "definitionSha256": "6c00e739cc63a3cc4e14c53ad7889af02e2f0fcb13ac1556b94f0491fc9e84bd",
+          "runtimeIntegritySha256": "ad519ede62bbc047e9b48cb2bab429b892d1e527ecd45d292372f3df75e09a94"
+        },
+        {
+          "version": 161,
+          "name": "remote_worker_chat_tasks",
+          "definitionSha256": "cab311537a491aa9200c22e13212245b4ddb01d8ff1e7db324eda06b6e317eaa",
+          "runtimeIntegritySha256": "dfa89813f1a66512a10e13b4ed7bc6ce482fa532311b725f0daa7fdedde871dc"
+        },
+        {
+          "version": 162,
+          "name": "tool_policy_identity",
+          "definitionSha256": "ca3c75650763c0c8a14130de8a2563d2f370076b10eebcd69cd56463d2d42636",
+          "runtimeIntegritySha256": "83d3227fe4a3778d641f318ff72ccdb8664ee348e323384408972ddf20181a82"
+        },
+        {
+          "version": 163,
+          "name": "remote_worker_cancellation_settlement",
+          "definitionSha256": "1c020d16d24d5432fc302b81c2e17bab7793e0278b213b4a4d2eba4240179807",
+          "runtimeIntegritySha256": "660bab32619c93bb346f8c652697832560328ea40cab43d69577aaa5ccc4b539"
+        },
+        {
+          "version": 164,
+          "name": "mesh_tool_policy_identity",
+          "definitionSha256": "a70852e442e8b2dd8a712bc894ceec4b98e2eb7d90ef085ecdf09972fe4c0ba9",
+          "runtimeIntegritySha256": "e625324fd7cb6c0c2e5cf03133af45ce3b388699545cc22ba7a4e099a8ed71d1"
+        },
+        {
+          "version": 165,
+          "name": "channel_delivery_parts",
+          "definitionSha256": "7319f9d8bdfd6ddff2ad94271914fa072757f88fbfbcdc61fa3e4dd71cd85fa6",
+          "runtimeIntegritySha256": "b3529ed2f045c08fd4f591298c0919155c51bb85696189345fa9d16a7e8053ac"
+        },
+        {
+          "version": 166,
+          "name": "remote_worker_cell_provisioning",
+          "definitionSha256": "4107055e7d7eb8bb5e7b08e6b9af1e8f8606254d30cd4fa6473b554e3fe50b48",
+          "runtimeIntegritySha256": "dca75ec70136e4d34d9da116d4339db40386ce2ef901c405faf60909d653b121"
+        },
+        {
+          "version": 167,
+          "name": "remote_worker_cell_volume_checkpoints",
+          "definitionSha256": "53337c758846aced6a81a53239a1214d9cae0d92b082b5955eeada4f6907aeb0",
+          "runtimeIntegritySha256": "746bdc9fb92f951310f9d4363aaf1b5dc1b5ba18fd4ccb4a93d98a1e8eea0428"
+        },
+        {
+          "version": 168,
+          "name": "remote_worker_cell_format_checkpoints",
+          "definitionSha256": "2b9d3caea242e62dffce04b9fd1ece08f5fbbcdacaa118e3d0ecdacb81c05f54",
+          "runtimeIntegritySha256": "0a92a69b7ee750b00b43e7dcc52eec47846f71bd67472a70ba450585fddde641"
+        },
+        {
+          "version": 169,
+          "name": "remote_worker_cell_protection_checkpoints",
+          "definitionSha256": "dd85d7779c2e1a1cde9348144d392ee6a799b856cae2e2552c63f4e4c0c26ae8",
+          "runtimeIntegritySha256": "52948e95cda9977fbc46b9f8e373bf47b21a5d1a4c6455680790fc76106ee586"
+        },
+        {
+          "version": 170,
+          "name": "remote_worker_cell_mount_checkpoints",
+          "definitionSha256": "805aae9cfddabe4b43625f09ee101e2a22b9e6e4489aca1bd8fe67ec71a2718e",
+          "runtimeIntegritySha256": "709413752b789f8080d2cbfee17c856727bcc0f99091c4c55c07e1e3a177649a"
+        },
+        {
+          "version": 171,
+          "name": "remote_worker_cell_mounted_workspace_checkpoints",
+          "definitionSha256": "ff32c73b9bb99ea9415edcb03856b7648fdec1fbd3ebd10bae9501e3583b2c57",
+          "runtimeIntegritySha256": "6fb308294a5cd3d705b927fece555946fc592c06b7c778707b2e1b40e9b4a24b"
+        },
+        {
+          "version": 172,
+          "name": "memory_item_enumeration",
+          "definitionSha256": "305dfa3aab50f840d287fed264583ebc5b64081ab7b9e1cbc0d9e2c6662351bd",
+          "runtimeIntegritySha256": "3a715ae08cfae03656e58919804d61ee2153c8951ebb70f0ac898477a6fd573c"
+        },
+        {
+          "version": 173,
+          "name": "permission_profile_selection",
+          "definitionSha256": "bbcb76edb06c36128908c5c221e88be2ec9d0bddbd3f2ee3ba9b39d3fa1e71f4",
+          "runtimeIntegritySha256": "bcb5ad15749e7f4332fe1db8e1d9e791830300df332f5ab7dadf0e329fa5f6f3"
         }
       ]
     }

@@ -588,6 +588,18 @@ async function change(node: ReactTestInstance, value: string, checked?: boolean)
   await flush();
 }
 
+async function openTest(renderer: ReactTestRenderer, code = "TEST-01") {
+  const row = renderer.root.findAll((node) => node.props.role === "button").find((node) => readNodeText(node).includes(code));
+  if (!row) throw new Error("Missing test row " + code);
+  await click(row);
+}
+async function selectDetailTab(renderer: ReactTestRenderer, label: string) {
+  const group = renderer.root.findByProps({ "aria-label": "Test details" });
+  const button = group.findAllByType("button").find((node) => readNodeText(node).startsWith(label));
+  if (!button) throw new Error("Missing detail tab " + label);
+  await click(button);
+}
+
 describe("PromptPacksWorkbenchPage", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -623,8 +635,13 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(renderer.root.findAllByProps({ className: "mc-pp-pack-list" })).toHaveLength(0);
     expect(renderer.root.findAllByProps({ "aria-label": "Prompt pack detail tabs" })).toHaveLength(0);
     expect(findSelectContaining(renderer, "Operator trust pack").props.value).toBe("pack-1");
+    expect(readNodeText(renderer.root)).not.toContain("Assistant output");
+    await openTest(renderer);
+    await selectDetailTab(renderer, "Output");
     expect(readNodeText(renderer.root)).toContain("Assistant output");
+    await selectDetailTab(renderer, "Assessment");
     expect(readNodeText(renderer.root)).toContain("Assessment summary");
+    await selectDetailTab(renderer, "Review");
     expect(readNodeText(renderer.root)).toContain("Manual review");
     expect(readNodeText(renderer.root)).not.toContain("Measurement-first retuning");
   });
@@ -647,6 +664,8 @@ describe("PromptPacksWorkbenchPage", () => {
       }),
     );
     expect(readNodeText(renderer.root)).toContain("Retune campaign retune-1 created with frozen inputs.");
+    await openTest(renderer);
+    await selectDetailTab(renderer, "Evidence");
     expect(readNodeText(renderer.root)).toContain("Retune campaign evidence");
     expect(readNodeText(renderer.root)).toContain("No measurement pass has started.");
   });
@@ -660,12 +679,13 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(readNodeText(renderer.root)).toContain("Trace a local failure");
     expect(promptPackMocks.loadModelsForProvider).toHaveBeenCalledWith("openai");
 
+    await click(findButton(renderer, "Agentic"));
+    await openTest(renderer);
     await click(findButton(renderer, "Run selected"));
     expect(readNodeText(renderer.root)).toContain("Missing placeholder values for TEST-01");
     expect(promptPackMocks.runPromptPackTest).not.toHaveBeenCalled();
 
     await change(findInput(renderer, "Value for <LOCAL PATH>"), "F:/code/personal-ai/runtime.log");
-    await click(findButton(renderer, "Agentic"));
     await click(findButton(renderer, "Run selected"));
     expect(promptPackMocks.runPromptPackTest).toHaveBeenCalledWith(
       "pack-1",
@@ -679,8 +699,11 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(promptPackMocks.autoScorePromptPackTest).toHaveBeenCalledWith("pack-1", "test-1", { runId: "run-new" });
     expect(promptPackMocks.exportPromptPackReport).toHaveBeenCalledWith("pack-1");
 
+    await selectDetailTab(renderer, "Output");
     expect(readNodeText(renderer.root)).toContain("Assistant output");
+    await selectDetailTab(renderer, "Assessment");
     expect(readNodeText(renderer.root)).toContain("Failure attribution");
+    await selectDetailTab(renderer, "Review");
     expect(readNodeText(renderer.root)).toContain("Manual review");
 
     await click(findButton(renderer, "Open run thread"));
@@ -714,9 +737,11 @@ describe("PromptPacksWorkbenchPage", () => {
       runId: "run-1",
     });
 
+    await selectDetailTab(renderer, "Evidence");
     expect(readNodeText(renderer.root)).toContain("Pack insights");
     expect(readNodeText(renderer.root)).toContain("Full-pack readiness");
     expect(readNodeText(renderer.root)).toContain("Incomplete");
+    await click(findButton(renderer, "Back to list"));
     await click(findButton(renderer, "Start benchmark"));
     expect(promptPackMocks.runPromptPackBenchmark).toHaveBeenCalledWith(
       "pack-1",
@@ -812,6 +837,7 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(readNodeText(renderer.root)).toContain("Quality workbench");
     expect(readNodeText(renderer.root)).not.toContain("Import a new pack");
 
+    await openTest(renderer);
     await change(findInput(renderer, "Value for <LOCAL PATH>"), "F:/code/personal-ai/runtime.log");
     await act(async () => {
       vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error("denied"));
@@ -819,6 +845,7 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Copy run link"));
     expect(readNodeText(renderer.root)).toContain("Failed to copy run link.");
 
+    await click(findButton(renderer, "Back to list"));
     await change(findTextarea(renderer, "TEST-03, TEST-06, TEST-10"), "");
     await click(findButton(renderer, "Start benchmark"));
     expect(readNodeText(renderer.root)).toContain("Benchmark needs at least one test code.");
@@ -879,6 +906,7 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Run selected"));
     expect(readNodeText(renderer.root)).toContain("run offline");
 
+    await click(findButton(renderer, "Back to list"));
     const thirdRow = renderer.root
       .findAll((node) => node.props.role === "button")
       .find((node) => readNodeText(node).includes("TEST-03"));
@@ -907,6 +935,7 @@ describe("PromptPacksWorkbenchPage", () => {
       progress: { totalItems: 2, completedItems: 2 },
     });
     promptPackMocks.exportPromptPackReport.mockRejectedValueOnce(new Error("benchmark archive offline"));
+    await click(findButton(renderer, "Back to list"));
     await click(findButton(renderer, "Run all"));
     expect(promptPackMocks.runPromptPackBenchmark).toHaveBeenCalledWith(
       "pack-2",
@@ -934,10 +963,13 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Auto-score"));
     expect(readNodeText(renderer.root)).toContain("batch score failed");
 
+    await openTest(renderer);
+    await selectDetailTab(renderer, "Review");
     promptPackMocks.scorePromptPackTest.mockRejectedValueOnce(new Error("review save failed"));
     await click(findButton(renderer, "Save review"));
     expect(readNodeText(renderer.root)).toContain("review save failed");
 
+    await click(findButton(renderer, "Back to list"));
     promptPackMocks.runPromptPackBenchmark.mockRejectedValueOnce(new Error("benchmark failed"));
     await click(findButton(renderer, "Start benchmark"));
     expect(readNodeText(renderer.root)).toContain("benchmark failed");
@@ -1004,6 +1036,8 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(legacyRenderer, "Agentic"));
     expect(promptPackMocks.loadModelsForProvider).toHaveBeenCalledWith("anthropic");
     expect(readNodeText(legacyRenderer.root)).toContain("New runs request anthropic/claude-opus-5.");
+    await openTest(legacyRenderer);
+    await selectDetailTab(legacyRenderer, "Review");
     expect(readNodeText(legacyRenderer.root)).toContain("Prompt Pack Scoring V2 UI is disabled in this build.");
   });
 

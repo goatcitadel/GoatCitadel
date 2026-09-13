@@ -19,10 +19,10 @@
 //
 // Live PostgreSQL is EXECUTED, never skipped (scenario 8): the lane honors a
 // provided GOATCITADEL_TEST_POSTGRES_URL, otherwise it provisions a hermetic
-// cluster (initdb/pg_ctl/psql; PGDATA in the OS temp directory, random
-// identity-checked port in a band distinct from the other lanes, detached
+// cluster (initdb/pg_ctl/psql; PGDATA in the OS temp directory, OS-selected
+// identity-checked port, detached
 // start, readiness-polled, fast-stopped and removed on teardown) and runs ALL
-// the bootstrap bridge plus seven remote-worker `.postgres.test.ts` owner suites against it with
+// the registered bootstrap bridge and remote-worker `.postgres.test.ts` owner suites against it with
 // requireAllExecuted. If neither a URL nor local PostgreSQL binaries exist, the
 // live-PG check FAILS. The lane's only declared skip is scenario 11.
 import { spawn, spawnSync } from "node:child_process";
@@ -30,6 +30,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveAvailablePort } from "./lib/runtime.mjs";
 import {
   REMOTE_WORKERS_LANE_ARTIFACTS,
   REMOTE_WORKERS_POSTGRES_AUTHORITY_ARTIFACTS,
@@ -199,17 +200,17 @@ function resolvePostgresBinDir() {
   return undefined;
 }
 
-function provisionHermeticPostgres() {
+async function provisionHermeticPostgres() {
   const binDir = resolvePostgresBinDir();
   if (!binDir) return { error: "No PostgreSQL binaries found (set GOATCITADEL_PG_BIN_DIR or install PostgreSQL 16)." };
   // PGDATA lives in the OS temp directory, NOT under the repository: clusters
   // under the repo tree intermittently lose backends mid-migration on this
   // host (antivirus-scanning signature), while temp-dir clusters are stable.
+  // Let the OS choose a bindable port. Random numbers can fall in Windows'
+  // excluded port ranges even when no process is listening there. Readiness
+  // still checks PGDATA identity in case another process wins the release race.
+  const port = await resolveAvailablePort(0);
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-remote-workers-lane-pg-"));
-  // Random port in a band based at 54334 (distinct from the other lanes'
-  // bands): sequential lane runs must never share a port with a lingering
-  // postmaster from a previous run.
-  const port = 54_334 + (randomBytes(2).readUInt16BE(0) % 4_000);
   const tool = (name) => path.join(binDir, isWindows ? `${name}.exe` : name);
   const removeDataDir = () => {
     try {
@@ -301,6 +302,17 @@ function provisionHermeticPostgres() {
   }
   return {
     url: `postgresql://gcproof@127.0.0.1:${port}/postgres`,
+    readLog: () => {
+      const handle = fs.openSync(path.join(dataDir, "log.txt"), "r");
+      try {
+        const size = fs.fstatSync(handle).size;
+        const bytes = Buffer.alloc(Math.min(size, 65_536));
+        const count = fs.readSync(handle, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+        return bytes.subarray(0, count).toString("utf8");
+      } finally {
+        fs.closeSync(handle);
+      }
+    },
     stop: () => {
       spawnSync(tool("pg_ctl"), ["-D", dataDir, "-m", "fast", "stop"], {
         encoding: "utf8",
@@ -470,11 +482,11 @@ for (const [index, check] of checks.entries()) {
       ...REMOTE_WORKER_LIVE_POSTGRES_SUITES.map((suite) => `src/${suite}`),
     ];
     // Connection-reset signatures get ONE fresh-cluster re-attempt: on this
-    // host a hermetic postmaster can sporadically lose backends to external
-    // interference (AV-style file scanning), which is environmental, not a
-    // proof failure. Genuine assertion failures never match and never retry.
+    // host an owned postmaster can lose connections. Preserve each failed
+    // attempt and the server log; a matching signature does not establish its
+    // cause. Assertion failures without that signature do not retry.
     const connectionResetPattern =
-      /ECONNRESET|Connection terminated|server closed the connection|terminated unexpectedly/iu;
+      /ECONNRESET|ECONNREFUSED|Connection terminated|server closed the connection|terminated unexpectedly/iu;
     // The same interference can leave a postmaster ACCEPTING but never
     // answering, which would block spawnSync forever. The suites complete in
     // well under a minute against a healthy cluster, so a stalled run is
@@ -485,6 +497,7 @@ for (const [index, check] of checks.entries()) {
     const maxAttempts = providedUrl ? 1 : 2;
     let attempt = 0;
     let hermeticStop;
+    let readHermeticLog;
     let outcome;
     while (attempt < maxAttempts) {
       attempt += 1;
@@ -494,12 +507,12 @@ for (const [index, check] of checks.entries()) {
         process.stdout.write("  using provided GOATCITADEL_TEST_POSTGRES_URL\n");
       } else {
         process.stdout.write(`  provisioning hermetic PostgreSQL cluster (attempt ${attempt}/${maxAttempts})...\n`);
-        const provisioned = provisionHermeticPostgres();
+        const provisioned = await provisionHermeticPostgres();
         if (provisioned.error) {
           recordResult(check, {
             status: "failed",
             failureNote:
-              `${provisioned.error} Scenario 8 requires live execution of the bootstrap bridge plus all seven remote-worker owner ` +
+              `${provisioned.error} Scenario 8 requires live execution of every registered bootstrap bridge and remote-worker owner ` +
               ".postgres.test.ts suites: provide GOATCITADEL_TEST_POSTGRES_URL or local PostgreSQL binaries.",
           });
           process.stdout.write(`  -> FAIL (${provisioned.error})\n`);
@@ -508,6 +521,7 @@ for (const [index, check] of checks.entries()) {
         }
         url = provisioned.url;
         hermeticStop = provisioned.stop;
+        readHermeticLog = provisioned.readLog;
         livePostgresMode = "hermetic_cluster";
         process.stdout.write(`  hermetic cluster ready at ${url}\n`);
         process.stdout.write(
@@ -518,25 +532,36 @@ for (const [index, check] of checks.entries()) {
         outcome = runProcessCheck(check, {
           args: livePostgresArgs,
           env: { GOATCITADEL_TEST_POSTGRES_URL: url },
-          logId: "remote-workers.live-postgres",
+          logId: `remote-workers.live-postgres.attempt-${attempt}`,
           timeoutMs: livePostgresTimeoutMs,
         });
       } finally {
         if (hermeticStop) {
+          try {
+            if (readHermeticLog)
+              fs.writeFileSync(
+                path.join(logsRoot, `remote-workers.live-postgres.attempt-${attempt}.server.log`),
+                readHermeticLog(),
+                "utf8",
+              );
+          } catch (error) {
+            process.stdout.write(`  (hermetic PostgreSQL log capture warning: ${String(error)})\n`);
+          }
           try {
             hermeticStop();
           } catch (error) {
             process.stdout.write(`  (hermetic PostgreSQL teardown warning: ${String(error)})\n`);
           }
           hermeticStop = undefined;
+          readHermeticLog = undefined;
         }
       }
       if (outcome.status === "passed" || attempt >= maxAttempts) break;
       if (!outcome.timedOut && !connectionResetPattern.test(outcome.combined)) break;
       process.stdout.write(
         outcome.timedOut
-          ? `  cluster stalled past ${livePostgresTimeoutMs / 1000}s (environmental interference); retrying once on a fresh cluster...\n`
-          : "  connection-reset signature detected (environmental interference); retrying once on a fresh cluster...\n",
+          ? `  cluster stalled past ${livePostgresTimeoutMs / 1000}s; retrying once on a fresh cluster...\n`
+          : "  database connection failure detected; retrying once on a fresh cluster...\n",
       );
     }
     const settled = checkResults.get(check.id);

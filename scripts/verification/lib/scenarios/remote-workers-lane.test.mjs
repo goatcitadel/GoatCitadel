@@ -37,6 +37,7 @@ const EXPECTED_CHECK_IDS = [
   // scenario proves, and the file-existence assertion below covers every suite.
   "remote-workers.storage",
   "remote-workers.gateway",
+  "remote-workers.worker-runtime",
   // Scenario 12: spawns the real apps/remote-worker process against a composed
   // native TLS listener; requireAllExecuted so it can never self-skip.
   "remote-workers.connected-worker-e2e",
@@ -65,6 +66,7 @@ test("the lane check table is complete, uniquely named, and cites only test file
     ["@goatcitadel/contracts", "packages/contracts"],
     ["@goatcitadel/storage", "packages/storage"],
     ["@goatcitadel/gateway", "apps/gateway"],
+    ["@goatcitadel/remote-worker", "apps/remote-worker"],
     ["@goatcitadel/policy-engine", "packages/policy-engine"],
     ["@goatcitadel/mission-control-shared", "packages/mission-control-shared"],
     ["@goatcitadel/mission-control-next", "apps/mission-control-next"],
@@ -90,9 +92,17 @@ test("the lane check table is complete, uniquely named, and cites only test file
   // Sanity: the lane actually cites a substantial suite set, not an empty table.
   assert.ok(citedSuiteCount >= 25, `the lane cites the committed remote-worker suites (${citedSuiteCount})`);
 
-  // The live-PostgreSQL check may never self-skip, and its seven owner suites exist.
+  // The live-PostgreSQL check may never self-skip, and its registered owner suites exist.
+  const workerRuntimeCheck = checks.find((check) => check.id === "remote-workers.worker-runtime");
+  assert.ok(checks.find((check) => check.id === "remote-workers.contracts").args.includes("src/mesh-schema-node.test.ts"),
+    "the contracts lane must exercise bounded schema validation and cancellation");
+  assert.deepEqual(workerRuntimeCheck.args, ["--filter", "@goatcitadel/remote-worker", "test"]);
+  assert.equal(workerRuntimeCheck.count, "vitest");
+  assert.equal(workerRuntimeCheck.requireAllExecuted, true, "worker deadline and recovery tests may never self-skip");
   const connectedWorkerCheck = checks.find((check) => check.id === "remote-workers.connected-worker-e2e");
   assert.equal(connectedWorkerCheck.count, "vitest");
+  assert.ok(connectedWorkerCheck.args.includes("src/services/mesh-capability-destination-e2e.test.ts"),
+    "the connected-worker proof must execute native mesh destination death and settlement recovery");
   assert.equal(
     connectedWorkerCheck.requireAllExecuted,
     true,
@@ -104,8 +114,8 @@ test("the lane check table is complete, uniquely named, and cites only test file
   assert.equal(livePostgres.requireAllExecuted, true, "the live-PG suites may never self-skip inside the lane");
   assert.equal(
     REMOTE_WORKER_LIVE_POSTGRES_SUITES.length,
-    8,
-    "the bootstrap bridge plus all seven generation-fenced owners run live",
+    10,
+    "the bootstrap bridge, Chat offer scheduler and all eight generation-fenced owners run live",
   );
   for (const suite of REMOTE_WORKER_LIVE_POSTGRES_SUITES) {
     assert.match(suite, /\.postgres\.test\.ts$/u, `${suite} is a .postgres.test.ts suite`);
@@ -178,12 +188,28 @@ test("the proof matrix covers 12 scenarios, cites known checks, and declares exa
     "exactly one conditional skip remains",
   );
   assert.match(matrix.find((row) => row.row === 11).skipReason, /two physical machines|mTLS/u);
+  assert.deepEqual(matrix.find((row) => row.row === 8).suites, [...REMOTE_WORKER_LIVE_POSTGRES_SUITES]);
   // Scenario 12 EXECUTES the connected-worker journey and must say, in its own
-  // note, what it does not execute — routes 11-12 remain uncomposed.
+  // note, what it does not execute alongside its controlled inference/artifact proof.
   const connectedWorker = matrix.find((row) => row.row === 12);
-  assert.deepEqual(connectedWorker.checks, ["remote-workers.connected-worker-e2e"]);
+  assert.deepEqual(connectedWorker.checks, ["remote-workers.worker-runtime", "remote-workers.connected-worker-e2e"]);
   assert.equal(connectedWorker.skipReason, undefined);
-  assert.match(connectedWorker.note, /routes 11-12/u);
+  assert.match(connectedWorker.note, /controlled provider/u);
+  assert.match(connectedWorker.note, /canonical tool-effect composition behind explicit activation/u);
+  assert.match(connectedWorker.note, /canonical offer owner/u);
+  assert.match(connectedWorker.note, /checks run separately/u);
+  assert.match(connectedWorker.note, /Frozen prepared Chat history crosses the worker and provider boundary/u);
+  assert.match(connectedWorker.note, /canonical completion hooks with memory disabled/u);
+  assert.match(connectedWorker.note, /separate owner tests cover memory utility budgets/u);
+  assert.match(connectedWorker.note, /canonical Chat messages and the durable finalizer/u);
+  assert.match(connectedWorker.note, /atomic transcript\/result receipts, rollback and exact replay/u);
+  assert.match(connectedWorker.note, /normal Chat stream writer is covered separately/u);
+  assert.match(connectedWorker.note, /admits an idle worker before production placement creates its assignment/u);
+  assert.match(connectedWorker.note, /Controlled built-in and requester MCP tool cases exercise the bounded model\/tool loop/u);
+  assert.match(connectedWorker.note, /an assignment can await mesh work on its own worker/u);
+  assert.match(connectedWorker.note, /The local mesh tool and credential custody are test fixtures/u);
+  assert.match(connectedWorker.note, /Separate controlled built-Gateway mesh Chat approval\/restart proof .* is not executed by this check/u);
+  assert.match(connectedWorker.note, /Shipped destination adapters, broader delegation\/council, protected native execution\/custody and the installed service remain pending/u);
   // Every executed scenario that proves a live-DB owner cites the live-postgres check.
   for (const rowNumber of [1, 2, 3, 4, 5, 6, 8]) {
     assert.ok(

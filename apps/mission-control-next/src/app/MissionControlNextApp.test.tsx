@@ -20,6 +20,7 @@ const appMocks = vi.hoisted(() => ({
   fetchRuntimeBuildIdentity: vi.fn(),
   listCitadels: vi.fn(),
   fetchRuntimeLifecycleExport: vi.fn(),
+  fetchOnboardingState: vi.fn(),
   fetchWorkspaces: vi.fn(),
   getGatewayApiBaseUrl: vi.fn(),
   isCompactTopbar: false,
@@ -64,6 +65,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchHealthSummary: appMocks.fetchHealthSummary,
   listCitadels: appMocks.listCitadels,
   fetchRuntimeLifecycleExport: appMocks.fetchRuntimeLifecycleExport,
+  fetchOnboardingState: appMocks.fetchOnboardingState,
   upsertNotificationPresence: appMocks.upsertNotificationPresence,
 }));
 
@@ -487,12 +489,10 @@ describe("MissionControlNextApp", () => {
 
     expect(css).toContain(".mc-next-topbar-left {\n  flex: 1 1 auto;");
     expect(css).toContain(".mc-next-topbar-right {\n  flex: 0 1 min(52rem, 62vw);");
-    expect(css).toContain(".mc-next-primary-nav {\n  display: inline-flex;");
-    expect(css).toContain("overflow-x: auto;");
-    expect(css).toContain(".mc-next-command-search {\n  order: -1;\n  flex: 1 1 12rem;");
-    expect(css).toContain("min-width: 3rem;");
+    const sidebarCss = readFileSync(new URL("./unified-sidebar.css", import.meta.url), "utf8");
+    expect(sidebarCss).toContain("grid-template-columns: var(--sidebar-width) minmax(0, 1fr)");
+    expect(sidebarCss).toContain("min-width: 0");
     expect(css).toContain(".mc-next-topbar-right > .mc-next-icon-button {");
-    expect(css).not.toContain(".mc-next-topbar-right > button:not(.mc-next-command-search)");
     // F1: lower-priority controls collapse into the overflow ⋯ More menu at the
     // laptop breakpoint, while text badges stay outside the icon-only selector.
     expect(css).toContain(".mc-next-topbar-more-menu {");
@@ -502,31 +502,15 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain(".mc-dialog-content {");
     expect(css).toContain("transform: translate(-50%, -50%);");
     expect(css).toContain("@media (max-width: 1180px) {");
-    expect(css).toContain(".mc-next-topbar-status .mc-next-badge-label {\n    display: inline;");
-    // Guardrail: the restored quick-glance status cluster (release scope /
-    // degraded-realtime / approvals) must never be silently re-hidden.
-    expect(css).not.toContain(".mc-next-topbar-status {\n  display: none;");
-    expect(css).not.toContain(
-      ".mc-next-topbar-right > button.mc-next-start-button,\n.mc-next-topbar-right > button.mc-next-mode-toggle {\n  display: none;",
-    );
-    // HX-303: identity is pinned outside the scrollable metrics and switches
-    // to a compact visual token at the mobile breakpoint. It shares the row
-    // with a non-shrinking Gateway pill and the labeled Details control.
-    expect(css).toContain(".mc-next-status-strip-identity {");
-    expect(css).toContain("flex: 1 1 0;");
-    expect(css).toContain("overflow: hidden;");
-    expect(css).toContain(".mc-next-status-strip-primary {\n    flex: 0 0 auto;");
-    expect(css).toContain(".mc-next-status-strip-identity .mc-next-status-value-compact {");
-    expect(css).toContain("display: block !important;");
+    expect(sidebarCss).toContain("@media (max-width: 1179px)");
+    // Identity and Gateway evidence remain in the responsive System details popover.
     expect(css).toContain(".mc-next-shell .mc-next-status-strip {");
-    expect(css).toContain("position: fixed;");
     // Detail and status values must not wrap character-by-character and expand
     // the fixed mobile strip.
     expect(css).toContain(
       ".mc-next-shell .mc-next-status-details summary strong {\n    flex: 0 0 auto;\n    min-width: max-content;",
     );
-    expect(css).toContain("white-space: nowrap;\n    overflow-wrap: normal;");
-    expect(css).toContain(".mc-next-status-strip-primary .mc-next-status-pill {\n    max-width: none;");
+    expect(css).toContain("width: min(24rem, calc(100vw - 1rem));");
     expect(css).toContain(".mc-next-status-details summary > span {\n    display: inline;");
     expect(css).toContain(".mc-next-status-strip:has(.mc-next-status-details[open]) {\n  overflow: visible;");
     expect(css).toContain(".mc-next-shell .mc-next-status-details-popover {\n    position: fixed;\n    right: 0.5rem;");
@@ -747,7 +731,7 @@ describe("MissionControlNextApp", () => {
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
+            String(node.props.className).includes("mc-next-rail-area-link") && readNodeText(node).includes("Chat"),
         )
         ?.props.onClick();
     });
@@ -805,6 +789,7 @@ describe("MissionControlNextApp", () => {
   });
 
   it("routes a bare installation to the native guided setup before Chat", async () => {
+    appMocks.fetchOnboardingState.mockResolvedValue({ completed: false });
     appMocks.preflightGatewayAccess.mockResolvedValueOnce({
       status: "ready",
       message: "Gateway ready",
@@ -817,7 +802,20 @@ describe("MissionControlNextApp", () => {
     expect(window.location.pathname).toBe("/settings/onboarding");
   });
 
+  it("keeps Chat open when a stale preflight snapshot precedes completed setup", async () => {
+    appMocks.fetchOnboardingState.mockResolvedValue({ completed: true });
+    appMocks.preflightGatewayAccess.mockResolvedValueOnce({
+      status: "ready",
+      message: "Gateway ready",
+      healthDetail: "ok",
+      onboardingState: { completed: false },
+    });
+    await renderApp();
+    expect(window.location.pathname).toBe("/chat");
+  });
+
   it("redirects an incomplete installation only once so finishing setup can enter Chat", async () => {
+    appMocks.fetchOnboardingState.mockResolvedValue({ completed: false });
     appMocks.preflightGatewayAccess.mockResolvedValueOnce({
       status: "ready",
       message: "Gateway ready",
@@ -833,7 +831,7 @@ describe("MissionControlNextApp", () => {
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
+            String(node.props.className).includes("mc-next-rail-area-link") && readNodeText(node).includes("Chat"),
         )
         ?.props.onClick();
       await Promise.resolve();
@@ -923,19 +921,16 @@ describe("MissionControlNextApp", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("# Trust\n\nReady.");
 
     await act(async () => {
-      findButton(renderer, "Pin").props.onClick();
-      findButton(renderer, "Close").props.onClick();
+      renderer.root.findByProps({ "aria-label": "Pin details" }).props.onClick();
+      renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick();
     });
     expect(appMocks.setDetailPanelPinned).toHaveBeenCalledWith(true);
 
     await openTopbarMore(renderer);
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
-      renderer.root
-        .findAllByType("button")
-        .find((node) => String(node.props.className).includes("mc-next-inspector-scrim"))
-        ?.props.onClick();
     });
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick(); });
     expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
   });
 
@@ -953,7 +948,7 @@ describe("MissionControlNextApp", () => {
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Chat"),
+            String(node.props.className).includes("mc-next-rail-area-link") && readNodeText(node).includes("Chat"),
         )
         ?.props.onClick();
     });
@@ -965,7 +960,7 @@ describe("MissionControlNextApp", () => {
         .findAllByType("button")
         .find(
           (node) =>
-            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Settings"),
+            String(node.props.className).includes("mc-next-rail-area-link") && readNodeText(node).includes("Settings"),
         )
         ?.props.onClick();
     });
@@ -980,13 +975,13 @@ describe("MissionControlNextApp", () => {
     const railSeparators = renderer.root.findAllByProps({ className: "mc-next-rail-separator" });
     const separatorIds = railSeparators.map((node) => node.props.id);
 
-    expect(readNodeText(renderer.root)).toContain("Identity");
-    expect(separatorIds).toContain("mc-next-rail-group-settings-identity");
+    expect(readNodeText(renderer.root)).toContain("Connections");
+    expect(separatorIds).toContain("mc-next-rail-group-settings-connections");
     expect(railSeparators.every((node) => node.props["aria-hidden"] === undefined)).toBe(true);
     expect(
       renderer.root.findAllByProps({
         className: "mc-next-rail-section",
-        "aria-labelledby": "mc-next-rail-group-settings-identity",
+        "aria-labelledby": "mc-next-rail-group-settings-connections",
       }),
     ).toHaveLength(1);
     expect(readNodeText(renderer.root)).not.toContain("Workspace capabilities");
@@ -1046,7 +1041,7 @@ describe("MissionControlNextApp", () => {
 
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open navigation" }).props.onClick();
-      renderer.root.findByProps({ "aria-label": "Open Command Palette" }).props.onClick();
+      renderer.root.findAllByProps({ "aria-label": "Command Palette" }).find((node) => String(node.props.className).includes("rail-command"))?.props.onClick();
     });
     expect(renderer.root.findAllByProps({ className: "modal-card command-palette" })).toHaveLength(1);
   });

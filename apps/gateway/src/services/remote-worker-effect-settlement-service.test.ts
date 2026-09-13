@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { normalizeRemoteWorkerEffectCorrelation } from "@goatcitadel/contracts";
+import { normalizeRemoteWorkerEffectCorrelation, canonicalJsonString, type RemoteWorkerEffectCorrelation } from "@goatcitadel/contracts";
 import {
   RemoteWorkerEffectSettlementService,
   type RemoteWorkerEffectCoordinatorPort,
@@ -11,13 +11,21 @@ const D = (value: string): string => createHash("sha256").update(value).digest("
 
 function fakeEffectRepository() {
   const transitions: Array<{ transitionState: string; transitionSequence: number; transitionSha256: string }> = [];
+  const history: Array<{ record: typeof transitions[number]; correlation: RemoteWorkerEffectCorrelation; key: string }> = [];
   return {
     transitions,
+    findSettlement: vi.fn(async () => undefined),
+    readTransitionHistory: vi.fn(async () => [...history]),
     recordIntent: vi.fn(async () => ({ intentId: "intent-1", canonicalArgsSha256: D("args") })),
-    appendTransition: vi.fn(async (input: { correlation: unknown }) => {
+    appendTransition: vi.fn(async (input: { correlation: unknown; idempotencyKey: string }) => {
       // Mirror the real repository's contract enforcement: an invalid correlation
       // (e.g. a completed_with_effect with no canonical HX-305 outcome) is rejected.
       const correlation = normalizeRemoteWorkerEffectCorrelation(input.correlation as never);
+      const existing = history.find((entry) => entry.key === input.idempotencyKey);
+      if (existing) {
+        expect(correlation).toEqual(existing.correlation);
+        return existing.record;
+      }
       const record = {
         intentId: "intent-1",
         transitionState: correlation.transitionState,
@@ -27,6 +35,7 @@ function fakeEffectRepository() {
         recordedAt: "2099-01-01T00:00:00.000Z",
       };
       transitions.push(record);
+      history.push({ record, correlation, key: input.idempotencyKey });
       return record;
     }),
     recordReceipt: vi.fn(async (input: { receiptState: string; hx305OutcomeSha256: string | null }) => ({
@@ -68,6 +77,26 @@ const dispatchInput = {
 };
 
 describe("HX-506 effect settlement service", () => {
+  it("retains an approval wait across restart, then appends the canonical owner's completed result", async () => {
+    const f = service({ kind: "waiting_approval", approvalRecordSha256: D("pending approval") });
+    const first = await f.svc.dispatchEffect(dispatchInput);
+    expect(first.receipt).toBeUndefined();
+    expect(f.repository.recordReceipt).not.toHaveBeenCalled();
+    expect(first.transitions.map((entry) => entry.transitionState)).toEqual(["recorded", "approval_wait"]);
+    const restarted = new RemoteWorkerEffectSettlementService({ repository: f.repository as never, coordinator: f.coordinator });
+    vi.mocked(f.coordinator.dispatch).mockResolvedValue({ kind: "waiting_approval", approvalRecordSha256: D("resolved approval") });
+    expect(await restarted.dispatchEffect(dispatchInput)).toEqual(first);
+    vi.mocked(f.coordinator.dispatch).mockResolvedValue({ kind: "completed_no_effect", externalSideEffectRunId: "owner",
+      boundaryReceiptSha256: D("no-boundary") });
+    const completed = await restarted.dispatchEffect(dispatchInput);
+    expect(completed.receipt?.receiptState).toBe("completed_no_effect");
+    expect(completed.transitions.map((entry) => entry.transitionState)).toEqual([
+      "recorded", "approval_wait", "dispatch_claimed", "completed_no_effect",
+    ]);
+    expect(completed.transitions[1]!.correlationSha256).toBe(first.transitions[1]!.correlationSha256);
+    expect(canonicalJsonString(f.repository.transitions)).toBe(canonicalJsonString(completed.transitions));
+  });
+
   it("persists the immutable intent BEFORE invoking the canonical coordinator", async () => {
     const { svc, repository, coordinator } = service({
       kind: "completed_no_effect",

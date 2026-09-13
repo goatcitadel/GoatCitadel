@@ -2,8 +2,15 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangePlanRecord, ChangePlanRequiredAction } from "@goatcitadel/contracts";
 import { ChatChangePlanActionDialog } from "./ChatChangePlanActionDialog";
+import { fetchCandidateSkillArtifactReview, fetchCapabilityCandidate } from "../../api/capabilities";
+
+vi.mock("../../api/capabilities", () => ({
+  fetchCandidateSkillArtifactReview: vi.fn(),
+  fetchCapabilityCandidate: vi.fn(),
+}));
 
 let latestModalProps: {
+  description?: string;
   onConfirm?: () => void | Promise<void>;
   confirmDisabled?: boolean;
   confirmLabel?: string;
@@ -66,7 +73,67 @@ function callbacks() {
 describe("ChatChangePlanActionDialog", () => {
   beforeEach(() => {
     latestModalProps = null;
+    vi.clearAllMocks();
   });
+
+  it("describes rollback without repeating the original forward effect", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatChangePlanActionDialog {...callbacks()} pending={false} error={null} plan={plan({
+        kind: "confirmation", actionId: "rollback", actionNonce: "nonce", purpose: "rollback",
+        title: "Review rollback", confirmationText: "Disable only the owned MCP installation.",
+      })} />);
+    });
+    expect(latestModalProps?.description).toBe("Disable only the owned MCP installation.");
+    act(() => renderer.unmount());
+  });
+
+  it.each([true, false])(
+    "requires exact candidate content and revision before acknowledgment (matching=%s)",
+    async (matching) => {
+      const handlers = callbacks();
+      const value = plan({
+        kind: "artifact_review",
+        actionId: "artifact-1",
+        actionNonce: "nonce-1234567890123456",
+        title: "Review captured skill",
+        artifactRefs: ["artifact:exact"],
+        requiresExplicitArtifactReview: true,
+      } as ChangePlanRequiredAction);
+      value.kind = "capability_candidate";
+      value.request = { kind: "capability_candidate", proposalId: "proposal-1", versionId: "version-1" };
+      value.target = { ownerId: "capability_candidate", resourceId: "candidate-1", expectedRevision: 3 };
+      vi.mocked(fetchCapabilityCandidate).mockResolvedValue({ candidateId: "candidate-1" } as Awaited<
+        ReturnType<typeof fetchCapabilityCandidate>
+      >);
+      vi.mocked(fetchCandidateSkillArtifactReview).mockResolvedValue({
+        candidateId: "candidate-1",
+        versionId: "version-1",
+        revision: matching ? 3 : 4,
+        artifacts: [
+          {
+            label: "Instructions",
+            artifactRef: "artifact:exact",
+            content: "# Reviewed skill\nRun the prescribed check.",
+          },
+        ],
+      });
+      let renderer!: ReactTestRenderer;
+      await act(async () => {
+        renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} />);
+      });
+      expect(latestModalProps?.confirmDisabled).toBe(!matching);
+      await act(async () => latestModalProps?.onConfirm?.());
+      if (matching) {
+        expect(handlers.onReviewArtifacts).toHaveBeenCalledWith(value);
+        expect(JSON.stringify(renderer.toJSON())).toContain("Run the prescribed check.");
+      } else {
+        expect(handlers.onReviewArtifacts).not.toHaveBeenCalled();
+        expect(JSON.stringify(renderer.toJSON())).toContain("artifacts changed");
+      }
+      act(() => renderer.unmount());
+    },
+  );
 
   it("keeps a credential in password input and submits it only to the secure callback", async () => {
     const handlers = callbacks();

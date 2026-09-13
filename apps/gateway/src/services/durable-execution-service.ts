@@ -18,6 +18,7 @@ import {
   type ChannelUnsendInput,
   ConflictError,
   canonicalJsonString,
+  verifyRemoteWorkerChatContextBinding,
   type ConnectorRecord,
   type McpInvokeRequest,
   type McpInvokeResponse,
@@ -120,6 +121,7 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
     | "mutationIdempotency"
     | "remoteActionTokens"
     | "routedContextSnapshots"
+    | "remoteWorkerChatContexts"
     | "runImmediateTransaction"
     | "sessions"
     | "skillLifecycle"
@@ -324,7 +326,12 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "cleanupSilentHeartbeatTurn"
     | "reconcileAutonomousChatPostCommit"
     | "reconcileGeneralChatPostCommit"
-  >;
+  > & {
+    resolveRemoteWorkerChatExecution?(
+      run: DurableRunRecord,
+      prepared: PreparedAgentChatTurn,
+    ): Promise<import("./remote-worker-chat-execution-service.js").RemoteWorkerChatExecution | undefined>;
+  };
 
 export type DurableChatPostCommitEffectWorkflowPort = DurableWorkflowCompletionHost &
   Pick<DurableExecutionHost, "storage" | "executeGeneralChatPostCommitDurableEffect">;
@@ -1950,6 +1957,11 @@ export async function executeDurableChatTurnRun(
     }
   }
   const routedContextSnapshot = await loadAndVerifyDurableChatRoutedContextSnapshot(host, run, payload);
+  const remoteContext = run.metadata?.remoteWorkerChatContextSha256 === undefined ? undefined
+    : await host.storage.remoteWorkerChatContexts?.findForRun(run.runId);
+  if (run.metadata?.remoteWorkerChatContextSha256 !== undefined && (!remoteContext ||
+      verifyRemoteWorkerChatContextBinding(remoteContext, run.payload).contextSha256 !== run.metadata.remoteWorkerChatContextSha256))
+    throw new Error(`Durable Chat run ${run.runId} lost its frozen worker context.`);
   const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
   if (recoveryTrace.outcome === "invalid") {
     throw new Error(recoveryTrace.reason);
@@ -2015,6 +2027,16 @@ export async function executeDurableChatTurnRun(
   if (routedContextSnapshot) {
     injectFrozenDurableChatRoutedContext(prepared, routedContextSnapshot);
   }
+  if (remoteContext) {
+    // Task-bound turns admitted for worker execution retain the same baseline
+    // even when recovered by a different Gateway. Answers to an explicit input
+    // interrupt are appended to the frozen baseline, never a newly read history.
+    const frozen = verifyRemoteWorkerChatContextBinding(remoteContext, run.payload);
+    prepared.history = JSON.parse(canonicalJsonString(frozen.messages));
+    if (resumedContent !== payload.request.content) {
+      prepared.history.push({ role: "user", content: resumedContent });
+    }
+  }
   // Explicit legacy-only backfill: runs admitted before capability profiles
   // existed may receive one here. Newly admitted runs always carry payload
   // profile references and take the fail-closed branch above.
@@ -2066,6 +2088,9 @@ export async function executeDurableChatTurnRun(
     return;
   }
   const continuation = isDurableChatStreamContinuation(run, payload);
+  // Placement is chosen before either runner starts and retained across retries.
+  // Existing worker ownership always wins over a new local execution attempt.
+  const remoteWorkerExecution = await host.resolveRemoteWorkerChatExecution?.(run, prepared);
   const streamRegistration = await host.registerActiveChatTurnStream(
     payload.sessionId,
     payload.turnId,
@@ -2087,6 +2112,7 @@ export async function executeDurableChatTurnRun(
       streamRegistration,
       skipMessageStart: true,
       durableLeaseOwnerId: run.leaseOwnerId,
+      ...(remoteWorkerExecution ? { remoteWorkerExecution } : {}),
       ...(context?.signal ? { abortSignal: context.signal } : {}),
     },
   );

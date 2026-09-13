@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSessionDraft } from "../../library/session-drafts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Play, Save } from "lucide-react";
 import type { ChatThinkingLevel, ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import {
@@ -19,7 +20,6 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import type { AppRoute } from "@next/app/route-model";
 import {
   getErrorMessage,
-  humanizeEnumToken,
   type Notice,
   SettingsButtonRow,
   SettingsField,
@@ -27,7 +27,7 @@ import {
   type SettingsSectionProps,
   SettingsWizardSteps,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton } from "../../primitives";
 
 const GUIDED_THINKING_LEVELS: ReadonlyArray<{ value: ChatThinkingLevel; label: string }> = [
@@ -73,11 +73,35 @@ export function GuidedModelSetup({
   // also the recovery surface when that boundary cannot return a full payload.
   const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
   const activeModel = onboarding.settings?.llm?.activeModel ?? "";
-  const [providerId, setProviderId] = useState(activeProviderId);
-  const [model, setModel] = useState(activeModel);
-  const [thinkingLevel, setThinkingLevel] = useState<ChatThinkingLevel>(
-    catalog.config?.defaultThinkingLevel ?? "standard",
+  const fallbackProvider =
+    catalogProviders.find((provider) => provider.providerId === activeProviderId) ??
+    catalogProviders.find(
+      (provider) => provider.localCostPosture === "zero_cost_local_runtime" || provider.hasApiKey,
+    ) ??
+    catalogProviders[0];
+  const canonicalSelection = {
+    providerId: activeProviderId || fallbackProvider?.providerId || "",
+    model: activeModel || fallbackProvider?.defaultModel || "",
+    thinkingLevel: catalog.config?.defaultThinkingLevel ?? ("standard" as ChatThinkingLevel),
+  };
+  const modelDraft = useSessionDraft(
+    "onboarding:" + workspaceId + ":model",
+    canonicalSelection,
+    JSON.stringify(canonicalSelection),
+    { label: "First Chat model", available: !catalog.loading },
   );
+  const { providerId, model, thinkingLevel } = modelDraft.value;
+  const setProviderId = (id: string) =>
+    modelDraft.setValue((current) => ({
+      ...current,
+      providerId: id,
+      model: catalogProviders.find((provider) => provider.providerId === id)?.defaultModel ?? "",
+    }));
+  const setModel = (model: string) => modelDraft.setValue((current) => ({ ...current, model }));
+  const setThinkingLevel = (thinkingLevel: ChatThinkingLevel) =>
+    modelDraft.setValue((current) => ({ ...current, thinkingLevel }));
+  const busyRef = useRef(false);
+  const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
   const [dialogPlan, setDialogPlan] = useState<ChangePlanRecord | null>(null);
@@ -90,49 +114,39 @@ export function GuidedModelSetup({
   );
   const providerReady = Boolean(
     selectedProvider &&
-    (selectedProvider.localCostPosture === "zero_cost_local_runtime" ||
-      selectedProvider.hasApiKey ||
-      ["configured", "ready"].includes(selectedProvider.authReadiness?.status ?? "")),
+    (selectedProvider.authReadiness
+      ? ["configured", "ready"].includes(selectedProvider.authReadiness.status)
+      : selectedProvider.localCostPosture === "zero_cost_local_runtime" || selectedProvider.hasApiKey),
   );
   const usesChatGptOAuth = selectedProvider?.authMode === "codex-oauth";
   const defaultPlanCompleted =
-    (Boolean(activeProviderId && activeModel) && activeProviderId === providerId && activeModel === model) ||
-    (latestPlan?.request.kind === "installation_default_model" && latestPlan.status === "completed");
-
-  useEffect(() => {
-    if (providerId && catalog.providers.some((provider) => provider.providerId === providerId)) return;
-    const fallback =
-      catalog.providers.find(
-        (provider) => provider.localCostPosture === "zero_cost_local_runtime" || provider.hasApiKey,
-      ) ?? catalog.providers[0];
-    if (fallback) setProviderId(fallback.providerId);
-  }, [catalog.providers, providerId]);
-
-  useEffect(() => {
-    if (catalog.config?.defaultThinkingLevel && !latestPlan) {
-      setThinkingLevel(catalog.config.defaultThinkingLevel);
-    }
-  }, [catalog.config?.defaultThinkingLevel, latestPlan]);
+    providerReady &&
+    ((Boolean(activeProviderId && activeModel) &&
+      activeProviderId === providerId &&
+      activeModel === model &&
+      thinkingLevel === (catalog.config?.defaultThinkingLevel ?? "standard")) ||
+      (latestPlan?.request.kind === "installation_default_model" &&
+        latestPlan.status === "completed" &&
+        latestPlan.request.providerId === providerId &&
+        latestPlan.request.model === model &&
+        latestPlan.request.thinkingLevel === thinkingLevel));
 
   useEffect(() => {
     if (!providerId) return;
     let cancelled = false;
     const provider = catalogProviders.find((candidate) => candidate.providerId === providerId);
     setModels(provider?.models ?? (provider?.defaultModel ? [provider.defaultModel] : []));
-    void loadModelsForProvider(providerId).then((items) => {
-      if (cancelled) return;
-      const nextModels = [
-        ...new Set([provider?.defaultModel, ...items].filter((item): item is string => Boolean(item))),
-      ];
-      setModels(nextModels);
-      setModel((current) => {
-        if (current && nextModels.includes(current)) return current;
-        if (providerId === activeProviderId && activeModel) {
-          return activeModel;
-        }
-        return nextModels[0] ?? "";
+    void loadModelsForProvider(providerId)
+      .then((items) => {
+        if (cancelled) return;
+        const nextModels = [
+          ...new Set([provider?.defaultModel, ...items].filter((item): item is string => Boolean(item))),
+        ];
+        setModels(nextModels);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setActionError(getErrorMessage(error));
       });
-    });
     return () => {
       cancelled = true;
     };
@@ -140,6 +154,9 @@ export function GuidedModelSetup({
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++planLoadGeneration.current;
+    setLatestPlan(null);
+    setDialogPlan(null);
     void fetchChangePlans({ workspaceId }, { limit: 25 })
       .then(({ items }) => {
         if (cancelled) return;
@@ -149,9 +166,11 @@ export function GuidedModelSetup({
             ["provider_connection", "installation_default_model"].includes(plan.kind) &&
             !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
         );
-        if (pending) setLatestPlan(pending);
+        if (pending && generation === planLoadGeneration.current) setLatestPlan(pending);
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        if (!cancelled) setActionError(getErrorMessage(error));
+      });
     return () => {
       cancelled = true;
     };
@@ -166,16 +185,27 @@ export function GuidedModelSetup({
         setDialogPlan(null);
       }
       if (updated.status === "completed") {
+        if (updated.request.kind === "installation_default_model") {
+          const saved = {
+            providerId: updated.request.providerId,
+            model: updated.request.model,
+            thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
+          };
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+        }
         setNotice({ tone: "success", message: updated.result?.summary ?? "Change applied and verified." });
         await Promise.all([catalog.reload(), reloadOnboarding()]);
       }
       return updated;
     },
-    [catalog, reloadOnboarding, setNotice],
+    [catalog, reloadOnboarding, setNotice, modelDraft],
   );
 
   const runAction = useCallback(
     async (operation: () => Promise<ChangePlanRecord>) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      planLoadGeneration.current += 1;
       setBusy(true);
       setActionError(null);
       try {
@@ -183,13 +213,19 @@ export function GuidedModelSetup({
       } catch (error) {
         setActionError(getErrorMessage(error));
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
     [recordPlan],
   );
 
+  const pendingSetupPlan = latestPlan && !TERMINAL_CHANGE_PLAN_STATUSES.has(latestPlan.status) ? latestPlan : null;
   const createProviderPlan = async () => {
+    if (pendingSetupPlan) {
+      setDialogPlan(pendingSetupPlan);
+      return;
+    }
     if (!providerId) {
       setNotice({ tone: "warning", message: "Choose a provider or local runtime first." });
       return;
@@ -204,6 +240,10 @@ export function GuidedModelSetup({
   };
 
   const createDefaultPlan = async () => {
+    if (pendingSetupPlan) {
+      setDialogPlan(pendingSetupPlan);
+      return;
+    }
     if (!providerId || !model) {
       setNotice({ tone: "warning", message: "Choose a verified provider and model first." });
       return;
@@ -218,17 +258,21 @@ export function GuidedModelSetup({
   };
 
   const enterChat = async () => {
-    if (!defaultPlanCompleted && (activeProviderId !== providerId || activeModel !== model)) {
+    if (!defaultPlanCompleted) {
       setNotice({ tone: "warning", message: "Confirm and verify the future-Chat model default before entering Chat." });
       return;
     }
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       await completeOnboarding("operator");
+      await reloadOnboarding();
       navigate({ area: "chat", theme: route.theme });
     } catch (error) {
       setNotice({ tone: "error", message: getErrorMessage(error) });
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -247,31 +291,43 @@ export function GuidedModelSetup({
       title="Connect a model"
       subtitle="Choose a provider, connect it securely, then select the model Chat should use."
       stats={[
-        { label: "Provider", value: providerReady ? "Ready" : "Needs setup" },
+        { label: "Connection", value: providerReady ? "Configured" : "Needs setup" },
         { label: "Model", value: model || "Choose one" },
-        { label: "Effort", value: humanizeEnumToken(thinkingLevel) },
+        {
+          label: "First response",
+          value: onboarding.firstTask?.status === "verified" ? "Verified" : "Not yet verified",
+        },
       ]}
     >
+      {modelDraft.hasRemoteChanges ? (
+        <p role="status">
+          Saved model defaults changed. Your selection is retained; confirmation will review the current Gateway state.
+        </p>
+      ) : null}
       <SettingsWizardSteps
         steps={[
           {
-            label: "Connect and verify a provider",
+            label: "Connect a provider",
             description: providerReady
               ? `${selectedProvider?.label ?? providerId} has a usable credential or local endpoint.`
               : "Use the secure Change Plan action to connect a provider or verify a local runtime.",
             state: providerReady ? "complete" : "active",
           },
           {
-            label: "Choose model and effort",
+            label: "Confirm your model",
             description: defaultPlanCompleted
-              ? "The installation default was applied and verified."
+              ? "Your default is saved. A real Chat response verifies that the model works."
               : "This default applies only to Chats created after confirmation.",
             state: defaultPlanCompleted ? "complete" : providerReady ? "active" : "pending",
           },
           {
             label: "Start the first Chat",
-            description: "Onboarding completes only after the model default is ready.",
-            state: defaultPlanCompleted || onboarding.completed ? "active" : "pending",
+            description:
+              onboarding.firstTask?.status === "verified"
+                ? "A completed model response is recorded in Chat."
+                : "Ask your own question or choose a starter prompt in Chat.",
+            state:
+              onboarding.firstTask?.status === "verified" ? "complete" : defaultPlanCompleted ? "active" : "pending",
           },
         ]}
       />
@@ -283,9 +339,11 @@ export function GuidedModelSetup({
             disabled={busy || catalog.loading}
             onChange={(event) => {
               setProviderId(event.currentTarget.value);
-              setLatestPlan(null);
             }}
           >
+            {providerId && !catalog.providers.some((provider) => provider.providerId === providerId) ? (
+              <option value={providerId}>{providerId} · unavailable</option>
+            ) : null}
             {catalog.providers.map((provider) => (
               <option key={provider.providerId} value={provider.providerId}>
                 {provider.label}
@@ -307,9 +365,9 @@ export function GuidedModelSetup({
             disabled={busy || !providerReady || models.length === 0}
             onChange={(event) => {
               setModel(event.currentTarget.value);
-              setLatestPlan(null);
             }}
           >
+            {model && !models.includes(model) ? <option value={model}>{model} · current selection</option> : null}
             {models.map((modelId) => (
               <option key={modelId} value={modelId}>
                 {modelId}
@@ -320,48 +378,56 @@ export function GuidedModelSetup({
             Model availability is checked live when the Change Plan is created.
           </p>
         </SettingsField>
-        <SettingsField label="Effort">
-          <select
-            className="mc-next-settings-input"
-            value={thinkingLevel}
-            disabled={busy || !providerReady}
-            onChange={(event) => {
-              setThinkingLevel(event.currentTarget.value as ChatThinkingLevel);
-              setLatestPlan(null);
-            }}
-          >
-            {GUIDED_THINKING_LEVELS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <p className="mc-next-settings-field-note">
-            Unsupported model-specific effort is rejected before confirmation and valid alternatives are returned.
-          </p>
-        </SettingsField>
       </SettingsFieldGrid>
+      <NativeDisclosureCard
+        id="onboarding-advanced-model"
+        title="Advanced model settings"
+        subtitle="Adjust effort or recheck the provider connection."
+      >
+        <SettingsFieldGrid>
+          <SettingsField label="Effort">
+            <select
+              className="mc-next-settings-input"
+              value={thinkingLevel}
+              disabled={busy || !providerReady}
+              onChange={(event) => {
+                setThinkingLevel(event.currentTarget.value as ChatThinkingLevel);
+              }}
+            >
+              {GUIDED_THINKING_LEVELS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="mc-next-settings-field-note">
+              Unsupported model-specific effort is rejected before confirmation and valid alternatives are returned.
+            </p>
+          </SettingsField>
+        </SettingsFieldGrid>
+        <NativeButton variant="secondary" disabled={busy || !providerId} onClick={() => void createProviderPlan()}>
+          Verify provider connection
+        </NativeButton>
+      </NativeDisclosureCard>
       <SettingsButtonRow>
-        <NativeButton variant="default" disabled={busy || !providerId} onClick={() => void createProviderPlan()}>
-          <Play size={16} />
-          {providerReady ? "Verify provider" : usesChatGptOAuth ? "Connect ChatGPT" : "Connect provider"}
-        </NativeButton>
         <NativeButton
-          variant="secondary"
-          disabled={busy || !providerReady || !model}
-          onClick={() => void createDefaultPlan()}
+          variant="default"
+          disabled={busy || !providerId || (providerReady && !model)}
+          onClick={() =>
+            void (defaultPlanCompleted ? enterChat() : providerReady ? createDefaultPlan() : createProviderPlan())
+          }
         >
-          <Save size={16} />
-          Review model default
-        </NativeButton>
-        <NativeButton
-          variant="secondary"
-          disabled={busy || (!defaultPlanCompleted && !onboarding.completed)}
-          onClick={() => void enterChat()}
-        >
-          Enter Chat
+          {defaultPlanCompleted ? <Play size={16} /> : <Save size={16} />}
+          {defaultPlanCompleted
+            ? "Enter Chat"
+            : providerReady
+              ? "Confirm model"
+              : usesChatGptOAuth
+                ? "Connect ChatGPT"
+                : "Connect provider"}
         </NativeButton>
       </SettingsButtonRow>
+      {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}
       {latestPlan ? (
         <ChatChangePlanCard
           plan={latestPlan}

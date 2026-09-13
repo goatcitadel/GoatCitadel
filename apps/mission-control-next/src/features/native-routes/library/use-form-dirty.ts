@@ -44,6 +44,9 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 const dirtyRegistry = new Map<string, boolean>();
 const labelRegistry = new Map<string, string>();
+const actionRegistry = new Map<string, UseFormDirtyOptions>();
+const retainedDraftKeys = new Set<string>();
+let leavingDraftKeys: ReadonlySet<string> = new Set();
 const subscribers = new Set<() => void>();
 
 function notifySubscribers(): void {
@@ -112,6 +115,7 @@ export function unregisterSection(key: string): void {
   }
   dirtyRegistry.delete(key);
   labelRegistry.delete(key);
+  actionRegistry.delete(key);
   rebuildSnapshot();
   notifySubscribers();
 }
@@ -135,14 +139,38 @@ export function clearAllDirty(): void {
  * inside a `useCallback` or event handler.
  */
 export function getDirtySectionKeys(): readonly string[] {
-  return cachedSnapshot;
+  return leavingDraftKeys.size ? cachedSnapshot.filter((key) => !leavingDraftKeys.has(key)) : cachedSnapshot;
+}
+
+/** Share a completed leave decision with nested synchronous navigation guards.
+ * The drafts remain dirty: only this transition ignores the approved keys. */
+export function withDraftLeaveDecision(keys: readonly string[], proceed: () => void): void {
+  const previous = leavingDraftKeys;
+  leavingDraftKeys = new Set([...previous, ...keys]);
+  try { proceed(); } finally { leavingDraftKeys = previous; }
 }
 
 /**
  * Non-hook accessor — true if any section currently reports dirty state.
  */
 export function hasDirtySections(): boolean {
-  return cachedSnapshot.length > 0;
+  return getDirtySectionKeys().length > 0;
+}
+
+export function setRetainedDraftDirty(key: string, dirty: boolean): void {
+  if (dirty) retainedDraftKeys.add(key);
+  else retainedDraftKeys.delete(key);
+}
+
+export function getDirtySectionActions(key: string): UseFormDirtyOptions | undefined {
+  return actionRegistry.get(key);
+}
+
+export function discardDirtySections(keys: readonly string[]): void {
+  for (const key of keys) {
+    actionRegistry.get(key)?.onDiscard?.();
+    setSectionDirty(key, false);
+  }
 }
 
 /**
@@ -168,6 +196,9 @@ export interface UseFormDirtyOptions {
    * Display label surfaced in the confirm-discard prompt. Defaults to the key.
    */
   label?: string;
+  keepDraft?: boolean;
+  onSave?: () => Promise<boolean>;
+  onDiscard?: () => void;
 }
 
 /**
@@ -178,9 +209,11 @@ export interface UseFormDirtyOptions {
  */
 export function useFormDirty(sectionKey: string, isDirty: boolean, options?: UseFormDirtyOptions): void {
   const label = options?.label;
+  const { keepDraft, onSave, onDiscard } = options ?? {};
   useEffect(() => {
+    actionRegistry.set(sectionKey, { label, keepDraft, onSave, onDiscard });
     setSectionDirty(sectionKey, isDirty, label);
-  }, [sectionKey, isDirty, label]);
+  }, [sectionKey, isDirty, label, keepDraft, onSave, onDiscard]);
 
   // Cleanup runs when the section unmounts entirely; depend only on the key
   // so we don't unregister-and-reregister on every render.
@@ -207,7 +240,7 @@ export function useHasAnyDirtySection(): boolean {
   return useAnySectionDirty().length > 0;
 }
 
-const BEFORE_UNLOAD_MESSAGE = "You have unsaved changes in Settings. Leave anyway?";
+const BEFORE_UNLOAD_MESSAGE = "You have unsaved changes. Leave anyway?";
 
 /**
  * Wire a `beforeunload` listener for the lifetime of the calling component.
@@ -223,7 +256,7 @@ export function useBeforeUnloadGuard(): void {
     }
     const eventTarget = window;
     function handler(event: BeforeUnloadEvent): string | undefined {
-      if (!hasDirtySections()) {
+      if (!hasDirtySections() && retainedDraftKeys.size === 0) {
         return undefined;
       }
       event.preventDefault();
@@ -242,6 +275,7 @@ export function useBeforeUnloadGuard(): void {
 
 export interface PendingNavigation<Route> {
   route: Route;
+  keys: readonly string[];
   options?: { replace?: boolean };
 }
 
@@ -261,6 +295,7 @@ export interface NavigateGuardController<Route> {
    * Discard all dirty sections and proceed with the deferred navigation.
    */
   confirmDiscard: () => void;
+  confirmKeep: () => void;
   /**
    * Drop the deferred navigation; leave dirty sections intact so the operator
    * keeps their edits.
@@ -349,7 +384,8 @@ export function useNavigateGuard<Route>(
         }
         return;
       }
-      setPending(options === undefined ? { route } : { route, options });
+      const keys = [...getDirtySectionKeys()];
+      setPending(options === undefined ? { route, keys } : { route, keys, options });
     },
     [rawNavigate, isSameRoute],
   );
@@ -361,7 +397,7 @@ export function useNavigateGuard<Route>(
     if (!pending) {
       return;
     }
-    clearAllDirty();
+    discardDirtySections(pending.keys);
     if (pending.options === undefined) {
       rawNavigate(pending.route);
     } else {
@@ -374,7 +410,16 @@ export function useNavigateGuard<Route>(
     setPending(null);
   }, []);
 
-  return { navigate, pending, confirmDiscard, cancelDiscard };
+  const confirmKeep = useCallback(() => {
+    if (!pending) return;
+    withDraftLeaveDecision(pending.keys, () => {
+      if (pending.options === undefined) rawNavigate(pending.route);
+      else rawNavigate(pending.route, pending.options);
+    });
+    setPending(null);
+  }, [pending, rawNavigate]);
+
+  return { navigate, pending, confirmDiscard, confirmKeep, cancelDiscard };
 }
 
 /**
@@ -384,6 +429,9 @@ export function useNavigateGuard<Route>(
 export function __resetFormDirtyRegistryForTests(): void {
   dirtyRegistry.clear();
   labelRegistry.clear();
+  actionRegistry.clear();
+  retainedDraftKeys.clear();
+  leavingDraftKeys = new Set();
   subscribers.clear();
   rebuildSnapshot();
 }

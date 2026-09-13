@@ -30,6 +30,8 @@ import {
 } from "./remote-worker-mesh-node-admission-service.js";
 import { createRemoteWorkerNativeHandlerMux } from "./remote-worker-native-handler-mux.js";
 import type { RemoteWorkerNativeRequestHandler } from "./remote-worker-native-tls-listener.js";
+import { createRemoteWorkerMeshCapabilityNativeRequestHandler } from "./remote-worker-mesh-capability-handler.js";
+import type { RemoteWorkerMeshCapabilityProtocolPort } from "./remote-worker-mesh-capability-protocol-service.js";
 import {
   RemoteWorkerProtectedAdmissionAuthorityService,
   type RemoteWorkerProtectedAdmissionAuthorityStorePort,
@@ -44,6 +46,7 @@ export interface RemoteWorkerAdmissionEvidenceVerifier extends RemoteWorkerAdmis
 }
 
 interface RemoteWorkerAdmissionCompositionDependencies {
+  readonly meshCapabilities?: RemoteWorkerMeshCapabilityProtocolPort;
   readonly config: EnabledRemoteWorkerRuntimeConfig;
   readonly admissionStore: RemoteWorkerAdmissionStorePort &
     RemoteWorkerProtectedAdmissionAuthorityStorePort &
@@ -101,12 +104,16 @@ export async function createGatewayRemoteWorkerAdmissionNativeRequestHandler(
   await dependencies.assignmentProtocol.assertAvailable();
   await dependencies.assignmentDispatch.assertAvailable();
   await dependencies.assignmentExecution.assertAvailable();
+  await dependencies.meshCapabilities?.assertAvailable();
   const admissionService = new RemoteWorkerAdmissionService({
     admissionStore: dependencies.admissionStore,
     evidenceVerifier,
     readRuntimeConfig: () => dependencies.config,
   });
   return createRemoteWorkerNativeHandlerMux({
+    ...(dependencies.meshCapabilities === undefined ? {} : {
+      meshCapabilities: createRemoteWorkerMeshCapabilityNativeRequestHandler(dependencies.meshCapabilities),
+    }),
     bootstrap: createRemoteWorkerAdmissionNativeRequestHandler({ admissionService }),
     meshNodeAdmission: createRemoteWorkerMeshNodeAdmissionNativeRequestHandler({ admissionService: meshNodeAdmission }),
     assignment: createRemoteWorkerAssignmentNativeRequestHandler({

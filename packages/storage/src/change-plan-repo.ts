@@ -183,7 +183,8 @@ const TRANSITIONS: Readonly<Record<ChangePlanStatus, readonly ChangePlanStatus[]
   awaiting_approval: ["applying", "manual_required", "failed", "cancelled", "rolling_back"],
   applying: ["verifying", "monitoring", "completed", "applied", "manual_required", "failed", "rolling_back"],
   verifying: ["monitoring", "completed", "applied", "manual_required", "failed", "rolling_back"],
-  monitoring: ["completed", "applied", "manual_required", "failed", "rolling_back", "rolled_back", "rollback_failed"],
+  // Reconciliation can refresh owner evidence while child actions remain pending.
+  monitoring: ["monitoring", "completed", "applied", "manual_required", "failed", "rolling_back", "rolled_back", "rollback_failed"],
   completed: ["awaiting_confirmation", "rolling_back"],
   applied: ["awaiting_confirmation", "rolling_back"],
   manual_required: ["awaiting_confirmation", "rolling_back"],
@@ -202,6 +203,7 @@ export class ChangePlanRepository {
   private readonly listWorkspaceStmt;
   private readonly listSessionStmt;
   private readonly listActiveStmt;
+  private readonly listAwaitingApprovalStmt;
   private readonly insertStmt;
   private readonly transitionStmt;
   private readonly insertEventStmt;
@@ -236,6 +238,17 @@ export class ChangePlanRepository {
     this.listActiveStmt = db.prepare(`
       SELECT * FROM change_plans
       WHERE active_target_key IS NOT NULL
+      ORDER BY updated_at ASC, plan_id ASC
+      LIMIT @limit
+    `);
+    const approvalKind = db.dialect === "postgres"
+      ? "required_action_json::jsonb ->> 'kind'" : "json_extract(required_action_json, '$.kind')";
+    const approvalId = db.dialect === "postgres"
+      ? "required_action_json::jsonb ->> 'approvalId'" : "json_extract(required_action_json, '$.approvalId')";
+    this.listAwaitingApprovalStmt = db.prepare(`
+      SELECT * FROM change_plans
+      WHERE status = 'awaiting_approval' AND active_target_key IS NOT NULL
+        AND ${approvalKind} = 'approval' AND ${approvalId} = @approvalId
       ORDER BY updated_at ASC, plan_id ASC
       LIMIT @limit
     `);
@@ -520,6 +533,13 @@ export class ChangePlanRepository {
     const rows = this.listActiveStmt.all({
       limit: Math.max(1, Math.min(Math.trunc(limit), 2_000)),
     }) as unknown as ChangePlanRow[];
+    return rows.map(mapRow);
+  }
+
+  /** Current canonical action binding, not historical approval links or payload inference. */
+  public listAwaitingApproval(approvalId: string, limit = 100): ChangePlanRecord[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new TypeError("Approval wait limit must be between 1 and 500.");
+    const rows = this.listAwaitingApprovalStmt.all({ approvalId: identifier(approvalId, "approvalId"), limit }) as unknown as ChangePlanRow[];
     return rows.map(mapRow);
   }
 

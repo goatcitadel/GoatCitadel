@@ -237,8 +237,8 @@ describe("MCP two-stage requester resolution primitives", () => {
 
   it("creates a full-digest opaque provider alias without exposing a profile mint", () => {
     const input = toolCallAuthorityInput();
-    expect(input.providerAlias).toMatch(/^mcp__[a-f0-9]{64}$/u);
-    expect(input.providerAlias).toHaveLength(69);
+    expect(input.providerAlias).toMatch(/^mcp__[A-Za-z0-9_-]{43}$/u);
+    expect(input.providerAlias).toHaveLength(48);
     expect(input.providerAlias).not.toContain(input.serverId);
   });
 

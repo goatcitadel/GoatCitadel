@@ -10,6 +10,7 @@ import {
   assertMeshCapabilityManifest,
   assertMeshCapabilityPermissionDiff,
   canonicalJsonString,
+  normalizeRemoteWorkerMeshNodeAuthorityFence,
   type MeshCapabilityActivationRecord,
   type MeshCapabilityActivationApprovalPayload,
   type MeshCapabilityActivationRevocationRecord,
@@ -52,6 +53,11 @@ export interface RegisterRemoteWorkerMeshCapabilityPublisherInput {
 export interface PublishRemoteWorkerMeshCapabilityManifestInput {
   readonly authorityFence: RemoteWorkerMeshNodeAuthorityFence;
   readonly manifest: MeshCapabilityManifest;
+}
+
+export interface SettleRemoteWorkerMeshCapabilityInvocationInput {
+  readonly authorityFence: RemoteWorkerMeshNodeAuthorityFence;
+  readonly settlement: SettleMeshCapabilityInvocationInput;
 }
 
 export interface ResolveRemoteWorkerMeshCapabilityManifestReplayInput {
@@ -935,6 +941,27 @@ export class MeshCapabilityPublicationRepository {
         limit: boundedLimit(limit, 64, 256),
       }) as IntentRow[];
     return rows.map(mapIntent);
+  }
+
+  /** Current native admission and exact intent binding must hold through commit, including replay. */
+  public settleRemoteWorkerInvocation(
+    input: SettleRemoteWorkerMeshCapabilityInvocationInput,
+  ): MeshCapabilityInvocationSettlementRecord {
+    const settlement = normalizeSettlementInput(input.settlement);
+    const fence = normalizeRemoteWorkerMeshNodeAuthorityFence(input.authorityFence);
+    return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(fence.workspaceId, fence.nodeId);
+      const intent = this.getInvocationIntent(settlement.workspaceId, settlement.invocationId);
+      const publisher = this.getPublisher(intent.workspaceId, intent.nodeId, intent.publisherGeneration);
+      assertFenceTargetsAdmission(fence, publisher);
+      this.remoteWorkerMeshNodeAdmissions.compareCurrentAuthorityFence({
+        workspaceId: publisher.workspaceId,
+        nodeId: publisher.nodeId,
+        admissionGeneration: publisher.admissionGeneration,
+        expected: fence,
+      });
+      return this.settleInvocation(settlement);
+    });
   }
 
   public settleInvocation(input: SettleMeshCapabilityInvocationInput): MeshCapabilityInvocationSettlementRecord {

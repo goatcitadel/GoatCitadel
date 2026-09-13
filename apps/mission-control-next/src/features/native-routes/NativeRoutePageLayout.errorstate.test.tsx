@@ -90,7 +90,7 @@ describe("NativePageFrame error state (STATE-01)", () => {
     expect(primaryCopy.findByProps({ className: "mc-next-error-state-description" }).children.join("")).not.toContain(
       "API error 403",
     );
-    expect(renderer.root.findByType("details").props.children).toBeTruthy();
+    expect(primaryCopy.findAllByType("details")).toHaveLength(1);
     const configureButton = renderer.root
       .findAllByType("button")
       .find((button) => button.children.join("") === "Configure access");

@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { SettingsChangeStatus, useSettingsChange } from "../use-settings-change";
+import { useSessionDraft } from "../../library/session-drafts";
+import { useCallback, useRef, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
 import { fetchSettings, isApiRequestError, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import {
@@ -9,12 +11,12 @@ import {
   SettingsButtonRow,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
+  SettingsStack,
   SettingsNotice,
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import {
   BUDGET_MODE_OPTIONS,
   describeBudgetMode,
@@ -27,55 +29,56 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   const load = useCallback(() => fetchSettings(), []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [budgetDraft, setBudgetDraft] = useState<ReturnType<typeof normalizeBudgetMode>>("balanced");
+  const editor = useSessionDraft("budget:system:mode", normalizeBudgetMode(data?.budgetMode), data?.revision, {
+    label: "Budget mode", available: Boolean(data), onSave: () => saveBudgetMode(),
+  });
+  const budgetChange = useSettingsChange({ key: editor.key, operation: "budget_mode", matches: (settings, submitted: typeof editor.value) => settings.budgetMode === submitted, acceptSaved: editor.acceptSaved, reload });
+  const budgetDraft = editor.value;
+  const setBudgetDraft = editor.setValue;
   const [savingBudgetMode, setSavingBudgetMode] = useState(false);
   const savingBudgetModeRef = useRef(false);
-  const preserveBudgetDraftRef = useRef(false);
-
-  useEffect(() => {
-    if (data) {
-      if (preserveBudgetDraftRef.current) {
-        preserveBudgetDraftRef.current = false;
-        return;
-      }
-      setBudgetDraft(normalizeBudgetMode(data.budgetMode));
-    }
-  }, [data]);
-
   const currentBudgetMode = normalizeBudgetMode(data?.budgetMode);
-  const saveBudgetMode = async () => {
+  const saveBudgetMode = async (): Promise<boolean> => {
+    if (budgetChange.isPending()) { await budgetChange.refresh(); return false; }
     if (savingBudgetModeRef.current) {
-      return;
+      return false;
     }
     if (!data) {
       setNotice({ tone: "warning", message: "Reload settings before saving the budget mode." });
-      return;
+      return false;
     }
+    if (editor.hasRemoteChanges) {
+      setNotice({ tone: "warning", message: "Review the current budget mode before applying your draft to the latest revision." });
+      return false;
+    }
+    const submitted = budgetDraft;
     try {
       savingBudgetModeRef.current = true;
       setSavingBudgetMode(true);
-      await patchSettings({ expectedRevision: data.revision, budgetMode: budgetDraft });
-      setNotice({ tone: "success", message: "Budget mode saved." });
+      const updated = await patchSettings({ expectedRevision: Number(editor.baseRevision ?? data.revision), budgetMode: submitted });
+      const clean = budgetChange.receive(updated, submitted, Number(editor.baseRevision ?? data.revision));
+      if (clean) setNotice({ tone: "success", message: "Budget mode saved." });
       await reload();
+      return clean;
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {
-        preserveBudgetDraftRef.current = true;
         await reload();
         setNotice({
           tone: "warning",
           message:
             "Budget settings changed elsewhere. Your draft is preserved; review the current settings, then save again to retry.",
         });
-        return;
+        return false;
       }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
+      return false;
     } finally {
       savingBudgetModeRef.current = false;
       setSavingBudgetMode(false);
     }
   };
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <SettingsSectionShell loading={loading} error={null}>
         {null}
@@ -112,7 +115,8 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
     <>
       {error ? <ErrorState size="inline" description={error} /> : null}
       {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsGrid>
+      <SettingsChangeStatus change={budgetChange.change} onRefresh={budgetChange.refresh} navigate={navigate} route={route} />
+      <SettingsStack>
         {data ? (
           <NativeCard
             density="compact"
@@ -124,6 +128,8 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
               { label: "Selected", value: labelForBudgetMode(budgetDraft) },
             ]}
           >
+            {editor.isDirty ? <p role="status">Unsaved budget draft</p> : null}
+            {editor.hasRemoteChanges ? <div role="status"><p>Current saved mode: {labelForBudgetMode(currentBudgetMode)}. Your draft is preserved.</p><NativeButton variant="outline" onClick={editor.rebaseToCurrent}>Apply draft to current budget</NativeButton></div> : null}
             <SettingsFieldGrid>
               <SettingsField label="Mode">
                 <select
@@ -143,7 +149,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
             <SettingsButtonRow>
               <NativeButton
                 variant="default"
-                disabled={savingBudgetMode || budgetDraft === currentBudgetMode}
+                disabled={savingBudgetMode || budgetChange.hasPending || !editor.isDirty || editor.hasRemoteChanges}
                 onClick={() => void saveBudgetMode()}
               >
                 <Save size={16} />
@@ -173,8 +179,8 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
             </SettingsButtonRow>
           </NativeCard>
         )}
-        {costEvidencePanel}
-      </SettingsGrid>
+        <NativeDisclosureCard id="budget-cost-evidence" title="Cost evidence">{costEvidencePanel}</NativeDisclosureCard>
+      </SettingsStack>
     </>
   );
 }

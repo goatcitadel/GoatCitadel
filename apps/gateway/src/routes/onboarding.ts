@@ -160,7 +160,7 @@ export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/onboarding/state", async (request, reply) => {
     try {
       const startedAt = Date.now();
-      const state = fastify.services.onboarding.getOnboardingState();
+      const state = await fastify.services.onboarding.getOnboardingState();
       const afterState = Date.now();
       if (onboardingTimingEnabled) {
         request.log.info(

@@ -142,6 +142,60 @@ export function createChangePlanSchema(db: SqlExecutor): void {
   `);
 }
 
+/** SQLite requires rebuilding a CHECK-constrained table; copy all append-only evidence inside the migration transaction. */
+export function upgradeChangePlanPackSchema(db: SqlExecutor): void {
+  db.exec(`
+    CREATE TEMP TABLE gc_pack_migration_plans AS SELECT * FROM change_plans;
+    CREATE TEMP TABLE gc_pack_migration_events AS SELECT * FROM change_plan_events;
+    CREATE TEMP TABLE gc_pack_migration_links AS SELECT * FROM change_plan_links;
+    DROP TABLE change_plan_links;
+    DROP TABLE change_plan_events;
+    DROP TABLE change_plans;
+  `);
+  createChangePlanSchema({
+    exec: (sql) =>
+      db.exec(
+        sql.replace(
+          "'managed_source_registration', 'product_source_update'",
+          "'managed_source_registration', 'product_source_update', 'capability_pack'",
+        ),
+      ),
+  });
+  db.exec(`
+    INSERT INTO change_plans SELECT * FROM gc_pack_migration_plans;
+    INSERT INTO change_plan_events SELECT * FROM gc_pack_migration_events;
+    INSERT INTO change_plan_links SELECT * FROM gc_pack_migration_links;
+    DROP TABLE gc_pack_migration_links;
+    DROP TABLE gc_pack_migration_events;
+    DROP TABLE gc_pack_migration_plans;
+  `);
+}
+
+export const CHANGE_PLAN_PACK_POSTGRES_SQL = `
+  -- Dynamic v2 bootstrap creates columns without CHECK constraints. Older
+  -- PostgreSQL-owned tables have the named constraint; validate it before widening.
+  ALTER TABLE change_plans ADD CONSTRAINT gc_pack_kind_before CHECK(kind IN (
+    'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
+    'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
+    'managed_source_registration', 'product_source_update'
+  )) NOT VALID;
+  DO $$ BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint old_check
+      JOIN pg_constraint probe ON probe.conrelid = old_check.conrelid AND probe.conname = 'gc_pack_kind_before'
+      WHERE old_check.conrelid = 'change_plans'::regclass AND old_check.conname = 'change_plans_kind_check'
+        AND (old_check.contype <> 'c' OR pg_get_expr(old_check.conbin, old_check.conrelid) IS DISTINCT FROM pg_get_expr(probe.conbin, probe.conrelid))
+    ) THEN RAISE EXCEPTION 'Capability pack migration found a drifted plan kind constraint'; END IF;
+  END $$;
+  ALTER TABLE change_plans DROP CONSTRAINT gc_pack_kind_before;
+  ALTER TABLE change_plans DROP CONSTRAINT IF EXISTS change_plans_kind_check;
+  ALTER TABLE change_plans ADD CONSTRAINT change_plans_kind_check CHECK(kind IN (
+    'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
+    'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
+    'managed_source_registration', 'product_source_update', 'capability_pack'
+  ));
+`;
+
 export const CHANGE_PLAN_POSTGRES_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS change_plans (
     schema_version BIGINT NOT NULL CHECK(schema_version >= 1),

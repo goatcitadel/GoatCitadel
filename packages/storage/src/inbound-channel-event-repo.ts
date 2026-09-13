@@ -1,3 +1,12 @@
+import {
+  normalizeRequired,
+  normalizeOptional,
+  normalizeTimestamp,
+  normalizeSafeInteger,
+  normalizeLeaseDuration,
+  normalizeLimit,
+  isPlainRecord,
+} from "./inbound-channel-normalization.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   ConflictError,
@@ -337,6 +346,19 @@ export class InboundChannelEventRepository {
   public get(eventId: string): InboundChannelEventRecord | undefined {
     const row = this.getStmt.get(normalizeRequired(eventId, "eventId")) as InboundChannelEventRow | undefined;
     return row ? mapRow(row) : undefined;
+  }
+
+  /** Durable ingress evidence, without loading message bodies or claiming delivery. */
+  public latestAcceptedAt(channelKey: string, connectionId: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(accepted_at) AS accepted_at FROM inbound_channel_events
+      WHERE channel_key = ? AND connection_id = ?`,
+      )
+      .get(normalizeRequired(channelKey, "channelKey"), normalizeRequired(connectionId, "connectionId")) as
+      | { accepted_at: string | null }
+      | undefined;
+    return row?.accepted_at ?? undefined;
   }
 
   public getByIdentity(input: {
@@ -988,60 +1010,4 @@ function nullableMatch(db: DatabaseClient, column: string, parameter: string): s
   return db.dialect === "postgres"
     ? `${column} IS NOT DISTINCT FROM CAST(@${parameter} AS TEXT)`
     : `${column} IS @${parameter}`;
-}
-
-function normalizeRequired(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) {
-    throw new ValidationError({ code: "FIELD_REQUIRED", field });
-  }
-  return normalized;
-}
-
-function normalizeOptional(value: string | undefined, field: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return normalizeRequired(value, field);
-}
-
-function normalizeTimestamp(value: string, field: string): string {
-  const time = Date.parse(value);
-  if (!Number.isFinite(time)) {
-    throw new ValidationError({ field, message: `${field} must be a valid timestamp.` });
-  }
-  return new Date(time).toISOString();
-}
-
-function normalizeSafeInteger(value: number | string, field: string, minimum: number): number {
-  const normalized = Number(value);
-  if (!Number.isSafeInteger(normalized) || normalized < minimum) {
-    throw new TypeError(`${field} must be a safe integer greater than or equal to ${minimum}.`);
-  }
-  return normalized;
-}
-
-function normalizeLeaseDuration(value: number): number {
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new ValidationError({ field: "leaseDurationMs", message: "leaseDurationMs must be a positive integer." });
-  }
-  return value;
-}
-
-function normalizeLimit(value: number | undefined): number {
-  if (value === undefined) {
-    return 100;
-  }
-  if (!Number.isSafeInteger(value) || value < 1 || value > 1_000) {
-    throw new ValidationError({ field: "limit", message: "limit must be an integer from 1 through 1000." });
-  }
-  return value;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }

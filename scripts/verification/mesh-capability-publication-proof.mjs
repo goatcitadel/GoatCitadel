@@ -319,14 +319,6 @@ for (const [index, check] of checks.entries()) {
 
   if (check.kind === "live-postgres") {
     const providedUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
-    const storageTestArgs = [
-      "--filter",
-      "@goatcitadel/storage",
-      "exec",
-      "tsx",
-      "--test",
-      "src/mesh-capability-publication-repo.postgres.test.ts",
-    ];
     // Connection-reset signatures get ONE fresh-cluster re-attempt: on this
     // host a hermetic postmaster can sporadically lose backends to external
     // interference (AV-style file scanning), which is environmental, not a
@@ -363,7 +355,7 @@ for (const [index, check] of checks.entries()) {
         process.stdout.write(`  hermetic cluster ready at ${url}\n`);
       }
       try {
-        outcome = runSpawnCheck({ ...check, args: storageTestArgs }, { GOATCITADEL_TEST_POSTGRES_URL: url });
+        outcome = runSpawnCheck(check, { GOATCITADEL_TEST_POSTGRES_URL: url });
       } finally {
         if (hermeticStop) {
           try {

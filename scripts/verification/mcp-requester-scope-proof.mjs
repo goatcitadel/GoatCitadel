@@ -283,9 +283,12 @@ const CHECKS = [
   {
     id: "requester-scope.composition",
     title:
-      "Composed gateway runtime + operator diagnostics: two-requester E2E, fail-closed defaults, recorder/posture canary absence (scenarios 1, 2, 4, 8, 9, 10, 11)",
+      "Composed Gateway and worker runtime + operator diagnostics: requester isolation, native approval/recovery, fail-closed defaults, canary absence (scenarios 1, 2, 4, 8, 9, 10, 11)",
     args: gatewayVitest([
       "services/gateway-service.mcp-requester-composition.test.ts",
+      "services/gateway-service.remote-worker-policy.test.ts",
+      "services/remote-worker-chat-placement-service.test.ts",
+      "services/remote-worker-effect-runtime.test.ts",
       "services/mcp-diagnostics-service.test.ts",
     ]),
     count: "vitest",
@@ -296,6 +299,8 @@ const CHECKS = [
       "Invocation seams: coordinator requester branch, direct route gate, approval replay floor, admin connect/discovery refusal (scenarios 2, 3, 9, 11, 12)",
     args: gatewayVitest([
       "services/tool-invocation-coordinator-service.test.ts",
+      "services/gateway/external-runtime-approval-adapter.test.ts",
+      "services/gateway/native-mcp-chat-binding.test.ts",
       "routes/mcp.test.ts",
       "services/mcp-server-admin-service.test.ts",
     ]),
@@ -304,11 +309,29 @@ const CHECKS = [
   {
     id: "requester-scope.chat-freeze-fallback",
     title:
-      "Profile freeze + chat-runner fallback: authenticated-authority requirement, binding freeze, requester exclusion from global fallback (scenarios 2, 9, 11)",
+      "Profile freeze + Chat/approval context: authenticated authority, exact stored linkage, binding freeze, requester exclusion from global fallback (scenarios 2, 9, 11)",
     args: gatewayVitest([
       "services/chat-turn-capability-profile-service.test.ts",
+      "services/gateway/native-mcp-chat-catalog.test.ts",
       "services/chat-turn-agent-runner.browser-fallback.test.ts",
+      "services/chat-turn-mcp-context.test.ts",
+      "services/mcp-approved-chat-context.test.ts",
     ]),
+    count: "vitest",
+  },
+  {
+    id: "requester-scope.named-policy",
+    title:
+      "Native MCP mapping: process-local identity, inherited deny/permission/Ward gates, shared limits and exact approval replay (scenario 11)",
+    args: [
+      "--filter",
+      "@goatcitadel/policy-engine",
+      "exec",
+      "vitest",
+      "run",
+      "src/mcp-tool-policy-binding.test.ts",
+      "src/mcp-named-policy.test.ts",
+    ],
     count: "vitest",
   },
   {
@@ -322,6 +345,8 @@ const CHECKS = [
       "tsx",
       "--test",
       "src/chat-turn-capability-profile-repo.test.ts",
+      "src/tool-policy-identity.test.ts",
+      "src/tool-access-decision-repo.test.ts",
     ],
     count: "node-test",
   },
@@ -385,6 +410,10 @@ const CHECKS = [
       "apps/gateway/src/services/mcp-public-projection.ts",
       "apps/gateway/src/services/gateway-service.ts",
       "apps/gateway/src/services/gateway-service.mcp-requester-composition.test.ts",
+      "apps/gateway/src/services/gateway/native-mcp-chat-binding.ts",
+      "apps/gateway/src/services/gateway/native-mcp-chat-binding.test.ts",
+      "apps/gateway/src/services/gateway/native-mcp-chat-catalog.ts",
+      "apps/gateway/src/services/gateway/native-mcp-chat-catalog.test.ts",
       "scripts/verification/mcp-requester-scope-proof.mjs",
       "package.json",
     ],
@@ -558,6 +587,7 @@ const SPEC_SCENARIOS = [
       "requester-scope.composition",
       "requester-scope.resolution-core",
       "requester-scope.resolution-service",
+      "requester-scope.named-policy",
     ],
     suites: [
       "apps/gateway/src/routes/mcp.test.ts (direct route fails closed before invokeMcpTool)",
@@ -566,6 +596,7 @@ const SPEC_SCENARIOS = [
       "apps/gateway/src/services/gateway-service.mcp-requester-composition.test.ts (constructor-only registry, forged-context brand rejection)",
       "apps/gateway/src/services/mcp-requester-resolution.test.ts (issuance call sites pinned by source-scan guard)",
       "apps/gateway/src/services/mcp-requester-resolution-service.turn-context.test.ts (turn-context factory call sites pinned)",
+      "packages/policy-engine/src/mcp-named-policy.test.ts and mcp-tool-policy-binding.test.ts (native identity cannot bypass shared policy or count budgets by renaming tools)",
     ],
     note: "Mesh/HX-408 convergence rests on the composed proofs above: every callable path reaches the one coordinator seam, the branded turn context cannot be constructed by plugins/skills/mesh publishers (source-scan guards + brand checks), the resolver registry is reachable only through the Gateway constructor (default-empty fail-closed test), and mesh activation generations are part of the drift-fenced binding (scenario 4 suites).",
   },

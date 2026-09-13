@@ -1,3 +1,6 @@
+import { FocusedDetail } from "../shared/FocusedDetail";
+import { useSessionDraft, hasSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Scale, Waypoints } from "lucide-react";
 import type { ModelComparisonRun } from "@goatcitadel/contracts";
@@ -36,9 +39,8 @@ const SCORE_OPTIONS: ScoreValue[] = ["0", "1", "2", "3", "4"];
 export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesProps) {
   const [selectedComparisonId, setSelectedComparisonId] = useState("");
   const [selectedTestId, setSelectedTestId] = useState("");
-  const [winnerCandidateId, setWinnerCandidateId] = useState("");
-  const [scoreDraft, setScoreDraft] = useState<ScoreDraft>({});
-  const [notes, setNotes] = useState("");
+  const [detailOpen, setDetailOpen] = useState(false);
+  const leave = useDraftLeave();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
   const load = useCallback(async () => {
@@ -63,36 +65,22 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
   }, [comparisons]);
 
   useEffect(() => {
-    if (!selectedComparison) {
-      setSelectedTestId("");
-      setWinnerCandidateId("");
-      setScoreDraft({});
-      return;
-    }
-    const nextTestId = selectedComparison.testIds.includes(selectedTestId)
-      ? selectedTestId
-      : (selectedComparison.testIds[0] ?? "");
-    const nextWinner = selectedComparison.candidates.some((candidate) => candidate.candidateId === winnerCandidateId)
-      ? winnerCandidateId
-      : (selectedComparison.candidates[0]?.candidateId ?? "");
-    setSelectedTestId(nextTestId);
-    setWinnerCandidateId(nextWinner);
-    setScoreDraft(
-      (current) =>
-        Object.fromEntries(
-          selectedComparison.candidates.map((candidate) => [
-            candidate.candidateId,
-            current[candidate.candidateId] ?? "3",
-          ]),
-        ) as ScoreDraft,
-    );
-  }, [selectedComparison, selectedTestId, winnerCandidateId]);
+    setSelectedTestId((current) => selectedComparison?.testIds.includes(current) ? current : selectedComparison?.testIds[0] ?? "");
+  }, [selectedComparison]);
+  const judgmentDraft = useSessionDraft("judgment:" + selectedComparisonId + ":" + selectedTestId, {
+    winner: selectedComparison?.candidates[0]?.candidateId ?? "", scores: Object.fromEntries((selectedComparison?.candidates ?? []).map((candidate) => [candidate.candidateId, "3"])) as ScoreDraft, notes: "",
+  }, selectedComparison?.updatedAt, { label: "Comparison judgment", active: detailOpen, available: Boolean(selectedComparison), onSave: (): Promise<boolean> => saveJudgment() });
+  const winnerCandidateId = judgmentDraft.value.winner, scoreDraft = judgmentDraft.value.scores, notes = judgmentDraft.value.notes;
+  const setWinnerCandidateId = (winner: string) => judgmentDraft.setValue((current) => ({ ...current, winner }));
+  const setNotes = (notes: string) => judgmentDraft.setValue((current) => ({ ...current, notes }));
+  const setScoreDraft = (update: (current: ScoreDraft) => ScoreDraft) => judgmentDraft.setValue((current) => ({ ...current, scores: update(current.scores) }));
 
-  const saveJudgment = useCallback(async () => {
+  const saveJudgment = useCallback(async (): Promise<boolean> => {
     if (!selectedComparison || !selectedTestId) {
       setNotice({ tone: "warning", message: "Select a comparison and test before saving a judgment." });
-      return;
+      return false;
     }
+    const submitted = judgmentDraft.value;
     setSaving(true);
     try {
       await judgeModelComparison(selectedComparison.comparisonId, {
@@ -106,21 +94,23 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
         reviewerId: "operator",
       });
       setNotice({ tone: "success", message: "Saved model comparison judgment." });
-      setNotes("");
+      const clean = judgmentDraft.acceptSaved({ ...submitted, notes: "" }, undefined, submitted);
       await reload();
+      return clean;
     } catch (judgeError) {
       setNotice({ tone: "error", message: getErrorMessage(judgeError) });
+      return false;
     } finally {
       setSaving(false);
     }
-  }, [notes, reload, scoreDraft, selectedComparison, selectedTestId, winnerCandidateId]);
+  }, [notes, reload, scoreDraft, selectedComparison, selectedTestId, winnerCandidateId, judgmentDraft]);
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {notice ? <LibraryNotice notice={notice} /> : null}
-      <div className="mc-next-settings-grid">
-        <NativeCard
+      <div className="mc-next-calm-directory">
+        {!detailOpen ? <NativeCard
           title="Prompt-pack review queue"
           subtitle="Recent model comparisons attached to prompt-pack evaluation work."
           stats={[
@@ -150,14 +140,14 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
           <LibrarySelectableList
             items={comparisons.map((comparison) => ({
               id: comparison.comparisonId,
-              title: comparison.title,
+              title: comparison.title + (comparison.testIds.some((testId) => hasSessionDraft("judgment:" + comparison.comparisonId + ":" + testId)) ? " · Unsaved" : ""),
               meta: comparison.status,
               body: `${comparison.packId} - ${comparison.candidates.length} candidates - ${formatDateTime(
                 comparison.updatedAt,
               )}`,
             }))}
             selectedId={selectedComparisonId}
-            onSelect={setSelectedComparisonId}
+            onSelect={(id) => leave.request(() => { setSelectedComparisonId(id); setDetailOpen(true); })}
             emptyLabel="No model comparison runs are visible yet."
           />
           <LibraryButtonRow>
@@ -174,8 +164,8 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
               Ops quality
             </button>
           </LibraryButtonRow>
-        </NativeCard>
-        <div className="mc-next-settings-stack">
+        </NativeCard> : null}
+        {detailOpen ? <FocusedDetail title={selectedComparison?.title ?? "Comparison unavailable"} onClose={() => leave.request(() => setDetailOpen(false), [judgmentDraft.key])}><div className="mc-next-settings-stack">
           <NativeCard
             title={selectedComparison?.title ?? "Model comparison detail"}
             subtitle={
@@ -263,7 +253,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                     <select
                       className="mc-next-settings-input"
                       value={selectedTestId}
-                      onChange={(event) => setSelectedTestId(event.target.value)}
+                      onChange={(event) => { const id = event.target.value; leave.request(() => setSelectedTestId(id), [judgmentDraft.key]); }}
                     >
                       {selectedComparison.testIds.map((testId) => (
                         <option key={testId} value={testId}>
@@ -342,8 +332,9 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
               <LibraryEmptyState label="Select a comparison before saving a judgment." />
             )}
           </NativeCard>
-        </div>
+        </div></FocusedDetail> : null}
       </div>
+      {leave.dialog}
     </LibrarySectionShell>
   );
 }

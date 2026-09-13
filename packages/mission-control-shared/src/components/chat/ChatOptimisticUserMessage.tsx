@@ -2,6 +2,8 @@ import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
 import { ActorTimestamp } from "./ChatThreadPrimitives";
+import { getWorkflowSkillCaptureDisplay } from "./workflow-skill-capture-display";
+import { WorkflowSkillCaptureEvidence } from "./WorkflowSkillCaptureEvidence";
 
 export interface ChatOptimisticUserMessageView {
   messageId: string;
@@ -11,6 +13,7 @@ export interface ChatOptimisticUserMessageView {
 }
 
 export function ChatOptimisticUserMessage({ message }: { message: ChatOptimisticUserMessageView }) {
+  const capture = getWorkflowSkillCaptureDisplay(message.content);
   return (
     <article
       className="mc-next-thread-turn streaming optimistic-user-message routine-chat"
@@ -22,7 +25,8 @@ export function ChatOptimisticUserMessage({ message }: { message: ChatOptimistic
           <strong>You</strong> · <ActorTimestamp timestamp={message.timestamp} /> ·{" "}
           <span className="mc-next-thread-delivery-status">Sending</span>
         </p>
-        <AssistantMessageRenderer role="user" content={message.content} />
+        <AssistantMessageRenderer role="user" content={capture?.summary ?? message.content} />
+        {capture ? <WorkflowSkillCaptureEvidence content={message.content} /> : null}
         <ChatAttachmentPreviewStack attachments={message.attachments} eager />
       </div>
     </article>

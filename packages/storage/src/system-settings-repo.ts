@@ -64,6 +64,35 @@ export class SystemSettingsRepository {
     return saved;
   }
 
+  /** Atomic data-only CAS; unlike mutate, its arguments can cross the PostgreSQL worker boundary. */
+  public compareAndSet<T>(
+    key: string,
+    expected: SystemSettingRecord<unknown> | undefined,
+    value: T,
+    now = new Date().toISOString(),
+  ): SystemSettingRecord<T> | undefined {
+    if (expected && expected.key !== key) {
+      throw new TypeError("Setting comparison belongs to a different key.");
+    }
+    const valueJson = JSON.stringify(value);
+    if (valueJson === undefined) throw new TypeError("Setting value must be JSON serializable.");
+    return this.db.transaction("immediate", () => {
+      if (!expected) {
+        const inserted = this.insertIfAbsentStmt.run({ key, valueJson, updatedAt: now });
+        if (inserted.changes !== 1) return undefined;
+      } else {
+        const row = this.getForUpdateStmt.get(key) as SystemSettingRow | undefined;
+        if (!row || row.updated_at !== expected.updatedAt || row.value_json !== JSON.stringify(expected.value)) {
+          return undefined;
+        }
+        this.upsertStmt.run({ key, valueJson, updatedAt: now });
+      }
+      const saved = this.get<T>(key);
+      if (!saved) throw new NotFoundError(`Failed to persist setting ${key}`);
+      return saved;
+    });
+  }
+
   /**
    * Atomically reads, transforms, and stores one JSON setting. This is the
    * narrow compare-and-reserve primitive for settings-backed authorities: a

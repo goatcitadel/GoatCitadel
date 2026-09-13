@@ -8,6 +8,7 @@ import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
 import {
   createGatewayRuntime,
   type GatewayAuthValidationPort,
+  type GatewayRuntimeFactoryOptions,
   type GatewayRuntimePort,
 } from "../services/gateway-runtime-factory.js";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -21,7 +22,9 @@ declare module "fastify" {
   }
 }
 
-export const gatewayPlugin = fp(async (fastify) => {
+export type GatewayPluginOptions = Pick<GatewayRuntimeFactoryOptions, "mcpRequesterResolvers">;
+
+export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) => {
   const startupPhases = getStartupPhaseRecorder();
   setBootCheckpoint("storage-plugin:detectRootDir");
   const rootDir = detectRootDir();
@@ -47,7 +50,10 @@ export const gatewayPlugin = fp(async (fastify) => {
   }
   setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
-  const gateway = createGatewayRuntime(config, { sharedHostLifecycle: fastify.sharedHostLifecycle });
+  const gateway = createGatewayRuntime(config, {
+    sharedHostLifecycle: fastify.sharedHostLifecycle,
+    ...(options.mcpRequesterResolvers ? { mcpRequesterResolvers: options.mcpRequesterResolvers } : {}),
+  });
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gatewayRuntime", gateway);
   fastify.decorate("gatewayAuth", gateway);

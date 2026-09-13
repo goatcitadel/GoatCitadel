@@ -212,6 +212,8 @@ describe("NextCodeWorkbenchPanel inspector disclosures", () => {
       await Promise.resolve();
     });
 
+    expect(renderer!.root.findAllByProps({ className: "mc-next-code-session-inspector-section" })).toHaveLength(0);
+    await act(async () => { renderer!.root.findByProps({ className: "mc-next-panel-button mc-next-code-inspector-open" }).props.onClick(); });
     const disclosures = renderer!.root.findAllByProps({ className: "mc-next-code-session-inspector-section" });
     expect(disclosures.length).toBeGreaterThan(0);
 
@@ -243,7 +245,7 @@ describe("NextCodeWorkbenchPanel inspector disclosures", () => {
       await Promise.resolve();
     });
     expect(inspectorTrigger.props["aria-expanded"]).toBe(true);
-    expect(renderer!.root.findByProps({ id: inspectorDrawerId }).props.role).toBe("dialog");
+    expect(renderer!.root.findByProps({ id: inspectorDrawerId }).findByProps({ className: "mc-next-detail-inspector" }).props.role).toBe("region");
 
     const moreMenuTrigger = findButtonByAriaLabel(renderer!.root, "More workbench actions");
     const moreMenuId = moreMenuTrigger.props["aria-controls"] as string;

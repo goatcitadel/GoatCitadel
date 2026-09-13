@@ -72,6 +72,22 @@ export interface CronRunSnapshot {
   runId: string;
   jobId: string;
   status: "ok" | "failed" | "unknown";
+  /** Present only for a retained canonical occurrence; legacy telemetry cannot supply it. */
+  canonical?: Pick<
+    CronRunRecord,
+    | "runId"
+    | "jobId"
+    | "trigger"
+    | "scheduledFor"
+    | "jobRevision"
+    | "executionGeneration"
+    | "status"
+    | "phase"
+    | "childSessionId"
+    | "childTurnId"
+    | "childDurableRunId"
+    | "deliveryRunId"
+  >;
   finishedAt?: string;
   output?: string;
   childDurableRunId?: string;
@@ -128,7 +144,7 @@ export interface CronRunResult {
 
 export interface CronDueRunItem {
   jobId: string;
-  status: "ran" | "pending" | "failed" | "backoff";
+  status: "ran" | "pending" | "settled" | "failed" | "backoff";
   runId?: string;
   error?: string;
   failureCount?: number;
@@ -139,6 +155,7 @@ export interface CronDueRunSummary {
   checkedAt: string;
   dueCount: number;
   ranCount: number;
+  settledCount: number;
   pendingCount: number;
   failedCount: number;
   backoffCount: number;
@@ -899,13 +916,7 @@ export class CronAutomationService {
       return await this.toCanonicalCronRunResult(advanced ?? current);
     }
     if (deliveryRun.status === "completed") {
-      return await this.settleCanonicalAgentTurnCronRun(current, "completed", {
-        outcome: {
-          ...buildCanonicalChildOutcome(current, child),
-          deliveryRunId,
-          deliveryStatus: "completed",
-        },
-      });
+      return await this.reconcileCompletedChannelDelivery(current, child, deliveryRun);
     }
     if (
       hasAmbiguousExternalDeliveryOutcome(
@@ -926,6 +937,72 @@ export class CronAutomationService {
         deliveryStatus: deliveryRun.status,
       },
     });
+  }
+
+  private async reconcileCompletedChannelDelivery(
+    current: CronRunRecord,
+    child: DurableRunRecord,
+    deliveryRun: DurableRunRecord,
+  ): Promise<CronRunResult> {
+    // Connector completion acknowledges queue admission. The channel repository
+    // owns the eventual provider outcome, which may arrive after that checkpoint.
+    const checkpoints = await this.deps.storage.durableRuns.listCheckpoints(deliveryRun.runId);
+    const completions = checkpoints.filter((checkpoint) => checkpoint.checkpointKind === "run_completed");
+    const completion = completions.length === 1 ? completions[0]?.state : undefined;
+    const result = readRecord(completion?.result);
+    const deliveryId = readString(result?.deliveryId);
+    const record = deliveryId ? await this.deps.storage.commsDeliveries.getById(deliveryId) : undefined;
+    if (
+      checkpoints.length >= 200 ||
+      !record ||
+      completion?.dispatchKind !== "integration_channel_send" ||
+      completion.connectorType !== "integration_connection" ||
+      completion.action !== "channel.send" ||
+      deliveryRun.payload.action !== completion.action ||
+      completion.connectorId !== `integration:${record.connectionId}` ||
+      completion.connectorId !== deliveryRun.payload.connectorId ||
+      result?.channelKey !== record.channelKey ||
+      result.target !== record.target ||
+      record.payload?.runId !== child.runId ||
+      record.payload.sessionId !== current.childSessionId
+    ) {
+      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
+        failureMessage: "The completed delivery child has no matching canonical channel receipt.",
+        reconciliationReason: "Channel delivery identity, parent or destination evidence is missing or inconsistent.",
+      });
+    }
+    if (record.status === "queued") {
+      const advanced = await this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
+        status: "waiting",
+        phase: "delivery",
+      });
+      return await this.toCanonicalCronRunResult(advanced ?? current);
+    }
+    const outcome = {
+      ...buildCanonicalChildOutcome(current, child),
+      deliveryRunId: deliveryRun.runId,
+      deliveryId: record.deliveryId,
+      ...(record.deliveryStatus ? { deliveryStatus: record.deliveryStatus } : {}),
+      ...(record.providerMessageId ? { providerMessageId: record.providerMessageId } : {}),
+    };
+    if (record.status === "sent" && record.deliveryStatus === "sent") {
+      return await this.settleCanonicalAgentTurnCronRun(current, "completed", { outcome });
+    }
+    const ambiguous = record.deliveryStatus === "manual_reconciliation_required" || Boolean(record.providerMessageId);
+    return await this.settleCanonicalAgentTurnCronRun(
+      current,
+      ambiguous || record.status !== "failed" ? "manual_reconciliation_required" : "failed",
+      {
+        outcome,
+        failureMessage: record.error ?? "The channel delivery has no acknowledged successful outcome.",
+        ...(ambiguous || record.status !== "failed"
+          ? {
+              reconciliationReason:
+                "Channel delivery has an unknown external outcome and must not be retried automatically.",
+            }
+          : {}),
+      },
+    );
   }
 
   private async settleCanonicalAgentTurnCronRun(
@@ -1102,18 +1179,52 @@ export class CronAutomationService {
       checkedAt: now.toISOString(),
       dueCount: 0,
       ranCount: 0,
+      settledCount: 0,
       pendingCount: 0,
       failedCount: 0,
       backoffCount: 0,
       items: [],
     };
-    const jobs = await (
-      await this.deps.storage.cronJobs.list()
-    ).filter(
-      (job) => isScheduledCronAction(job.action) && isCronActionEnabledForScheduledRun(job.action) && job.enabled,
-    );
+    const jobs = await this.deps.storage.cronJobs.list();
     for (const job of jobs) {
       if (job.activeRunId) {
+        try {
+          const active = await this.deps.storage.cronRuns.get(job.activeRunId);
+          // Observe already-attached agent children even when the job is paused
+          // or expired. Cadence must never replay inline work or child admission.
+          if (
+            active?.action === "agent_turn" &&
+            active.status !== "admitting" &&
+            !isCronRunTerminalStatus(active.status)
+          ) {
+            await this.processCanonicalAgentTurnCronRun(active);
+            const current = await this.deps.storage.cronRuns.get(active.runId);
+            if (current && isCronRunTerminalStatus(current.status)) {
+              summary.settledCount += 1;
+              const failed = current.status !== "completed";
+              if (failed) summary.failedCount += 1;
+              summary.items.push({
+                jobId: job.jobId,
+                runId: current.runId,
+                status: failed ? "failed" : "settled",
+                ...(failed
+                  ? { error: readString(current.failure?.message) ?? `Cron run settled as ${current.status}.` }
+                  : {}),
+              });
+            }
+          }
+        } catch (error) {
+          summary.failedCount += 1;
+          summary.items.push({
+            jobId: job.jobId,
+            runId: job.activeRunId,
+            status: "failed",
+            error: normalizeCronFailureMessage(error),
+          });
+        }
+        continue;
+      }
+      if (!isScheduledCronAction(job.action) || !isCronActionEnabledForScheduledRun(job.action) || !job.enabled) {
         continue;
       }
       if (!isCronJobActive(job, now)) {
@@ -1187,6 +1298,20 @@ export class CronAutomationService {
       return {
         runId: canonical.runId,
         jobId: canonical.jobId,
+        canonical: {
+          runId: canonical.runId,
+          jobId: canonical.jobId,
+          trigger: canonical.trigger,
+          scheduledFor: canonical.scheduledFor,
+          jobRevision: canonical.jobRevision,
+          executionGeneration: canonical.executionGeneration,
+          status: canonical.status,
+          phase: canonical.phase,
+          childSessionId: canonical.childSessionId,
+          childTurnId: canonical.childTurnId,
+          childDurableRunId: canonical.childDurableRunId,
+          deliveryRunId: canonical.deliveryRunId,
+        },
         status: !isCronRunTerminalStatus(canonical.status)
           ? "unknown"
           : canonical.status === "completed"
@@ -1958,8 +2083,9 @@ export function computeNextCronRunAt(schedule: string, from: Date, endAt?: strin
     return undefined;
   }
   const limit = endAt ? Date.parse(endAt) : undefined;
+  const fromMinuteMs = Math.floor(from.getTime() / 60_000) * 60_000;
   for (let offsetMinutes = 1; offsetMinutes <= 60 * 24 * 30; offsetMinutes += 1) {
-    const candidate = new Date(from.getTime() + offsetMinutes * 60_000);
+    const candidate = new Date(fromMinuteMs + offsetMinutes * 60_000);
     if (limit !== undefined && candidate.getTime() > limit) {
       return undefined;
     }

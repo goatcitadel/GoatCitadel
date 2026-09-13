@@ -5,9 +5,13 @@ import {
   REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
   REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_CELL_PROVISIONING_PLAN_SCHEMA_VERSION,
+  REMOTE_WORKER_CELL_PROVISIONING_EXCHANGE_SCHEMA_VERSION,
+  remoteWorkerCellProvisioningPlanSha256,
   buildRemoteWorkerPopV2Preimage,
   buildRemoteWorkerRuntimeCredentialClaims,
   canonicalJsonString,
+  remoteWorkerInferenceUsageEventIdsSha256,
   remoteWorkerRuntimeCredentialClaimsSha256,
   type RemoteWorkerArtifactManifest,
   type RemoteWorkerAssignmentGenerationRecord,
@@ -34,6 +38,12 @@ import {
   type RemoteWorkerProtocolBody,
 } from "./remote-worker-protocol.js";
 import type { RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
+import { checkpointFixture } from "../../../../packages/storage/src/remote-worker-cell-checkpoint-test-helpers.js";
+import { volumeExchangeFixture } from "../../../../packages/contracts/src/remote-worker-cell-volume-test-fixture.js";
+import { formatExchangeFixture } from "../../../../packages/contracts/src/remote-worker-cell-format-test-fixture.js";
+import { protectionExchangeFixture } from "../../../../packages/contracts/src/remote-worker-cell-protection-test-fixture.js";
+import { mountExchangeFixture } from "../../../../packages/contracts/src/remote-worker-cell-mount-test-fixture.js";
+import { mountedWorkspaceExchangeFixture } from "../../../../packages/contracts/src/remote-worker-cell-mounted-workspace-test-fixture.js";
 
 type ExecutionRoute =
   (typeof REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES)[keyof typeof REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES];
@@ -213,6 +223,8 @@ function inferenceRequestRecord() {
     budgetReservationId: "NEVER-RETURN-THIS-RESERVATION",
     budgetOperationJson: '{"secret":"NEVER-RETURN-THIS"}',
     dispatchClaimOwner: "NEVER-RETURN-THIS-OWNER",
+    usageEventIdsJson: canonicalJsonString(["usage-retry-a", "usage-a"]),
+    usageEventIdsSha256: remoteWorkerInferenceUsageEventIdsSha256(["usage-retry-a", "usage-a"]),
   };
 }
 
@@ -527,6 +539,285 @@ function token(value: string): string {
 }
 
 describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
+  function cellExchangeFixture() {
+    const plan = { schemaVersion: REMOTE_WORKER_CELL_PROVISIONING_PLAN_SCHEMA_VERSION,
+      assignmentBindingSha256: D("cell-binding"), profileSha256: D("cell-profile"),
+      parentIdentityHex: "0100000000000000" + "1".repeat(32), cellName: `gc-cell-${"1".repeat(32)}`,
+      ownerSid: "S-1-5-18", controllerSid: "S-1-5-80-1-2-3-4-5", diskIdentifierHex: "3".repeat(32),
+      virtualDiskBytes: 16 * 1024 * 1024, reservedDiskBytes: 80 * 1024 * 1024 } as const;
+    return { schemaVersion: REMOTE_WORKER_CELL_PROVISIONING_EXCHANGE_SCHEMA_VERSION,
+      registryWorkspaceId: "registry-a", assignmentId: "assignment-a", assignmentGeneration: 1, leaseRevision: 1,
+      plan, planSha256: remoteWorkerCellProvisioningPlanSha256(plan), records: [checkpointFixture(plan, 1)] };
+  }
+
+  it.each(["create_once", "reconcile"] as const)("carries the canonical cell preparation decision %s without granting worker policy fields", async (decision) => {
+    const f = fixture(), deps = dependencies(f);
+    const exchange = { ...cellExchangeFixture(), records: [] };
+    const result = { schemaVersion: "goatcitadel.remote-worker-cell-preparation.v1", decision,
+      provisioningExpiresAt: "2099-01-01T00:00:00.000Z", exchange };
+    const cellProvisioning = { exchange: vi.fn(), prepare: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning });
+    const submission = { kind: "cell.provisioning.prepare", parentIdentityHex: exchange.plan.parentIdentityHex };
+    const request = signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, submission));
+    const response = await service(f, deps).execute(request);
+    expect(response).toMatchObject({ disposition: "cell_provisioning_prepared", cellPreparation: result });
+    expect(cellProvisioning.prepare).toHaveBeenCalledWith(expect.objectContaining({ submission, leaseRevision: 1,
+      leaseTokenSha256: D(f.rawLeaseToken), protectedAuthority: expect.any(Object), signal: expect.any(AbortSignal) }));
+    expect(cellProvisioning.exchange).not.toHaveBeenCalled();
+    expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+  });
+
+  it.each(["policy", "capacity", "profile", "runtimeAttestationSha256", "approved", "provisioningOwner"])(
+    "rejects worker-authored preparation %s before consuming a nonce", async (field) => {
+      const f = fixture(), deps = dependencies(f);
+      await expect(service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { kind: "cell.provisioning.prepare", parentIdentityHex: cellExchangeFixture().plan.parentIdentityHex,
+          [field]: "untrusted" })))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+      expect(deps.nonceConsumer.consume).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["missing", "expired", "foreign", "recorded_create", "before_owner", "after_commit"])(
+    "refuses cell creation acknowledgement when %s", async (failure) => {
+      const f = fixture(), deps = dependencies(f), cancellation = new AbortController();
+      const fixtureExchange = cellExchangeFixture();
+      const result = { schemaVersion: "goatcitadel.remote-worker-cell-preparation.v1", decision: "create_once",
+        provisioningExpiresAt: failure === "expired" ? "2000-01-01T00:00:00.000Z" : "2099-01-01T00:00:00.000Z",
+        exchange: { ...fixtureExchange, assignmentId: failure === "foreign" ? "other" : "assignment-a",
+          records: failure === "recorded_create" ? fixtureExchange.records : [] } };
+      const prepare = vi.fn(async () => { if (failure === "after_commit") cancellation.abort(); return result; });
+      Object.assign(deps.settlement, { cellProvisioning: { exchange: vi.fn(), ...(failure === "missing" ? {} : { prepare }) } });
+      if (failure === "before_owner") cancellation.abort();
+      const request = signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { kind: "cell.provisioning.prepare", parentIdentityHex: fixtureExchange.plan.parentIdentityHex }));
+      await expect(service(f, deps).execute({ ...request, signal: cancellation.signal })).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+      expect(prepare).toHaveBeenCalledTimes(["missing", "before_owner"].includes(failure) ? 0 : 1);
+    },
+  );
+
+  it("routes volume checkpoints under the protected fence and refuses incomplete acknowledgements", async () => {
+    const f = fixture(), deps = dependencies(f), base = cellExchangeFixture();
+    const plan = { ...base.plan, virtualDiskBytes: 64 * 1024 * 1024, reservedDiskBytes: 128 * 1024 * 1024 };
+    const records: string[] = [];
+    for (let sequence = 1; sequence <= 5; sequence++) records.push(checkpointFixture(plan, sequence, records.at(-1)?.slice(-64)));
+    const result = volumeExchangeFixture({ ...base, plan, planSha256: remoteWorkerCellProvisioningPlanSha256(plan), records });
+    const owner = { exchange: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning: owner });
+    const selection = { kind: "cell.volume.checkpoint", expectedSequence: 5, recordHex: result.volumeRecords![5] };
+    const request = () => signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, selection));
+    const response = await service(f, deps).execute(request());
+    expect(response).toMatchObject({ disposition: "cell_provisioning_recorded", cellProvisioning: result });
+    expect(owner.exchange).toHaveBeenLastCalledWith(expect.objectContaining({ submission: selection,
+      leaseTokenSha256: D(f.rawLeaseToken), protectedAuthority: expect.any(Object), signal: expect.any(AbortSignal) }));
+    expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+    for (const volumeRecords of [[], result.volumeRecords!.slice(0, 5)]) {
+      owner.exchange.mockResolvedValueOnce({ ...result, volumeRecords });
+      await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    expect(deps.inference.performInference).not.toHaveBeenCalled();
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+
+  it("routes format checkpoints under the protected fence and refuses incomplete acknowledgements", async () => {
+    const f = fixture(), deps = dependencies(f), base = cellExchangeFixture();
+    const plan = { ...base.plan, virtualDiskBytes: 64 * 1024 * 1024, reservedDiskBytes: 128 * 1024 * 1024 };
+    const records: string[] = [];
+    for (let sequence = 1; sequence <= 5; sequence++) records.push(checkpointFixture(plan, sequence, records.at(-1)?.slice(-64)));
+    const result = formatExchangeFixture({ ...base, plan, planSha256: remoteWorkerCellProvisioningPlanSha256(plan), records });
+    const owner = { exchange: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning: owner });
+    const selection = { kind: "cell.format.checkpoint", expectedSequence: 1, recordHex: result.formatRecords![1] };
+    const request = () => signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, selection));
+    const response = await service(f, deps).execute(request());
+    expect(response).toMatchObject({ disposition: "cell_provisioning_recorded", cellProvisioning: result });
+    expect(owner.exchange).toHaveBeenLastCalledWith(expect.objectContaining({ submission: selection,
+      leaseTokenSha256: D(f.rawLeaseToken), protectedAuthority: expect.any(Object), signal: expect.any(AbortSignal) }));
+    expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+    for (const formatRecords of [[], result.formatRecords!.slice(0, 1)]) {
+      owner.exchange.mockResolvedValueOnce({ ...result, formatRecords });
+      await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    const nonceCount = deps.nonceConsumer.consume.mock.calls.length;
+    for (const patch of [{ provisioningOwner: "worker" }, { approvalGranted: true }, { expectedSequence: 0 }]) {
+      await expect(service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { ...selection, ...patch })))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    expect(deps.nonceConsumer.consume).toHaveBeenCalledTimes(nonceCount);
+    expect(deps.inference.performInference).not.toHaveBeenCalled();
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+
+  it("routes protection checkpoints under current authority and refuses missing acknowledgements", async () => {
+    const f = fixture(), deps = dependencies(f), base = cellExchangeFixture();
+    const plan = { ...base.plan, virtualDiskBytes: 64 * 1024 * 1024, reservedDiskBytes: 128 * 1024 * 1024 };
+    const records: string[] = [];
+    for (let sequence = 1; sequence <= 5; sequence++) records.push(checkpointFixture(plan, sequence, records.at(-1)?.slice(-64)));
+    const result = protectionExchangeFixture({ ...base, plan, planSha256: remoteWorkerCellProvisioningPlanSha256(plan), records });
+    const owner = { exchange: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning: owner });
+    const selection = { kind: "cell.protection.checkpoint", expectedSequence: 1, recordHex: result.protectionRecords![1] };
+    const request = () => signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, selection));
+    const response = await service(f, deps).execute(request());
+    expect(response.cellProvisioning).toEqual(result);
+    expect(owner.exchange).toHaveBeenCalledWith(expect.objectContaining({ submission: selection,
+      protectedAuthority: expect.any(Object), signal: expect.any(AbortSignal) }));
+    expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+    for (const protectionRecords of [[], result.protectionRecords!.slice(0, 1)]) {
+      owner.exchange.mockResolvedValueOnce({ ...result, protectionRecords });
+      await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    const nonceCount = deps.nonceConsumer.consume.mock.calls.length;
+    for (const patch of [{ provisioningOwner: "worker" }, { approvalGranted: true }, { expectedSequence: 0 }]) {
+      await expect(service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { ...selection, ...patch })))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    expect(deps.nonceConsumer.consume).toHaveBeenCalledTimes(nonceCount);
+    expect(deps.inference.performInference).not.toHaveBeenCalled();
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+
+  it("routes mount checkpoints under current authority and refuses missing acknowledgements", async () => {
+    const f = fixture(), deps = dependencies(f), base = cellExchangeFixture();
+    const plan = { ...base.plan, virtualDiskBytes: 64 * 1024 * 1024, reservedDiskBytes: 128 * 1024 * 1024 };
+    const records: string[] = [];
+    for (let sequence = 1; sequence <= 5; sequence++) records.push(checkpointFixture(plan, sequence, records.at(-1)?.slice(-64)));
+    const result = mountExchangeFixture({ ...base, plan, planSha256: remoteWorkerCellProvisioningPlanSha256(plan), records });
+    const owner = { exchange: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning: owner });
+    const selection = { kind: "cell.mount.checkpoint", expectedSequence: 3, recordHex: result.mountRecords![3] };
+    const request = () => signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, selection));
+    const response = await service(f, deps).execute(request());
+    expect(response.cellProvisioning).toEqual(result);
+    expect(owner.exchange).toHaveBeenCalledWith(expect.objectContaining({ submission: selection,
+      protectedAuthority: expect.any(Object), signal: expect.any(AbortSignal) }));
+    expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+    for (const mountRecords of [[], ...[1, 2, 3].map((length) => result.mountRecords!.slice(0, length))]) {
+      owner.exchange.mockResolvedValueOnce({ ...result, mountRecords });
+      await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    const nonceCount = deps.nonceConsumer.consume.mock.calls.length;
+    for (const patch of [{ provisioningOwner: "worker" }, { approvalGranted: true }, { expectedSequence: 0 }]) {
+      await expect(service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { ...selection, ...patch })))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    expect(deps.nonceConsumer.consume).toHaveBeenCalledTimes(nonceCount);
+    expect(deps.inference.performInference).not.toHaveBeenCalled();
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+  it("routes mounted workspace checkpoints under current authority and refuses missing acknowledgements", async () => {
+    const f = fixture(), deps = dependencies(f), base = cellExchangeFixture();
+    const plan = { ...base.plan, virtualDiskBytes: 64 * 1024 * 1024, reservedDiskBytes: 128 * 1024 * 1024 };
+    const records: string[] = [];
+    for (let sequence = 1; sequence <= 5; sequence++) records.push(checkpointFixture(plan, sequence, records.at(-1)?.slice(-64)));
+    const result = mountedWorkspaceExchangeFixture({ ...base, plan, planSha256: remoteWorkerCellProvisioningPlanSha256(plan), records });
+    const owner = { exchange: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning: owner });
+    const selection = { kind: "cell.mounted-workspace.checkpoint", expectedSequence: 1, recordHex: result.mountedWorkspaceRecords![1] };
+    const request = () => signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, selection));
+    const response = await service(f, deps).execute(request());
+    expect(response.cellProvisioning).toEqual(result);
+    expect(owner.exchange).toHaveBeenCalledWith(expect.objectContaining({ submission: selection,
+      protectedAuthority: expect.any(Object), signal: expect.any(AbortSignal) }));
+    expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+    for (const mountedWorkspaceRecords of [[], ...[1].map((length) => result.mountedWorkspaceRecords!.slice(0, length))]) {
+      owner.exchange.mockResolvedValueOnce({ ...result, mountedWorkspaceRecords });
+      await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    const nonceCount = deps.nonceConsumer.consume.mock.calls.length;
+    for (const patch of [{ provisioningOwner: "worker" }, { approvalGranted: true }, { expectedSequence: 0 }]) {
+      await expect(service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { ...selection, ...patch })))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    }
+    expect(deps.nonceConsumer.consume).toHaveBeenCalledTimes(nonceCount);
+    expect(deps.inference.performInference).not.toHaveBeenCalled();
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+
+  it("routes cell snapshots and checkpoints under the current protected assignment fence without exposing it", async () => {
+    const f = fixture();
+    const deps = dependencies(f);
+    const result = cellExchangeFixture();
+    const cellProvisioning = { exchange: vi.fn(async () => result) };
+    Object.assign(deps.settlement, { cellProvisioning });
+    for (const selection of [{ kind: "cell.provisioning.snapshot" },
+      { kind: "cell.provisioning.checkpoint", expectedSequence: 0, recordHex: result.records[0] }]) {
+      const request = signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, selection));
+      const response = await service(f, deps).execute(request);
+      expect(response).toMatchObject({ disposition: "cell_provisioning_recorded", cellProvisioning: result });
+      expect(cellProvisioning.exchange).toHaveBeenLastCalledWith(expect.objectContaining({
+        registryWorkspaceId: "registry-a", assignmentId: "assignment-a", assignmentGeneration: 1, leaseRevision: 1,
+        leaseTokenSha256: D(f.rawLeaseToken), protectedAuthority: expect.any(Object), submission: selection,
+        signal: expect.any(AbortSignal),
+      }));
+      expect(JSON.stringify(response)).not.toMatch(/protectedAuthority|provisioningOwner|leaseTokenSha256/u);
+      expect(JSON.stringify(response)).not.toContain(f.rawLeaseToken);
+    }
+    expect(deps.nonceConsumer.consume).toHaveBeenCalledTimes(2);
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+    expect(deps.inference.performInference).not.toHaveBeenCalled();
+  });
+
+  it.each([{ provisioningOwner: "worker" }, { plan: {} }, { approvalGranted: true },
+    { expectedSequence: 1 }, { recordHex: "not-a-record" }])("rejects cell checkpoint authority injection or invalid bytes: %j", async (patch) => {
+    const f = fixture();
+    const deps = dependencies(f);
+    const result = cellExchangeFixture();
+    await expect(service(f, deps).execute(signedRequest(f,
+      REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, {
+        kind: "cell.provisioning.checkpoint", expectedSequence: 0, recordHex: result.records[0], ...patch,
+      }),
+    ))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    expect(deps.nonceConsumer.consume).not.toHaveBeenCalled();
+  });
+
+  it("refuses missing cell owners and stale authority and propagates a commit refusal", async () => {
+    const f = fixture();
+    const deps = dependencies(f);
+    const request = () => signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+      settlementPayload(f, { kind: "cell.provisioning.snapshot" }));
+    await expect(service(f, deps).execute(request())).rejects.toThrow("unavailable");
+    const cellProvisioning = { exchange: vi.fn(async () => { throw new Error("revoked during commit"); }) };
+    Object.assign(deps.settlement, { cellProvisioning });
+    deps.assignments.resolveActiveAuthorityByLeaseTokenHash.mockResolvedValueOnce(undefined);
+    await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    expect(cellProvisioning.exchange).not.toHaveBeenCalled();
+    await expect(service(f, deps).execute(request())).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    expect(cellProvisioning.exchange).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before_owner", "after_commit"] as const)("does not acknowledge a cancelled cell exchange: %s", async (stage) => {
+    const f = fixture();
+    const deps = dependencies(f);
+    const cancellation = new AbortController();
+    const cellProvisioning = { exchange: vi.fn(async () => {
+      cancellation.abort();
+      return cellExchangeFixture();
+    }) };
+    Object.assign(deps.settlement, { cellProvisioning });
+    if (stage === "before_owner") cancellation.abort();
+    const request = signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+      settlementPayload(f, { kind: "cell.provisioning.snapshot" }));
+    await expect(service(f, deps).execute({ ...request, signal: cancellation.signal }))
+      .rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    expect(cellProvisioning.exchange).toHaveBeenCalledTimes(stage === "before_owner" ? 0 : 1);
+  });
+
+  it.each([{ assignmentId: "foreign" }, { leaseRevision: 2 }, { records: [] },
+    { protectedAuthority: "must-not-cross-wire" }, { planSha256: "f".repeat(64) }])(
+    "refuses a cell owner result that is private, corrupt or bound to a different request: %j", async (patch) => {
+      const f = fixture();
+      const deps = dependencies(f);
+      const result = cellExchangeFixture();
+      Object.assign(deps.settlement, { cellProvisioning: { exchange: vi.fn(async () => ({ ...result, ...patch })) } });
+      await expect(service(f, deps).execute(signedRequest(f,
+        REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, {
+          kind: "cell.provisioning.checkpoint", expectedSequence: 0, recordHex: result.records[0],
+        }),
+      ))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    },
+  );
+
   it("uses the exact contract-owned route codes 11-12 and reaches the HX-503 owner with the untouched submission", async () => {
     expect(Object.values(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES).map(({ code }) => code)).toEqual([11, 12]);
     expect(Object.values(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES).map(({ operation }) => operation)).toEqual([
@@ -540,7 +831,8 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
     );
 
     expect(response).toMatchObject({ disposition: "delivered", operation: "assignment.inference.exchange" });
-    expect(deps.inference.performInference).toHaveBeenCalledWith({ submission: submission(f) });
+    expect(deps.inference.performInference).toHaveBeenCalledWith({ submission: submission(f),
+      protectedAuthority: deps.fences[0], signal: expect.any(AbortSignal) });
     expect(deps.nonceConsumer.consume).toHaveBeenCalledOnce();
     // The lease-token hash the storage transaction is fenced with comes from the
     // canonical contracts boundary, and no raw lease leaves the wire boundary.
@@ -582,6 +874,42 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
       deps.assignments.resolveActiveAuthorityByLeaseTokenHash.mock.invocationCallOrder[0] ?? 0,
     );
   });
+
+  it("routes a retained model tool reference through the same protected settlement fence", async () => {
+    const f = fixture();
+    const deps = dependencies(f);
+    const selection = { kind: "chat.tool", inferenceRequestId: "inference-a", attempt: 1, callIndex: 0 };
+    const chatTools = { dispatchTool: vi.fn(async () => ({
+      status: "waiting_approval" as const, inferenceRequestId: "inference-a", attempt: 1, callIndex: 0,
+      requestSha256: D("request"), callId: "call-a", modelToolName: "fs_read", toolRunId: "remote-tool:intent-a", intentId: "intent-a",
+    })) };
+    Object.assign(deps.settlement, { chatTools });
+    await expect(service(f, deps).execute(signedRequest(f,
+      REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, selection),
+    ))).resolves.toMatchObject({ disposition: "chat_tool_recorded", tool: { status: "waiting_approval" } });
+    expect(chatTools.dispatchTool).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      submission: selection, fence: expect.objectContaining({
+        leaseTokenSha256: D(f.rawLeaseToken), sessionControlGeneration: null,
+        protectedAuthority: expect.any(Object),
+      }),
+    }));
+    expect(JSON.stringify(chatTools.dispatchTool.mock.calls)).not.toContain(f.rawLeaseToken);
+    expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+
+  it.each([{ canonicalArgs: {} }, { effectSelector: "fs.write" }, { approvalGranted: true }, { callIndex: 32 }])(
+    "rejects model tool authority fields or an invalid selection before consuming its nonce: %j", async (patch) => {
+      const f = fixture();
+      const deps = dependencies(f);
+      await expect(service(f, deps).execute(signedRequest(f,
+        REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, settlementPayload(f, {
+          kind: "chat.tool", inferenceRequestId: "inference-a", attempt: 1, callIndex: 0, ...patch,
+        }),
+      ))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+      expect(deps.nonceConsumer.consume).not.toHaveBeenCalled();
+      expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes every HX-506 settlement submission kind to its owner under the same fence", async () => {
     const f = fixture();
@@ -867,6 +1195,7 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
         "assignmentGeneration",
         "assignmentId",
         "attempt",
+        "effectiveRouteSha256",
         "governanceDecision",
         "governanceExpiresAt",
         "governanceOutputTokenCeiling",
@@ -877,12 +1206,35 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
         "registryWorkspaceId",
         "requestSha256",
         "state",
+        "usageEventIds",
+        "usageEventIdsSha256",
       ].sort(),
     );
     // Provider output frames and the canonical HX-306 usage id still reach the worker.
     expect(response.frames).toHaveLength(1);
     expect(response.frames[0]).toMatchObject({ frameSequence: 1, usageEventId: "usage-a" });
     expect(response.frames[0]).not.toHaveProperty("effectiveRouteSha256");
+    expect(response.request.usageEventIds).toEqual(["usage-retry-a", "usage-a"]);
+    expect(response.request.usageEventIdsSha256).toBe(
+      remoteWorkerInferenceUsageEventIdsSha256(["usage-retry-a", "usage-a"]),
+    );
+  });
+
+  it("refuses corrupt canonical usage evidence instead of projecting partial attempt accounting", async () => {
+    const f = fixture();
+    for (const usageEventIdsJson of ["{malformed", canonicalJsonString(["usage-a"])]) {
+      const deps = dependencies(f);
+      deps.inference.performInference.mockResolvedValue({
+        disposition: "delivered",
+        request: { ...inferenceRequestRecord(), usageEventIdsJson },
+        frames: [inferenceFrameRecord()],
+      } as never);
+      await expect(
+        service(f, deps).execute(
+          signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.inferenceExchange, inferencePayload(f)),
+        ),
+      ).rejects.toThrow(/usage receipt is invalid/);
+    }
   });
 
   it("refuses an artifact manifest whose identity does not bind the fenced assignment authority", async () => {
@@ -957,6 +1309,22 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
     ).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
     expect(smuggled.nonceConsumer.consume).not.toHaveBeenCalled();
     expect(smuggled.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+  });
+
+  it.each(["payload", "submission"])("refuses worker-supplied artifact continuation in the %s", async (location) => {
+    const f = fixture();
+    const deps = dependencies(f);
+    const submission = { kind: "artifact.open", uploadAttempt: 1, declaredFileCount: 1, declaredTotalBytes: 5,
+      stagingRootSha256: D("staging"), expiresAt: "2099-01-01T00:00:00.000Z" };
+    const supplied = { uploadId: "other-upload", leaseRevision: 1, parentDispatchAuthority: {} };
+    const payload = location === "payload"
+      ? { ...settlementPayload(f, submission), continuingArtifact: supplied }
+      : settlementPayload(f, { ...submission, continuingArtifact: supplied });
+    await expect(service(f, deps).execute(signedRequest(
+      f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, payload,
+    ))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+    expect(deps.nonceConsumer.consume).not.toHaveBeenCalled();
+    expect(deps.settlement.artifacts.openUpload).not.toHaveBeenCalled();
   });
 
   it("refuses a payload above the execution byte ceiling and settlement counts above their contract bounds", async () => {

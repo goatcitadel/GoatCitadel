@@ -18,6 +18,8 @@
  * and identifiers are opaque, server-derived values echoed back verbatim.
  */
 import {
+  normalizeRemoteWorkerAssignmentRuntime,
+  type RemoteWorkerAssignmentRuntime,
   freezeRemoteWorkerAssignmentEventPage,
   freezeRemoteWorkerAssignmentPage,
   freezeRemoteWorkerReconciliation,
@@ -74,7 +76,9 @@ export async function fetchRemoteWorkerRegistry(
   if (query.cursor !== undefined) params.set("cursor", boundedCursor(query.cursor));
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const payload = await request<unknown>(`/api/v1/ops/workspaces/${encodeURIComponent(scope)}/remote-workers${suffix}`);
-  return freezeRemoteWorkerRegistryPage(payload);
+  const result = freezeRemoteWorkerRegistryPage(payload);
+  if (result.workspaceId !== scope) throw new Error("Worker registry scope mismatch.");
+  return result;
 }
 
 /** Operator-only, read-only registry detail for one worker. */
@@ -87,7 +91,9 @@ export async function fetchRemoteWorkerDetail(
   const payload = await request<unknown>(
     `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/remote-workers/${encodeURIComponent(worker)}`,
   );
-  return freezeRemoteWorkerRegistryDetail(payload);
+  const result = freezeRemoteWorkerRegistryDetail(payload);
+  if (result.workspaceId !== scope || result.item.workerId !== worker) throw new Error("Worker detail scope mismatch.");
+  return result;
 }
 
 /** Read-only cross-owner reconciliation projection for one worker. */
@@ -100,7 +106,9 @@ export async function fetchRemoteWorkerReconciliation(
   const payload = await request<unknown>(
     `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/remote-workers/${encodeURIComponent(worker)}/reconciliation`,
   );
-  return freezeRemoteWorkerReconciliation(payload);
+  const result = freezeRemoteWorkerReconciliation(payload);
+  if (result.workspaceId !== scope || result.workerId !== worker) throw new Error("Worker reconciliation scope mismatch.");
+  return result;
 }
 
 export interface RemoteWorkerAssignmentsQuery {
@@ -127,7 +135,9 @@ export async function fetchRemoteWorkerAssignments(
   const payload = await request<unknown>(
     `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/remote-worker-assignments${suffix}`,
   );
-  return freezeRemoteWorkerAssignmentPage(payload);
+  const result = freezeRemoteWorkerAssignmentPage(payload);
+  if (result.workspaceId !== scope || (query.workerId && result.filters.workerId !== query.workerId) || (query.sessionId && result.filters.sessionId !== query.sessionId) || (query.turnId && result.filters.turnId !== query.turnId)) throw new Error("Worker assignment scope mismatch.");
+  return result;
 }
 
 export interface RemoteWorkerAssignmentEventsQuery {
@@ -152,5 +162,27 @@ export async function fetchRemoteWorkerAssignmentEvents(
       assignment,
     )}/events${suffix}`,
   );
-  return freezeRemoteWorkerAssignmentEventPage(payload);
+  const result = freezeRemoteWorkerAssignmentEventPage(payload);
+  if (result.workspaceId !== scope || result.assignmentId !== assignment) throw new Error("Worker event scope mismatch.");
+  return result;
+}
+
+/** Canonical generation-scoped resource, cost, settlement, and contact evidence. */
+export async function fetchRemoteWorkerAssignmentRuntime(
+  workspaceId: string,
+  assignmentId: string,
+): Promise<RemoteWorkerAssignmentRuntime> {
+  const scope = normalizeWorkspaceId(workspaceId);
+  const assignment = normalizeScopedId(assignmentId, "assignment id");
+  const payload = await request<unknown>(
+    "/api/v1/ops/workspaces/" +
+      encodeURIComponent(scope) +
+      "/remote-worker-assignments/" +
+      encodeURIComponent(assignment) +
+      "/runtime",
+  );
+  const result = normalizeRemoteWorkerAssignmentRuntime(payload);
+  if (result.workspaceId !== scope || result.assignmentId !== assignment)
+    throw new Error("Remote worker runtime evidence does not match the requested scope.");
+  return result;
 }

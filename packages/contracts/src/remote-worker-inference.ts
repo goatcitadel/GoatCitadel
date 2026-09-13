@@ -1,15 +1,22 @@
 import { canonicalJsonString } from "./canonical-json.js";
 import { redactSecretText } from "./secret-redaction.js";
+import { normalizeRemoteWorkerChatMessages } from "./remote-worker-chat-context.js";
+import {
+  normalizeRemoteWorkerInferenceToolCalls,
+  type RemoteWorkerInferenceToolCall,
+} from "./remote-worker-chat-tool-calls.js";
 
 /**
  * HX-503 assignment-bound remote-worker inference contract (production-dark).
  *
  * The worker may supply ONLY the identities below, the raw assignment lease
- * token, bounded text-only messages, the exact input/context/model-intent
+ * token, bounded messages from its frozen Chat input, the exact input/context/model-intent
  * hashes, and bounded output/reasoning/temperature ceilings. It can never
  * supply a provider, model, API style, provider URL, credential reference,
- * key, header, tool, memory, metadata, service tier, fallback list, or a
- * multimodal body; `assertExactKeys` rejects every such field. The Gateway
+ * key, header, tool definition, memory configuration, metadata, service tier,
+ * fallback list, or arbitrary provider body. Structured content is allowed only
+ * as a message part whose exact bytes the Gateway froze; `assertExactKeys`
+ * rejects configuration fields. The Gateway
  * hashes the raw lease immediately (`remoteWorkerInferenceLeaseTokenSha256`)
  * and never persists or logs it, then chooses the effective provider/model and
  * owns every credential. Output frames are provider-output-only: their schema
@@ -32,6 +39,10 @@ export const REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION = "goatcitadel.remote
 
 export const REMOTE_WORKER_INFERENCE_FRAME_GENESIS_SHA256 = "0".repeat(64);
 
+/** Bounded synchronous model work. This never extends a worker/parent lease;
+ * those authorities must remain live and are checked throughout execution. */
+export const REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS = 90_000;
+
 export const REMOTE_WORKER_INFERENCE_MAX_MESSAGES = 256;
 export const REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS = 131_072;
 export const REMOTE_WORKER_INFERENCE_MAX_REQUEST_CHARS = 1_048_576;
@@ -43,7 +54,7 @@ export const REMOTE_WORKER_INFERENCE_MAX_FRAME_TEXT_CHARS = 131_072;
 export const REMOTE_WORKER_INFERENCE_MAX_OUTPUT_CHARS = 8_388_608;
 export const REMOTE_WORKER_INFERENCE_MAX_USAGE_EVENT_IDS = 32;
 
-export const REMOTE_WORKER_INFERENCE_MESSAGE_ROLES = ["system", "user", "assistant"] as const;
+export const REMOTE_WORKER_INFERENCE_MESSAGE_ROLES = ["system", "developer", "user", "assistant", "tool"] as const;
 export type RemoteWorkerInferenceMessageRole = (typeof REMOTE_WORKER_INFERENCE_MESSAGE_ROLES)[number];
 
 export const REMOTE_WORKER_INFERENCE_STATES = [
@@ -128,6 +139,10 @@ export function isRemoteWorkerInferenceTerminalState(value: string): value is Re
 export interface RemoteWorkerInferenceMessage {
   readonly role: RemoteWorkerInferenceMessageRole;
   readonly text: string;
+  readonly parts?: Array<Record<string, unknown>>;
+  readonly name?: string;
+  readonly tool_call_id?: string;
+  readonly toolCalls?: readonly RemoteWorkerInferenceToolCall[];
 }
 
 export interface RemoteWorkerInferenceRequestSubmission {
@@ -258,17 +273,50 @@ function normalizeMessages(value: unknown): readonly RemoteWorkerInferenceMessag
   let totalChars = 0;
   const messages = value.map((entry, index) => {
     assertRecord(entry, `inference message[${index}]`);
-    assertExactKeys(entry, ["role", "text"], `inference message[${index}]`);
+    assertExactKeys(entry, ["role", "text", "parts", "name", "tool_call_id", "toolCalls"], `inference message[${index}]`, [
+      "parts",
+      "name",
+      "tool_call_id",
+      "toolCalls",
+    ]);
     enumValue(entry.role, REMOTE_WORKER_INFERENCE_MESSAGE_ROLES, `inference message[${index}] role`);
-    const text = boundedText(entry.text, `inference message[${index}] text`, REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS);
-    totalChars += text.length;
-    return Object.freeze({ role: entry.role, text });
+    if (
+      typeof entry.text !== "string" ||
+      entry.text.length > REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS ||
+      (entry.parts !== undefined && (!Array.isArray(entry.parts) || entry.text !== ""))
+    )
+      throw new TypeError("Remote worker inference message exceeds its content bound.");
+    const normalized = normalizeRemoteWorkerChatMessages([
+      {
+        role: entry.role,
+        content: entry.parts ?? entry.text,
+        ...(entry.name === undefined ? {} : { name: identifier(entry.name, "message name") }),
+        ...(entry.tool_call_id === undefined
+          ? {}
+          : { tool_call_id: identifier(entry.tool_call_id, "message tool_call_id") }),
+      },
+    ])[0]!;
+    const toolCalls = entry.toolCalls === undefined ? undefined : normalizeRemoteWorkerInferenceToolCalls(entry.toolCalls);
+    if (toolCalls && (entry.role !== "assistant" || entry.parts !== undefined || entry.tool_call_id !== undefined))
+      throw new TypeError("Only an assistant message may retain model tool calls.");
+    const message = Object.freeze({
+      role: entry.role,
+      text: entry.text,
+      ...(Array.isArray(normalized.content) ? { parts: normalized.content } : {}),
+      ...(normalized.name === undefined ? {} : { name: normalized.name }),
+      ...(normalized.tool_call_id === undefined ? {} : { tool_call_id: normalized.tool_call_id }),
+      ...(toolCalls ? { toolCalls } : {}),
+    });
+    totalChars += canonicalJsonString(message).length;
+    return message;
   });
   if (totalChars > REMOTE_WORKER_INFERENCE_MAX_REQUEST_CHARS) {
     throw new TypeError("Remote worker inference request exceeds the bounded total character budget.");
   }
   return Object.freeze(messages);
 }
+
+export { normalizeMessages as normalizeRemoteWorkerInferenceMessages };
 
 /**
  * The canonical bounded request body persisted verbatim and delivered to the
@@ -334,6 +382,8 @@ export interface RemoteWorkerInferenceTerminalPayload {
   readonly kind: "terminal";
   readonly terminalState: RemoteWorkerInferenceTerminalState;
   readonly usageEventId?: string;
+  /** A completed model request may require tools before Chat can complete. */
+  readonly toolCalls?: readonly RemoteWorkerInferenceToolCall[];
 }
 
 export type RemoteWorkerInferenceFramePayload =
@@ -356,15 +406,19 @@ export function normalizeRemoteWorkerInferenceFramePayload(
       text: boundedText(input.text, "inference frame text", REMOTE_WORKER_INFERENCE_MAX_FRAME_TEXT_CHARS),
     });
   }
-  assertExactKeys(input, ["schemaVersion", "kind", "terminalState", "usageEventId"], "inference terminal frame", [
+  assertExactKeys(input, ["schemaVersion", "kind", "terminalState", "usageEventId", "toolCalls"], "inference terminal frame", [
     "usageEventId",
+    "toolCalls",
   ]);
   enumValue(input.terminalState, REMOTE_WORKER_INFERENCE_TERMINAL_STATES, "inference terminal frame terminalState");
+  if (input.toolCalls !== undefined && (input.terminalState !== "completed" || input.usageEventId === undefined))
+    throw new TypeError("Worker tool calls require a completed, accounted model request.");
   return Object.freeze({
     schemaVersion: REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
     kind: "terminal",
     terminalState: input.terminalState,
     ...(input.usageEventId === undefined ? {} : { usageEventId: identifier(input.usageEventId, "usageEventId") }),
+    ...(input.toolCalls === undefined ? {} : { toolCalls: normalizeRemoteWorkerInferenceToolCalls(input.toolCalls) }),
   });
 }
 

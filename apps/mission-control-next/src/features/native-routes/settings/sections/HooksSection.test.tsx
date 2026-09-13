@@ -87,8 +87,10 @@ describe("HooksSection", () => {
     });
     await flush();
 
+    expect(collectText(renderer.root)).not.toContain("Run safe test");
+    await act(async () => { findButton(renderer.root, "Deployment observer").props.onClick(); });
     const text = collectText(renderer.root);
-    expect(text).toContain("Governed hooks");
+    expect(text).toContain("Registered hooks");
     expect(text).toContain("Deployment observer");
     expect(text).toContain("Keychain");
     expect(text).toContain("completed · attempt 1");
@@ -103,5 +105,12 @@ describe("HooksSection", () => {
       await Promise.resolve();
     });
     expect(api.testWorkspaceHook).toHaveBeenCalledWith("default", "hook-1");
+    await act(async () => { findButton(renderer.root, "Delivery history").props.onClick(); });
+    await act(async () => { findButton(renderer.root, "completed · tool.call.after").props.onClick(); });
+    const historyText = collectText(renderer.root);
+    expect(historyText).not.toContain("never-render-this-payload");
+    expect(historyText).not.toContain("never-render-this-response");
+    expect(historyText).not.toContain("super-secret");
+    await act(async () => renderer.unmount());
   });
 });

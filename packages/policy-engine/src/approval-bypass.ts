@@ -60,6 +60,7 @@ function requestMatchesPendingApproval(
     storedRequest.agentId === request.agentId &&
     storedRequest.sessionId === request.sessionId &&
     (storedRequest.turnId ?? undefined) === ((request as Partial<ToolInvokeRequest>).turnId ?? undefined) &&
+    (storedRequest.toolRunId ?? undefined) === ((request as Partial<ToolInvokeRequest>).toolRunId ?? undefined) &&
     (storedRequest.workspaceId ?? undefined) === (request.workspaceId ?? undefined) &&
     (storedRequest.taskId ?? undefined) === (request.taskId ?? undefined) &&
     (storedRequest.runId ?? undefined) === (request.runId ?? undefined) &&

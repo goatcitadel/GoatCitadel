@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ChevronDown, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowRight, ChevronDown, FlaskConical, Info, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
+import "./calm-surfaces.css";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
@@ -119,7 +120,10 @@ export function NativePageFrame({
     return () => window.cancelAnimationFrame(handle);
   }, [kicker, loading, title]);
 
-  const hasHeadRow = Boolean(metrics?.length) || Boolean(actions);
+  const urgentMetric = (metric: NativePageMetric) => metric.flash || (/approval|blocked|failed|pending|error/i.test(metric.label) && !/^(0|none)$/i.test(metric.value));
+  const essentialMetrics = metrics?.filter(urgentMetric);
+  const supportingMetrics = metrics?.filter((metric) => !urgentMetric(metric));
+  const hasHeadRow = Boolean(essentialMetrics?.length) || Boolean(actions);
   const errorPresentation = error ? normalizeNativeRouteError(error, { resourceLabel: title, ...errorContext }) : null;
 
   return (
@@ -131,18 +135,18 @@ export function NativePageFrame({
           </div>
         ) : null}
         <div className="mc-next-directory-copy">
-          <p>{kicker}</p>
+          <p className="mc-next-visually-hidden">{kicker}</p>
           <div className="mc-next-directory-title-row">
             <h1>{title}</h1>
             <ReleaseScopeBadge status={releaseStatus} />
           </div>
-          <span>{description}</span>
+          <details className="mc-next-page-explanation"><summary><Info size={14} aria-hidden="true" />Page details</summary><p>{description}</p>{supportingMetrics?.length ? <dl>{supportingMetrics.map((metric) => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}{metric.delta ? ` · ${metric.delta.value}` : ""}</dd></div>)}</dl> : null}</details>
         </div>
         {hasHeadRow ? (
           <div className="mc-next-directory-head-row">
-            {metrics?.length ? (
+            {essentialMetrics?.length ? (
               <div className="mc-next-directory-head-metrics">
-                {metrics.map((metric) => (
+                {essentialMetrics.map((metric) => (
                   <div
                     key={metric.label}
                     className="mc-next-directory-head-metric"
@@ -254,18 +258,8 @@ export function NativeCard({
           ) : (
             <h2>{title}</h2>
           )}
-          <p>{subtitle}</p>
+          {subtitle || stats?.length ? <details className="mc-next-card-explanation"><summary aria-label={`About ${title}`}><Info size={14} aria-hidden="true" /><span>Details</span></summary><p>{subtitle}</p>{stats?.length ? <dl>{stats.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl> : null}</details> : null}
         </div>
-        {stats?.length ? (
-          <div className="mc-next-directory-stats">
-            {stats.map((item) => (
-              <div key={`${item.label}-${item.value}`}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
         {actions ? <div className="mc-next-directory-card-actions">{actions}</div> : null}
       </div>
       <div
@@ -326,22 +320,26 @@ export function NativeDisclosureCard({
   defaultOpen = false,
   className,
   revealOnOpen = false,
+  lazy = false,
 }: {
   id: string;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   children: ReactNode;
   stats?: Array<{ label: string; value: string }>;
   defaultOpen?: boolean;
   className?: string;
   revealOnOpen?: boolean;
+  /** Delay expensive child mounts until first requested; keep mounted thereafter to preserve drafts. */
+  lazy?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [isOpen, setIsOpen] = useState(() => defaultOpen || globalThis.location?.hash === `#${id}`);
+  const [hasOpened, setHasOpened] = useState(isOpen);
   useEffect(() => {
-    if (defaultOpen) {
-      setIsOpen(true);
-    }
-  }, [defaultOpen]);
+    const openTarget = () => { if (globalThis.location?.hash === `#${id}`) { setIsOpen(true); setHasOpened(true); } };
+    globalThis.window?.addEventListener?.("hashchange", openTarget);
+    return () => globalThis.window?.removeEventListener?.("hashchange", openTarget);
+  }, [id]);
 
   return (
     <details
@@ -351,6 +349,7 @@ export function NativeDisclosureCard({
       onToggle={(event) => {
         const nextOpen = event.currentTarget.open;
         setIsOpen(nextOpen);
+        if (nextOpen) setHasOpened(true);
         if (revealOnOpen && nextOpen) {
           event.currentTarget.scrollIntoView({ block: "nearest" });
         }
@@ -359,7 +358,7 @@ export function NativeDisclosureCard({
       <summary>
         <span>
           <strong>{title}</strong>
-          <small>{subtitle}</small>
+          {subtitle ? <small>{subtitle}</small> : null}
         </span>
         <ChevronDown size={16} aria-hidden="true" />
       </summary>
@@ -374,7 +373,7 @@ export function NativeDisclosureCard({
             ))}
           </div>
         ) : null}
-        {children}
+        {!lazy || hasOpened ? children : null}
       </div>
     </details>
   );
@@ -485,7 +484,7 @@ export function QuickJumpCard({
   subtitle,
   actions,
   navigate,
-  compact = false,
+  compact = true,
 }: {
   title: string;
   subtitle: string;

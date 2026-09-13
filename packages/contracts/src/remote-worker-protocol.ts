@@ -88,6 +88,13 @@ export const REMOTE_WORKER_POP_V2_ROUTE_BINDINGS = Object.freeze([
     operation: "assignment.settlement.submit",
     authorityKind: "credential",
   }),
+  Object.freeze({
+    code: 13,
+    method: "POST",
+    rawPath: "/api/v1/remote-workers/mesh-capability-exchanges",
+    operation: "mesh.capability.exchange",
+    authorityKind: "credential",
+  }),
 ] as const);
 
 export type RemoteWorkerPopV2RouteBinding = (typeof REMOTE_WORKER_POP_V2_ROUTE_BINDINGS)[number];
@@ -130,10 +137,11 @@ export const REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES = FIXED_HEADER_BYTES + UI
 export const REMOTE_WORKER_POP_V2_PREIMAGE_BYTES = DOMAIN_BYTES.byteLength + REMOTE_WORKER_POP_V2_FIXED_MATERIAL_BYTES;
 
 /**
- * Normalize the closed twelve-purpose protected-proof table. Codes 8 through 12
+ * Normalize the closed thirteen-purpose protected-proof table. Codes 8 through 13
  * are contract-reserved and remain production-dark until their Gateway and
  * native handlers are explicitly activated (codes 11-12 carry the HX-503
- * inference exchange and HX-506 artifact/effect settlement submission). Keeping
+ * inference exchange and HX-506 artifact/effect settlement submission; code 13
+ * carries the closed mesh capability exchange). Keeping
  * method, route, operation, and authority purpose in one closed table prevents
  * a protected key from becoming a generic signing oracle.
  */
@@ -358,3 +366,9 @@ function writeSha256(output: Uint8Array, offset: number, digest: string): number
 function invalid(label: string): TypeError {
   return new TypeError(`Remote worker proof v2 ${label} is invalid.`);
 }
+export const REMOTE_WORKER_ASSIGNMENT_INFERENCE_EXCHANGE_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-assignment-inference-exchange.v1" as const;
+export const REMOTE_WORKER_ASSIGNMENT_SETTLEMENT_SUBMISSION_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-assignment-settlement-submission.v1" as const;
+export const REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION =
+  "goatcitadel.remote-worker-assignment-workload.v1" as const;

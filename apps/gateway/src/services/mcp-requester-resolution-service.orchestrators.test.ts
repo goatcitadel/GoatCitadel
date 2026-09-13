@@ -20,6 +20,8 @@ import {
   McpProfileDiscoveryOutcomeRegistry,
   McpRequesterResolutionService,
   dispatchRequesterScopedToolCall,
+  discoverRequesterScopedCatalogForProfile,
+  resolveRequesterScopedCatalogBindingsForProfileFreeze,
   resolveRequesterScopedBindingForProfileFreeze,
   type McpProfileDiscoveryOutcomeRecord,
   type McpRequesterScopedFreezeCurrentState,
@@ -417,6 +419,95 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("native catalog enumeration and final binding", () => {
+  it("reconstructs an exact retained full-hex alias without changing its profile identity", async () => {
+    stubFetch();
+    const before = buildHarness();
+    const fixture = actorFixture("operator-a");
+    const binding = (await resolveRequesterScopedBindingForProfileFreeze(before.freezeInput(fixture)))!;
+    const key = {
+      profileId: fixture.hook.profileId,
+      serverId: "tenant-mcp",
+      canonicalToolName: fixture.hook.canonicalToolName,
+    };
+    const compact = before.outcomes.loadProfileDiscoveryOutcome(key)!.providerAlias;
+    const legacy = `mcp__${Buffer.from(compact.slice(5), "base64url").toString("hex")}`;
+    const after = buildHarness();
+    fixture.hook.expectedBindingSha256 = binding.bindingSha256;
+    fixture.hook.expectedProviderAlias = legacy;
+    expect(await resolveRequesterScopedBindingForProfileFreeze(after.freezeInput(fixture))).toEqual(binding);
+    expect(after.outcomes.loadProfileDiscoveryOutcome(key)?.providerAlias).toBe(legacy);
+    const effectDispatch = vi.fn();
+    expect((await dispatchRequesterScopedToolCall(after.dispatchInput(fixture, effectDispatch))).ok).toBe(true);
+    expect(effectDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a secret-scanned catalog without authorizing an invocation", async () => {
+    stubFetch();
+    const harness = buildHarness();
+    const fixture = actorFixture("operator-a");
+    const record = vi.spyOn(harness.outcomes, "recordProfileDiscoveryOutcome");
+    const resolveAttempt = vi.spyOn(harness.service, "resolveForProfileDiscovery");
+    const catalog = await discoverRequesterScopedCatalogForProfile(harness.freezeInput(fixture));
+    expect(catalog?.tools).toMatchObject([{ canonicalToolName: fixture.hook.canonicalToolName }]);
+    expect(JSON.stringify(catalog)).not.toContain("secret-operator-a");
+    expect(record).not.toHaveBeenCalled();
+    expect(harness.discoveryResolver).toHaveBeenCalledTimes(1);
+    expect((await resolveAttempt.mock.results[0]!.value).isDisposed()).toBe(true);
+    expect((await dispatchRequesterScopedToolCall(harness.dispatchInput(fixture))).ok).toBe(false);
+    expect(harness.toolCallResolver).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched requester scope before any credential resolution", async () => {
+    const harness = buildHarness();
+    const fixture = actorFixture("operator-a");
+    fixture.hook.requesterScopeSha256 = "0".repeat(64);
+    expect(await discoverRequesterScopedCatalogForProfile(harness.freezeInput(fixture))).toBeUndefined();
+    expect(harness.onDiagnostic).toHaveBeenCalledWith("requester_scope_mismatch");
+    expect(harness.discoveryResolver).not.toHaveBeenCalled();
+  });
+
+  it("records final bindings only after every expected descriptor matches", async () => {
+    stubFetch();
+    const harness = buildHarness();
+    const fixture = actorFixture("operator-a");
+    const catalog = (await discoverRequesterScopedCatalogForProfile(harness.freezeInput(fixture)))!;
+    const batch = {
+      ...harness.freezeInput(fixture),
+      hook: {
+        ...fixture.hook,
+        serverId: "tenant-mcp",
+        tools: catalog.tools.map((tool) => ({
+          canonicalToolName: tool.canonicalToolName,
+          expectedToolDefinitionSha256: tool.toolDefinitionSha256,
+        })),
+      },
+    };
+    const record = vi.spyOn(harness.outcomes, "recordProfileDiscoveryOutcome");
+    stubFetch({ toolDescription: "Changed during admission" });
+    expect(await resolveRequesterScopedCatalogBindingsForProfileFreeze(batch)).toBeUndefined();
+    expect(record).not.toHaveBeenCalled();
+    expect(harness.onDiagnostic).toHaveBeenLastCalledWith("schema_revalidation_drift");
+    stubFetch();
+    expect(await resolveRequesterScopedCatalogBindingsForProfileFreeze(batch)).toHaveLength(1);
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["expectedToolDefinitionSha256", "expectedBindingSha256", "expectedProviderAlias"] as const)(
+    "rejects recovery drift in %s before publishing an outcome",
+    async (field) => {
+      stubFetch();
+      const harness = buildHarness();
+      const fixture = actorFixture("operator-a");
+      fixture.hook[field] = field === "expectedProviderAlias" ? `mcp__${"A".repeat(43)}` : "0".repeat(64);
+      const record = vi.spyOn(harness.outcomes, "recordProfileDiscoveryOutcome");
+      expect(await resolveRequesterScopedBindingForProfileFreeze(harness.freezeInput(fixture))).toBeUndefined();
+      expect(record).not.toHaveBeenCalled();
+      expect(harness.onDiagnostic).toHaveBeenLastCalledWith("schema_revalidation_drift");
+    },
+  );
+});
+
 describe("resolveRequesterScopedBindingForProfileFreeze", () => {
   it("returns undefined for authActorSource none/missing without touching the resolver", async () => {
     stubFetch();
@@ -509,7 +600,7 @@ describe("resolveRequesterScopedBindingForProfileFreeze", () => {
       discoveryAttemptId: "attempt-1",
       discoveryAttemptGeneration: 1,
     });
-    expect(outcome?.providerAlias).toMatch(/^mcp__[a-f0-9]{64}$/u);
+    expect(outcome?.providerAlias).toMatch(/^mcp__[A-Za-z0-9_-]{43}$/u);
     expect(harness.onDiagnostic).not.toHaveBeenCalled();
   });
 

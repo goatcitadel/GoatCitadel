@@ -4,65 +4,68 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Microsoft.UI.Xaml.Controls"
     Title="GoatCitadel Mission Control">
-    <Grid Background="#081015">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
         <controls:WebView2
             x:Name="MissionWebView"
             Visibility="Collapsed"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
 
-        <Grid x:Name="StartupPanel" Padding="32">
+        <Grid x:Name="StartupPanel" Padding="24">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Center">
             <Border
-                MaxWidth="720"
-                Padding="28"
+                MaxWidth="640"
+                Padding="24"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                Background="#101A20"
-                BorderBrush="#1C3D44"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8">
                 <StackPanel Spacing="18">
                     <StackPanel Orientation="Horizontal" Spacing="14">
-                        <Border Width="14" Height="42" Background="#00D7C8" CornerRadius="3" />
+                        <Border Width="14" Height="42" Background="{ThemeResource GoatAccentBrush}" CornerRadius="3" />
                         <StackPanel>
                             <TextBlock
-                                Foreground="#7EE8DF"
+                                Foreground="{ThemeResource GoatAccentBrush}"
                                 FontSize="13"
                                 Text="GoatCitadel" />
                             <TextBlock
-                                Foreground="#F4FBFC"
+                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                 FontSize="28"
                                 FontWeight="SemiBold"
-                                Text="Mission Control" />
+                                Text="Mission Control" TextWrapping="Wrap" />
                         </StackPanel>
                     </StackPanel>
 
                     <TextBlock
                         x:Name="StatusCopy"
-                        Foreground="#F4FBFC"
+                        AutomationProperties.LiveSetting="Polite"
+                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                         FontSize="18"
                         Text="Starting the local runtime..."
                         TextWrapping="Wrap" />
-                    <ProgressBar x:Name="ProgressBar" Minimum="0" Maximum="100" Value="42" />
+                    <ProgressBar x:Name="ProgressBar" IsIndeterminate="True" AutomationProperties.Name="Starting local runtime" />
+                    <Expander Header="Runtime details" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <TextBlock
                         x:Name="RuntimeMeta"
-                        Foreground="#B8CED2"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         FontSize="13"
                         Text="Gateway and Mission Control will stay warm while the desktop app is open."
                         TextWrapping="Wrap" />
+                    </Expander>
 
-                    <StackPanel
-                        x:Name="RecoveryActions"
-                        Orientation="Horizontal"
-                        Spacing="10"
-                        Visibility="Collapsed">
-                        <Button x:Name="RetryButton" Click="RetryButton_Click" Content="Retry" />
-                        <Button x:Name="OpenBrowserButton" Click="OpenBrowserButton_Click" Content="Open in Browser" />
-                        <Button x:Name="OpenLogsButton" Click="OpenLogsButton_Click" Content="Open Logs" />
-                        <Button x:Name="OpenFolderButton" Click="OpenFolderButton_Click" Content="Open Install Folder" />
-                    </StackPanel>
+                    <Grid x:Name="RecoveryActions" Visibility="Collapsed" ColumnSpacing="8" RowSpacing="8">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Button x:Name="RetryButton" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" Click="RetryButton_Click" Content="Retry" />
+                        <Button x:Name="OpenBrowserButton" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch" Click="OpenBrowserButton_Click" Content="Open in Browser" />
+                        <Button x:Name="OpenLogsButton" Grid.Row="1" Grid.Column="0" HorizontalAlignment="Stretch" Click="OpenLogsButton_Click" Content="Open Logs" />
+                        <Button x:Name="OpenFolderButton" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Click="OpenFolderButton_Click" Content="Open Install Folder" />
+                    </Grid>
                 </StackPanel>
             </Border>
+            </ScrollViewer>
         </Grid>
 
         <InfoBar

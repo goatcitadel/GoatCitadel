@@ -16,9 +16,9 @@ constexpr std::uint16_t kProtocolVersion = 1U;
 constexpr std::uint32_t kRequestId = 1U;
 constexpr std::uint16_t kMachineX64 = 0x8664U;
 constexpr std::uint16_t kMachineArm64 = 0xAA64U;
-constexpr std::uint64_t kRecognizedOpcodeBitmap = UINT64_C(0x00070007001F0002);
+constexpr std::uint64_t kRecognizedOpcodeBitmap = UINT64_C(0x00070007003F0002);
 constexpr std::uint64_t kCallableOpcodeBitmap = UINT64_C(0x0000000000000002);
-constexpr std::uint64_t kProtectedCallableOpcodeBitmap = UINT64_C(0x00000000001D0002);
+constexpr std::uint64_t kProtectedCallableOpcodeBitmap = UINT64_C(0x00000000003D0002);
 constexpr std::size_t kProtectedInspectPayloadBytes = 320U;
 constexpr std::size_t kCreateKeysetRequestBytes = 72U;
 constexpr std::size_t kCreateKeysetResultBytes = 320U;
@@ -31,6 +31,10 @@ constexpr std::size_t kRemoteWorkerPopV2DomainBytes = 33U;
 constexpr std::size_t kRemoteWorkerPopV2PreimageBytes = 285U;
 constexpr std::size_t kSignRuntimePopV2RequestBytes = 384U;
 constexpr std::size_t kSignRuntimePopV2ResultBytes = 184U;
+constexpr std::size_t kTlsClientCertificateVerifySha256Bytes = 130U;
+constexpr std::size_t kTlsClientCertificateVerifySha384Bytes = 146U;
+constexpr std::size_t kSignTlsClientCertificateVerifyRequestBytes = 280U;
+constexpr std::size_t kSignTlsClientCertificateVerifyResultBytes = 184U;
 
 enum class Opcode : std::uint8_t {
   Inspect = 0x01U,
@@ -39,6 +43,7 @@ enum class Opcode : std::uint8_t {
   SignAdmissionEvidence = 0x12U,
   RevokeLocalKeyset = 0x13U,
   SignRuntimePopV2 = 0x14U,
+  SignTlsClientCertificateVerify = 0x15U,
   BeginInstall = 0x20U,
   SealAndPublishInstall = 0x21U,
   AbandonToQuarantine = 0x22U,
@@ -132,6 +137,25 @@ struct SignRuntimePopV2Request final {
   std::array<std::uint8_t, kRemoteWorkerPopV2PreimageBytes> preimage{};
   RemoteWorkerPopV2Material material{};
 };
+
+struct SignTlsClientCertificateVerifyRequest final {
+  std::array<std::uint8_t, 16U> operation_id{};
+  std::array<std::uint8_t, 32U> expected_state_sha256{};
+  std::uint64_t expected_generation = 0U;
+  std::array<std::uint8_t, 32U> expected_keyset_receipt_sha256{};
+  std::array<std::uint8_t, 32U> expected_worker_public_key_spki_sha256{};
+  std::array<std::uint8_t, kTlsClientCertificateVerifySha384Bytes> preimage{};
+  std::size_t preimage_length = 0U;
+};
+
+bool IsTlsClientCertificateVerifyPreimage(
+    const std::uint8_t* bytes, std::size_t length) noexcept;
+bool DecodeSignTlsClientCertificateVerifyRequest(
+    const std::uint8_t* bytes, std::size_t length,
+    SignTlsClientCertificateVerifyRequest* request) noexcept;
+bool DecodeSignTlsClientCertificateVerifyCallerRequest(
+    const std::uint8_t* bytes, std::size_t length,
+    SignTlsClientCertificateVerifyRequest* request) noexcept;
 
 bool DecodeCreateKeysetRequest(
     const std::uint8_t* bytes,

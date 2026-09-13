@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { NativeButton } from "../primitives";
+import { useDraftLeave } from "./DraftLeaveDialog";
+import { useSessionDraft, hasSessionDraft } from "./session-drafts";
 import { Plus, RefreshCw, Save, Undo2 } from "lucide-react";
 import {
   archiveAgentProfile,
@@ -32,19 +36,14 @@ import {
 } from "../shared/library-primitives";
 
 export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRoutePagesProps) {
+  const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [createMode, setCreateMode] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const leave = useDraftLeave();
   const catalogFocusRef = useRef<HTMLDivElement | null>(null);
-  const [draft, setDraft] = useState({
-    roleId: "",
-    name: "",
-    title: "",
-    summary: "",
-    specialties: "",
-    aliases: "",
-    defaultTools: "",
-  });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [agents, catalog] = await Promise.all([
       nativeLoad("Agent profiles", fetchAgents("all", 160), { items: [] }),
@@ -86,11 +85,8 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
     catalogFocusRef.current?.focus?.({ preventScroll: true });
   }, [catalogFocused, loading]);
 
-  useEffect(() => {
-    if (!selectedAgent || createMode) {
-      return;
-    }
-    setDraft({
+  const emptyProfile = { roleId: "", name: "", title: "", summary: "", specialties: "", aliases: "", defaultTools: "" };
+  const canonicalProfile = !createMode && selectedAgent ? {
       roleId: selectedAgent.roleId,
       name: selectedAgent.name,
       title: selectedAgent.title,
@@ -98,13 +94,17 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
       specialties: selectedAgent.specialties.join(", "),
       aliases: selectedAgent.aliases.join(", "),
       defaultTools: selectedAgent.defaultTools.join(", "),
-    });
-  }, [createMode, selectedAgent]);
+    } : emptyProfile;
+  const profileDraft = useSessionDraft(`agent-profile:${activeWorkspaceId}:${createMode ? "new" : selectedAgentId}`, canonicalProfile, JSON.stringify(canonicalProfile), {
+    label: createMode ? "New agent profile" : "Agent profile", active: detailOpen && (editing || createMode), available: createMode || Boolean(selectedAgent), onSave: () => handleSave(),
+  });
+  const draft = profileDraft.value;
+  const setDraft = profileDraft.setValue;
 
   const handleSave = async () => {
     if (!draft.roleId.trim() || !draft.name.trim() || !draft.title.trim() || !draft.summary.trim()) {
       setNotice({ tone: "warning", message: "Role, name, title, and summary are required before saving." });
-      return;
+      return false;
     }
     try {
       if (createMode) {
@@ -117,7 +117,9 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
           aliases: splitCommaList(draft.aliases),
           defaultTools: splitCommaList(draft.defaultTools),
         });
+        if (!profileDraft.acceptSaved(emptyProfile, undefined, draft)) return false;
         setCreateMode(false);
+        setEditing(false);
         setSelectedAgentId(created.agentId);
         setNotice({ tone: "success", message: "Agent profile created." });
       } else if (selectedAgent) {
@@ -129,11 +131,15 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
           aliases: splitCommaList(draft.aliases),
           defaultTools: splitCommaList(draft.defaultTools),
         });
+        if (!profileDraft.acceptSaved(draft, undefined, draft)) return false;
+        setEditing(false);
         setNotice({ tone: "success", message: "Agent profile updated." });
       }
       await reload();
+      return true;
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
+      return false;
     }
   };
 
@@ -156,11 +162,12 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
   };
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <div className="mc-next-settings-grid">
-        <NativeCard
+      <div className="mc-next-view-tabs" role="group" aria-label="Agent views"><NativeButton variant="ghost" aria-pressed={!catalogFocused} onClick={() => leave.request(() => navigate({ ...route, view: undefined }))}>Profiles</NativeButton><NativeButton variant="ghost" aria-pressed={catalogFocused} onClick={() => leave.request(() => navigate({ ...route, view: "catalog" }))}>Imported catalog</NativeButton></div>
+      <div className="mc-next-calm-directory">
+        {!catalogFocused ? <NativeCard
           title="Agent profiles"
           subtitle="Reusable profiles you can inspect and maintain in Library."
           density="compact"
@@ -169,49 +176,35 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
             { label: "Catalog", value: String(data?.catalog.length ?? 0) },
           ]}
         >
+          <LibraryField label="Search agents"><input type="search" className="mc-next-settings-input" value={query} onChange={(event) => setQuery(event.target.value)} /></LibraryField>
           <LibrarySelectableList
-            items={(data?.agents ?? []).map((item) => ({
+            items={(data?.agents ?? []).filter((item) => !query.trim() || [item.name, item.roleId, item.title, item.summary].some((value) => value.toLowerCase().includes(query.trim().toLowerCase()))).map((item) => ({
               id: item.agentId,
-              title: item.name,
+              title: item.name + (hasSessionDraft("agent-profile:" + activeWorkspaceId + ":" + item.agentId) ? " · Unsaved" : ""),
               meta: item.lifecycleStatus,
               body: `${item.title} · ${item.editable ? "editable" : "built-in"} · ${item.sessionCount} sessions`,
             }))}
             selectedId={selectedAgentId}
-            onSelect={(id) => {
-              setCreateMode(false);
-              setSelectedAgentId(id);
-            }}
+            onSelect={(id) => leave.request(() => { setCreateMode(false); setEditing(false); setSelectedAgentId(id); setDetailOpen(true); })}
             emptyLabel="No agent profiles returned from the gateway."
           />
           <div className="mc-next-settings-button-row">
             <button
               type="button"
               className="mc-next-settings-filter"
-              onClick={() => {
-                setCreateMode(true);
-                setSelectedAgentId("");
-                setDraft({
-                  roleId: "",
-                  name: "",
-                  title: "",
-                  summary: "",
-                  specialties: "",
-                  aliases: "",
-                  defaultTools: "",
-                });
-              }}
+              onClick={() => leave.request(() => { setCreateMode(true); setEditing(true); setDetailOpen(true); })}
             >
               <Plus size={16} />
-              New profile
+              {hasSessionDraft("agent-profile:" + activeWorkspaceId + ":new") ? "Resume new profile · Unsaved" : "New profile"}
             </button>
             <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
               <RefreshCw size={16} />
               Refresh
             </button>
           </div>
-        </NativeCard>
+        </NativeCard> : null}
         <div className="mc-next-settings-stack">
-          <div
+          <div hidden={!catalogFocused}
             ref={catalogFocusRef}
             id="imported-agent-catalog"
             className="mc-next-library-route-focus"
@@ -240,20 +233,8 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
               />
             </NativeCard>
           </div>
-          <NativeCard
-            title={createMode ? "Create agent profile" : (selectedAgent?.name ?? "Agent detail")}
-            subtitle={
-              createMode
-                ? "Create a reusable operator profile for Work conversations, plans, and builds."
-                : selectedAgent
-                  ? "Review the selected agent and update editable fields."
-                  : "Select an agent profile to inspect or edit it."
-            }
-            density="compact"
-            scrollBody
-            bodyMaxHeight="min(58vh, 34rem)"
-          >
-            {createMode || selectedAgent ? (
+          <DetailInspector open={detailOpen} title={createMode ? "New agent profile" : selectedAgent?.name ?? "Agent unavailable"} subtitle={profileDraft.isDirty ? "Unsaved changes" : selectedAgent?.lifecycleStatus} onClose={() => leave.request(() => setDetailOpen(false), [profileDraft.key])}>
+            {createMode || editing ? (
               <>
                 <LibraryFieldGrid>
                   <LibraryField label="Role ID">
@@ -333,9 +314,9 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
                 </LibraryButtonRow>
               </>
             ) : (
-              <LibraryEmptyState label="Select an agent profile to inspect it." />
+              selectedAgent ? <><p>{selectedAgent.summary}</p><dl className="mc-next-profile-summary">{Object.entries(canonicalProfile).filter(([key]) => key !== "summary").map(([key, value]) => <div key={key}><dt>{key.replace(/([A-Z])/g, " $1")}</dt><dd>{value || "None specified"}</dd></div>)}</dl><LibraryButtonRow>{selectedAgent.editable ? <NativeButton onClick={() => setEditing(true)}>{profileDraft.isDirty ? "Resume editing · Unsaved" : "Edit profile"}</NativeButton> : null}<NativeButton variant="outline" onClick={() => void handleArchiveToggle()}>{selectedAgent.lifecycleStatus === "archived" ? "Restore" : "Archive"}</NativeButton></LibraryButtonRow></> : <LibraryEmptyState label="Select an agent profile to inspect it." />
             )}
-          </NativeCard>
+          </DetailInspector>
           <QuickJumpCard
             title="Related routes"
             subtitle="Keep adjacent Library surfaces within reach from this route."
@@ -349,6 +330,6 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
           />
         </div>
       </div>
-    </LibrarySectionShell>
+    {leave.dialog}</LibrarySectionShell>
   );
 }

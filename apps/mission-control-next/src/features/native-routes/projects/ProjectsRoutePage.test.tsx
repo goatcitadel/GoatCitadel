@@ -1,3 +1,4 @@
+import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -18,6 +19,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { deriveProjectHome, ProjectsRoutePage } from "./ProjectsRoutePage";
+import { __resetSessionDraftsForTests } from "../library/session-drafts";
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveChatProject: vi.fn(),
@@ -172,6 +174,8 @@ function pageText(renderer: ReactTestRenderer): string {
 
 describe("ProjectsRoutePage", () => {
   beforeEach(() => {
+    __resetSessionViewStateForTests();
+    __resetSessionDraftsForTests();
     vi.clearAllMocks();
     mockedFetchChatProjects.mockResolvedValue({
       items: [
@@ -256,10 +260,11 @@ describe("ProjectsRoutePage", () => {
     expect(navigate).not.toHaveBeenCalled();
 
     const text = pageText(renderer).replace(/\s+/g, " ");
-    expect(text).toContain("Project containers");
+    expect(text).toContain("Projects");
     expect(text).toContain("Alpha");
     expect(text).toContain("Chat 3");
-    expect(text).toContain("Open latest thread");
+    expect(text).toContain("Pick up where you left off");
+    expect(renderer.root.findAllByProps({ "aria-label": "New project name" })).toHaveLength(0);
     expect(text).not.toContain("Project overview");
     expect(text).not.toContain("Edit selected");
 
@@ -279,7 +284,8 @@ describe("ProjectsRoutePage", () => {
     expect(text).toContain("Projects · Detail");
     expect(text).toContain("Threads, artifacts, and controls for Alpha");
     expect(text).toContain("Project overview");
-    expect(text).toContain("Start from intent");
+    expect(text).toContain("New chat");
+    expect(renderer.root.findAllByProps({ "aria-label": "Edit project name" })).toHaveLength(0);
     expect(text).toContain("Release proof");
     expect(text).toContain("Continue Chat");
     expect(text).toContain("Latest continuation");
@@ -438,6 +444,7 @@ describe("ProjectsRoutePage", () => {
       theme: "ops",
     });
 
+    await act(async () => { findButton(renderer.root, "New project").props.onClick(); });
     act(() => {
       expect(renderer.root.findByProps({ "aria-label": "New project name" })).toBeTruthy();
       expect(renderer.root.findByProps({ "aria-label": "New project workspace path" })).toBeTruthy();
@@ -462,6 +469,7 @@ describe("ProjectsRoutePage", () => {
     });
     expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-created", theme: "ops" });
 
+    await act(async () => { findButton(renderer.root, "Edit project").props.onClick(); });
     const alphaNameInput = findFieldByAriaLabel(renderer.root, "Edit project name");
     expect(alphaNameInput).toBeDefined();
     expect(findFieldByAriaLabel(renderer.root, "Edit project workspace path")).toBeDefined();
@@ -483,13 +491,15 @@ describe("ProjectsRoutePage", () => {
       }),
     );
 
+    await act(async () => { findButton(renderer.root, "Close editor").props.onClick(); });
     await act(async () => {
-      findButton(renderer.root, "Archive project Alpha renamed").props.onClick();
+      findButtonByAriaLabel(renderer.root, "Archive project Alpha renamed").props.onClick();
       await Promise.resolve();
     });
     expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha", 7);
     expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" }, { replace: true });
 
+    await act(async () => { renderer.update(<ProjectsRoutePage {...defaultProps({ route: { area: "projects", theme: "ops" }, navigate })} />); });
     act(() => {
       findButton(renderer.root, "Archived").props.onClick();
     });
@@ -510,6 +520,7 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(
       defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" } }),
     );
+    await act(async () => { findButton(renderer.root, "Edit project").props.onClick(); });
     const localDescriptionInput = findFieldByAriaLabel(renderer.root, "Edit project description");
     act(() => {
       localDescriptionInput.props.onChange({

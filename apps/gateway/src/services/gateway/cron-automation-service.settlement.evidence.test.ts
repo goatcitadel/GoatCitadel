@@ -125,6 +125,45 @@ function updateDurableRun(
 }
 
 describe("HX-204 canonical cron settlement evidence", () => {
+  it.each(["completed", "failed"] as const)(
+    "settles an admitted %s child during normal cadence while its job is paused",
+    async (status) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-cron-cadence-settlement-"));
+      const storage = createStorage(root);
+      try {
+        seedAgentTurnJob(storage, "cadence-agent");
+        const handler = createAgentHandler(storage);
+        const service = createService(storage, handler);
+        await service.setCronJobEnabled("cadence-agent", false, 1);
+        const admitted = await service.runCronJobNow("cadence-agent", { force: true });
+        const child = storage.durableRuns.getRun(admitted.childDurableRunId!);
+        updateDurableRun(
+          storage,
+          child.runId,
+          status,
+          {
+            ...child.metadata,
+            autonomousChatPostCommit: { delivery: { status: "skipped", reason: "no test destination" } },
+          },
+          status === "failed" ? "controlled child failure" : undefined,
+        );
+
+        const first = await service.runDueTaskCronJobs();
+        const replay = await service.runDueTaskCronJobs();
+        expect(storage.cronRuns.get(admitted.runId)).toMatchObject({ status, phase: "settlement" });
+        expect(storage.cronJobs.get("cadence-agent")).toMatchObject({ enabled: false, lastRunId: admitted.runId });
+        expect(storage.cronJobs.get("cadence-agent")?.activeRunId).toBeUndefined();
+        expect(first).toMatchObject({ dueCount: 0, ranCount: 0, settledCount: 1 });
+        expect(replay).toMatchObject({ dueCount: 0, ranCount: 0, settledCount: 0 });
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(storage.cronRuns.listByJob("cadence-agent")).toHaveLength(1);
+      } finally {
+        storage.close();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("begins before launch and coalesces concurrent admission without reporting success", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-cron-coalesce-"));
     const storage = createStorage(root);
@@ -149,6 +188,9 @@ describe("HX-204 canonical cron settlement evidence", () => {
       const first = service.runCronJobNow("coalesced-agent", options);
       const second = service.runCronJobNow("coalesced-agent", options);
       await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+      const duringAdmission = await service.runDueTaskCronJobs();
+      expect(duringAdmission).toMatchObject({ settledCount: 0, failedCount: 0 });
+      expect(storage.cronRuns.listByJob("coalesced-agent")[0]?.status).toBe("admitting");
       release();
       const [left, right] = await Promise.all([first, second]);
 
@@ -306,7 +348,101 @@ describe("HX-204 canonical cron settlement evidence", () => {
       expect(await service.findCronRunById(admitted.runId)).toMatchObject({
         status: "ok",
         finishedAt: expect.any(String),
+        canonical: {
+          runId: admitted.runId,
+          jobId: "postcommit-agent",
+          trigger: "manual",
+          scheduledFor: expect.any(String),
+          jobRevision: 1,
+          executionGeneration: 1,
+          status: "completed",
+          phase: "settlement",
+          childSessionId: "session-postcommit-agent",
+          childTurnId: buildCronChatAdmissionIdentity({
+            runId: admitted.runId,
+            jobId: "postcommit-agent",
+            executionGeneration: 1,
+          }).turnId,
+          childDurableRunId: childRunId,
+        },
       });
+    } finally {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["missing-receipt", "manual_reconciliation_required"],
+    ["wrong-parent", "manual_reconciliation_required"],
+    ["wrong-connection", "manual_reconciliation_required"],
+    ["wrong-target", "manual_reconciliation_required"],
+    ["blocked", "failed"],
+    ["unknown-after-send", "manual_reconciliation_required"],
+  ] as const)("retains %s channel truth after connector completion", async (scenario, status) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-cron-channel-outcome-"));
+    const storage = createStorage(root);
+    try {
+      seedAgentTurnJob(storage, "channel-outcome");
+      const handler = createAgentHandler(storage);
+      const service = createService(storage, handler);
+      const admitted = await service.runCronJobNow("channel-outcome");
+      const cronRun = storage.cronRuns.get(admitted.runId)!;
+      const child = storage.durableRuns.getRun(cronRun.childDurableRunId!);
+      const deliveryRunId = "delivery-outcome-run";
+      const connectorId = "integration:conn-1";
+      const queued = storage.commsDeliveries.createQueued({
+        connectionId: "conn-1",
+        channelKey: "telegram",
+        target: "-123456",
+        payload: {
+          runId: scenario === "wrong-parent" ? "another-chat" : child.runId,
+          sessionId: cronRun.childSessionId,
+          message: "hello",
+        },
+      });
+      storage.durableRuns.createRun({
+        runId: deliveryRunId,
+        workflowKey: "connector.delivery",
+        status: "completed",
+        payload: { runId: child.runId, connectorId, action: "channel.send" },
+        metadata: { deliveryKind: "autonomous.assistant_message", sourceRunId: child.runId },
+      });
+      if (scenario !== "missing-receipt") {
+        storage.durableRuns.createCheckpoint({
+          runId: deliveryRunId,
+          checkpointKind: "run_completed",
+          state: {
+            connectorId: scenario === "wrong-connection" ? "integration:another-connection" : connectorId,
+            connectorType: "integration_connection",
+            action: "channel.send",
+            dispatchKind: "integration_channel_send",
+            result: { ...queued, target: scenario === "wrong-target" ? "-654321" : queued.target },
+          },
+        });
+      }
+      if (scenario === "blocked" || scenario === "unknown-after-send") {
+        storage.commsDeliveries.markFailed(
+          queued.deliveryId,
+          scenario,
+          new Date().toISOString(),
+          scenario === "blocked" ? "blocked" : "manual_reconciliation_required",
+        );
+      } else {
+        storage.commsDeliveries.markSent(queued.deliveryId, "provider-unrelated");
+      }
+      updateDurableRun(storage, child.runId, "completed", {
+        ...child.metadata,
+        autonomousChatPostCommit: { delivery: { status: "enqueued", runId: deliveryRunId } },
+      });
+      const cadence = await service.runDueTaskCronJobs();
+      await service.runDueTaskCronJobs();
+      expect(storage.cronRuns.get(admitted.runId), JSON.stringify(cadence)).toMatchObject({
+        status,
+        phase: "settlement",
+      });
+      expect(storage.cronJobs.get("channel-outcome")?.lastRunStatus).toBe("failed");
+      expect(handler).toHaveBeenCalledTimes(1);
     } finally {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });
@@ -332,7 +468,13 @@ describe("HX-204 canonical cron settlement evidence", () => {
           runId: deliveryRunId,
           workflowKey: "connector.delivery",
           status: "queued",
-          payload: { runId: child.runId },
+          payload: {
+            runId: child.runId,
+            connectorId: "integration:conn-1",
+            connectorType: "integration_connection",
+            action: "channel.send",
+            payload: { target: "-123456", message: "hello" },
+          },
           metadata: {
             deliveryKind: "autonomous.assistant_message",
             sourceRunId: child.runId,
@@ -350,12 +492,33 @@ describe("HX-204 canonical cron settlement evidence", () => {
         expect(storage.cronJobs.get(jobId)?.lastRunStatus).toBeUndefined();
 
         if (jobId === "delivery-success") {
+          const queued = storage.commsDeliveries.createQueued({
+            connectionId: "conn-1",
+            channelKey: "telegram",
+            target: "-123456",
+            payload: { message: "hello", runId: child.runId, sessionId: cronRun.childSessionId },
+          });
+          storage.durableRuns.createCheckpoint({
+            runId: deliveryRunId,
+            checkpointKind: "run_completed",
+            state: {
+              connectorId: "integration:conn-1",
+              connectorType: "integration_connection",
+              action: "channel.send",
+              dispatchKind: "integration_channel_send",
+              result: queued,
+            },
+          });
           updateDurableRun(
             storage,
             deliveryRunId,
             "completed",
             storage.durableRuns.getRun(deliveryRunId).metadata ?? {},
           );
+          await service.recoverPendingAgentTurnCronRuns();
+          expect(storage.cronRuns.get(admitted.runId)).toMatchObject({ status: "waiting", phase: "delivery" });
+          expect(storage.cronJobs.get(jobId)?.lastRunStatus).toBeUndefined();
+          storage.commsDeliveries.markSent(queued.deliveryId, "provider-123");
           await service.recoverPendingAgentTurnCronRuns();
           expect(storage.cronRuns.get(admitted.runId)?.status).toBe("completed");
           expect(storage.cronJobs.get(jobId)?.lastRunStatus).toBe("ok");

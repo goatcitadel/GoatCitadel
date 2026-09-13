@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalJsonString,
+  sealRemoteWorkerChatContextForTurn,
+  type RemoteWorkerChatContextSnapshot,
   NotFoundError,
   type ChatRoutedContextSnapshotRecord,
   type ChatSendMessageRequest,
@@ -35,6 +37,50 @@ beforeEach(() => {
 });
 
 describe("durable Chat routed-context binding", () => {
+  it("freezes worker context during admission and reuses it instead of changed live history on recovery", async () => {
+    const fixture = await admitRoutedTurn(true);
+    expect(fixture.workerContext).toBeDefined();
+    expect(fixture.events.indexOf("worker-context")).toBeGreaterThan(fixture.events.indexOf("durable-run"));
+    expect(fixture.events.indexOf("worker-context")).toBeLessThan(fixture.events.indexOf("tx:commit"));
+    expect(fixture.run.metadata?.remoteWorkerChatContextSha256).toBe(fixture.workerContext!.contextSha256);
+    const run = { ...fixture.run, status: "running" as const, leaseOwnerId: "replacement-gateway", attemptCount: 2 };
+    const prepare = vi.fn(async () => {
+      const prepared = buildReplayPrepared(fixture.finalProfile);
+      prepared.history = [{ role: "system", content: "Changed live guidance must not replace admitted context." }];
+      return prepared;
+    });
+    const baseHost = replayHost(
+      run,
+      fixture.finalProfile,
+      fixture.trace,
+      prepare,
+      vi.fn(() => fixture.finalSnapshot),
+    );
+    const host = {
+      ...baseHost,
+      resolveRemoteWorkerChatExecution: vi.fn(async () => ({
+        async *stream() {}, recordAssistantCommit: vi.fn(async () => undefined),
+      })),
+      storage: {
+        ...baseHost.storage,
+        remoteWorkerChatContexts: { findForRun: vi.fn(async () => fixture.workerContext) },
+      },
+    };
+    await executeDurableChatTurnRun(host as never, run);
+    const dispatched = vi.mocked(executePreparedAgentChatTurnBackground).mock.calls[0]![3];
+    expect(dispatched.history).toEqual(fixture.workerContext!.messages);
+    expect(canonicalJsonString(dispatched.history)).not.toContain("Changed live guidance");
+    expect(host.resolveRemoteWorkerChatExecution).toHaveBeenCalledExactlyOnceWith(run, dispatched);
+    expect(vi.mocked(executePreparedAgentChatTurnBackground).mock.calls[0]![7]).toMatchObject({
+      remoteWorkerExecution: expect.objectContaining({ stream: expect.any(Function), recordAssistantCommit: expect.any(Function) }),
+    });
+    vi.mocked(executePreparedAgentChatTurnBackground).mockClear();
+    host.storage.remoteWorkerChatContexts.findForRun.mockResolvedValue(undefined);
+    prepare.mockClear();
+    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow("lost its frozen worker context");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
+  });
   it("atomically rebinds the snapshot to the stable run profile and persists only id/hash references", async () => {
     const fixture = await admitRoutedTurn();
     const payloadText = JSON.stringify(fixture.run.payload);
@@ -283,8 +329,11 @@ describe("durable Chat routed-context binding", () => {
   });
 });
 
-async function admitRoutedTurn() {
+async function admitRoutedTurn(freezeWorkerContext = false) {
   const prepared = buildPrepared();
+  if (freezeWorkerContext)
+    prepared.history.splice(-1, 0, { role: "system", content: prepared.routedContextSnapshot!.contextText });
+  const request = { ...routedRequest(), ...(freezeWorkerContext ? { policyTaskId: "task-remote" } : {}) };
   // HX-411: a capability-profile-bearing prepared turn now carries an immutable
   // turn-write admission; beginDurableChatRun binds the profile to it.
   prepared.turnAdmission = {
@@ -298,7 +347,7 @@ async function admitRoutedTurn() {
       controllerGeneration: 1,
       materialSha256: "a".repeat(64),
     },
-    admittedRequest: routedRequest(),
+    admittedRequest: request,
     requestActor: { actorKind: "operator", actorId: "operator" },
     requestClaim: { runtimeOwnerId: "runtime-turn-1", leaseRevision: 1 },
   } as never;
@@ -313,6 +362,8 @@ async function admitRoutedTurn() {
   let finalProfile!: ChatTurnCapabilityProfileRecord;
   let finalSnapshot!: ChatRoutedContextSnapshotRecord;
   let trace!: ChatTurnTraceRecord;
+  let createdRun!: DurableRunRecord;
+  let workerContext: RemoteWorkerChatContextSnapshot | undefined;
   const deps: ChatDurableRunBeginDeps = {
     shouldUseDurableExecution: true,
     runImmediateTransaction: async (callback) => {
@@ -349,7 +400,8 @@ async function admitRoutedTurn() {
     bindTurnAdmissionToDurableRun: () => undefined,
     createDurableRun: (input) => {
       events.push("durable-run");
-      return runFromCreate(input);
+      createdRun = runFromCreate(input);
+      return createdRun;
     },
     buildDurablePayloadRecord: (preparedTurn, input, threadEventType, runId) => {
       // buildDurableRoutedContextPayload strips contextRefs from the request, so
@@ -396,7 +448,16 @@ async function admitRoutedTurn() {
     persistChatStreamChunk: () => events.push("stream"),
     requestDurableRunProcessing: () => events.push("process"),
   };
-  const run = (await beginDurableChatRun(deps, prepared, routedRequest(), "chat_thread_turn_appended", {
+  if (freezeWorkerContext)
+    deps.remoteWorkerChatContexts = {
+      freezeForAdmission: (input) => {
+        events.push("worker-context");
+        expect(input.requestRuntimeClaim).toEqual(prepared.turnAdmission!.requestClaim);
+        workerContext = sealRemoteWorkerChatContextForTurn(input.durableRunId, createdRun.payload, input.messages);
+        return workerContext;
+      },
+    };
+  const run = (await beginDurableChatRun(deps, prepared, request, "chat_thread_turn_appended", {
     runId: "run-routed-1",
   }))!;
   return {
@@ -407,6 +468,7 @@ async function admitRoutedTurn() {
     finalSnapshot,
     provisionalProfileHash,
     provisionalSnapshotHash,
+    workerContext,
   };
 }
 

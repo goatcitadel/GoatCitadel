@@ -242,10 +242,12 @@ function deliveryStatusTone(status: AgenticChannelDeliveryRuntimeRecord["status"
   if (status === "sent") return "success";
   if (status === "failed" || status === "stale") return "critical";
   if (status === "manual_reconciliation_required") return "warning";
-  if (status === "queued" || status === "retrying" || status === "running") return "warning";
+  if (status === "queued" || status === "retrying" || status === "running" || status === "waiting_approval")
+    return "warning";
   return "muted";
 }
 
 function formatDeliveryStatus(status: AgenticChannelDeliveryRuntimeRecord["status"]): string {
+  if (status === "waiting_approval") return "waiting for approval";
   return status === "manual_reconciliation_required" ? "manual reconciliation" : status;
 }

@@ -33,8 +33,9 @@
   mutating entry point lives in install-broker-coordinator.ps1 and
   uninstall-broker-coordinator.ps1 and is administrator-gated there. Nothing
   in this recipe ever wires the untrusted helper/client to start a service:
-  the recipe contains no service-start call of any kind and never deploys the
-  untrusted client executable.
+  the recipe contains no service-start call of any kind. Installing the pinned
+  client image grants the dedicated worker only signer query access, never
+  service start, stop, or configuration authority.
 #>
 
 Set-StrictMode -Version Latest
@@ -49,8 +50,8 @@ $script:BrokerDisplayName = "GoatCitadel Remote Worker Provisioner Availability 
 $script:SignerServiceName = "GoatCitadelRemoteWorkerProvisioner"
 $script:SignerExecutableName = "GoatCitadelRemoteWorkerProvisioner.exe"
 $script:SignerDisplayName = "GoatCitadel Remote Worker Provisioner"
-# The untrusted helper. It is never deployed and never granted any service
-# right by this recipe (query-only posture is enforced by its PE import
+# The untrusted helper is installed with read/execute access only. Its worker
+# caller receives only signer query access (also enforced by the PE import
 # closure in scripts/packaging/build-remote-worker-provisioner-windows-native.mjs).
 $script:ClientExecutableName = "GoatCitadelRemoteWorkerProvisionerClient.exe"
 
@@ -67,6 +68,8 @@ $script:BrokerServiceSid = "S-1-5-80-938203738-3606080319-1885328063-149464327-2
 # availability_broker_runtime.cpp kTargetServiceSidParts (the signer's own
 # virtual service account, validated by both the broker and the signer).
 $script:SignerServiceSid = "S-1-5-80-1765223994-2719708455-3112291649-2938929260-976374647"
+# local_transport.hpp kRuntimeWorkerSidParts: the dedicated runtime worker.
+$script:RuntimeWorkerServiceSid = "S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905"
 
 # --- Frozen service configuration --------------------------------------------
 # availability_broker.cpp ValidateCommonServiceConfiguration: the broker
@@ -76,15 +79,14 @@ $script:ExpectedServiceType = 16          # SERVICE_WIN32_OWN_PROCESS (0x10)
 $script:ExpectedStartType = 3             # SERVICE_DEMAND_START
 $script:ExpectedErrorControl = 1          # SERVICE_ERROR_NORMAL
 $script:ExpectedServiceAccount = "LocalSystem"  # exact literal, case-sensitive
-$script:ExpectedServiceSidType = 3        # SERVICE_SID_TYPE_UNRESTRICTED
+$script:ExpectedServiceSidType = 1        # SERVICE_SID_TYPE_UNRESTRICTED (winsvc.h)
 # availability_broker.cpp kRequiredPrivileges: exactly one required privilege.
 $script:ExpectedRequiredPrivilege = "SeChangeNotifyPrivilege"
 $script:ServiceStoppedState = 1           # SERVICE_STOPPED
 # QueryServiceStatusEx dwWin32ExitCode observed on a service that has never
-# been started since boot. availability_broker.cpp StatusMetadataIsExact
-# requires NO_ERROR (0), so a freshly installed, never-started signer reports
-# 1077 until its first clean start/stop cycle; the installed-host broker
-# contract proof (held) must account for this.
+# been started since boot. The broker accepts 1077 only for an exact stopped
+# signer with no process, checkpoint, wait hint or service-specific error.
+# Active states and broker startup still require NO_ERROR (0).
 $script:ServiceNeverStartedExitCode = 1077
 
 # --- Frozen broker SCM DACL --------------------------------------------------
@@ -94,28 +96,34 @@ $script:ServiceNeverStartedExitCode = 1077
 #   2. BUILTIN\Administrators (BA)  -> SERVICE_START | SERVICE_STOP |
 #      SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL |
 #      SYNCHRONIZE                                                     0x00120035
-# The untrusted helper/client receives NO ACE: it has no start right and no
-# query right on either service object. Start authority over the broker is
+# The worker receives no ACE on the broker. Start authority over the broker is
 # SYSTEM plus elevated Administrators only; the shipped coordinator principal
 # (the broker's own unrestricted service SID, running from the LocalSystem
 # account) is the only shipped identity that starts the signer.
 $script:ServiceObjectSddl = "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00120035;;;BA)"
+# The signer adds one non-inherited worker ACE: SERVICE_QUERY_CONFIG |
+# SERVICE_QUERY_STATUS | READ_CONTROL (0x00020005). It grants no service
+# start/stop/change rights; service_runtime and the broker validate it exactly.
+$script:SignerServiceObjectSddl = "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00120035;;;BA)(A;;0x00020005;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)"
 
 # --- Frozen protected image and directory ACLs -------------------------------
 # availability_broker_runtime.cpp ValidateExactProtectedDacl: the signer image
-# must carry owner SYSTEM and a protected DACL with exactly three ACEs in this
+# must carry owner SYSTEM and a protected DACL with exactly four ACEs in this
 # order: SYSTEM full control (0x001F01FF), the signer service SID read +
-# execute (0x001200A9), Administrators read + execute (0x001200A9).
-$script:SignerImageSddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;S-1-5-80-1765223994-2719708455-3112291649-2938929260-976374647)(A;;0x001200a9;;;BA)"
+# execute (0x001200A9), Administrators read + execute (0x001200A9), and
+# the dedicated runtime worker read + execute (0x001200A9).
+$script:SignerImageSddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;S-1-5-80-1765223994-2719708455-3112291649-2938929260-976374647)(A;;0x001200a9;;;BA)(A;;0x001200a9;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)"
+# local_transport.cpp ValidateExactProtectedDacl applies the same exact
+# descriptor to the client image, provisioner root and bin directory.
+$script:ClientImageSddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;S-1-5-80-1765223994-2719708455-3112291649-2938929260-976374647)(A;;0x001200a9;;;BA)(A;;0x001200a9;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)"
 # The broker validates only path identity for its own image; the recipe
 # freezes the symmetric posture with the coordinator (broker) service SID as
 # the middle ACE.
 $script:BrokerImageSddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;S-1-5-80-938203738-3606080319-1885328063-149464327-2394007130)(A;;0x001200a9;;;BA)"
-# bin\ and RemoteWorkerProvisioner\ are admin-read-only after install; both
-# services hold SeChangeNotifyPrivilege (bypass-traverse), so no directory ACE
-# is required for them. GoatCitadel\ (when created by this recipe) stays
-# admin-operable for sibling components.
-$script:ProtectedDirectorySddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;BA)"
+# bin\ and RemoteWorkerProvisioner\ must satisfy the authenticated transport's
+# exact four-ACE descriptor, including the signer and worker SIDs. GoatCitadel\
+# (when created by this recipe) stays admin-operable for sibling components.
+$script:ProtectedDirectorySddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;S-1-5-80-1765223994-2719708455-3112291649-2938929260-976374647)(A;;0x001200a9;;;BA)(A;;0x001200a9;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)"
 $script:SharedRootSddl = "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001f01ff;;;BA)"
 # Uninstall restores an admin-writable descriptor before deletion.
 $script:UninstallRestoreSddl = "O:BAD:P(A;;0x001f01ff;;;SY)(A;;0x001f01ff;;;BA)"
@@ -163,7 +171,7 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
         private const uint ServiceErrorNormal = 0x00000001u;
         private const uint ServiceConfigServiceSidInfo = 5u;
         private const uint ServiceConfigRequiredPrivilegesInfo = 6u;
-        private const uint ServiceSidTypeUnrestricted = 3u;
+        private const uint ServiceSidTypeUnrestricted = 1u;
         private const uint OwnerSecurityInformation = 0x00000001u;
         private const uint DaclSecurityInformation = 0x00000004u;
         private const uint ProtectedDaclSecurityInformation = 0x80000000u;
@@ -184,6 +192,14 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
         private const int ErrorServiceMarkedForDelete = 1072;
         private const int ErrorAccessDenied = 5;
         private const int MaximumMultiSzBytes = 65536;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SecurityAttributesValue
+        {
+            public int Length;
+            public IntPtr SecurityDescriptor;
+            public int InheritHandle;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct LuidValue
@@ -420,6 +436,14 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
             uint creationDisposition,
             uint flagsAndAttributes,
             IntPtr templateFile);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateDirectoryW(string path, ref SecurityAttributesValue attributes);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        private static extern uint GetFinalPathNameByHandleW(
+            IntPtr file, System.Text.StringBuilder path, uint capacity, uint flags);
 
         [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -1129,6 +1153,75 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
             }
         }
 
+        public static void CreateProtectedDirectory(string path, string sddl)
+        {
+            IntPtr descriptor;
+            uint size;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl, SddlRevision1, out descriptor, out size))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            try
+            {
+                SecurityAttributesValue attributes = new SecurityAttributesValue();
+                attributes.Length = Marshal.SizeOf(typeof(SecurityAttributesValue));
+                attributes.SecurityDescriptor = descriptor;
+                attributes.InheritHandle = 0;
+                // Exclusive creation with an explicit DACL prevents inheriting
+                // writable ProgramData permissions before protection is applied.
+                if (!CreateDirectoryW(path, ref attributes))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            }
+            finally
+            {
+                LocalFree(descriptor);
+            }
+        }
+
+        public static IDisposable PinDirectory(string path)
+        {
+            string expected = System.IO.Path.GetFullPath(path);
+            if (expected.Length > 3) { expected = expected.TrimEnd('\\'); }
+            // FILE_LIST_DIRECTORY participates in share-access checks; a
+            // metadata-only handle does not fence directory replacement.
+            IntPtr raw = CreateFileW(
+                expected, 1u | FileReadAttributes | StandardReadControl, 3u, IntPtr.Zero,
+                OpenExisting, 0x02200000u, IntPtr.Zero);
+            Microsoft.Win32.SafeHandles.SafeFileHandle handle =
+                new Microsoft.Win32.SafeHandles.SafeFileHandle(raw, true);
+            try
+            {
+                if (handle.IsInvalid) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+                ByHandleFileInformationValue information;
+                if (!GetFileInformationByHandle(raw, out information))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                if ((information.FileAttributes & 0x00000410u) != 0x00000010u)
+                {
+                    throw new InvalidOperationException("REFUSED: a directory is a reparse point or is not a directory.");
+                }
+                System.Text.StringBuilder finalPath = new System.Text.StringBuilder(512);
+                uint length = GetFinalPathNameByHandleW(raw, finalPath, 512u, 0u);
+                if (length == 0u) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+                if (length >= 512u) { throw new InvalidOperationException("REFUSED: directory path is too long."); }
+                if (!string.Equals(finalPath.ToString(), @"\\?\" + expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("REFUSED: a directory resolves through an alias or reparse ancestor.");
+                }
+                // FILE_SHARE_DELETE is intentionally absent for the lease lifetime.
+                return handle;
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
         public static int GetFileHardLinkCount(string path)
         {
             IntPtr invalidHandle = new IntPtr(-1);
@@ -1214,6 +1307,7 @@ function Get-BrokerCoordinatorPaths {
   $goatCitadelDirectory = Split-Path -Path $provisionerDirectory -Parent
   $brokerImagePath = $drive + $script:ProgramDataSuffix + $script:BrokerExecutableName
   $signerImagePath = $drive + $script:ProgramDataSuffix + $script:SignerExecutableName
+  $clientImagePath = $drive + $script:ProgramDataSuffix + $script:ClientExecutableName
   return [pscustomobject]@{
     Drive = $drive
     GoatCitadelDirectory = $goatCitadelDirectory
@@ -1221,8 +1315,56 @@ function Get-BrokerCoordinatorPaths {
     BinDirectory = $binDirectory
     BrokerImagePath = $brokerImagePath
     SignerImagePath = $signerImagePath
+    ClientImagePath = $clientImagePath
     BrokerQuotedBinaryPath = '"' + $brokerImagePath + '"'
     SignerQuotedBinaryPath = '"' + $signerImagePath + '"'
+  }
+}
+
+function Assert-BrokerCoordinatorAncestorSddl {
+  param(
+    [Parameter(Mandatory = $true)][string]$Sddl,
+    [switch]$GoatCitadelLevel
+  )
+  $descriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($Sddl)
+  $trustedInstaller = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+  if ($descriptor.Owner.Value -notin @("S-1-5-18", $trustedInstaller)) {
+    throw "REFUSED: an install ancestor owner is not SYSTEM or TrustedInstaller."
+  }
+  if ($null -eq $descriptor.DiscretionaryAcl) {
+    throw "REFUSED: an install ancestor has no DACL."
+  }
+  # Mirrors local_transport.cpp ValidateAncestorDacl. Inherit-only ACEs do not
+  # grant authority on this ancestor; unknown effective ACE kinds are refused.
+  $forbidden = 0x500C0040
+  if ($GoatCitadelLevel) { $forbidden = $forbidden -bor 0x00010116 }
+  foreach ($ace in $descriptor.DiscretionaryAcl) {
+    if (([int]$ace.AceFlags -band [int][System.Security.AccessControl.AceFlags]::InheritOnly) -ne 0) { continue }
+    if ($ace.AceType -eq [System.Security.AccessControl.AceType]::AccessDenied) { continue }
+    if ($ace.AceType -ne [System.Security.AccessControl.AceType]::AccessAllowed) {
+      throw "REFUSED: an install ancestor has an unsupported effective ACE."
+    }
+    $trusted = @("S-1-5-18", $trustedInstaller, "S-1-5-32-544", $script:SignerServiceSid)
+    if ($ace.SecurityIdentifier.Value -notin $trusted -and ($ace.AccessMask -band $forbidden) -ne 0) {
+      throw "REFUSED: an install ancestor permits untrusted mutation."
+    }
+  }
+}
+
+function Get-BrokerCoordinatorDirectoryLease {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [switch]$GoatCitadelLevel
+  )
+  $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  $lease = $native::PinDirectory($Path)
+  try {
+    Assert-BrokerCoordinatorAncestorSddl -Sddl ($native::GetFileSddl($Path)) -GoatCitadelLevel:$GoatCitadelLevel
+    return $lease
+  }
+  catch {
+    $lease.Dispose()
+    throw
   }
 }
 
@@ -1236,14 +1378,23 @@ function Get-BrokerCoordinatorFileSha256 {
   param(
     [Parameter(Mandatory = $true)][string]$Path
   )
-  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+  $hasher = $null
+  try {
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    return [System.BitConverter]::ToString($hasher.ComputeHash($stream)).Replace("-", "").ToLowerInvariant()
+  }
+  finally {
+    if ($null -ne $hasher) { $hasher.Dispose() }
+    $stream.Dispose()
+  }
 }
 
 function Get-BrokerCoordinatorStreamNames {
   param(
     [Parameter(Mandatory = $true)][string]$Path
   )
-  return @(Get-Item -LiteralPath $Path -Stream * | ForEach-Object { $_.Stream })
+  return ,@(Get-Item -LiteralPath $Path -Stream * | ForEach-Object { $_.Stream })
 }
 
 function ConvertTo-CanonicalSddl {
@@ -1252,6 +1403,17 @@ function ConvertTo-CanonicalSddl {
   )
   Initialize-BrokerCoordinatorNativeType
   return [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::CanonicalizeSddl($Sddl)
+}
+
+function ConvertTo-CanonicalFileSddl {
+  param([Parameter(Mandatory = $true)][string]$Sddl)
+  $descriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($Sddl)
+  # SetNamedSecurityInfoW may retain the AI bookkeeping flag after replacing
+  # every inherited ACE with an explicit protected DACL. Native transport
+  # validates owner, protected state and exact ACEs, not this historical flag.
+  $flags = [int]$descriptor.ControlFlags -band (-bnot [int][System.Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInherited)
+  $descriptor.SetFlags([System.Security.AccessControl.ControlFlags]$flags)
+  return $descriptor.GetSddlForm([System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Access)
 }
 
 function Write-BrokerCoordinatorEvidenceBundle {

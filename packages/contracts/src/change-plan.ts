@@ -18,6 +18,7 @@ export const CHANGE_PLAN_KINDS = [
   "channel_connection",
   "runtime_remediation",
   "capability_candidate",
+  "capability_pack",
   "improvement_candidate",
   "managed_source_registration",
   "product_source_update",
@@ -257,6 +258,10 @@ export type ChangePlanRuntimeConfigurationOperation =
   | { readonly operation: "npu_configuration"; readonly config: ChangePlanNpuConfiguration }
   | { readonly operation: "llama_cpp_configuration"; readonly config: ChangePlanLlamaCppConfiguration }
   | {
+      readonly operation: "feature_flags";
+      readonly flags: Readonly<Partial<Record<ChangePlanRuntimeFeatureFlag, boolean>>>;
+    }
+  | {
       readonly operation: "feature_flag";
       readonly flag: ChangePlanRuntimeFeatureFlag;
       readonly enabled: boolean;
@@ -287,6 +292,14 @@ export interface ChangePlanCapabilityCandidateRequest {
   readonly versionId?: string;
 }
 
+/** A reviewed catalog binding; payloads and commands remain server owned. */
+export interface ChangePlanCapabilityPackRequest {
+  readonly kind: "capability_pack";
+  readonly packId: string;
+  readonly manifestHash: string;
+  readonly assetIds: readonly string[];
+}
+
 export interface ChangePlanImprovementCandidateRequest {
   readonly kind: "improvement_candidate";
   readonly candidateId: string;
@@ -315,6 +328,7 @@ export type ChangePlanRequest =
   | ChangePlanChannelConnectionRequest
   | ChangePlanRuntimeRemediationRequest
   | ChangePlanCapabilityCandidateRequest
+  | ChangePlanCapabilityPackRequest
   | ChangePlanImprovementCandidateRequest
   | ChangePlanManagedSourceRegistrationRequest
   | ChangePlanProductSourceUpdateRequest;
@@ -494,6 +508,7 @@ export function changePlanScopeForKind(kind: ChangePlanKind): ChangePlanScope {
     case "runtime_remediation":
       return "remediation";
     case "capability_candidate":
+    case "capability_pack":
       return "capability";
     case "improvement_candidate":
       return "improvement";
@@ -600,6 +615,18 @@ export function isChangePlanRequest(value: unknown): value is ChangePlanRequest 
       );
     case "runtime_remediation":
       return hasOnlyKeys(value, ["kind", "remediationId"]) && isIdentifier(value.remediationId);
+    case "capability_pack":
+      return (
+        hasOnlyKeys(value, ["kind", "packId", "manifestHash", "assetIds"]) &&
+        isIdentifier(value.packId) &&
+        typeof value.manifestHash === "string" &&
+        /^[a-f0-9]{64}$/u.test(value.manifestHash) &&
+        Array.isArray(value.assetIds) &&
+        value.assetIds.length > 0 &&
+        value.assetIds.length <= 32 &&
+        value.assetIds.every(isIdentifier) &&
+        new Set(value.assetIds).size === value.assetIds.length
+      );
     case "capability_candidate":
       return (
         hasOnlyKeys(value, ["kind", "proposalId", "action", "versionId"]) &&
@@ -693,6 +720,17 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
         hasOnlyKeys(value, ["operation", "flag", "enabled"]) &&
         (CHANGE_PLAN_RUNTIME_FEATURE_FLAGS as readonly string[]).includes(String(value.flag)) &&
         typeof value.enabled === "boolean"
+      );
+    case "feature_flags":
+      return (
+        hasOnlyKeys(value, ["operation", "flags"]) &&
+        isPlainObject(value.flags) &&
+        Object.keys(value.flags).length > 0 &&
+        Object.keys(value.flags).length <= 8 &&
+        Object.entries(value.flags).every(
+          ([flag, enabled]) =>
+            (CHANGE_PLAN_RUNTIME_FEATURE_FLAGS as readonly string[]).includes(flag) && typeof enabled === "boolean",
+        )
       );
     default:
       return false;

@@ -17,8 +17,9 @@ import {
 /**
  * The worker's one-time bootstrap admission (route 1, proof protocol v1).
  *
- * This module is the ONLY place the one-time bootstrap secret is used, and its
- * only product is a `RetainedRuntimeCredential`. It never writes the secret
+ * Bootstrap admission is the only operation that uses the one-time secret.
+ * This PEM fixture path and the protected native client return a runtime
+ * credential. Neither writes the bootstrap secret
  * anywhere durable; the caller hands the returned credential to the vault,
  * which structurally refuses bootstrap-secret-shaped fields.
  */
@@ -142,17 +143,17 @@ function signBootstrapPop(
 }
 
 /**
- * Produce the fixed 288-byte protected admission envelope and its signer
- * result. The byte layout mirrors the Gateway verifier exactly: magic, version,
+ * Produce the fixed 288-byte protected admission envelope without signing it.
+ * The byte layout mirrors the Gateway verifier exactly: magic, version,
  * kind, length, operation id, evidence-nonce digest, worker generation, then
  * the six pinned digests.
  */
-export function buildProtectedAdmissionEvidence(input: {
-  readonly ticket: WorkerAdmissionTicket;
+export function buildWorkerAdmissionEnvelope(input: {
+  readonly ticket: Omit<WorkerAdmissionTicket, "protectedSignerPrivateKeyPem">;
   readonly identity: WorkerTransportIdentityDigests;
   readonly tlsExporterSha256: string;
   readonly evidenceNonce: string;
-}): Readonly<Record<string, unknown>> {
+}): Buffer {
   const { ticket, identity } = input;
   const evidenceNonceSha256 = sha256Utf8(input.evidenceNonce);
   const contextSha256 = remoteWorkerProtectedAdmissionContextSha256({
@@ -191,6 +192,19 @@ export function buildProtectedAdmissionEvidence(input: {
   Buffer.from(ticket.downloadVerificationReceiptSha256, "hex").copy(envelope, 192);
   Buffer.from(ticket.installedTreeAttestationSha256, "hex").copy(envelope, 224);
   Buffer.from(ticket.installedTreeVerificationReceiptSha256, "hex").copy(envelope, 256);
+  return envelope;
+}
+
+/** Single-host fixture signing path. Protected workers use the native owner instead. */
+export function buildProtectedAdmissionEvidence(input: {
+  readonly ticket: WorkerAdmissionTicket;
+  readonly identity: WorkerTransportIdentityDigests;
+  readonly tlsExporterSha256: string;
+  readonly evidenceNonce: string;
+}): Readonly<Record<string, unknown>> {
+  const { ticket } = input;
+  const envelope = buildWorkerAdmissionEnvelope(input);
+  const operationId = envelope.subarray(16, 32);
   const signerKey = createPrivateKey(ticket.protectedSignerPrivateKeyPem);
   const signerSpkiDer = protectedSignerSpkiDer(ticket.protectedSignerPrivateKeyPem);
   const signature = sign(

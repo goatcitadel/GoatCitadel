@@ -147,16 +147,18 @@ describe("HX-407 paired external-source schema parity", () => {
   });
 
   // DESIGN DECISION (owner): `createDatabase` does not admit sparse databases.
-  // The e40432a0b canonical schema-shape gate stays fail-closed for every real
-  // application boot, and a database that skipped an additive migration can
-  // never converge to the canonical head, so the gate refuses it by design.
+  // Required authority migrations and the canonical schema-shape gate stay
+  // fail-closed for real application boots. A sparse database may be refused
+  // before reaching the final shape gate when a required authority is absent.
   // The skip-on-absent-parent behaviour the frozen lineage relies on is
   // therefore a migration-layer guarantee, not a createDatabase admission: it
   // is proven here against the migration runner directly, the same layer the
-  // sibling HX-410 sparse proof uses, and the gate's refusal of the very same
+  // sibling HX-410 sparse proof uses, and startup's refusal of the very same
   // database is asserted below so neither half can drift.
   it("does not invent or backfill missing parent owners in a repair-only sparse database", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-hx407-sparse-${randomUUID()}.db`);
+    const missingAuthorityGuard =
+      /Worker Chat resume migration requires the expected authority guard: trg_remote_worker_assignment_leases_live_authority/u;
     try {
       const sparse = new DatabaseSync(dbPath);
       sparse.exec(`
@@ -185,7 +187,7 @@ describe("HX-407 paired external-source schema parity", () => {
         // `createDatabase` enables foreign keys before migrating; hold the
         // sparse proof to the same footing minus the canonical-shape gate.
         sparse.exec("PRAGMA foreign_keys = ON;");
-        __sqliteInternals.migrate(sparse);
+        assert.throws(() => __sqliteInternals.migrate(sparse), missingAuthorityGuard);
 
         const recorded = sparse.prepare("SELECT name FROM schema_migrations WHERE version = 166").get() as
           | { name: string }
@@ -209,12 +211,9 @@ describe("HX-407 paired external-source schema parity", () => {
         sparse.close();
       }
 
-      // The other half of the decision: the same sparse database the migration
-      // runner legitimately leaves non-canonical is refused by `createDatabase`,
-      // which admits only the canonical head shape. The gate reports just the
-      // first twelve divergences, so assert its identity rather than any one
-      // absent object.
-      assert.throws(() => createDatabase({ dbPath }), /SQLite canonical schema-shape validation failed/u);
+      // Ordinary startup refuses the same missing authority. The external-source
+      // repair remains additive; it does not invent the absent parent owners.
+      assert.throws(() => createDatabase({ dbPath }), missingAuthorityGuard);
     } finally {
       for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
     }

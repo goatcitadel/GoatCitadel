@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type {
   MemoryMaintenanceChangeRecord,
-  MemoryMaintenancePolicyRecord,
+  MemoryMaintenancePolicyValues,
   MemoryMaintenanceRecommendationRecord,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceRunSourceRecord,
@@ -40,7 +40,7 @@ function createRepoWithDb(): { repo: MemoryMaintenanceRepository; db: ReturnType
   };
 }
 
-function basePolicy(overrides: Partial<MemoryMaintenancePolicyRecord> = {}): MemoryMaintenancePolicyRecord {
+function basePolicy(overrides: Partial<MemoryMaintenancePolicyValues> = {}): MemoryMaintenancePolicyValues {
   return {
     workspaceId: "workspace-1",
     enabled: true,
@@ -143,6 +143,7 @@ describe("MemoryMaintenanceRepository", () => {
     const storedPolicy = repo.upsertPolicy(basePolicy({ providerId: "  ", model: "" }));
     assert.deepEqual(storedPolicy, {
       ...basePolicy({ providerId: undefined, model: undefined }),
+      revision: storedPolicy.revision,
       providerId: undefined,
       model: undefined,
     });
@@ -158,7 +159,7 @@ describe("MemoryMaintenanceRepository", () => {
         executionTarget: "local",
         unavailableModelPolicy: "error",
       },
-      basePolicy(),
+      storedPolicy.revision,
       "2026-03-20T11:00:00.000Z",
     );
     assert.equal(patchedPolicy.enabled, false);
@@ -173,7 +174,7 @@ describe("MemoryMaintenanceRepository", () => {
     const createdFromDefaults = repo.patchPolicy(
       "workspace-2",
       { minChangedSessions: 8 },
-      defaultPolicy,
+      repo.ensurePolicy(defaultPolicy).revision,
       "2026-03-20T12:00:00.000Z",
     );
     assert.equal(createdFromDefaults.workspaceId, "workspace-2");
@@ -468,17 +469,20 @@ describe("MemoryMaintenanceRepository", () => {
       appliedAt: "2026-03-20T11:10:00.000Z",
       updatedAt: "2026-03-20T11:10:00.000Z",
     };
-    assert.deepEqual(repo.updateRecommendation(updatedRecommendation), updatedRecommendation);
-    assert.deepEqual(repo.listRecommendations("workspace-1", 1000), [updatedRecommendation]);
+    const savedRecommendation = repo.updateRecommendation(updatedRecommendation);
+    assert.notEqual(savedRecommendation.revision, recommendation.revision);
+    assert.deepEqual(savedRecommendation, { ...updatedRecommendation, revision: savedRecommendation.revision });
+    assert.deepEqual(repo.listRecommendations("workspace-1", 1000), [savedRecommendation]);
   });
 
   it("preserves maintenance defaults and filters malformed adapter rows", () => {
     const { repo } = createRepoWithDb();
     const policy = repo.upsertPolicy(basePolicy());
 
-    const preservedPolicy = repo.patchPolicy("workspace-1", {}, basePolicy(), "2026-03-21T00:00:00.000Z");
+    const preservedPolicy = repo.patchPolicy("workspace-1", {}, policy.revision, "2026-03-21T00:00:00.000Z");
     assert.deepEqual(preservedPolicy, {
       ...policy,
+      revision: preservedPolicy.revision,
       providerId: "openai",
       model: "gpt-5.2",
       updatedAt: "2026-03-21T00:00:00.000Z",
@@ -491,7 +495,7 @@ describe("MemoryMaintenanceRepository", () => {
         model: null,
         schedule: null,
       },
-      basePolicy(),
+      preservedPolicy.revision,
       "2026-03-21T00:05:00.000Z",
     );
     assert.equal(clearedPolicy.providerId, undefined);
@@ -616,15 +620,17 @@ describe("MemoryMaintenanceRepository", () => {
     });
     assert.deepEqual(recommendation.proposedPatch, {});
     assert.equal(recommendation.rationale, undefined);
-    assert.deepEqual(
-      repo.updateRecommendation({
+    const updatedRecommendation = repo.updateRecommendation({
         ...recommendation,
         proposedPatch: undefined as unknown as Record<string, unknown>,
         appliedAt: undefined,
         updatedAt: "2026-03-21T00:16:00.000Z",
-      }),
+      });
+    assert.deepEqual(
+      updatedRecommendation,
       {
         ...recommendation,
+        revision: updatedRecommendation.revision,
         proposedPatch: {},
         appliedAt: undefined,
         updatedAt: "2026-03-21T00:16:00.000Z",

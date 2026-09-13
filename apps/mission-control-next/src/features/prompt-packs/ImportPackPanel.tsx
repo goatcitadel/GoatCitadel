@@ -3,17 +3,18 @@ import { NativeButton } from "@next/features/native-routes/primitives";
 
 export interface ImportPackPanelProps {
   importText: string;
+  dirty?: boolean;
   importing: boolean;
   onSetImportText: (value: string) => void;
   onImport: () => void;
 }
 
-export function ImportPackPanel({ importText, importing, onSetImportText, onImport }: ImportPackPanelProps) {
+export function ImportPackPanel({ importText, dirty, importing, onSetImportText, onImport }: ImportPackPanelProps) {
   return (
     <details className="mc-pp-panel mc-pp-panel-collapsible">
       <summary>
         <div>
-          <h4>Import a new pack</h4>
+          <h4>Import a new pack{dirty ? " · Unsaved" : ""}</h4>
           <p>Open only when you want to paste fresh prompt-pack markdown into the workspace.</p>
         </div>
         <Upload size={16} />

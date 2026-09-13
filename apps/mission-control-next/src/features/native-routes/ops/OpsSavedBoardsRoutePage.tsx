@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useSessionDraft, hasSessionDraft } from "../library/session-drafts";
+import { useDraftLeave } from "../library/DraftLeaveDialog";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 import { Archive, PanelsTopLeft, Pencil, Plus, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import type { OpsSavedBoardRecord } from "@goatcitadel/contracts";
 import {
@@ -37,7 +40,51 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
   const [listError, setListError] = useState<string | null>(null);
   const [boardError, setBoardError] = useState<string | null>(null);
   const [boardGeneration, setBoardGeneration] = useState(0);
-  const [editor, setEditor] = useState<OpsSavedBoardsEditorSession | null>(null);
+  const leave = useDraftLeave();
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorTarget, setEditorTarget] = useState("create");
+  const [createEpoch, setCreateEpoch] = useState(0);
+  const createSeed = useMemo(
+    () => ({
+      workspaceId: props.activeWorkspaceId,
+      epoch: createEpoch,
+      value: {
+        mode: "create",
+        idempotencyKey: createRequestIdentity(),
+        draft: createOpsSavedBoardsDraft(),
+      } as OpsSavedBoardsEditorSession,
+    }),
+    [props.activeWorkspaceId, createEpoch],
+  );
+  const canonicalEditor: OpsSavedBoardsEditorSession =
+    editorTarget === "create"
+      ? createSeed.value
+      : {
+          mode: "edit",
+          boardId: editorTarget,
+          expectedRevision: selectedBoard?.boardId === editorTarget ? selectedBoard.revision : undefined,
+          draft: createOpsSavedBoardsDraft(selectedBoard?.boardId === editorTarget ? selectedBoard : undefined),
+        };
+  const editorStore = useSessionDraft(
+    "ops-board:" + props.activeWorkspaceId + ":" + editorTarget,
+    canonicalEditor,
+    canonicalEditor.expectedRevision,
+    {
+      label: "Board layout",
+      active: editorOpen,
+      available: editorTarget === "create" || selectedBoard?.boardId === editorTarget,
+      onSave: () => saveEditor(),
+    },
+  );
+  const editor = editorOpen ? editorStore.value : null;
+  const setEditor = (update: SetStateAction<OpsSavedBoardsEditorSession | null>) => {
+    const value = typeof update === "function" ? update(editor) : update;
+    if (value) {
+      editorStore.setValue(value);
+      setEditorOpen(true);
+    } else setEditorOpen(false);
+  };
+  const mutationBusyRef = useRef(false);
   const [editorBusy, setEditorBusy] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [editorConflict, setEditorConflict] = useState<OpsSavedBoardRecord | null>(null);
@@ -130,12 +177,13 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
     listRequestRef.current += 1;
     detailRequestRef.current += 1;
     mutationRequestRef.current += 1;
+    mutationBusyRef.current = false;
     setStateWorkspaceId(props.activeWorkspaceId);
     setBoards(null);
     setSelectedBoardId(null);
     selectedBoardIdRef.current = null;
     setSelectedBoard(null);
-    setEditor(null);
+    setEditorOpen(false);
     setEditorBusy(false);
     setEditorError(null);
     setEditorConflict(null);
@@ -211,33 +259,29 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
     void loadBoard(boardId);
   };
 
-  const beginCreate = () => {
-    setEditor({
-      mode: "create",
-      idempotencyKey: createRequestIdentity(),
-      draft: createOpsSavedBoardsDraft(),
+  const beginCreate = () =>
+    leave.request(() => {
+      setEditorTarget("create");
+      setEditorOpen(true);
+      setEditorError(null);
+      setEditorConflict(null);
+      setTransitionError(null);
     });
-    setEditorError(null);
-    setEditorConflict(null);
-    setTransitionError(null);
-  };
-
   const beginEdit = () => {
     if (!selectedBoard || selectedBoard.status !== "active") return;
-    setEditor({
-      mode: "edit",
-      boardId: selectedBoard.boardId,
-      expectedRevision: selectedBoard.revision,
-      draft: createOpsSavedBoardsDraft(selectedBoard),
+    leave.request(() => {
+      setEditorTarget(selectedBoard.boardId);
+      setEditorOpen(true);
+      setEditorError(null);
+      setEditorConflict(null);
+      setTransitionError(null);
     });
-    setEditorError(null);
-    setEditorConflict(null);
-    setTransitionError(null);
   };
 
-  const saveEditor = async () => {
+  const saveEditor = async (): Promise<boolean> => {
     const currentEditor = editor;
-    if (!currentEditor) return;
+    if (!currentEditor || mutationBusyRef.current) return false;
+    mutationBusyRef.current = true;
     const workspaceId = props.activeWorkspaceId;
     const requestId = mutationRequestRef.current + 1;
     mutationRequestRef.current = requestId;
@@ -263,13 +307,23 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
               description: description ? currentEditor.draft.description : null,
               expectedRevision: requireValue(currentEditor.expectedRevision, "board revision"),
             });
-      if (!isCurrentMutation(mountedRef, activeWorkspaceRef, mutationRequestRef, workspaceId, requestId)) return;
-      setEditor(null);
+      if (!isCurrentMutation(mountedRef, activeWorkspaceRef, mutationRequestRef, workspaceId, requestId)) return false;
+      const cleared = editorStore.acceptSaved(
+        { ...currentEditor, expectedRevision: saved.revision, draft: createOpsSavedBoardsDraft(saved) },
+        saved.revision,
+        currentEditor,
+      );
+      if (cleared) {
+        editorStore.discard();
+        setEditor(null);
+        if (currentEditor.mode === "create") setCreateEpoch((value) => value + 1);
+      }
       setEditorError(null);
       setEditorConflict(null);
       await loadBoards(saved.boardId);
+      return cleared;
     } catch (error) {
-      if (!isCurrentMutation(mountedRef, activeWorkspaceRef, mutationRequestRef, workspaceId, requestId)) return;
+      if (!isCurrentMutation(mountedRef, activeWorkspaceRef, mutationRequestRef, workspaceId, requestId)) return false;
       if (errorStatus(error) === 409) {
         if (currentEditor.mode === "edit" && currentEditor.boardId) {
           await refreshEditConflict(currentEditor.boardId, workspaceId, requestId);
@@ -285,9 +339,11 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
       }
     } finally {
       if (isCurrentMutation(mountedRef, activeWorkspaceRef, mutationRequestRef, workspaceId, requestId)) {
+        mutationBusyRef.current = false;
         setEditorBusy(false);
       }
     }
+    return false;
   };
 
   const refreshEditConflict = async (boardId: string, workspaceId: string, mutationRequestId: number) => {
@@ -315,7 +371,8 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
   const performTransition = async () => {
     const operation = pendingTransition;
     const board = selectedBoard;
-    if (!operation || !board) return;
+    if (!operation || !board || mutationBusyRef.current) return;
+    mutationBusyRef.current = true;
     const workspaceId = props.activeWorkspaceId;
     const requestId = mutationRequestRef.current + 1;
     mutationRequestRef.current = requestId;
@@ -351,6 +408,7 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
       }
     } finally {
       if (isCurrentMutation(mountedRef, activeWorkspaceRef, mutationRequestRef, workspaceId, requestId)) {
+        mutationBusyRef.current = false;
         setTransitionBusy(false);
       }
     }
@@ -405,20 +463,23 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
           </NativeButton>
           <NativeButton onClick={beginCreate} disabled={!stateMatchesWorkspace || editorBusy || transitionBusy}>
             <Plus size={14} /> New board
+            {hasSessionDraft("ops-board:" + props.activeWorkspaceId + ":create") ? " · Unsaved" : ""}
           </NativeButton>
         </div>
       }
       className="mc-next-ops-saved-boards-page"
     >
       {listError && visibleBoards !== null ? <NoticeBanner tone="error" message={listError} /> : null}
-      <BoardSelector
-        boards={visibleBoards ?? []}
-        selectedBoardId={visibleSelectedBoardId}
-        includeArchived={includeArchived}
-        disabled={editorBusy || transitionBusy}
-        onSelect={selectBoard}
-        onIncludeArchived={(checked) => setIncludeArchived(checked)}
-      />
+      {!visibleEditor ? (
+        <BoardSelector
+          boards={visibleBoards ?? []}
+          selectedBoardId={visibleSelectedBoardId}
+          includeArchived={includeArchived}
+          disabled={editorBusy || transitionBusy}
+          onSelect={(boardId) => leave.request(() => selectBoard(boardId))}
+          onIncludeArchived={(checked) => setIncludeArchived(checked)}
+        />
+      ) : null}
 
       {visibleEditor ? (
         <OpsSavedBoardsEditor
@@ -431,19 +492,26 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
             if (!editorConflict) setEditorError(null);
           }}
           onSave={() => void saveEditor()}
-          onCancel={() => {
-            setEditor(null);
-            setEditorError(null);
-            setEditorConflict(null);
-          }}
+          onCancel={() =>
+            leave.request(() => {
+              mutationRequestRef.current++;
+              mutationBusyRef.current = false;
+              setEditorBusy(false);
+              setEditor(null);
+              setEditorError(null);
+              setEditorConflict(null);
+            }, [editorStore.key])
+          }
           onAdoptConflictRevision={() => {
             if (!editorConflict) return;
+            editorStore.rebaseToCurrent();
             setEditor((current) => (current ? { ...current, expectedRevision: editorConflict.revision } : current));
             setEditorConflict(null);
             setEditorError(null);
           }}
           onDiscardForCanonical={() => {
             if (!editorConflict) return;
+            editorStore.discard();
             setEditor({
               mode: "edit",
               boardId: editorConflict.boardId,
@@ -481,12 +549,17 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
           transitionError={transitionError}
           pendingTransition={pendingTransition}
           onEdit={beginEdit}
+          hasDraft={Boolean(
+            visibleSelectedBoard &&
+            hasSessionDraft("ops-board:" + props.activeWorkspaceId + ":" + visibleSelectedBoard.boardId),
+          )}
           onRequestTransition={requestTransition}
           onCancelTransition={() => setPendingTransition(null)}
           onConfirmTransition={() => void performTransition()}
           onRetry={() => visibleSelectedBoardId && void loadBoard(visibleSelectedBoardId)}
         />
       )}
+      {leave.dialog}
     </NativePageFrame>
   );
 }
@@ -550,6 +623,7 @@ function BoardViewer({
   transitionError,
   pendingTransition,
   onEdit,
+  hasDraft,
   onRequestTransition,
   onCancelTransition,
   onConfirmTransition,
@@ -566,11 +640,18 @@ function BoardViewer({
   transitionError: string | null;
   pendingTransition: PendingTransition;
   onEdit: () => void;
+  hasDraft: boolean;
   onRequestTransition: (operation: Exclude<PendingTransition, null>) => void;
   onCancelTransition: () => void;
   onConfirmTransition: () => void;
   onRetry: () => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [inspectedWidgetId, setInspectedWidgetId] = useState<string | null>(null);
+  useEffect(() => {
+    setDetailsOpen(false);
+    setInspectedWidgetId(null);
+  }, [board?.boardId]);
   if (boardLoading && !board) {
     return (
       <p className="mc-next-ops-board-loading" role="status">
@@ -596,7 +677,15 @@ function BoardViewer({
           <div className="mc-next-ops-board-title-row">
             <h2 id="ops-saved-board-title">{board.name}</h2>
             <StatusChip tone={board.status === "active" ? "success" : "muted"}>{board.status}</StatusChip>
-            <StatusChip tone="neutral">revision {board.revision}</StatusChip>
+            <NativeButton
+              variant="ghost"
+              onClick={() => {
+                setInspectedWidgetId(null);
+                setDetailsOpen(true);
+              }}
+            >
+              Board details
+            </NativeButton>
           </div>
           {board.description ? <p>{board.description}</p> : null}
           <span>Updated {formatDateTime(board.updatedAt)} · layout only, never runtime authority</span>
@@ -605,7 +694,7 @@ function BoardViewer({
           {board.status === "active" ? (
             <>
               <NativeButton variant="outline" onClick={onEdit} disabled={transitionBusy}>
-                <Pencil size={14} /> Edit layout
+                <Pencil size={14} /> Edit layout{hasDraft ? " · Unsaved" : ""}
               </NativeButton>
               <NativeButton variant="ghost" onClick={() => onRequestTransition("archive")} disabled={transitionBusy}>
                 <Archive size={14} /> Archive
@@ -619,28 +708,53 @@ function BoardViewer({
         </div>
       </header>
 
-      {transitionError ? <NoticeBanner tone="warning" message={transitionError} /> : null}
-      {operation ? (
-        <div className="mc-next-ops-board-transition-confirm" role="alertdialog" aria-modal="false">
-          <div>
-            <strong>{operation === "archive" ? "Archive this board?" : "Restore this board?"}</strong>
-            <p>This changes only the saved layout record at revision {board.revision}; source data is untouched.</p>
+      <DetailInspector
+        open={detailsOpen || Boolean(operation)}
+        title="Board details"
+        onClose={() => {
+          if (!transitionBusy) {
+            setDetailsOpen(false);
+            onCancelTransition();
+          }
+        }}
+      >
+        <p>
+          revision {board.revision} · {board.status}
+        </p>
+        <p>{board.description}</p>
+        <p>Updated {formatDateTime(board.updatedAt)} · layout only, never runtime authority</p>
+        <dl className="mc-next-worker-record">
+          {Object.entries(board)
+            .filter(([key]) => key !== "placements")
+            .map(([key, value]) => (
+              <div key={key}>
+                <dt>{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt>
+                <dd>{String(value ?? "Unavailable")}</dd>
+              </div>
+            ))}
+        </dl>{" "}
+        {transitionError ? <NoticeBanner tone="warning" message={transitionError} /> : null}
+        {operation ? (
+          <div className="mc-next-ops-board-transition-confirm" role="alertdialog" aria-modal="false">
+            <div>
+              <strong>{operation === "archive" ? "Archive this board?" : "Restore this board?"}</strong>
+              <p>This changes only the saved layout record at revision {board.revision}; source data is untouched.</p>
+            </div>
+            <div className="mc-next-ops-board-inline-actions">
+              <NativeButton variant="outline" onClick={onCancelTransition} disabled={transitionBusy}>
+                Cancel
+              </NativeButton>
+              <NativeButton
+                variant={operation === "archive" ? "destructive" : "default"}
+                onClick={onConfirmTransition}
+                disabled={transitionBusy}
+              >
+                {transitionBusy ? "Saving…" : operation === "archive" ? "Archive board" : "Restore board"}
+              </NativeButton>
+            </div>
           </div>
-          <div className="mc-next-ops-board-inline-actions">
-            <NativeButton variant="outline" onClick={onCancelTransition} disabled={transitionBusy}>
-              Cancel
-            </NativeButton>
-            <NativeButton
-              variant={operation === "archive" ? "destructive" : "default"}
-              onClick={onConfirmTransition}
-              disabled={transitionBusy}
-            >
-              {transitionBusy ? "Saving…" : operation === "archive" ? "Archive board" : "Restore board"}
-            </NativeButton>
-          </div>
-        </div>
-      ) : null}
-
+        ) : null}
+      </DetailInspector>
       <div className="mc-next-ops-board-grid" aria-label={`${board.name} trusted widget grid`}>
         {board.placements.map((placement) => (
           <div
@@ -656,6 +770,12 @@ function BoardViewer({
               boardGeneration={boardGeneration}
               theme={theme}
               navigate={navigate}
+              inspected={inspectedWidgetId === placement.widgetId}
+              onInspect={() => {
+                setDetailsOpen(false);
+                setInspectedWidgetId(placement.widgetId);
+              }}
+              onCloseInspector={() => setInspectedWidgetId(null)}
             />
           </div>
         ))}

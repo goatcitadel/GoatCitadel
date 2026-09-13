@@ -82,6 +82,8 @@ describe("JourneyTimelineRoutePage HX-402", () => {
         />,
       );
     });
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain("Stable event fingerprint");
+    await act(async () => { renderer!.root.findAllByType("button").find((node) => node.props.className?.includes("mc-next-settings-selectable"))!.props.onClick(); });
     const text = JSON.stringify(renderer!.toJSON());
     expect(text).toContain("Journey timeline");
     expect(text).toContain('"data-release-status":"experimental"');

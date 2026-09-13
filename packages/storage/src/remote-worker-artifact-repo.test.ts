@@ -153,6 +153,28 @@ describe("HX-506 artifact repository (SQLite)", () => {
     };
     const first = h.artifacts.openUpload(open);
     assert.equal(h.artifacts.openUpload(open).uploadId, first.uploadId);
+    assert.throws(() => h.artifacts.openUpload({ ...open, expiresAt: "2098-01-01T00:00:00.000Z" }));
+    assert.throws(() => h.artifacts.openUpload({ ...open, declaredTotalBytes: 11 }));
+    assert.throws(() => h.artifacts.openUpload({ ...open, declaredFileCount: 2 }));
+    const part = {
+      registryWorkspaceId,
+      assignmentId,
+      assignmentGeneration,
+      uploadId: first.uploadId,
+      part: {
+        globalSequence: 1,
+        logicalPathSha256: D("p"),
+        filePartIndex: 0,
+        isFinalPart: true,
+        partBytes: 10,
+        partSha256: D("part"),
+      },
+      idempotencyKey: "replay-part",
+    };
+    h.artifacts.appendPart(part);
+    h.artifacts.appendPart(part);
+    assert.throws(() => h.artifacts.appendPart({ ...part, part: { ...part.part, globalSequence: 2 } }));
+    assert.throws(() => h.artifacts.appendPart({ ...part, part: { ...part.part, logicalPathSha256: D("different") } }));
     h.db.close();
   });
 
@@ -270,6 +292,7 @@ describe("HX-506 artifact repository (SQLite)", () => {
     const h = harness("gate");
     const { registryWorkspaceId, assignmentId, assignmentGeneration } = h.seed;
     const { uploadId } = openAndCommit(h, D("verifier-profile"));
+    const manifestSha256 = h.artifacts.getManifestSha256(registryWorkspaceId, assignmentId, assignmentGeneration)!;
     assert.equal(gateOf(h, uploadId), "pending");
 
     h.artifacts.recordWorkerClaim({
@@ -298,7 +321,7 @@ describe("HX-506 artifact repository (SQLite)", () => {
       attemptIndex: 1,
       verifierProfileSha256: D("verifier-profile"),
       wallDeadlineAt: FUTURE,
-      evidence: gatewayEvidence("queued", 0),
+      evidence: gatewayEvidence("queued", 0, manifestSha256),
       idempotencyKey: "attempt-1",
     });
     const running = h.artifacts.advanceGatewayVerification({
@@ -308,7 +331,7 @@ describe("HX-506 artifact repository (SQLite)", () => {
       verificationId: attempt.verificationId,
       expectedAttemptRevision: 1,
       nextState: "running",
-      evidence: gatewayEvidence("running", 10),
+      evidence: gatewayEvidence("running", 10, manifestSha256),
     });
     assert.equal(running.gateState, "pending");
     const passed = h.artifacts.advanceGatewayVerification({
@@ -318,7 +341,7 @@ describe("HX-506 artifact repository (SQLite)", () => {
       verificationId: attempt.verificationId,
       expectedAttemptRevision: 2,
       nextState: "passed",
-      evidence: gatewayEvidence("passed", 20),
+      evidence: gatewayEvidence("passed", 20, manifestSha256),
     });
     assert.equal(passed.gateState, "satisfied");
     assert.equal(gateOf(h, uploadId), "satisfied");
@@ -350,16 +373,89 @@ describe("HX-506 artifact repository (SQLite)", () => {
     assert.equal(resolved.cleanupState, "cleaned");
     h.db.close();
   });
+
+  it("binds trusted verification to the required profile and exact immutable manifest, including replay", () => {
+    const h = harness("verifier-binding");
+    const { uploadId } = openAndCommit(h, D("verifier-profile"));
+    const manifestSha256 = h.artifacts.getManifestSha256(
+      h.seed.registryWorkspaceId,
+      h.seed.assignmentId,
+      h.seed.assignmentGeneration,
+    )!;
+    const initial = {
+      ...h.seed,
+      attemptIndex: 1,
+      verifierProfileSha256: D("verifier-profile"),
+      wallDeadlineAt: FUTURE,
+      evidence: gatewayEvidence("queued", 0, manifestSha256),
+      idempotencyKey: "verify-bound",
+    };
+    assert.equal(h.artifacts.getVerifiedManifest(h.seed.registryWorkspaceId, h.seed.assignmentId, h.seed.assignmentGeneration), undefined);
+    assert.throws(
+      () => h.artifacts.openGatewayVerification({ ...initial, verifierProfileSha256: D("other-profile") }),
+      /binding/,
+    );
+    assert.throws(
+      () =>
+        h.artifacts.openGatewayVerification({
+          ...initial,
+          evidence: gatewayEvidence("queued", 0, D("other-manifest")),
+        }),
+      /binding/,
+    );
+    const attempt = h.artifacts.openGatewayVerification(initial);
+    h.artifacts.advanceGatewayVerification({
+      ...h.seed,
+      verificationId: attempt.verificationId,
+      expectedAttemptRevision: 1,
+      nextState: "running",
+      evidence: gatewayEvidence("running", 0, manifestSha256),
+    });
+    const final = {
+      ...h.seed,
+      verificationId: attempt.verificationId,
+      expectedAttemptRevision: 2,
+      nextState: "passed" as const,
+      evidence: gatewayEvidence("passed", 0, manifestSha256),
+    };
+    assert.throws(
+      () =>
+        h.artifacts.advanceGatewayVerification({
+          ...final,
+          evidence: { ...final.evidence, verifierProfileSha256: D("other-profile") },
+        }),
+      /binding/,
+    );
+    assert.throws(
+      () =>
+        h.artifacts.advanceGatewayVerification({
+          ...final,
+          evidence: { ...final.evidence, postExecutionManifestSha256: D("mutated") },
+        }),
+      /binding/,
+    );
+    assert.equal(gateOf(h, uploadId), "pending");
+    h.artifacts.advanceGatewayVerification(final);
+    assert.deepEqual(h.artifacts.openGatewayVerification(initial), attempt);
+    assert.equal(gateOf(h, uploadId), "satisfied");
+    assert.equal(h.artifacts.getVerifiedManifest(h.seed.registryWorkspaceId, h.seed.assignmentId, h.seed.assignmentGeneration)
+      ?.requiredVerifierProfileSha256, D("verifier-profile"));
+    h.db.close();
+  });
 });
 
-function gatewayEvidence(attemptState: "queued" | "running" | "passed", capturedOutputBytes: number) {
+function gatewayEvidence(
+  attemptState: "queued" | "running" | "passed",
+  capturedOutputBytes: number,
+  manifestSha256: string,
+) {
   return {
     schemaVersion: REMOTE_WORKER_VERIFICATION_EVIDENCE_SCHEMA_VERSION,
     kind: "gateway_attempt" as const,
     attemptState,
     verifierProfileSha256: D("verifier-profile"),
-    preExecutionManifestSha256: D("pre"),
-    postExecutionManifestSha256: D("post"),
+    preExecutionManifestSha256: manifestSha256,
+    postExecutionManifestSha256: manifestSha256,
     summary: attemptState,
     capturedOutputBytes,
   };

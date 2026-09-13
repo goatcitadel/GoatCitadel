@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Button } from "./button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./dialog";
 
 interface GCModalProps {
+  className?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -18,6 +19,7 @@ interface GCModalProps {
 }
 
 export function GCModal({
+  className,
   open,
   onOpenChange,
   title,
@@ -31,6 +33,7 @@ export function GCModal({
   dismissDisabled = false,
   onConfirm,
 }: GCModalProps) {
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   return (
     <Dialog
       open={open}
@@ -41,7 +44,21 @@ export function GCModal({
         onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="gc-modal-content mc-gc-modal-content max-w-xl border-border/60 bg-popover/96">
+      <DialogContent
+        onOpenAutoFocus={() => {
+          returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          const opener = returnFocusRef.current;
+          if (opener?.isConnected && opener !== document.body) {
+            event.preventDefault();
+            opener.focus({ preventScroll: true });
+          }
+        }}
+        className={["gc-modal-content mc-gc-modal-content max-w-xl border-border/60 bg-popover/96", className]
+          .filter(Boolean)
+          .join(" ")}
+      >
         <DialogHeader>
           <DialogTitle className="gc-modal-title">{title}</DialogTitle>
           {description ? <DialogDescription className="gc-modal-description">{description}</DialogDescription> : null}

@@ -10274,6 +10274,7 @@ bool RuntimeManifestKeyCustodyIsCurrent(
 
 ProtectedOperationResult ExecuteRuntimePopV2Signature(
     ProtectedOperationsState* state,
+    bool tls_client,
     const std::uint8_t* body,
     std::uint32_t body_length,
     const std::uint8_t* operator_sid,
@@ -10283,19 +10284,42 @@ ProtectedOperationResult ExecuteRuntimePopV2Signature(
     std::array<std::uint8_t, kCreateKeysetResultBytes>* result,
     std::uint32_t* result_length) noexcept {
   SignRuntimePopV2Request request{};
-  if (!DecodeSignRuntimePopV2Request(body, body_length, &request)) {
+  std::size_t preimage_length = kRemoteWorkerPopV2PreimageBytes;
+  if (tls_client) {
+    SignTlsClientCertificateVerifyRequest tls_request{};
+    if (!DecodeSignTlsClientCertificateVerifyRequest(body, body_length, &tls_request)) {
+      return ProtectedOperationResult::ProtocolInvalid;
+    }
+    // Normalize into the shared protected signing owner; the original TLS bytes
+    // remain unchanged and the lease carries its distinct, validated purpose.
+    request.operation_id = tls_request.operation_id;
+    request.expected_state_sha256 = tls_request.expected_state_sha256;
+    request.expected_generation = tls_request.expected_generation;
+    request.expected_keyset_receipt_sha256 = tls_request.expected_keyset_receipt_sha256;
+    request.material.worker_generation = tls_request.expected_generation;
+    request.material.worker_public_key_spki_sha256 = tls_request.expected_worker_public_key_spki_sha256;
+    preimage_length = tls_request.preimage_length;
+    std::memcpy(request.preimage.data(), tls_request.preimage.data(), preimage_length);
+  } else if (!DecodeSignRuntimePopV2Request(body, body_length, &request)) {
     return ProtectedOperationResult::ProtocolInvalid;
   }
   Byte16 expected_operation_id{};
-  if (!DeriveRuntimePopV2OperationId(
+  const bool operation_derived = tls_client
+      ? DeriveTlsClientCertificateVerifyOperationId(
+          operator_sid, operator_sid_length, request.expected_state_sha256,
+          request.expected_generation, request.expected_keyset_receipt_sha256,
+          request.material.worker_public_key_spki_sha256,
+          request.preimage.data(), preimage_length, &expected_operation_id)
+      : DeriveRuntimePopV2OperationId(
           operator_sid,
           operator_sid_length,
           request.expected_state_sha256,
           request.expected_generation,
           request.expected_keyset_receipt_sha256,
           request.preimage.data(),
-          request.preimage.size(),
-          &expected_operation_id)) {
+          preimage_length,
+          &expected_operation_id);
+  if (!operation_derived) {
     return ProtectedOperationResult::CustodyOrJournal;
   }
   if (request.operation_id != expected_operation_id) {
@@ -10305,7 +10329,7 @@ ProtectedOperationResult ExecuteRuntimePopV2Signature(
   }
   Byte32 preimage_sha256{};
   if (!ComputeSha256(
-          request.preimage.data(), request.preimage.size(), &preimage_sha256)) {
+          request.preimage.data(), preimage_length, &preimage_sha256)) {
     return ProtectedOperationResult::CustodyOrJournal;
   }
 
@@ -10361,7 +10385,7 @@ ProtectedOperationResult ExecuteRuntimePopV2Signature(
           state->filesystem,
           artifact,
           request.preimage.data(),
-          request.preimage.size()) &&
+          preimage_length) &&
       ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
       FlushFileBuffers(artifact) != FALSE &&
       ProtectedFilesystemRecoveryCheckpoint(state->filesystem) &&
@@ -10417,8 +10441,9 @@ ProtectedOperationResult ExecuteRuntimePopV2Signature(
     lease_input.key_id = state->runtime_manifest_spki_sha256;
     lease_input.custody_state_sha256 = state->state_sha256;
     lease_input.incarnation = state->active_receipt_sha256;
-    lease_input.purpose = ProtectedArtifactPurpose::RemoteWorkerPopV2;
-    lease_input.artifact_length = kRemoteWorkerPopV2PreimageBytes;
+    lease_input.purpose = tls_client ? ProtectedArtifactPurpose::TlsClientCertificateVerify
+                                     : ProtectedArtifactPurpose::RemoteWorkerPopV2;
+    lease_input.artifact_length = preimage_length;
     lease_input.generation = state->active_generation;
     lease_input.deadline_ms = deadline_ms;
     prepared = CreateProtectedSigningLease(lease_input, &lease) &&
@@ -12010,9 +12035,11 @@ ProtectedOperationResult ExecuteProtectedOperation(
         result,
         result_length);
   }
-  if (opcode == static_cast<std::uint8_t>(Opcode::SignRuntimePopV2)) {
+  if (opcode == static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
+      opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify)) {
     return ExecuteRuntimePopV2Signature(
         state,
+        opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify),
         body,
         body_length,
         operator_sid,

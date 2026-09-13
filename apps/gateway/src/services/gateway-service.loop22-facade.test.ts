@@ -345,6 +345,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     const backgroundTask = Promise.resolve();
     const maintenanceStop = vi.fn();
     const gateway = createGatewayHarness({
+      mcpStdioSessions: { close: vi.fn() },
       approvalEffectsService: { stopWorker: vi.fn() },
       assemblyService: { close: vi.fn(async () => undefined) },
       backgroundTasks: new Set<Promise<unknown>>([backgroundTask]),
@@ -363,6 +364,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
 
     await GatewayService.prototype.close.call(gateway);
 
+    expect(gateway.mcpStdioSessions.close).toHaveBeenCalledOnce();
     expect(gateway.closing).toBe(true);
     expect(gateway.chatProactiveService.stopScheduler).toHaveBeenCalled();
     expect(gateway.improvementService.stopScheduler).toHaveBeenCalled();

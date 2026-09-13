@@ -13,6 +13,8 @@ import {
   type ChatSessionWorkbenchDiffResponse,
   type ChatSessionWorkbenchFileDiffResponse,
   type ChatSessionWorkbenchFileOperationKind,
+  type ChatSessionWorkbenchFileOperationPreviewRequest,
+  type ChatSessionWorkbenchFileOperationPreviewResponse,
   type ChatSessionWorkbenchFileOperationRequest,
   type ChatSessionWorkbenchFileOperationResponse,
   type ChatSessionWorkbenchFileResponse,
@@ -40,6 +42,15 @@ import {
 } from "@goatcitadel/policy-engine";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { serializePathWithinRoot } from "./security-utils.js";
+import {
+  readWorkbenchFileSnapshot,
+  withWorkbenchWriteLock,
+  WORKBENCH_WRITE_LOCK,
+  writeWorkbenchFileSnapshot,
+  type WorkbenchFileSnapshot,
+} from "./workbench-file-revisions.js";
+
+import { readWorkbenchPathRevision, workbenchPathConflict } from "./workbench-path-revisions.js";
 
 const MAX_TREE_ITEMS = 250;
 const MAX_FILE_BYTES = 256 * 1024;
@@ -163,88 +174,76 @@ export async function saveChatSessionWorkbenchFile(
   const state = await syncWorkbenchState(deps, sessionId);
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   const normalized = normalizeWorkbenchRelativePath(input.path);
+  assertWorkbenchFileOperationPathAllowed(normalized);
   const targetPath = path.resolve(context.projectRoot, normalized);
   assertPathInsideRoot(targetPath, context.projectRoot, "workbench file");
   assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
-
-  const contentBytes = Buffer.byteLength(input.content, "utf8");
-  if (contentBytes > MAX_FILE_BYTES) {
-    throw new ValidationError({
-      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
-    });
-  }
-
-  let existingStat: fsSync.Stats | null = null;
+  assertWorkbenchMutationScope(deps, context);
+  let writeStarted = false;
   try {
-    assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, targetPath, "workbench file");
-    existingStat = await fs.stat(targetPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      throw error;
-    }
-    if (await pathExistsEvenIfDangling(targetPath)) {
-      throw new ValidationError({ message: `Path points at a dangling symbolic link: ${normalized}` });
-    }
-  }
+    const snapshot = await withWorkbenchWriteLock(context.projectRoot, async () => {
+      const currentState = await syncWorkbenchState(deps, sessionId);
+      const currentContext = await resolveWorkbenchContext(deps, sessionId, currentState, true);
+      if (currentContext.project.projectId !== context.project.projectId || currentContext.projectRoot !== context.projectRoot) {
+        throw new ValidationError({ message: "The workbench project changed. Reload the file before saving." });
+      }
+      return await writeWorkbenchFileSnapshot({
+        sessionId, projectId: context.project.projectId, projectRoot: context.projectRoot, relativePath: normalized,
+        assertAllowed: (filePath) => {
+          assertWorkbenchFileOperationPathAllowed(path.relative(context.projectRoot, filePath).replaceAll("\\", "/"));
+          assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, filePath, "workbench file");
+          assertWritePathInJail(filePath, deps.config.toolPolicy.sandbox.writeJailRoots);
+        },
+      }, input, () => { writeStarted = true; });
+    });
+    const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
+    const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
 
-  if (existingStat?.isDirectory()) {
-    throw new ValidationError({ message: `Path is a directory: ${normalized}` });
-  }
-
-  if (existingStat && existingStat.size > MAX_FILE_BYTES) {
-    throw new ValidationError({
-      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
+    const response = await buildWorkbenchFileResponse(deps, sessionId, context, normalized, snapshot);
+    const diagnostics = buildWorkbenchDiagnostics(validation, [normalized]);
+    await deps.publishRealtime(
+      "chat_workbench_updated",
+      "chat",
+      {
+        type: "chat_workbench_file_saved",
+        sessionId,
+        projectId: context.project.projectId,
+        path: normalized,
+        changed: response.changed,
+        activeFilePath: response.state.activeFilePath,
+        validationStatus: response.state.validationStatus,
+        validation,
+        diagnostics,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: { sessionId },
+      },
+    );
+    return {
+      ...response,
+      diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
+    };
+  } catch (cause) {
+    if (!writeStarted) throw cause;
+    throw Object.assign(new Error("The file write started, but confirmation or follow-up failed. Reload the file before retrying; your draft is preserved.", { cause }), {
+      mutationCommitted: true,
     });
   }
+}
 
-  if (existingStat) {
-    const existingBuffer = await fs.readFile(targetPath);
-    assertWorkbenchFileIsText(existingBuffer, normalized, "editor");
-  } else {
-    const parentDir = path.dirname(targetPath);
-    const parentStat = await fs.stat(parentDir).catch(() => null);
-    if (!parentStat?.isDirectory()) {
-      throw new ValidationError({ message: `Parent directory does not exist for ${normalized}.` });
-    }
-    assertPathInsideRoot(parentDir, context.projectRoot, "workbench file parent");
-    assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, parentDir, "workbench file parent");
-  }
-
-  if (existingStat) {
-    await fs.writeFile(targetPath, input.content, "utf8");
-  } else {
-    await fs.writeFile(targetPath, input.content, { encoding: "utf8", flag: "wx" });
-  }
-  const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
-  const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
-
-  const response = await buildWorkbenchFileResponse(deps, sessionId, context, normalized);
-  const diagnostics = buildWorkbenchDiagnostics(validation, [normalized]);
-  await deps.publishRealtime(
-    "chat_workbench_updated",
-    "chat",
-    {
-      type: "chat_workbench_file_saved",
-      sessionId,
-      projectId: context.project.projectId,
-      path: normalized,
-      changed: response.changed,
-      activeFilePath: response.state.activeFilePath,
-      validationStatus: response.state.validationStatus,
-      validation,
-      diagnostics,
-    },
-    {
-      eventClass: "operational_signal",
-      eventAuthority: "retained_stream",
-      links: { sessionId },
-    },
-  );
-  return {
-    ...response,
-    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
-  };
+export async function previewChatSessionWorkbenchFileOperation(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  input: ChatSessionWorkbenchFileOperationPreviewRequest,
+): Promise<ChatSessionWorkbenchFileOperationPreviewResponse> {
+  const prepared = await prepareWorkbenchFileOperation(deps, sessionId, input);
+  return withWorkbenchWriteLock(prepared.context.projectRoot, async () => {
+    const current = await prepareWorkbenchFileOperation(deps, sessionId, input);
+    assertSameWorkbenchOperationContext(prepared.context, current.context);
+    return readWorkbenchPathRevision(workbenchPathScope(deps, sessionId, current.context), current.input);
+  });
 }
 
 export async function runChatSessionWorkbenchFileOperation(
@@ -252,83 +251,140 @@ export async function runChatSessionWorkbenchFileOperation(
   sessionId: string,
   input: ChatSessionWorkbenchFileOperationRequest,
 ): Promise<ChatSessionWorkbenchFileOperationResponse> {
+  const prepared = await prepareWorkbenchFileOperation(deps, sessionId, input);
+  if (!/^[a-f0-9]{64}$/.test(input.expectedRevision ?? "")) {
+    throw new ValidationError({ message: "Review the file action before applying it. An expected revision is required." });
+  }
+  const { context } = prepared;
+  const { operation, path: normalized, targetPath: normalizedTarget } = prepared.input;
+  let writeStarted = false;
+  try {
+    const { activeFilePath, message } = await withWorkbenchWriteLock(context.projectRoot, async () => {
+      const current = await prepareWorkbenchFileOperation(deps, sessionId, input);
+      assertSameWorkbenchOperationContext(context, current.context);
+      const review = await readWorkbenchPathRevision(workbenchPathScope(deps, sessionId, context), current.input)
+        .catch((error: unknown) => {
+          if (error instanceof ValidationError || error instanceof NotFoundError
+            || ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw workbenchPathConflict();
+          throw error;
+        });
+      if (review.revision !== input.expectedRevision) throw workbenchPathConflict();
+      return applyWorkbenchFileOperation(deps, context, {
+        operation, normalized, normalizedTarget,
+        targetPath: path.resolve(context.projectRoot, normalized),
+        destinationPath: normalizedTarget ? path.resolve(context.projectRoot, normalizedTarget) : undefined,
+        content: current.input.content,
+        currentActiveFilePath: current.state.activeFilePath,
+        onWriteStarted: () => { writeStarted = true; },
+      });
+    });
+
+    const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
+    const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
+    const updated = await deps.storage.chatSessionWorkbench.patch(sessionId, {
+      projectId: context.project.projectId,
+      activeFilePath,
+    });
+    const hydrated = hydrateWorkbenchRecord(deps, updated, context.project.projectId);
+    const tree = await getChatSessionWorkbenchTree(deps, sessionId);
+    const output = buildWorkbenchOperationOutput(hydrated, message, new Date().toISOString(), validation);
+    const diagnostics = output.diagnostics ?? [];
+
+    await deps.publishRealtime(
+      "chat_workbench_updated",
+      "chat",
+      {
+        type: "chat_workbench_file_operation_completed",
+        sessionId,
+        projectId: context.project.projectId,
+        operation,
+        path: normalized,
+        targetPath: normalizedTarget,
+        changedFiles,
+        activeFilePath: hydrated.activeFilePath,
+        validationStatus: hydrated.validationStatus,
+        diagnostics,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: { sessionId },
+      },
+    );
+
+    return {
+      state: hydrated,
+      operation,
+      path: normalized,
+      targetPath: normalizedTarget,
+      changedFiles,
+      tree,
+      output,
+      diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
+    };
+  } catch (cause) {
+    if (!writeStarted) throw cause;
+    throw Object.assign(new Error("The file action started, but confirmation or follow-up failed. Inspect the source and destination before retrying.", { cause }), {
+      mutationCommitted: true,
+    });
+  }
+}
+
+async function prepareWorkbenchFileOperation(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  input: ChatSessionWorkbenchFileOperationPreviewRequest,
+) {
   await deps.requireChatSession(sessionId);
   const state = await syncWorkbenchState(deps, sessionId);
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
-
   const operation = input.operation;
+  if (!["create_file", "create_folder", "rename", "delete", "duplicate", "move"].includes(operation)) {
+    throw new ValidationError({ message: "Unknown Workbench file action." });
+  }
   const normalized = normalizeWorkbenchRelativePath(input.path);
   assertWorkbenchFileOperationPathAllowed(normalized);
   const targetPath = path.resolve(context.projectRoot, normalized);
   assertPathInsideRoot(targetPath, context.projectRoot, "workbench file action");
   assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
-
-  const normalizedTarget =
-    operationRequiresTargetPath(operation) && input.targetPath
-      ? normalizeWorkbenchRelativePath(input.targetPath)
-      : undefined;
+  const needsTarget = operationRequiresTargetPath(operation);
+  if (needsTarget && !input.targetPath) throw new ValidationError({ message: "This file action requires a target path." });
+  if (!needsTarget && input.targetPath !== undefined) throw new ValidationError({ message: "This file action does not accept a target path." });
+  if (operation !== "create_file" && input.content !== undefined) throw new ValidationError({ message: "Only Create file accepts initial content." });
+  const normalizedTarget = needsTarget ? normalizeWorkbenchRelativePath(input.targetPath!) : undefined;
   if (normalizedTarget) {
     assertWorkbenchFileOperationPathAllowed(normalizedTarget);
-  }
-  const destinationPath = normalizedTarget ? path.resolve(context.projectRoot, normalizedTarget) : undefined;
-  if (destinationPath) {
+    const destinationPath = path.resolve(context.projectRoot, normalizedTarget);
     assertPathInsideRoot(destinationPath, context.projectRoot, "workbench file action destination");
     assertWritePathInJail(destinationPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+    assertWorkbenchDirectoryMoveSafe(targetPath, destinationPath);
   }
+  const content = operation === "create_file" ? (input.content ?? "") : undefined;
+  if (content !== undefined && Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES) {
+    throw new ValidationError({ message: "Initial file content exceeds the Workbench editor's 262144-byte limit." });
+  }
+  return { state, context, input: { operation, path: normalized, targetPath: normalizedTarget, content } };
+}
 
-  const { activeFilePath, message } = await applyWorkbenchFileOperation(deps, context, {
-    operation,
-    normalized,
-    targetPath,
-    normalizedTarget,
-    destinationPath,
-    content: input.content,
-    currentActiveFilePath: state.activeFilePath,
-  });
+function assertSameWorkbenchOperationContext(
+  before: { project: { projectId: string }; projectRoot: string },
+  current: { project: { projectId: string }; projectRoot: string },
+): void {
+  if (before.project.projectId !== current.project.projectId || before.projectRoot !== current.projectRoot) throw workbenchPathConflict();
+}
 
-  const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
-  const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
-  const updated = await deps.storage.chatSessionWorkbench.patch(sessionId, {
-    projectId: context.project.projectId,
-    activeFilePath,
-  });
-  const hydrated = hydrateWorkbenchRecord(deps, updated, context.project.projectId);
-  const tree = await getChatSessionWorkbenchTree(deps, sessionId);
-  const output = buildWorkbenchOperationOutput(hydrated, message, new Date().toISOString(), validation);
-  const diagnostics = output.diagnostics ?? [];
-
-  await deps.publishRealtime(
-    "chat_workbench_updated",
-    "chat",
-    {
-      type: "chat_workbench_file_operation_completed",
-      sessionId,
-      projectId: context.project.projectId,
-      operation,
-      path: normalized,
-      targetPath: normalizedTarget,
-      changedFiles,
-      activeFilePath: hydrated.activeFilePath,
-      validationStatus: hydrated.validationStatus,
-      diagnostics,
+function workbenchPathScope(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  context: { project: { projectId: string }; projectRoot: string },
+) {
+  return { sessionId, projectId: context.project.projectId, projectRoot: context.projectRoot,
+    assertAllowed: (targetPath: string) => {
+      assertWorkbenchFileOperationPathAllowed(path.relative(context.projectRoot, targetPath).replaceAll("\\", "/"));
+      assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, targetPath, "workbench file action");
+      assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
     },
-    {
-      eventClass: "operational_signal",
-      eventAuthority: "retained_stream",
-      links: { sessionId },
-    },
-  );
-
-  return {
-    state: hydrated,
-    operation,
-    path: normalized,
-    targetPath: normalizedTarget,
-    changedFiles,
-    tree,
-    output,
-    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   };
 }
 
@@ -442,10 +498,10 @@ export async function runChatSessionWorkbenchCommand(
     },
   );
 
-  const result = await executeWorkbenchCommand(command, args, {
+  const result = await withWorkbenchWriteLock(context.projectRoot, () => executeWorkbenchCommand(command, args, {
     cwd: context.projectRoot,
     timeoutMs,
-  });
+  }));
   const completedAt = new Date().toISOString();
   const durationMs = Date.now() - startedAtMs;
   const status = result.timedOut ? "timed_out" : result.exitCode === 0 ? "passed" : "failed";
@@ -545,7 +601,7 @@ export async function applyChatSessionWorkbenchPatch(
   const checkOnly = Boolean(input.checkOnly);
   const startedAt = new Date().toISOString();
   const artifactId = `workbench-patch:${randomUUID()}`;
-  const applyResult = applyPatchWithScope(context, patch, checkOnly);
+  const applyResult = await withWorkbenchWriteLock(context.projectRoot, async () => applyPatchWithScope(context, patch, checkOnly));
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const validation =
     applyResult.exitCode === 0 && !checkOnly
@@ -636,16 +692,20 @@ export async function revertChatSessionWorkbenchFile(
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
   const normalized = normalizeWorkbenchRelativePath(input.path);
+  assertWorkbenchFileOperationPathAllowed(normalized);
   const targetPath = path.resolve(context.projectRoot, normalized);
   assertPathInsideRoot(targetPath, context.projectRoot, "workbench revert file");
   assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
   const repoScopedPath = toRepoScopedFilePath(context.repoScopePath, normalized);
-  const wasUntracked = isGitPathUntracked(context.worktreePath, repoScopedPath);
-  if (wasUntracked) {
-    await fs.rm(targetPath, { recursive: true, force: true });
-  } else {
-    runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", repoScopedPath]);
-  }
+  const wasUntracked = await withWorkbenchWriteLock(context.projectRoot, async () => {
+    const untracked = isGitPathUntracked(context.worktreePath, repoScopedPath);
+    if (untracked) {
+      await fs.rm(targetPath, { recursive: true, force: true });
+    } else {
+      runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", repoScopedPath]);
+    }
+    return untracked;
+  });
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const finalState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
@@ -675,15 +735,18 @@ export async function revertChatSessionWorkbenchChanges(
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   assertWorkbenchMutationScope(deps, context);
   const before = listChangedFiles(context.worktreePath, context.repoScopePath);
-  runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", context.repoScopePath]);
-  const untrackedFiles = listUntrackedFiles(context.worktreePath, context.repoScopePath);
-  for (const repoScopedPath of untrackedFiles) {
-    const relativePath = fromRepoScopedFilePath(context.repoScopePath, repoScopedPath);
-    const targetPath = path.resolve(context.projectRoot, relativePath);
-    assertPathInsideRoot(targetPath, context.projectRoot, "workbench revert all file");
-    assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
-    await fs.rm(targetPath, { recursive: true, force: true });
-  }
+  await withWorkbenchWriteLock(context.projectRoot, async () => {
+    runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", context.repoScopePath,
+      `:(exclude)**/${WORKBENCH_WRITE_LOCK}`, `:(exclude)${WORKBENCH_WRITE_LOCK}`]);
+    const untrackedFiles = listUntrackedFiles(context.worktreePath, context.repoScopePath);
+    for (const repoScopedPath of untrackedFiles) {
+      const relativePath = fromRepoScopedFilePath(context.repoScopePath, repoScopedPath);
+      const targetPath = path.resolve(context.projectRoot, relativePath);
+      assertPathInsideRoot(targetPath, context.projectRoot, "workbench revert all file");
+      assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+      await fs.rm(targetPath, { recursive: true, force: true });
+    }
+  });
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const finalState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
@@ -840,12 +903,17 @@ async function buildWorkbenchFileResponse(
     repoScopePath: string;
   },
   relativePath: string,
+  savedSnapshot?: WorkbenchFileSnapshot,
 ): Promise<ChatSessionWorkbenchFileResponse> {
-  const { normalized, targetPath, stat, content } = await readWorkbenchFilePayload(
+  const normalized = normalizeWorkbenchRelativePath(relativePath);
+  const targetPath = path.resolve(context.projectRoot, normalized);
+  const { stat, content: contentBuffer, revision } = savedSnapshot ?? await readWorkbenchFilePayload(
     deps,
-    context.projectRoot,
+    sessionId,
+    context,
     relativePath,
   );
+  const content = contentBuffer.toString("utf8");
   const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
   const nextState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
@@ -854,7 +922,8 @@ async function buildWorkbenchFileResponse(
   return {
     state: hydrateWorkbenchRecord(deps, nextState, context.project.projectId),
     path: normalized,
-    sizeBytes: stat.size,
+    revision,
+    sizeBytes: Number(stat.size),
     modifiedAt: stat.mtime.toISOString(),
     contentType: guessContentType(targetPath),
     language: guessLanguage(targetPath),
@@ -879,6 +948,7 @@ async function applyWorkbenchFileOperation(
     destinationPath?: string;
     content?: string;
     currentActiveFilePath?: string;
+    onWriteStarted(): void;
   },
 ): Promise<{ activeFilePath: string; message: string }> {
   const parentPath = input.destinationPath ? path.dirname(input.destinationPath) : path.dirname(input.targetPath);
@@ -893,7 +963,9 @@ async function applyWorkbenchFileOperation(
           message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
         });
       }
-      await fs.writeFile(input.targetPath, content, { encoding: "utf8", flag: "wx" });
+      const file = await fs.open(input.targetPath, "wx");
+      input.onWriteStarted();
+      try { await file.writeFile(content, "utf8"); } finally { await file.close(); }
       return {
         activeFilePath: input.normalized,
         message: `Created file ${input.normalized}.`,
@@ -902,6 +974,7 @@ async function applyWorkbenchFileOperation(
     case "create_folder": {
       await assertWorkbenchTargetAvailable(input.targetPath, input.normalized);
       await fs.mkdir(input.targetPath);
+      input.onWriteStarted();
       return {
         activeFilePath: input.currentActiveFilePath ?? "",
         message: `Created folder ${input.normalized}.`,
@@ -926,6 +999,7 @@ async function applyWorkbenchFileOperation(
         assertWorkbenchDirectoryMoveSafe(input.targetPath, input.destinationPath);
       }
       await fs.rename(input.targetPath, input.destinationPath);
+      input.onWriteStarted();
       return {
         activeFilePath: deriveActiveFilePathAfterMove(
           input.currentActiveFilePath,
@@ -958,7 +1032,9 @@ async function applyWorkbenchFileOperation(
       await assertWorkbenchTargetAvailable(input.destinationPath, input.normalizedTarget);
       const content = await fs.readFile(input.targetPath);
       assertWorkbenchFileIsText(content, input.normalized, "editor");
-      await fs.writeFile(input.destinationPath, content, { flag: "wx" });
+      const file = await fs.open(input.destinationPath, "wx");
+      input.onWriteStarted();
+      try { await file.writeFile(content); } finally { await file.close(); }
       return {
         activeFilePath: input.normalizedTarget,
         message: `Duplicated ${input.normalized} to ${input.normalizedTarget}.`,
@@ -971,6 +1047,7 @@ async function applyWorkbenchFileOperation(
         input.targetPath,
         input.normalized,
       );
+      input.onWriteStarted();
       await fs.rm(input.targetPath, { recursive: sourceStat.isDirectory(), force: false });
       return {
         activeFilePath: deriveActiveFilePathAfterDelete(input.currentActiveFilePath, input.normalized),
@@ -1339,8 +1416,8 @@ async function resolveWorkbenchContext(
   worktreePath: string;
   repoScopePath: string;
 }> {
-  const project = (await resolveProjectContext(deps, sessionId, true)).project;
   const projectContext = await resolveProjectContext(deps, sessionId, true);
+  const project = projectContext.project;
   const worktreePath = state.worktreePath ? deserializeWorkbenchPath(deps, state.worktreePath) : undefined;
   if (!worktreePath || state.worktreeStatus !== "ready") {
     if (requireWorktree) {
@@ -1394,15 +1471,13 @@ async function resolveProjectContext(
 
 async function readWorkbenchFilePayload(
   deps: ChatWorkbenchDependencies,
-  projectRoot: string,
+  sessionId: string,
+  context: { project: { projectId: string }; projectRoot: string },
   relativePath: string,
-): Promise<{
-  normalized: string;
-  targetPath: string;
-  stat: fsSync.Stats;
-  content: string;
-}> {
+): Promise<WorkbenchFileSnapshot> {
+  const projectRoot = context.projectRoot;
   const normalized = normalizeWorkbenchRelativePath(relativePath);
+  assertWorkbenchFileOperationPathAllowed(normalized);
   const targetPath = path.resolve(projectRoot, normalized);
   assertPathInsideRoot(targetPath, projectRoot, "workbench file");
   try {
@@ -1415,24 +1490,12 @@ async function readWorkbenchFilePayload(
     throw error;
   }
 
-  const stat = await fs.stat(targetPath);
-  if (stat.isDirectory()) {
-    throw new ValidationError({ message: `Path is a directory: ${normalized}` });
-  }
-  if (stat.size > MAX_FILE_BYTES) {
-    throw new ValidationError({
-      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench viewer.`,
-    });
-  }
-
-  const contentBuffer = await fs.readFile(targetPath);
-  assertWorkbenchFileIsText(contentBuffer, normalized, "viewer");
-  return {
-    normalized,
-    targetPath,
-    stat,
-    content: contentBuffer.toString("utf8"),
-  };
+  const snapshot = await readWorkbenchFileSnapshot({
+    sessionId, projectId: context.project.projectId, projectRoot, relativePath: normalized,
+    assertAllowed: (filePath) => assertExistingWorkbenchRealpathAllowed(deps, projectRoot, filePath, "workbench file"),
+  });
+  assertWorkbenchFileIsText(snapshot.content, normalized, "viewer");
+  return snapshot;
 }
 
 async function walkWorkbenchTree(
@@ -1454,7 +1517,7 @@ async function walkWorkbenchTree(
   });
   const changedSet = new Set(changedFiles);
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules") {
+    if (entry.name === ".git" || entry.name === "node_modules" || isWorkbenchLockPath(entry.name)) {
       continue;
     }
     const fullPath = path.join(currentDir, entry.name);
@@ -1482,7 +1545,7 @@ async function walkWorkbenchTree(
 
 function listChangedFiles(worktreePath: string, repoScopePath: string): string[] {
   const status = runGit(worktreePath, ["status", "--short", "--", repoScopePath]);
-  return parseChangedFilesFromStatus(status, repoScopePath);
+  return parseChangedFilesFromStatus(status, repoScopePath).filter((filePath) => !isWorkbenchLockPath(filePath));
 }
 
 function listUntrackedFiles(worktreePath: string, repoScopePath: string): string[] {
@@ -1490,7 +1553,7 @@ function listUntrackedFiles(worktreePath: string, repoScopePath: string): string
   return output
     .split(/\r?\n/)
     .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(Boolean);
+    .filter((filePath) => filePath && !isWorkbenchLockPath(filePath));
 }
 
 function isGitPathUntracked(worktreePath: string, repoScopedPath: string): boolean {
@@ -1765,13 +1828,23 @@ function operationRequiresTargetPath(operation: ChatSessionWorkbenchFileOperatio
 }
 
 function assertWorkbenchFileOperationPathAllowed(normalized: string): void {
-  const pathSegments = normalized.split("/").map((segment) => segment.toLowerCase());
+  const pathSegments = normalized.split("/").map((segment) => segment.toLowerCase().replace(/[. ]+$/, ""));
+  if (normalized.includes(":") || pathSegments.some((segment) => /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/u.test(segment))) {
+    throw new ValidationError({ message: "Workbench actions cannot use Windows device names or alternate data streams." });
+  }
   if (pathSegments.includes(".git")) {
     throw new ValidationError({ message: "Workbench file actions cannot mutate Git metadata." });
   }
   if (pathSegments.includes("node_modules")) {
     throw new ValidationError({ message: "Workbench file actions cannot mutate node_modules." });
   }
+  if (isWorkbenchLockPath(normalized)) {
+    throw new ValidationError({ message: "Workbench actions cannot access the project write lock." });
+  }
+}
+
+function isWorkbenchLockPath(filePath: string): boolean {
+  return filePath.replaceAll("\\", "/").split("/").some((segment) => segment.toLowerCase().replace(/[. ]+$/, "") === WORKBENCH_WRITE_LOCK);
 }
 
 async function assertWorkbenchOperationParentAllowed(
@@ -1819,18 +1892,6 @@ async function assertWorkbenchTargetAvailable(targetPath: string, normalized: st
   if (existing) {
     throw new ValidationError({ message: `Workbench file action target already exists: ${normalized}` });
   }
-}
-
-async function pathExistsEvenIfDangling(targetPath: string): Promise<boolean> {
-  return fs
-    .lstat(targetPath)
-    .then(() => true)
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
-        return false;
-      }
-      throw error;
-    });
 }
 
 function assertExistingWorkbenchRealpathAllowed(
@@ -2063,6 +2124,7 @@ function assertPatchPathsInWorkbenchScope(
             ? normalized.slice(normalizedScope.length + 1)
             : normalized;
     const targetPath = path.resolve(context.projectRoot, projectRelativePath);
+    assertWorkbenchFileOperationPathAllowed(projectRelativePath);
     assertPathInsideRoot(targetPath, context.projectRoot, "workbench patch file");
   }
 }

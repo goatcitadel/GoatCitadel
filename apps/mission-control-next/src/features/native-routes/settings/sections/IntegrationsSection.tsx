@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Integrations coordinates catalog, connection drafts, diagnostics, side-effect evidence, and meeting setup in one owner pending a later surface split. */
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { Play, Plus, RefreshCw, Save, SlidersHorizontal, Trash2 } from "lucide-react";
 import type {
   ConnectorDiagnosticReport,
@@ -50,7 +50,6 @@ import {
   SettingsButtonRow,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,
@@ -67,10 +66,14 @@ import {
   OperatorActionResultPanel,
   PluginTrustPanel,
 } from "./IntegrationsSectionPanels";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import { applyIntegrationDefaults, formatDateTime, formatJson, parseJsonObject } from "../../SettingsNativePage";
-import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
+import { hasSessionDraft, discardSessionDraft, useSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { useSessionViewState } from "../../../../hooks/use-session-view-state";
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { FocusedDetail } from "../../shared/FocusedDetail";
 
 type IntegrationDetailDraft = {
   label: string;
@@ -87,6 +90,12 @@ const EMPTY_INTEGRATION_DETAIL_DRAFT: IntegrationDetailDraft = {
 };
 
 export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
+  const [panel, setPanel] = useState<"create" | "edit" | "details" | "plugins" | "connectors" | "history" | "routing" | "meet" | null>(null);
+  const [requested, setRequested] = useState({plugins:false,connectors:false,history:false,meet:false});
+  const leave = useDraftLeave();
+  const panelRef = useRef(panel); panelRef.current = panel;
+  const mutationBusy = useRef(false);
+  const [saving, setSaving] = useState(false);
   const load = useCallback(async () => {
     const [
       catalog,
@@ -100,19 +109,19 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     ] = await Promise.all([
       nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
       nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
-      nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
-      nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
-      nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
+      nativeLoad("Integration plugins", requested.plugins ? fetchIntegrationPlugins() : Promise.resolve({items:[]}), { items: [] }),
+      nativeLoad("Google Meet prerequisites", requested.meet ? fetchGoogleMeetPrerequisiteStatus() : Promise.resolve(null), null),
+      nativeLoad("Google Meet sessions", requested.meet ? fetchGoogleMeetSessions(50) : Promise.resolve([]), []),
       nativeLoad(
         "External side-effect runs",
-        fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }),
+        requested.history ? fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }) : Promise.resolve({items:[], summary: undefined}),
         {
           items: [],
         },
       ),
       nativeLoad(
         "Dormant external connector catalog",
-        fetchExternalConnectorServices({ workspaceId: activeWorkspaceId, includeActions: true, limit: 50 }),
+        requested.connectors ? fetchExternalConnectorServices({ workspaceId: activeWorkspaceId, includeActions: true, limit: 50 }) : Promise.resolve({items:[]}),
         { items: [] },
       ),
       nativeLoad("Runtime settings", fetchSettings(), null),
@@ -139,54 +148,28 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       externalConnectorServices: externalConnectors.data.items,
       connectorDiagnosticsEnabled: runtimeSettings.data?.features?.connectorDiagnosticsV1Enabled === true,
     };
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, requested]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [selectedConnectionId, setSelectedConnectionId] = useState("");
-  const [createCatalogId, setCreateCatalogId] = useState("");
-  const [createLabel, setCreateLabel] = useState("");
-  const [createConfig, setCreateConfig] = useState("{}");
-  const [createGuidedConfig, setCreateGuidedConfig] = useState<Record<string, unknown>>({});
+  const [selectedConnectionId, setSelectedConnectionId] = useSessionViewState("integrations:" + activeWorkspaceId + ":selection", "");
+  const selectionRef = useRef(selectedConnectionId); selectionRef.current = selectedConnectionId;
+  const [createCatalogId, setCreateCatalogId] = useSessionViewState("integrations:" + activeWorkspaceId + ":catalog", "");
   const [createSchema, setCreateSchema] = useState<IntegrationFormSchema | undefined>();
-  const [createBaseline, setCreateBaseline] = useState({
-    catalogId: "",
-    label: "",
-    configText: "{}",
-    guidedConfig: {} as Record<string, unknown>,
-  });
-  const [showCreateJson, setShowCreateJson] = useState(false);
-  const [detailForm, setDetailForm] = useState({
-    label: "",
-    enabled: true,
-    status: "connected",
-    configText: "{}",
-  });
-  const [detailGuidedConfig, setDetailGuidedConfig] = useState<Record<string, unknown>>({});
-  const [detailBaseline, setDetailBaseline] = useState({
-    connectionId: "",
-    form: EMPTY_INTEGRATION_DETAIL_DRAFT,
-    guidedConfig: {} as Record<string, unknown>,
-  });
   const [detailSchema, setDetailSchema] = useState<IntegrationFormSchema | undefined>();
-  const [showDetailJson, setShowDetailJson] = useState(false);
+  const [showCreateJson, setShowCreateJson] = useSessionViewState("integration:" + activeWorkspaceId + ":" + createCatalogId + ":new-json", false);
+  const [showDetailJson, setShowDetailJson] = useSessionViewState("integration:" + activeWorkspaceId + ":" + selectedConnectionId + ":edit-json", false);
   const [diagnostics, setDiagnostics] = useState<ConnectorDiagnosticReport | null>(null);
   const [pendingDeleteConnection, setPendingDeleteConnection] = useState<{
     connectionId: string;
     label: string;
   } | null>(null);
   const [deletePending, setDeletePending] = useState(false);
-  const [operatorActionInputs, setOperatorActionInputs] = useState<Record<string, Record<string, unknown>>>({});
-  const [operatorActionIdempotencyKeys, setOperatorActionIdempotencyKeys] = useState<Record<string, string>>({});
   const [replayAuditBusy, setReplayAuditBusy] = useState(false);
+  const operatorBusy = useRef(new Set<string>());
+  const [operatorBusyId,setOperatorBusyId] = useState<string | null>(null);
   const [lastReplayAuditRunId, setLastReplayAuditRunId] = useState<string | null>(null);
   const [externalConnectorBusyId, setExternalConnectorBusyId] = useState<string | null>(null);
   const [meetBusySessionId, setMeetBusySessionId] = useState<string | null>(null);
-  const [meetForm, setMeetForm] = useState({
-    meetingUrl: "",
-    displayName: "",
-    accountRef: "",
-  });
-  const [meetBaseline, setMeetBaseline] = useState(meetForm);
   const [lastOperatorActionResult, setLastOperatorActionResult] = useState<
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
@@ -195,52 +178,32 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     [data?.catalog],
   );
   const selectedConnection =
-    data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? data?.connections[0] ?? null;
-  const selectedCatalog =
-    data?.catalog.find((item) => item.catalogId === selectedConnection?.catalogId) ??
-    data?.catalog.find((item) => item.catalogId === createCatalogId) ??
-    null;
-  const createDirty =
-    createLabel !== createBaseline.label ||
-    createConfig !== createBaseline.configText ||
-    !areIntegrationValuesEqual(createGuidedConfig, createBaseline.guidedConfig);
-  const detailDirty = Boolean(
-    selectedConnection &&
-    detailBaseline.connectionId === selectedConnection.connectionId &&
-    (!areIntegrationValuesEqual(detailForm, detailBaseline.form) ||
-      !areIntegrationValuesEqual(detailGuidedConfig, detailBaseline.guidedConfig)),
-  );
-  const meetDirty = !areIntegrationValuesEqual(meetForm, meetBaseline);
-  useFormDirty("settings:integrations", createDirty || detailDirty || meetDirty, { label: "Integrations" });
-
-  const resetConnectionDraft = useCallback(() => {
-    setDetailForm(detailBaseline.form);
-    setDetailGuidedConfig(detailBaseline.guidedConfig);
-    setDiagnostics(null);
-    setLastOperatorActionResult(null);
-  }, [detailBaseline]);
-  const applyConnectionSelection = useCallback((connectionId: string) => {
-    setSelectedConnectionId(connectionId);
-    setDiagnostics(null);
-    setLastOperatorActionResult(null);
-  }, []);
-  const connectionSelectionGuard = useDraftTransitionGuard(detailDirty, applyConnectionSelection, resetConnectionDraft);
-
-  const resetCreateDraft = useCallback(() => {
-    setCreateLabel(createBaseline.label);
-    setCreateConfig(createBaseline.configText);
-    setCreateGuidedConfig(createBaseline.guidedConfig);
-  }, [createBaseline]);
-  const applyCreateCatalogSelection = useCallback((catalogId: string) => {
-    setCreateCatalogId(catalogId);
-    setCreateLabel("");
-    setCreateConfig("{}");
-    setCreateGuidedConfig({});
-    setCreateSchema(undefined);
-    setCreateBaseline({ catalogId, label: "", configText: "{}", guidedConfig: {} });
-  }, []);
-  const createCatalogGuard = useDraftTransitionGuard(createDirty, applyCreateCatalogSelection, resetCreateDraft);
-
+    data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? null;
+  const selectedCatalog = data?.catalog.find(item => item.catalogId === (panel === "create" ? createCatalogId : selectedConnection?.catalogId)) ?? null;
+  const createCanonical = {label:"",configText:"{}",guidedConfig:createSchema ? applyIntegrationDefaults(createSchema,{}) : {} as Record<string,unknown>};
+  const createDraft = useSessionDraft("integration:" + activeWorkspaceId + ":" + createCatalogId + ":new", createCanonical, undefined, { label:"New integration",active:panel === "create",onSave:()=>handleCreate() });
+  const detailCanonical = {form:selectedConnection ? {label:selectedConnection.label,enabled:selectedConnection.enabled,status:selectedConnection.status,configText:formatJson(selectedConnection.config)} : EMPTY_INTEGRATION_DETAIL_DRAFT,guidedConfig:selectedConnection?.config ?? {}};
+  const detailDraft = useSessionDraft("integration:" + activeWorkspaceId + ":" + selectedConnectionId + ":edit",detailCanonical,selectedConnection?.updatedAt ?? (selectedConnection ? JSON.stringify(selectedConnection) : undefined),{label:selectedConnection?.label ?? "Integration",active:panel === "edit",available:Boolean(selectedConnection),onSave:()=>handleSave()});
+  const {label:createLabel,configText:createConfig,guidedConfig:createGuidedConfig} = createDraft.value;
+  const {form:detailForm,guidedConfig:detailGuidedConfig} = detailDraft.value;
+  const setCreateLabel = (label:string) => createDraft.setValue(current=>({...current,label}));
+  const setCreateConfig = (configText:string) => createDraft.setValue(current=>({...current,configText}));
+  const setCreateGuidedConfig = (guidedConfig:Record<string,unknown>) => createDraft.setValue(current=>({...current,guidedConfig}));
+  const setDetailForm = (update:SetStateAction<IntegrationDetailDraft>) => detailDraft.setValue(current=>({...current,form:typeof update === "function" ? update(current.form) : update}));
+  const setDetailGuidedConfig = (guidedConfig:Record<string,unknown>) => detailDraft.setValue(current=>({...current,guidedConfig}));
+  const actionDraft = useSessionDraft("integration:" + activeWorkspaceId + ":" + selectedConnectionId + ":actions",{inputs:{} as Record<string,Record<string,unknown>>,keys:{} as Record<string,string>},undefined,{label:"Integration action inputs",active:panel === "details"});
+  const {inputs:operatorActionInputs,keys:operatorActionIdempotencyKeys} = actionDraft.value;
+  const setOperatorActionInputs = (update:SetStateAction<Record<string,Record<string,unknown>>>) => actionDraft.setValue(current=>({...current,inputs:typeof update === "function" ? update(current.inputs) : update}));
+  const setOperatorActionIdempotencyKeys = (update:SetStateAction<Record<string,string>>) => actionDraft.setValue(current=>({...current,keys:typeof update === "function" ? update(current.keys) : update}));
+  const meetDraft = useSessionDraft("integration:" + activeWorkspaceId + ":google-meet:new",{meetingUrl:"",displayName:"",accountRef:""},undefined,{label:"Google Meet setup",active:panel === "meet"});
+  const {value:meetForm,setValue:setMeetForm} = meetDraft;
+  const openPanel = (next: typeof panel) => leave.request(()=>{setPanel(next);if(next === "plugins" || next === "connectors" || next === "history" || next === "meet")setRequested(current=>({...current,[next]:true}));});
+  const closePanel = () => openPanel(null);
+  const connectionSelectionGuard = {requestTransition:(id:string)=>leave.request(()=>{setSelectedConnectionId(id);setDiagnostics(null);setLastOperatorActionResult(null);setPanel("details");})};
+  const createCatalogGuard = {requestTransition:(id:string)=>leave.request(()=>{setCreateCatalogId(id);setCreateSchema(undefined);setPanel("create");},[createDraft.key])};
+  const toggleCreateJson = () => { try { if (showCreateJson) setCreateGuidedConfig(parseJsonObject(createConfig)); else setCreateConfig(formatJson(createGuidedConfig)); setShowCreateJson(!showCreateJson); } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});} };
+  const toggleDetailJson = () => { try { if (showDetailJson) setDetailGuidedConfig(parseJsonObject(detailForm.configText)); else setDetailForm(current=>({...current,configText:formatJson(detailGuidedConfig)}));setShowDetailJson(!showDetailJson); } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});} };
+  useEffect(()=>{setPanel(null);setDiagnostics(null);setLastOperatorActionResult(null);},[activeWorkspaceId]);
   useEffect(() => {
     if (!createableCatalog.length) {
       setCreateCatalogId("");
@@ -254,66 +217,15 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   }, [createableCatalog]);
 
   useEffect(() => {
-    if (!data?.connections.length) {
-      setSelectedConnectionId("");
-      return;
-    }
-    setSelectedConnectionId((current) =>
-      current && data.connections.some((item) => item.connectionId === current)
-        ? current
-        : data.connections[0]?.connectionId || "",
-    );
-  }, [data?.connections]);
-
-  useEffect(() => {
-    if (!selectedConnection) {
-      setDetailForm(EMPTY_INTEGRATION_DETAIL_DRAFT);
-      setDetailGuidedConfig({});
-      setDetailBaseline({
-        connectionId: "",
-        form: EMPTY_INTEGRATION_DETAIL_DRAFT,
-        guidedConfig: {},
-      });
-      return;
-    }
-    if (detailBaseline.connectionId === selectedConnection.connectionId && detailDirty) {
-      return;
-    }
-    const nextForm = {
-      label: selectedConnection.label,
-      enabled: selectedConnection.enabled,
-      status: selectedConnection.status,
-      configText: formatJson(selectedConnection.config),
-    };
-    setDetailForm(nextForm);
-    setDetailGuidedConfig(selectedConnection.config);
-    setDetailBaseline({
-      connectionId: selectedConnection.connectionId,
-      form: nextForm,
-      guidedConfig: selectedConnection.config,
-    });
-  }, [detailBaseline.connectionId, detailDirty, selectedConnection]);
-
-  useEffect(() => {
-    if (!createCatalogId) {
+    if (!createCatalogId || panel !== "create") {
       setCreateSchema(undefined);
-      setCreateGuidedConfig({});
       return;
     }
     let cancelled = false;
     void fetchIntegrationFormSchema(createCatalogId)
       .then((schema) => {
         if (!cancelled) {
-          const defaults = applyIntegrationDefaults(schema, {});
           setCreateSchema(schema);
-          setCreateGuidedConfig(defaults);
-          setCreateConfig("{}");
-          setCreateBaseline({
-            catalogId: createCatalogId,
-            label: "",
-            configText: "{}",
-            guidedConfig: defaults,
-          });
         }
       })
       .catch(() => {
@@ -324,10 +236,10 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     return () => {
       cancelled = true;
     };
-  }, [createCatalogId]);
+  }, [createCatalogId, panel]);
 
   useEffect(() => {
-    if (!selectedConnection?.catalogId) {
+    if (!selectedConnection?.catalogId || panel !== "edit") {
       setDetailSchema(undefined);
       return;
     }
@@ -346,69 +258,32 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     return () => {
       cancelled = true;
     };
-  }, [selectedConnection?.catalogId]);
+  }, [selectedConnection?.catalogId, panel]);
 
-  const handleCreate = async () => {
-    if (!createCatalogId) {
-      setNotice({ tone: "warning", message: "Choose an integration catalog entry first." });
-      return;
-    }
+  const handleCreate = async (): Promise<boolean> => {
+    if (mutationBusy.current) return false;
+    if (!createCatalogId) {setNotice({tone:"warning",message:"Choose an integration catalog entry first."});return false;}
+    const submitted = createDraft.value;
+    mutationBusy.current = true; setSaving(true);
     try {
-      const created = await createIntegrationConnection({
-        catalogId: createCatalogId,
-        label: createLabel.trim() || undefined,
-        enabled: true,
-        config: showCreateJson ? parseJsonObject(createConfig) : createGuidedConfig,
-      });
-      setNotice({ tone: "success", message: `Connection ${created.label} created.` });
-      await reload();
-      if (!detailDirty) {
-        setSelectedConnectionId(created.connectionId);
-      }
-      const nextGuidedConfig = createSchema ? applyIntegrationDefaults(createSchema, {}) : {};
-      setCreateLabel("");
-      setCreateConfig("{}");
-      setCreateGuidedConfig(nextGuidedConfig);
-      setCreateBaseline({
-        catalogId: createCatalogId,
-        label: "",
-        configText: "{}",
-        guidedConfig: nextGuidedConfig,
-      });
-    } catch (createError) {
-      setNotice({ tone: "error", message: getErrorMessage(createError) });
-    }
+      const created = await createIntegrationConnection({catalogId:createCatalogId,label:submitted.label.trim() || undefined,enabled:true,config:showCreateJson ? parseJsonObject(submitted.configText) : (createSchema ? applyIntegrationDefaults(createSchema,submitted.guidedConfig) : submitted.guidedConfig)});
+      const saved = createDraft.acceptSaved(createCanonical,undefined,submitted);
+      setNotice({tone:"success",message:"Connection " + created.label + " created."});await reload();
+      if(saved && panelRef.current === "create") {setSelectedConnectionId(created.connectionId);setPanel("details");}
+      return saved;
+    } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});return false;}
+    finally {mutationBusy.current=false;setSaving(false);}
   };
-
-  const handleSave = async () => {
-    if (!selectedConnection) {
-      return;
-    }
+  const handleSave = async (): Promise<boolean> => {
+    if (mutationBusy.current || !selectedConnection || detailDraft.hasRemoteChanges) return false;
+    const submitted=detailDraft.value;
+    mutationBusy.current=true;setSaving(true);
     try {
-      const updated = await updateIntegrationConnection(selectedConnection.connectionId, {
-        label: detailForm.label.trim() || undefined,
-        enabled: detailForm.enabled,
-        status: detailForm.status as IntegrationConnection["status"],
-        config: showDetailJson ? parseJsonObject(detailForm.configText, selectedConnection.config) : detailGuidedConfig,
-      });
-      const nextForm = {
-        label: updated.label,
-        enabled: updated.enabled,
-        status: updated.status,
-        configText: formatJson(updated.config),
-      };
-      setDetailForm(nextForm);
-      setDetailGuidedConfig(updated.config);
-      setDetailBaseline({
-        connectionId: updated.connectionId,
-        form: nextForm,
-        guidedConfig: updated.config,
-      });
-      setNotice({ tone: "success", message: "Connection updated." });
-      await reload();
-    } catch (saveError) {
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    }
+      const updated=await updateIntegrationConnection(selectedConnection.connectionId,{label:submitted.form.label.trim() || undefined,enabled:submitted.form.enabled,status:submitted.form.status as IntegrationConnection["status"],config:showDetailJson ? parseJsonObject(submitted.form.configText,selectedConnection.config) : submitted.guidedConfig});
+      const saved=detailDraft.acceptSaved({form:{label:updated.label,enabled:updated.enabled,status:updated.status,configText:formatJson(updated.config)},guidedConfig:updated.config},updated.updatedAt ?? JSON.stringify(updated),submitted);
+      setNotice({tone:"success",message:"Connection updated."});await reload();return saved;
+    } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});return false;}
+    finally {mutationBusy.current=false;setSaving(false);}
   };
 
   const handleDelete = async () => {
@@ -418,6 +293,9 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     setDeletePending(true);
     try {
       await deleteIntegrationConnection(pendingDeleteConnection.connectionId);
+      discardSessionDraft("integration:" + activeWorkspaceId + ":" + pendingDeleteConnection.connectionId + ":edit");
+      discardSessionDraft("integration:" + activeWorkspaceId + ":" + pendingDeleteConnection.connectionId + ":actions");
+      setPanel(null);
       setNotice({ tone: "success", message: "Connection deleted." });
       setDiagnostics(null);
       setPendingDeleteConnection(null);
@@ -442,6 +320,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     }
     try {
       const result = await fetchIntegrationConnectionDiagnostics(selectedConnection.connectionId);
+      if(selectedConnection.connectionId !== selectionRef.current) return;
       setDiagnostics(result);
       setNotice({ tone: "success", message: "Diagnostics refreshed." });
     } catch (diagnosticsError) {
@@ -453,6 +332,9 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     if (!selectedConnection) {
       return;
     }
+    const actionKey = selectedConnection.connectionId + ":" + action.actionId;
+    if (operatorBusy.current.has(actionKey)) return;
+    operatorBusy.current.add(actionKey); setOperatorBusyId(actionKey);
     const input = action.formSchema
       ? applyIntegrationDefaults(action.formSchema, operatorActionInputs[action.actionId] ?? {})
       : undefined;
@@ -462,7 +344,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         ...(input ? { input } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       });
-      setLastOperatorActionResult({ ...result, actionLabel: action.label });
+      if(selectedConnection.connectionId === selectionRef.current) setLastOperatorActionResult({ ...result, actionLabel: action.label });
       setNotice({
         tone: result.status === "failed" ? "error" : result.status === "blocked" ? "warning" : "success",
         message: result.message,
@@ -470,7 +352,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       await reload();
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
-    }
+    } finally {operatorBusy.current.delete(actionKey);setOperatorBusyId(null);}
   };
 
   const handleStartReplayAudit = async (run?: ExternalSideEffectRunRecord) => {
@@ -606,7 +488,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         tone: "success",
         message: `OpenAI Realtime voice prepared for ${session.displayName ?? session.meetingUrl} with ${token.model} / ${token.voice}.`,
       });
-      setMeetBaseline(meetForm);
+      meetDraft.acceptSaved(meetForm,undefined,meetForm);
       await reload();
     } catch (meetError) {
       setNotice({ tone: "error", message: getErrorMessage(meetError) });
@@ -648,16 +530,9 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
-      {data ? (
-        <SettingsGrid variant="three-column">
-          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <SettingsStack>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Create connection"
-              subtitle="Create a new integration connection from the catalog."
-            >
+      {data ? <SettingsStack>
+        <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+        {panel === "create" ? <FocusedDetail title="Add integration" onClose={closePanel}><SettingsStack>
               <SettingsFieldGrid>
                 <SettingsField label="Catalog">
                   <select
@@ -722,88 +597,33 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                 }}
               />
               <SettingsButtonRow>
-                <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
+                <NativeButton variant="default" disabled={saving || !createCatalogId} onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create connection
                 </NativeButton>
-                <NativeButton variant="secondary" onClick={() => setShowCreateJson((current) => !current)}>
+                <NativeButton variant="secondary" onClick={toggleCreateJson}>
                   <SlidersHorizontal size={16} />
                   {showCreateJson ? "Use guided fields" : "Advanced JSON"}
                 </NativeButton>
               </SettingsButtonRow>
-            </NativeCard>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Connected integrations"
-              subtitle="Review live connections and jump into the selected one."
-              stats={[
-                { label: "Connections", value: String(data.connections.length) },
-                { label: "Catalog", value: String(data.catalog.length) },
-                { label: "Plugins", value: String(data.plugins?.length ?? 0) },
-              ]}
-            >
-              <NativeSelectableList
-                items={data.connections.map((item) => ({
-                  id: item.connectionId,
-                  title: item.label,
-                  meta: item.status,
-                  body: `${item.key} · ${item.enabled ? "enabled" : "disabled"}`,
-                }))}
-                selectedId={selectedConnectionId}
-                onSelect={(connectionId) => {
-                  if (connectionId !== selectedConnectionId) {
-                    connectionSelectionGuard.requestTransition(connectionId);
-                  }
-                }}
-                emptyLabel="No integration connections yet."
-                maxHeight="min(36vh, 21rem)"
-              />
-            </NativeCard>
-          </SettingsStack>
-          <SettingsStack>
-            <PluginTrustPanel plugins={data.plugins ?? []} />
-            <DormantExternalConnectorsPanel
-              services={data.externalConnectorServices ?? []}
-              busyId={externalConnectorBusyId}
-              onReviewService={(service, status) => void handleReviewExternalConnectorService(service, status)}
-              onReviewAction={(action, status) => void handleReviewExternalConnectorAction(action, status)}
-              onStageAction={(action) => void handleStageExternalConnectorAction(action)}
-            />
-            <ExternalSideEffectLedgerPanel
-              runs={data.sideEffectRuns ?? []}
-              summary={data.sideEffectSummary}
-              selectedConnectionId={selectedConnection?.connectionId}
-              busy={replayAuditBusy}
-              onStartReplayAudit={(run) => void handleStartReplayAudit(run)}
-              lastReplayAuditRunId={lastReplayAuditRunId}
-              onOpenReplayAudit={(runId) => navigate({ area: "ops", section: "sessions", view: "run-detail", runId })}
-            />
-            <NotificationRoutingPanel workspaceId={activeWorkspaceId} channels={data.channelConnections} />
-            <GoogleMeetStatusPanel
-              status={data.meetStatus}
-              sessions={data.meetSessions}
-              form={meetForm}
-              busySessionId={meetBusySessionId}
-              onFormChange={setMeetForm}
-              onStartOpenAIRealtime={() => void handleStartGoogleMeetRealtime()}
-              onStopSession={(session) => void handleStopGoogleMeetSession(session)}
-              onConsultSession={(session) => void handleConsultGoogleMeetSession(session)}
-            />
-          </SettingsStack>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title={selectedConnection?.label ?? "Integration catalog"}
-            subtitle={
-              selectedConnection
-                ? "Update, diagnose, or remove the selected integration connection."
-                : "Available connection definitions stay visible while you decide what to create next."
-            }
-          >
-            {selectedConnection ? (
-              <>
-                <SettingsFieldGrid>
+            <NativeDisclosureCard id="integration-catalog" title="Catalog details"><SettingsActionList
+                ariaLabel="Integration catalog entries"
+                items={data.catalog.map((item) => {
+                  const reviewOnly = item.kind === "external_connector";
+                  return {
+                    id: item.catalogId,
+                    label: item.label,
+                    description: item.description,
+                    meta: `${item.kind} · ${item.maturity} · ${item.capabilities.length} capabilities`,
+                    actionLabel: reviewOnly ? "Review-only" : createCatalogId === item.catalogId ? "Selected" : "Use",
+                    onClick: reviewOnly ? undefined : () => createCatalogGuard.requestTransition(item.catalogId),
+                  };
+                })}
+                emptyLabel="No integration catalog entries are available."
+                maxHeight="min(58vh, 34rem)"
+              /></NativeDisclosureCard></SettingsStack></FocusedDetail> : panel === "edit" ? <FocusedDetail title={"Edit " + (selectedConnection?.label ?? "connection")} onClose={closePanel}><SettingsStack>
+          {detailDraft.hasRemoteChanges ? <NativeCard title="Connection changed" subtitle="Review the current saved values before retrying."><p>{selectedConnection?.label} · {selectedConnection?.status} · Updated {formatDateTime(selectedConnection?.updatedAt)}</p><NativeDisclosureCard id="integration-current-config" title="Current configuration"><fieldset disabled><ConfigFormBuilder schema={detailSchema} value={selectedConnection?.config ?? {}} onChange={() => {}} /></fieldset></NativeDisclosureCard><NativeButton onClick={detailDraft.rebaseToCurrent}>Apply draft to current connection</NativeButton></NativeCard> : null}
+          <SettingsFieldGrid>
                   <SettingsField label="Label">
                     <input
                       className="mc-next-settings-input"
@@ -836,8 +656,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                       <span>Connection can be used by the operator.</span>
                     </label>
                   </SettingsField>
-                </SettingsFieldGrid>
-                {showDetailJson ? (
+                </SettingsFieldGrid>{showDetailJson ? (
                   <SettingsField label="Advanced Config JSON" span={2}>
                     <textarea
                       className="mc-next-settings-textarea mc-next-settings-code"
@@ -851,7 +670,35 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     value={detailGuidedConfig}
                     onChange={setDetailGuidedConfig}
                   />
-                )}
+                )}<SettingsButtonRow><NativeButton disabled={saving || detailDraft.hasRemoteChanges || !selectedConnection} onClick={() => void handleSave()}>Save changes</NativeButton><NativeButton variant="secondary" onClick={toggleDetailJson}>{showDetailJson ? "Use guided fields" : "Advanced JSON"}</NativeButton><NativeButton variant="secondary" onClick={closePanel}>Close editor</NativeButton></SettingsButtonRow>
+        </SettingsStack></FocusedDetail> : <>
+          <SettingsButtonRow><NativeButton onClick={() => openPanel("create")}><Plus size={16} />Add integration{hasSessionDraft("integration:" + activeWorkspaceId + ":" + createCatalogId + ":new") ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" onClick={() => void reload()}>Refresh</NativeButton></SettingsButtonRow>
+          <NativeCard title="Connected integrations" subtitle="" stats={[{label:"Connections",value:data.issues.some(issue=>issue.label === "Integration connections") ? "Unavailable" : String(data.connections.length)},{label:"Catalog",value:data.issues.some(issue=>issue.label === "Integration catalog") ? "Unavailable" : String(data.catalog.length)},{label:"Plugins",value:!requested.plugins ? "Not loaded" : data.issues.some(issue=>issue.label === "Integration plugins") ? "Unavailable" : (Array.isArray(data.plugins) ? String(data.plugins.length) : "Unavailable")}]}>
+              <NativeSelectableList
+                items={data.connections.map((item) => ({
+                  id: item.connectionId,
+                  title: item.label,
+                  meta: item.status + (hasSessionDraft("integration:" + activeWorkspaceId + ":" + item.connectionId + ":edit") ? " · Unsaved" : ""),
+                  body: `${item.key} · ${item.enabled ? "enabled" : "disabled"}`,
+                }))}
+                selectedId={selectedConnectionId}
+                onSelect={(connectionId) => {
+                  connectionSelectionGuard.requestTransition(connectionId);
+                }}
+                emptyLabel="No integration connections yet."
+                maxHeight="min(65vh, 42rem)"
+              />
+            </NativeCard>
+          <NativeDisclosureCard id="integration-support" title="More integration tools"><SettingsButtonRow><NativeButton variant="secondary" onClick={() => openPanel("meet")}>Google Meet{meetDraft.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" onClick={() => openPanel("history")}>Delivery history</NativeButton><NativeButton variant="secondary" onClick={() => openPanel("routing")}>Notification routing</NativeButton><NativeButton variant="secondary" onClick={() => openPanel("connectors")}>Review external connectors</NativeButton><NativeButton variant="secondary" onClick={() => openPanel("plugins")}>Plugin trust</NativeButton></SettingsButtonRow></NativeDisclosureCard>
+        </>}
+        <DetailInspector open={panel === "details"} title={selectedConnection?.label ?? "Connection unavailable"} onClose={closePanel}>
+          <SettingsStack>
+            {selectedConnection ? (
+              <>
+                <p>{selectedConnection.status} · {selectedConnection.enabled ? "Enabled" : "Disabled"}</p>
+                <dl><dt>Scope</dt><dd>{(selectedConnection as IntegrationConnection & {workspaceId?:string}).workspaceId ?? "Unbound · Personal Citadel policy"}</dd><dt>Connection ID</dt><dd>{selectedConnection.connectionId}</dd><dt>Updated</dt><dd>{formatDateTime(selectedConnection.updatedAt)}</dd></dl>
+
+
                 <NativeMetricGrid
                   items={[
                     { label: "Catalog key", value: selectedConnection.key, meta: selectedConnection.kind },
@@ -863,10 +710,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                   ]}
                 />
                 <SettingsButtonRow>
-                  <NativeButton variant="default" onClick={() => void handleSave()}>
-                    <Save size={16} />
-                    Save changes
-                  </NativeButton>
+                  <NativeButton onClick={() => openPanel("edit")}>Edit connection{detailDraft.isDirty ? " · Unsaved" : ""}</NativeButton>
                   <NativeButton
                     variant="secondary"
                     disabled={!data.connectorDiagnosticsEnabled}
@@ -875,10 +719,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     <RefreshCw size={16} />
                     Run diagnostics
                   </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => setShowDetailJson((current) => !current)}>
-                    <SlidersHorizontal size={16} />
-                    {showDetailJson ? "Use guided fields" : "Advanced JSON"}
-                  </NativeButton>
+
                   <NativeButton
                     variant="destructive"
                     onClick={() =>
@@ -897,7 +738,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     Connector diagnostics are not enabled in Runtime settings.
                   </p>
                 ) : null}
-                {selectedCatalog?.operatorActions?.length ? (
+                <NativeDisclosureCard id="integration-actions" title="Actions">{selectedCatalog?.operatorActions?.length ? (
                   <div className="mc-next-settings-stack">
                     {selectedCatalog.operatorActions.map((action) => {
                       const actionInput = action.formSchema
@@ -939,7 +780,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                             </SettingsField>
                           ) : null}
                           <SettingsButtonRow>
-                            <NativeButton variant="default" onClick={() => void handleOperatorAction(action)}>
+                            <NativeButton variant="default" disabled={operatorBusyId === selectedConnection.connectionId + ":" + action.actionId} onClick={() => void handleOperatorAction(action)}>
                               <Play size={16} />
                               Run
                             </NativeButton>
@@ -957,59 +798,51 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                         : "This integration has no advertised operator action. Save changes here; runtime use stays blocked until a catalog action exists, and diagnostics remain unavailable until enabled in Runtime settings.",
                     }}
                   />
-                )}
+                )}</NativeDisclosureCard>
                 {lastOperatorActionResult ? <OperatorActionResultPanel result={lastOperatorActionResult} /> : null}
                 {diagnostics ? (
                   <DiagnosticsPanel report={diagnostics} ariaLabel="Integration connection diagnostic checks" />
                 ) : null}
               </>
             ) : (
-              <SettingsActionList
-                ariaLabel="Integration catalog entries"
-                items={data.catalog.map((item) => {
-                  const reviewOnly = item.kind === "external_connector";
-                  return {
-                    id: item.catalogId,
-                    label: item.label,
-                    description: item.description,
-                    meta: `${item.kind} · ${item.maturity} · ${item.capabilities.length} capabilities`,
-                    actionLabel: reviewOnly ? "Review-only" : createCatalogId === item.catalogId ? "Selected" : "Use",
-                    onClick: reviewOnly ? undefined : () => createCatalogGuard.requestTransition(item.catalogId),
-                  };
-                })}
-                emptyLabel="No integration catalog entries are available."
-                maxHeight="min(58vh, 34rem)"
-              />
+              <p>Choose a connection or add an integration.</p>
             )}
-          </NativeCard>
-        </SettingsGrid>
-      ) : null}
-      <ConfirmModal
-        open={connectionSelectionGuard.pendingTransition !== null}
-        danger
-        title="Discard integration changes?"
-        message="The selected integration has unsaved edits. Discard them and open another connection?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={connectionSelectionGuard.cancelDiscard}
-        onConfirm={connectionSelectionGuard.confirmDiscard}
-      />
-      <ConfirmModal
-        open={createCatalogGuard.pendingTransition !== null}
-        danger
-        title="Discard new connection draft?"
-        message="The new integration connection has unsaved setup values. Discard them and choose another catalog entry?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={createCatalogGuard.cancelDiscard}
-        onConfirm={createCatalogGuard.confirmDiscard}
-      />
+          </SettingsStack>
+        </DetailInspector>
+        <DetailInspector open={panel === "plugins" || panel === "connectors" || panel === "history" || panel === "routing" || panel === "meet"} title={panel === "plugins" ? "Plugin trust" : panel === "connectors" ? "External connectors" : panel === "history" ? "Delivery history" : panel === "routing" ? "Notification routing" : "Google Meet"} onClose={closePanel}>
+          {panel === "plugins" ? (<PluginTrustPanel plugins={data.plugins ?? []} />) : panel === "connectors" ? (<DormantExternalConnectorsPanel
+              services={data.externalConnectorServices ?? []}
+              busyId={externalConnectorBusyId}
+              onReviewService={(service, status) => void handleReviewExternalConnectorService(service, status)}
+              onReviewAction={(action, status) => void handleReviewExternalConnectorAction(action, status)}
+              onStageAction={(action) => void handleStageExternalConnectorAction(action)}
+            />) : panel === "history" ? (<ExternalSideEffectLedgerPanel
+              runs={data.sideEffectRuns ?? []}
+              summary={data.sideEffectSummary}
+              selectedConnectionId={selectedConnection?.connectionId}
+              busy={replayAuditBusy}
+              onStartReplayAudit={(run) => void handleStartReplayAudit(run)}
+              lastReplayAuditRunId={lastReplayAuditRunId}
+              onOpenReplayAudit={(runId) => navigate({ area: "ops", section: "sessions", view: "run-detail", runId })}
+            />) : panel === "routing" ? (<NotificationRoutingPanel workspaceId={activeWorkspaceId} channels={data.channelConnections} />) : panel === "meet" ? (<GoogleMeetStatusPanel
+              status={data.meetStatus}
+              sessions={data.meetSessions}
+              form={meetForm}
+              busySessionId={meetBusySessionId}
+              onFormChange={setMeetForm}
+              onStartOpenAIRealtime={() => void handleStartGoogleMeetRealtime()}
+              onStopSession={(session) => void handleStopGoogleMeetSession(session)}
+              onConsultSession={(session) => void handleConsultGoogleMeetSession(session)}
+            />) : null}
+        </DetailInspector>
+      </SettingsStack> : null}
+      {leave.dialog}
       <ConfirmModal
         open={pendingDeleteConnection !== null}
         danger
         pending={deletePending}
         title="Delete integration connection?"
-        message={`Delete ${pendingDeleteConnection?.label ?? "this connection"}? Saved configuration will be permanently removed.`}
+        message={`Delete ${pendingDeleteConnection?.label ?? "this connection"}? Saved configuration and retained drafts for this connection will be permanently removed.`}
         confirmLabel="Delete connection"
         onCancel={() => setPendingDeleteConnection(null)}
         onConfirm={() => void handleDelete()}

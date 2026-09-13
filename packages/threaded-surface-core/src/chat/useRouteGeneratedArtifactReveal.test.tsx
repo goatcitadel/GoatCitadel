@@ -126,4 +126,13 @@ describe("useRouteGeneratedArtifactReveal", () => {
 
     expect(revealGeneratedArtifact).not.toHaveBeenCalledWith(artifact);
   });
+  it("does not reopen a consumed link when refreshed callbacks change", async () => {
+    const reveal = vi.fn(); const clear = vi.fn(); apiMocks.fetchChatGeneratedArtifact.mockResolvedValue({item: artifact});
+    let renderer!: ReactTestRenderer;
+    await act(async()=>{renderer=create(<Harness routeArtifactId="artifact-1" revealGeneratedArtifact={reveal} setActiveGeneratedArtifact={clear}/>);});
+    const refreshed = vi.fn();
+    await act(async()=>renderer.update(<Harness routeArtifactId="artifact-1" revealGeneratedArtifact={refreshed} setActiveGeneratedArtifact={clear}/>));
+    expect(reveal).toHaveBeenCalledTimes(1); expect(refreshed).not.toHaveBeenCalled(); expect(apiMocks.fetchChatGeneratedArtifact).toHaveBeenCalledTimes(1);
+    await act(async()=>renderer.unmount());
+  });
 });

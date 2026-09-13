@@ -269,14 +269,14 @@ describe("chat session routes", () => {
       app.inject({
         method: "PUT",
         url: "/api/v1/chat/sessions/sess-1/workbench/file",
-        payload: { path: "README.md", content: "updated" },
+        payload: { path: "README.md", content: "updated", expectedRevision: "a".repeat(64) },
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
       app.inject({
         method: "POST",
         url: "/api/v1/chat/sessions/sess-1/workbench/file-operation",
-        payload: { operation: "create_file", path: "src/new.ts" },
+        payload: { operation: "create_file", path: "src/new.ts", expectedRevision: "a".repeat(64) },
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
@@ -501,9 +501,9 @@ describe("chat session routes", () => {
       app.inject({
         method: "PUT",
         url: "/api/v1/chat/sessions/sess-1/workbench/file",
-        payload: { path: "README.md", content: "updated" },
+        payload: { path: "README.md", content: "updated", expectedRevision: "a".repeat(64) },
       }),
-    ).resolves.toMatchObject({ statusCode: 400 });
+    ).resolves.toMatchObject({ statusCode: 500 });
     await expect(
       app.inject({
         method: "POST",

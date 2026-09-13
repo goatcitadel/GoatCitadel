@@ -62,14 +62,14 @@ export function composeSystemRouteDependencies(
     personalOps: createPersonalOpsRouteService(new PersonalOpsService(gateway.storage.personalOps)),
     settings: {
       createPersonality: (input) => gateway.personalityCatalogService.createPersonality(input),
-      deletePersonality: (id) => gateway.personalityCatalogService.deletePersonality(id),
+      deletePersonality: (id, expectedRevision) => gateway.personalityCatalogService.deletePersonality(id, expectedRevision),
       getAuthRuntimeSettings: () => {
         gateway.readSettingsRevision();
         return settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps);
       },
       getPersonalityCatalog: () => gateway.personalityCatalogService.getCatalog(),
       getSettings: async () => await settingsAuthService.getSettings(settingsRuntimeDeps),
-      setDefaultPersonality: (id) => gateway.personalityCatalogService.setDefaultPersonality(id),
+      setDefaultPersonality: (id, expectedRevision) => gateway.personalityCatalogService.setDefaultPersonality(id, expectedRevision),
       updatePersonality: (id, input) => gateway.personalityCatalogService.updatePersonality(id, input),
       updateSettings: (input) => gateway.updateSettings(input),
     },

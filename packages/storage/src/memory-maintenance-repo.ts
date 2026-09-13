@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Memory maintenance SQL ownership stays co-located while gateway direct-SQL callers are being migrated behind repositories. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
   MemoryItemLifecycleState,
@@ -7,12 +7,16 @@ import type {
   MemoryMaintenanceChangeRecord,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
+  MemoryMaintenancePolicyValues,
+  MemoryMaintenanceRecommendationAcceptInput,
+  MemoryMaintenanceRecommendationAcceptance,
+  MemoryMaintenanceRecommendationDecisionInput,
   MemoryMaintenanceRecommendationRecord,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceRunSourceRecord,
   MemoryMaintenanceStateRecord,
 } from "@goatcitadel/contracts";
-import { NotFoundError, deriveMemoryItemLifecycleState } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError, canonicalJsonString, deriveMemoryItemLifecycleState } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface MemoryMaintenancePolicyRow {
@@ -182,6 +186,8 @@ export function buildMemoryWorkspaceScopeSql(
 
 export class MemoryMaintenanceRepository {
   private readonly getPolicyStmt;
+  private readonly getPolicyForUpdateStmt;
+  private readonly insertPolicyIfAbsentStmt;
   private readonly upsertPolicyStmt;
   private readonly getStateStmt;
   private readonly upsertStateStmt;
@@ -199,6 +205,7 @@ export class MemoryMaintenanceRepository {
   private readonly insertRunChangeStmt;
   private readonly listRunChangesStmt;
   private readonly getRecommendationStmt;
+  private readonly getRecommendationForUpdateStmt;
   private readonly insertRecommendationStmt;
   private readonly updateRecommendationStmt;
   private readonly listRecommendationsStmt;
@@ -219,7 +226,9 @@ export class MemoryMaintenanceRepository {
       FROM workspace_memory_maintenance_policies
       WHERE workspace_id = ?
     `);
-    this.upsertPolicyStmt = db.prepare(`
+    this.getPolicyForUpdateStmt = db.prepare(`SELECT * FROM workspace_memory_maintenance_policies
+      WHERE workspace_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`);
+    const policyInsertSql = `
       INSERT INTO workspace_memory_maintenance_policies (
         workspace_id,
         enabled,
@@ -250,7 +259,12 @@ export class MemoryMaintenanceRepository {
         @unavailableModelPolicy,
         @createdAt,
         @updatedAt
-      )
+      )`;
+    this.insertPolicyIfAbsentStmt = db.prepare(`${policyInsertSql} ON CONFLICT(workspace_id) DO NOTHING`);
+    const nextPolicyTimestampSql = db.dialect === "postgres"
+      ? `to_char((workspace_memory_maintenance_policies.updated_at::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 millisecond', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+      : "strftime('%Y-%m-%dT%H:%M:%fZ', workspace_memory_maintenance_policies.updated_at, '+0.001 seconds')";
+    this.upsertPolicyStmt = db.prepare(`${policyInsertSql}
       ON CONFLICT(workspace_id) DO UPDATE SET
         enabled = excluded.enabled,
         run_mode = excluded.run_mode,
@@ -263,7 +277,8 @@ export class MemoryMaintenanceRepository {
         model = excluded.model,
         execution_target = excluded.execution_target,
         unavailable_model_policy = excluded.unavailable_model_policy,
-        updated_at = excluded.updated_at
+        updated_at = CASE WHEN excluded.updated_at > workspace_memory_maintenance_policies.updated_at
+          THEN excluded.updated_at ELSE ${nextPolicyTimestampSql} END
     `);
     this.getStateStmt = db.prepare(`
       SELECT *
@@ -454,6 +469,8 @@ export class MemoryMaintenanceRepository {
       FROM memory_maintenance_recommendations
       WHERE recommendation_id = ?
     `);
+    this.getRecommendationForUpdateStmt = db.prepare(`SELECT * FROM memory_maintenance_recommendations
+      WHERE recommendation_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`);
     this.insertRecommendationStmt = db.prepare(`
       INSERT INTO memory_maintenance_recommendations (
         recommendation_id,
@@ -740,48 +757,52 @@ export class MemoryMaintenanceRepository {
     return row ? mapPolicyRow(row) : undefined;
   }
 
-  public upsertPolicy(record: MemoryMaintenancePolicyRecord): MemoryMaintenancePolicyRecord {
-    this.upsertPolicyStmt.run({
-      workspaceId: record.workspaceId,
-      enabled: record.enabled ? 1 : 0,
-      runMode: record.runMode,
-      timingStrategy: record.timingStrategy,
-      scheduleJson: record.schedule ? JSON.stringify(record.schedule) : null,
-      timeZone: record.timeZone,
-      minHoursSinceLastSuccess: record.minHoursSinceLastSuccess,
-      minChangedSessions: record.minChangedSessions,
-      providerId: normalizeNullableText(record.providerId),
-      model: normalizeNullableText(record.model),
-      executionTarget: record.executionTarget,
-      unavailableModelPolicy: record.unavailableModelPolicy,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
+  public upsertPolicy(record: MemoryMaintenancePolicyValues): MemoryMaintenancePolicyRecord {
+    return this.db.transaction("immediate", () => {
+      this.upsertPolicyStmt.run(policyWriteParams(record));
+      return this.requirePolicy(record.workspaceId);
     });
-    return this.requirePolicy(record.workspaceId);
+  }
+
+  /** First-read initialization never replaces a concurrently created policy. */
+  public ensurePolicy(defaults: MemoryMaintenancePolicyValues): MemoryMaintenancePolicyRecord {
+    return this.db.transaction("immediate", () => {
+      this.insertPolicyIfAbsentStmt.run(policyWriteParams(defaults));
+      return this.requirePolicy(defaults.workspaceId);
+    });
   }
 
   public patchPolicy(
     workspaceId: string,
     patch: MemoryMaintenancePolicyPatchInput,
-    defaults: MemoryMaintenancePolicyRecord,
+    expectedRevision: string,
     now = new Date().toISOString(),
   ): MemoryMaintenancePolicyRecord {
-    const current = this.findPolicy(workspaceId) ?? defaults;
-    return this.upsertPolicy({
-      ...current,
-      enabled: patch.enabled ?? current.enabled,
-      runMode: patch.runMode ?? current.runMode,
-      timingStrategy: patch.timingStrategy ?? current.timingStrategy,
-      schedule: patch.schedule === undefined ? current.schedule : (patch.schedule ?? undefined),
-      timeZone: patch.timeZone ?? current.timeZone,
-      minHoursSinceLastSuccess: patch.minHoursSinceLastSuccess ?? current.minHoursSinceLastSuccess,
-      minChangedSessions: patch.minChangedSessions ?? current.minChangedSessions,
-      providerId: patch.providerId === undefined ? current.providerId : (patch.providerId ?? undefined),
-      model: patch.model === undefined ? current.model : (patch.model ?? undefined),
-      executionTarget: patch.executionTarget ?? current.executionTarget,
-      unavailableModelPolicy: patch.unavailableModelPolicy ?? current.unavailableModelPolicy,
-      createdAt: current.createdAt,
-      updatedAt: now,
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision)) throw new ValidationError({ field: "expectedRevision" });
+    return this.db.transaction("immediate", () => {
+      const row = toMemoryMaintenancePolicyRow(this.getPolicyForUpdateStmt.get(workspaceId));
+      if (!row) throw new NotFoundError({ entity: "Memory maintenance policy", id: workspaceId });
+      const current = mapPolicyRow(row);
+      if (current.revision !== expectedRevision) throw new ConflictError({
+        message: "The memory maintenance policy changed. Reload and review the current policy before saving.",
+        details: { reason: "MEMORY_POLICY_REVISION_CONFLICT" },
+      });
+      return this.upsertPolicy({
+        ...current,
+        enabled: patch.enabled ?? current.enabled,
+        runMode: patch.runMode ?? current.runMode,
+        timingStrategy: patch.timingStrategy ?? current.timingStrategy,
+        schedule: patch.schedule === undefined ? current.schedule : (patch.schedule ?? undefined),
+        timeZone: patch.timeZone ?? current.timeZone,
+        minHoursSinceLastSuccess: patch.minHoursSinceLastSuccess ?? current.minHoursSinceLastSuccess,
+        minChangedSessions: patch.minChangedSessions ?? current.minChangedSessions,
+        providerId: patch.providerId === undefined ? current.providerId : (patch.providerId ?? undefined),
+        model: patch.model === undefined ? current.model : (patch.model ?? undefined),
+        executionTarget: patch.executionTarget ?? current.executionTarget,
+        unavailableModelPolicy: patch.unavailableModelPolicy ?? current.unavailableModelPolicy,
+        createdAt: current.createdAt,
+        updatedAt: now,
+      });
     });
   }
 
@@ -976,7 +997,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public createRecommendation(
-    record: Omit<MemoryMaintenanceRecommendationRecord, "recommendationId"> & { recommendationId?: string },
+    record: Omit<MemoryMaintenanceRecommendationRecord, "recommendationId" | "revision"> & { recommendationId?: string },
   ): MemoryMaintenanceRecommendationRecord {
     const recommendationId = record.recommendationId ?? `mmrec_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
     this.insertRecommendationStmt.run({
@@ -1003,16 +1024,63 @@ export class MemoryMaintenanceRepository {
   }
 
   public updateRecommendation(record: MemoryMaintenanceRecommendationRecord): MemoryMaintenanceRecommendationRecord {
-    this.updateRecommendationStmt.run({
-      recommendationId: record.recommendationId,
-      status: record.status,
-      summary: record.summary,
-      proposedPatchJson: JSON.stringify(record.proposedPatch ?? {}),
-      rationale: normalizeNullableText(record.rationale),
-      updatedAt: record.updatedAt,
-      appliedAt: record.appliedAt ?? null,
+    return this.db.transaction("immediate", () => {
+      const current = this.lockRecommendationForDecision(record.recommendationId, record.revision);
+      this.updateRecommendationStmt.run({
+        recommendationId: record.recommendationId,
+        status: record.status,
+        summary: record.summary,
+        proposedPatchJson: JSON.stringify(record.proposedPatch ?? {}),
+        rationale: normalizeNullableText(record.rationale),
+        updatedAt: new Date(Math.max(Date.parse(record.updatedAt), Date.parse(current.updatedAt) + 1)).toISOString(),
+        appliedAt: record.appliedAt ?? null,
+      });
+      return this.getRecommendation(record.recommendationId);
     });
-    return this.getRecommendation(record.recommendationId);
+  }
+
+  /** The reviewed proposal, policy comparison, policy write, and decision share one transaction. */
+  public acceptRecommendation(
+    recommendationId: string,
+    input: MemoryMaintenanceRecommendationAcceptInput,
+    now = new Date().toISOString(),
+  ): MemoryMaintenanceRecommendationAcceptance {
+    return this.db.transaction("immediate", () => {
+      const recommendation = this.lockRecommendationForDecision(recommendationId, input.expectedRevision);
+      const policy = this.patchPolicy(
+        recommendation.workspaceId,
+        recommendation.proposedPatch as MemoryMaintenancePolicyPatchInput,
+        input.expectedPolicyRevision,
+        now,
+      );
+      return {
+        policy,
+        recommendation: this.updateRecommendation({ ...recommendation, status: "applied", updatedAt: now, appliedAt: now }),
+      };
+    });
+  }
+
+  public rejectRecommendation(
+    recommendationId: string,
+    input: MemoryMaintenanceRecommendationDecisionInput,
+    now = new Date().toISOString(),
+  ): MemoryMaintenanceRecommendationRecord {
+    return this.db.transaction("immediate", () => {
+      const recommendation = this.lockRecommendationForDecision(recommendationId, input.expectedRevision);
+      return this.updateRecommendation({ ...recommendation, status: "rejected", updatedAt: now });
+    });
+  }
+
+  private lockRecommendationForDecision(recommendationId: string, expectedRevision: string): MemoryMaintenanceRecommendationRecord {
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision)) throw new ValidationError({ field: "expectedRevision" });
+    const row = toMemoryMaintenanceRecommendationRow(this.getRecommendationForUpdateStmt.get(recommendationId));
+    if (!row) throw new NotFoundError({ entity: "Memory maintenance recommendation", id: recommendationId });
+    const current = mapRecommendationRow(row);
+    if (current.revision !== expectedRevision || current.status !== "queued") throw new ConflictError({
+      message: "The memory maintenance recommendation changed or was already resolved. Reload and review it before deciding.",
+      details: { reason: "MEMORY_RECOMMENDATION_REVISION_CONFLICT" },
+    });
+    return current;
   }
 
   public listRecommendations(workspaceId: string, limit = 100): MemoryMaintenanceRecommendationRecord[] {
@@ -1027,7 +1095,7 @@ export class MemoryMaintenanceRepository {
 }
 
 function mapPolicyRow(row: MemoryMaintenancePolicyRow): MemoryMaintenancePolicyRecord {
-  return {
+  const values: MemoryMaintenancePolicyValues = {
     workspaceId: row.workspace_id,
     enabled: row.enabled === 1,
     runMode: row.run_mode,
@@ -1044,6 +1112,26 @@ function mapPolicyRow(row: MemoryMaintenancePolicyRow): MemoryMaintenancePolicyR
     unavailableModelPolicy: row.unavailable_model_policy,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+  return { ...values, revision: createHash("sha256").update(canonicalJsonString(values)).digest("hex") };
+}
+
+function policyWriteParams(record: MemoryMaintenancePolicyValues) {
+  return {
+    workspaceId: record.workspaceId,
+    enabled: record.enabled ? 1 : 0,
+    runMode: record.runMode,
+    timingStrategy: record.timingStrategy,
+    scheduleJson: record.schedule ? JSON.stringify(record.schedule) : null,
+    timeZone: record.timeZone,
+    minHoursSinceLastSuccess: record.minHoursSinceLastSuccess,
+    minChangedSessions: record.minChangedSessions,
+    providerId: normalizeNullableText(record.providerId),
+    model: normalizeNullableText(record.model),
+    executionTarget: record.executionTarget,
+    unavailableModelPolicy: record.unavailableModelPolicy,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
   };
 }
 
@@ -1082,7 +1170,7 @@ function mapRunRow(row: MemoryMaintenanceRunRow): MemoryMaintenanceRunRecord {
 }
 
 function mapRecommendationRow(row: MemoryMaintenanceRecommendationRow): MemoryMaintenanceRecommendationRecord {
-  return {
+  const values: Omit<MemoryMaintenanceRecommendationRecord, "revision"> = {
     recommendationId: row.recommendation_id,
     workspaceId: row.workspace_id,
     kind: row.kind,
@@ -1094,6 +1182,7 @@ function mapRecommendationRow(row: MemoryMaintenanceRecommendationRow): MemoryMa
     updatedAt: row.updated_at,
     appliedAt: row.applied_at ?? undefined,
   };
+  return { ...values, revision: createHash("sha256").update(canonicalJsonString(values)).digest("hex") };
 }
 
 function normalizeNullableText(value: string | undefined): string | null {

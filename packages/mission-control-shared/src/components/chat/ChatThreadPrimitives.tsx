@@ -1,4 +1,6 @@
 import { memo, useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { getWorkflowSkillCaptureDisplay } from "./workflow-skill-capture-display";
+import { WorkflowSkillCaptureEvidence } from "./WorkflowSkillCaptureEvidence";
 import {
   isChatTurnActiveStatus,
   type ChatDelegateResponse,
@@ -1078,6 +1080,7 @@ export interface ChatThreadTurnCardProps {
   onStartNewThreadFromTurn?: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
+  renderSkillCapture?: (turn: ChatThreadTurnRecord) => ReactNode;
   onEditTurn?: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
@@ -1128,6 +1131,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   onStartNewThreadFromTurn,
   onSwitchBranch,
   onRetryTurn,
+  renderSkillCapture,
   onEditTurn,
   onOpenRunDetails,
   onOpenUniversalRunDetail,
@@ -1136,7 +1140,10 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   onCreateGeneratedArtifactVersion,
   onStopStreamingTurn,
 }: ChatThreadTurnCardProps) {
-  const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
+  const workflowCaptureDisplay = getWorkflowSkillCaptureDisplay(turn.userMessage.content);
+  const suggestionSummary = workflowCaptureDisplay
+    ? null
+    : renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
   const recoveryLabel = getRecoveryStripLabel(turn);
   const routingSummary = summarizeTurnRouting(turn, { effectiveVerb: "used" });
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
@@ -1177,7 +1184,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   // Retry is the primary recovery action, so it stays reachable without
   // opening the menu. Everything else remains secondary and collapsible.
   const showActionMenu =
-    hasStartNewThreadAction || hasEditAction || hasGeneratedArtifactAction || hasGeneratedArtifactVersionAction;
+    hasStartNewThreadAction || hasEditAction || hasGeneratedArtifactAction || hasGeneratedArtifactVersionAction || Boolean(renderSkillCapture);
   const showBranchSwitcher = turn.branch.siblingCount > 1;
   const showActions = showRetryAction || showActionMenu || showBranchSwitcher || Boolean(suggestionSummary);
   const showOperationalDetails =
@@ -1210,7 +1217,8 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     .filter(Boolean)
     .join(" ");
 
-  const turnLabel = turn.userMessage.content?.trim().slice(0, 60) || "turn";
+  const userDisplayContent = workflowCaptureDisplay?.summary ?? turn.userMessage.content;
+  const turnLabel = userDisplayContent?.trim().slice(0, 60) || "turn";
 
   useEffect(() => {
     setActionMenuOpen(false);
@@ -1240,7 +1248,8 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             <strong>You</strong> · <ActorTimestamp timestamp={turn.userMessage.timestamp} />
             {renderUserMetaAddon?.(turn)}
           </p>
-          <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
+          <AssistantMessageRenderer role="user" content={userDisplayContent} />
+          <WorkflowSkillCaptureEvidence content={turn.userMessage.content} />
           <ChatAttachmentPreviewStack
             attachments={turn.userMessage.attachments}
             eager={selected || contextSelected || isStreamingTurn}
@@ -1385,6 +1394,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
                     </button>
                   ) : null}
                 </div>
+                {renderSkillCapture?.(turn)}
               </div>
             </details>
           ) : null}

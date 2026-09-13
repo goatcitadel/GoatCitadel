@@ -163,6 +163,7 @@ import {
   type RemoteWorkerOperatorControlDependencies,
   type RemoteWorkerAssignmentStore,
   type RemoteWorkerRegistryStore,
+  type RemoteWorkerRuntimeReadStore,
 } from "./remote-workers-route-service.js";
 import { RuntimeLifecycleRouteService, type RuntimeLifecycleRoutePort } from "./runtime-lifecycle-route-service.js";
 import {
@@ -431,6 +432,7 @@ export interface GatewayRouteServiceDependencies {
     registry: RemoteWorkerRegistryStore;
     assignments: RemoteWorkerAssignmentStore;
     operatorControl: RemoteWorkerOperatorControlDependencies;
+    runtimeReads?: RemoteWorkerRuntimeReadStore;
   };
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
@@ -511,6 +513,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
       deps.remoteWorkers.assignments,
       () => new Date().toISOString(),
       deps.remoteWorkers.operatorControl,
+      deps.remoteWorkers.runtimeReads,
     ),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),

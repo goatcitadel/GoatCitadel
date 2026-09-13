@@ -23,7 +23,7 @@
                               hidden).
     4. remove-files         - Restores an administrator-writable descriptor
                               (the frozen protected DACLs are intentionally
-                              admin-read-only) and removes the two pinned
+                              admin-read-only) and removes the three pinned
                               images, bin\, and RemoteWorkerProvisioner\.
                               GoatCitadel\ is removed only when empty; a
                               shared root with sibling content is preserved.
@@ -32,12 +32,14 @@
                               broker-coordinator-uninstall-evidence.json
                               (schema goatcitadel.remote-worker.broker-coordinator-uninstall/1).
 
-  This script never starts a service and never touches the untrusted
-  helper/client. Exit codes: 0 = passed, 1 = failed, 2 = refused.
+  This script never starts a service. Removing an installed client requires
+  its independently retained -ClientImageSha256 pin; drift is refused before
+  any service stop or deletion. Exit codes: 0 = passed, 1 = failed, 2 = refused.
 
 .EXAMPLE
   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-    -File scripts\remote-worker\uninstall-broker-coordinator.ps1
+    -File scripts\remote-worker\uninstall-broker-coordinator.ps1 `
+    -ClientImageSha256 <64-hex-from-package-result>
 
 .EXAMPLE
   # Read-only: report what an uninstall would do and verify identity binding.
@@ -46,6 +48,9 @@
 #>
 [CmdletBinding()]
 param(
+  [ValidatePattern("^[0-9a-fA-F]{64}$")]
+  [string]$ClientImageSha256,
+
   [string]$OutputRoot,
 
   [switch]$Preflight
@@ -60,6 +65,8 @@ $script:StartedAt = (Get-Date).ToUniversalTime()
 $script:Steps = New-Object System.Collections.Generic.List[object]
 $script:Refusals = New-Object System.Collections.Generic.List[string]
 $script:CleanupFailures = New-Object System.Collections.Generic.List[string]
+$script:DirectoryLeases = New-Object System.Collections.Generic.List[System.IDisposable]
+$script:ImageLeases = New-Object System.Collections.Generic.List[System.IDisposable]
 $script:Paths = $null
 $script:Footprint = $null
 $script:Verdict = "failed"
@@ -90,10 +97,16 @@ function Invoke-RecipeStep {
     [Parameter(Mandatory = $true)][scriptblock]$Body
   )
   $stepStart = (Get-Date).ToUniversalTime()
+  $refusalCountBefore = $script:Refusals.Count
   try {
     $detail = & $Body
     if ($null -eq $detail) { $detail = "" }
-    Add-StepRecord -Name $Name -Status "passed" -StartedAtUtc $stepStart -Detail ([string]$detail)
+    $status = "passed"
+    if ($script:Refusals.Count -gt $refusalCountBefore) {
+      $status = "refused"
+      $detail = $script:Refusals.GetRange($refusalCountBefore, $script:Refusals.Count - $refusalCountBefore).ToArray() -join "; "
+    }
+    Add-StepRecord -Name $Name -Status $status -StartedAtUtc $stepStart -Detail ([string]$detail)
   }
   catch {
     $message = $_.Exception.Message
@@ -133,7 +146,12 @@ function Test-RecipeElevation {
 
 function Test-RecipeSystemDrive {
   try {
-    $script:Paths = Get-BrokerCoordinatorPaths -SystemDrive $env:SystemDrive
+    $systemRoot = [System.Environment]::GetFolderPath("Windows")
+    $systemDrive = [System.IO.Path]::GetPathRoot($systemRoot).TrimEnd("\")
+    $script:Paths = Get-BrokerCoordinatorPaths -SystemDrive $systemDrive
+    if (-not [string]::Equals($env:SystemDrive, $systemDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "REFUSED: SystemDrive does not match the Windows system directory volume."
+    }
   }
   catch {
     Add-RefusalFinding $_.Exception.Message.Replace("REFUSED: ", "")
@@ -160,6 +178,7 @@ function Test-RecipeFootprintIdentity {
     signerServicePresent = $false
     brokerImagePresent = (Test-Path -LiteralPath $script:Paths.BrokerImagePath)
     signerImagePresent = (Test-Path -LiteralPath $script:Paths.SignerImagePath)
+    clientImagePresent = (Test-Path -LiteralPath $script:Paths.ClientImagePath)
     binDirectoryPresent = (Test-Path -LiteralPath $script:Paths.BinDirectory)
     provisionerDirectoryPresent = (Test-Path -LiteralPath $script:Paths.ProvisionerDirectory)
   }
@@ -175,7 +194,85 @@ function Test-RecipeFootprintIdentity {
       }
     }
   }
+  Test-RecipeFilesystemIdentity
   $script:Footprint = $footprint
+}
+
+function Test-RecipeFilesystemIdentity {
+  $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  foreach ($directory in @(($script:Paths.Drive + "\"), ($script:Paths.Drive + "\ProgramData"), $script:Paths.GoatCitadelDirectory, $script:Paths.ProvisionerDirectory, $script:Paths.BinDirectory)) {
+    if (Test-Path -LiteralPath $directory) {
+      try {
+        $goatLevel = $directory.Length -ge $script:Paths.GoatCitadelDirectory.Length
+        $script:DirectoryLeases.Add((Get-BrokerCoordinatorDirectoryLease -Path $directory -GoatCitadelLevel:$goatLevel))
+      }
+      catch { Add-RefusalFinding $_.Exception.Message }
+    }
+  }
+  foreach ($entry in @(
+      @{ Path = $script:Paths.ProvisionerDirectory; Allowed = @("bin") },
+      @{ Path = $script:Paths.BinDirectory; Allowed = @($script:BrokerExecutableName, $script:SignerExecutableName, $script:ClientExecutableName) })) {
+    if (Test-Path -LiteralPath $entry.Path) {
+      foreach ($child in Get-ChildItem -LiteralPath $entry.Path -Force) {
+        if ($child.Name -cnotin $entry.Allowed) {
+          Add-RefusalFinding "The install footprint contains unrecognized content; refusing cleanup before service mutation."
+        }
+      }
+    }
+  }
+  foreach ($image in @($script:Paths.BrokerImagePath, $script:Paths.SignerImagePath, $script:Paths.ClientImagePath)) {
+    if (-not (Test-Path -LiteralPath $image)) { continue }
+    $item = Get-Item -LiteralPath $image
+    if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      Add-RefusalFinding "An installed image is a directory or reparse point; refusing cleanup."
+      continue
+    }
+    if ($item.Length -le 0 -or $item.Length -gt $script:MaximumImageBytes) {
+      Add-RefusalFinding "An installed image has an invalid size; refusing cleanup."
+      continue
+    }
+    $script:ImageLeases.Add([System.IO.File]::Open($image, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read))
+    if ($native::GetFileHardLinkCount($image) -ne 1) {
+      Add-RefusalFinding "An installed image has multiple hard links; refusing cleanup."
+    }
+  }
+  Test-RecipeClientIdentity
+}
+
+function Test-RecipeClientIdentity {
+  $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  if (Test-Path -LiteralPath $script:Paths.ClientImagePath -PathType Leaf) {
+    $item = Get-Item -LiteralPath $script:Paths.ClientImagePath
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt $script:MaximumImageBytes) {
+      Add-RefusalFinding "The installed client has an invalid file type or size; refusing cleanup."
+      return
+    }
+    if (-not $ClientImageSha256) {
+      Add-RefusalFinding "An installed client requires -ClientImageSha256 from the retained package result before uninstall."
+      return
+    }
+    $actual = Get-BrokerCoordinatorFileSha256 -Path $script:Paths.ClientImagePath
+    if (-not [string]::Equals($actual, $ClientImageSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+      Add-RefusalFinding "The installed client hash does not match -ClientImageSha256; refusing cleanup."
+    }
+    $expectedSddl = ConvertTo-CanonicalFileSddl -Sddl $script:ClientImageSddl
+    if ((ConvertTo-CanonicalFileSddl -Sddl ($native::GetFileSddl($script:Paths.ClientImagePath))) -cne $expectedSddl) {
+      Add-RefusalFinding "The installed client security descriptor has drifted; refusing cleanup."
+    }
+  }
+}
+
+function Close-UninstallLeases {
+  param([switch]$ImagesOnly)
+  foreach ($lease in $script:ImageLeases) { $lease.Dispose() }
+  $script:ImageLeases.Clear()
+  if (-not $ImagesOnly) {
+    for ($index = $script:DirectoryLeases.Count - 1; $index -ge 0; $index--) {
+      $script:DirectoryLeases[$index].Dispose()
+    }
+    $script:DirectoryLeases.Clear()
+  }
 }
 
 function Wait-ForServiceStopped {
@@ -233,6 +330,7 @@ function Invoke-RecipeDeleteServices {
 
 function Invoke-RecipeRemoveFiles {
   $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  Close-UninstallLeases -ImagesOnly
   $native::EnablePrivilege("SeRestorePrivilege")
   $native::EnablePrivilege("SeTakeOwnershipPrivilege")
   # Restore an administrator-writable descriptor before deletion: the frozen
@@ -240,17 +338,19 @@ function Invoke-RecipeRemoveFiles {
   foreach ($path in @(
       $script:Paths.BrokerImagePath,
       $script:Paths.SignerImagePath,
+      $script:Paths.ClientImagePath,
       $script:Paths.BinDirectory,
       $script:Paths.ProvisionerDirectory)) {
     if (Test-Path -LiteralPath $path) {
       $native::SetFileSddl($path, $script:UninstallRestoreSddl)
     }
   }
-  foreach ($filePath in @($script:Paths.BrokerImagePath, $script:Paths.SignerImagePath)) {
+  foreach ($filePath in @($script:Paths.BrokerImagePath, $script:Paths.SignerImagePath, $script:Paths.ClientImagePath)) {
     if (Test-Path -LiteralPath $filePath) {
       Remove-Item -LiteralPath $filePath -Force
     }
   }
+  Close-UninstallLeases
   foreach ($directory in @($script:Paths.BinDirectory, $script:Paths.ProvisionerDirectory)) {
     if (Test-Path -LiteralPath $directory) {
       Remove-Item -LiteralPath $directory -Force
@@ -276,7 +376,7 @@ function Invoke-RecipeVerifyRemoved {
       $residue.Add("service:" + $serviceName)
     }
   }
-  foreach ($path in @($script:Paths.BrokerImagePath, $script:Paths.SignerImagePath, $script:Paths.BinDirectory, $script:Paths.ProvisionerDirectory)) {
+  foreach ($path in @($script:Paths.BrokerImagePath, $script:Paths.SignerImagePath, $script:Paths.ClientImagePath, $script:Paths.BinDirectory, $script:Paths.ProvisionerDirectory)) {
     if (Test-Path -LiteralPath $path) {
       $residue.Add("path:" + $path)
     }
@@ -318,9 +418,11 @@ function Write-UninstallEvidence {
         binDirectory = $script:Paths.BinDirectory
         brokerImagePath = $script:Paths.BrokerImagePath
         signerImagePath = $script:Paths.SignerImagePath
+        clientImagePath = $script:Paths.ClientImagePath
       }
     } else { $null })
     footprint = $script:Footprint
+    clientImageSha256 = $ClientImageSha256
     refusals = $script:Refusals.ToArray()
     steps = $script:Steps.ToArray()
     cleanupFailures = $script:CleanupFailures.ToArray()
@@ -381,7 +483,8 @@ try {
   }
 }
 finally {
-  Write-UninstallEvidence
+  try { Write-UninstallEvidence }
+  finally { Close-UninstallLeases }
 }
 
 exit $exitCode

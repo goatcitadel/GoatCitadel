@@ -74,6 +74,7 @@ interface OutboxSnapshot {
  *     unacknowledged tail — no lost event, no changed-content duplicate.
  */
 export class WorkerTranscriptOutbox {
+  private mutationTail: Promise<void> = Promise.resolve();
   private constructor(
     private readonly state: WorkerDurableStatePort,
     private readonly stateKey: string,
@@ -137,20 +138,46 @@ export class WorkerTranscriptOutbox {
     return Object.freeze({ sequence: this.headSequenceValue, hash: this.headHashValue });
   }
 
-  async enqueue(event: WorkerTranscriptEvent): Promise<WorkerOutboxEntry> {
-    const normalizedEvent = normalizeEvent(event);
-    if (this.unackedCount() >= this.maxUnacked) {
-      throw new WorkerOutboxBackpressureError(this.headSequenceValue, this.ackWatermarkValue, this.maxUnacked);
+  /** Before resuming a partially retained transcript, bind its complete committed
+   * prefix, including entries already pruned after acknowledgement. The single
+   * assignment writer calls this before enqueuing the missing suffix. */
+  assertReplayPrefix(events: readonly WorkerTranscriptEvent[]): void {
+    if (events.length < this.headSequenceValue) {
+      throw new WorkerOutboxError("Replayed transcript omits retained events.");
     }
-    const sequence = this.headSequenceValue + 1;
-    const previousHash = this.headHashValue;
-    const entryHash = hashEntry(previousHash, sequence, normalizedEvent);
-    const entry: WorkerOutboxEntry = Object.freeze({ sequence, previousHash, entryHash, event: normalizedEvent });
-    this.entries.push(entry);
-    this.headSequenceValue = sequence;
-    this.headHashValue = entryHash;
-    await this.persist();
-    return entry;
+    let hash = WORKER_OUTBOX_GENESIS_HASH;
+    for (let index = 0; index < this.headSequenceValue; index++) {
+      hash = hashEntry(hash, index + 1, normalizeEvent(events[index]));
+    }
+    if (hash !== this.headHashValue) {
+      throw new WorkerOutboxError("Replayed transcript differs from its retained prefix.");
+    }
+  }
+
+  async enqueue(event: WorkerTranscriptEvent): Promise<WorkerOutboxEntry> {
+    // Snapshot caller-owned payloads before this operation waits behind a write.
+    const normalizedEvent = normalizeEvent(event);
+    return await this.mutate(async () => {
+      if (this.unackedCount() >= this.maxUnacked) {
+        throw new WorkerOutboxBackpressureError(this.headSequenceValue, this.ackWatermarkValue, this.maxUnacked);
+      }
+      const sequence = this.headSequenceValue + 1;
+      if (!Number.isSafeInteger(sequence)) throw new WorkerOutboxError("Transcript sequence limit reached.");
+      const previousHash = this.headHashValue;
+      const entryHash = hashEntry(previousHash, sequence, normalizedEvent);
+      const entry: WorkerOutboxEntry = Object.freeze({ sequence, previousHash, entryHash, event: normalizedEvent });
+      await this.persist({
+        assignmentId: this.assignmentId,
+        ackWatermark: this.ackWatermarkValue,
+        headSequence: sequence,
+        headHash: entryHash,
+        entries: [...this.entries, entry],
+      });
+      this.entries.push(entry);
+      this.headSequenceValue = sequence;
+      this.headHashValue = entryHash;
+      return entry;
+    });
   }
 
   /** The unacknowledged tail in ascending order — the exact frames to (re)send. */
@@ -172,28 +199,35 @@ export class WorkerTranscriptOutbox {
     if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) {
       throw new WorkerOutboxError("acknowledge(throughSequence) must be a non-negative integer.");
     }
-    if (throughSequence > this.headSequenceValue) {
-      throw new WorkerOutboxError("Cannot acknowledge beyond the enqueued head.");
-    }
-    if (throughSequence <= this.ackWatermarkValue) return;
-    this.ackWatermarkValue = throughSequence;
-    let index = 0;
-    while (index < this.entries.length && (this.entries[index]?.sequence ?? Infinity) <= throughSequence) {
-      index += 1;
-    }
-    this.entries.splice(0, index);
-    await this.persist();
+    await this.mutate(async () => {
+      if (throughSequence > this.headSequenceValue) {
+        throw new WorkerOutboxError("Cannot acknowledge beyond the enqueued head.");
+      }
+      if (throughSequence <= this.ackWatermarkValue) return;
+      const entries = this.entries.filter((entry) => entry.sequence > throughSequence);
+      await this.persist({
+        assignmentId: this.assignmentId,
+        ackWatermark: throughSequence,
+        headSequence: this.headSequenceValue,
+        headHash: this.headHashValue,
+        entries,
+      });
+      this.ackWatermarkValue = throughSequence;
+      this.entries.splice(0, this.entries.length, ...entries);
+    });
   }
 
-  private async persist(): Promise<void> {
-    const snapshot: OutboxSnapshot = {
-      assignmentId: this.assignmentId,
-      ackWatermark: this.ackWatermarkValue,
-      headSequence: this.headSequenceValue,
-      headHash: this.headHashValue,
-      entries: this.entries,
-    };
+  private async persist(snapshot: OutboxSnapshot): Promise<void> {
     await this.state.write(this.stateKey, canonicalJsonString(snapshot));
+  }
+
+  private async mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.mutationTail.then(operation);
+    this.mutationTail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await next;
   }
 }
 
@@ -212,7 +246,17 @@ function normalizeEvent(value: unknown): WorkerTranscriptEvent {
   if (!("payload" in record)) {
     throw new WorkerOutboxError("A transcript event must carry a payload.");
   }
-  return Object.freeze({ kind: record.kind, payload: record.payload });
+  // Detach the payload and freeze its entire JSON tree: neither the caller nor
+  // pending()/catchUp() may change bytes after their hash has been retained.
+  const payload: unknown = JSON.parse(canonicalJsonString(record.payload));
+  freezePayload(payload);
+  return Object.freeze({ kind: record.kind, payload });
+}
+
+function freezePayload(value: unknown): void {
+  if (value === null || typeof value !== "object") return;
+  for (const child of Object.values(value)) freezePayload(child);
+  Object.freeze(value);
 }
 
 function normalizeSnapshot(value: unknown, expectedAssignmentId: string): OutboxSnapshot {

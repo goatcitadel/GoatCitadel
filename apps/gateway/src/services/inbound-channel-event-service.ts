@@ -1,3 +1,4 @@
+import { sanitizeMetadata } from "./inbound-channel-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   redactSecretText,
@@ -17,6 +18,7 @@ import {
 } from "./channel-inbound-dispatch.js";
 import type { BotLoopGuardDecision } from "./channel-bot-loop-guard.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
+import { withChannelProgressHeartbeat } from "./channel-progress-heartbeat.js";
 
 const CLAIM_LEASE_MS = 30_000;
 const CLAIM_HEARTBEAT_MS = 10_000;
@@ -609,12 +611,20 @@ export class InboundChannelEventService {
         }),
       );
     };
-    const response = await this.deps.respondToExistingChatMessage(ingestResult.session.sessionId, messageId, {
-      ...payload.responseOptions,
-      inboundDurableIdentity: identity,
-    });
+    const respond = () =>
+      this.deps.respondToExistingChatMessage(ingestResult.session.sessionId, messageId, {
+        ...payload.responseOptions,
+        inboundDurableIdentity: identity,
+      });
+    const response = ["telegram", "discord"].includes(claim.event.channelKey)
+      ? await withChannelProgressHeartbeat(respond, async (signal) => {
+          assertCurrent();
+          await this.emitActivity(claim, payload, ingestResult.session.sessionId, "thinking", identity.turnId, signal);
+        })
+      : await respond();
     assertCurrent();
     if (response.trace?.status === "waiting_for_approval") {
+      await this.emitActivity(claim, payload, ingestResult.session.sessionId, "waiting_approval", identity.turnId);
       this.requireTransition(
         claim,
         await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
@@ -785,6 +795,7 @@ export class InboundChannelEventService {
     sessionId: string,
     phase: ChannelActivityInput["phase"],
     turnId?: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     const target = payload.bindingTarget ?? payload.message.room ?? payload.message.peer ?? payload.message.account;
     if (!target?.trim()) {
@@ -800,6 +811,7 @@ export class InboundChannelEventService {
         turnId,
         phase,
         correlationId: claim.event.idempotencyKey,
+        signal,
       });
     } catch (error) {
       this.diagnostic("warn", "channel.activity_failed", "Channel activity signal failed.", {
@@ -1008,32 +1020,6 @@ function isAmbiguousPostCommitError(error: unknown): boolean {
 function normalizeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return redactSecretText(message).value.slice(0, MAX_DIAGNOSTIC_TEXT);
-}
-
-function sanitizeMetadata(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) {
-    const normalizedKey = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
-    // callbackQueryId, replyToken, interactionToken, and responseUrl are
-    // provider reply capabilities. Routes strip them too, but the durable
-    // owner independently rejects every known key spelling.
-    if (
-      /(?:secret|token|password|authorization|cookie|signature|callbackdata|callbackqueryid|replytoken|interactiontoken|responseurl)/i.test(
-        normalizedKey,
-      )
-    ) {
-      continue;
-    }
-    if (typeof item === "string") {
-      sanitized[key] = redactSecretText(item).value.slice(0, 2_000);
-    } else if (typeof item === "number" || typeof item === "boolean" || item === null) {
-      sanitized[key] = item;
-    }
-  }
-  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 function normalizeRequiredString(value: string, field: string): string {

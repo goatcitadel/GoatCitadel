@@ -139,9 +139,13 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
     reducedMotion: "reduce",
     hasTouch: true,
     route: {
-      readyText: "Mission Control Next shell posture",
+      readyText: "Memory items",
       expectedArea: "library",
       expectedSection: "memory",
+    },
+    async prepare(page) {
+      await page.getByRole("button", { name: /Mission Control Next shell posture/ }).click();
+      await page.getByRole("heading", { name: "Mission Control Next shell posture", exact: true }).waitFor();
     },
   },
   {

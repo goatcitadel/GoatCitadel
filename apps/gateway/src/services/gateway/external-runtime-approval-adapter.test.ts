@@ -4,10 +4,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpInvokeRequest, McpInvokeResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
+import { createMcpToolPolicyBinding } from "@goatcitadel/policy-engine";
+import { createMeshChatCatalogFixture } from "./mesh-chat-catalog-test-fixtures.js";
+import { resolveMeshChatToolSchemas } from "./mesh-chat-catalog.js";
+import { dispatchMeshChatTool, type MeshChatDispatchPort } from "./mesh-chat-dispatch.js";
 import {
   executeApprovedExternalRuntimePendingAction,
   type ApprovedExternalRuntimePendingActionPort,
   toolInvokeResultFromMcpApproval,
+  toToolInvokeRequest,
+  approvedExternalRuntimeRequestMatches,
 } from "./external-runtime-approval-adapter.js";
 
 const cleanups: Array<() => void> = [];
@@ -17,6 +23,17 @@ afterEach(() => {
 });
 
 describe("external runtime approval adapter", () => {
+  it("preserves the protected turn, tool invocation and Citadel identity through approval replay", () => {
+    const pending = { toolName: "session.status", args: {}, agentId: "assistant", sessionId: "session",
+      turnId: "turn", toolRunId: "remote-tool:intent", citadelId: "citadel", workspaceId: "workspace" };
+    const request = toToolInvokeRequest(pending);
+    expect(request).toMatchObject(pending);
+    expect(approvedExternalRuntimeRequestMatches(pending, request)).toBe(true);
+    for (const field of ["turnId", "toolRunId", "citadelId"] as const) {
+      expect(approvedExternalRuntimeRequestMatches(pending, { ...request, [field]: "another" })).toBe(false);
+      expect(approvedExternalRuntimeRequestMatches(pending, { ...request, [field]: undefined })).toBe(false);
+    }
+  });
   function createHarness(label: string, request: Record<string, unknown>) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `goatcitadel-approved-runtime-adapter-${label}-`));
     const storage = new Storage({
@@ -146,6 +163,7 @@ describe("external runtime approval adapter", () => {
       outcome: "executed",
       policyReason: "allowed_via_approval",
       auditEventId: "audit-policy",
+      wardEffect: "redact",
       result: {
         policyContext: { workspaceId: "workspace-1", matchedGrantAllowedHosts: ["mcp.example"] },
       },
@@ -159,7 +177,7 @@ describe("external runtime approval adapter", () => {
     }));
     const invokeApprovedMcpRuntime = vi.fn<ApprovedExternalRuntimePendingActionPort["invokeApprovedMcpRuntime"]>(
       async (_input, markExternalCallStarted) => {
-        markExternalCallStarted?.();
+        await markExternalCallStarted?.();
         return { ok: true, output: "created" };
       },
     );
@@ -182,12 +200,138 @@ describe("external runtime approval adapter", () => {
     expect(invokeApprovedMcpRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ surface: "mcp" }),
       expect.any(Function),
+      { wardEffect: "redact" },
     );
     expect(result).toMatchObject({
       outcome: "executed",
       result: { externalRuntime: true, toolName: "mcp.invoke", ok: true, output: "created" },
     });
   });
+
+  it.each(["allowed", "denied", "missing", "missing-runtime", "drift", "unknown", "legacy-flag"] as const)(
+    "retains mesh identity, policy and effect truth through approved dispatch (%s)", async (scenario) => {
+      const catalog = createMeshChatCatalogFixture();
+      const [schema] = await resolveMeshChatToolSchemas(catalog.deps, { workspaceId: catalog.workspaceId, entries: [catalog.entry] });
+      const binding = { schema: schema!, executionProfileSha256: "9".repeat(64) };
+      const request = toolRequest({ toolName: catalog.capabilityId,
+        externalRuntime: scenario === "legacy-flag" ? undefined : true, turnId: "turn", toolRunId: "tool-run",
+        args: { query: "reviewed input", nodeId: "argument-only-node", approvalId: "argument-only-approval" } });
+      const { storage, approvalId, pending } = createHarness(`mesh-${scenario}`, request);
+      const resolveBinding = vi.fn<MeshChatDispatchPort["resolveBinding"]>(async () => scenario === "missing" ? undefined : binding);
+      const policyResult: ToolInvokeResult = { outcome: scenario === "denied" ? "blocked" : "executed",
+        policyReason: scenario === "denied" ? "current mesh deny" : "allowed_via_approval", auditEventId: "audit-mesh" };
+      const executeApprovedAction = vi.fn<ApprovedExternalRuntimePendingActionPort["executeApprovedAction"]>(async () => {
+        if (scenario === "drift") resolveBinding.mockResolvedValue(undefined);
+        return policyResult;
+      });
+      const dispatch = vi.fn<MeshChatDispatchPort["dispatch"]>(async (_input, options) => {
+        await options?.executionFence?.();
+        expect(storage.externalSideEffectRuns.listByWorkspace(catalog.workspaceId)[0]?.externalCallStartedAt).toBeDefined();
+        return { invocationId: "mesh-invocation", disposition: scenario === "unknown" ? "unknown" : "succeeded",
+          settled: true, deliveryUncertain: scenario === "unknown", manualReconciliationRequired: scenario === "unknown",
+          output: { status: "ok" }, receipt: {
+            invocationId: "mesh-invocation", capabilityId: catalog.capabilityId, nodeId: catalog.binding.nodeId,
+            activationId: catalog.binding.activationId, activationRevision: catalog.binding.activationRevision,
+            publisherGeneration: catalog.binding.publisherGeneration, publicationLeaseFencingToken: catalog.binding.publicationLeaseFencingToken,
+            inputSha256: "1".repeat(64), deadlineAt: "2099-01-01T00:00:00.000Z",
+          } };
+      });
+      const invokeApprovedMeshRuntime = vi.fn<NonNullable<ApprovedExternalRuntimePendingActionPort["invokeApprovedMeshRuntime"]>>(
+        (input, policy, id, markStarted) => dispatchMeshChatTool({ resolveBinding, dispatch }, input, policy, {
+          approvalId: id, markExternalCallStarted: markStarted,
+        }),
+      );
+      const port = createPort(storage, { resolveMeshChatToolBinding: (input) => resolveBinding(input, undefined), executeApprovedAction,
+        ...(scenario === "missing-runtime" ? {} : { invokeApprovedMeshRuntime }) });
+      const call = executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
+      if (["missing", "missing-runtime", "drift"].includes(scenario)) {
+        await expect(call).rejects.toThrow(/frozen target/);
+        expect(dispatch).not.toHaveBeenCalled();
+        if (scenario !== "drift") expect(executeApprovedAction).not.toHaveBeenCalled();
+        expect(storage.externalSideEffectRuns.listByWorkspace(catalog.workspaceId)[0]?.externalCallStartedAt).toBeUndefined();
+        return;
+      }
+      const result = await call;
+      expect(executeApprovedAction).toHaveBeenCalledExactlyOnceWith(approvalId, undefined, {
+        deferResolution: true, externalRuntimeReplay: true, meshToolBinding: schema!.policyBinding,
+      });
+      expect(port.invokeApprovedMcpRuntime).not.toHaveBeenCalled();
+      expect(port.invokeApprovedExternalRuntimeTool).not.toHaveBeenCalled();
+      if (scenario === "denied") {
+        expect(result.outcome).toBe("blocked");
+        expect(dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          approvalId, capabilityId: catalog.capabilityId, binding: catalog.binding, args: request.args,
+          sessionId: "session-1", turnId: "turn", toolRunId: "tool-run", executionProfileSha256: binding.executionProfileSha256,
+        }), expect.any(Object));
+        expect(result).toMatchObject({ outcome: "executed", result: { toolName: catalog.capabilityId,
+          ...(scenario === "unknown" ? { externalOutcome: "unknown_after_send", manualReconciliationRequired: true } : { ok: true }),
+        } });
+        if (scenario === "unknown") expect(result.result).not.toHaveProperty("output");
+        expect(storage.approvalEvents.listByApprovalId(approvalId)).toEqual([
+          expect.objectContaining({ payload: expect.objectContaining({ externalBoundaryState: "crossed" }) }),
+        ]);
+        const replay = await executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
+        expect(replay).toEqual(result);
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(executeApprovedAction).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["allowed", "denied", "missing", "drift", "unknown"] as const)(
+    "retains the native MCP request through approval replay (%s)", async (scenario) => {
+      const nativeToolName = "mcp.server.with.dots.tool.echo";
+      const request = toolRequest({ toolName: nativeToolName, externalRuntime: true, turnId: "turn", toolRunId: "tool-run",
+        args: { serverId: "native data", toolName: "native data", value: "reviewed" } });
+      const { storage, approvalId, pending } = createHarness(`native-${scenario}`, request);
+      const policyBinding = createMcpToolPolicyBinding({ canonicalName: nativeToolName,
+        serverId: "server.with.dots", nativeToolName: "tool.echo" });
+      const target = { serverId: "server.with.dots", nativeToolName: "tool.echo", policyBinding };
+      const resolveBinding = vi.fn<NonNullable<ApprovedExternalRuntimePendingActionPort["resolveNativeMcpChatToolBinding"]>>(
+        async () => scenario === "missing" ? undefined : target,
+      );
+      if (scenario === "drift") resolveBinding.mockResolvedValueOnce(target).mockResolvedValueOnce(undefined);
+      const policyResult: ToolInvokeResult = { outcome: scenario === "denied" ? "blocked" : "executed",
+        policyReason: scenario === "denied" ? "current native deny" : "allowed_via_approval", auditEventId: "audit-native" };
+      const executeApprovedAction = vi.fn<ApprovedExternalRuntimePendingActionPort["executeApprovedAction"]>(async () => policyResult);
+      const transport = vi.fn<ApprovedExternalRuntimePendingActionPort["invokeApprovedMcpRuntime"]>(async (_input, markStarted) => {
+        await markStarted?.();
+        return scenario === "unknown"
+          ? { ok: false, error: "connection lost after send", externalOutcome: "unknown_after_send", manualReconciliationRequired: true }
+          : { ok: true, output: "native response" };
+      });
+      const port = createPort(storage, { resolveNativeMcpChatToolBinding: resolveBinding,
+        executeApprovedAction, invokeApprovedMcpRuntime: transport });
+      const call = executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
+      if (scenario === "missing" || scenario === "drift") {
+        await expect(call).rejects.toThrow(/frozen target binding|target binding drifted/);
+        expect(transport).not.toHaveBeenCalled();
+        if (scenario === "missing") expect(executeApprovedAction).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await call;
+      expect(executeApprovedAction).toHaveBeenCalledExactlyOnceWith(approvalId, undefined, {
+        deferResolution: true, externalRuntimeReplay: true, mcpToolBinding: policyBinding,
+      });
+      expect(port.invokeApprovedExternalRuntimeTool).not.toHaveBeenCalled();
+      if (scenario === "denied") {
+        expect(result.outcome).toBe("blocked");
+        expect(transport).not.toHaveBeenCalled();
+        expect(resolveBinding).toHaveBeenCalledTimes(1);
+      } else {
+        expect(resolveBinding).toHaveBeenCalledTimes(2);
+        expect(transport).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          serverId: "server.with.dots", toolName: "tool.echo", arguments: request.args,
+        }), expect.any(Function), { wardEffect: undefined });
+        expect(result).toMatchObject({ outcome: "executed", result: { toolName: nativeToolName,
+          ...(scenario === "unknown" ? { externalOutcome: "unknown_after_send", manualReconciliationRequired: true } : { ok: true }),
+        } });
+        expect(storage.pendingApprovalActions.find(approvalId)?.request).toMatchObject(request);
+      }
+    },
+  );
 
   it("routes a non-MCP external runtime only after replay policy and records the concrete boundary", async () => {
     const { storage, approvalId, pending } = createHarness(

@@ -7,6 +7,7 @@ vi.mock("node:sqlite", () => ({
 
 import { GatewayService } from "./gateway-service.js";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 
 function createGatewayHarness() {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
@@ -21,6 +22,32 @@ function createGatewayHarness() {
 }
 
 describe("GatewayService low-hanging facade delegation", () => {
+  it.each(["fs.read", "channel.send", "mcp.invoke"])(
+    "blocks approved worker-owned %s before any local executor runs", async (toolName) => {
+      const gateway = createGatewayHarness();
+      gateway.storage = {
+        pendingApprovalActions: {
+          find: vi.fn(async () => ({ approvalId: "worker-approval", actionType: "tool.invoke", resolutionStatus: "pending",
+            request: { toolName, runId: "worker-run", turnId: "worker-turn" } })),
+          markResolved: vi.fn(),
+        },
+        approvals: { get: vi.fn(async () => ({ linkage: { runId: "worker-run", turnId: "worker-turn" } })) },
+        chatToolRuns: { listByTurn: vi.fn(async () => []) },
+        chatExecutionPlacements: { get: vi.fn(async () => ({ executionKind: "remote_worker" })) },
+        approvalEvents: { append: vi.fn() },
+        runImmediateTransaction: async (work: () => Promise<unknown>) => await work(),
+      };
+      gateway.policyEngine = { executeApprovedAction: vi.fn() };
+      gateway.executeApprovedExternalRuntimePendingAction = vi.fn();
+      await expect((GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "worker-approval"))
+        .rejects.toBeInstanceOf(RemoteWorkerApprovalResumeRequiredError);
+      expect(gateway.policyEngine.executeApprovedAction).not.toHaveBeenCalled();
+      expect(gateway.executeApprovedExternalRuntimePendingAction).not.toHaveBeenCalled();
+      expect(gateway.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalled();
+      expect(gateway.storage.approvalEvents.append).not.toHaveBeenCalled();
+    },
+  );
+
   it("rolls back a policy-context denial when its canonical approval event cannot commit", async () => {
     const gateway = createGatewayHarness();
     let resolutionStatus = "pending";

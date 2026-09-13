@@ -1,6 +1,9 @@
 #include <windows.h>
 
 #include "ed25519_runtime.hpp"
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+#include "protocol.hpp"
+#endif
 
 #include "monocypher-ed25519.h"
 #include "monocypher.h"
@@ -788,6 +791,18 @@ bool RunFixedInteropForTest(
 
 bool WasLastSha512ContextWipedForTest() noexcept {
   return g_last_sha512_context_wiped;
+}
+
+bool CheckTlsClientCertificateVerifyForTest(
+    const std::array<std::uint8_t, 44U>& spki,
+    const std::uint8_t* signature, std::size_t signature_length,
+    const std::uint8_t* preimage, std::size_t preimage_length) noexcept {
+  if (signature == nullptr || signature_length != 64U ||
+      !IsTlsClientCertificateVerifyPreimage(preimage, preimage_length)) return false;
+  for (std::size_t index = 0U; index < kSpkiPrefix.size(); ++index) {
+    if (spki[index] != kSpkiPrefix[index]) return false;
+  }
+  return crypto_ed25519_check(signature, spki.data() + kSpkiPrefix.size(), preimage, preimage_length) == 0;
 }
 
 #endif

@@ -44,6 +44,9 @@ describe("InboundChannelEventRepository", () => {
       assert.equal(duplicate.outcome, "duplicate");
       assert.equal(duplicate.event.eventId, "event-1");
       assert.equal(duplicate.event.payloadHash, first.event.payloadHash);
+      assert.equal(repo.latestAcceptedAt("telegram", "connection-1"), "2026-07-13T10:00:00.000Z");
+      assert.equal(repo.latestAcceptedAt("slack", "connection-1"), undefined);
+      assert.equal(repo.latestAcceptedAt("telegram", "another-connection"), undefined);
 
       assert.throws(
         () =>

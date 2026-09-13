@@ -63,6 +63,8 @@ function buildProps(overrides: Record<string, unknown> = {}): any {
 
   return {
     mode: "code",
+    draft: "",
+    onDraftChange: vi.fn(),
     loading: false,
     thread: {
       sessionId: "session-1",

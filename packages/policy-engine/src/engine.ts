@@ -21,13 +21,14 @@ import type {
   ToolRiskLevel,
 } from "@goatcitadel/contracts";
 import {
-  evaluateWards,
+  evaluateWardsForActions,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   HEARTBEAT_RESTRICTED_PROFILE,
   splitUtf8HeadTail,
 } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import { channelDeliveryPartRequestHash, isChannelDeliveryPartId } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ApprovalGate, type ApprovalCreateAuthority, type ApprovalCreateCommitPort } from "./approval-gate.js";
@@ -46,6 +47,12 @@ import {
 } from "./research-search-official-providers.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
+import {
+  readMcpToolPolicyBinding,
+  readMcpPolicyTargetFromWrapper,
+  type McpToolPolicyBinding,
+} from "./mcp-tool-policy-binding.js";
+import { readMeshToolPolicyBinding, MESH_TOOL_POLICY_DEFINITION, type MeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import {
   assertHostAllowed,
@@ -276,10 +283,16 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
  * authority and must never be serialized into an approval or accepted over a
  * wire API.
  */
-export interface ToolPolicyInvokeOptions {
+export interface ToolPolicyEvaluateOptions {
+  /** Trusted runtime mapping, never read from ToolInvokeRequest or policyContext. */
+  mcpToolBinding?: McpToolPolicyBinding;
+  meshToolBinding?: MeshToolPolicyBinding;
+}
+
+export interface ToolPolicyInvokeOptions extends ToolPolicyEvaluateOptions {
   beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void>;
   externalSideEffect?: {
-    markStarted(): void;
+    markStarted(): void | Promise<void>;
     markNotRequired(): void;
   };
 }
@@ -334,10 +347,15 @@ export class ToolPolicyEngine {
     return this.storage.toolGrants.revoke(grantId, undefined, revokedBy);
   }
 
-  public async evaluateAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
-    const evaluation = await this.evaluateAccessInternal(input);
+  public async evaluateAccess(
+    input: ToolAccessEvaluateRequest,
+    options: ToolPolicyEvaluateOptions = {},
+  ): Promise<ToolAccessEvaluateResponse> {
+    const identity = this.resolveInvocationPolicy(input, options);
+    const evaluation = await this.evaluateAccessInternal(input, options);
     await this.storage.toolAccessDecisions.record({
-      toolName: input.toolName,
+      toolName: identity.accountingToolName,
+      policyToolName: identity.mappedTarget?.policyToolName,
       agentId: input.agentId,
       sessionId: input.sessionId,
       workspaceId: input.workspaceId,
@@ -362,12 +380,19 @@ export class ToolPolicyEngine {
    * canonical invocation still re-evaluates and records the limit-counting
    * decision before execution.
    */
-  public async inspectAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
-    const evaluation = await this.evaluateAccessInternal(input);
+  public async inspectAccess(
+    input: ToolAccessEvaluateRequest,
+    options: ToolPolicyEvaluateOptions = {},
+  ): Promise<ToolAccessEvaluateResponse> {
+    const evaluation = await this.evaluateAccessInternal(input, options);
     return toToolAccessEvaluateResponse(input.toolName, evaluation);
   }
 
   public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {
+    const identity = this.resolveInvocationPolicy(request, options);
+    if (identity.binding && request.externalRuntime !== true) {
+      throw new ToolExecutionPreconditionError("Mapped remote tools require the external runtime owner");
+    }
     const pendingActionRequest = toPendingApprovalRequestRecord(request);
     assertNoRawRemoteApprovalBearer(pendingActionRequest);
     const directApprovalBypassId = await getVerifiedApprovalBypassId(request, this.storage);
@@ -376,6 +401,8 @@ export class ToolPolicyEngine {
         ...(request.externalRuntime === true ? { deferResolution: true } : {}),
         beforeExecute: options.beforeExecute,
         externalSideEffect: options.externalSideEffect,
+        mcpToolBinding: options.mcpToolBinding,
+        meshToolBinding: options.meshToolBinding,
       });
       if (result) {
         return result;
@@ -384,13 +411,13 @@ export class ToolPolicyEngine {
 
     const auditEventId = randomUUID();
     const startedAt = new Date().toISOString();
-    const toolDef = this.registry.get(request.toolName);
-    const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
+    const { capabilityPolicy } = identity;
     const internalCall = buildInternalToolCall(request, capabilityPolicy, startedAt);
-    const evaluation = await this.evaluateAccessInternal(request);
+    const evaluation = await this.evaluateAccessInternal(request, options);
 
     await this.storage.toolAccessDecisions.record({
-      toolName: request.toolName,
+      toolName: identity.accountingToolName,
+      policyToolName: identity.mappedTarget?.policyToolName,
       agentId: request.agentId,
       sessionId: request.sessionId,
       workspaceId: request.workspaceId,
@@ -486,6 +513,14 @@ export class ToolPolicyEngine {
             request: pendingActionRequest,
             expiresAt: createdApproval.expiresAt,
           });
+
+          if (isChannelDeliveryPartId(request.toolRunId)) {
+            await this.storage.channelDeliveryParts.bindApproval(
+              request.toolRunId,
+              channelDeliveryPartRequestHash(request),
+              createdApproval.approvalId,
+            );
+          }
 
           await this.storage.approvalEvents.append({
             approvalId: createdApproval.approvalId,
@@ -707,6 +742,8 @@ export class ToolPolicyEngine {
       externalRuntimeReplay?: boolean;
       beforeExecute?: ToolPolicyInvokeOptions["beforeExecute"];
       externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
+      mcpToolBinding?: McpToolPolicyBinding;
+      meshToolBinding?: MeshToolPolicyBinding;
     },
   ): Promise<ToolInvokeResult | undefined> {
     const pending = await this.storage.pendingApprovalActions.find(approvalId);
@@ -759,13 +796,17 @@ export class ToolPolicyEngine {
         : approvedRequest;
     const auditEventId = randomUUID();
     const startedAt = new Date().toISOString();
-    const approvedToolDef = this.registry.get(executionRequest.toolName);
-    const approvedCapabilityPolicy = deriveToolCapabilityPolicy(executionRequest.toolName, approvedToolDef);
+    const identity = this.resolveInvocationPolicy(executionRequest, options);
+    if (identity.binding && executionRequest.externalRuntime !== true) {
+      throw new ToolExecutionPreconditionError("Mapped remote tools require the external runtime owner");
+    }
+    const approvedCapabilityPolicy = identity.capabilityPolicy;
     const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
-    const evaluation = await this.evaluateAccessInternal(executionRequest);
+    const evaluation = await this.evaluateAccessInternal(executionRequest, options);
 
     await this.storage.toolAccessDecisions.record({
-      toolName: executionRequest.toolName,
+      toolName: identity.accountingToolName,
+      policyToolName: identity.mappedTarget?.policyToolName,
       agentId: executionRequest.agentId,
       sessionId: executionRequest.sessionId,
       workspaceId: executionRequest.workspaceId,
@@ -884,9 +925,56 @@ export class ToolPolicyEngine {
     return result;
   }
 
-  private async evaluateAccessInternal(request: ToolAccessEvaluateRequest): Promise<AccessEvaluation> {
-    const toolDef = this.registry.get(request.toolName);
-    const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
+  private resolveInvocationPolicy(request: ToolAccessEvaluateRequest, options: ToolPolicyEvaluateOptions = {}) {
+    if (options.mcpToolBinding && options.meshToolBinding) {
+      throw new ToolExecutionPreconditionError("Remote policy mappings are mutually exclusive");
+    }
+    const mcpBinding = readMcpToolPolicyBinding(options.mcpToolBinding, request.toolName);
+    const meshBinding = readMeshToolPolicyBinding(options.meshToolBinding, request.toolName);
+    const binding = mcpBinding ?? meshBinding;
+    const mappedTarget = binding ?? readMcpPolicyTargetFromWrapper(request);
+    if (mappedTarget && this.registry.get(mappedTarget.canonicalName)) {
+      throw new ToolExecutionPreconditionError("Remote policy mapping collides with a registered tool");
+    }
+    if (meshBinding && this.registry.get(meshBinding.policyToolName)) {
+      throw new ToolExecutionPreconditionError("Mesh policy template collides with a registered tool");
+    }
+    const policyToolName = mappedTarget?.policyToolName ?? request.toolName;
+    const toolDef = meshBinding ? MESH_TOOL_POLICY_DEFINITION : this.registry.get(policyToolName);
+    const accountingToolName = mappedTarget?.canonicalName ?? request.toolName;
+    const rawMcpArguments = request.args?.arguments;
+    const mcpArguments =
+      rawMcpArguments && typeof rawMcpArguments === "object" && !Array.isArray(rawMcpArguments)
+        ? (rawMcpArguments as Record<string, unknown>)
+        : {};
+    const evaluationRequest: ToolAccessEvaluateRequest = mappedTarget
+      ? {
+          ...request,
+          toolName: accountingToolName,
+          args: request.toolName === "mcp.invoke" ? mcpArguments : request.args,
+        }
+      : request;
+    return {
+      binding,
+      mappedTarget,
+      toolDef,
+      accountingToolName,
+      evaluationRequest,
+      capabilityPolicy: deriveToolCapabilityPolicy(policyToolName, toolDef),
+    };
+  }
+
+  private async evaluateAccessInternal(
+    input: ToolAccessEvaluateRequest,
+    options: ToolPolicyEvaluateOptions = {},
+  ): Promise<AccessEvaluation> {
+    const {
+      mappedTarget,
+      toolDef,
+      capabilityPolicy,
+      evaluationRequest: request,
+    } = this.resolveInvocationPolicy(input, options);
+    const toolNames = mappedTarget ? [request.toolName, mappedTarget.policyToolName] : [request.toolName];
     const riskLevel = toolDef?.riskLevel ?? "caution";
     const shellRisk = this.evaluateShellRisk(request);
     const argumentRisk = this.evaluateArgumentRisk(request);
@@ -903,7 +991,7 @@ export class ToolPolicyEngine {
       localOperatorOverrideId: localOperatorOverrideAuditId,
       approvalMode: policy.approvalMode,
     });
-    if (matchesAnyToolPattern(policy.denySet, request.toolName)) {
+    if (toolNames.some((name) => matchesAnyToolPattern(policy.denySet, name))) {
       return withPolicy(deny(riskLevel, "policy_deny", "tool denied by policy"));
     }
 
@@ -922,7 +1010,7 @@ export class ToolPolicyEngine {
         : undefined;
     if (
       activePermissionProfile &&
-      !matchesAnyToolPattern(new Set(activePermissionProfile.toolPatterns), request.toolName)
+      !toolNames.some((name) => matchesAnyToolPattern(new Set(activePermissionProfile.toolPatterns), name))
     ) {
       return withPolicy(deny(riskLevel, "permission_profile_upper_bound", "tool not available in resolved policy"));
     }
@@ -935,7 +1023,7 @@ export class ToolPolicyEngine {
 
     // Citadel Wards (deny-wins) gate the request before grants.
     const rawWardEffect = effectiveCitadelId
-      ? await this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
+      ? await this.evaluateCitadelWards(effectiveCitadelId, toolNames)
       : undefined;
     // The matched effect surfaced to callers: `evaluateWards` returns "allow" on
     // no-match, so collapse both "allow" and absence to `undefined`. Set ONLY when
@@ -955,7 +1043,7 @@ export class ToolPolicyEngine {
     }
     const wardRequiresApproval = rawWardEffect === "require_approval";
 
-    const grantDecision = await this.resolveGrantDecision(request, toolDef);
+    const grantDecision = await this.resolveGrantDecision(request, toolDef, mappedTarget?.policyToolName);
     if (grantDecision?.decision === "deny") {
       return withWard({
         allowed: false,
@@ -1007,7 +1095,7 @@ export class ToolPolicyEngine {
       });
     }
 
-    const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
+    const inProfile = toolNames.some((name) => matchesAnyToolPattern(policy.effectiveTools, name));
     const hasAllowGrant = grantDecision?.decision === "allow" && !grantDecision.constraintsError;
     if (!inProfile && !hasAllowGrant) {
       return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
@@ -1030,6 +1118,7 @@ export class ToolPolicyEngine {
         request,
         (await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
           grantDecision.grant,
+        mappedTarget?.policyToolName,
       ))
     ) {
       requiresApproval = true;
@@ -1279,19 +1368,20 @@ export class ToolPolicyEngine {
    * `citadel_wards` table directly (preserving the rich WardEffects) rather than
    * mirroring Wards into tool-grants (which would be lossy to allow/deny).
    */
-  private async evaluateCitadelWards(citadelId: string, action: string): Promise<WardEffect | undefined> {
+  private async evaluateCitadelWards(citadelId: string, actions: readonly string[]): Promise<WardEffect | undefined> {
     const citadelRepo = this.storage.citadels as unknown as
       | { listWards?: (id: string) => Promise<CitadelWardRecord[]> }
       | undefined;
     if (!citadelRepo?.listWards) {
       return undefined;
     }
-    return evaluateWards(await citadelRepo.listWards(citadelId), action);
+    return evaluateWardsForActions(await citadelRepo.listWards(citadelId), actions);
   }
 
   private async resolveGrantDecision(
     request: ToolAccessEvaluateRequest,
     toolDef?: ToolDefinition,
+    policyToolName?: string,
   ): Promise<GrantDecision | undefined> {
     const scoped = buildScopeCandidates(request);
     // Scope reads are independent. Resolve them concurrently, then flatten in the
@@ -1304,7 +1394,8 @@ export class ToolPolicyEngine {
           (grant) =>
             grant.scope === candidate.scope &&
             grant.scopeRef === candidate.scopeRef &&
-            matchesToolPattern(grant.toolPattern, request.toolName),
+            (matchesToolPattern(grant.toolPattern, request.toolName) ||
+              (policyToolName !== undefined && matchesToolPattern(grant.toolPattern, policyToolName))),
         ),
       ),
     );
@@ -1326,7 +1417,7 @@ export class ToolPolicyEngine {
       if (grant.decision !== "allow") {
         continue;
       }
-      const constraintsError = await this.applyGrantConstraints(request, grant, toolDef);
+      const constraintsError = await this.applyGrantConstraints(request, grant, toolDef, policyToolName);
       if (!constraintsError) {
         allowedGrants.push(grant);
         continue;
@@ -1359,6 +1450,7 @@ export class ToolPolicyEngine {
     request: ToolAccessEvaluateRequest,
     grant: ToolGrantRecord,
     toolDef?: ToolDefinition,
+    policyToolName?: string,
   ): Promise<string | undefined> {
     const constraints = grant.constraints;
     if (!constraints) {
@@ -1371,7 +1463,8 @@ export class ToolPolicyEngine {
 
     if (typeof constraints.maxCallsPerHour === "number") {
       const count = await this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
-        toolName: request.toolName,
+        toolName:
+          policyToolName && matchesToolPattern(grant.toolPattern, policyToolName) ? policyToolName : request.toolName,
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,
@@ -1457,10 +1550,15 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private async isFirstMutationInScope(request: ToolAccessEvaluateRequest, grant: ToolGrantRecord): Promise<boolean> {
+  private async isFirstMutationInScope(
+    request: ToolAccessEvaluateRequest,
+    grant: ToolGrantRecord,
+    policyToolName?: string,
+  ): Promise<boolean> {
     return (
       (await this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
-        toolName: request.toolName,
+        toolName:
+          policyToolName && matchesToolPattern(grant.toolPattern, policyToolName) ? policyToolName : request.toolName,
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,
@@ -1809,19 +1907,23 @@ export class ToolPolicyEngine {
       await options.beforeExecute?.();
     }
     let externalSideEffectStarted = false;
-    const markExternalSideEffectStarted = () => {
+    let externalSideEffectStart: Promise<void> | undefined;
+    const markExternalSideEffectStarted = async () => {
       if (externalSideEffectStarted) {
         return;
       }
-      options.externalSideEffect?.markStarted();
-      externalSideEffectStarted = true;
+      externalSideEffectStart ??= (async () => {
+        await options.externalSideEffect?.markStarted();
+        externalSideEffectStarted = true;
+      })();
+      await externalSideEffectStart;
     };
     let executorRuntimeHooks: ToolExecutorRuntimeHooks = options.externalSideEffect
       ? {
           ...this.runtimeHooks,
-          beforeExternalSideEffect: () => {
-            this.runtimeHooks.beforeExternalSideEffect?.();
-            markExternalSideEffectStarted();
+          beforeExternalSideEffect: async () => {
+            await this.runtimeHooks.beforeExternalSideEffect?.();
+            await markExternalSideEffectStarted();
           },
         }
       : this.runtimeHooks;
@@ -1843,7 +1945,7 @@ export class ToolPolicyEngine {
       // Executors without a deeper provider adapter remain conservative. This
       // preserves non-replayability for local mutations while comms/http can
       // report their exact dispatch boundary after validation.
-      markExternalSideEffectStarted();
+      await markExternalSideEffectStarted();
     }
     try {
       const result = await executeTool(executionRequest, this.config, this.storage, executorRuntimeHooks);
@@ -2734,6 +2836,8 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
     agentId,
     sessionId,
     turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId : undefined,
+    toolRunId: typeof value.toolRunId === "string" && value.toolRunId.trim() ? value.toolRunId : undefined,
+    citadelId: typeof value.citadelId === "string" && value.citadelId.trim() ? value.citadelId : undefined,
     workspaceId,
     taskId,
     runId,

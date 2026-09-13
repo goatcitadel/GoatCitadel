@@ -1,4 +1,5 @@
 #include "availability_broker.hpp"
+#include "local_transport.hpp"
 
 #include <algorithm>
 #include <array>
@@ -112,7 +113,8 @@ bool RequiredPrivilegesAreExact(
 bool ValidateCommonServiceConfiguration(
     const AvailabilityServiceSnapshot& snapshot,
     const AvailabilityFixedPath& expected_binary_path,
-    std::uint32_t expected_start_type) noexcept {
+    std::uint32_t expected_start_type,
+    bool allow_worker_query) noexcept {
   if (snapshot.configured_service_type != SERVICE_WIN32_OWN_PROCESS ||
       snapshot.configured_start_type != expected_start_type ||
       snapshot.configured_error_control != SERVICE_ERROR_NORMAL ||
@@ -126,7 +128,7 @@ bool ValidateCommonServiceConfiguration(
       !RequiredPrivilegesAreExact(snapshot) || !snapshot.service_dacl_present ||
       snapshot.service_dacl_defaulted || !snapshot.service_dacl_protected ||
       !snapshot.service_dacl_non_inheriting ||
-      snapshot.service_ace_count != 2U) {
+      snapshot.service_ace_count != (allow_worker_query ? 3U : 2U)) {
     return false;
   }
   const AvailabilitySid system = MakeNtSid(
@@ -135,6 +137,16 @@ bool ValidateCommonServiceConfiguration(
       kAdministratorsSidParts.data(), kAdministratorsSidParts.size());
   if (!EqualSidSnapshot(snapshot.service_object_owner, system)) {
     return false;
+  }
+  if (allow_worker_query) {
+    const AvailabilitySid worker = MakeNtSid(
+        kRuntimeWorkerSidParts.data(), kRuntimeWorkerSidParts.size());
+    const AvailabilityAce& worker_ace = snapshot.service_aces[2U];
+    if (worker_ace.type != ACCESS_ALLOWED_ACE_TYPE || worker_ace.flags != 0U ||
+        worker_ace.mask != kRuntimeWorkerSignerQueryMask ||
+        !EqualSidSnapshot(worker_ace.sid, worker)) {
+      return false;
+    }
   }
   const AvailabilityAce& system_ace = snapshot.service_aces[0U];
   const AvailabilityAce& administrators_ace = snapshot.service_aces[1U];
@@ -148,13 +160,21 @@ bool ValidateCommonServiceConfiguration(
 }
 
 bool StatusMetadataIsExact(
-    const AvailabilityServiceSnapshot& snapshot) noexcept {
-  if (snapshot.win32_exit_code != NO_ERROR ||
+    const AvailabilityServiceSnapshot& snapshot,
+    bool allow_never_started) noexcept {
+  const bool never_started = allow_never_started &&
+      snapshot.current_state == SERVICE_STOPPED && snapshot.service_process_id == 0U &&
+      snapshot.win32_exit_code == ERROR_SERVICE_NEVER_STARTED;
+  if ((snapshot.win32_exit_code != NO_ERROR && !never_started) ||
       snapshot.service_specific_exit_code != 0U) {
     return false;
   }
   if (snapshot.current_state == SERVICE_START_PENDING ||
       snapshot.current_state == SERVICE_STOP_PENDING) {
+    // SCM publishes this exact bootstrap status before ServiceMain can report
+    // its first checkpoint. It is valid only for the fixed signer target.
+    if (allow_never_started && snapshot.current_state == SERVICE_START_PENDING &&
+        snapshot.checkpoint == 0U && snapshot.wait_hint == 2000U) return true;
     return snapshot.checkpoint != 0U && snapshot.wait_hint != 0U &&
            snapshot.wait_hint <= 30000U;
   }
@@ -197,29 +217,66 @@ std::uint32_t AvailabilityWaitMilliseconds(
 
 bool ValidateAvailabilityBrokerSnapshot(
     const AvailabilityServiceSnapshot& snapshot,
-    const AvailabilityFixedPath& expected_binary_path) noexcept {
+    const AvailabilityFixedPath& expected_binary_path,
+    bool starting) noexcept {
   return snapshot.exact_service_main_arguments &&
          snapshot.current_process_id != 0U &&
          snapshot.current_process_id == snapshot.service_process_id &&
          snapshot.status_service_type == SERVICE_WIN32_OWN_PROCESS &&
-         snapshot.current_state == SERVICE_START_PENDING &&
+         snapshot.current_state == static_cast<DWORD>(starting ? SERVICE_START_PENDING : SERVICE_RUNNING) &&
          snapshot.service_flags == 0U &&
-         StatusMetadataIsExact(snapshot) &&
+         StatusMetadataIsExact(snapshot, false) &&
          ValidateCommonServiceConfiguration(
-             snapshot, expected_binary_path, SERVICE_DEMAND_START);
+             snapshot, expected_binary_path, SERVICE_DEMAND_START, false);
 }
 
 bool ValidateAvailabilityTargetSnapshot(
     const AvailabilityServiceSnapshot& snapshot,
     const AvailabilityFixedPath& expected_binary_path) noexcept {
   return snapshot.status_service_type == SERVICE_WIN32_OWN_PROCESS &&
-         StatusMetadataIsExact(snapshot) &&
+         StatusMetadataIsExact(snapshot, true) &&
          ValidateCommonServiceConfiguration(
-             snapshot, expected_binary_path, SERVICE_DEMAND_START) &&
+             snapshot, expected_binary_path, SERVICE_DEMAND_START, true) &&
          ClassifyAvailabilityAction(
              snapshot.current_state,
              snapshot.service_process_id,
              snapshot.service_flags) != AvailabilityAction::Reject;
+}
+
+AvailabilityIdentityValidation RunAvailabilitySupervisor(
+    const AvailabilitySupervisorPorts& ports) noexcept {
+  if (!ports.context || !ports.stop_requested || !ports.verify_broker ||
+      !ports.publish_running || !ports.ensure_target ||
+      !ports.await_target_completion || !ports.pause_before_restart) {
+    return AvailabilityIdentityValidation::ServiceIdentity;
+  }
+  const auto stopping = [&ports]() noexcept { return ports.stop_requested(ports.context); };
+  const auto finish = [&stopping](AvailabilityIdentityValidation result) noexcept {
+    return result == AvailabilityIdentityValidation::LaunchContext && stopping()
+        ? AvailabilityIdentityValidation::Valid : result;
+  };
+  if (stopping()) return AvailabilityIdentityValidation::Valid;
+  if (!ports.verify_broker(ports.context, true)) return AvailabilityIdentityValidation::ServiceIdentity;
+  if (stopping()) return AvailabilityIdentityValidation::Valid;
+  // Windows forbids starting another service during our own initialization.
+  // RUNNING means supervision is active, not that a signer request succeeded.
+  if (!ports.publish_running(ports.context)) return AvailabilityIdentityValidation::ServiceIdentity;
+  for (;;) {
+    if (stopping()) return AvailabilityIdentityValidation::Valid;
+    if (!ports.verify_broker(ports.context, false)) return AvailabilityIdentityValidation::ServiceIdentity;
+    if (stopping()) return AvailabilityIdentityValidation::Valid;
+    bool completed = false;
+    auto result = ports.ensure_target(ports.context, &completed);
+    if (result != AvailabilityIdentityValidation::Valid) return finish(result);
+    if (stopping()) return AvailabilityIdentityValidation::Valid;
+    if (!completed) {
+      result = ports.await_target_completion(ports.context);
+      if (result != AvailabilityIdentityValidation::Valid) return finish(result);
+    }
+    if (stopping()) return AvailabilityIdentityValidation::Valid;
+    result = ports.pause_before_restart(ports.context);
+    if (result != AvailabilityIdentityValidation::Valid) return finish(result);
+  }
 }
 
 }  // namespace goatcitadel::remote_worker_provisioner

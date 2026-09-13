@@ -7,7 +7,11 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
   ToolPolicyActorContext,
+  WardEffect,
 } from "@goatcitadel/contracts";
+import { ToolExecutionPreconditionError, type McpToolPolicyBinding, type MeshToolPolicyBinding } from "@goatcitadel/policy-engine";
+import { isNativeMcpToolName, type NativeMcpChatToolBinding } from "./native-mcp-chat-binding.js";
+import { isMeshChatToolName, type MeshChatToolBinding } from "./mesh-chat-binding.js";
 import {
   executeApprovedExternalRuntimeSideEffect,
   type ApprovedExternalRuntimeSideEffectInput,
@@ -17,6 +21,8 @@ type ApprovedExternalRuntimeExecutionOptions =
   | {
       deferResolution: true;
       externalRuntimeReplay: true;
+      mcpToolBinding?: McpToolPolicyBinding;
+      meshToolBinding?: MeshToolPolicyBinding;
     }
   | {
       deferResolution: true;
@@ -28,13 +34,23 @@ type ApprovedExternalRuntimeExecutionOptions =
 
 export interface ApprovedExternalRuntimePendingActionPort {
   storage: ApprovedExternalRuntimeSideEffectInput["storage"];
+  resolveNativeMcpChatToolBinding?(request: ToolInvokeRequest): Promise<NativeMcpChatToolBinding | undefined>;
+  resolveMeshChatToolBinding?(request: ToolInvokeRequest): Promise<MeshChatToolBinding | undefined>;
+  invokeApprovedMeshRuntime?(
+    request: ToolInvokeRequest, policyResult: ToolInvokeResult, approvalId: string,
+    markExternalCallStarted: () => void | Promise<void>,
+  ): Promise<ToolInvokeResult>;
   executeApprovedAction(
     approvalId: string,
     signal: AbortSignal | undefined,
     options: ApprovedExternalRuntimeExecutionOptions,
   ): Promise<ToolInvokeResult | undefined>;
   enrichMcpInvokePolicyContext(input: McpInvokeRequest): Promise<McpInvokeRequest>;
-  invokeApprovedMcpRuntime(input: McpInvokeRequest, markExternalCallStarted?: () => void): Promise<McpInvokeResponse>;
+  invokeApprovedMcpRuntime(
+    input: McpInvokeRequest,
+    markExternalCallStarted?: () => void | Promise<void>,
+    options?: { wardEffect?: WardEffect },
+  ): Promise<McpInvokeResponse>;
   invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
     markExternalCallStarted?: () => void,
@@ -67,21 +83,44 @@ export async function executeApprovedExternalRuntimePendingAction(
         return result ?? staleApprovedActionResult(false);
       }
 
+      const native = isNativeMcpToolName(storedRequest.toolName);
+      const mesh = isMeshChatToolName(storedRequest.toolName);
+      const meshBinding = mesh ? await port.resolveMeshChatToolBinding?.(storedRequest) : undefined;
+      if (mesh && (!meshBinding || !port.invokeApprovedMeshRuntime)) {
+        throw new ToolExecutionPreconditionError("Approved mesh invocation has no frozen target or runtime owner");
+      }
+      const nativeBinding = native ? await port.resolveNativeMcpChatToolBinding?.(storedRequest) : undefined;
+      if (native && !nativeBinding) {
+        throw new ToolExecutionPreconditionError("Approved native MCP invocation has no frozen target binding");
+      }
       const policyResult = await port.executeApprovedAction(approvalId, signal, {
         deferResolution: true,
         externalRuntimeReplay: true,
+        ...(nativeBinding ? { mcpToolBinding: nativeBinding.policyBinding } : {}),
+        ...(meshBinding ? { meshToolBinding: meshBinding.schema.policyBinding } : {}),
       });
       if (!policyResult || policyResult.outcome !== "executed") {
         return policyResult ?? staleApprovedActionResult(true);
       }
 
       const request = withExternalRuntimePolicyContext(storedRequest, policyResult);
-      if (request.toolName === "mcp.invoke") {
+      if (meshBinding) {
+        return port.invokeApprovedMeshRuntime!(request, policyResult, approvalId, markExternalCallStarted);
+      }
+      if (request.toolName === "mcp.invoke" || nativeBinding) {
+        // Re-read the durable profile after approval policy work; do not permit
+        // a stale or missing mapping to reach the transport owner.
+        const currentBinding = native ? await port.resolveNativeMcpChatToolBinding?.(storedRequest) : undefined;
+        if (native && (!currentBinding || currentBinding.serverId !== nativeBinding?.serverId ||
+          currentBinding.nativeToolName !== nativeBinding.nativeToolName)) {
+          throw new ToolExecutionPreconditionError("Approved native MCP target binding drifted");
+        }
         const mcpResult = await port.invokeApprovedMcpRuntime(
-          await port.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
+          await port.enrichMcpInvokePolicyContext(toMcpInvokeRequest(request, signal, currentBinding)),
           markExternalCallStarted,
+          { wardEffect: policyResult.wardEffect },
         );
-        return toolInvokeResultFromMcpApproval(policyResult, mcpResult);
+        return toolInvokeResultFromMcpApproval(policyResult, mcpResult, request.toolName);
       }
       return port.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted, { signal });
     },
@@ -95,7 +134,8 @@ export function isApprovedExternalRuntimePendingAction(
 }
 
 export function requiresApprovedExternalRuntimeAdapter(pending: PendingApprovalAction): boolean {
-  return pending.request.externalRuntime === true || readRecordString(pending.request, "toolName") === "mcp.invoke";
+  const toolName = readRecordString(pending.request, "toolName") ?? "";
+  return pending.request.externalRuntime === true || toolName === "mcp.invoke" || isNativeMcpToolName(toolName) || isMeshChatToolName(toolName);
 }
 
 export function approvedExternalRuntimeRequestMatches(
@@ -108,6 +148,9 @@ export function approvedExternalRuntimeRequestMatches(
       stableRecordStringify(request.args ?? {}) &&
     readRecordString(storedRequest, "agentId") === request.agentId &&
     readRecordString(storedRequest, "sessionId") === request.sessionId &&
+    readOptionalRecordString(storedRequest, "turnId") === (request.turnId ?? undefined) &&
+    readOptionalRecordString(storedRequest, "toolRunId") === (request.toolRunId ?? undefined) &&
+    readOptionalRecordString(storedRequest, "citadelId") === (request.citadelId ?? undefined) &&
     readOptionalRecordString(storedRequest, "workspaceId") === (request.workspaceId ?? undefined) &&
     readOptionalRecordString(storedRequest, "taskId") === (request.taskId ?? undefined) &&
     readOptionalRecordString(storedRequest, "runId") === (request.runId ?? undefined) &&
@@ -133,6 +176,9 @@ export function toToolInvokeRequest(record: Record<string, unknown>, signal?: Ab
     args: isRecord(record.args) ? record.args : {},
     agentId,
     sessionId,
+    turnId: readRecordString(record, "turnId"),
+    toolRunId: readRecordString(record, "toolRunId"),
+    citadelId: readRecordString(record, "citadelId"),
     workspaceId: readRecordString(record, "workspaceId"),
     taskId: readRecordString(record, "taskId"),
     runId: readRecordString(record, "runId"),
@@ -178,15 +224,27 @@ export function withExternalRuntimePolicyContext(
 }
 
 export function toApprovedMcpInvokeRequest(request: ToolInvokeRequest, signal?: AbortSignal): McpInvokeRequest {
-  const serverId = typeof request.args.serverId === "string" ? request.args.serverId.trim() : "";
-  const toolName = typeof request.args.toolName === "string" ? request.args.toolName.trim() : "";
+  return toMcpInvokeRequest(request, signal);
+}
+
+/** Convert the policy-owned wrapper without accepting transport authority from its arguments. */
+export function toMcpInvokeRequest(
+  request: ToolInvokeRequest,
+  signal?: AbortSignal,
+  target?: Pick<NativeMcpChatToolBinding, "serverId" | "nativeToolName">,
+): McpInvokeRequest {
+  if (target ? request.toolName !== `mcp.${target.serverId}.${target.nativeToolName}` : request.toolName !== "mcp.invoke") {
+    throw new ToolExecutionPreconditionError("MCP invocation does not match its explicit target binding");
+  }
+  const serverId = target?.serverId ?? (typeof request.args.serverId === "string" ? request.args.serverId.trim() : "");
+  const toolName = target?.nativeToolName ?? (typeof request.args.toolName === "string" ? request.args.toolName.trim() : "");
   if (!serverId || !toolName) {
-    throw new Error("Invalid approved MCP invocation payload.");
+    throw new Error("Invalid MCP invocation payload.");
   }
   return {
     serverId,
     toolName,
-    arguments: isRecord(request.args.arguments) ? request.args.arguments : {},
+    arguments: target ? request.args : isRecord(request.args.arguments) ? request.args.arguments : {},
     agentId: request.agentId,
     sessionId: request.sessionId,
     workspaceId: request.workspaceId,
@@ -204,10 +262,20 @@ export function toApprovedMcpInvokeRequest(request: ToolInvokeRequest, signal?: 
 export function toolInvokeResultFromMcpApproval(
   policyResult: ToolInvokeResult,
   mcpResult: McpInvokeResponse,
+  toolName = "mcp.invoke",
+): ToolInvokeResult {
+  return toolInvokeResultFromMcpRuntime(policyResult, mcpResult, " after approval", toolName);
+}
+
+export function toolInvokeResultFromMcpRuntime(
+  policyResult: ToolInvokeResult,
+  mcpResult: McpInvokeResponse,
+  executionContext = "",
+  toolName = "mcp.invoke",
 ): ToolInvokeResult {
   const result = {
     externalRuntime: true,
-    toolName: "mcp.invoke",
+    toolName,
     ok: mcpResult.ok,
     output: mcpResult.output,
     contentItems: mcpResult.contentItems,
@@ -222,7 +290,7 @@ export function toolInvokeResultFromMcpApproval(
         ...policyResult,
         outcome: "executed",
         policyReason:
-          `MCP runtime outcome is unknown after approval; manual reconciliation is required: ` +
+          `MCP runtime outcome is unknown${executionContext}; manual reconciliation is required: ` +
           `${mcpResult.error ?? "unknown error"}`,
         result,
       };
@@ -230,14 +298,14 @@ export function toolInvokeResultFromMcpApproval(
     return {
       ...policyResult,
       outcome: "blocked",
-      policyReason: `MCP runtime failed after approval: ${mcpResult.error ?? "unknown error"}`,
+      policyReason: `MCP runtime failed${executionContext}: ${mcpResult.error ?? "unknown error"}`,
       result,
     };
   }
   return {
     ...policyResult,
     outcome: "executed",
-    policyReason: `${policyResult.policyReason}; MCP runtime executed after approval`,
+    policyReason: `${policyResult.policyReason}; MCP runtime executed${executionContext}`,
     result,
   };
 }

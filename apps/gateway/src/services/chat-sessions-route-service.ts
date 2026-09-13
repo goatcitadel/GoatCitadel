@@ -41,6 +41,7 @@ export const chatSessionsRouteMethods = [
   "revertChatSessionWorkbenchChanges",
   "revertChatSessionWorkbenchFile",
   "runChatSessionWorkbenchCommand",
+  "previewChatSessionWorkbenchFileOperation",
   "runChatSessionWorkbenchFileOperation",
   "saveChatSessionWorkbenchFile",
   "searchChatSessions",

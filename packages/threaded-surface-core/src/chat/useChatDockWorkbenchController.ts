@@ -15,6 +15,7 @@ function getViewportWidth(): number | undefined {
 
 export function useChatDockWorkbenchController(input: {
   messageMode: ChatMode;
+  workbenchEnabled?: boolean;
   selectedSessionId: string | null;
   selectedSession: { projectId?: string | null } | null;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
@@ -45,12 +46,16 @@ export function useChatDockWorkbenchController(input: {
     workbenchSaving,
     workbenchError,
     hasDirtyWorkbenchDraft,
+    workbenchHasRemoteChanges,
+    workbenchDraftPaths,
+    rebaseWorkbenchDraft,
     setWorkbenchDraftContent,
     setWorkbenchExpandedPaths,
     refreshWorkbench,
     createWorkbenchWorktree,
     openWorkbenchFile,
     saveWorkbenchFile,
+    previewWorkbenchFileOperation,
     runWorkbenchFileOperation,
     discardWorkbenchDraft,
     runWorkbenchValidationCommand,
@@ -60,9 +65,8 @@ export function useChatDockWorkbenchController(input: {
     revertWorkbenchAll,
   } = useChatWorkbench({
     sessionId: input.selectedSessionId,
-    // Chat is the canonical home for the build editor. Keeping this keyed only
-    // to the selected session also preserves legacy Code/Cowork compatibility.
-    enabled: Boolean(input.selectedSession),
+    // The canonical host loads specialist file evidence when its owning panel opens.
+    enabled: Boolean(input.selectedSession) && input.workbenchEnabled !== false,
   });
 
   useEffect(() => {
@@ -132,12 +136,16 @@ export function useChatDockWorkbenchController(input: {
     workbenchSaving,
     workbenchError,
     hasDirtyWorkbenchDraft,
+    workbenchHasRemoteChanges,
+    workbenchDraftPaths,
+    rebaseWorkbenchDraft,
     setWorkbenchDraftContent,
     setWorkbenchExpandedPaths,
     refreshWorkbench,
     createWorkbenchWorktree,
     openWorkbenchFile,
     saveWorkbenchFile,
+    previewWorkbenchFileOperation,
     runWorkbenchFileOperation,
     discardWorkbenchDraft,
     runWorkbenchValidationCommand,

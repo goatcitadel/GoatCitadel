@@ -1,4 +1,9 @@
-import type { ChatCompletionRequest, MemoryContextPack, MemoryContextPlacement } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionRequest,
+  MemoryContextPack,
+  MemoryContextPlacement,
+  ModelUsageAttributionContext,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
 import { buildMemoryContextSystemMessage, extractPromptFromMessages } from "./llm-completion-helpers.js";
@@ -7,14 +12,15 @@ export async function composeChatCompletionMemoryContext(
   host: LlmCompletionHost,
   request: ChatCompletionRequest,
   memoryInput: ChatCompletionRequest["memory"],
+  attribution?: ModelUsageAttributionContext,
 ): Promise<MemoryContextPack | undefined> {
   if (!shouldUseChatCompletionMemoryContext(host, memoryInput)) return undefined;
 
   const prompt = extractPromptFromMessages(request.messages);
   if (!prompt.trim()) return undefined;
 
-  return await host.memoryLifecycleService.composeContext({
-    scope: "chat",
+  const input = {
+    scope: "chat" as const,
     // Scope DB memory-item collection to this turn's workspace (review Finding 1).
     // Without workspaceId the memory-item collector ran the unfiltered query and
     // could surface another workspace's items into this completion's context. Uses
@@ -23,10 +29,25 @@ export async function composeChatCompletionMemoryContext(
     prompt,
     sessionId: memoryInput?.sessionId,
     taskId: memoryInput?.taskId,
+    runId: attribution?.durableRunId ?? memoryInput?.runId,
+    signal: request.signal,
     workspace: await host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
     relationScope: memoryInput?.relationScope,
     maxContextTokens: memoryInput?.maxContextTokens,
     forceRefresh: memoryInput?.forceRefresh,
+  };
+  if (!attribution) return await host.memoryLifecycleService.composeContext(input);
+  return await host.memoryLifecycleService.composeContext(input, {
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    turnId: attribution.turnId ?? memoryInput?.turnId,
+    durableRunId: input.runId,
+    taskId: input.taskId,
+    workerId: attribution.workerId,
+    parentOperationId: attribution.operationId,
+    contextIntentHash: attribution.contextIntentHash,
+    contextEntryRefId: attribution.contextEntryRefId,
+    routeDecisionId: attribution.routeDecisionId,
   });
 }
 

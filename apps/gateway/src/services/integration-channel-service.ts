@@ -64,6 +64,7 @@ export interface IntegrationChannelPort {
   syncDiscordRuntime(): Promise<void>;
   syncSignalInboundRuntime(): Promise<void>;
   getDiscordRuntimeStatus(connectionId: string): DiscordRuntimeStatus | undefined;
+  latestAcceptedInboundAt?(channelKey: string, connectionId: string): Promise<string | undefined>;
   getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
   assertDiscordConnection(connection: IntegrationConnection): void;
   readDiscordPairings(): Promise<DiscordPairingRecord[]>;
@@ -265,6 +266,8 @@ export async function getIntegrationConnectionChannelRuntimeStatus(
     runtimePosture: capabilities.runtimePosture,
     lastReadyAt: baseReady ? (connection.lastSyncAt ?? connection.updatedAt) : undefined,
     lastError: connection.lastError,
+    lastInboundAt:
+      connection.key === "signal" ? undefined : await deps.latestAcceptedInboundAt?.(connection.key, connectionId),
     metadata: {
       setupReady: capabilities.setupReady,
       setupDiagnostics: capabilities.setupDiagnostics,
@@ -324,7 +327,7 @@ export async function getIntegrationConnectionChannelRuntimeStatus(
     ...runtimeStatus,
     ready: discordRuntime.ready,
     lastReadyAt: discordRuntime.lastReadyAt ?? runtimeStatus.lastReadyAt,
-    lastInboundAt: discordRuntime.lastInboundAt,
+    lastInboundAt: runtimeStatus.lastInboundAt ?? discordRuntime.lastInboundAt,
     lastReconnectAt: discordRuntime.lastReconnectAt,
     lastError: discordRuntime.lastError ?? runtimeStatus.lastError,
     metadata: {

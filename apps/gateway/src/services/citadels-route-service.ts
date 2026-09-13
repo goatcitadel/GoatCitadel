@@ -87,8 +87,8 @@ export interface CitadelsRoutePort {
   getRecord(citadelId: string): Promise<CitadelRecord>;
   createRecord(input: CitadelCreateInput): Promise<CitadelRecord>;
   updateRecord(citadelId: string, input: CitadelUpdateInput): Promise<CitadelRecord>;
-  archiveRecord(citadelId: string): Promise<CitadelRecord>;
-  restoreRecord(citadelId: string): Promise<CitadelRecord>;
+  archiveRecord(citadelId: string, expectedRevision: string): Promise<CitadelRecord>;
+  restoreRecord(citadelId: string, expectedRevision: string): Promise<CitadelRecord>;
   getCitadel(citadelId: string): Promise<Citadel | undefined>;
   upsertCharter(input: CitadelCharterInput): Promise<CitadelCharter>;
   createChamber(input: CitadelChamberInput): Promise<CitadelChamber>;
@@ -141,12 +141,12 @@ export class CitadelsRouteService {
     return await this.citadels.updateRecord(citadelId, input);
   }
 
-  public async archiveRecord(citadelId: string): Promise<CitadelRecord> {
-    return await this.citadels.archiveRecord(citadelId);
+  public async archiveRecord(citadelId: string, expectedRevision: string): Promise<CitadelRecord> {
+    return await this.citadels.archiveRecord(citadelId, expectedRevision);
   }
 
-  public async restoreRecord(citadelId: string): Promise<CitadelRecord> {
-    return await this.citadels.restoreRecord(citadelId);
+  public async restoreRecord(citadelId: string, expectedRevision: string): Promise<CitadelRecord> {
+    return await this.citadels.restoreRecord(citadelId, expectedRevision);
   }
 
   public async getCitadel(citadelId: string): Promise<Citadel | undefined> {

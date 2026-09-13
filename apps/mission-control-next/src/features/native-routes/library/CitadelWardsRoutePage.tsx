@@ -11,6 +11,9 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { useSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -31,15 +34,7 @@ interface WardsState {
   items: CitadelWardRecord[];
 }
 
-interface DraftState {
-  name: string;
-  actionPattern: string;
-  effect: WardEffect;
-  busy: boolean;
-  error: string | null;
-}
-
-const INITIAL_DRAFT: DraftState = { name: "", actionPattern: "", effect: "deny", busy: false, error: null };
+const EMPTY_WARD = { name: "", actionPattern: "", effect: "deny" as WardEffect };
 
 /**
  * The Gatehouse Wards editor (spec §20.3 / §11.3). Wards are evaluated deny-wins:
@@ -58,14 +53,21 @@ export function CitadelWardsRoutePage({
   const effectId = useId();
   const probeId = useId();
   const [wards, setWards] = useState<WardsState>({ loading: true, error: null, items: [] });
-  const [draft, setDraft] = useState<DraftState>(INITIAL_DRAFT);
+  const [view, setView] = useState<"new" | "test" | "rule" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
+  const leave = useDraftLeave();
+  const wardDraft = useSessionDraft(`ward:${activeCitadelId}:new`, EMPTY_WARD, undefined, { label: "New Ward", active: view === "new", onSave: (): Promise<boolean> => addWard() });
+  const draft = wardDraft.value;
+  const setDraft = wardDraft.setValue;
   const [probe, setProbe] = useState("");
   const [probeResult, setProbeResult] = useState<{ action: string; effect: string } | null>(null);
   const [selectedWardId, setSelectedWardId] = useState<string | null>(null);
   const [pendingDeleteWard, setPendingDeleteWard] = useState<CitadelWardRecord | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const selectedWard = useMemo(
-    () => wards.items.find((ward) => ward.wardId === selectedWardId) ?? wards.items[0] ?? null,
+    () => wards.items.find((ward) => ward.wardId === selectedWardId) ?? null,
     [selectedWardId, wards.items],
   );
 
@@ -77,7 +79,7 @@ export function CitadelWardsRoutePage({
         if (!cancelled) {
           setWards({ loading: false, error: null, items });
           setSelectedWardId((current) =>
-            current && items.some((ward) => ward.wardId === current) ? current : (items[0]?.wardId ?? null),
+            current && items.some((ward) => ward.wardId === current) ? current : null,
           );
         }
       })
@@ -93,9 +95,9 @@ export function CitadelWardsRoutePage({
 
   const addWard = useCallback(async () => {
     if (draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0) {
-      return;
+      return false;
     }
-    setDraft((current) => ({ ...current, busy: true, error: null }));
+    setBusy(true); setDraftError(null);
     try {
       const record = await addCitadelWard(activeCitadelId, {
         name: draft.name.trim(),
@@ -104,11 +106,15 @@ export function CitadelWardsRoutePage({
       });
       setWards((current) => ({ ...current, items: [...current.items, record] }));
       setSelectedWardId(record.wardId);
-      setDraft(INITIAL_DRAFT);
+      if (wardDraft.acceptSaved(EMPTY_WARD, undefined, draft)) setView("rule");
+      return true;
     } catch (error) {
-      setDraft((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
+      setDraftError(getErrorMessage(error));
+      return false;
+    } finally {
+      setBusy(false);
     }
-  }, [activeCitadelId, draft.actionPattern, draft.effect, draft.name]);
+  }, [activeCitadelId, draft, wardDraft.acceptSaved]);
 
   const deleteWard = useCallback(async () => {
     if (!pendingDeleteWard) {
@@ -135,11 +141,12 @@ export function CitadelWardsRoutePage({
     if (action.length === 0) {
       return;
     }
+    setProbeError(null); setProbeResult(null);
     try {
       const result = await evaluateCitadelGatehouseAction(activeCitadelId, action);
       setProbeResult(result);
     } catch (error) {
-      setProbeResult({ action, effect: getErrorMessage(error) });
+      setProbeError(getErrorMessage(error));
     }
   }, [activeCitadelId, probe]);
 
@@ -150,10 +157,14 @@ export function CitadelWardsRoutePage({
       kicker={routeKicker(route)}
       title="Wards"
       description={`Access policy for ${activeCitadelName}. Wards are evaluated deny-wins; the most restrictive matching effect governs an action.`}
-      loading={wards.loading}
+      loading={wards.loading && !wards.items.length}
       error={wards.error}
     >
-      <NativeGrid className="mc-next-native-work-pair mc-next-citadel-wards-grid">
+      <div className="mc-next-settings-button-row">
+        <NativeButton onClick={() => leave.request(() => setView("new"), [wardDraft.key])}>Add Ward{wardDraft.isDirty ? " · Unsaved" : ""}</NativeButton>
+        <NativeButton variant="outline" onClick={() => leave.request(() => setView("test"), [wardDraft.key])}>Test an action</NativeButton>
+      </div>
+      <NativeGrid className="mc-next-calm-directory">
         <NativeCard
           title="Active Wards"
           subtitle="Each Ward matches an action pattern (use * as a wildcard) and applies an effect."
@@ -168,7 +179,7 @@ export function CitadelWardsRoutePage({
                   type="button"
                   className={selectedWard?.wardId === ward.wardId ? "active" : undefined}
                   aria-pressed={selectedWard?.wardId === ward.wardId}
-                  onClick={() => setSelectedWardId(ward.wardId)}
+                  onClick={() => leave.request(() => { setSelectedWardId(ward.wardId); setView("rule"); }, [wardDraft.key])}
                 >
                   <span>
                     <strong>{ward.name}</strong>
@@ -182,7 +193,7 @@ export function CitadelWardsRoutePage({
             <p className="mc-next-ward-empty">No Wards yet — the Gatehouse default posture applies.</p>
           )}
           {selectedWard ? (
-            <section className="mc-next-ward-detail" aria-label={`${selectedWard.name} Ward detail`}>
+            <DetailInspector open={view === "rule"} title={selectedWard.name} onClose={() => setView(null)}>
               <div>
                 <span>Selected Ward</span>
                 <strong>{selectedWard.name}</strong>
@@ -202,17 +213,13 @@ export function CitadelWardsRoutePage({
                 <Trash2 size={16} />
                 Delete Ward
               </NativeButton>
-            </section>
+            </DetailInspector>
           ) : null}
         </NativeCard>
 
         <div className="mc-next-native-stack mc-next-citadel-ward-tools">
-          <NativeCard
-            title="Add a Ward"
-            subtitle="Define a pattern and the effect it should enforce."
-            density="compact"
-          >
-            {draft.error ? <NoticeBanner tone="error" message={draft.error} /> : null}
+          <DetailInspector open={view === "new"} title="Add a Ward" onClose={() => leave.request(() => setView(null), [wardDraft.key])}>
+            {draftError ? <NoticeBanner tone="error" message={draftError} /> : null}
             <label className="mc-next-mason-field" htmlFor={nameId}>
               <span>Name</span>
               <input
@@ -253,19 +260,15 @@ export function CitadelWardsRoutePage({
             </fieldset>
             <NativeButton
               variant="default"
-              disabled={draft.busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
+              disabled={busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
               onClick={() => void addWard()}
             >
               <ShieldAlert size={16} />
-              {draft.busy ? "Adding…" : "Add Ward"}
+              {busy ? "Adding…" : "Add Ward"}
             </NativeButton>
-          </NativeCard>
+          </DetailInspector>
 
-          <NativeCard
-            title="Test an action"
-            subtitle="See which effect the current Wards would apply."
-            density="compact"
-          >
+          <DetailInspector open={view === "test"} title="Test an action" onClose={() => leave.request(() => setView(null), [wardDraft.key])}>
             <label className="mc-next-mason-field" htmlFor={probeId}>
               <span>Action</span>
               <input
@@ -280,14 +283,16 @@ export function CitadelWardsRoutePage({
               <Sparkles size={16} />
               Evaluate
             </NativeButton>
+            {probeError ? <NoticeBanner tone="error" message={probeError} /> : null}
             {probeResult ? (
               <p className="mc-next-ward-result">
                 <strong>{probeResult.action}</strong> → {probeResult.effect}
               </p>
             ) : null}
-          </NativeCard>
+          </DetailInspector>
         </div>
       </NativeGrid>
+      {leave.dialog}
       <ConfirmModal
         open={Boolean(pendingDeleteWard)}
         title="Delete this Ward?"

@@ -1,3 +1,5 @@
+import { DetailInspector } from "../../../components/DetailInspector";
+import { NativeButton } from "../primitives";
 import { useEffect, useMemo, useState } from "react";
 import {
   downloadFile,
@@ -11,7 +13,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchJourneyTimeline } from "@goatcitadel/mission-control-shared/api/journey";
 import type { EngineeringLearningStatus } from "@goatcitadel/contracts";
-import { NativeCard } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
   formatBytes,
@@ -110,6 +112,8 @@ function formatRecoveredSnapshotItem(event: RecoveredSnapshotEvent): {
 
 export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   const { activeWorkspaceId, activeWorkspaceName } = props;
+  const view = props.route.view === "context" || props.route.view === "learnings" ? props.route.view : "sources";
+  const [detail, setDetail] = useState<"file" | "learning" | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [search, setSearch] = useState("");
   const [learningStatus, setLearningStatus] = useState<EngineeringLearningStatus | "all">("all");
@@ -198,7 +202,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   }
 
   useEffect(() => {
-    if (!selectedFilePath) {
+    if (!selectedFilePath || detail !== "file") {
       setPreview({ loading: false, error: null, data: null });
       return;
     }
@@ -225,13 +229,14 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
     return () => {
       cancelled = true;
     };
-  }, [selectedFilePath]);
+  }, [selectedFilePath, detail]);
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
+      <div className="mc-next-view-tabs" role="group" aria-label="Knowledge views">{([ ["sources", "Sources"], ["context", "Context use"], ["learnings", "Engineering learnings"] ] as const).filter(([id]) => id !== "learnings" || data?.learningsEnabled).map(([id, label]) => <NativeButton key={id} variant="ghost" aria-pressed={view === id} onClick={() => { setDetail(null); props.navigate({ ...props.route, view: id === "sources" ? undefined : id }); }}>{label}</NativeButton>)}</div>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <div className="mc-next-settings-grid">
-        <NativeCard
+      <div className="mc-next-calm-directory">
+        {view === "sources" ? <NativeCard
           title="Knowledge sources"
           subtitle="Browsable knowledge-oriented files and distilled context packs for this workspace."
           stats={[
@@ -258,15 +263,12 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               body: formatDateTime(item.modifiedAt),
             }))}
             selectedId={selectedFilePath}
-            onSelect={setSelectedFilePath}
+            onSelect={(id) => { setSelectedFilePath(id); setDetail("file"); }}
             emptyLabel="No knowledge files are available yet."
           />
-        </NativeCard>
+        </NativeCard> : null}
         <div className="mc-next-settings-stack">
-          <NativeCard
-            title={selectedFilePath || "Knowledge preview"}
-            subtitle={preview.data?.contentType ?? "Select a knowledge file to preview it."}
-          >
+          <DetailInspector open={detail === "file" && view === "sources"} title={selectedFilePath || "Source unavailable"} subtitle={preview.data?.contentType} onClose={() => setDetail(null)}>
             {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
             {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
             {selectedFilePath ? (
@@ -320,13 +322,13 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               />
             ) : null}
             {!preview.loading && !preview.error && preview.data ? (
-              <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2400)}</LibraryCodeBlock>
+              <LibraryCodeBlock label="Preview">{preview.data.content}</LibraryCodeBlock>
             ) : null}
             {!preview.loading && !preview.error && !preview.data ? (
               <LibraryEmptyState label="Select a knowledge file to preview it." />
             ) : null}
-          </NativeCard>
-          <NativeCard
+          </DetailInspector>
+          {view === "context" ? <NativeCard
             title="Why memory was used"
             subtitle="Recent context-pack citations expose source type, score, relation scope, freshness, and selection reason."
           >
@@ -365,8 +367,8 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               emptyLabel="No context-pack citations are available yet."
               maxHeight="min(32vh, 18rem)"
             />
-          </NativeCard>
-          <NativeCard
+          </NativeCard> : null}
+          {view === "sources" ? <NativeDisclosureCard id="recovered-snapshots"
             title="Recovered external snapshots"
             subtitle="Journey knowledge_snapshot_lifecycle evidence for approved external-source copies. These live as governed knowledge documents, not memory files; the External sources panel below owns the full import provenance chain."
           >
@@ -395,8 +397,8 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               emptyLabel="No recovered external snapshots yet. Approved knowledge-copy requests appear here."
               maxHeight="min(32vh, 18rem)"
             />
-          </NativeCard>
-          <NativeCard
+          </NativeDisclosureCard> : null}
+          {view === "context" ? <NativeCard
             title="Recent context packs"
             subtitle="Recent distilled memory contexts that the system produced for retrieval-heavy flows."
           >
@@ -429,11 +431,11 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               }))}
               emptyLabel="No recent context packs are available."
             />
-          </NativeCard>
+          </NativeCard> : null}
         </div>
       </div>
-      {data?.learningsEnabled ? (
-        <div className="mc-next-settings-grid">
+      {data?.learningsEnabled && view === "learnings" ? (
+        <div className="mc-next-calm-directory">
           <NativeCard
             title="Engineering learnings"
             subtitle="Source-grounded code-work lessons stay proposed until approval and are excluded when stale."
@@ -468,18 +470,11 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
                 body: truncateText(item.problem, 150),
               }))}
               selectedId={selectedLearning?.learningId ?? ""}
-              onSelect={setSelectedLearningId}
+              onSelect={(id) => { setSelectedLearningId(id); setDetail("learning"); }}
               emptyLabel="No engineering learnings match this workspace and status."
             />
           </NativeCard>
-          <NativeCard
-            title={selectedLearning?.title ?? "Learning evidence"}
-            subtitle={
-              selectedLearning
-                ? `${selectedLearning.status} · source run ${selectedLearning.source.runId}`
-                : "Select a learning."
-            }
-          >
+          <DetailInspector open={detail === "learning" && view === "learnings"} title={selectedLearning?.title ?? "Learning unavailable"} subtitle={selectedLearning?.status} onClose={() => setDetail(null)}>
             {selectedLearning ? (
               <>
                 <LibraryMetricGrid
@@ -563,13 +558,13 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
             ) : (
               <LibraryEmptyState label="Select a learning to inspect provenance and freshness." />
             )}
-          </NativeCard>
+          </DetailInspector>
         </div>
       ) : null}
-      <LibraryExternalSourcesSection
+      {view === "sources" ? <LibraryExternalSourcesSection
         workspaceId={activeWorkspaceId}
         onConfigureAccess={() => props.navigate({ area: "settings", section: "access", theme: props.route.theme })}
-      />
+      /> : null}
     </LibrarySectionShell>
   );
 }

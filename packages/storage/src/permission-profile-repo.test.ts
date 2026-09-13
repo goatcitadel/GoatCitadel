@@ -128,6 +128,7 @@ describe("PermissionProfileRepository", () => {
     });
 
     const updated = repo.updateProfile(custom.profileId, {
+      expectedRevision: custom.revision,
       label: "Updated profile",
       description: "After update",
       approvalMode: "approve_risky",

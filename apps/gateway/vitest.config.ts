@@ -9,6 +9,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: "@goatcitadel/contracts/mesh-schema-node",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/mesh-schema-node.ts"),
+      },
+      {
         find: "@goatcitadel/contracts/citadel-vault-node",
         replacement: path.resolve(configDir, "../../packages/contracts/src/citadel-vault-node.ts"),
       },

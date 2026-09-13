@@ -13,6 +13,7 @@ import { applyPostgresMigrationsSync, runPostgresMigrations } from "./migrator.j
 import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./migrations.js";
 import { PostgresSyncDatabaseClient } from "./sync.js";
 import { CommsDeliveryRepository } from "../comms-delivery-repo.js";
+import { CHANNEL_DELIVERY_PARTS_POSTGRES_SQL } from "../channel-delivery-parts-schema.js";
 import { ApprovalEffectRepository } from "../approval-effect-repo.js";
 import { DurableRunRepository } from "../durable-run-repo.js";
 import { ChatDelegationStepRepository } from "../chat-delegation-step-repo.js";
@@ -6307,6 +6308,8 @@ test(
         pool: { max: 1, connectionTimeoutMs: 10_000 },
       });
       try {
+        syncClient.exec("CREATE TABLE approvals (approval_id TEXT PRIMARY KEY)");
+        syncClient.exec(CHANNEL_DELIVERY_PARTS_POSTGRES_SQL);
         const repo = new CommsDeliveryRepository(syncClient);
         const stale = repo.createQueued(
           {
@@ -6337,6 +6340,10 @@ test(
           false,
         );
         assert.equal(repo.list("conn-real-pg-sent", 1)[0]?.providerMessageId, "provider-real-pg");
+        assert.equal(repo.getById("missing-delivery"), undefined);
+        assert.equal(repo.getById(sent.deliveryId)?.status, "sent");
+        assert.equal(repo.getById(sent.deliveryId)?.providerMessageId, "provider-real-pg");
+        assert.equal(repo.getById(stale.deliveryId)?.status, "failed");
       } finally {
         syncClient.close();
       }

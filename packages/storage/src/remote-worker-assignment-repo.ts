@@ -1,14 +1,30 @@
 /* eslint-disable max-lines -- Cross-dialect assignment fencing, replay, and mapping stay in one audited repository boundary. */
 import { createHash } from "node:crypto";
+import { RemoteWorkerChatPlacementRepository } from "./remote-worker-chat-placement-repo.js";
+import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
+import { DurableRunRepository } from "./durable-run-repo.js";
+import { RemoteWorkerChatTaskRepository } from "./remote-worker-chat-task-repo.js";
+import { RemoteWorkerChatParentRecoveryLedger } from "./remote-worker-chat-parent-recovery-ledger.js";
+import {
+  RemoteWorkerChatResumeLedger,
+  readChatResumeLeaseHandoff,
+  type RecordRemoteWorkerChatResumeWakeInput,
+} from "./remote-worker-chat-resume-ledger.js";
+export type { RecordRemoteWorkerChatResumeWakeInput, RemoteWorkerChatResumeRecord } from "./remote-worker-chat-resume-ledger.js";
 import {
   ConflictError,
   NotFoundError,
   REMOTE_WORKER_ASSIGNMENT_DISPATCH_AUTHORITY_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
   REMOTE_WORKER_ASSIGNMENT_MATERIALIZATION_SCHEMA_VERSION,
+  REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_SETTLEMENT_SCHEMA_VERSION,
+  REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
+  REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256,
+  REMOTE_WORKER_PROTOCOL_VERSION,
   ValidationError,
   assertRemoteWorkerAssignmentControlRecord,
+  assertRemoteWorkerAssignmentDispatchAuthority,
   assertRemoteWorkerAssignmentEventRecord,
   assertRemoteWorkerAssignmentGenerationRecord,
   assertRemoteWorkerAssignmentLeaseRecord,
@@ -24,6 +40,7 @@ import {
   normalizeRecordRemoteWorkerAssignmentMaterializationCommand,
   normalizeRecoverRemoteWorkerAssignmentCommand,
   readDurableChatTurnExecutionPayloadAuthority,
+  verifyRemoteWorkerChatContextBinding,
   normalizeRenewRemoteWorkerAssignmentLeaseCommand,
   normalizeSettleRemoteWorkerAssignmentCommand,
   normalizeStartRemoteWorkerAssignmentGenerationCommand,
@@ -52,10 +69,13 @@ import {
   type RemoteWorkerAssignmentManifest,
   type RemoteWorkerAssignmentMaterializationRecord,
   type RemoteWorkerAssignmentRecord,
+  type RemoteWorkerChatArtifactPolicy,
+  type RemoteWorkerChatContextSnapshot,
   type RemoteWorkerAssignmentSettlementRecord,
   type RemoteWorkerMeshNodeAuthorityFence,
   type RenewRemoteWorkerAssignmentLeaseCommand,
   type ResolvedRemoteWorkerAssignmentAuthority,
+  type ResolvedRemoteWorkerAssignmentParentRecovery,
   type SettleRemoteWorkerAssignmentCommand,
   type StartRemoteWorkerAssignmentGenerationCommand,
 } from "@goatcitadel/contracts";
@@ -66,14 +86,41 @@ import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-no
 import { buildRemoteWorkerTaskBoundDispatchLockPlan } from "./remote-worker-dispatch-lock-order.js";
 import { safeJsonParse } from "./safe-json.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
+import { RoutedContextSnapshotRepository } from "./routed-context-snapshot-repo.js";
+import { RemoteWorkerChatContextRepository } from "./remote-worker-chat-context-repo.js";
 
-export const REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION =
-  "goatcitadel.remote-worker-assignment-workload.v1" as const;
+export { REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION } from "@goatcitadel/contracts";
 export const REMOTE_WORKER_ASSIGNMENT_WORKLOAD_MAX_BYTES = 512 * 1024;
 
 export interface CreateRemoteWorkerAssignmentOutcome {
   disposition: "created" | "replayed";
   assignment: RemoteWorkerAssignmentRecord;
+}
+
+/** Internal scheduler input. Identity and capability/context bindings are read
+ * from the admitted Chat run; only the Gateway's execution limits are supplied. */
+export interface ScheduleRemoteWorkerChatOfferInput {
+  readonly registryWorkspaceId: string;
+  readonly executionWorkspaceId: string;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly durableRunId: string;
+  readonly dispatchOwnerId: string;
+  readonly durableRunAttempt: number;
+  readonly durableRunVersion: number;
+  readonly payloadMaterialSha256: string;
+  readonly pathJailSha256: string;
+  readonly deadlineAt: string;
+  readonly limits: Pick<
+    RemoteWorkerAssignmentManifest,
+    | "leaseTtlSeconds"
+    | "maxEventCount"
+    | "maxEventBytes"
+    | "eventLowWatermark"
+    | "eventHighWatermark"
+    | "maxOutputBytes"
+    | "maxArtifactBytes"
+  >;
 }
 
 export interface StartRemoteWorkerAssignmentGenerationOutcome {
@@ -226,6 +273,8 @@ export interface RemoteWorkerAssignmentWorkloadIdentity {
 
 export interface RemoteWorkerAssignmentWorkloadProjection extends RemoteWorkerAssignmentWorkloadIdentity {
   readonly payload: Readonly<Record<string, unknown>>;
+  readonly chatContext?: RemoteWorkerChatContextSnapshot;
+  readonly artifactPolicy?: RemoteWorkerChatArtifactPolicy;
 }
 
 export interface RemoteWorkerAssignmentOffer {
@@ -444,6 +493,165 @@ interface WorkerAuthorityRow {
 export class RemoteWorkerAssignmentRepository {
   public constructor(private readonly db: DatabaseClient) {}
 
+  /** One stable offer per admitted Chat turn. Creating the offer and validating
+   * the active Chat admission happen in the same transaction. An expired or
+   * changed replay never creates a replacement assignment or extends its limits. */
+  public scheduleTaskBoundChatOffer(input: ScheduleRemoteWorkerChatOfferInput): CreateRemoteWorkerAssignmentOutcome {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const executionWorkspaceId = identifier(input.executionWorkspaceId, "executionWorkspaceId");
+    const sessionId = identifier(input.sessionId, "sessionId");
+    const turnId = identifier(input.turnId, "turnId");
+    const durableRunId = identifier(input.durableRunId, "durableRunId");
+    const dispatchOwnerId = identifier(input.dispatchOwnerId, "dispatchOwnerId");
+    const attempt = nonNegativeInteger(input.durableRunAttempt, "durableRunAttempt");
+    const version = positiveInteger(input.durableRunVersion, "durableRunVersion");
+    const payloadSha256 = digest(input.payloadMaterialSha256, "payloadMaterialSha256");
+    const pathJailSha256 = digest(input.pathJailSha256, "pathJailSha256");
+    const idempotencyKey = `chat-offer:${sha256({ executionWorkspaceId, sessionId, turnId, durableRunId })}`;
+    const assignmentId = deriveServerId("remote-worker-assignment", registryWorkspaceId, idempotencyKey);
+    return this.db.transaction("immediate", () => {
+      // Before the assignment/run locks, acquire the same sorted session and
+      // workspace roots used by worker claim/workload and mutation admission.
+      if (this.db.dialect === "postgres") {
+        for (const key of [...new Set([sessionId, executionWorkspaceId])].sort()) {
+          this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@key, 411)) AS locked").get({ key });
+        }
+      }
+      this.acquirePostgresRootLocks(registryWorkspaceId, assignmentId);
+      let run = this.getDurableAuthorityRow(durableRunId, true);
+      if (
+        run.workflow_key !== "chat.turn.execute" ||
+        run.status !== "running" ||
+        run.lease_owner_id !== dispatchOwnerId ||
+        asNonNegativeInteger(run.attempt_count) !== attempt ||
+        asPositiveInteger(run.version) !== version ||
+        !run.lease_expires_at ||
+        !this.isTimestampFresh(run.lease_expires_at)
+      )
+        throw conflict("remote worker Chat offer durable execution claim");
+      const payload = parseJsonRecord(run.payload_json, "remote worker Chat offer payload");
+      if (sha256(payload) !== payloadSha256) throw conflict("remote worker Chat offer payload material");
+      const metadata = parseJsonRecord(run.metadata_json ?? "{}", "remote worker Chat offer metadata");
+      const authority = readDurableChatTurnExecutionPayloadAuthority({
+        workflowKey: run.workflow_key,
+        durableRunId,
+        payload,
+      });
+      if (
+        !authority ||
+        payload.version !== "chat.turn.execute.v2" ||
+        authority.workspaceId !== executionWorkspaceId ||
+        authority.sessionId !== sessionId ||
+        authority.turnId !== turnId
+      )
+        throw conflict("remote worker Chat offer admission identity");
+      const profile = new ChatTurnCapabilityProfileRepository(this.db).findByRun(durableRunId);
+      if (
+        !profile ||
+        profile.profileId !== payload.capabilityProfileId ||
+        profile.hashes.profileHash !== payload.capabilityProfileHash
+      )
+        throw conflict("remote worker Chat offer capability profile");
+      const chatContext = new RemoteWorkerChatContextRepository(this.db).findForRun(durableRunId);
+      if (!chatContext) throw conflict("remote worker Chat offer frozen context is missing");
+      const contextSnapshotSha256 = verifyRemoteWorkerChatContextBinding(chatContext, payload).contextSha256;
+      if (metadata.remoteWorkerChatContextSha256 !== contextSnapshotSha256)
+        throw conflict("remote worker Chat offer frozen admission digest");
+      if (payload.routedContextSnapshotId !== undefined) {
+        const snapshot = new RoutedContextSnapshotRepository(this.db).get(String(payload.routedContextSnapshotId));
+        if (
+          snapshot.snapshotHash !== payload.routedContextSnapshotHash ||
+          snapshot.workspaceId !== executionWorkspaceId ||
+          snapshot.sessionId !== sessionId ||
+          snapshot.turnId !== turnId ||
+          snapshot.capabilityProfileId !== profile.profileId ||
+          snapshot.capabilityProfileHash !== profile.hashes.profileHash
+        )
+          throw conflict("remote worker Chat offer routed context snapshot");
+      }
+      const requestedTaskId = plainRecord(payload.request).policyTaskId;
+      const generatedTask =
+        requestedTaskId === undefined
+          ? new RemoteWorkerChatTaskRepository(this.db).createForOffer(
+              new DurableRunRepository(this.db).getRun(durableRunId),
+            )
+          : undefined;
+      const taskId = generatedTask?.taskId ?? identifier(String(requestedTaskId ?? ""), "taskId");
+      if (generatedTask?.created) {
+        if (
+          metadata.remoteWorkerAssignmentParentContext !== undefined ||
+          metadata.remoteWorkerAssignmentParentContextSha256 !== undefined
+        )
+          throw conflict("remote worker Chat task already has another parent context");
+        new DurableRunRepository(this.db).updateRun({
+          runId: durableRunId,
+          status: "running",
+          expectedVersion: version,
+          metadata: {
+            ...metadata,
+            remoteWorkerAssignmentParentContext: generatedTask.parentContext,
+            remoteWorkerAssignmentParentContextSha256: generatedTask.parentContextSha256,
+          },
+        });
+        run = this.getDurableAuthorityRow(durableRunId, true);
+      }
+      const outcome = this.createAssignment({
+        manifest: {
+          schemaVersion: REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          registryWorkspaceId,
+          executionWorkspaceId,
+          sessionId,
+          turnId,
+          durableRunId,
+          taskId,
+          capabilityProfileSha256: profile.hashes.profileHash,
+          contextSnapshotSha256,
+          toolEffectPostureSha256: sha256({
+            schemaVersion: "goatcitadel.remote-worker-chat-tool-posture.v1",
+            tools: profile.selection.tools,
+            governance: profile.governance,
+          }),
+          pathJailSha256,
+          parentContextSha256: digest(
+            String(generatedTask?.parentContextSha256 ?? metadata.remoteWorkerAssignmentParentContextSha256 ?? ""),
+            "parentContextSha256",
+          ),
+          requiredCapabilityClasses: profile.selection.tools.length
+            ? ["artifact_stage", "durable_compute", "gateway_inference", "governed_tool"]
+            : ["artifact_stage", "durable_compute", "gateway_inference"],
+          deadlineAt: input.deadlineAt,
+          leaseTtlSeconds: input.limits.leaseTtlSeconds,
+          maxEventCount: input.limits.maxEventCount,
+          maxEventBytes: input.limits.maxEventBytes,
+          eventLowWatermark: input.limits.eventLowWatermark,
+          eventHighWatermark: input.limits.eventHighWatermark,
+          maxOutputBytes: input.limits.maxOutputBytes,
+          maxArtifactBytes: input.limits.maxArtifactBytes,
+        },
+        // Execution owners change across durable recovery; the admitted actor
+        // remains the creator of this immutable offer and its replay identity.
+        createdByActorId: authority.requestActor.actorId,
+        idempotencyKey,
+      });
+      if (!this.isTimestampFuture(outcome.assignment.manifest.deadlineAt))
+        throw conflict("remote worker Chat offer deadline");
+      // Includes the current session lifecycle, exact durable admission payload,
+      // task ownership, profile identity and routed-context reference bindings.
+      this.buildTaskBoundChatWorkload(outcome.assignment, run, sessionId);
+      new RemoteWorkerChatPlacementRepository(this.db).claimRemote(
+        {
+          runId: durableRunId,
+          leaseOwnerId: dispatchOwnerId,
+          attemptCount: attempt,
+        },
+        registryWorkspaceId,
+        outcome.assignment.assignmentId,
+      );
+      return outcome;
+    });
+  }
+
   public createAssignment(input: CreateRemoteWorkerAssignmentCommand): CreateRemoteWorkerAssignmentOutcome {
     const command = normalizeCreateRemoteWorkerAssignmentCommand(input);
     const assignmentId = deriveServerId(
@@ -455,6 +663,11 @@ export class RemoteWorkerAssignmentRepository {
     const manifestJson = canonicalJsonString(command.manifest);
     const manifestSha256 = remoteWorkerAssignmentManifestSha256(command.manifest);
     return this.db.transaction("immediate", () => {
+      if (this.db.dialect === "postgres" && command.manifest.sessionId) {
+        for (const key of [...new Set([command.manifest.sessionId, command.manifest.executionWorkspaceId])].sort()) {
+          this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@key, 411)) AS locked").get({ key });
+        }
+      }
       this.acquirePostgresRootLocks(command.manifest.registryWorkspaceId, assignmentId);
       const replay = this.findAssignmentByIdempotency(command.manifest.registryWorkspaceId, command.idempotencyKey);
       if (replay) {
@@ -462,6 +675,11 @@ export class RemoteWorkerAssignmentRepository {
         return { disposition: "replayed", assignment: this.mapAssignment(replay) };
       }
       const parentRun = this.getDurableAuthorityRow(command.manifest.durableRunId, true);
+      new RemoteWorkerChatPlacementRepository(this.db).assertRemoteAllowed(
+        command.manifest.durableRunId,
+        command.manifest.registryWorkspaceId,
+        assignmentId,
+      );
       this.assertCanonicalParentContext(command.manifest, parentRun);
       if (!this.isTimestampFuture(command.manifest.deadlineAt)) {
         throw conflict("remote worker assignment deadline");
@@ -773,7 +991,7 @@ export class RemoteWorkerAssignmentRepository {
         nodeId: authority.nodeId,
         nodeAdmissionGeneration: meshAdmission.admissionGeneration,
         dispatchOwnerId: run.lease_owner_id,
-        durableRunAttempt: asPositiveInteger(run.attempt_count),
+        durableRunAttempt: asNonNegativeInteger(run.attempt_count),
         leaseTokenSha256,
         idempotencyKey,
       });
@@ -849,6 +1067,340 @@ export class RemoteWorkerAssignmentRepository {
     });
   }
 
+  /**
+   * Server-only execution lookup. Rechecks protected admission, the current
+   * generation/lease, durable parent and exact admitted Chat workload together.
+   * Subsequent provider attempts may follow a legitimate lease rotation within
+   * the same generation; callers must bind this result to their stored operation.
+   */
+  public resolveActiveChatExecution(
+    input: {
+      registryWorkspaceId: string;
+      assignmentId: string;
+      assignmentGeneration: number;
+      leaseTokenSha256?: string;
+      continuingInference?: { operationId: string; dispatchGeneration: string };
+      /** Server-owned snapshot taken after the commit request's exact lease check.
+       * Never accepted from a worker request or reused for another publication. */
+      continuingArtifact?: {
+        uploadId: string;
+        leaseRevision: number;
+        parentDispatchAuthority: RemoteWorkerAssignmentDispatchAuthority;
+        durableRunPayloadSha256: string;
+      };
+    },
+    protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
+  ): {
+    authority: ResolvedRemoteWorkerAssignmentAuthority;
+    workload: RemoteWorkerAssignmentWorkloadProjection;
+  } {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const assignmentGeneration = positiveInteger(input.assignmentGeneration, "assignmentGeneration");
+    const fence = normalizeProtectedCommitFence(protectedAuthority);
+    if (input.continuingArtifact && (input.continuingInference || input.leaseTokenSha256 !== undefined))
+      throw conflict("remote worker artifact continuation authority");
+    return this.db.transaction("immediate", () => {
+      const generation = this.getGenerationRow(registryWorkspaceId, assignmentId, assignmentGeneration);
+      const hint = this.getAssignment(registryWorkspaceId, assignmentId);
+      const lockContext = this.readTaskBoundDispatchLockContext(hint);
+      this.acquirePostgresTaskBoundDispatchLocks(
+        fence.credentialAuthority,
+        hint,
+        assignmentGeneration,
+        lockContext.sessionId,
+      );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      if (
+        asPositiveInteger(this.getCurrentGenerationRow(registryWorkspaceId, assignmentId).assignment_generation) !==
+          assignmentGeneration ||
+        !this.isTimestampFuture(assignment.manifest.deadlineAt)
+      )
+        throw conflict("remote worker inference current generation");
+      this.assertProtectedCommitFenceCurrent(fence, assignment, generation);
+      const lease = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, assignmentGeneration);
+      if (
+        !this.isTimestampFresh(lease.expires_at) ||
+        (input.leaseTokenSha256 !== undefined &&
+          lease.lease_token_sha256 !== digest(input.leaseTokenSha256, "leaseTokenSha256"))
+      ) {
+        throw conflict("remote worker inference current lease");
+      }
+      if (input.continuingInference) {
+        // An already-claimed model call may outlive a parent heartbeat. Only
+        // this canonical operation can observe continuous ownership; new work,
+        // transcript publication, new artifacts and effects still require a fresh
+        // exact worker renewal fence.
+        const operation = this.db
+          .prepare(
+            `SELECT state FROM remote_worker_inference_requests
+          WHERE operation_id = @operationId AND dispatch_generation = @dispatchGeneration
+            AND registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+            AND assignment_generation = @assignmentGeneration`,
+          )
+          .get({
+            registryWorkspaceId,
+            assignmentId,
+            assignmentGeneration,
+            operationId: identifier(input.continuingInference.operationId, "operationId"),
+            dispatchGeneration: identifier(input.continuingInference.dispatchGeneration, "dispatchGeneration"),
+          }) as { state: string } | undefined;
+        if (!operation || !["dispatch_claimed", "streaming"].includes(operation.state))
+          throw conflict("remote worker continuing inference claim");
+        const current = this.buildCurrentGenerationDispatchAuthority(generation);
+        const committed = parseCanonicalJson<RemoteWorkerAssignmentDispatchAuthority>(
+          lease.parent_dispatch_authority_json,
+          "remote worker assignment lease parent dispatch authority",
+        );
+        if (
+          sha256Bytes(lease.parent_dispatch_authority_json) !== lease.parent_dispatch_authority_sha256 ||
+          current.durableRunId !== committed.durableRunId ||
+          current.durableRunAttempt !== committed.durableRunAttempt ||
+          current.dispatchOwnerId !== committed.dispatchOwnerId ||
+          current.durableRunVersion < committed.durableRunVersion ||
+          current.durableRunLeaseExpiresAt < committed.durableRunLeaseExpiresAt
+        )
+          throw conflict("remote worker continuous parent ownership");
+      } else if (input.continuingArtifact) {
+        const continuation = input.continuingArtifact;
+        assertRemoteWorkerAssignmentDispatchAuthority(continuation.parentDispatchAuthority);
+        const admitted = continuation.parentDispatchAuthority;
+        const current = this.buildCurrentGenerationDispatchAuthority(generation);
+        const upload = new RemoteWorkerArtifactRepository(this.db).getUpload(
+          registryWorkspaceId,
+          assignmentId,
+          assignmentGeneration,
+          identifier(continuation.uploadId, "uploadId"),
+        );
+        const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+        if (
+          !["open", "assembling", "committed"].includes(upload.uploadState) ||
+          !this.isTimestampFuture(upload.expiresAt) ||
+          upload.identity.assignmentManifestSha256 !== assignment.manifestSha256 ||
+          asPositiveInteger(lease.lease_revision) < positiveInteger(continuation.leaseRevision, "leaseRevision") ||
+          current.durableRunId !== admitted.durableRunId ||
+          current.durableRunAttempt !== admitted.durableRunAttempt ||
+          current.dispatchOwnerId !== admitted.dispatchOwnerId ||
+          current.durableRunVersion < admitted.durableRunVersion ||
+          current.durableRunLeaseExpiresAt < admitted.durableRunLeaseExpiresAt ||
+          sha256Bytes(run.payload_json) !== digest(continuation.durableRunPayloadSha256, "durableRunPayloadSha256")
+        )
+          throw conflict("remote worker continuing artifact ownership");
+      } else {
+        this.assertLeaseDispatchAuthorityLive(generation, lease);
+      }
+      this.assertNoTerminalState(registryWorkspaceId, assignmentId, assignmentGeneration);
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      return {
+        authority: { assignment, generation: this.mapGeneration(generation), lease: this.mapLease(lease) },
+        workload: this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId),
+      };
+    });
+  }
+
+  /** Read retained handoff evidence; this method grants no execution authority. */
+  public findChatApprovalResume(input: {
+    registryWorkspaceId: string;
+    assignmentId: string;
+    assignmentGeneration: number;
+  }) {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const assignmentGeneration = positiveInteger(input.assignmentGeneration, "assignmentGeneration");
+    this.getGenerationRow(registryWorkspaceId, assignmentId, assignmentGeneration);
+    return new RemoteWorkerChatResumeLedger(this.db).readLatest(
+      registryWorkspaceId,
+      assignmentId,
+      assignmentGeneration,
+    );
+  }
+
+  /** The approved tool owner must hold an active rotated native lease in the
+   * same generation as the exact canonical approval wake. */
+  public resolveActiveChatApprovalResume(
+    input: Parameters<RemoteWorkerAssignmentRepository["resolveActiveChatExecution"]>[0],
+    protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
+  ) {
+    return this.db.transaction("immediate", () => {
+      const execution = this.resolveActiveChatExecution(input, protectedAuthority);
+      const { assignment, generation, lease } = execution.authority;
+      const resume = new RemoteWorkerChatResumeLedger(this.db).readLatest(
+        assignment.registryWorkspaceId,
+        assignment.assignmentId,
+        generation.assignmentGeneration,
+      );
+      if (!resume?.binding || lease.leaseRevision <= readChatResumeLeaseHandoff(resume).priorLeaseRevision)
+        return undefined;
+      return resume;
+    });
+  }
+
+  /** Inspect the exact resolved-decision handoff under the worker/parent lock order.
+   * This neither skips the claimed approval effect nor wakes its parent. */
+  public prepareChatApprovalResumeHandoff(input: RecordRemoteWorkerChatResumeWakeInput) {
+    return this.db.transaction("immediate", () => {
+      const { assignment, generation, lease, lockContext } = this.lockChatResumeAssignment(
+        input.registryWorkspaceId,
+        input.assignmentId,
+      );
+      const row = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      this.assertCanonicalParentContext(assignment.manifest, row);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      if (asNonNegativeInteger(row.attempt_count) !== asNonNegativeInteger(generation.durable_run_attempt))
+        throw conflict("remote worker Chat resume parent attempt");
+      return new RemoteWorkerChatResumeLedger(this.db).prepareHandoff(
+        input,
+        assignment,
+        this.mapGeneration(generation),
+        this.mapLease(lease),
+        new DurableRunRepository(this.db).getRun(row.run_id),
+      );
+    });
+  }
+
+  /** Called by the canonical approval wake transaction before waiting -> queued.
+   * Its caller must commit that CAS and this record together. */
+  public recordChatApprovalResumeWake(input: RecordRemoteWorkerChatResumeWakeInput) {
+    return this.db.transaction("immediate", () => {
+      const { assignment, generation, lease, lockContext } = this.lockChatResumeAssignment(
+        input.registryWorkspaceId,
+        input.assignmentId,
+      );
+      const row = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      this.assertCanonicalParentContext(assignment.manifest, row);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      if (asNonNegativeInteger(row.attempt_count) !== asNonNegativeInteger(generation.durable_run_attempt))
+        throw conflict("remote worker Chat resume parent attempt");
+      const run = new DurableRunRepository(this.db).getRun(row.run_id);
+      return new RemoteWorkerChatResumeLedger(this.db).recordWake(
+        input,
+        assignment,
+        this.mapGeneration(generation),
+        this.mapLease(lease),
+        run,
+      );
+    });
+  }
+
+  /** The resumed Chat dispatcher binds its fresh admitted parent lease. Binding
+   * alone does not make the retained, possibly expired worker lease usable. */
+  public bindChatApprovalResumeDispatch(input: {
+    registryWorkspaceId: string;
+    assignmentId: string;
+    durableRunId: string;
+    leaseOwnerId: string;
+    attemptCount: number;
+  }) {
+    return this.db.transaction("immediate", () => {
+      const { assignment, generation, lease, lockContext } = this.lockChatResumeAssignment(
+        input.registryWorkspaceId,
+        input.assignmentId,
+      );
+      const ledger = new RemoteWorkerChatResumeLedger(this.db);
+      const resume = ledger.readLatest(
+        assignment.registryWorkspaceId,
+        assignment.assignmentId,
+        asPositiveInteger(generation.assignment_generation),
+      );
+      if (!resume) return undefined;
+      const handoff = readChatResumeLeaseHandoff(resume);
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      if (
+        run.run_id !== input.durableRunId ||
+        run.status !== "running" ||
+        run.lease_owner_id !== input.leaseOwnerId ||
+        asNonNegativeInteger(run.attempt_count) !== input.attemptCount ||
+        !run.lease_expires_at ||
+        !this.isTimestampFresh(run.lease_expires_at) ||
+        resume.material.assignmentManifestSha256 !== assignment.manifestSha256 ||
+        resume.material.payloadSha256 !== sha256(parseJsonRecord(run.payload_json, "Chat resume parent payload")) ||
+        asPositiveInteger(lease.lease_revision) < handoff.priorLeaseRevision
+      )
+        throw conflict("remote worker Chat resume dispatch claim");
+      this.assertCanonicalParentContext(assignment.manifest, run);
+      this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId);
+      if (
+        asPositiveInteger(lease.lease_revision) === handoff.priorLeaseRevision &&
+        lease.request_sha256 !== handoff.priorLeaseRequestSha256
+      )
+        throw conflict("remote worker Chat resume prior lease");
+      return ledger.bind(
+        resume,
+        Object.freeze({
+          schemaVersion: REMOTE_WORKER_ASSIGNMENT_DISPATCH_AUTHORITY_SCHEMA_VERSION,
+          durableRunId: run.run_id,
+          durableRunAttempt: asNonNegativeInteger(run.attempt_count),
+          dispatchOwnerId: run.lease_owner_id,
+          durableRunVersion: asPositiveInteger(run.version),
+          durableRunLeaseExpiresAt: run.lease_expires_at,
+        }),
+        this.mapLease(lease),
+      );
+    });
+  }
+
+  /** Bind a recovered Chat claim before its first approval wake. The existing
+   * approval ledger takes precedence once it has retained a wake. */
+  public bindChatParentRecoveryDispatch(input: {
+    registryWorkspaceId: string;
+    assignmentId: string;
+    durableRunId: string;
+    leaseOwnerId: string;
+    attemptCount: number;
+  }) {
+    return this.db.transaction("immediate", () => {
+      const { assignment, generation, lease, lockContext } = this.lockChatResumeAssignment(
+        input.registryWorkspaceId,
+        input.assignmentId,
+      );
+      if (
+        new RemoteWorkerChatResumeLedger(this.db).readLatest(
+          assignment.registryWorkspaceId,
+          assignment.assignmentId,
+          asPositiveInteger(generation.assignment_generation),
+        )
+      )
+        return undefined;
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      if (
+        run.run_id !== input.durableRunId ||
+        run.status !== "running" ||
+        run.lease_owner_id !== input.leaseOwnerId ||
+        asNonNegativeInteger(run.attempt_count) !== input.attemptCount ||
+        !run.lease_expires_at ||
+        !this.isTimestampFresh(run.lease_expires_at)
+      )
+        throw conflict("remote worker Chat parent recovery claim");
+      this.assertCanonicalParentContext(assignment.manifest, run);
+      this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId);
+      return new RemoteWorkerChatParentRecoveryLedger(this.db).bind(
+        assignment,
+        this.mapGeneration(generation),
+        this.mapLease(lease),
+        Object.freeze({
+          schemaVersion: REMOTE_WORKER_ASSIGNMENT_DISPATCH_AUTHORITY_SCHEMA_VERSION,
+          durableRunId: run.run_id,
+          durableRunAttempt: asNonNegativeInteger(run.attempt_count),
+          dispatchOwnerId: run.lease_owner_id,
+          durableRunVersion: asPositiveInteger(run.version),
+          durableRunLeaseExpiresAt: run.lease_expires_at,
+        }),
+        sha256(parseJsonRecord(run.payload_json, "Chat parent recovery payload")),
+      );
+    });
+  }
+
+  public findChatParentRecovery(input: {
+    registryWorkspaceId: string;
+    assignmentId: string;
+    assignmentGeneration: number;
+  }) {
+    const assignment = this.getAssignment(input.registryWorkspaceId, input.assignmentId);
+    const generation = this.getGenerationRow(input.registryWorkspaceId, input.assignmentId, input.assignmentGeneration);
+    return new RemoteWorkerChatParentRecoveryLedger(this.db).readLatest(assignment, this.mapGeneration(generation));
+  }
+
   public renewLease(
     input: RenewRemoteWorkerAssignmentLeaseCommand,
     expectedProtectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence,
@@ -895,9 +1447,24 @@ export class RemoteWorkerAssignmentRepository {
         command.assignmentId,
         command.expectedAssignmentGeneration,
       );
+      const resume = new RemoteWorkerChatResumeLedger(this.db).readLatest(
+        command.registryWorkspaceId,
+        command.assignmentId,
+        command.expectedAssignmentGeneration,
+      );
+      const recovery = !resume
+        ? new RemoteWorkerChatParentRecoveryLedger(this.db).readLatest(assignment, this.mapGeneration(generation))
+        : undefined;
+      const handoff = resume ? readChatResumeLeaseHandoff(resume) : recovery?.material;
+      const isResumeLease =
+        (resume?.binding !== undefined || recovery !== undefined) &&
+        handoff !== undefined &&
+        handoff.priorLeaseRevision === command.expectedLeaseRevision &&
+        handoff.priorLeaseRequestSha256 === current.request_sha256;
       if (
         asPositiveInteger(current.lease_revision) !== command.expectedLeaseRevision ||
-        !this.isTimestampFresh(current.expires_at)
+        (!this.isTimestampFresh(current.expires_at) && !isResumeLease) ||
+        (isResumeLease && protectedAuthority === undefined)
       ) {
         throw conflict("remote worker assignment lease renewal");
       }
@@ -1004,6 +1571,242 @@ export class RemoteWorkerAssignmentRepository {
         assignment,
         generation: this.mapGeneration(generation),
         lease: this.mapLease(current),
+      };
+    });
+  }
+
+  /** Read-only authentication for a parked Chat assignment. The retained lease
+   * may have expired while awaiting an operator; it grants no execution or
+   * renewal authority. Gateway must additionally verify the canonical approval
+   * and its sealed waiting checkpoint before projecting an approval wait. */
+  public resolveWaitingChatAssignmentByLeaseTokenHash(
+    input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
+  ): ResolvedRemoteWorkerAssignmentAuthority | undefined {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const assignmentGeneration = positiveInteger(input.expectedAssignmentGeneration, "expectedAssignmentGeneration");
+    const leaseRevision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const token = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const protectedAuthority = normalizeProtectedCommitFence(expectedProtectedAuthority);
+    return this.db.transaction("immediate", () => {
+      const generation = this.getGenerationRow(registryWorkspaceId, assignmentId, assignmentGeneration);
+      const hint = this.getAssignment(registryWorkspaceId, assignmentId);
+      if (
+        !hint.manifest.sessionId ||
+        !hint.manifest.turnId ||
+        this.getDurableAuthorityRow(hint.manifest.durableRunId, false).status !== "waiting"
+      )
+        return undefined;
+      const lockContext = this.readTaskBoundDispatchLockContext(hint);
+      // Include the session and mesh-binding roots before touching the parent
+      // row, matching claim/workload/execution reads and avoiding lock inversion.
+      this.acquirePostgresTaskBoundDispatchLocks(
+        protectedAuthority.credentialAuthority,
+        hint,
+        assignmentGeneration,
+        lockContext.sessionId,
+      );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      if (
+        asPositiveInteger(this.getCurrentGenerationRow(registryWorkspaceId, assignmentId).assignment_generation) !==
+        assignmentGeneration
+      )
+        return undefined;
+      const lease = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, assignmentGeneration);
+      if (asPositiveInteger(lease.lease_revision) !== leaseRevision || lease.lease_token_sha256 !== token)
+        return undefined;
+      const manifest = assignment.manifest;
+      if (!manifest.sessionId || !manifest.turnId || !this.isTimestampFresh(manifest.deadlineAt)) return undefined;
+      const run = this.getDurableAuthorityRow(manifest.durableRunId, true);
+      if (
+        run.status !== "waiting" ||
+        run.lease_owner_id ||
+        run.lease_expires_at ||
+        asNonNegativeInteger(run.attempt_count) !== asNonNegativeInteger(generation.durable_run_attempt)
+      )
+        return undefined;
+      this.assertCanonicalParentContext(manifest, run);
+      this.assertWorkerIsCurrentAndAllowed(
+        this.getWorkerAuthorityRow(
+          registryWorkspaceId,
+          generation.worker_id,
+          asPositiveInteger(generation.worker_generation),
+        ),
+        manifest,
+      );
+      this.assertNodeAdmissionCurrent(
+        generation.execution_workspace_id,
+        generation.node_id,
+        asPositiveInteger(generation.node_admission_generation),
+      );
+      this.assertNoTerminalState(registryWorkspaceId, assignmentId, assignmentGeneration);
+      return { assignment, generation: this.mapGeneration(generation), lease: this.mapLease(lease) };
+    });
+  }
+
+  /** Native-authenticated observation of a retained approval handoff. An expired
+   * lease may observe whether its replacement parent is ready; only renewLease
+   * can issue the next revision, and all execution reads still require it. */
+  public resolveChatApprovalResumeByLeaseTokenHash(
+    input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
+  ) {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const generationNumber = positiveInteger(input.expectedAssignmentGeneration, "expectedAssignmentGeneration");
+    const revision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const token = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const protectedAuthority = normalizeProtectedCommitFence(expectedProtectedAuthority);
+    return this.db.transaction("immediate", () => {
+      const hint = this.getAssignment(registryWorkspaceId, assignmentId);
+      const generation = this.getGenerationRow(registryWorkspaceId, assignmentId, generationNumber);
+      if (!hint.manifest.sessionId || !hint.manifest.turnId) return undefined;
+      const lockContext = this.readTaskBoundDispatchLockContext(hint);
+      this.acquirePostgresTaskBoundDispatchLocks(
+        protectedAuthority.credentialAuthority,
+        hint,
+        generationNumber,
+        lockContext.sessionId,
+      );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      this.assertProtectedCommitFenceCurrent(protectedAuthority, assignment, generation);
+      const current = this.getCurrentGenerationRow(registryWorkspaceId, assignmentId);
+      if (asPositiveInteger(current.assignment_generation) !== generationNumber) return undefined;
+      const lease = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, generationNumber);
+      if (asPositiveInteger(lease.lease_revision) !== revision || lease.lease_token_sha256 !== token) return undefined;
+      const resume = new RemoteWorkerChatResumeLedger(this.db).readLatest(
+        registryWorkspaceId,
+        assignmentId,
+        generationNumber,
+      );
+      if (
+        !resume ||
+        resume.material.assignmentManifestSha256 !== assignment.manifestSha256 ||
+        !this.isTimestampFresh(assignment.manifest.deadlineAt)
+      )
+        return undefined;
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      if (
+        asNonNegativeInteger(run.attempt_count) !== resume.material.durableRunAttempt ||
+        sha256(parseJsonRecord(run.payload_json, "Chat resume parent payload")) !== resume.material.payloadSha256
+      )
+        throw conflict("remote worker Chat resume observation parent");
+      this.assertCanonicalParentContext(assignment.manifest, run);
+      this.assertNoTerminalState(registryWorkspaceId, assignmentId, generationNumber);
+      let phase: "waiting" | "renew";
+      let pendingRecovery: boolean;
+      if (run.status === "queued" && !run.lease_owner_id && !run.lease_expires_at) {
+        phase = "waiting";
+        pendingRecovery = resume.binding !== undefined;
+      } else if (
+        run.status === "running" &&
+        run.lease_owner_id &&
+        run.lease_expires_at &&
+        asPositiveInteger(run.version) > resume.material.queuedRunVersion
+      ) {
+        pendingRecovery =
+          resume.binding !== undefined &&
+          (resume.binding.dispatchOwnerId !== run.lease_owner_id || !this.isTimestampFresh(run.lease_expires_at));
+        if (resume.binding && !pendingRecovery) this.buildCurrentGenerationDispatchAuthority(generation);
+        phase = resume.binding && !pendingRecovery ? "renew" : "waiting";
+      } else return undefined;
+      const handoff = readChatResumeLeaseHandoff(resume);
+      if (
+        !pendingRecovery &&
+        (handoff.priorLeaseRevision !== revision || handoff.priorLeaseRequestSha256 !== lease.request_sha256)
+      )
+        return undefined;
+      return {
+        assignment,
+        generation: this.mapGeneration(generation),
+        lease: this.mapLease(lease),
+        resume,
+        phase,
+        pendingRecovery,
+      };
+    });
+  }
+
+  /** Native-authenticated observation while the canonical Chat recovery owner
+   * replaces a parent. No lease is issued and no execution is authorized. */
+  public resolveChatParentRecoveryByLeaseTokenHash(
+    input: ResolveRemoteWorkerAssignmentControlReadInput,
+    expectedProtectedAuthority: RemoteWorkerAssignmentProtectedCommitFence,
+  ): ResolvedRemoteWorkerAssignmentParentRecovery | undefined {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const generationNumber = positiveInteger(input.expectedAssignmentGeneration, "expectedAssignmentGeneration");
+    const revision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const token = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const fence = normalizeProtectedCommitFence(expectedProtectedAuthority);
+    return this.db.transaction("immediate", () => {
+      const hint = this.getAssignment(registryWorkspaceId, assignmentId);
+      if (!hint.manifest.sessionId || !hint.manifest.turnId) return undefined;
+      const generation = this.getGenerationRow(registryWorkspaceId, assignmentId, generationNumber);
+      const lockContext = this.readTaskBoundDispatchLockContext(hint);
+      this.acquirePostgresTaskBoundDispatchLocks(
+        fence.credentialAuthority,
+        hint,
+        generationNumber,
+        lockContext.sessionId,
+      );
+      const assignment = this.getAssignment(registryWorkspaceId, assignmentId);
+      this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+      this.assertProtectedCommitFenceCurrent(fence, assignment, generation);
+      if (
+        asPositiveInteger(this.getCurrentGenerationRow(registryWorkspaceId, assignmentId).assignment_generation) !==
+          generationNumber ||
+        !this.isTimestampFresh(assignment.manifest.deadlineAt) ||
+        new RemoteWorkerChatResumeLedger(this.db).readLatest(registryWorkspaceId, assignmentId, generationNumber)
+      )
+        return undefined;
+      const lease = this.getCurrentLeaseRow(registryWorkspaceId, assignmentId, generationNumber);
+      if (asPositiveInteger(lease.lease_revision) !== revision || lease.lease_token_sha256 !== token) return undefined;
+      const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
+      if (
+        !readDurableChatTurnExecutionPayloadAuthority({
+          workflowKey: run.workflow_key,
+          durableRunId: run.run_id,
+          payload: parseJsonRecord(run.payload_json, "Chat parent recovery payload"),
+        })
+      )
+        return undefined;
+      if (asNonNegativeInteger(run.attempt_count) !== asNonNegativeInteger(generation.durable_run_attempt))
+        return undefined;
+      this.assertCanonicalParentContext(assignment.manifest, run);
+      this.buildTaskBoundChatWorkload(assignment, run);
+      this.assertNoTerminalState(registryWorkspaceId, assignmentId, generationNumber);
+      const mappedGeneration = this.mapGeneration(generation);
+      const recovery = new RemoteWorkerChatParentRecoveryLedger(this.db).readLatest(assignment, mappedGeneration);
+      if (
+        recovery &&
+        recovery.material.payloadSha256 !== sha256(parseJsonRecord(run.payload_json, "Chat parent recovery payload"))
+      )
+        return undefined;
+      let phase: "waiting" | "renew";
+      if (run.status === "queued" && !run.lease_owner_id && !run.lease_expires_at) phase = "waiting";
+      else if (run.status === "running" && run.lease_owner_id && run.lease_expires_at) {
+        const owner = recovery?.material.dispatchAuthority.dispatchOwnerId ?? generation.dispatch_owner_id;
+        if (run.lease_owner_id !== owner || !this.isTimestampFresh(run.lease_expires_at)) phase = "waiting";
+        else if (
+          recovery &&
+          recovery.material.priorLeaseRevision === revision &&
+          recovery.material.priorLeaseRequestSha256 === lease.request_sha256
+        ) {
+          this.buildCurrentGenerationDispatchAuthority(generation);
+          phase = "renew";
+        } else return undefined;
+      } else return undefined;
+      return {
+        assignment,
+        generation: mappedGeneration,
+        lease: this.mapLease(lease),
+        phase,
+        recovery: { bindingSha256: recovery?.materialSha256 ?? mappedGeneration.dispatchAuthoritySha256 },
       };
     });
   }
@@ -1315,6 +2118,8 @@ export class RemoteWorkerAssignmentRepository {
     const command = normalizeSettleRemoteWorkerAssignmentCommand(input);
     const protectedAuthority =
       expectedProtectedAuthority === undefined ? undefined : normalizeProtectedCommitFence(expectedProtectedAuthority);
+    if (command.origin === "worker" && command.renewalLeaseTokenSha256 !== undefined && !protectedAuthority)
+      throw conflict("remote worker terminal renewal protected authority");
     return this.db.transaction("immediate", () => {
       const generation = this.getGenerationRow(
         command.registryWorkspaceId,
@@ -1349,13 +2154,63 @@ export class RemoteWorkerAssignmentRepository {
         return { disposition: "replayed", settlement: this.mapSettlement(replay) };
       }
       if (command.origin === "worker") {
-        const lease = this.getCurrentLeaseRow(
+        let lease = this.getCurrentLeaseRow(
           command.registryWorkspaceId,
           command.assignmentId,
           command.expectedAssignmentGeneration,
         );
         this.authenticateCurrentLease(command.expectedLeaseRevision, command.leaseTokenSha256, lease);
-        this.assertLeaseDispatchAuthorityLive(generation, lease);
+        if (command.outcome === "cancelled") {
+          // A recorded operator cancellation closes authority; it cannot mint
+          // a new lease. Check the live parent under these locks, without
+          // requiring a cancelled worker to perform an illegal renewal.
+          if (
+            !this.findControlByAction(
+              command.registryWorkspaceId,
+              command.assignmentId,
+              command.expectedAssignmentGeneration,
+              "cancel_requested",
+            )
+          )
+            throw conflict("remote worker assignment cancellation settlement");
+          const current = this.buildCurrentGenerationDispatchAuthority(generation);
+          const retained = this.mapLease(lease).parentDispatchAuthority;
+          if (
+            current.durableRunId !== retained.durableRunId ||
+            current.dispatchOwnerId !== retained.dispatchOwnerId ||
+            current.durableRunAttempt !== retained.durableRunAttempt ||
+            current.durableRunVersion < retained.durableRunVersion ||
+            current.durableRunLeaseExpiresAt < retained.durableRunLeaseExpiresAt
+          )
+            throw conflict("remote worker assignment cancellation parent dispatch authority");
+        }
+        if (command.renewalLeaseTokenSha256 !== undefined) {
+          // Refresh the parent binding and settle under the same generation
+          // locks. This terminal-only lease is never visible without the
+          // settlement, so it cannot authorize further execution.
+          const parentDispatchAuthority = this.buildCurrentGenerationDispatchAuthority(generation);
+          const clock = this.assignmentLeaseClock(assignment.manifest, parentDispatchAuthority);
+          this.insertLease({
+            registryWorkspaceId: command.registryWorkspaceId,
+            assignmentId: command.assignmentId,
+            assignmentGeneration: command.expectedAssignmentGeneration,
+            leaseRevision: command.expectedLeaseRevision + 1,
+            leaseTokenSha256: command.renewalLeaseTokenSha256,
+            workerSentThrough: asNonNegativeInteger(lease.worker_sent_through),
+            serverAcknowledgedThrough: asNonNegativeInteger(lease.server_acknowledged_through),
+            parentDispatchAuthority,
+            heartbeatAt: clock.now,
+            expiresAt: clock.expiresAt,
+            idempotencyKey: `terminal-renewal:${requestSha256}`,
+            requestSha256: sha256({ kind: "terminal_renewal", settlementRequestSha256: requestSha256 }),
+          });
+          lease = this.getCurrentLeaseRow(
+            command.registryWorkspaceId,
+            command.assignmentId,
+            command.expectedAssignmentGeneration,
+          );
+        }
+        if (command.outcome !== "cancelled") this.assertLeaseDispatchAuthorityLive(generation, lease);
       } else {
         const control = this.findControlByRequestHash(
           command.registryWorkspaceId,
@@ -1615,6 +2470,34 @@ export class RemoteWorkerAssignmentRepository {
       if (this.findSettlement(command.registryWorkspaceId, command.assignmentId)) {
         throw conflict("remote worker assignment recovery after settlement");
       }
+      const resume = new RemoteWorkerChatResumeLedger(this.db).readLatest(
+        command.registryWorkspaceId,
+        command.assignmentId,
+        command.expectedAssignmentGeneration,
+      );
+      if (
+        resume &&
+        readChatResumeLeaseHandoff(resume).priorLeaseRevision === command.expectedLeaseRevision &&
+        readChatResumeLeaseHandoff(resume).priorLeaseRequestSha256 === oldLease.request_sha256
+      )
+        throw conflict("remote worker approval resume owns the retained generation");
+      const parentRecovery = !resume
+        ? new RemoteWorkerChatParentRecoveryLedger(this.db).readLatest(
+            assignment,
+            this.mapGeneration(
+              this.getGenerationRow(
+                command.registryWorkspaceId,
+                command.assignmentId,
+                command.expectedAssignmentGeneration,
+              ),
+            ),
+          )
+        : undefined;
+      if (
+        parentRecovery?.material.priorLeaseRevision === command.expectedLeaseRevision &&
+        parentRecovery.material.priorLeaseRequestSha256 === oldLease.request_sha256
+      )
+        throw conflict("remote worker parent recovery owns the retained generation");
       const nextGeneration = command.expectedAssignmentGeneration + 1;
       const authority = this.assertStartAuthority(assignment, command);
       const requestSha256 = sha256(remoteWorkerAssignmentRecoveryReplayMaterial(command, nextGeneration, authority));
@@ -1820,6 +2703,31 @@ export class RemoteWorkerAssignmentRepository {
    * resolution and reconciliation projection. Returns undefined when the
    * assignment does not exist in the workspace (no cross-workspace disclosure).
    */
+  /** Discover existing worker ownership before a recovered Chat turn can run
+   * locally. Registry selection never comes from caller-authored Chat JSON. */
+  public findTaskBoundChatAssignment(input: {
+    executionWorkspaceId: string;
+    sessionId: string;
+    turnId: string;
+    durableRunId: string;
+  }): RemoteWorkerAssignmentAggregate | undefined {
+    const rows = this.db
+      .prepare(
+        `SELECT registry_workspace_id, assignment_id FROM remote_worker_assignments
+       WHERE execution_workspace_id = @executionWorkspaceId AND session_id = @sessionId
+         AND turn_id = @turnId AND durable_run_id = @durableRunId LIMIT 2`,
+      )
+      .all({
+        executionWorkspaceId: identifier(input.executionWorkspaceId, "executionWorkspaceId"),
+        sessionId: identifier(input.sessionId, "sessionId"),
+        turnId: identifier(input.turnId, "turnId"),
+        durableRunId: identifier(input.durableRunId, "durableRunId"),
+      }) as { registry_workspace_id: string; assignment_id: string }[];
+    if (rows.length > 1) throw conflict("remote worker Chat has multiple assignment owners");
+    const row = rows[0];
+    return row ? this.findAssignmentAggregate(row.registry_workspace_id, row.assignment_id) : undefined;
+  }
+
   public findAssignmentAggregate(
     registryWorkspaceId: string,
     assignmentId: string,
@@ -2182,6 +3090,14 @@ export class RemoteWorkerAssignmentRepository {
     });
     if (!durablePayloadAuthority) throw conflict("remote worker assignment durable Chat payload authority");
     const request = plainRecord(payload.request);
+    const taskBinding =
+      request.policyTaskId === undefined
+        ? new RemoteWorkerChatTaskRepository(this.db).findForRun({
+            runId: run.run_id,
+            workflowKey: run.workflow_key,
+            payload,
+          })
+        : undefined;
     const metadata = parseJsonRecord(run.metadata_json ?? "{}", "remote worker assignment durable Chat metadata");
     const capabilityProfileId = identifier(String(payload.capabilityProfileId ?? ""), "capabilityProfileId");
     const capabilityProfileSha256 = digest(String(payload.capabilityProfileHash ?? ""), "capabilityProfileSha256");
@@ -2191,7 +3107,7 @@ export class RemoteWorkerAssignmentRepository {
       payload.workspaceId !== assignment.manifest.executionWorkspaceId ||
       payload.sessionId !== assignment.manifest.sessionId ||
       payload.turnId !== assignment.manifest.turnId ||
-      request.policyTaskId !== assignment.manifest.taskId ||
+      (taskBinding?.taskId ?? request.policyTaskId) !== assignment.manifest.taskId ||
       capabilityProfileSha256 !== assignment.manifest.capabilityProfileSha256 ||
       metadata.capabilityProfileId !== capabilityProfileId ||
       metadata.capabilityProfileHash !== capabilityProfileSha256
@@ -2211,7 +3127,7 @@ export class RemoteWorkerAssignmentRepository {
         durableClaim: {
           durableRunId: run.run_id,
           leaseOwnerId: run.lease_owner_id,
-          attemptCount: asPositiveInteger(run.attempt_count),
+          attemptCount: asNonNegativeInteger(run.attempt_count),
         },
         requireExactDurablePayloadIdentity: true,
       });
@@ -2230,9 +3146,22 @@ export class RemoteWorkerAssignmentRepository {
     }
     const routedContextSnapshotId = payload.routedContextSnapshotId;
     const routedContextSnapshotHash = payload.routedContextSnapshotHash;
+    const chatContext = new RemoteWorkerChatContextRepository(this.db).findForRun(run.run_id);
+    if (
+      metadata.remoteWorkerChatContextSha256 !== undefined &&
+      (!chatContext || chatContext.contextSha256 !== metadata.remoteWorkerChatContextSha256)
+    )
+      throw conflict("remote worker assignment frozen admission digest");
+    if (
+      chatContext &&
+      verifyRemoteWorkerChatContextBinding(chatContext, payload).contextSha256 !==
+        assignment.manifest.contextSnapshotSha256
+    )
+      throw conflict("remote worker assignment frozen Chat context authority");
     if (
       (routedContextSnapshotId === undefined) !== (routedContextSnapshotHash === undefined) ||
-      (routedContextSnapshotHash !== undefined &&
+      (!chatContext &&
+        routedContextSnapshotHash !== undefined &&
         digest(String(routedContextSnapshotHash), "routedContextSnapshotHash") !==
           assignment.manifest.contextSnapshotSha256)
     ) {
@@ -2256,6 +3185,16 @@ export class RemoteWorkerAssignmentRepository {
       ...identityMaterial,
       workloadSha256: sha256(identityMaterial),
       payload: freezeJson(payload) as Readonly<Record<string, unknown>>,
+      ...(chatContext ? { chatContext } : {}),
+      ...(assignment.manifest.requiredCapabilityClasses.includes("artifact_stage")
+        ? {
+            artifactPolicy: Object.freeze({
+              pathJailSha256: assignment.manifest.pathJailSha256,
+              verifierProfileSha256: REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256,
+              deadlineAt: assignment.manifest.deadlineAt,
+            }),
+          }
+        : {}),
     });
     if (Buffer.byteLength(canonicalJsonString(projection), "utf8") > REMOTE_WORKER_ASSIGNMENT_WORKLOAD_MAX_BYTES) {
       throw conflict("remote worker assignment workload byte bound");
@@ -2285,7 +3224,7 @@ export class RemoteWorkerAssignmentRepository {
     );
     if (
       run.status !== "running" ||
-      asPositiveInteger(run.attempt_count) !== command.durableRunAttempt ||
+      asNonNegativeInteger(run.attempt_count) !== command.durableRunAttempt ||
       run.lease_owner_id !== command.dispatchOwnerId ||
       !run.lease_expires_at ||
       !this.isTimestampFresh(run.lease_expires_at)
@@ -2295,7 +3234,7 @@ export class RemoteWorkerAssignmentRepository {
     return Object.freeze({
       schemaVersion: REMOTE_WORKER_ASSIGNMENT_DISPATCH_AUTHORITY_SCHEMA_VERSION,
       durableRunId: run.run_id,
-      durableRunAttempt: asPositiveInteger(run.attempt_count),
+      durableRunAttempt: asNonNegativeInteger(run.attempt_count),
       dispatchOwnerId: run.lease_owner_id,
       durableRunVersion: asPositiveInteger(run.version),
       durableRunLeaseExpiresAt: run.lease_expires_at,
@@ -2325,7 +3264,18 @@ export class RemoteWorkerAssignmentRepository {
       throw conflict("remote worker assignment canonical durable parent context");
     }
     const metadata = safeJsonParse<Record<string, unknown>>(run.metadata_json, {});
+    const payload = parseJsonRecord(run.payload_json, "remote worker assignment parent payload");
+    const generatedTask = new RemoteWorkerChatTaskRepository(this.db).findForRun({
+      runId: run.run_id,
+      workflowKey: run.workflow_key,
+      payload,
+    });
     const parent = metadata.remoteWorkerAssignmentParentContext;
+    if (
+      generatedTask &&
+      (generatedTask.taskId !== manifest.taskId || generatedTask.parentContextSha256 !== manifest.parentContextSha256)
+    )
+      throw conflict("remote worker assignment generated task context");
     if (
       typeof parent !== "object" ||
       parent === null ||
@@ -2362,10 +3312,40 @@ export class RemoteWorkerAssignmentRepository {
       generation.node_id,
       asPositiveInteger(generation.node_admission_generation),
     );
+    const resume = new RemoteWorkerChatResumeLedger(this.db).readLatest(
+      generation.registry_workspace_id,
+      generation.assignment_id,
+      asPositiveInteger(generation.assignment_generation),
+    );
+    if (
+      resume &&
+      (!resume.binding ||
+        resume.binding.durableRunVersion > asPositiveInteger(run.version) ||
+        resume.material.assignmentManifestSha256 !== assignment.manifestSha256 ||
+        resume.material.payloadSha256 !== sha256(parseJsonRecord(run.payload_json, "Chat resume parent payload")))
+    )
+      throw conflict("remote worker Chat resume parent binding");
+    const recovery = !resume
+      ? new RemoteWorkerChatParentRecoveryLedger(this.db).readLatest(assignment, this.mapGeneration(generation))
+      : undefined;
+    if (
+      recovery &&
+      (recovery.material.dispatchAuthority.durableRunVersion > asPositiveInteger(run.version) ||
+        recovery.material.payloadSha256 !== sha256(parseJsonRecord(run.payload_json, "Chat parent recovery payload")))
+    )
+      throw conflict("remote worker Chat parent recovery binding");
+    const owner =
+      resume?.binding?.dispatchOwnerId ??
+      recovery?.material.dispatchAuthority.dispatchOwnerId ??
+      generation.dispatch_owner_id;
+    const attempt =
+      resume?.binding?.durableRunAttempt ??
+      recovery?.material.dispatchAuthority.durableRunAttempt ??
+      asNonNegativeInteger(generation.durable_run_attempt);
     if (
       run.status !== "running" ||
-      run.lease_owner_id !== generation.dispatch_owner_id ||
-      asPositiveInteger(run.attempt_count) !== asPositiveInteger(generation.durable_run_attempt) ||
+      run.lease_owner_id !== owner ||
+      asNonNegativeInteger(run.attempt_count) !== attempt ||
       !run.lease_expires_at ||
       !this.isTimestampFresh(run.lease_expires_at)
     ) {
@@ -2374,7 +3354,7 @@ export class RemoteWorkerAssignmentRepository {
     return Object.freeze({
       schemaVersion: REMOTE_WORKER_ASSIGNMENT_DISPATCH_AUTHORITY_SCHEMA_VERSION,
       durableRunId: run.run_id,
-      durableRunAttempt: asPositiveInteger(run.attempt_count),
+      durableRunAttempt: asNonNegativeInteger(run.attempt_count),
       dispatchOwnerId: run.lease_owner_id,
       durableRunVersion: asPositiveInteger(run.version),
       durableRunLeaseExpiresAt: run.lease_expires_at,
@@ -3354,6 +4334,56 @@ export class RemoteWorkerAssignmentRepository {
         "SELECT pg_advisory_xact_lock(hashtextextended(@registryWorkspaceId || ':' || @assignmentId, 503)) AS locked",
       )
       .get({ registryWorkspaceId, assignmentId });
+  }
+
+  private lockChatResumeAssignment(registryWorkspaceId: string, assignmentId: string) {
+    const assignment = this.getAssignment(
+      identifier(registryWorkspaceId, "registryWorkspaceId"),
+      identifier(assignmentId, "assignmentId"),
+    );
+    const generation = this.getCurrentGenerationRow(registryWorkspaceId, assignmentId);
+    const lockContext = this.readTaskBoundDispatchLockContext(assignment);
+    // No native credential is consumed here. Lock the session roots before the
+    // shared mesh/worker/assignment roots; protected renewal adds native fencing.
+    if (this.db.dialect === "postgres") {
+      for (const key of [...new Set([lockContext.sessionId, assignment.manifest.executionWorkspaceId])].sort())
+        this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@key, 411)) AS locked").get({ key });
+    }
+    this.acquirePostgresGenerationLocks(
+      generation.execution_workspace_id,
+      generation.node_id,
+      registryWorkspaceId,
+      generation.worker_id,
+      assignmentId,
+      asPositiveInteger(generation.assignment_generation),
+    );
+    if (
+      asPositiveInteger(this.getCurrentGenerationRow(registryWorkspaceId, assignmentId).assignment_generation) !==
+        asPositiveInteger(generation.assignment_generation) ||
+      !this.isTimestampFresh(assignment.manifest.deadlineAt)
+    )
+      throw conflict("remote worker Chat resume generation or deadline");
+    this.assertTaskBoundDispatchLockContext(assignment, lockContext);
+    this.assertWorkerIsCurrentAndAllowed(
+      this.getWorkerAuthorityRow(
+        registryWorkspaceId,
+        generation.worker_id,
+        asPositiveInteger(generation.worker_generation),
+      ),
+      assignment.manifest,
+    );
+    this.assertNodeAdmissionCurrent(
+      generation.execution_workspace_id,
+      generation.node_id,
+      asPositiveInteger(generation.node_admission_generation),
+    );
+    this.assertNoTerminalState(registryWorkspaceId, assignmentId, asPositiveInteger(generation.assignment_generation));
+    const lease = this.getCurrentLeaseRow(
+      registryWorkspaceId,
+      assignmentId,
+      asPositiveInteger(generation.assignment_generation),
+    );
+    return { assignment, generation, lease, lockContext };
   }
 
   private acquirePostgresGenerationLocks(

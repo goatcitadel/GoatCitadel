@@ -1,33 +1,48 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatGeneratedArtifact } from "@goatcitadel/mission-control-shared/api/client";
 
 export function useRouteGeneratedArtifactReveal(input: {
+  activeArtifactId?: string;
+  onError?: (message: string) => void;
   routeArtifactId: string | null;
   workspaceId: string;
-  revealGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord) => Promise<void> | void;
-  setActiveGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord | null) => void;
+  revealGeneratedArtifact: (
+    artifact: ChatGeneratedArtifactRecord,
+  ) => Promise<void> | void;
+  setActiveGeneratedArtifact: (
+    artifact: ChatGeneratedArtifactRecord | null,
+  ) => void;
 }): void {
-  const { revealGeneratedArtifact, routeArtifactId, setActiveGeneratedArtifact, workspaceId } = input;
+  const { routeArtifactId, workspaceId } = input;
+  const latest = useRef(input);
+  latest.current = input;
   useEffect(() => {
     if (!routeArtifactId) {
-      setActiveGeneratedArtifact(null);
+      latest.current.setActiveGeneratedArtifact(null);
       return;
     }
+    if (latest.current.activeArtifactId === routeArtifactId) return;
     let cancelled = false;
     void fetchChatGeneratedArtifact(routeArtifactId, workspaceId)
-      .then((response) => {
-        if (!cancelled) {
-          void revealGeneratedArtifact(response.item);
-        }
+      .then(async (response) => {
+        if (cancelled) return;
+        if (response.item.artifactId !== routeArtifactId)
+          throw new Error("The returned artifact does not match this link.");
+        await latest.current.revealGeneratedArtifact(response.item);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled) {
-          setActiveGeneratedArtifact(null);
+          latest.current.setActiveGeneratedArtifact(null);
+          latest.current.onError?.(
+            error instanceof Error
+              ? error.message
+              : "Artifact evidence is unavailable.",
+          );
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [revealGeneratedArtifact, routeArtifactId, setActiveGeneratedArtifact, workspaceId]);
+  }, [routeArtifactId, workspaceId]);
 }

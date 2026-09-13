@@ -10,6 +10,8 @@ export {
   WorkerCredentialVaultError,
   type RetainedAssignmentLease,
   type RetainedRuntimeCredential,
+  type RetainedPemRuntimeCredential,
+  type RetainedProtectedRuntimeCredential,
 } from "./worker-credential-vault.js";
 export {
   WorkerTranscriptOutbox,
@@ -36,6 +38,8 @@ export {
   type WorkerRequestSigningMaterial,
   type WorkerTransportIdentityDigests,
   type WorkerTransportMaterial,
+  type WorkerContextTransportMaterial,
+  type WorkerTlsTransportMaterial,
   type WorkerWireRequest,
   type WorkerWireResponse,
 } from "./worker-wire-client.js";
@@ -45,6 +49,17 @@ export {
   WorkerAdmissionError,
   type WorkerAdmissionTicket,
 } from "./worker-admission-client.js";
+export { admitProtectedWorker, type WorkerProtectedAdmissionTicket } from "./worker-protected-admission-client.js";
+export { createWindowsProtectedWorkerKeyOwner } from "./worker-windows-protected-key-owner.js";
+export {
+  createWindowsProtectedWorkerTransport,
+  type WindowsWorkerImageGuard,
+} from "./worker-windows-protected-transport.js";
+export {
+  normalizeWorkerProtectedKeyReference,
+  type WorkerProtectedKeyReference,
+  type WorkerProtectedKeyOwner,
+} from "./worker-protected-key-owner.js";
 export {
   callProtectedRoute,
   WorkerProtectedRouteError,
@@ -52,12 +67,25 @@ export {
 } from "./worker-protected-route-client.js";
 export { buildEventChain, WORKER_ROUTES, type LeaseBinding, type WireEvent } from "./connected-worker-routes.js";
 export { runConnectedWorker, type ConnectedWorkerReport } from "./connected-worker-runtime.js";
+export { WorkerMeshCapabilityRuntime, type WorkerMeshCapabilityBinding,
+  type WorkerMeshCapabilityExecutionRequest, type WorkerMeshCapabilityCycleResult } from "./worker-mesh-capability-runtime.js";
+export { exchangeWorkerMeshCapability, type WorkerMeshCapabilityCall } from "./worker-mesh-capability-client.js";
+export { exchangeWorkerCellProvisioning, prepareWorkerCellProvisioning } from "./worker-cell-provisioning-client.js";
+export { prepareWindowsWorkerAssignmentCell } from "./worker-windows-cell-startup.js";
+export { loadWorkerMeshToolRegistry, WORKER_MESH_TOOL_REGISTRY_SCHEMA_VERSION,
+  type WorkerMeshToolRegistryReference } from "./worker-mesh-tool-registry.js";
+export { createWorkerMeshFileReadDescriptor } from "./worker-mesh-file-read.js";
+export { createWorkerMeshFileWriteDescriptor } from "./worker-mesh-file-write.js";
+export { createWorkerMeshMcpHttpDescriptor, type WorkerMcpNativeTool } from "./worker-mesh-mcp-http.js";
 export {
   CONNECTED_WORKER_ENV,
   CONNECTED_WORKER_STAGES,
   ConnectedWorkerConfigError,
   parseConnectedWorkerConfig,
+  parseConnectedWorkerStartup,
   type ConnectedWorkerConfig,
+  type ProtectedConnectedWorkerConfig,
+  type WorkerRunConfig,
   type ConnectedWorkerStage,
 } from "./worker-runtime-config.js";
 export {

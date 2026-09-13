@@ -1,7 +1,8 @@
+import { DetailInspector } from "../../../components/DetailInspector";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { fetchCapabilityCatalog } from "@goatcitadel/mission-control-shared/api/client";
-import { NativeCard, QuickJumpCard } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, QuickJumpCard } from "../NativeRoutePageLayout";
 import { ErrorState } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -27,6 +28,7 @@ import {
 } from "../shared/library-primitives";
 
 export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePagesProps) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
   const [statusFilter, setStatusFilter] = useState<CapabilityStatusFilter>("all");
   const { loading, error, data, reload } = useAsyncLoad(async () => {
@@ -73,9 +75,9 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
   const selectedStatus = selectedCapability ? deriveCapabilityStatus(selectedCapability) : null;
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <div className="mc-next-settings-grid">
+      <div className="mc-next-calm-directory">
         <NativeCard
           title="Capability browser"
           subtitle="Plain-language visibility into the skills, tools, providers, MCP entries, and generated capabilities GoatCitadel can inspect or use when callable."
@@ -109,7 +111,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
               };
             })}
             selectedId={visibleSelectedCapabilityId}
-            onSelect={setSelectedCapabilityId}
+            onSelect={(id) => { setSelectedCapabilityId(id); setDetailOpen(true); }}
             emptyLabel="No capabilities match this filter."
           />
           <LibraryButtonRow>
@@ -120,14 +122,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
           </LibraryButtonRow>
         </NativeCard>
         <div className="mc-next-settings-stack">
-          <NativeCard
-            title={selectedCapability?.title ?? "Capability detail"}
-            subtitle={
-              selectedCapability
-                ? selectedCapability.summary
-                : "Select a capability to see what it does and whether it is ready to use."
-            }
-          >
+          <DetailInspector open={detailOpen} title={selectedCapability?.title ?? "Capability unavailable"} subtitle={selectedCapability?.summary} onClose={() => setDetailOpen(false)}>
             {selectedCapability && selectedStatus ? (
               <>
                 <LibraryMetricGrid
@@ -218,7 +213,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
                 {selectedCapability.reviewWarning ? (
                   <ErrorState size="inline" tone="caution" description={selectedCapability.reviewWarning} />
                 ) : null}
-                <div className="mc-next-technical-detail">
+                <details className="mc-next-inline-details"><summary>Technical detail</summary>
                   <LibraryCodeBlock label="Technical detail">
                     {JSON.stringify(
                       {
@@ -235,13 +230,13 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
                       2,
                     )}
                   </LibraryCodeBlock>
-                </div>
+                </details>
               </>
             ) : (
               <LibraryEmptyState label="Select a capability to inspect it." />
             )}
-          </NativeCard>
-          <NativeCard title="Catalog posture" subtitle="Capability availability split into operator-friendly states.">
+          </DetailInspector>
+          <NativeDisclosureCard id="capability-posture" title="Catalog posture" subtitle="Capability availability split into operator-friendly states.">
             <LibraryMetricGrid
               items={[
                 { label: "Available", value: String(statusCounts.available), meta: "Ready and callable" },
@@ -259,7 +254,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
                 { label: "Unavailable", value: String(statusCounts.unavailable), meta: "Revoked or blocked" },
               ]}
             />
-          </NativeCard>
+          </NativeDisclosureCard>
           <QuickJumpCard
             title="Related routes"
             subtitle="Capability status is only useful when setup and memory are nearby."

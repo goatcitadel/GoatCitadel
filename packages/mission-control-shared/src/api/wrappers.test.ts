@@ -379,14 +379,14 @@ describe("shared API wrappers", () => {
       "/api/v1/memory/maintenance/recommendations?workspaceId=workspace&limit=1",
     );
     await expectCall(
-      memory.acceptMemoryMaintenanceRecommendation("rec/1"),
+      memory.acceptMemoryMaintenanceRecommendation("rec/1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }),
       "/api/v1/memory/maintenance/recommendations/rec%2F1/accept",
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify({ expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }) },
     );
     await expectCall(
-      memory.rejectMemoryMaintenanceRecommendation("rec/1"),
+      memory.rejectMemoryMaintenanceRecommendation("rec/1", { expectedRevision: "a".repeat(64) }),
       "/api/v1/memory/maintenance/recommendations/rec%2F1/reject",
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify({ expectedRevision: "a".repeat(64) }) },
     );
     await expectCall(
       memory.fetchTraceMemoryCandidates({ workspaceId: "workspace 1", status: "proposed", limit: 999 }),

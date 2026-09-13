@@ -1,6 +1,10 @@
 import {
+  canonicalJsonString,
   evaluateRemoteWorkerCellCapacityPressure,
+  normalizeRemoteWorkerCellCapacityFootprint,
+  normalizeRemoteWorkerCellCapacityReservation,
   remoteWorkerCellCapacityFootprintSha256,
+  remoteWorkerCellCapacityFootprintTotalBytes,
   type RemoteWorkerCellCapacityFootprint,
   type RemoteWorkerCellCapacityPressureDecision,
   type RemoteWorkerCellCapacityReservation,
@@ -49,6 +53,7 @@ export interface RemoteWorkerCellServiceDeps {
 
 export interface WorkerCellCapacityAdmissionInput extends RemoteWorkerCellKey {
   readonly footprint: RemoteWorkerCellCapacityFootprint;
+  /** Expected immutable reservation; the caller cannot replace the stored limits. */
   readonly reservation: RemoteWorkerCellCapacityReservation;
   readonly incomingBytes: number;
   readonly peakDiskBytes: number;
@@ -87,35 +92,54 @@ export class RemoteWorkerCellService {
   public async evaluateCapacityAdmission(
     input: WorkerCellCapacityAdmissionInput,
   ): Promise<WorkerCellCapacityAdmissionResult> {
-    const key = keyOf(input);
+    // Retain the observation before any asynchronous authority/repository call.
+    const observation = Object.freeze({
+      ...input,
+      footprint: normalizeRemoteWorkerCellCapacityFootprint(input.footprint),
+      reservation: normalizeRemoteWorkerCellCapacityReservation(input.reservation),
+    });
+    const key = keyOf(observation);
+    await this.deps.assignmentAuthority.assertGenerationActive(key);
     const existing = await this.deps.repository.getCell(key);
     if (!existing) throw new Error("Remote worker cell not found for capacity admission.");
-    const pressure = evaluateRemoteWorkerCellCapacityPressure({
-      footprint: input.footprint,
-      reservation: input.reservation,
-      incomingBytes: input.incomingBytes,
+    if (canonicalJsonString(observation.reservation) !== canonicalJsonString(existing.capacity)) {
+      throw new Error("Remote worker cell immutable capacity reservation differs from the observation.");
+    }
+    // These are absolute observed footprints, not deltas. A repeated scan must
+    // neither add retained bytes twice nor erase unreconciled canonical bytes.
+    const footprint = normalizeRemoteWorkerCellCapacityFootprint({
+      ...observation.footprint,
+      failedCleanupBytes: Math.max(observation.footprint.failedCleanupBytes, existing.failedCleanupRetainedBytes),
+      quarantineEvidenceBytes: Math.max(
+        observation.footprint.quarantineEvidenceBytes,
+        existing.quarantineRetainedBytes,
+      ),
     });
-    const footprintSha256 = remoteWorkerCellCapacityFootprintSha256(input.footprint);
+    const pressure = evaluateRemoteWorkerCellCapacityPressure({
+      footprint,
+      reservation: existing.capacity,
+      incomingBytes: observation.incomingBytes,
+    });
+    const footprintSha256 = remoteWorkerCellCapacityFootprintSha256(footprint);
     if (pressure.decision === "reject") {
       // Reject new work; canonical state and evidence are untouched.
       return { decision: "reject", reason: pressure.reason, cell: existing };
     }
-    const quarantineBytes =
-      pressure.decision === "quarantine"
-        ? existing.quarantineRetainedBytes + input.footprint.quarantineEvidenceBytes
-        : existing.quarantineRetainedBytes;
+    await this.deps.assignmentAuthority.assertGenerationActive(key);
     const cell = await this.deps.repository.recordCapacityHighWater({
       ...key,
-      footprint: input.footprint,
-      peakDiskBytes: input.peakDiskBytes,
-      peakMemoryBytes: input.peakMemoryBytes,
-      peakFileCount: input.peakFileCount,
-      peakProcessCount: input.peakProcessCount,
-      rawOutputBytes: input.rawOutputBytes,
-      failedCleanupRetainedBytes: existing.failedCleanupRetainedBytes + input.footprint.failedCleanupBytes,
-      quarantineRetainedBytes: quarantineBytes,
+      expectedCapacityRevision: existing.capacityRevision,
+      expectedCleanupRevision: existing.cleanupRevision,
+      footprint,
+      peakDiskBytes: Math.max(observation.peakDiskBytes, remoteWorkerCellCapacityFootprintTotalBytes(footprint)),
+      peakMemoryBytes: observation.peakMemoryBytes,
+      peakFileCount: observation.peakFileCount,
+      peakProcessCount: observation.peakProcessCount,
+      rawOutputBytes: observation.rawOutputBytes,
+      failedCleanupRetainedBytes: footprint.failedCleanupBytes,
+      quarantineRetainedBytes: footprint.quarantineEvidenceBytes,
       detailSha256: footprintSha256,
-      now: input.now,
+      now: observation.now,
     });
     return { decision: pressure.decision, reason: pressure.reason, cell };
   }

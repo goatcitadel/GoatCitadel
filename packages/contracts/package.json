@@ -14,6 +14,10 @@
     "./citadel-vault-node": {
       "types": "./dist/citadel-vault-node.d.ts",
       "default": "./dist/citadel-vault-node.js"
+    },
+    "./mesh-schema-node": {
+      "types": "./dist/mesh-schema-node.d.ts",
+      "default": "./dist/mesh-schema-node.js"
     }
   },
   "repository": {
@@ -29,6 +33,8 @@
   ],
   "dependencies": {
     "@noble/hashes": "1.8.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "zod": "3.25.76"
   },
   "scripts": {

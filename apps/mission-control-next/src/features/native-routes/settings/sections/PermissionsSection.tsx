@@ -1,6 +1,6 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { AlertTriangle, Code2, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
 import type {
   LocalOperatorOverrideRecord,
@@ -31,7 +31,6 @@ import {
   SettingsButtonRow,
   SettingsEmptyState,
   SettingsField,
-  SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,
@@ -39,9 +38,14 @@ import {
   SettingsStack,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList } from "../../primitives";
-import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
+import { useSessionDraft, hasSessionDraft, discardSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { FocusedDetail } from "../../shared/FocusedDetail";
+import { usePermissionSelectionReview } from "./usePermissionSelectionReview";
+import { PermissionSelectionReviewDetails } from "./PermissionSelectionReviewDetails";
 import {
   createEmptyPermissionProfileDraft,
   createPermissionProfileDraftFromRecord,
@@ -49,10 +53,8 @@ import {
   describeToolApprovalMode,
   formatDateTime,
   labelForLocalOperatorOverrideScope,
-  labelForPermissionProfile,
   normalizeToolApprovalMode,
   permissionProfileDraftToMutation,
-  type PermissionProfileEditorDraft,
   resetLocalOperatorOverrideScopeRefForScope,
   resolveLocalOperatorOverrideScopeRef,
 } from "../../SettingsNativePage";
@@ -118,27 +120,20 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
   const [revokePending, setRevokePending] = useState(false);
-  const [pendingArchiveProfile, setPendingArchiveProfile] = useState<{ profileId: string; label: string } | null>(null);
+  const [pendingArchiveProfile, setPendingArchiveProfile] = useState<{ profileId: string; label: string; expectedRevision: string } | null>(null);
   const [archiveProfilePending, setArchiveProfilePending] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("safe");
-  const [profileDraft, setProfileDraft] = useState<PermissionProfileEditorDraft>(createEmptyPermissionProfileDraft);
-  const [profileEditDraft, setProfileEditDraft] = useState<PermissionProfileEditorDraft>(
-    createEmptyPermissionProfileDraft,
-  );
-  const [profileEditBaseline, setProfileEditBaseline] = useState<PermissionProfileEditorDraft>(
-    createEmptyPermissionProfileDraft,
-  );
-  const [profileEditOwnerId, setProfileEditOwnerId] = useState("");
-  const [overrideDraft, setOverrideDraft] = useState({
-    scope: "workspace" as LocalOperatorOverrideScope,
-    scopeRef: activeWorkspaceId,
-    reason: "",
-    ttlSeconds: 600,
-  });
+  const [view, setView] = useState<"profile" | "edit" | "new" | "override" | "effective" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [activationSaving, setActivationSaving] = useState(false);
+  const activationSavingRef = useRef(false);
+  const [profileConflict, setProfileConflict] = useState<{ key: string; revision: string } | null>(null);
+  const leave = useDraftLeave();
   const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
   const [recentLocalOverride, setRecentLocalOverride] = useState<LocalOperatorOverrideRecord | null>(null);
   const selectedProfile =
-    data?.profiles?.find((profile) => profile.profileId === selectedProfileId) ?? data?.profiles?.[0];
+    data?.profiles?.find((profile) => profile.profileId === selectedProfileId);
   const effectiveOverride = data?.effective.find((item) => item.localOperatorOverride)?.localOperatorOverride;
   const activeOverrides = collectActiveLocalOperatorOverrides([
     effectiveOverride,
@@ -165,142 +160,159 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const activeAutonomyGrants = (data?.autonomyGrants ?? []).filter((grant) => grant.status === "active");
   const primaryEffectiveContexts = (data?.effective ?? []).filter((item) => isPrimaryPermissionContext(item.surface));
   const legacyEffectiveContexts = (data?.effective ?? []).filter((item) => isLegacyPermissionContext(item.surface));
-  const profileEditDirty = Boolean(
-    selectedProfile &&
-    !selectedProfile.builtin &&
-    profileEditOwnerId === selectedProfile.profileId &&
-    !arePermissionProfileDraftsEqual(profileEditDraft, profileEditBaseline),
-  );
-  const profileCreateDirty = !arePermissionProfileDraftsEqual(profileDraft, createEmptyPermissionProfileDraft());
-  const overrideDirty =
-    overrideDraft.scope !== "workspace" ||
-    overrideDraft.scopeRef !== activeWorkspaceId ||
-    overrideDraft.reason.trim().length > 0 ||
-    overrideDraft.ttlSeconds !== 600 ||
-    overrideAcknowledged;
-  useFormDirty("settings:permissions", profileEditDirty || profileCreateDirty || overrideDirty, {
-    label: "Permissions",
-  });
-
-  const resetSelectedProfileDraft = useCallback(() => {
-    setProfileEditDraft(profileEditBaseline);
-  }, [profileEditBaseline]);
-  const applyProfileSelection = useCallback((profileId: string) => {
-    setSelectedProfileId(profileId);
-  }, []);
-  const profileSelectionGuard = useDraftTransitionGuard(
-    profileEditDirty,
-    applyProfileSelection,
-    resetSelectedProfileDraft,
-  );
-
-  useEffect(() => {
-    setOverrideDraft((current) =>
-      current.scope === "workspace"
-        ? {
-            ...current,
-            scopeRef: activeWorkspaceId,
-          }
-        : current,
-    );
-  }, [activeWorkspaceId]);
-
-  useEffect(() => {
-    if (!data?.profiles?.length) return;
-    setSelectedProfileId((current) =>
-      data.profiles.some((profile) => profile.profileId === current) ? current : data.profiles[0]!.profileId,
-    );
-  }, [data?.profiles]);
-
-  useEffect(() => {
-    if (effectiveOverride) {
-      setRecentLocalOverride(effectiveOverride);
-    }
-  }, [effectiveOverride]);
-
-  useEffect(() => {
-    if (!selectedProfile || selectedProfile.builtin) {
-      const emptyDraft = createEmptyPermissionProfileDraft();
-      setProfileEditDraft(emptyDraft);
-      setProfileEditBaseline(emptyDraft);
-      setProfileEditOwnerId(selectedProfile?.profileId ?? "");
-      return;
-    }
-    if (profileEditOwnerId === selectedProfile.profileId && profileEditDirty) {
-      return;
-    }
-    const nextDraft = createPermissionProfileDraftFromRecord(selectedProfile);
-    setProfileEditDraft(nextDraft);
-    setProfileEditBaseline(nextDraft);
-    setProfileEditOwnerId(selectedProfile.profileId);
-  }, [profileEditDirty, profileEditOwnerId, selectedProfile]);
+  const createEditor = useSessionDraft(`permission-profile:${activeWorkspaceId}:new`, createEmptyPermissionProfileDraft(), undefined, { label: "New permission profile", active: view === "new", onSave: () => handleCreateProfile() });
+  const editBaseline = selectedProfile ? createPermissionProfileDraftFromRecord(selectedProfile) : createEmptyPermissionProfileDraft();
+  const editEditor = useSessionDraft(`permission-profile:${activeWorkspaceId}:${selectedProfileId}`, editBaseline, selectedProfile?.revision, { label: selectedProfile?.label ?? "Permission profile", active: view === "edit", available: Boolean(selectedProfile), onSave: () => handleUpdateSelectedProfile() });
+  const emptyOverride = { scope: "workspace" as LocalOperatorOverrideScope, scopeRef: activeWorkspaceId, reason: "", ttlSeconds: 600 };
+  const overrideEditor = useSessionDraft(`permission-override:${activeWorkspaceId}:new`, emptyOverride, undefined, { label: "Temporary override", active: view === "override", onSave: () => handleStartOverride() });
+  const profileDraft = createEditor.value;
+  const setProfileDraft = createEditor.setValue;
+  const profileEditDraft = editEditor.value;
+  const hasProfileConflict = profileConflict?.key === editEditor.key;
+  const activationSelection = usePermissionSelectionReview(JSON.stringify([activeWorkspaceId, selectedProfileId, selectedProfile?.revision, view]));
+  const defaultSelection = usePermissionSelectionReview(JSON.stringify([activeWorkspaceId, view, selectedProfileId,
+    editEditor.baseRevision, view === "new" ? profileDraft : profileEditDraft]));
+  const createNeedsDefaultReview = profileDraft.defaultForSurfaces.length > 0;
+  const editNeedsDefaultReview = JSON.stringify([...profileEditDraft.defaultForSurfaces].sort())
+    !== JSON.stringify([...(selectedProfile?.defaultForSurfaces ?? [])].sort());
+  const setProfileEditDraft = editEditor.setValue;
+  const overrideDraft = overrideEditor.value;
+  const setOverrideDraft = (update: SetStateAction<typeof overrideDraft>) => { overrideEditor.setValue(update); setOverrideAcknowledged(false); };
+  const draftKeys = [createEditor.key, editEditor.key, overrideEditor.key];
+  const openView = (next: typeof view) => leave.request(() => { setView(next); setOverrideAcknowledged(false); }, draftKeys);
+  const profileSelectionGuard = { requestTransition: (profileId: string) => leave.request(() => { setSelectedProfileId(profileId); setView("profile"); setOverrideAcknowledged(false); }, draftKeys) };
+  useEffect(() => { if (effectiveOverride) setRecentLocalOverride(effectiveOverride); }, [effectiveOverride]);
 
   const handleActivateProfile = async (profileId: string, surface: PermissionSurface) => {
+    if (activationSavingRef.current) return;
     const profile = data?.profiles?.find((item) => item.profileId === profileId);
     if (promptSkippingProfileRestriction && profile?.approvalMode === "bypass") {
       setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
       return;
     }
+    await activationSelection.request({ operation: "activate", profileId, workspaceId: activeWorkspaceId, surface });
+  };
+
+  const handleApplyReviewedActivation = async () => {
+    const review = activationSelection.review;
+    if (activationSavingRef.current || !review?.profile || review.input.operation !== "activate" || !activationSelection.isCurrent()) return;
+    if (promptSkippingProfileRestriction && review.profile.approvalMode === "bypass") {
+      setNotice({ tone: "warning", message: promptSkippingProfileRestriction }); return;
+    }
+    activationSavingRef.current = true; setActivationSaving(true);
     try {
-      await activatePermissionProfile({ profileId, workspaceId: activeWorkspaceId, surface });
-      setNotice({ tone: "success", message: `${labelForPermissionProfile(profileId, data?.profiles)} activated.` });
+      await activatePermissionProfile({ profileId: review.input.profileId, workspaceId: review.input.workspaceId,
+        sessionId: review.input.sessionId, surface: review.input.surface,
+        expectedProfileRevision: review.profile.revision, expectedSelectionRevision: review.revision });
+      if (!activationSelection.isCurrent()) return;
+      activationSelection.clear();
+      setNotice({ tone: "success", message: `${review.profile.label} activated.` });
       await reload();
     } catch (activateError) {
-      setNotice({ tone: "error", message: getErrorMessage(activateError) });
+      if (!activationSelection.isCurrent()) return;
+      activationSelection.clear();
+      if (isPermissionProfileConflict(activateError)) {
+        setNotice({ tone: "warning", message: "Permission selections changed. Review the current selection before applying it again." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(activateError) });
+    } finally { activationSavingRef.current = false; setActivationSaving(false); }
+  };
+
+  const handleReviewDefaults = async () => {
+    if (view === "new") {
+      await defaultSelection.request({ operation: "defaults", scope: "workspace", scopeRef: activeWorkspaceId,
+        defaultForSurfaces: profileDraft.defaultForSurfaces });
+    } else if (view === "edit" && selectedProfile && !editEditor.hasRemoteChanges && !hasProfileConflict) {
+      await defaultSelection.request({ operation: "defaults", profileId: selectedProfile.profileId,
+        defaultForSurfaces: profileEditDraft.defaultForSurfaces });
     }
   };
 
-  const handleCreateProfile = async () => {
+  const handleCreateProfile = async (): Promise<boolean> => {
+    if (savingRef.current) return false;
+    if (createNeedsDefaultReview && !defaultSelection.review) {
+      setNotice({ tone: "warning", message: "Review the default selection before creating this profile." }); return false;
+    }
+    const submitted = profileDraft;
     if (!profileDraft.label.trim()) {
       setNotice({ tone: "warning", message: "Profile name is required." });
-      return;
+      return false;
     }
     if (promptSkippingProfileRestriction && profileDraft.approvalMode === "bypass") {
       setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
-      return;
+      return false;
     }
+    savingRef.current = true; setSaving(true);
     try {
       const created = await createPermissionProfile({
         scope: "workspace",
         scopeRef: activeWorkspaceId,
         ...permissionProfileDraftToMutation(profileDraft),
+        expectedSelectionRevision: createNeedsDefaultReview ? defaultSelection.review?.revision : undefined,
       });
       setSelectedProfileId(created.profileId);
-      setProfileDraft(createEmptyPermissionProfileDraft());
+      const clean = createEditor.acceptSaved(createEmptyPermissionProfileDraft(), undefined, submitted);
       setNotice({ tone: "success", message: "Permission profile created." });
       await reload();
+      return clean;
     } catch (createError) {
-      setNotice({ tone: "error", message: getErrorMessage(createError) });
-    }
+      if (isPermissionProfileConflict(createError)) {
+        defaultSelection.clear();
+        setNotice({ tone: "warning", message: "Permission selections changed. Your draft is preserved; review the default selection again." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(createError) });
+      return false;
+    } finally { savingRef.current = false; setSaving(false); }
   };
 
-  const handleUpdateSelectedProfile = async () => {
+  const handleUpdateSelectedProfile = async (): Promise<boolean> => {
+    if (savingRef.current || editEditor.hasRemoteChanges || hasProfileConflict) return false;
+    if (editNeedsDefaultReview && !defaultSelection.review) {
+      setNotice({ tone: "warning", message: "Review the default selection before saving this profile." }); return false;
+    }
+    const submitted = profileEditDraft;
+    const expectedRevision = editEditor.baseRevision;
+    if (typeof expectedRevision !== "string") {
+      setNotice({ tone: "warning", message: "Reload this permission profile before editing it." });
+      return false;
+    }
     if (!selectedProfile || selectedProfile.builtin) {
       setNotice({ tone: "warning", message: "Select a custom permission profile to edit." });
-      return;
+      return false;
     }
     if (!profileEditDraft.label.trim()) {
       setNotice({ tone: "warning", message: "Profile name is required." });
-      return;
+      return false;
     }
     if (promptSkippingProfileRestriction && profileEditDraft.approvalMode === "bypass") {
       setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
-      return;
+      return false;
     }
+    savingRef.current = true; setSaving(true);
     try {
       const updated = await updatePermissionProfile(selectedProfile.profileId, {
         ...permissionProfileDraftToMutation(profileEditDraft),
+        expectedRevision,
+        expectedSelectionRevision: editNeedsDefaultReview ? defaultSelection.review?.revision : undefined,
       });
       const nextDraft = createPermissionProfileDraftFromRecord(updated);
       setSelectedProfileId(updated.profileId);
-      setProfileEditDraft(nextDraft);
-      setProfileEditBaseline(nextDraft);
-      setProfileEditOwnerId(updated.profileId);
+      const clean = editEditor.acceptSaved(nextDraft, updated.revision, submitted);
       setNotice({ tone: "success", message: "Permission profile updated." });
       await reload();
+      return clean;
     } catch (updateError) {
-      setNotice({ tone: "error", message: getErrorMessage(updateError) });
-    }
+      if (isPermissionSelectionConflict(updateError)) {
+        defaultSelection.clear();
+        setNotice({ tone: "warning", message: "Permission selections changed. Your draft is preserved; review the default selection again." });
+        await reload();
+      } else if (isPermissionProfileConflict(updateError)) {
+        setProfileConflict({ key: editEditor.key, revision: expectedRevision });
+        setNotice({ tone: "warning", message: "This permission profile changed. Your draft is preserved; review the latest profile before saving." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(updateError) });
+      return false;
+    } finally { savingRef.current = false; setSaving(false); }
   };
 
   const handleArchiveSelectedProfile = async () => {
@@ -309,26 +321,33 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
     }
     setArchiveProfilePending(true);
     try {
-      await archivePermissionProfile(pendingArchiveProfile.profileId);
-      setSelectedProfileId("safe");
+      await archivePermissionProfile(pendingArchiveProfile.profileId, { expectedRevision: pendingArchiveProfile.expectedRevision });
+      discardSessionDraft(`permission-profile:${activeWorkspaceId}:${pendingArchiveProfile.profileId}`);
+      setSelectedProfileId("safe"); setView(null);
       setNotice({ tone: "success", message: "Permission profile archived." });
       setPendingArchiveProfile(null);
       await reload();
     } catch (archiveError) {
-      setNotice({ tone: "error", message: getErrorMessage(archiveError) });
+      if (isPermissionProfileConflict(archiveError)) {
+        setPendingArchiveProfile(null);
+        setNotice({ tone: "warning", message: "This permission profile changed. Review it again before archiving; your draft is preserved." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(archiveError) });
     } finally {
       setArchiveProfilePending(false);
     }
   };
 
-  const handleStartOverride = async () => {
+  const handleStartOverride = async (): Promise<boolean> => {
+    if (savingRef.current) return false;
+    const submitted = overrideDraft;
     if (localOperatorOverrideRestriction) {
       setNotice({ tone: "warning", message: localOperatorOverrideRestriction });
-      return;
+      return false;
     }
     if (!overrideDraft.reason.trim()) {
       setNotice({ tone: "warning", message: "Add a reason before starting Local Operator Override." });
-      return;
+      return false;
     }
     const scopeRef = resolveLocalOperatorOverrideScopeRef(
       overrideDraft.scope,
@@ -337,7 +356,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
     );
     if (overrideDraft.scope !== "operator" && !scopeRef) {
       setNotice({ tone: "warning", message: "Add a target for this Local Operator Override scope." });
-      return;
+      return false;
     }
     if (!overrideAcknowledged) {
       setNotice({
@@ -345,8 +364,9 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
         message:
           "Confirm that this grants broad local tool access, skips normal prompts, and keeps hard safety boundaries in force.",
       });
-      return;
+      return false;
     }
+    savingRef.current = true; setSaving(true);
     try {
       const override = await createLocalOperatorOverride({
         scope: overrideDraft.scope,
@@ -355,21 +375,18 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
         ttlSeconds: overrideDraft.ttlSeconds,
       });
       setRecentLocalOverride(override);
-      setOverrideDraft((current) => ({
-        ...current,
-        reason: "",
-        ttlSeconds: 600,
-        scopeRef: current.scope === "workspace" ? activeWorkspaceId : current.scopeRef,
-      }));
+      const clean = overrideEditor.acceptSaved(emptyOverride, undefined, submitted);
       setOverrideAcknowledged(false);
       setNotice({
         tone: "warning",
         message: `Local Operator Override ${override.overrideId} is active until ${formatDateTime(override.expiresAt)}.`,
       });
       await reload();
+      return clean;
     } catch (overrideError) {
       setNotice({ tone: "error", message: getErrorMessage(overrideError) });
-    }
+      return false;
+    } finally { savingRef.current = false; setSaving(false); }
   };
 
   const handleRevokeOverride = async (overrideId?: string) => {
@@ -404,21 +421,18 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <>
-          <NativeSectionIndex
-            items={[
-              { id: "permissions-profiles", label: "Profiles" },
-              { id: "permissions-effective", label: "Core grants" },
-              { id: "permissions-override", label: "Local override" },
-              { id: "permissions-autonomy", label: "Autonomous grants" },
-            ]}
-          />
-          <SettingsGrid variant="three-column">
+
+          <SettingsStack>
             <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-            <NativeCard
+            <p className="mc-next-settings-field-note">Chat effective profile: {chatEffectiveProfileLabel} · Workspace: {activeWorkspaceId}</p>
+            <SettingsButtonRow><NativeButton onClick={() => openView("new")}>New profile{createEditor.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="outline" onClick={() => openView("effective")}>Effective policy contexts</NativeButton><NativeButton variant="outline" onClick={() => openView("override")}>Temporary override{overrideEditor.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="outline" onClick={() => void reload()}>Refresh</NativeButton></SettingsButtonRow>
+            {activeOverrides.length ? <div role="status"><strong>{activeOverrides.length} active Local Operator Override{activeOverrides.length === 1 ? "" : "s"}</strong>{activeOverrides.map((override) => <p key={override.overrideId}>{override.scope} {override.scopeRef} · expires {formatDateTime(override.expiresAt)} <NativeButton variant="outline" onClick={() => void handleRevokeOverride(override.overrideId)}>End {override.overrideId}</NativeButton></p>)}</div> : null}
+            {activeAutonomyGrants.length ? <p role="status">{activeAutonomyGrants.length} active autonomous activation grant{activeAutonomyGrants.length === 1 ? "" : "s"}. <a href="#permissions-autonomy">Inspect grants</a></p> : null}
+            <div hidden={view === "edit" || view === "new"}><NativeCard
               id="permissions-profiles"
               density="compact"
               className="mc-next-settings-panel"
@@ -433,21 +447,21 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 items={(data.profiles ?? []).map((profile) => ({
                   id: profile.profileId,
                   title: profile.label,
-                  meta: profile.builtin ? "Built-in" : profile.scope,
+                  meta: `${profile.builtin ? "Built-in" : profile.scope}${hasSessionDraft(`permission-profile:${activeWorkspaceId}:${profile.profileId}`) ? " · Unsaved" : ""}`,
                   body: profile.description ?? describePermissionProfile(profile),
                 }))}
                 selectedId={selectedProfile?.profileId ?? ""}
                 onSelect={(profileId) => {
-                  if (profileId !== selectedProfileId) {
+                  if (profileId !== selectedProfileId || view !== "profile") {
                     profileSelectionGuard.requestTransition(profileId);
                   }
                 }}
                 emptyLabel="No permission profiles returned by the gateway."
-                maxHeight="22rem"
+                maxHeight=""
               />
-            </NativeCard>
+            </NativeCard></div>
             <SettingsStack>
-              <NativeCard
+              <DetailInspector open={view === "profile"} title={selectedProfile?.label ?? "Profile unavailable"} onClose={() => openView(null)}><NativeCard
                 density="compact"
                 className="mc-next-settings-panel"
                 title={selectedProfile?.label ?? "Profile"}
@@ -463,6 +477,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   { label: "Read access", value: describeReadAccessMode(selectedProfile?.readAccessMode ?? "") },
                 ]}
               >
+                {selectedProfile && !selectedProfile.builtin ? <SettingsButtonRow><NativeButton onClick={() => openView("edit")}>Edit profile{editEditor.isDirty ? " · Unsaved" : ""}</NativeButton></SettingsButtonRow> : null}
                 {selectedProfile ? (
                   <>
                     <SettingsActionList
@@ -507,10 +522,19 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                         automatically.
                       </p>
                     ) : null}
+                    {activationSelection.error ? <p role="alert">{activationSelection.error}</p> : null}
+                    {activationSelection.pending ? <p role="status">Reviewing the current permission selection...</p> : null}
+                    {activationSelection.review ? <>
+                      <PermissionSelectionReviewDetails review={activationSelection.review} />
+                      <SettingsButtonRow>
+                        <NativeButton disabled={activationSaving} onClick={() => void handleApplyReviewedActivation()}>Apply reviewed selection</NativeButton>
+                        <NativeButton variant="outline" disabled={activationSaving} onClick={activationSelection.clear}>Cancel selection</NativeButton>
+                      </SettingsButtonRow>
+                    </> : null}
                     <SettingsButtonRow>
                       <NativeButton
                         variant="default"
-                        disabled={activationBlockedByRemoteHardened}
+                        disabled={activationBlockedByRemoteHardened || activationSaving || activationSelection.pending}
                         onClick={() => void handleActivateProfile(selectedProfile.profileId, "chat")}
                       >
                         <ShieldCheck size={16} />
@@ -518,7 +542,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                       </NativeButton>
                       <NativeButton
                         variant="secondary"
-                        disabled={activationBlockedByRemoteHardened}
+                        disabled={activationBlockedByRemoteHardened || activationSaving || activationSelection.pending}
                         onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
                       >
                         <ShieldCheck size={16} />
@@ -530,7 +554,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                         <NativeButton
                           key={surface}
                           variant="secondary"
-                          disabled={activationBlockedByRemoteHardened}
+                          disabled={activationBlockedByRemoteHardened || activationSaving || activationSelection.pending}
                           onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
                         >
                           <ShieldCheck size={16} />
@@ -549,7 +573,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                           <NativeButton
                             key={surface}
                             variant="secondary"
-                            disabled={activationBlockedByRemoteHardened}
+                            disabled={activationBlockedByRemoteHardened || activationSaving || activationSelection.pending}
                             onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
                           >
                             {surface === "code" ? <Code2 size={16} /> : <ShieldCheck size={16} />}
@@ -562,22 +586,54 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 ) : (
                   <SettingsEmptyState label="Select a profile." />
                 )}
-              </NativeCard>
-              {selectedProfile && !selectedProfile.builtin ? (
-                <NativeCard
+              </NativeCard></DetailInspector>
+              {selectedProfile && !selectedProfile.builtin && view === "edit" ? (
+                <FocusedDetail title="Edit permission profile" onClose={() => openView(null)}><NativeCard
                   density="compact"
                   className="mc-next-settings-panel"
                   title="Edit custom profile"
                   subtitle="Update or archive the selected profile."
                 >
+                  {editEditor.hasRemoteChanges || hasProfileConflict ? (
+                    <div role="status">
+                      <p>The saved profile changed. Your draft is preserved.</p>
+                      <details>
+                        <summary>Current profile rules</summary>
+                        <SettingsActionList
+                          ariaLabel="Current saved profile"
+                          items={[
+                            { label: "Name", description: editBaseline.label },
+                            { label: "Description", description: editBaseline.description || "No description" },
+                            { label: "Approval behavior", description: describeToolApprovalMode(editBaseline.approvalMode) },
+                            { label: "Tool patterns", description: editBaseline.toolPatterns || "No tool patterns" },
+                            { label: "Allow patterns", description: editBaseline.allow || "No extra allow patterns" },
+                            { label: "Deny patterns", description: editBaseline.deny || "No profile deny patterns" },
+                            { label: "Read access", description: describeReadAccessMode(editBaseline.readAccessMode) },
+                            { label: "Default policy contexts", description: editBaseline.defaultForSurfaces.length
+                              ? formatPermissionContextList(editBaseline.defaultForSurfaces) : "No automatic policy-context default" },
+                          ]}
+                          emptyLabel="Current profile unavailable."
+                        />
+                      </details>
+                      <SettingsButtonRow>
+                        <NativeButton variant="outline" disabled={!selectedProfile?.revision || selectedProfile.revision === profileConflict?.revision} onClick={() => { editEditor.rebaseToCurrent(); setProfileConflict(null); }}>Apply draft to current profile</NativeButton>
+                        <NativeButton variant="outline" onClick={() => void reload()}>Reload latest profile</NativeButton>
+                      </SettingsButtonRow>
+                    </div>
+                  ) : null}
                   <PermissionProfileDraftFields
                     accessibleNamePrefix="Edit profile"
                     draft={profileEditDraft}
                     bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
                     setDraft={setProfileEditDraft}
                   />
+                  {editNeedsDefaultReview ? <>
+                    <NativeButton variant="outline" disabled={saving || defaultSelection.pending || editEditor.hasRemoteChanges || hasProfileConflict} onClick={() => void handleReviewDefaults()}>Review default selection</NativeButton>
+                    {defaultSelection.error ? <p role="alert">{defaultSelection.error}</p> : null}
+                    {defaultSelection.review ? <PermissionSelectionReviewDetails review={defaultSelection.review} /> : null}
+                  </> : null}
                   <SettingsButtonRow>
-                    <NativeButton variant="default" onClick={() => void handleUpdateSelectedProfile()}>
+                    <NativeButton variant="default" disabled={saving || editEditor.hasRemoteChanges || hasProfileConflict || typeof editEditor.baseRevision !== "string" || (editNeedsDefaultReview && !defaultSelection.review)} onClick={() => void handleUpdateSelectedProfile()}>
                       <Save size={16} />
                       Save profile
                     </NativeButton>
@@ -588,6 +644,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                           ? setPendingArchiveProfile({
                               profileId: selectedProfile.profileId,
                               label: selectedProfile.label,
+                              expectedRevision: selectedProfile.revision,
                             })
                           : setNotice({ tone: "warning", message: "Select a custom permission profile to archive." })
                       }
@@ -596,9 +653,9 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                       Archive profile
                     </NativeButton>
                   </SettingsButtonRow>
-                </NativeCard>
+                </NativeCard></FocusedDetail>
               ) : null}
-              <NativeCard
+              {view === "new" ? <FocusedDetail title="New permission profile" onClose={() => openView(null)}><NativeCard
                 density="compact"
                 className="mc-next-settings-panel"
                 title="Custom profile"
@@ -609,15 +666,20 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
                   setDraft={setProfileDraft}
                 />
+                {createNeedsDefaultReview ? <>
+                  <NativeButton variant="outline" disabled={saving || defaultSelection.pending} onClick={() => void handleReviewDefaults()}>Review default selection</NativeButton>
+                  {defaultSelection.error ? <p role="alert">{defaultSelection.error}</p> : null}
+                  {defaultSelection.review ? <PermissionSelectionReviewDetails review={defaultSelection.review} /> : null}
+                </> : null}
                 <SettingsButtonRow>
-                  <NativeButton variant="default" onClick={() => void handleCreateProfile()}>
+                  <NativeButton variant="default" disabled={saving || (createNeedsDefaultReview && !defaultSelection.review)} onClick={() => void handleCreateProfile()}>
                     <Plus size={16} />
                     Create profile
                   </NativeButton>
                 </SettingsButtonRow>
-              </NativeCard>
+              </NativeCard></FocusedDetail> : null}
             </SettingsStack>
-            <NativeCard
+            <DetailInspector open={view === "effective"} title="Effective policy contexts" onClose={() => openView(null)}><NativeCard
               id="permissions-effective"
               density="compact"
               className="mc-next-settings-panel"
@@ -629,7 +691,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 items={primaryEffectiveContexts.map((item) => ({
                   id: item.surface,
                   label: formatPermissionContextLabel(item.surface),
-                  description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
+                  description: `${item.profileLabel ?? item.profileId ?? "Unavailable"}${
                     item.approvalMode
                       ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}`
                       : ""
@@ -652,7 +714,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   items={legacyEffectiveContexts.map((item) => ({
                     id: item.surface,
                     label: formatPermissionContextLabel(item.surface),
-                    description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
+                    description: `${item.profileLabel ?? item.profileId ?? "Unavailable"}${
                       item.approvalMode
                         ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}`
                         : ""
@@ -665,8 +727,8 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   emptyLabel="No legacy compatibility context returned."
                 />
               </details>
-            </NativeCard>
-            <NativeCard
+            </NativeCard></DetailInspector>
+            <DetailInspector open={view === "override"} title="Temporary Local Operator Override" onClose={() => openView(null)}><NativeCard
               id="permissions-override"
               density="compact"
               className="mc-next-settings-panel"
@@ -770,21 +832,18 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
               <SettingsButtonRow>
                 <NativeButton
                   variant="destructive"
-                  disabled={Boolean(localOperatorOverrideRestriction) || !overrideAcknowledged}
+                  disabled={saving || Boolean(localOperatorOverrideRestriction) || !overrideAcknowledged}
                   onClick={() => void handleStartOverride()}
                 >
                   <AlertTriangle size={16} />
                   Start temporary override
                 </NativeButton>
               </SettingsButtonRow>
-            </NativeCard>
+            </NativeCard></DetailInspector>
             <NativeDisclosureCard
               id="permissions-autonomy"
               title="Autonomous activation grants"
               subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
-              defaultOpen={Boolean(
-                data.autonomyGrants?.some((grant) => ["active", "pending", "degraded"].includes(grant.status)),
-              )}
             >
               <p className="mc-next-settings-field-note">
                 {activeAutonomyGrants.length} active of {data.autonomyGrants?.length ?? 0} recorded grants.
@@ -805,19 +864,10 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 emptyLabel="No autonomous activation grants recorded."
               />
             </NativeDisclosureCard>
-          </SettingsGrid>
+          </SettingsStack>
         </>
       ) : null}
-      <ConfirmModal
-        open={profileSelectionGuard.pendingTransition !== null}
-        danger
-        title="Discard permission profile changes?"
-        message="The selected permission profile has unsaved edits. Discard them and open another profile?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={profileSelectionGuard.cancelDiscard}
-        onConfirm={profileSelectionGuard.confirmDiscard}
-      />
+      {leave.dialog}
       <ConfirmModal
         open={pendingArchiveProfile !== null}
         danger
@@ -853,13 +903,6 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
       />
     </SettingsSectionShell>
   );
-}
-
-function arePermissionProfileDraftsEqual(
-  left: PermissionProfileEditorDraft,
-  right: PermissionProfileEditorDraft,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function readEffectivePermissionSurfaceState(
@@ -938,4 +981,14 @@ function readString(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isPermissionProfileConflict(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "status" in error && error.status === 409);
+}
+
+function isPermissionSelectionConflict(error: unknown): boolean {
+  if (!isPermissionProfileConflict(error) || !isRecord(error)) return false;
+  const body = isRecord(error.body) ? error.body : undefined;
+  return isRecord(body?.details) && body.details.reason === "PERMISSION_SELECTION_REVISION_CONFLICT";
 }

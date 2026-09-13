@@ -7,10 +7,36 @@ import {
   projectCodeModeRunArtifactPreviewForPublic,
 } from "../services/capability-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
 export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get(
+    "/api/v1/capabilities/candidates/:candidateId/versions/:versionId/review",
+    withRouteAccess(fastify, "operator"),
+    async (request, reply) => {
+      const params = z
+        .object({ candidateId: z.string().min(1).max(256), versionId: z.string().min(1).max(256) })
+        .safeParse(request.params);
+      const query = z
+        .object({ workspaceId: z.string().min(1).max(256) })
+        .strict()
+        .safeParse(request.query);
+      if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid candidate review scope." });
+      try {
+        return reply.send(
+          await fastify.services.capabilities.getCandidateArtifactReview(
+            params.data.candidateId,
+            params.data.versionId,
+            query.data.workspaceId,
+          ),
+        );
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
   const catalogQuerySchema = z.object({

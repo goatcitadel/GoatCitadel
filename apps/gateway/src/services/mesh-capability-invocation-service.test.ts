@@ -1,16 +1,27 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MESH_CAPABILITY_PERMISSION_SCHEMA_VERSION,
+  REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+  NotFoundError,
   canonicalJsonString,
   type MeshCapabilityActivationRecord,
   type MeshCapabilityManifest,
   type MeshCapabilityManifestEntry,
   type MeshReplicationRecord,
   type ChatTurnCapabilityToolMeshPublicationBinding,
+  type ToolInvokeRequest,
+  type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { Storage, computeMeshCapabilityDescriptorSha256, createLocalAsyncStorage } from "@goatcitadel/storage";
+import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
+import { resolveMeshChatToolSchemas } from "./gateway/mesh-chat-catalog.js";
+import { dispatchMeshChatTool } from "./gateway/mesh-chat-dispatch.js";
+import { executeApprovedExternalRuntimePendingAction, type ApprovedExternalRuntimePendingActionPort } from "./gateway/external-runtime-approval-adapter.js";
 import {
   MESH_CAPABILITY_INVOCATION_DISPATCH_EVENT_TYPE,
   MESH_CAPABILITY_INVOCATION_ENVELOPE_SCHEMA_VERSION,
@@ -25,10 +36,16 @@ import {
 } from "./mesh-capability-publication-service.js";
 
 const storages: Storage[] = [];
+const fixtureRoots: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   for (const storage of storages.splice(0)) storage.close();
+  for (const root of fixtureRoots.splice(0)) {
+    expect(path.dirname(root)).toBe(path.resolve(os.tmpdir()));
+    expect(path.basename(root)).toMatch(/^gc-mesh-invocation-/);
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 const EXECUTION_PROFILE_SHA256 = "9".repeat(64);
@@ -52,7 +69,9 @@ interface Harness {
 }
 
 async function createHarness(): Promise<Harness> {
-  const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-mesh-invocation-"));
+  fixtureRoots.push(root);
+  const storage = new Storage({ dbPath: ":memory:", transcriptsDir: path.join(root, "transcripts"), auditDir: path.join(root, "audit") });
   storages.push(storage);
   admitNode(storage, { nodeId: "node-a", token: "join-node-a" });
   const runtimeStorage = createLocalAsyncStorage(storage);
@@ -141,13 +160,16 @@ function toolDescriptor(timeoutMs: number): Record<string, unknown> {
 
 async function activateTool(
   harness: Harness,
-  options: { timeoutMs?: number; publicationKey?: string; localId?: string } = {},
+  options: { timeoutMs?: number; publicationKey?: string; localId?: string;
+    inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> } = {},
 ): Promise<{
   activation: MeshCapabilityActivationRecord;
   manifest: MeshCapabilityManifest;
   entry: MeshCapabilityManifestEntry;
 }> {
   const descriptor = toolDescriptor(options.timeoutMs ?? 30_000);
+  if (options.inputSchema) descriptor.inputSchema = options.inputSchema;
+  if (options.outputSchema) descriptor.outputSchema = options.outputSchema;
   const receipt = await harness.publication.publishCapabilityManifest(harness.identity, {
     publicationKey: options.publicationKey ?? "publication-1",
     entries: [
@@ -224,6 +246,10 @@ function listDispatchEvents(storage: Storage): MeshReplicationRecord[] {
     .filter((event) => event.eventType === MESH_CAPABILITY_INVOCATION_DISPATCH_EVENT_TYPE);
 }
 
+async function waitForDispatch(storage: Storage, count = 1): Promise<void> {
+  await vi.waitFor(() => expect(listDispatchEvents(storage)).toHaveLength(count), { timeout: 7_000 });
+}
+
 function nodeSettlement(
   invocationId: string,
   activation: MeshCapabilityActivationRecord,
@@ -242,6 +268,168 @@ function nodeSettlement(
 }
 
 describe("MeshCapabilityInvocationService dispatch + settlement", () => {
+  it("rejects schema-invalid input before retaining an intent or entering the execution fence", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness, { inputSchema: {
+      type: "object", properties: { query: { type: "integer" } }, required: ["query"], additionalProperties: false,
+    } });
+    const createIntent = vi.spyOn(harness.storage.meshCapabilityPublications, "createInvocationIntent");
+    const fence = vi.fn(async () => { throw new Error("schema validation was bypassed"); });
+    await expect(harness.createService().dispatch(dispatchInputFor(activation), { executionFence: fence }))
+      .rejects.toMatchObject({ code: "mesh_capability_invocation_input_invalid" });
+    expect(createIntent).not.toHaveBeenCalled();
+    expect(fence).not.toHaveBeenCalled();
+    expect(listDispatchEvents(harness.storage)).toEqual([]);
+  });
+
+  it("rejects schema-invalid output without committing success", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness, { outputSchema: {
+      type: "object", properties: { count: { type: "integer" } }, required: ["count"], additionalProperties: false,
+    } });
+    const service = harness.createService();
+    const stop = new AbortController();
+    const dispatch = service.dispatch(dispatchInputFor(activation), { signal: stop.signal });
+    try {
+      await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1), { timeout: 7_000 });
+      const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+      await expect(service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { count: "1" })))
+        .rejects.toMatchObject({ code: "mesh_capability_settlement_invalid" });
+      expect(harness.storage.meshCapabilityPublications.findInvocationSettlement("default", invocationId)).toBeUndefined();
+      const valid = nodeSettlement(invocationId, activation, { count: 1 });
+      const settling = service.settleFromNode(harness.identity, valid);
+      // The public caller retains its object while the real validator awaits.
+      // Neither content nor its claimed hash may change the admitted submission.
+      valid.output!.count = "changed during validation";
+      valid.outputSha256 = sha256Utf8(canonicalJsonString(valid.output));
+      await settling;
+      await expect(dispatch).resolves.toMatchObject({ disposition: "succeeded", output: { count: 1 } });
+    } finally { stop.abort(); await dispatch; }
+  });
+
+  it("does not widen the declared response limit when the immutable manifest cannot be read", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const stop = new AbortController();
+    const dispatch = service.dispatch(dispatchInputFor(activation), { signal: stop.signal });
+    let manifestRead: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1), { timeout: 7_000 });
+      const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+      manifestRead = vi.spyOn(harness.storage.meshCapabilityPublications, "getManifest")
+        .mockImplementation(() => { throw new Error("private manifest read failure"); });
+      await expect(service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { blob: "x".repeat(8_192) })))
+        .rejects.toMatchObject({ code: "mesh_capability_settlement_invalid" });
+      expect(harness.storage.meshCapabilityPublications.findInvocationSettlement("default", invocationId)).toBeUndefined();
+    } finally { manifestRead?.mockRestore(); stop.abort(); await dispatch; }
+  });
+
+  it.each(["allowed", "current-deny"] as const)(
+    "joins real policy approval, dispatch, node settlement and durable effect replay (%s)", async (scenario) => {
+      const harness = await createHarness();
+      const { activation } = await activateTool(harness);
+      const runtimeStorage = createLocalAsyncStorage(harness.storage);
+      const entries = await harness.publication.listCatalogEntries("default");
+      const resolveBinding = async () => {
+        const [schema] = await resolveMeshChatToolSchemas({ storage: runtimeStorage, activations: harness.activationService }, {
+          workspaceId: "default", entries,
+        });
+        return schema ? { schema, executionProfileSha256: EXECUTION_PROFILE_SHA256 } : undefined;
+      };
+      const binding = (await resolveBinding())!;
+      const config: ToolPolicyConfig = { profiles: { danger: ["mesh.invoke"] },
+        tools: { profile: "danger", approvalMode: "approve_all", allow: [], deny: [] }, agents: {},
+        sandbox: { writeJailRoots: [], readOnlyRoots: [], networkAllowlist: [], riskyShellPatterns: [], requireApprovalForRiskyShell: true } };
+      const policy = new ToolPolicyEngine(config, runtimeStorage);
+      const request: ToolInvokeRequest = { toolName: activation.capabilityId, agentId: "assistant", sessionId: "session-a",
+        turnId: "turn-a", toolRunId: "tool-run-a", runId: "run-a", workspaceId: "default", externalRuntime: true,
+        args: { query: "reviewed request" } };
+      const decision = await policy.invoke(request, { meshToolBinding: binding.schema.policyBinding });
+      expect(decision.outcome).toBe("approval_required");
+      const approvalId = decision.approvalId!;
+      expect(listDispatchEvents(harness.storage)).toEqual([]);
+      harness.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-approver" });
+      const pending = harness.storage.pendingApprovalActions.find(approvalId)!;
+      expect(pending.request).toMatchObject(request);
+      const currentPolicy = new ToolPolicyEngine({ ...config, tools: { ...config.tools,
+        deny: scenario === "current-deny" ? [activation.capabilityId] : [] } }, runtimeStorage);
+      const service = harness.createService();
+      const dispatch = vi.spyOn(service, "dispatch");
+      const executeApprovedAction = vi.fn<ApprovedExternalRuntimePendingActionPort["executeApprovedAction"]>(
+        (id, signal, options) => currentPolicy.executeApprovedAction(id, signal, options),
+      );
+      const port: ApprovedExternalRuntimePendingActionPort = {
+        storage: runtimeStorage, resolveMeshChatToolBinding: resolveBinding, executeApprovedAction,
+        invokeApprovedMeshRuntime: (input, admittedPolicy, id, markStarted) => dispatchMeshChatTool({
+          resolveBinding, dispatch: (input, options) => service.dispatch(input, options),
+        }, input, admittedPolicy, { approvalId: id, markExternalCallStarted: markStarted }),
+        enrichMcpInvokePolicyContext: vi.fn(async () => { throw new Error("unexpected MCP route"); }),
+        invokeApprovedMcpRuntime: vi.fn(async () => { throw new Error("unexpected MCP runtime"); }),
+        invokeApprovedExternalRuntimeTool: vi.fn(async () => { throw new Error("unexpected plugin runtime"); }),
+      };
+      const call = executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
+      if (scenario === "current-deny") {
+        expect(await call).toMatchObject({ outcome: "blocked" });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(listDispatchEvents(harness.storage)).toEqual([]);
+        return;
+      }
+      await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1));
+      const envelope = listDispatchEvents(harness.storage)[0]!.payload;
+      expect(envelope).toMatchObject({ approvalId, sessionId: "session-a", turnId: "turn-a", runId: "run-a",
+        executionProfileSha256: EXECUTION_PROFILE_SHA256, capabilityId: activation.capabilityId });
+      expect(harness.storage.externalSideEffectRuns.listByWorkspace("default")[0]?.externalCallStartedAt).toBeDefined();
+      await service.settleFromNode(harness.identity, nodeSettlement(envelope.invocationId as string, activation, { status: "ok" }));
+      const result = await call;
+      expect(result).toMatchObject({ outcome: "executed", result: { ok: true, output: { status: "ok" } } });
+      expect(harness.storage.pendingApprovalActions.find(approvalId)).toMatchObject({ resolutionStatus: "executed" });
+      expect(result.audit?.approvalId).toBe(approvalId);
+      expect(await executeApprovedExternalRuntimePendingAction(port, approvalId, pending)).toEqual({
+        outcome: result.outcome, policyReason: result.policyReason, auditEventId: result.auditEventId, result: result.result,
+      });
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(executeApprovedAction).toHaveBeenCalledOnce();
+      expect(listDispatchEvents(harness.storage)).toHaveLength(1);
+      expect(harness.storage.modelUsageEvents.list({}).items).toEqual([]);
+    },
+  );
+
+  it("loads a Chat schema from the committed publication and governed activation owners", async () => {
+    const harness = await createHarness();
+    const { activation, entry } = await activateTool(harness);
+    const entries = await harness.publication.listCatalogEntries("default");
+    const readCurrent = vi.spyOn(harness.storage.meshCapabilityPublications, "listCallableActivations");
+    const result = await resolveMeshChatToolSchemas({
+      storage: createLocalAsyncStorage(harness.storage), activations: harness.activationService,
+    }, { workspaceId: "default", entries });
+    expect(readCurrent).toHaveBeenCalledTimes(1);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.canonicalName).toBe(activation.capabilityId);
+    expect(result[0]!.publication).toEqual(bindingOf(activation));
+    expect(result[0]!.providerDefinition).toMatchObject({ function: {
+      parameters: (entry.descriptor as { inputSchema: unknown }).inputSchema,
+    } });
+    expect(listDispatchEvents(harness.storage)).toEqual([]);
+  });
+
+  it("rejects a Chat schema when its activation is revoked while the manifest read is pending", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const entries = await harness.publication.listCatalogEntries("default");
+    const storage = createLocalAsyncStorage(harness.storage);
+    await expect(resolveMeshChatToolSchemas({
+      storage: { meshCapabilityPublications: { getManifest: async (...args) => {
+        const manifest = await storage.meshCapabilityPublications.getManifest(...args);
+        await harness.activationService.revokeActivation({ workspaceId: "default", activationId: activation.activationId,
+          reason: "Operator withdrew publication during schema admission.", actorId: "operator-a" });
+        return manifest;
+      } } },
+      activations: harness.activationService,
+    }, { workspaceId: "default", entries })).rejects.toThrow("mesh_capability_freeze_drift");
+    expect(listDispatchEvents(harness.storage)).toEqual([]);
+  });
+
   it("dispatches one intent with the exact credential-free envelope and settles on the node receipt", async () => {
     const harness = await createHarness();
     const { activation } = await activateTool(harness);
@@ -250,7 +438,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const input = dispatchInputFor(activation);
 
     const dispatchPromise = service.dispatch(input, { executionFence: fence });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitForDispatch(harness.storage);
 
     // Exactly one durable intent and one transport envelope exist.
     const events = listDispatchEvents(harness.storage);
@@ -345,7 +533,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
 
     const output = { status: "ok" };
@@ -365,6 +553,63 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     ).rejects.toThrowError(expect.objectContaining({ code: "mesh_capability_settlement_conflict" }) as Error);
   });
 
+  it("uses the fenced native settlement owner for first submission and replay without a legacy fallback", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
+    await waitForDispatch(harness.storage);
+    const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+    const submission = nodeSettlement(invocationId, activation, { status: "ok" });
+    const identity: MeshCapabilityAuthenticatedNodeIdentity = {
+      ...harness.identity,
+      provenance: "remote_worker",
+      remoteWorkerAuthorityFence: {
+        schemaVersion: REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+        registryWorkspaceId: "default", workspaceId: "default", nodeId: "node-a", admissionGeneration: 1,
+        bootstrapId: "bootstrap-a", workerId: "worker-a", workerGeneration: 2,
+        credentialId: "credential-a", credentialGeneration: 3, joinAuthorityGeneration: 1,
+        joinCredentialSha256: "1".repeat(64), protectedAdmissionEnvelopeSha256: "2".repeat(64),
+        protectedAdmissionContextSha256: "3".repeat(64),
+      },
+    };
+    const repo = harness.storage.meshCapabilityPublications;
+    const write = repo.settleInvocation.bind(repo);
+    const legacy = vi.spyOn(repo, "settleInvocation");
+    const native = vi.spyOn(repo, "settleRemoteWorkerInvocation");
+    await expect(service.settleFromNode({ ...identity, provenance: "legacy" }, submission)).rejects.toThrow();
+    await expect(service.settleFromNode({ ...identity, remoteWorkerAuthorityFence: undefined }, submission)).rejects.toThrow();
+    expect(native).not.toHaveBeenCalled();
+
+    // The real storage owner rejects a fabricated native fence on this legacy-only fixture.
+    await expect(service.settleFromNode(identity, submission)).rejects.toMatchObject({
+      code: "mesh_capability_settlement_stale_generation",
+    });
+    expect(legacy).not.toHaveBeenCalled();
+    expect(repo.findInvocationSettlement("default", invocationId)).toBeUndefined();
+    expect(harness.realtimeEvents.some((event) => event.eventType === "mesh_capability_invocation_settled")).toBe(false);
+
+    // Storage's real protected-authority acceptance is exercised in its SQLite/PostgreSQL fixture.
+    native.mockImplementation(({ settlement }) => write(settlement));
+    const first = await service.settleFromNode(identity, submission);
+    expect(first.replayed).toBe(false);
+    expect(native).toHaveBeenLastCalledWith({
+      authorityFence: identity.remoteWorkerAuthorityFence,
+      settlement: expect.objectContaining({ workspaceId: "default", invocationId,
+        idempotencyKey: `mesh-capability-settlement:node:node-a:${invocationId}` }),
+    });
+    expect(await dispatchPromise).toMatchObject({ disposition: "succeeded", output: { status: "ok" } });
+    await expect(service.settleFromNode(identity, submission)).resolves.toEqual({ ...first, replayed: true });
+    const eventsBeforeRevocation = harness.realtimeEvents.length;
+    native.mockImplementation(() => { throw new NotFoundError({ entity: "native authority", id: "revoked" }); });
+    await expect(service.settleFromNode(identity, submission)).rejects.toMatchObject({
+      code: "mesh_capability_settlement_stale_generation",
+    });
+    expect(harness.realtimeEvents).toHaveLength(eventsBeforeRevocation);
+    expect(repo.findInvocationSettlement("default", invocationId)).toEqual(first.settlement);
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
   it("rejects settlement, progress, and input reads from a node other than the dispatched node", async () => {
     const harness = await createHarness();
     admitNode(harness.storage, { nodeId: "node-b", token: "join-node-b" });
@@ -372,7 +617,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
 
     const submission = nodeSettlement(invocationId, activation, { status: "ok" });
@@ -405,7 +650,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
 
     // A settlement presenting a mismatched generation or fencing token can
@@ -465,7 +710,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const service = harness.createService();
     const fence = vi.fn();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), { executionFence: fence });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
     await service.recordProgress(harness.identity, {
       invocationId,
@@ -536,7 +781,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       signal: controller.signal,
       executionFence: fence,
     });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
     await service.recordProgress(harness.identity, {
       invocationId,
@@ -585,6 +830,93 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     expect(harness.storage.mesh.listReplicationEvents(100)).toHaveLength(0);
   });
 
+  it.each(["pending", "settled"] as const)("rejects changed execution lineage before reusing a %s intent", async (state) => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const approval = harness.storage.approvals.create({ kind: "tool.invoke", riskLevel: "caution",
+      payload: { toolName: activation.capabilityId }, preview: { title: "Review mesh invocation" } });
+    harness.storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator-approver" });
+    const input = dispatchInputFor(activation, { approvalId: approval.approvalId });
+    const invocationId = deriveMeshCapabilityInvocationId({ ...input, inputSha256: sha256Utf8(canonicalJsonString(input.args)) });
+    if (state === "pending") {
+      await expect(service.dispatch(input, { executionFence: async () => { throw new Error("claim withdrawn"); } }))
+        .rejects.toThrow("claim withdrawn");
+    } else {
+      const dispatch = service.dispatch(input);
+      await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1));
+      await service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { status: "ok" }));
+      await dispatch;
+    }
+    const stored = harness.storage.meshCapabilityPublications.findInvocationIntent("default", invocationId);
+    const recovered = harness.createService();
+    const fence = vi.fn();
+    const changed: Array<Partial<typeof input>> = [
+      { sessionId: "other-session" }, { turnId: "other-turn" }, { runId: "other-run" }, { runId: undefined },
+      { approvalId: "another-approval" }, { approvalId: undefined }, { executionProfileSha256: "a".repeat(64) },
+      ...(["nodeId", "manifestSha256", "entrySha256", "permissionEnvelopeSha256"] as const)
+        .map((key) => ({ binding: { ...input.binding, [key]: key === "nodeId" ? "another-node" : "a".repeat(64) } })),
+      { binding: { ...input.binding, healthGeneration: input.binding.healthGeneration + 1 } },
+    ];
+    for (const override of changed) {
+      await expect(recovered.dispatch({ ...input, ...override }, { executionFence: fence }))
+        .rejects.toMatchObject({ code: "mesh_capability_invocation_conflict" });
+    }
+    expect(fence).not.toHaveBeenCalled();
+    expect(listDispatchEvents(harness.storage)).toHaveLength(state === "settled" ? 1 : 0);
+    expect(harness.storage.meshCapabilityPublications.findInvocationIntent("default", invocationId)).toEqual(stored);
+  });
+
+  it("freezes caller arguments and publication identity before asynchronous dispatch work", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const input = dispatchInputFor(activation);
+    const originalArgs = structuredClone(input.args);
+    const dispatch = service.dispatch(input, { executionFence: async () => {
+      input.args.query = "changed after admission";
+      input.binding.healthGeneration += 1;
+    } });
+    await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1));
+    const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+    expect(await service.readInvocationInput(harness.identity, invocationId)).toMatchObject({ input: originalArgs });
+    await service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { status: "ok" }));
+    expect(await dispatch).toMatchObject({ disposition: "succeeded" });
+  });
+
+  it("keeps staged input private and rejects activation withdrawal during the execution fence", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const input = dispatchInputFor(activation);
+    const invocationId = deriveMeshCapabilityInvocationId({ ...input, inputSha256: sha256Utf8(canonicalJsonString(input.args)) });
+    await expect(service.dispatch(input, { executionFence: async () => {
+      await expect(service.readInvocationInput(harness.identity, invocationId)).rejects.toMatchObject({
+        code: "mesh_capability_invocation_not_found",
+      });
+      await harness.activationService.revokeActivation({ workspaceId: "default", activationId: activation.activationId,
+        actorId: "operator-a", reason: "Operator withdrew the capability before dispatch." });
+    } })).rejects.toMatchObject({ code: "mesh_capability_invocation_not_callable" });
+    expect(listDispatchEvents(harness.storage)).toEqual([]);
+    await expect(service.readInvocationInput(harness.identity, invocationId)).rejects.toMatchObject({
+      code: "mesh_capability_invocation_not_found",
+    });
+    const recovered = harness.createService();
+    await expect(recovered.dispatch(input)).rejects.toMatchObject({ code: "mesh_capability_invocation_not_callable" });
+    expect(listDispatchEvents(harness.storage)).toEqual([]);
+  });
+
+  it("does not expose staged input when cancellation arrives during the execution fence", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const controller = new AbortController();
+    await expect(service.dispatch(dispatchInputFor(activation), {
+      signal: controller.signal, executionFence: async () => controller.abort(),
+    })).rejects.toThrow();
+    expect(listDispatchEvents(harness.storage)).toEqual([]);
+  });
+
   it("settles vault-capacity exhaustion as a clean pre-dispatch block before the fence and any envelope", async () => {
     // M4 fold of the M3 review Minor: `storeVaultInput` runs BEFORE the
     // execution fence, so an exhausted in-memory input vault rejects with no
@@ -614,7 +946,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     // intent and dispatches normally with exactly one fence mark.
     vault.clear();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), { executionFence: fence });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
     await service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { status: "ok" }));
     const outcome = await dispatchPromise;
@@ -627,7 +959,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const first = harness.createService();
     const dispatchPromise = first.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
     const output = { status: "ok" };
     await first.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, output));
@@ -663,7 +995,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const first = harness.createService();
     const controller = new AbortController();
     const firstDispatch = first.dispatch(dispatchInputFor(activation), { signal: controller.signal });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
     // Simulate a crash of the awaiting turn: abandon the first waiter but keep
     // the intent unsettled by settling nothing. (The abort settles cancelled,
@@ -678,7 +1010,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       dispatchInputFor(second.activation, { toolRunId: "tool-run-2" }),
       {},
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage, 2);
     const secondEvents = listDispatchEvents(harness.storage);
     expect(secondEvents).toHaveLength(2);
     const secondInvocationId = secondEvents
@@ -688,7 +1020,8 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     // A concurrent duplicate dispatch of the SAME attempt converges on the
     // same intent and the same envelope row (append is per-source idempotent).
     const duplicate = recoveredService.dispatch(dispatchInputFor(second.activation, { toolRunId: "tool-run-2" }), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => expect(harness.realtimeEvents.filter((event) =>
+      event.eventType === "mesh_capability_invocation_dispatched")).toHaveLength(3), { timeout: 7_000 });
     expect(listDispatchEvents(harness.storage)).toHaveLength(2);
 
     await recoveredService.settleFromNode(
@@ -706,7 +1039,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
     const progress = async (sequence: number, overrides: Partial<MeshCapabilityNodeProgress> = {}) =>
       service.recordProgress(harness.identity, {
@@ -745,13 +1078,122 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     expect(progressEvents[0]!.payload).toMatchObject({ invocationId, sequence: 1, stage: "executing" });
   });
 
+  it("discovers only its admitted node's confirmed deliveries without arguments or foreign replication data", async () => {
+    const harness = await createHarness();
+    admitNode(harness.storage, { nodeId: "node-b", token: "join-node-b" });
+    const other = await authenticate(harness.publication, "node-b", "join-node-b");
+    const { activation } = await activateTool(harness);
+    const service = harness.createService();
+    const input = dispatchInputFor(activation);
+    const dispatch = service.dispatch(input);
+    await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1));
+    const event = listDispatchEvents(harness.storage)[0]!;
+    const invocationId = event.payload.invocationId as string;
+    harness.storage.mesh.appendReplicationEvent({ sourceNodeId: "other-gateway", eventType: event.eventType,
+      idempotencyKey: "unrelated-operator-event", payload: { ...event.payload, invocationId: "invented", input: "private" } });
+    expect(await service.listPendingInvocations(other)).toEqual({ items: [] });
+    expect(await service.listPendingInvocations({ ...harness.identity, workspaceId: "other-workspace" })).toEqual({ items: [] });
+    const listed = await service.listPendingInvocations(harness.identity);
+    expect(listed).toEqual({ items: [event.payload] });
+    expect(JSON.stringify(listed)).not.toContain("secret-credential-value");
+    expect(JSON.stringify(listed)).not.toContain("release notes");
+    listed.items[0]!.nodeId = "caller-mutated";
+    expect(await service.listPendingInvocations(harness.identity)).toEqual({ items: [event.payload] });
+    expect(await harness.createService().listPendingInvocations(harness.identity)).toEqual({ items: [] });
+    await service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { status: "ok" }));
+    await dispatch;
+    expect(await service.listPendingInvocations(harness.identity)).toEqual({ items: [] });
+    expect(listDispatchEvents(harness.storage)).toHaveLength(2);
+  });
+
+  it("keeps arguments and pending delivery private until exact transport confirmation", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const storage = createLocalAsyncStorage(harness.storage);
+    let confirm!: () => void;
+    const confirmation = new Promise<void>((resolve) => { confirm = resolve; });
+    const service = new MeshCapabilityInvocationService({ storage, settlementPollIntervalMs: 10, transport: {
+      localNodeId: () => LOCAL_GATEWAY_NODE_ID,
+      appendEvent: async (input) => {
+        const event = await storage.mesh.appendReplicationEvent(input);
+        await confirmation;
+        return event;
+      },
+    } });
+    const input = dispatchInputFor(activation);
+    const invocationId = deriveMeshCapabilityInvocationId({ ...input, inputSha256: sha256Utf8(canonicalJsonString(input.args)) });
+    const dispatch = service.dispatch(input, { executionFence: async () => {
+      expect(await service.listPendingInvocations(harness.identity)).toEqual({ items: [] });
+    } });
+    await vi.waitFor(() => expect(listDispatchEvents(harness.storage)).toHaveLength(1));
+    expect(await service.listPendingInvocations(harness.identity)).toEqual({ items: [] });
+    await expect(service.readInvocationInput(harness.identity, invocationId)).rejects.toMatchObject({
+      code: "mesh_capability_invocation_not_found",
+    });
+    confirm();
+    await vi.waitFor(async () => expect((await service.listPendingInvocations(harness.identity)).items).toHaveLength(1));
+    expect(await service.readInvocationInput(harness.identity, invocationId)).toMatchObject({ input: input.args });
+    await service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { status: "ok" }));
+    expect(await dispatch).toMatchObject({ disposition: "succeeded" });
+  });
+
+  it.each(["revoked", "offline", "lease", "admission", "certificate", "deadline"] as const)(
+    "withdraws pending delivery and argument access when %s authority changes", async (change) => {
+      const harness = await createHarness();
+      const { activation } = await activateTool(harness);
+      const service = harness.createService();
+      const dispatch = service.dispatch(dispatchInputFor(activation));
+      await vi.waitFor(async () => expect((await service.listPendingInvocations(harness.identity)).items).toHaveLength(1));
+      const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+      let identity = harness.identity;
+      if (change === "revoked") {
+        await harness.activationService.revokeActivation({ workspaceId: "default", activationId: activation.activationId,
+          actorId: "operator-a", reason: "Withdraw before input delivery." });
+      } else if (change === "offline") {
+        const node = harness.storage.mesh.listNodes(10).find((row) => row.nodeId === "node-a")!;
+        harness.storage.mesh.upsertNode({ ...node, status: "offline" });
+      } else if (change === "lease") {
+        const lease = harness.storage.mesh.listLeases(10).find((row) => row.holderNodeId === "node-a")!;
+        harness.storage.mesh.releaseLease(lease.leaseKey, lease.holderNodeId, lease.fencingToken);
+      } else if (change === "admission") identity = { ...identity, admissionGeneration: identity.admissionGeneration + 1 };
+      else if (change === "certificate") identity = { ...identity, tlsFingerprint: "changed-certificate" };
+      else harness.clock.value += 60_000;
+      expect(await service.listPendingInvocations(identity)).toEqual({ items: [] });
+      await expect(service.readInvocationInput(identity, invocationId)).rejects.toMatchObject({
+        code: change === "deadline" ? "mesh_capability_invocation_not_found" : "mesh_capability_invocation_not_callable",
+      });
+      // No node execution occurred. Let the canonical deadline owner retain
+      // uncertainty instead of inventing a successful settlement for cleanup.
+      harness.clock.value += 60_000;
+      expect(await dispatch).toMatchObject({ deliveryUncertain: true, manualReconciliationRequired: true });
+      expect(listDispatchEvents(harness.storage)).toHaveLength(1);
+    },
+  );
+
+  it("retains uncertainty and withholds input when transport replays different envelope bytes", async () => {
+    const harness = await createHarness();
+    const { activation } = await activateTool(harness);
+    const storage = createLocalAsyncStorage(harness.storage);
+    const service = new MeshCapabilityInvocationService({ storage, transport: {
+      localNodeId: () => LOCAL_GATEWAY_NODE_ID,
+      appendEvent: (input) => storage.mesh.appendReplicationEvent({ ...input,
+        payload: { ...input.payload, executionProfileSha256: "1".repeat(64) } }),
+    } });
+    const outcome = await service.dispatch(dispatchInputFor(activation));
+    expect(outcome).toMatchObject({ disposition: "unknown", deliveryUncertain: true, manualReconciliationRequired: true });
+    expect(await service.listPendingInvocations(harness.identity)).toEqual({ items: [] });
+    await expect(service.readInvocationInput(harness.identity, outcome.invocationId)).rejects.toMatchObject({
+      code: "mesh_capability_invocation_not_found",
+    });
+  });
+
   it("serves the transient input only to the dispatched node while the invocation is open", async () => {
     const harness = await createHarness();
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const input = dispatchInputFor(activation);
     const dispatchPromise = service.dispatch(input, {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
 
     const served = await service.readInvocationInput(harness.identity, invocationId);
@@ -776,11 +1218,13 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
 
     const output = { status: "ok" };
     const good = nodeSettlement(invocationId, activation, output);
+    await expect(service.settleFromNode(harness.identity, { ...good, output: undefined }))
+      .rejects.toMatchObject({ code: "mesh_capability_settlement_invalid" });
     // Digest mismatch between output bytes and outputSha256 fails closed.
     await expect(
       service.settleFromNode(harness.identity, { ...good, outputSha256: "a".repeat(64) }),
@@ -804,7 +1248,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const { activation } = await activateTool(harness);
     const service = harness.createService();
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForDispatch(harness.storage);
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
 
     const attribution = await service.resolveModelUsageAttribution("default", invocationId);
@@ -888,6 +1332,9 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
   });
 
   it("classifies only the exact node-facing invocation paths for admitted-node authentication", () => {
+    expect(isMeshCapabilityNodeInvocationPath("/api/v1/mesh/capabilities/invocations/pending")).toBe(true);
+    expect(isMeshCapabilityNodeInvocationPath("/api/v1/mesh/capabilities/invocations/pending?x=1")).toBe(true);
+    expect(isMeshCapabilityNodeInvocationPath("/api/v1/mesh/capabilities/invocations/pending/extra")).toBe(false);
     expect(isMeshCapabilityNodeInvocationPath("/api/v1/mesh/capabilities/invocations/mesh-invocation-abc/input")).toBe(
       true,
     );

@@ -1,3 +1,6 @@
+import { createElement, type ReactElement } from "react";
+import { DraftLeaveDialog } from "../library/DraftLeaveDialog";
+import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -551,8 +554,59 @@ function findFirstByClass(root: ReactTestInstance, className: string): ReactTest
   return match;
 }
 
+// Walk the actual disclosure entry points, preserving each original surface assertion.
+// Serialize only the host tree so markup checks still inspect rendered semantics.
+function renderInspectedMarkup(element: ReactElement) {
+  let renderer: ReactTestRenderer;
+  act(() => {
+    renderer = create(element);
+  });
+  const host = (node: any): any =>
+    typeof node === "string" || node === null
+      ? node
+      : Array.isArray(node)
+        ? node.map(host)
+        : createElement(node.type, node.props, ...(node.children ?? []).map(host));
+  let markup = renderToStaticMarkup(host(renderer!.toJSON()));
+  for (const label of [
+    "Gateway details",
+    "Authority details",
+    "Mesh details",
+    "Local runtime details",
+    "Integration details",
+    "Release proof",
+    "Review readiness",
+    "Review notification",
+    "Notification routing",
+    "Coverage",
+    "Efficiency",
+    "Backups",
+  ]) {
+    const close = renderer!.root.findAll(
+      (node) => node.type === "button" && node.props["aria-label"] === "Close details",
+    )[0];
+    if (close)
+      act(() => {
+        close.props.onClick();
+      });
+    const button = renderer!.root.findAll((node) => node.type === "button" && collectText(node).trim() === label)[0];
+    if (!button) continue;
+    act(() => {
+      button.props.onClick();
+    });
+    markup += renderToStaticMarkup(host(renderer!.toJSON()));
+  }
+  act(() => {
+    renderer!.unmount();
+  });
+  return markup;
+}
+
 describe("RuntimeRoutePage", () => {
   afterEach(() => {
+    act(() => {
+      __resetSessionDraftsForTests();
+    });
     runtimeSnapshotOverrides.sourceStatus = null;
     runtimeSnapshotOverrides.daemon = undefined;
     runtimeSnapshotOverrides.health = undefined;
@@ -575,7 +629,7 @@ describe("RuntimeRoutePage", () => {
   });
 
   it("renders runtime posture and daemon controls in the Ops route", () => {
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -614,7 +668,7 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain('aria-label="Active llama.cpp lease purposes"');
     expect(markup).toContain('class="mc-next-settings-metric-grid"');
 
-    const diagnosticsMarkup = renderToStaticMarkup(
+    const diagnosticsMarkup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "diagnostics", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -650,7 +704,7 @@ describe("RuntimeRoutePage", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -690,7 +744,7 @@ describe("RuntimeRoutePage", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -712,7 +766,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.sourceStatus = {
       llamaCpp: { status: "error", message: "status route failed" },
     };
-    const failedMarkup = renderToStaticMarkup(
+    const failedMarkup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -734,7 +788,7 @@ describe("RuntimeRoutePage", () => {
       healthy: true,
       updatedAt: "2026-04-22T00:00:00.000Z",
     };
-    const compatibilityMarkup = renderToStaticMarkup(
+    const compatibilityMarkup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -908,8 +962,8 @@ describe("RuntimeRoutePage", () => {
     } as any;
 
     const sections = [
-      ["runtime", "Runtime posture"],
-      ["runtime", "No backup"],
+      ["runtime", "Services"],
+      ["runtime", "Unavailable"],
       ["diagnostics", "Diagnostics directory"],
       ["diagnostics", "mc-next-ops-diagnostics-grid"],
       ["diagnostics", "mc-next-ops-diagnostics-primary"],
@@ -917,12 +971,12 @@ describe("RuntimeRoutePage", () => {
       ["schedules", "No scheduled jobs."],
       ["improvement", "No improvement reports yet."],
       ["costs", "Quality and QMD signal"],
-      ["notifications", "Daemon needs intervention"],
+      ["notifications", "Daemon status unavailable"],
       ["activity", "Activity feed"],
     ] as const;
 
     for (const [section, expected] of sections) {
-      const markup = renderToStaticMarkup(
+      const markup = renderInspectedMarkup(
         <RuntimeRoutePage
           route={{ area: "ops", section, theme: "ops" } as any}
           activeWorkspaceId="default"
@@ -1093,6 +1147,9 @@ describe("RuntimeRoutePage", () => {
         />,
       );
     });
+    await act(async () => {
+      findButton(renderer!.root, "New schedule").props.onClick();
+    });
 
     expect(renderer!.root.findByProps({ className: "mc-next-ops-schedules-grid" })).toBeTruthy();
 
@@ -1102,10 +1159,12 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("Name and schedule are required.");
 
     const inputs = renderer!.root.findAllByType("input");
-    const actionSelect = renderer!.root.findByType("select");
+    const actionSelect = renderer!.root.findByProps({ "aria-label": "Schedule action" });
     await act(async () => {
       inputs[0]!.props.onChange({ target: { value: "Daily review" } });
-      inputs[1]!.props.onChange({ target: { value: "0 10 * * *" } });
+      renderer!.root
+        .findByProps({ "aria-label": "Cron expression" })
+        .props.onChange({ target: { value: "0 10 * * *" } });
       actionSelect.props.onChange({ target: { value: "backup" } });
     });
     await act(async () => {
@@ -1142,6 +1201,9 @@ describe("RuntimeRoutePage", () => {
       );
     });
 
+    await act(async () => {
+      findButton(renderer!.root, "Details").props.onClick();
+    });
     await act(async () => {
       findButton(renderer!.root, "Run now").props.onClick();
     });
@@ -1341,6 +1403,9 @@ describe("RuntimeRoutePage", () => {
         />,
       );
     });
+    await act(async () => {
+      findButton(renderer!.root, "Automation Designer").props.onClick();
+    });
 
     await act(async () => {
       findButton(renderer!.root, "Preview recipe").props.onClick();
@@ -1436,11 +1501,16 @@ describe("RuntimeRoutePage", () => {
         />,
       );
     });
+    await act(async () => {
+      findButton(renderer!.root, "New schedule").props.onClick();
+    });
 
     const inputs = renderer!.root.findAllByType("input");
     await act(async () => {
       inputs[0]!.props.onChange({ target: { value: "Daily review" } });
-      inputs[1]!.props.onChange({ target: { value: "0 10 * * *" } });
+      renderer!.root
+        .findByProps({ "aria-label": "Cron expression" })
+        .props.onChange({ target: { value: "0 10 * * *" } });
     });
     await act(async () => {
       findButton(renderer!.root, "Create schedule").props.onClick();
@@ -1466,6 +1536,9 @@ describe("RuntimeRoutePage", () => {
           setActiveWorkspaceId={vi.fn()}
         />,
       );
+    });
+    await act(async () => {
+      findExactButton(renderer!.root, "Gateway details").props.onClick();
     });
 
     await act(async () => {
@@ -1537,7 +1610,7 @@ describe("RuntimeRoutePage", () => {
   });
 
   it("folds notifications into the shared needs-attention inbox", () => {
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "notifications", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -1553,7 +1626,7 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Notification signals");
     expect(markup).toContain("Notification routing");
-    expect(markup).toContain("Keychain HTTPS webhook");
+    expect(markup).toContain("New destination");
     expect(markup).not.toContain("approval.created");
   });
 
@@ -1667,10 +1740,8 @@ describe("RuntimeRoutePage", () => {
     });
     expect(
       renderer!.root
-        .findAllByType("summary")
-        .some(
-          (node) => node.props.role === "button" && node.props["aria-label"] === "Inspect activity event tool.failed",
-        ),
+        .findAllByType("button")
+        .some((node) => node.type === "button" && node.props["aria-label"] === "Inspect activity event tool.failed"),
     ).toBe(true);
 
     await act(async () => findExactButton(renderer!.root, "Errors").props.onClick());
@@ -1809,6 +1880,9 @@ describe("RuntimeRoutePage", () => {
     );
 
     expect(promptPacksButton).toBeDefined();
+    await act(async () => {
+      findExactButton(renderer!.root, "Release proof").props.onClick();
+    });
     expect(collectText(renderer!.root)).toContain("Release proof dashboard");
     expect(collectText(renderer!.root)).toContain("Source / build identity");
     expect(collectText(renderer!.root)).toContain("Packaged / release proof");
@@ -1816,6 +1890,10 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("No release certificate is available to the running Gateway.");
     expect(collectText(renderer!.root)).toContain("Route coverage");
     expect(collectText(renderer!.root)).toContain("Screenshot freshness");
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Close details" }).props.onClick();
+      findExactButton(renderer!.root, "Review readiness").props.onClick();
+    });
     expect(collectText(renderer!.root)).toContain("Code/Ops review readiness");
     expect(collectText(renderer!.root)).toContain("skills-catalog");
 
@@ -1890,6 +1968,9 @@ describe("RuntimeRoutePage", () => {
         />,
       );
     });
+    await act(async () => {
+      findExactButton(renderer!.root, "Release proof").props.onClick();
+    });
 
     const text = collectText(renderer!.root);
     expect(text).toContain("Packaged · aaaaaaaa");
@@ -1953,6 +2034,9 @@ describe("RuntimeRoutePage", () => {
         />,
       );
     });
+    await act(async () => {
+      findExactButton(renderer!.root, "Release proof").props.onClick();
+    });
 
     await act(async () => {
       findButton(renderer!.root, "Refresh proof").props.onClick();
@@ -1974,7 +2058,7 @@ describe("RuntimeRoutePage", () => {
       health: { status: "error", error: "health route failed" },
     };
 
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -2136,7 +2220,7 @@ describe("RuntimeRoutePage", () => {
       },
     } as any;
 
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "costs", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -2223,7 +2307,7 @@ describe("RuntimeRoutePage", () => {
       health: { status: "ok" },
     };
 
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -2399,7 +2483,7 @@ describe("RuntimeRoutePage", () => {
       setActiveWorkspaceId: vi.fn(),
     };
 
-    const runtimeMarkup = renderToStaticMarkup(
+    const runtimeMarkup = renderInspectedMarkup(
       <RuntimeRoutePage route={{ area: "ops", section: "runtime", theme: "ops" } as any} {...commonProps} />,
     );
     expect(runtimeMarkup).toContain("Daemon stopped");
@@ -2417,6 +2501,9 @@ describe("RuntimeRoutePage", () => {
         <RuntimeRoutePage route={{ area: "ops", section: "runtime", theme: "ops" } as any} {...commonProps} />,
       );
     });
+    act(() => {
+      findExactButton(readOnlyRenderer!.root, "Gateway details").props.onClick();
+    });
     expect(findButton(readOnlyRenderer!.root, "Start daemon").props.disabled).toBe(true);
     expect(findButton(readOnlyRenderer!.root, "Restart daemon").props.disabled).toBe(true);
     expect(findButton(readOnlyRenderer!.root, "Stop daemon").props.disabled).toBe(true);
@@ -2424,14 +2511,14 @@ describe("RuntimeRoutePage", () => {
       readOnlyRenderer!.unmount();
     });
 
-    const diagnosticsMarkup = renderToStaticMarkup(
+    const diagnosticsMarkup = renderInspectedMarkup(
       <RuntimeRoutePage route={{ area: "ops", section: "diagnostics", theme: "ops" } as any} {...commonProps} />,
     );
     expect(diagnosticsMarkup).toContain("n/a");
     expect(diagnosticsMarkup).toContain("0m");
     expect(diagnosticsMarkup).toContain("Runtime warning");
 
-    const costsMarkup = renderToStaticMarkup(
+    const costsMarkup = renderInspectedMarkup(
       <RuntimeRoutePage route={{ area: "ops", section: "costs", theme: "ops" } as any} {...commonProps} />,
     );
     expect(costsMarkup).toContain("Expanded");
@@ -2454,12 +2541,12 @@ describe("RuntimeRoutePage", () => {
       },
     };
     expect(
-      renderToStaticMarkup(
+      renderInspectedMarkup(
         <RuntimeRoutePage route={{ area: "ops", section: "costs", theme: "ops" } as any} {...commonProps} />,
       ),
     ).toContain("no token delta");
 
-    const notificationsMarkup = renderToStaticMarkup(
+    const notificationsMarkup = renderInspectedMarkup(
       <RuntimeRoutePage route={{ area: "ops", section: "notifications", theme: "ops" } as any} {...commonProps} />,
     );
     expect(notificationsMarkup).toContain("Daemon needs intervention");
@@ -2514,7 +2601,7 @@ describe("RuntimeRoutePage", () => {
       backups: { items: [], latest: { backupId: "latest-backup" } },
     };
 
-    const markup = renderToStaticMarkup(
+    const markup = renderInspectedMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
         activeWorkspaceId="default"
@@ -2528,5 +2615,69 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Backup present");
     expect(markup).not.toContain("Backup ready");
     expect(markup).not.toContain("Daemon restarted.");
+  });
+  it("retains a schedule draft across close and refresh, and preserves newer input during a single create", async () => {
+    const props = {
+      route: { area: "ops", section: "schedules", theme: "ops" } as any,
+      activeWorkspaceId: "draft-proof",
+      activeWorkspaceName: "Draft proof",
+      pendingApprovals: 0,
+      navigate: vi.fn(),
+      setActiveWorkspaceId: vi.fn(),
+    };
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<RuntimeRoutePage {...props} />);
+    });
+    expect(renderer!.root.findAllByType("input")).toHaveLength(0);
+    await act(async () => {
+      findButton(renderer!.root, "New schedule").props.onClick();
+    });
+    await act(async () => {
+      renderer!.root.findAllByType("input")[0]!.props.onChange({ target: { value: "Retained schedule" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Back to list").props.onClick();
+    });
+    expect(renderer!.root.findByType(DraftLeaveDialog).props.open).toBe(true);
+    await act(async () => {
+      renderer!.root.findByType(DraftLeaveDialog).props.onContinue();
+    });
+    expect(collectText(renderer!.root).replace(/\s+/g, " ")).toContain("New schedule · Unsaved");
+    await act(async () => {
+      renderer!.update(<RuntimeRoutePage {...props} />);
+      findButton(renderer!.root, "New schedule").props.onClick();
+    });
+    expect(renderer!.root.findAllByType("input")[0]!.props.value).toBe("Retained schedule");
+    let resolveCreate!: (value: unknown) => void;
+    runtimeApiMocks.createCronJob.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    await act(async () => {
+      const save = findButton(renderer!.root, "Create schedule");
+      save.props.onClick();
+      save.props.onClick();
+    });
+    expect(runtimeApiMocks.createCronJob).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      renderer!.root.findAllByType("input")[0]!.props.onChange({ target: { value: "Next schedule input" } });
+    });
+    await act(async () => {
+      resolveCreate({ jobId: "created-schedule" });
+    });
+    expect(renderer!.root.findAllByType("input")[0]!.props.value).toBe("Next schedule input");
+    await act(async () => {
+      findButton(renderer!.root, "Back to list").props.onClick();
+    });
+    await act(async () => {
+      renderer!.root.findByType(DraftLeaveDialog).props.onDiscard();
+    });
+    expect(renderer!.root.findAllByType("input")).toHaveLength(0);
+    await act(async () => {
+      renderer!.unmount();
+    });
   });
 });

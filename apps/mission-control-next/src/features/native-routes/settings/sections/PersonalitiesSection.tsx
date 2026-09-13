@@ -1,12 +1,13 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { CheckCircle2, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import type { PersonalityPresetCategory } from "@goatcitadel/contracts";
 import {
   createPersonality,
   deletePersonality,
   fetchPersonalities,
+  isApiRequestError,
   setDefaultPersonality,
   updatePersonality,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -15,20 +16,22 @@ import {
   getErrorMessage,
   type Notice,
   SettingsButtonRow,
+  SettingsActionList,
   SettingsEmptyState,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
+  SettingsStack,
   SettingsNotice,
   type SettingsSectionProps,
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
-import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
+import { useSessionDraft, hasSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { FocusedDetail } from "../../shared/FocusedDetail";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList, StatusChip } from "../../primitives";
 import {
-  arePersonalityDraftsEqual,
   createEmptyPersonalityEditorDraft,
   createPersonalityEditorDraft,
   formatPersonalityCategoryLabel,
@@ -56,15 +59,24 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedPersonalityId, setSelectedPersonalityId] = useState("");
   const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
-  const [draft, setDraft] = useState<PersonalityEditorDraft>(() => createEmptyPersonalityEditorDraft());
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [catalogConflict, setCatalogConflict] = useState<{ key: string; revision: string } | null>(null);
+  const [pendingDefault, setPendingDefault] = useState<{ id: string; label: string; expectedRevision: string } | null>(null);
+  const [defaultPending, setDefaultPending] = useState(false);
+  const defaultPendingRef = useRef(false);
+  const removePendingRef = useRef(false);
+  const leave = useDraftLeave();
   const [pendingRemove, setPendingRemove] = useState<{
     id: string;
     label: string;
     builtin: boolean;
+    expectedRevision: string;
   } | null>(null);
   const [removePending, setRemovePending] = useState(false);
   const selectedPersonality =
-    data?.items?.find((item) => item.id === selectedPersonalityId) ?? data?.items?.[0] ?? null;
+    data?.items?.find((item) => item.id === selectedPersonalityId) ?? null;
   const defaultPersonalityId = data?.defaultPersonalityId ?? "default";
   const customCount = data?.items?.filter((item) => !item.builtin).length ?? 0;
   const modifiedBuiltinCount = data?.items?.filter((item) => item.builtin && item.modified).length ?? 0;
@@ -72,64 +84,28 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   const editingBuiltin = editorMode === "selected" && selectedPersonality?.builtin === true;
   const canSave = editorMode === "new" || !editorLocked;
 
-  // Ship punchlist H-9 (data integrity) — report this section's dirty state to
-  // the shared registry so the page-level beforeunload + route-change guards
-  // can warn the operator before edits are lost. The baseline is rebuilt from
-  // the server snapshot, so a successful save (which triggers `reload()`)
-  // naturally collapses dirty back to clean.
-  const baselineDraft = useMemo(
-    () =>
-      editorMode === "new" ? createEmptyPersonalityEditorDraft() : createPersonalityEditorDraft(selectedPersonality),
-    [editorMode, selectedPersonality],
-  );
-  const isDirty = !editorLocked && !arePersonalityDraftsEqual(draft, baselineDraft);
-  useFormDirty("settings:personalities", isDirty, { label: "Personalities" });
-
-  const resetPersonalityDraft = useCallback(() => {
-    setDraft(baselineDraft);
-  }, [baselineDraft]);
-  const applyPersonalityTransition = useCallback(
-    (transition: PersonalityTransition) => {
-      if (transition.kind === "new") {
-        setEditorMode("new");
-        setDraft(createEmptyPersonalityEditorDraft());
-        setNotice(null);
-        return;
-      }
-      setEditorMode("selected");
-      if (transition.kind === "select") {
-        setSelectedPersonalityId(transition.id);
-      } else {
-        void reload();
-      }
-    },
-    [reload],
-  );
-  const personalityTransitionGuard = useDraftTransitionGuard(
-    isDirty,
-    applyPersonalityTransition,
-    resetPersonalityDraft,
-  );
-
-  useEffect(() => {
-    if (!data?.items?.length) {
-      setSelectedPersonalityId("");
-      return;
-    }
-    setSelectedPersonalityId((current) =>
-      current && data.items.some((item) => item.id === current) ? current : data.defaultPersonalityId,
-    );
-  }, [data?.defaultPersonalityId, data?.items]);
-
-  useEffect(() => {
-    if (editorMode === "new") {
-      return;
-    }
-    setDraft(createPersonalityEditorDraft(selectedPersonality));
-  }, [editorMode, selectedPersonality]);
+  const baseline = editorMode === "new" ? createEmptyPersonalityEditorDraft() : createPersonalityEditorDraft(selectedPersonality);
+  const editor = useSessionDraft(`personality:system:${editorMode === "new" ? "new" : selectedPersonalityId}`, baseline, data?.revision, {
+    label: editorMode === "new" ? "New personality" : selectedPersonality?.label ?? "Personality",
+    active: editorOpen, available: editorMode === "new" || Boolean(selectedPersonality), onSave: () => savePersonality(),
+  });
+  const draft = editor.value;
+  const setDraft = editor.setValue;
+  const isDirty = editor.isDirty;
+  const hasCatalogConflict = catalogConflict?.key === editor.key;
+  const revisionUnavailable = typeof editor.baseRevision !== "string";
+  const closeEditor = () => leave.request(() => setEditorOpen(false), [editor.key]);
+  const personalityTransitionGuard = { requestTransition: (transition: PersonalityTransition) => {
+    if (transition.kind === "refresh") { void reload(); return; }
+    leave.request(() => {
+      setEditorMode(transition.kind === "new" ? "new" : "selected");
+      if (transition.kind === "select") setSelectedPersonalityId(transition.id);
+      setEditorOpen(true); setNotice(null);
+    }, [editor.key]);
+  } };
 
   const beginCustomPersonality = () => {
-    if (editorMode === "new") {
+    if (editorMode === "new" && editorOpen) {
       return;
     }
     personalityTransitionGuard.requestTransition({ kind: "new" });
@@ -139,64 +115,90 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
     personalityTransitionGuard.requestTransition({ kind: "refresh" });
   };
 
-  const savePersonality = async () => {
+  const savePersonality = async (): Promise<boolean> => {
+    if (savingRef.current) return false;
+    if (editor.hasRemoteChanges || hasCatalogConflict) { setNotice({ tone: "warning", message: "The personality catalog changed. Review it before applying your draft." }); return false; }
+    const expectedRevision = editor.baseRevision;
+    if (typeof expectedRevision !== "string") { setNotice({ tone: "warning", message: "Reload the personality catalog before saving." }); return false; }
+    const submitted = draft;
     const input = personalityDraftToMutationInput(draft);
     if (!input.label) {
       setNotice({ tone: "warning", message: "Personality label is required." });
-      return;
+      return false;
     }
     try {
+      savingRef.current = true; setSaving(true);
       if (editorMode === "new") {
         const nextId = normalizePersonalityEditorId(input.id || input.label);
-        await createPersonality(input);
+        const saved = await createPersonality({ ...input, expectedRevision });
+        const savedPreset = saved.items.find((item) => item.id === nextId);
+        const clean = editor.acceptSavedAs(`personality:system:${nextId}`,
+          savedPreset ? createPersonalityEditorDraft(savedPreset) : submitted, saved.revision, submitted);
+        setCatalogConflict(null);
         setNotice({ tone: "success", message: "Custom personality created." });
+        setEditorMode("selected"); setSelectedPersonalityId(nextId);
         await reload();
-        setEditorMode("selected");
-        setSelectedPersonalityId(nextId);
-        return;
+        if (clean) setEditorOpen(false);
+        return clean;
       }
       if (!selectedPersonality || selectedPersonality.editable === false) {
         setNotice({ tone: "warning", message: "This personality cannot be edited." });
-        return;
+        return false;
       }
       const nextId = selectedPersonality.builtin
         ? selectedPersonality.id
         : normalizePersonalityEditorId(input.id || selectedPersonality.id);
-      await updatePersonality(selectedPersonality.id, input);
+      const saved = await updatePersonality(selectedPersonality.id, { ...input, expectedRevision });
+      const savedPreset = saved.items.find((item) => item.id === nextId);
+      const clean = editor.acceptSavedAs(`personality:system:${nextId}`,
+        savedPreset ? createPersonalityEditorDraft(savedPreset) : submitted, saved.revision, submitted);
+      setCatalogConflict(null);
       setNotice({ tone: "success", message: `${selectedPersonality.label} saved.` });
-      await reload();
       setSelectedPersonalityId(nextId);
+      await reload();
+      return clean;
     } catch (saveError) {
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    }
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        setCatalogConflict({ key: editor.key, revision: expectedRevision });
+        setNotice({ tone: "warning", message: "The personality catalog changed. Your draft is preserved; review the current catalog before saving again." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(saveError) });
+      return false;
+    } finally { savingRef.current = false; setSaving(false); }
   };
 
   const makeDefault = async () => {
-    if (!selectedPersonality) {
+    if (!pendingDefault || defaultPendingRef.current) {
       return;
     }
+    defaultPendingRef.current = true; setDefaultPending(true);
     try {
-      await setDefaultPersonality(selectedPersonality.id);
+      await setDefaultPersonality(pendingDefault.id, pendingDefault.expectedRevision);
       setNotice({
         tone: "success",
         message:
-          selectedPersonality.id === "default"
+          pendingDefault.id === "default"
             ? "Work personality cleared."
-            : `${selectedPersonality.label} is now the global Work default.`,
+            : `${pendingDefault.label} is now the global Work default.`,
       });
+      setPendingDefault(null);
       await reload();
     } catch (defaultError) {
-      setNotice({ tone: "error", message: getErrorMessage(defaultError) });
-    }
+      setPendingDefault(null);
+      if (isApiRequestError(defaultError) && defaultError.status === 409) {
+        setNotice({ tone: "warning", message: "The personality catalog changed. Review it again before setting the Work default." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(defaultError) });
+    } finally { defaultPendingRef.current = false; setDefaultPending(false); }
   };
 
   const removeOrResetPersonality = async () => {
-    if (!pendingRemove) {
+    if (!pendingRemove || removePendingRef.current) {
       return;
     }
-    setRemovePending(true);
+    removePendingRef.current = true; setRemovePending(true);
     try {
-      await deletePersonality(pendingRemove.id);
+      await deletePersonality(pendingRemove.id, pendingRemove.expectedRevision);
       setNotice({
         tone: "success",
         message: pendingRemove.builtin
@@ -204,16 +206,20 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
           : `${pendingRemove.label} removed.`,
       });
       const nextSelectedId = pendingRemove.builtin ? pendingRemove.id : "default";
-      const nextSelectedPersonality = data?.items?.find((item) => item.id === nextSelectedId) ?? null;
-      setDraft(createPersonalityEditorDraft(nextSelectedPersonality));
+      editor.discard();
+      setEditorOpen(false);
       setSelectedPersonalityId(nextSelectedId);
       setEditorMode("selected");
       setPendingRemove(null);
       await reload();
     } catch (removeError) {
-      setNotice({ tone: "error", message: getErrorMessage(removeError) });
+      setPendingRemove(null);
+      if (isApiRequestError(removeError) && removeError.status === 409) {
+        setNotice({ tone: "warning", message: "The personality catalog changed. Your draft is preserved; review it again before resetting or removing a personality." });
+        await reload();
+      } else setNotice({ tone: "error", message: getErrorMessage(removeError) });
     } finally {
-      setRemovePending(false);
+      removePendingRef.current = false; setRemovePending(false);
     }
   };
 
@@ -222,7 +228,7 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {/* F-M11: personalities is an experimental surface. Beyond the page-frame
           badge, state it inline since this section's labeling was the weakest. */}
@@ -230,8 +236,8 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
         <strong>Experimental.</strong> Work personalities are an experimental surface and may change before 1.0.
       </p>
       {data ? (
-        <SettingsGrid variant="detail-wide">
-          <NativeCard
+        <SettingsStack>
+          <div hidden={editorOpen}><NativeCard
             density="compact"
             className="mc-next-settings-panel"
             title="Personality catalog"
@@ -245,7 +251,7 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
             <SettingsButtonRow>
               <NativeButton variant="default" onClick={beginCustomPersonality}>
                 <Plus size={16} />
-                Add custom personality
+                Add custom personality{hasSessionDraft("personality:system:new") ? " · Unsaved" : ""}
               </NativeButton>
               <NativeButton variant="secondary" onClick={refreshPersonalities}>
                 <RefreshCw size={16} />
@@ -256,23 +262,23 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
               items={(data.items ?? []).map((item) => ({
                 id: item.id,
                 title: item.label,
-                meta: formatPersonalityStatus(item, defaultPersonalityId),
+                meta: `${formatPersonalityStatus(item, defaultPersonalityId)}${hasSessionDraft(`personality:system:${item.id}`) ? " · Unsaved" : ""}`,
                 body: `${formatPersonalityCategoryLabel(item.category)} · ${item.tone || "No tone"} · ${
                   item.description || "No description"
                 }`,
               }))}
               selectedId={editorMode === "new" ? "" : selectedPersonalityId}
               onSelect={(id) => {
-                if (editorMode === "selected" && id === selectedPersonalityId) {
+                if (editorOpen && editorMode === "selected" && id === selectedPersonalityId) {
                   return;
                 }
                 personalityTransitionGuard.requestTransition({ kind: "select", id });
               }}
               emptyLabel="No personalities returned from the gateway."
-              maxHeight="min(48vh, 28rem)"
+              maxHeight=""
             />
-          </NativeCard>
-          <NativeCard
+          </NativeCard></div>
+          {editorOpen ? <FocusedDetail title={editorMode === "new" ? "New custom personality" : selectedPersonality?.label ?? "Personality"} onClose={closeEditor}><NativeCard
             density="compact"
             className="mc-next-settings-panel"
             title={
@@ -293,6 +299,30 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
           >
             {editorMode === "new" || selectedPersonality ? (
               <>
+                {editor.hasRemoteChanges || hasCatalogConflict ? <div role="status">
+                  <p>The personality catalog changed. Your draft is preserved.</p>
+                  <details><summary>Current saved instructions</summary>
+                    <p>Current Work default: {data.items.find((item) => item.id === defaultPersonalityId)?.label ?? defaultPersonalityId}.</p>
+                    {selectedPersonality && editorMode === "selected" ? <SettingsActionList ariaLabel="Current saved personality" items={[
+                      { label: "ID", description: selectedPersonality.id },
+                      { label: "Label", description: selectedPersonality.label },
+                      { label: "Category", description: formatPersonalityCategoryLabel(selectedPersonality.category) },
+                      { label: "Description", description: selectedPersonality.description || "No description" },
+                      { label: "Tone", description: selectedPersonality.tone || "No tone" },
+                      { label: "Style", description: selectedPersonality.style || "No style" },
+                      { label: "System overlay", description: selectedPersonality.systemOverlay || "No overlay" },
+                      { label: "Safety notes", description: selectedPersonality.safetyNotes.join(" ") || "No extra safety notes" },
+                    ]} /> : <SettingsActionList ariaLabel="Current personality catalog" items={data.items.map((item) => ({
+                      label: `${item.label} (${item.id})`,
+                      description: `${item.builtin ? "Built-in" : "Custom"} · ${item.description || "No description"}`,
+                    }))} />}
+                  </details>
+                  <SettingsButtonRow>
+                    <NativeButton variant="outline" disabled={!data.revision || (hasCatalogConflict && data.revision === catalogConflict.revision)}
+                      onClick={() => { editor.rebaseToCurrent(); setCatalogConflict(null); }}>Apply draft to current personality</NativeButton>
+                    <NativeButton variant="secondary" onClick={() => void reload()}>Reload latest catalog</NativeButton>
+                  </SettingsButtonRow>
+                </div> : null}
                 <SettingsFieldGrid>
                   <SettingsField label="ID">
                     <input
@@ -380,15 +410,16 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsButtonRow>
-                  <NativeButton variant="default" onClick={() => void savePersonality()} disabled={!canSave}>
+                  <NativeButton variant="default" onClick={() => void savePersonality()} disabled={!canSave || saving || editor.hasRemoteChanges || hasCatalogConflict || revisionUnavailable}>
                     <Save size={16} />
                     {editorMode === "new" ? "Create personality" : "Save edits"}
                   </NativeButton>
                   {editorMode === "selected" ? (
                     <NativeButton
                       variant="secondary"
-                      onClick={() => void makeDefault()}
-                      disabled={!selectedPersonality}
+                      onClick={() => selectedPersonality && data.revision && setPendingDefault({ id: selectedPersonality.id,
+                        label: selectedPersonality.label, expectedRevision: data.revision })}
+                      disabled={!selectedPersonality || !data.revision || saving}
                     >
                       <CheckCircle2 size={16} />
                       {selectedPersonality?.id === "default" ? "Clear Work default" : "Set as Work default"}
@@ -403,10 +434,11 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
                               id: selectedPersonality.id,
                               label: selectedPersonality.label,
                               builtin: selectedPersonality.builtin,
+                              expectedRevision: data.revision,
                             })
                           : undefined
                       }
-                      disabled={selectedPersonality?.builtin === true && !selectedPersonality.modified}
+                      disabled={!data.revision || saving || (selectedPersonality?.builtin === true && !selectedPersonality.modified)}
                     >
                       {selectedPersonality?.builtin ? <RotateCcw size={16} /> : <Trash2 size={16} />}
                       {selectedPersonality?.builtin ? "Reset built-in" : "Remove custom"}
@@ -415,10 +447,7 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
                   {editorMode === "new" ? (
                     <NativeButton
                       variant="secondary"
-                      onClick={() => {
-                        setEditorMode("selected");
-                        setDraft(createPersonalityEditorDraft(selectedPersonality));
-                      }}
+                      onClick={closeEditor}
                     >
                       <RotateCcw size={16} />
                       Cancel
@@ -426,21 +455,36 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
                   ) : null}
                 </SettingsButtonRow>
               </>
+            ) : isDirty ? (
+              <>
+                <p role="status">The selected personality was removed. Your unsaved draft is retained for review.</p>
+                <SettingsActionList ariaLabel="Retained personality draft" items={[
+                  { label: "ID", description: draft.id },
+                  { label: "Label", description: draft.label },
+                  { label: "Category", description: formatPersonalityCategoryLabel(draft.category) },
+                  { label: "Description", description: draft.description || "No description" },
+                  { label: "Tone", description: draft.tone || "No tone" },
+                  { label: "Style", description: draft.style || "No style" },
+                  { label: "System overlay", description: draft.systemOverlay || "No overlay" },
+                  { label: "Safety notes", description: draft.safetyNotes || "No extra safety notes" },
+                ]} />
+              </>
             ) : (
               <SettingsEmptyState label="Choose a personality or create a custom one." />
             )}
-          </NativeCard>
-        </SettingsGrid>
+          </NativeCard></FocusedDetail> : null}
+        </SettingsStack>
       ) : null}
+      {leave.dialog}
       <ConfirmModal
-        open={personalityTransitionGuard.pendingTransition !== null}
-        danger
-        title="Discard personality changes?"
-        message="This personality has unsaved edits. Discard them and continue?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={personalityTransitionGuard.cancelDiscard}
-        onConfirm={personalityTransitionGuard.confirmDiscard}
+        open={pendingDefault !== null}
+        title="Change Work default?"
+        message={pendingDefault?.id === "default" ? "Clear the global Work personality and use the default voice?"
+          : `Use the saved instructions for ${pendingDefault?.label ?? "this personality"} as the global Work default?`}
+        confirmLabel="Apply reviewed default"
+        pending={defaultPending}
+        onCancel={() => setPendingDefault(null)}
+        onConfirm={() => void makeDefault()}
       />
       <ConfirmModal
         open={pendingRemove !== null}

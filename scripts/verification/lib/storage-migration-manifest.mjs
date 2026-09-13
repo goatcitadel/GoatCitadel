@@ -554,7 +554,18 @@ function resolveSourceSymbol(sourceGraph, modulePath, symbolName, resolving) {
   }
 
   for (const statement of sourceFile.statements) {
-    if (!ts.isExportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+    if (!ts.isExportDeclaration(statement)) {
+      continue;
+    }
+    if (!statement.moduleSpecifier) {
+      const element = statement.exportClause && ts.isNamedExports(statement.exportClause)
+        ? statement.exportClause.elements.find((candidate) => candidate.name.text === symbolName) : undefined;
+      if (element) {
+        return resolveSourceSymbol(sourceGraph, modulePath, (element.propertyName ?? element.name).text, new Set(resolving));
+      }
+      continue;
+    }
+    if (!ts.isStringLiteral(statement.moduleSpecifier)) {
       continue;
     }
     const moduleSpecifier = statement.moduleSpecifier.text;

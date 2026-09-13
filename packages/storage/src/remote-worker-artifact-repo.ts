@@ -141,6 +141,7 @@ export interface ResolveRemoteWorkerCleanupCommand {
 }
 
 interface UploadRow {
+  request_sha256: string;
   registry_workspace_id: string;
   execution_workspace_id: string;
   assignment_id: string;
@@ -218,11 +219,12 @@ export class RemoteWorkerArtifactRepository {
       });
       const replay = this.findUploadByIdempotency(registryWorkspaceId, idempotencyKey);
       if (replay) {
-        assertExactReplay(
-          replay.staging_root_sha256,
-          digest(input.stagingRootSha256, "stagingRootSha256"),
-          "remote worker upload",
-        );
+        assertExactReplay(replay.request_sha256, requestSha256, "remote worker upload");
+        if (
+          replay.declared_file_count !== input.declaredFileCount ||
+          replay.declared_total_bytes !== input.declaredTotalBytes
+        )
+          throw conflict("remote worker upload declared bounds");
         return this.mapUpload(replay);
       }
       const maxArtifactBytes = this.resolveArtifactCeiling(registryWorkspaceId, assignmentId);
@@ -290,7 +292,7 @@ export class RemoteWorkerArtifactRepository {
       const requestSha256 = sha256(remoteWorkerArtifactPartReplayMaterial({ identity, uploadId, part }));
       const replay = this.findPartByIdempotency(registryWorkspaceId, idempotencyKey);
       if (replay) {
-        assertExactReplay(replay.part_sha256, part.partSha256, "remote worker part");
+        assertExactReplay(replay.request_sha256, requestSha256, "remote worker part");
         return this.mapUpload(this.getUploadRow(registryWorkspaceId, assignmentId, assignmentGeneration, uploadId));
       }
       if (upload.upload_state !== "open" && upload.upload_state !== "assembling") {
@@ -536,11 +538,22 @@ export class RemoteWorkerArtifactRepository {
       this.acquireGenerationLocks(registryWorkspaceId, assignmentId, assignmentGeneration);
       const row = this.getVerificationRow(registryWorkspaceId, verificationId);
       if (row.kind !== "gateway_attempt") throw conflict("remote worker verification kind");
+      const manifest = this.findManifestByGeneration(registryWorkspaceId, assignmentId, assignmentGeneration);
+      if (
+        !manifest ||
+        row.assignment_id !== assignmentId ||
+        Number(row.assignment_generation) !== assignmentGeneration ||
+        row.manifest_id !== manifest.manifest_id
+      )
+        throw conflict("remote worker verification assignment binding");
+      this.assertGatewayVerificationEvidence(manifest, row.verifier_profile_sha256, evidence, nextState);
       if (row.attempt_revision !== expectedAttemptRevision) throw conflict("remote worker verification revision");
       if (!remoteWorkerVerificationAttemptCanTransition(row.attempt_state, nextState)) {
         throw conflict("remote worker verification transition");
       }
       const now = this.databaseNow();
+      if (nextState === "passed" && (!row.wall_deadline_at || row.wall_deadline_at <= now))
+        throw conflict("remote worker verification deadline");
       try {
         this.db
           .prepare(
@@ -653,6 +666,31 @@ export class RemoteWorkerArtifactRepository {
     return this.findManifestByGeneration(registryWorkspaceId, assignmentId, assignmentGeneration)?.manifest_sha256;
   }
 
+  /** Return exact, hash-checked manifest bytes only after its canonical verifier
+   * gate passed. The consumer still verifies the referenced CAS blob. */
+  public getVerifiedManifest(
+    registryWorkspaceId: string,
+    assignmentId: string,
+    assignmentGeneration: number,
+  ): RemoteWorkerArtifactManifest | undefined {
+    const row = this.findManifestByGeneration(
+      identifier(registryWorkspaceId, "registryWorkspaceId"),
+      identifier(assignmentId, "assignmentId"),
+      positiveInteger(assignmentGeneration, "assignmentGeneration"),
+    );
+    if (!row) return undefined;
+    const upload = this.getUploadRow(registryWorkspaceId, assignmentId, assignmentGeneration, row.upload_id);
+    if (upload.upload_state !== "committed" || upload.verification_gate_state !== "satisfied") return undefined;
+    const manifest = normalizeRemoteWorkerArtifactManifest(JSON.parse(row.manifest_json));
+    if (
+      canonicalJsonString(manifest.identity) !== canonicalJsonString(this.identityFromManifest(row)) ||
+      remoteWorkerArtifactManifestSha256(manifest) !== row.manifest_sha256 ||
+      upload.committed_manifest_sha256 !== row.manifest_sha256 ||
+      manifest.requiredVerifierProfileSha256 !== row.required_verifier_profile_sha256
+    ) throw conflict("remote worker verified manifest binding");
+    return manifest;
+  }
+
   // --- internals ------------------------------------------------------------
 
   private insertVerification(input: {
@@ -683,11 +721,23 @@ export class RemoteWorkerArtifactRepository {
       this.acquireGenerationLocks(registryWorkspaceId, assignmentId, assignmentGeneration);
       const manifest = this.findManifestByGeneration(registryWorkspaceId, assignmentId, assignmentGeneration);
       if (!manifest) throw conflict("remote worker verification manifest");
+      if (input.kind === "gateway_attempt") {
+        this.assertGatewayVerificationEvidence(manifest, input.verifierProfileSha256, input.evidence, "queued");
+      }
       const identity = this.identityFromManifest(manifest);
       const evidenceSha256 = sha256(input.evidence);
       const replay = this.findVerificationByIdempotency(registryWorkspaceId, idempotencyKey);
       if (replay) {
-        assertExactReplay(replay.evidence_sha256, evidenceSha256, "remote worker verification");
+        if (
+          replay.assignment_id !== assignmentId ||
+          Number(replay.assignment_generation) !== assignmentGeneration ||
+          replay.kind !== input.kind ||
+          Number(replay.attempt_index) !== attemptIndex ||
+          replay.verifier_profile_sha256 !== input.verifierProfileSha256 ||
+          replay.wall_deadline_at !== input.wallDeadlineAt
+        )
+          throw conflict("remote worker verification replay binding");
+        assertExactReplay(replay.request_sha256, evidenceSha256, "remote worker verification");
         return { verificationId: replay.verification_id };
       }
       const verificationId = deriveServerId(
@@ -736,6 +786,25 @@ export class RemoteWorkerArtifactRepository {
       }
       return { verificationId };
     });
+  }
+
+  private assertGatewayVerificationEvidence(
+    manifest: ManifestRow,
+    profileSha256: string | null,
+    evidence: RemoteWorkerVerificationEvidence,
+    state: RemoteWorkerVerificationAttemptState,
+  ): void {
+    if (
+      !profileSha256 ||
+      profileSha256 !== manifest.required_verifier_profile_sha256 ||
+      evidence.kind !== "gateway_attempt" ||
+      evidence.attemptState !== state ||
+      evidence.verifierProfileSha256 !== profileSha256 ||
+      evidence.preExecutionManifestSha256 !== manifest.manifest_sha256 ||
+      evidence.postExecutionManifestSha256 !== manifest.manifest_sha256
+    ) {
+      throw conflict("remote worker verification manifest or verifier binding");
+    }
   }
 
   private satisfyGate(
@@ -928,12 +997,12 @@ export class RemoteWorkerArtifactRepository {
   private findPartByIdempotency(
     registryWorkspaceId: string,
     idempotencyKey: string,
-  ): { part_sha256: string } | undefined {
+  ): { request_sha256: string } | undefined {
     return this.db
       .prepare(
-        `SELECT part_sha256 FROM remote_worker_artifact_parts WHERE registry_workspace_id = @registryWorkspaceId AND idempotency_key = @idempotencyKey`,
+        `SELECT request_sha256 FROM remote_worker_artifact_parts WHERE registry_workspace_id = @registryWorkspaceId AND idempotency_key = @idempotencyKey`,
       )
-      .get({ registryWorkspaceId, idempotencyKey }) as { part_sha256: string } | undefined;
+      .get({ registryWorkspaceId, idempotencyKey }) as { request_sha256: string } | undefined;
   }
 
   private findVerificationByIdempotency(
@@ -1020,6 +1089,8 @@ interface ManifestRow extends GenerationIdentityRow {
   upload_id: string;
   manifest_id: string;
   manifest_sha256: string;
+  manifest_json: string;
+  required_verifier_profile_sha256: string | null;
 }
 
 interface VerificationRow extends GenerationIdentityRow {
@@ -1030,6 +1101,9 @@ interface VerificationRow extends GenerationIdentityRow {
   attempt_state: RemoteWorkerVerificationAttemptState;
   attempt_revision: number;
   evidence_sha256: string;
+  request_sha256: string;
+  verifier_profile_sha256: string | null;
+  wall_deadline_at: string | null;
 }
 
 function identityParams(identity: RemoteWorkerSettlementIdentity): Record<string, unknown> {

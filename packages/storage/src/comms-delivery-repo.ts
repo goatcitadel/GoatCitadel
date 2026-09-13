@@ -54,6 +54,7 @@ export class CommsDeliveryRepository {
   private readonly markFailedStmt;
   private readonly listStmt;
   private readonly listByConnectionStmt;
+  private readonly getByIdStmt;
   private readonly getByIdempotencyKeyStmt;
   private readonly listDueStmt;
 
@@ -216,14 +217,21 @@ export class CommsDeliveryRepository {
     `);
     this.listStmt = db.prepare(`
       SELECT * FROM comms_deliveries
+      WHERE NOT EXISTS (SELECT 1 FROM channel_delivery_parts part WHERE part.provider_delivery_id = comms_deliveries.delivery_id)
       ORDER BY created_at DESC
       LIMIT @limit
     `);
     this.listByConnectionStmt = db.prepare(`
       SELECT * FROM comms_deliveries
       WHERE connection_id = @connectionId
+        AND NOT EXISTS (SELECT 1 FROM channel_delivery_parts part WHERE part.provider_delivery_id = comms_deliveries.delivery_id)
       ORDER BY created_at DESC
       LIMIT @limit
+    `);
+    this.getByIdStmt = db.prepare(`
+      SELECT * FROM comms_deliveries
+      WHERE delivery_id = @deliveryId
+      LIMIT 1
     `);
     this.getByIdempotencyKeyStmt = db.prepare(`
       SELECT * FROM comms_deliveries
@@ -234,6 +242,7 @@ export class CommsDeliveryRepository {
       SELECT * FROM comms_deliveries
       WHERE status = 'queued'
         AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
+        AND NOT EXISTS (SELECT 1 FROM channel_delivery_parts part WHERE part.provider_delivery_id = comms_deliveries.delivery_id)
       ORDER BY created_at ASC
       LIMIT @limit
     `);
@@ -476,6 +485,11 @@ export class CommsDeliveryRepository {
     });
   }
 
+  public getById(deliveryId: string): CommsDeliveryRecord | undefined {
+    const row = this.getByIdStmt.get({ deliveryId }) as unknown;
+    return isCommsDeliveryRow(row) ? toCommsDeliveryRecord(row) : undefined;
+  }
+
   public findByIdempotencyKey(idempotencyKey: string): CommsDeliveryRecord | undefined {
     const row = this.getByIdempotencyKeyStmt.get({ idempotencyKey }) as unknown;
     return isCommsDeliveryRow(row) ? toCommsDeliveryRecord(row) : undefined;
@@ -550,6 +564,8 @@ function isCommsDeliveryRow(value: unknown): value is CommsDeliveryRow {
 }
 
 function toCommsDeliveryRecord(row: CommsDeliveryRow): CommsDeliveryRecord {
+  const payload = parsePayload(row.payload_json);
+  const diagnostics = payload?.deliveryDiagnostics;
   return {
     deliveryId: row.delivery_id,
     connectionId: row.connection_id,
@@ -559,7 +575,11 @@ function toCommsDeliveryRecord(row: CommsDeliveryRow): CommsDeliveryRecord {
     channelKey: row.channel_key,
     target: row.target,
     payloadHash: row.payload_hash,
-    payload: parsePayload(row.payload_json),
+    payload,
+    deliveryDiagnostics:
+      isRecord(diagnostics) && !Array.isArray(diagnostics)
+        ? (diagnostics as CommsSendResult["deliveryDiagnostics"])
+        : undefined,
     idempotencyKey: row.idempotency_key ?? undefined,
     attempts: row.attempts ?? 0,
     maxAttempts: row.max_attempts ?? 3,
@@ -590,6 +610,7 @@ function parsePayload(value: string | null): Record<string, unknown> | undefined
 function isCommsDeliveryStatus(value: string | null): value is NonNullable<CommsSendResult["deliveryStatus"]> {
   return (
     value === "sent" ||
+    value === "waiting_approval" ||
     value === "retrying" ||
     value === "degraded" ||
     value === "blocked" ||

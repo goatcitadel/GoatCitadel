@@ -8,6 +8,7 @@ export type TrustedUtilityModelUsageLineage = Pick<
   | "durableRunId"
   | "taskId"
   | "agentId"
+  | "workerId"
   | "parentOperationId"
   | "routeDecisionId"
   | "contextSnapshotId"

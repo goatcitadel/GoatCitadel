@@ -1770,6 +1770,7 @@ export async function* streamPreparedAgentChatTurn(
     mutationLifecycle?: ChatStreamMutationLifecycle;
     /** Durable runs reconcile general post-commit effects after terminal run finalization. */
     deferGeneralPostCommit?: boolean;
+    remoteWorkerExecution?: import("./remote-worker-chat-execution-service.js").RemoteWorkerChatExecution;
   },
 ): AsyncGenerator<ChatStreamChunkDraft> {
   const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
@@ -1786,9 +1787,19 @@ export async function* streamPreparedAgentChatTurn(
       }
     : baseCanonicalWriteFence;
   const deferGeneralPostCommit = options?.deferGeneralPostCommit === true;
+  if (options?.remoteWorkerExecution && (!options.canonicalWriteFence || !deferGeneralPostCommit))
+    throw new Error("Worker Chat output requires canonical durable completion ownership.");
+  const completionTaskId = options?.remoteWorkerExecution?.taskId ?? input.policyTaskId;
+  if (options?.remoteWorkerExecution && (!completionTaskId ||
+    (input.policyTaskId !== undefined && input.policyTaskId !== completionTaskId)))
+    throw new Error("Worker Chat output task differs from its admitted execution.");
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
-  host.steerService?.registerActiveTurn?.({ sessionId, turnId });
+  host.steerService?.registerActiveTurn?.({ sessionId, turnId,
+    ...(options?.remoteWorkerExecution ? {
+      unavailableReason: "This worker task uses its saved instructions. Stop it and send a new message to change the task.",
+    } : {}),
+  });
 
   try {
     if (!options?.skipMessageStart) {
@@ -1805,7 +1816,7 @@ export async function* streamPreparedAgentChatTurn(
 
     const routedContextOrchestrationBypassed = enforcePreparedRoutedContextOrchestrationBypass(prepared);
     const modeOrchestration =
-      routedContextOrchestrationBypassed || input.modelCouncil?.enabled
+      options?.remoteWorkerExecution || routedContextOrchestrationBypassed || input.modelCouncil?.enabled
         ? undefined
         : (resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared)));
     if (modeOrchestration) {
@@ -2206,14 +2217,15 @@ export async function* streamPreparedAgentChatTurn(
     let userInputRequired = false;
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
     const streamCitations: ChatCitationRecord[] = [...(prepared.threadKnowledgeCitations ?? [])];
-    const drainedSteers = host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
+    const drainedSteers = options?.remoteWorkerExecution
+      ? [] : host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
     const steerHistoryMessages = drainedSteers.map((item) => ({
       role: "user" as const,
       content: `[Steer] ${item.instruction}`,
     }));
     const historyWithSteers =
       drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
-    await recordRuntimeDecision(
+    if (!options?.remoteWorkerExecution) await recordRuntimeDecision(
       host,
       {
         kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
@@ -2273,7 +2285,9 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
     const serverContextUsageAttribution = buildPreparedRoutedContextUsageAttribution(prepared);
-    const directStream = input.modelCouncil?.enabled
+    const directStream = options?.remoteWorkerExecution
+      ? options.remoteWorkerExecution.stream({ signal: controller.signal, canonicalWriteFence })
+      : input.modelCouncil?.enabled
       ? await streamChatModelCouncil(host, prepared, controller.signal, canonicalWriteFence)
       : await runDirectTurnStreamWithSubagentFanout(
           host,
@@ -2428,6 +2442,7 @@ export async function* streamPreparedAgentChatTurn(
     await assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
     if (!approvalRequired && !userInputRequired && !finalText.trim()) {
+      if (options?.remoteWorkerExecution) throw new Error("Worker Chat completion has no verified response.");
       const preRepairContent = finalText;
       finalText = buildEmptyAssistantTurnFallbackText();
       streamLayerRepaired = true;
@@ -2647,6 +2662,10 @@ export async function* streamPreparedAgentChatTurn(
       const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
         assistantMessageId,
         status: "completed",
+        ...(options?.remoteWorkerExecution ? {
+          usage: assistantUsage,
+          completion: { status: "complete" as const, repaired: false },
+        } : {}),
         ...(streamLayerRepaired
           ? {
               completion: {
@@ -2697,7 +2716,7 @@ export async function* streamPreparedAgentChatTurn(
             role: "assistant",
             content: finalText,
           },
-          ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
+          ...(completionTaskId ? { taskId: completionTaskId } : {}),
           usage:
             assistantUsage || (assistantModelUsageEventIds?.length ?? 0) > 0
               ? {
@@ -2725,6 +2744,7 @@ export async function* streamPreparedAgentChatTurn(
                 completionPatch,
               );
               await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+              await options?.remoteWorkerExecution?.recordAssistantCommit(assistantMessageId, finalText);
               return trace;
             });
           },

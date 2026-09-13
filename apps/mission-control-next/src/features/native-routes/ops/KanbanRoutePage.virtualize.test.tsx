@@ -8,6 +8,13 @@ import { toKanbanCard, type KanbanCardModel } from "./kanban-card-model";
 const fetchAgenticRuns = vi.fn();
 const bulkTaskAction = vi.fn();
 
+vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({
+  fetchTasksByView: vi.fn(async () => ({ items: [] })),
+  createTask: vi.fn(),
+  fetchTaskActivities: vi.fn(async () => ({ items: [] })),
+  fetchTaskDeliverables: vi.fn(async () => ({ items: [] })),
+}));
+
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
   fetchAgenticRuns: (...args: unknown[]) => fetchAgenticRuns(...args),

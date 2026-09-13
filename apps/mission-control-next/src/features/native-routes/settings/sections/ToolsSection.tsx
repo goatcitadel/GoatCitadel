@@ -1,6 +1,10 @@
+import { SettingsChangeStatus, useSettingsChange } from "../use-settings-change";
+import { useSessionDraft, hasSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { DetailInspector } from "../../../../components/DetailInspector";
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Plus, Save } from "lucide-react";
 import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import {
@@ -44,7 +48,7 @@ import {
   TOOL_APPROVAL_MODE_OPTIONS,
 } from "../../SettingsNativePage";
 
-export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
+export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [tools, grants, settings] = await Promise.all([
       nativeLoad("Tool catalog", fetchToolCatalog(), { items: [] }),
@@ -64,16 +68,27 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [revokePending, setRevokePending] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedToolName, setSelectedToolName] = useState("");
-  const [approvalModeDraft, setApprovalModeDraft] = useState<ToolApprovalMode>("approve_risky");
-  const preserveApprovalModeDraftRef = useRef(false);
-  const [grantForm, setGrantForm] = useState({
-    toolPattern: "",
-    decision: "allow",
-    scope: "workspace",
-    grantType: "persistent",
-    scopeRef: activeWorkspaceId,
-    expiresAt: defaultToolGrantExpiry(),
+  const [detailView, setDetailView] = useState<"tool" | "grant" | "all-grants" | null>(null);
+  const [savingMode, setSavingMode] = useState(false);
+  const savingModeRef = useRef(false);
+  const [creatingGrant, setCreatingGrant] = useState(false);
+  const creatingGrantRef = useRef(false);
+  const leave = useDraftLeave();
+  const approvalEditor = useSessionDraft("tools:system:approval-mode", normalizeToolApprovalMode(data?.settings?.toolApprovalMode), data?.settings?.revision, { label: "Tool prompt mode", available: Boolean(data?.settings), onSave: () => handleSaveApprovalMode() });
+  const approvalChange = useSettingsChange({ key: approvalEditor.key, operation: "tool_approval_mode", matches: (settings, submitted: typeof approvalEditor.value) => settings.toolApprovalMode === submitted, acceptSaved: approvalEditor.acceptSaved, reload });
+  const approvalModeDraft = approvalEditor.value;
+  const setApprovalModeDraft = approvalEditor.setValue;
+  const [defaultExpiry] = useState(defaultToolGrantExpiry);
+  const emptyGrant = { toolPattern: selectedToolName, decision: "allow", scope: "workspace", grantType: "persistent", scopeRef: activeWorkspaceId, expiresAt: defaultExpiry };
+  const grantEditor = useSessionDraft(`tool-grant:${activeWorkspaceId}:${selectedToolName || "new"}`, emptyGrant, undefined, { label: "Tool grant", active: detailView === "grant", onSave: () => reviewGrant() });
+  const grantForm = grantEditor.value;
+  const setGrantForm = grantEditor.setValue;
+  const [grantReview, setGrantReview] = useState<{ draft: typeof grantForm; resolve: (saved: boolean) => void } | null>(null);
+  const reviewGrant = (): Promise<boolean> => new Promise((resolve) => {
+    if (creatingGrantRef.current || grantReview) { resolve(false); return; }
+    setGrantReview({ draft: { ...grantForm }, resolve });
   });
+  const openDetails = (next: typeof detailView) => leave.request(() => setDetailView(next), [grantEditor.key]);
 
   const filteredTools = useMemo(() => {
     const items = data?.tools ?? [];
@@ -86,70 +101,46 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       return haystack.includes(normalized);
     });
   }, [data?.tools, search]);
-  const selectedTool = filteredTools.find((item) => item.toolName === selectedToolName) ?? filteredTools[0] ?? null;
+  const selectedTool = data?.tools?.find((item) => item.toolName === selectedToolName) ?? null;
 
-  useEffect(() => {
-    if (!filteredTools.length) {
-      setSelectedToolName("");
-      return;
-    }
-    setSelectedToolName((current) =>
-      current && filteredTools.some((item) => item.toolName === current) ? current : filteredTools[0]?.toolName || "",
-    );
-  }, [filteredTools]);
   const approvalBypassRestriction = !data?.settings
     ? "Settings could not be loaded, so routine prompt skipping stays unavailable."
     : data.settings.deploymentProfile === "remote_hardened"
       ? "Remote Hardened mode keeps routine prompt skipping unavailable."
       : null;
 
-  useEffect(() => {
-    if (data?.settings?.toolApprovalMode) {
-      if (preserveApprovalModeDraftRef.current) {
-        preserveApprovalModeDraftRef.current = false;
-        return;
-      }
-      setApprovalModeDraft(normalizeToolApprovalMode(data.settings.toolApprovalMode));
-    }
-  }, [data?.settings?.revision, data?.settings?.toolApprovalMode]);
-
-  useEffect(() => {
-    if (!selectedTool) {
-      return;
-    }
-    setGrantForm((current) => ({
-      ...current,
-      toolPattern: selectedTool.toolName,
-      scopeRef: current.scope === "workspace" ? activeWorkspaceId : current.scopeRef,
-    }));
-  }, [activeWorkspaceId, selectedTool]);
-
-  const handleCreateGrant = async () => {
-    if (!grantForm.toolPattern.trim()) {
+  const handleCreateGrant = async (submittedForm = grantForm): Promise<boolean> => {
+    if (creatingGrantRef.current) return false;
+    const submitted = submittedForm;
+    if (!submitted.toolPattern.trim()) {
       setNotice({ tone: "warning", message: "Tool pattern is required." });
-      return;
+      return false;
     }
-    const grantScope = grantForm.scope as "global" | "session" | "workspace" | "agent" | "task";
-    const scopeRef = grantScope === "global" ? undefined : grantForm.scopeRef.trim();
+    const grantScope = submitted.scope as "global" | "session" | "workspace" | "agent" | "task";
+    const scopeRef = grantScope === "global" ? undefined : submitted.scopeRef.trim();
     if ((grantScope === "session" || grantScope === "agent" || grantScope === "task") && !scopeRef) {
       setNotice({ tone: "warning", message: `Add a ${grantScope} id before creating this tool grant.` });
-      return;
+      return false;
     }
+    creatingGrantRef.current = true; setCreatingGrant(true);
     try {
-      const expiresAt = grantForm.grantType === "ttl" ? grantForm.expiresAt.trim() : undefined;
+      const expiresAt = submitted.grantType === "ttl" ? submitted.expiresAt.trim() : undefined;
       await createToolGrant({
-        toolPattern: grantForm.toolPattern.trim(),
-        decision: grantForm.decision as "allow" | "deny",
+        toolPattern: submitted.toolPattern.trim(),
+        decision: submitted.decision as "allow" | "deny",
         scope: grantScope,
         scopeRef,
-        grantType: grantForm.grantType as "persistent" | "ttl" | "one_time",
+        grantType: submitted.grantType as "persistent" | "ttl" | "one_time",
         ...(expiresAt ? { expiresAt } : {}),
       });
+      const clean = grantEditor.acceptSaved(emptyGrant, undefined, submitted);
       setNotice({ tone: "success", message: "Tool grant created." });
       await reload();
+      return clean;
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
-    }
+      return false;
+    } finally { creatingGrantRef.current = false; setCreatingGrant(false); }
   };
 
   const handleRevokeGrant = async (grantId: string) => {
@@ -165,50 +156,49 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
-  const handleSaveApprovalMode = async () => {
+  const handleSaveApprovalMode = async (): Promise<boolean> => {
+    if (approvalChange.isPending()) { await approvalChange.refresh(); return false; }
+    if (savingModeRef.current || approvalEditor.hasRemoteChanges) return false;
     if (approvalBypassRestriction && approvalModeDraft === "bypass") {
       setNotice({ tone: "warning", message: approvalBypassRestriction });
-      return;
+      return false;
     }
     if (!data?.settings) {
       setNotice({ tone: "warning", message: "Reload settings before saving the tool approval mode." });
-      return;
+      return false;
     }
+    savingModeRef.current = true; setSavingMode(true);
+    const submitted = approvalModeDraft;
     try {
       const updated = await patchSettings({
-        expectedRevision: data.settings.revision,
+        expectedRevision: Number(approvalEditor.baseRevision ?? data.settings.revision),
         toolApprovalMode: approvalModeDraft,
       });
-      const receipt = updated.changePlanReceipt;
-      setNotice(
-        receipt && receipt.status !== "completed" && receipt.status !== "applied"
-          ? {
-              tone: "warning",
-              message: `${receipt.summary} Approval is still required before this setting changes (plan ${receipt.planId}).`,
-            }
-          : { tone: "success", message: "Tool approval mode saved." },
-      );
+      const clean = approvalChange.receive(updated, submitted, Number(approvalEditor.baseRevision ?? data.settings.revision));
+      if (clean) setNotice({ tone: "success", message: "Tool approval mode saved." });
       await reload();
+      return clean;
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {
-        preserveApprovalModeDraftRef.current = true;
         await reload();
         setNotice({
           tone: "warning",
           message:
             "Tool settings changed elsewhere. Your approval-mode draft is preserved; review the current settings, then save again to retry.",
         });
-        return;
+        return false;
       }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    }
+      return false;
+    } finally { savingModeRef.current = false; setSavingMode(false); }
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
+      <SettingsChangeStatus change={approvalChange.change} onRefresh={approvalChange.refresh} navigate={navigate} route={route} />
       {data ? (
-        <SettingsGrid variant="three-column">
+        <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <NativeCard
             density="compact"
@@ -225,6 +215,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               { label: "Hard blocks", value: "Always enforced" },
             ]}
           >
+            {approvalEditor.hasRemoteChanges ? <div role="status"><p>Current saved mode: {data.settings?.toolApprovalMode ? describeToolApprovalMode(data.settings.toolApprovalMode) : "Unavailable"}. Your approval-mode draft is preserved.</p><NativeButton variant="outline" onClick={approvalEditor.rebaseToCurrent}>Apply draft to current prompt mode</NativeButton></div> : null}
             <SettingsField label="Tool approvals">
               <select
                 className="mc-next-settings-input"
@@ -251,7 +242,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               ) : null}
             </SettingsField>
             <SettingsButtonRow>
-              <NativeButton variant="default" onClick={() => void handleSaveApprovalMode()}>
+              <NativeButton variant="default" disabled={savingMode || approvalChange.hasPending || approvalEditor.hasRemoteChanges} onClick={() => void handleSaveApprovalMode()}>
                 <Save size={16} />
                 Save mode
               </NativeButton>
@@ -268,6 +259,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 { label: "Grants", value: String(data.grants?.length ?? 0) },
               ]}
             >
+              <SettingsButtonRow><NativeButton variant="outline" onClick={() => openDetails("all-grants")}>All grants</NativeButton></SettingsButtonRow>
               <SettingsField label="Search">
                 <input
                   className="mc-next-settings-input"
@@ -280,16 +272,16 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 items={filteredTools.map((item) => ({
                   id: item.toolName,
                   title: item.toolName,
-                  meta: item.category || "tool",
+                  meta: `${item.category || "tool"} · ${item.riskLevel} risk${hasSessionDraft(`tool-grant:${activeWorkspaceId}:${item.toolName}`) ? " · Unsaved grant" : ""}`,
                   body: item.description || "Tool catalog entry",
                 }))}
                 selectedId={selectedToolName}
-                onSelect={setSelectedToolName}
+                onSelect={(toolName) => leave.request(() => { setSelectedToolName(toolName); setDetailView("tool"); }, [grantEditor.key])}
                 emptyLabel="No tools match the current search."
-                maxHeight="min(48vh, 28rem)"
+                maxHeight=""
               />
             </NativeCard>
-            <NativeCard
+            {detailView === "grant" ? <DetailInspector open title="Create tool grant" onClose={() => openDetails(null)}><NativeCard
               density="compact"
               className="mc-next-settings-panel"
               title="Create tool grant"
@@ -371,15 +363,16 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   </SettingsField>
                 ) : null}
               </SettingsFieldGrid>
+              <p className="mc-next-settings-field-note">{grantForm.decision === "deny" ? "Deny" : "Allow"} {grantForm.toolPattern || "the selected tool"} in {grantForm.scope}{grantForm.scope !== "global" ? ` ${grantForm.scopeRef}` : ""}. {grantForm.grantType === "ttl" ? `Expires ${grantForm.expiresAt}.` : grantForm.grantType === "one_time" ? "One use." : "Persists until revoked."} Deny rules and approval-required execution remain authoritative.</p>
               <SettingsButtonRow>
-                <NativeButton variant="default" onClick={() => void handleCreateGrant()}>
+                <NativeButton variant="default" disabled={creatingGrant} onClick={() => void reviewGrant()}>
                   <Plus size={16} />
                   Create grant
                 </NativeButton>
               </SettingsButtonRow>
-            </NativeCard>
+            </NativeCard></DetailInspector> : null}
           </SettingsStack>
-          <NativeCard
+          <DetailInspector open={detailView === "tool" || detailView === "all-grants"} title={detailView === "all-grants" ? "All tool grants" : selectedTool?.toolName ?? "Tool unavailable"} onClose={() => openDetails(null)}><NativeCard
             density="compact"
             className="mc-next-settings-panel"
             title={selectedTool?.toolName ?? "Tool detail"}
@@ -405,6 +398,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                     },
                   ]}
                 />
+                <SettingsButtonRow><NativeButton onClick={() => openDetails("grant")}>Create tool grant{grantEditor.isDirty ? " · Unsaved" : ""}</NativeButton></SettingsButtonRow>
                 <SettingsCodeBlock label="Tool description">
                   {selectedTool.description || "No tool description provided."}
                 </SettingsCodeBlock>
@@ -415,7 +409,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
             <SettingsActionList
               ariaLabel={selectedTool ? `${selectedTool.toolName} grants` : "Tool grants"}
               items={(data.grants ?? [])
-                .filter((item) => (selectedTool ? matchesToolGrant(item, selectedTool.toolName) : true))
+                .filter((item) => (selectedTool && detailView !== "all-grants" ? matchesToolGrant(item, selectedTool.toolName) : true))
                 .map((item) => ({
                   id: item.grantId,
                   label: item.toolPattern,
@@ -429,9 +423,11 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               emptyLabel={selectedTool ? "No tool grants match this catalog entry." : "No tool grants created yet."}
               maxHeight="min(42vh, 24rem)"
             />
-          </NativeCard>
-        </SettingsGrid>
+          </NativeCard></DetailInspector>
+        </SettingsStack>
       ) : null}
+      {leave.dialog}
+      <ConfirmModal open={grantReview !== null} title="Confirm tool grant" pending={creatingGrant} message={grantReview ? `${grantReview.draft.decision} ${grantReview.draft.toolPattern || "the selected tool"} for ${grantReview.draft.scope}${grantReview.draft.scope !== "global" ? ` ${grantReview.draft.scopeRef}` : ""}. ${grantReview.draft.grantType === "ttl" ? `Expires ${grantReview.draft.expiresAt}.` : grantReview.draft.grantType === "one_time" ? "One use." : "Persists until revoked."} Deny rules and approval-required execution still apply.` : ""} confirmLabel="Create grant" onCancel={() => { grantReview?.resolve(false); setGrantReview(null); }} onConfirm={() => { const review = grantReview; if (review) void handleCreateGrant(review.draft).then((saved) => { review.resolve(saved); setGrantReview(null); }); }} />
       <ConfirmModal
         open={pendingRevokeGrantId !== null}
         danger

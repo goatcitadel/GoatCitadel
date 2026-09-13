@@ -1,3 +1,4 @@
+import { __resetSessionDraftsForTests } from "./session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,7 +55,7 @@ function instanceText(node: ReactTestInstance | string): string {
 }
 
 function buttonByLabel(renderer: ReactTestRenderer, label: string): ReactTestInstance {
-  const [node] = renderer.root.findAll((n) => n.type === "button" && instanceText(n).includes(label));
+  const node = renderer.root.findAll((n) => n.type === "button" && instanceText(n).includes(label)).at(-1);
   if (!node) {
     throw new Error(`No button "${label}"`);
   }
@@ -72,6 +73,7 @@ function inputByPlaceholder(renderer: ReactTestRenderer, placeholder: string): R
 describe("CitadelWardsRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionDraftsForTests();
     apiMocks.listCitadelWards.mockResolvedValue([]);
     apiMocks.addCitadelWard.mockResolvedValue({
       wardId: "w1",
@@ -107,9 +109,9 @@ describe("CitadelWardsRoutePage", () => {
     });
     expect(apiMocks.listCitadelWards).toHaveBeenCalledWith("default");
     expect(treeString(renderer!)).toContain("Seal finance");
-    expect(treeString(renderer!)).toContain("mc-next-native-work-pair mc-next-citadel-wards-grid");
+    expect(treeString(renderer!)).toContain("mc-next-calm-directory");
     expect(buttonByLabel(renderer!, "Add Ward").props["data-variant"]).toBe("default");
-    expect(buttonByLabel(renderer!, "Evaluate").props["data-variant"]).toBe("default");
+    expect(renderer!.root.findAllByType("input")).toHaveLength(0);
   });
 
   it("adds a ward and appends it to the list", async () => {
@@ -117,6 +119,7 @@ describe("CitadelWardsRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelWardsRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "Add Ward").props.onClick(); });
     await act(async () => {
       inputByPlaceholder(renderer!, "Block destructive shell").props.onChange({ target: { value: "Block shell" } });
     });
@@ -139,6 +142,7 @@ describe("CitadelWardsRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelWardsRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "Test an action").props.onClick(); });
     await act(async () => {
       inputByPlaceholder(renderer!, "shell.run").props.onChange({ target: { value: "shell.run" } });
     });
@@ -164,6 +168,7 @@ describe("CitadelWardsRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelWardsRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "Seal finance").props.onClick(); });
     await act(async () => {
       buttonByLabel(renderer!, "Delete Ward").props.onClick();
     });

@@ -63,17 +63,17 @@ export async function updateCitadel(citadelId: string, input: CitadelUpdateInput
   });
 }
 
-export async function archiveCitadel(citadelId: string): Promise<CitadelRecord> {
+export async function archiveCitadel(citadelId: string, expectedRevision: string): Promise<CitadelRecord> {
   return request<CitadelRecord>(`/api/v1/citadels/${id(citadelId)}/archive`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function restoreCitadel(citadelId: string): Promise<CitadelRecord> {
+export async function restoreCitadel(citadelId: string, expectedRevision: string): Promise<CitadelRecord> {
   return request<CitadelRecord>(`/api/v1/citadels/${id(citadelId)}/restore`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 

@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { loadLocalEnvFile } from "./env-file.js";
-import { gatewayPlugin } from "./plugins/storage.js";
+import { gatewayPlugin, type GatewayPluginOptions } from "./plugins/storage.js";
 import { routeServicesPlugin } from "./plugins/route-services.js";
 import { createAppSharedHostLifecycle, sharedHostLifecyclePlugin } from "./plugins/shared-host-lifecycle.js";
 import { authPlugin } from "./plugins/auth.js";
@@ -134,7 +134,8 @@ interface GatewayRequestState {
   requestStartedAtMs?: number;
 }
 
-export async function buildApp() {
+/** Resolver registration is a trusted code-composition input, never a route or environment loader. */
+export async function buildApp(options: GatewayPluginOptions = {}) {
   const verbose = isVerboseLoggingEnabled();
   const app = Fastify({
     loggerInstance: createGatewayLogger(verbose),
@@ -364,7 +365,9 @@ export async function buildApp() {
       },
     });
 
-    await app.register(gatewayPlugin);
+    await app.register(gatewayPlugin, {
+      ...(options.mcpRequesterResolvers ? { mcpRequesterResolvers: options.mcpRequesterResolvers } : {}),
+    });
     await app.register(routeServicesPlugin);
     assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins, {
       bindHost: process.env.GATEWAY_HOST ?? "127.0.0.1",

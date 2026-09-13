@@ -22,6 +22,7 @@ import {
   type ChatTurnCapabilityToolRuntimeOwnerBinding,
   type ChatWebMode,
   type McpRequesterResolutionBinding,
+  type McpNormalizedRequesterDiscoveryCatalog,
   type McpRequesterScopeAuthActorSource,
   type ToolPolicyActorContext,
   type WorkPassportRecord,
@@ -30,10 +31,23 @@ import {
   sealChatTurnCapabilityProfile,
   verifyCapabilityCatalogEntryUniqueness,
   verifyChatTurnCapabilityProfile,
+  verifyChatTurnCapabilityCatalogBinding,
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { ResolvedChatTurnToolSchema } from "./chat-turn-agent-runner.js";
 import type { ChatTurnRoute } from "./chat-turn-prep-service.js";
+import {
+  collectNativeMcpChatCatalogCandidates,
+  bindNativeStaticMcpChatToolSchema,
+  resolveNativeMcpChatToolSchemas,
+  type NativeMcpChatToolSchema,
+} from "./gateway/native-mcp-chat-catalog.js";
+import type {
+  McpRequesterScopedCatalogDiscoveryHookInput,
+  McpRequesterScopedCatalogFreezeHookInput,
+} from "./mcp-requester-resolution-service.js";
+import type { StaticMcpCatalogSnapshot } from "./mcp-static-catalog.js";
+import { assertMeshChatToolSchema, type MeshChatToolSchema } from "./gateway/mesh-chat-catalog.js";
 import {
   buildToolRuntimeOwnerBinding,
   buildToolCallBeforeHookInterpositionBinding,
@@ -92,34 +106,51 @@ export interface ChatTurnCapabilityProfileResolveInput {
 export interface ChatTurnCapabilityProfileResolveDeps {
   storage: CapabilityProfileStorage;
   listCapabilityCatalog(scope: "inspectable" | "callable"): Promise<CapabilityCatalogEntry[]>;
-  resolveToolSchema(input: {
-    sessionId: string;
-    turnId: string;
-    userMessageId: string;
-    content: string;
-    mode: ChatMode;
-    providerId?: string;
-    model?: string;
-    webMode: ChatWebMode;
-    memoryMode: ChatMemoryMode;
-    retrievalMode: ChatRetrievalMode;
-    thinkingLevel: ChatThinkingLevel;
-    speedMode: ChatSpeedMode;
-    subagentPolicy: ChatSubagentPolicy;
-    normalizationProfile?: ChatNormalizationProfile;
-    toolAutonomy: "safe_auto" | "manual";
-    routedContextRequested?: boolean;
-    operatorId?: string;
-    authActorId?: string;
-    authActorSource?: ToolPolicyActorContext["authActorSource"];
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-    policyRunId?: string;
-    policyTaskId?: string;
-    fullWebAccess?: boolean;
-    policyContext?: ToolPolicyActorContext;
-    historyMessages: ChatCompletionRequest["messages"];
-  }): Promise<ResolvedChatTurnToolSchema>;
+  resolveToolSchema(
+    input: {
+      sessionId: string;
+      turnId: string;
+      userMessageId: string;
+      content: string;
+      mode: ChatMode;
+      providerId?: string;
+      model?: string;
+      webMode: ChatWebMode;
+      memoryMode: ChatMemoryMode;
+      retrievalMode: ChatRetrievalMode;
+      thinkingLevel: ChatThinkingLevel;
+      speedMode: ChatSpeedMode;
+      subagentPolicy: ChatSubagentPolicy;
+      normalizationProfile?: ChatNormalizationProfile;
+      toolAutonomy: "safe_auto" | "manual";
+      routedContextRequested?: boolean;
+      operatorId?: string;
+      authActorId?: string;
+      authActorSource?: ToolPolicyActorContext["authActorSource"];
+      permissionProfileId?: string;
+      localOperatorOverrideId?: string;
+      policyRunId?: string;
+      policyTaskId?: string;
+      fullWebAccess?: boolean;
+      policyContext?: ToolPolicyActorContext;
+      historyMessages: ChatCompletionRequest["messages"];
+    },
+    nativeTools?: readonly NativeMcpChatToolSchema[],
+    meshTools?: readonly MeshChatToolSchema[],
+  ): Promise<ResolvedChatTurnToolSchema>;
+  resolveMeshToolSchemas?(input: {
+    workspaceId: string;
+    entries: readonly CapabilityCatalogEntry[];
+  }): Promise<MeshChatToolSchema[]>;
+  discoverMcpRequesterCatalogs?(
+    input: McpRequesterScopedCatalogDiscoveryHookInput,
+  ): Promise<McpNormalizedRequesterDiscoveryCatalog[]>;
+  resolveMcpRequesterCatalogBindings?(
+    input: McpRequesterScopedCatalogFreezeHookInput,
+    options: { signal: AbortSignal },
+  ): Promise<McpRequesterResolutionBinding[] | undefined>;
+  discoverStaticMcpCatalogs?(input: McpRequesterScopedCatalogDiscoveryHookInput): Promise<StaticMcpCatalogSnapshot[]>;
+  assertStaticMcpCatalogCurrent?(snapshot: StaticMcpCatalogSnapshot, input: McpRequesterScopedCatalogDiscoveryHookInput): Promise<void>;
   resolveToolPolicyContext(input: {
     operatorId?: string;
     authActorId?: string;
@@ -231,18 +262,9 @@ export async function resolveChatTurnCapabilityProfile(
     deps.listCapabilityCatalog("inspectable"),
     deps.listCapabilityCatalog("callable"),
   ]);
-  const inspectableEntries = sortCatalogEntries(inspectableCatalog);
-  const callableEntries = sortCatalogEntries(callableCatalog);
-  assertCanonicalCatalogPair(inspectableEntries, callableEntries);
-  const inspectableHash = digest(inspectableEntries);
-  const callableHash = digest(callableEntries);
-  const snapshotId = `chat-cap-snap-${inspectableHash.slice(0, 16)}-${callableHash.slice(0, 16)}`;
-  const catalogSnapshot: CapabilityCatalogSnapshotRecord = {
-    snapshotId,
-    inspectableEntries,
-    callableEntries,
-    createdAt,
-  };
+  const baseInspectableEntries = sortCatalogEntries(inspectableCatalog);
+  const baseCallableEntries = sortCatalogEntries(callableCatalog);
+  assertCanonicalCatalogPair(baseInspectableEntries, baseCallableEntries);
   const capabilityProfileId = `chat-capability-profile-${input.turnId}`;
 
   const policyContext =
@@ -273,7 +295,68 @@ export async function resolveChatTurnCapabilityProfile(
           }),
         )
       : undefined;
-  const toolSchema = await deps.resolveToolSchema({
+  const discoveryHook: McpRequesterScopedCatalogDiscoveryHookInput = {
+    profileId: capabilityProfileId,
+    turnId: input.turnId,
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    authActorId: policyContext.authActorId,
+    authActorSource: policyContext.authActorSource,
+    requesterScopeSha256,
+    catalogSnapshotId: `chat-cap-snap-${digest(baseInspectableEntries).slice(0, 16)}-${digest(baseCallableEntries).slice(0, 16)}`,
+    callableCatalogSha256: digest(baseCallableEntries),
+  };
+  // Enumerate using authenticated discovery, then pin the exact descriptors to
+  // the final catalog. Manual turns and unsupported actors skip discovery.
+  const nativeAdmissionAllowed = Boolean(requesterScopeSha256 &&
+    input.toolAutonomy !== "manual" &&
+    baseCallableEntries.some((entry) => entry.kind === "tool" && entry.toolName === "mcp.invoke" && entry.callable));
+  const [requesterCatalogs, staticCatalogs] = await Promise.all([
+    nativeAdmissionAllowed && deps.discoverMcpRequesterCatalogs && deps.resolveMcpRequesterCatalogBindings
+      ? deps.discoverMcpRequesterCatalogs(discoveryHook) : [],
+    nativeAdmissionAllowed && deps.discoverStaticMcpCatalogs && deps.assertStaticMcpCatalogCurrent
+      ? deps.discoverStaticMcpCatalogs(discoveryHook) : [],
+  ]);
+  const nativeCandidates = collectNativeMcpChatCatalogCandidates(requesterCatalogs, baseInspectableEntries, staticCatalogs);
+  const inspectableEntries = sortCatalogEntries([
+    ...baseInspectableEntries,
+    ...nativeCandidates.map(({ entry }) => entry),
+  ]);
+  const callableEntries = sortCatalogEntries([...baseCallableEntries, ...nativeCandidates.map(({ entry }) => entry)]);
+  assertCanonicalCatalogPair(inspectableEntries, callableEntries);
+  const inspectableHash = digest(inspectableEntries);
+  const callableHash = digest(callableEntries);
+  const snapshotId = `chat-cap-snap-${inspectableHash.slice(0, 16)}-${callableHash.slice(0, 16)}`;
+  const catalogSnapshot: CapabilityCatalogSnapshotRecord = {
+    snapshotId,
+    inspectableEntries,
+    callableEntries,
+    createdAt,
+  };
+  const nativeTools =
+    nativeCandidates.length > 0 && deps.resolveMcpRequesterCatalogBindings
+      ? await resolveNativeMcpChatToolSchemas(
+          nativeCandidates.filter((candidate) => !candidate.staticCatalog),
+          {
+            ...discoveryHook,
+            catalogSnapshotId: snapshotId,
+            callableCatalogSha256: callableHash,
+          },
+          deps.resolveMcpRequesterCatalogBindings,
+        )
+      : [];
+  for (const candidate of nativeCandidates) {
+    if (!candidate.staticCatalog) continue;
+    if (!deps.assertStaticMcpCatalogCurrent || !policyContext.authActorId ||
+      !isMcpRequesterScopeAuthActorSource(policyContext.authActorSource)) throw new Error("Static MCP admission has no current actor authority.");
+    await deps.assertStaticMcpCatalogCurrent(candidate.staticCatalog, discoveryHook);
+    nativeTools.push(bindNativeStaticMcpChatToolSchema(candidate, {
+      profileId: capabilityProfileId, turnId: input.turnId, sessionId: input.sessionId, workspaceId: input.workspaceId,
+      authActorId: policyContext.authActorId, authActorSource: policyContext.authActorSource,
+    }, { snapshotId, callableHash }));
+  }
+  const nativeToolsByName = new Map(nativeTools.map((tool) => [tool.canonicalName, tool]));
+  const schemaInput = {
     sessionId: input.sessionId,
     turnId: input.turnId,
     userMessageId: `capability-profile:${input.turnId}`,
@@ -300,7 +383,21 @@ export async function resolveChatTurnCapabilityProfile(
     fullWebAccess: input.fullWebAccess,
     policyContext,
     historyMessages: input.historyMessages,
-  });
+  };
+  const meshTools = input.toolAutonomy !== "manual" && deps.resolveMeshToolSchemas &&
+    callableEntries.some((entry) => entry.kind === "mesh_tool" || entry.kind === "mesh_mcp_server")
+    ? await deps.resolveMeshToolSchemas({ workspaceId: input.workspaceId, entries: callableEntries }) : [];
+  const meshToolsByName = new Map<string, MeshChatToolSchema>();
+  for (const tool of meshTools) {
+    assertMeshChatToolSchema(tool);
+    if (meshToolsByName.has(tool.canonicalName)) throw new Error("Duplicate mesh Chat schema");
+    meshToolsByName.set(tool.canonicalName, tool);
+  }
+  const toolSchema = meshTools.length > 0
+    ? await deps.resolveToolSchema(schemaInput, nativeTools, meshTools)
+    : nativeTools.length > 0
+      ? await deps.resolveToolSchema(schemaInput, nativeTools)
+      : await deps.resolveToolSchema(schemaInput);
   const callableToolsByName = new Map(
     callableEntries
       .filter((entry) => entry.kind === "tool" && entry.callable && Boolean(entry.toolName))
@@ -335,23 +432,41 @@ export async function resolveChatTurnCapabilityProfile(
       const meshPublication = meshCatalogEntry
         ? await resolveFrozenMeshPublicationBinding(deps, input.workspaceId, canonicalName, meshCatalogEntry)
         : undefined;
+      const meshTool = meshToolsByName.get(canonicalName);
+      if (meshCatalogEntry && (!meshTool || meshTool.modelName !== modelName ||
+        digest(meshTool.providerDefinition) !== digest(providerDefinition) ||
+        digest(meshTool.publication) !== digest(meshPublication) ||
+        digest(meshTool.entry.mesh) !== digest(meshCatalogEntry.mesh))) {
+        throw new Error("Mesh Chat schema changed after its publication binding.");
+      }
       const runtimeOwner =
         deps.resolveToolRuntimeOwnerBinding?.(canonicalName) ?? buildToolRuntimeOwnerBinding("builtin");
-      const resolvedMcpRequesterResolution = canonicalName.startsWith("mcp.")
-        ? await deps.resolveMcpRequesterResolutionBinding?.({
-            profileId: capabilityProfileId,
-            turnId: input.turnId,
-            sessionId: input.sessionId,
-            workspaceId: input.workspaceId,
-            authActorId: policyContext.authActorId,
-            authActorSource: policyContext.authActorSource,
-            catalogSnapshotId: snapshotId,
-            callableCatalogSha256: callableHash,
-            requesterScopeSha256,
-            canonicalToolName: canonicalName,
-            modelToolName: modelName,
-          })
-        : undefined;
+      const nativeTool = nativeToolsByName.get(canonicalName);
+      if (
+        nativeCandidates.some(({ tool }) => tool.canonicalToolName === canonicalName) &&
+        (!nativeTool ||
+          nativeTool.modelName !== modelName ||
+          digest(nativeTool.providerDefinition) !== digest(providerDefinition))
+      ) {
+        throw new Error("Native MCP schema changed after its final discovery binding.");
+      }
+      const resolvedMcpRequesterResolution =
+        nativeTool?.requesterBinding ??
+        (canonicalName.startsWith("mcp.") && !nativeTool?.staticBinding
+          ? await deps.resolveMcpRequesterResolutionBinding?.({
+              profileId: capabilityProfileId,
+              turnId: input.turnId,
+              sessionId: input.sessionId,
+              workspaceId: input.workspaceId,
+              authActorId: policyContext.authActorId,
+              authActorSource: policyContext.authActorSource,
+              catalogSnapshotId: snapshotId,
+              callableCatalogSha256: callableHash,
+              requesterScopeSha256,
+              canonicalToolName: canonicalName,
+              modelToolName: modelName,
+            })
+          : undefined);
       const mcpRequesterResolution = resolvedMcpRequesterResolution
         ? copyAndFreezeMcpRequesterResolutionBinding(resolvedMcpRequesterResolution)
         : undefined;
@@ -362,6 +477,7 @@ export async function resolveChatTurnCapabilityProfile(
         providerDefinition,
         runtimeOwner,
         ...(mcpRequesterResolution ? { mcpRequesterResolution } : {}),
+        ...(nativeTool?.staticBinding ? { mcpStaticBinding: nativeTool.staticBinding } : {}),
         ...(meshPublication ? { meshPublication } : {}),
         effectPotential: meshPublication
           ? // A mesh-published callable executes on a remote node: its recovery
@@ -526,6 +642,7 @@ export async function resolveChatTurnCapabilityProfile(
   // persistence. Do not return a preview for a profile that would later be
   // rejected as malformed, ambiguous, oversized, or secret-bearing.
   verifyChatTurnCapabilityProfile(profile);
+  verifyChatTurnCapabilityCatalogBinding(profile, catalogSnapshot);
   const blockedReasons = [
     input.routeResolution.blockedReason,
     ...providerReadiness.reasonCodes.filter((reason) => providerReadiness.status !== "ready" && reason),

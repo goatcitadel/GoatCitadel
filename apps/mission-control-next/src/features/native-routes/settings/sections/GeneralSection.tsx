@@ -20,14 +20,14 @@ import {
   SettingsButtonRow,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
+  SettingsStack,
   SettingsLoadWarnings,
   SettingsPosturePanel,
   type SettingsSectionProps,
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid } from "../../primitives";
 
 function normalizeDensity(value: string): UiDensity {
@@ -44,7 +44,8 @@ function labelForDensity(value: UiDensity): string {
   return "Default";
 }
 
-export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, navigate }: SettingsSectionProps) {
+export function GeneralSection(props: SettingsSectionProps) {
+  const { activeWorkspaceName, route, navigate } = props;
   const {
     density,
     setDensity,
@@ -54,6 +55,129 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
     setNotificationSoundMode,
     setNotificationToastsEnabled,
   } = useUiPreferences();
+
+  return <SettingsStack className="mc-next-preference-stack">
+    <p className="mc-next-settings-field-note">Workspace: {activeWorkspaceName}</p>
+    <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Interface"
+            subtitle="Tune how dense the operator surfaces feel. The choice persists on this device."
+            stats={[{ label: "Density", value: labelForDensity(density) }]}
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="Display density">
+                <select
+                  className="mc-next-settings-input"
+                  value={density}
+                  onChange={(event) => setDensity(normalizeDensity(event.target.value))}
+                >
+                  <option value="comfortable">Comfortable</option>
+                  <option value="default">Default</option>
+                  <option value="compact">Compact</option>
+                </select>
+                <p className="mc-next-settings-field-note">
+                  Comfortable enlarges type and controls; Compact tightens them for dense, evidence-heavy work.
+                </p>
+              </SettingsField>
+            </SettingsFieldGrid>
+          </NativeCard>
+    <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
+            title="Notifications and sounds"
+            subtitle="Choose how GoatCitadel asks for attention when work completes, blocks, or waits on approval."
+            stats={[
+              { label: "Toasts", value: notifications.toastsEnabled ? "On" : "Off" },
+              { label: "Sound", value: labelForNotificationSoundMode(notifications.soundMode) },
+              { label: "Desktop", value: notifications.desktopEnabled ? "On" : "Off" },
+            ]}
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="In-app notifications" group>
+                <label className="mc-next-settings-check">
+                  <input
+                    type="checkbox"
+                    checked={notifications.toastsEnabled}
+                    onChange={(event) => setNotificationToastsEnabled(event.target.checked)}
+                  />
+                  <span>Show operator attention toasts</span>
+                </label>
+                <p className="mc-next-settings-field-note">
+                  Toasts stay tied to realtime events and Ops notification history.
+                </p>
+              </SettingsField>
+              <SettingsField label="Sound cue">
+                <select
+                  className="mc-next-settings-input"
+                  value={notifications.soundMode}
+                  onChange={(event) => setNotificationSoundMode(normalizeNotificationSoundMode(event.target.value))}
+                >
+                  <option value="off">Off</option>
+                  <option value="subtle">Subtle</option>
+                  <option value="normal">Normal</option>
+                </select>
+                <p className="mc-next-settings-field-note">
+                  Sounds use short synthesized cues for done, waiting, and problem states.
+                </p>
+              </SettingsField>
+              <SettingsField label="Desktop notifications" group>
+                <label className="mc-next-settings-check">
+                  <input
+                    type="checkbox"
+                    checked={notifications.desktopEnabled}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        void requestBrowserNotificationPermission();
+                      }
+                      setNotificationDesktopEnabled(event.target.checked);
+                    }}
+                  />
+                  <span>Use system notifications when permission is granted</span>
+                </label>
+                <p className="mc-next-settings-field-note">
+                  Desktop notifications stay permission-aware in browser and native hosts.
+                </p>
+              </SettingsField>
+              <SettingsField label="Attention scope" group>
+                <label className="mc-next-settings-check">
+                  <input
+                    type="checkbox"
+                    checked={notifications.onlyWhenUnfocused}
+                    onChange={(event) => setNotificationOnlyWhenUnfocused(event.target.checked)}
+                  />
+                  <span>Only notify when Mission Control is unfocused</span>
+                </label>
+                <p className="mc-next-settings-field-note">
+                  Keep the active workspace quieter while preserving background completion alerts.
+                </p>
+              </SettingsField>
+            </SettingsFieldGrid>
+            <SettingsButtonRow>
+              <NativeButton variant="secondary" onClick={() => void requestBrowserNotificationPermission()}>
+                <Bell size={16} />
+                Check permission
+              </NativeButton>
+              <NativeButton
+                variant="secondary"
+                onClick={() => setNotificationSoundMode(notifications.soundMode === "off" ? "subtle" : "off")}
+              >
+                <Volume2 size={16} />
+                {notifications.soundMode === "off" ? "Enable subtle sound" : "Mute sound"}
+              </NativeButton>
+            </SettingsButtonRow>
+          </NativeCard>
+    <SettingsButtonRow>
+      <NativeButton variant="outline" onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}>Get started</NativeButton>
+      <NativeButton variant="outline" onClick={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}>Runtime status</NativeButton>
+    </SettingsButtonRow>
+    <NativeDisclosureCard id="general-setup-status" title="Setup status and shortcuts" lazy>
+      <GeneralSetupStatus {...props} />
+    </NativeDisclosureCard>
+  </SettingsStack>;
+}
+
+function GeneralSetupStatus({ activeCitadelId, activeWorkspaceName, route, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [settings, workspaces, integrations, mcpServers, tools, addons, meshReadiness] = await Promise.all([
       nativeLoad("Settings", fetchSettings(), null),
@@ -81,11 +205,8 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
   }, [activeCitadelId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
 
-  return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
-      {data ? (
-        <SettingsGrid variant="three-column">
-          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+  return <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
+    {data ? <SettingsStack><SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
@@ -237,119 +358,8 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
               ]}
             />
           </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Interface"
-            subtitle="Tune how dense the operator surfaces feel. The choice persists on this device."
-            stats={[{ label: "Density", value: labelForDensity(density) }]}
-          >
-            <SettingsFieldGrid>
-              <SettingsField label="Display density">
-                <select
-                  className="mc-next-settings-input"
-                  value={density}
-                  onChange={(event) => setDensity(normalizeDensity(event.target.value))}
-                >
-                  <option value="comfortable">Comfortable</option>
-                  <option value="default">Default</option>
-                  <option value="compact">Compact</option>
-                </select>
-                <p className="mc-next-settings-field-note">
-                  Comfortable enlarges type and controls; Compact tightens them for dense, evidence-heavy work.
-                </p>
-              </SettingsField>
-            </SettingsFieldGrid>
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Notifications and sounds"
-            subtitle="Choose how GoatCitadel asks for attention when work completes, blocks, or waits on approval."
-            stats={[
-              { label: "Toasts", value: notifications.toastsEnabled ? "On" : "Off" },
-              { label: "Sound", value: labelForNotificationSoundMode(notifications.soundMode) },
-              { label: "Desktop", value: notifications.desktopEnabled ? "On" : "Off" },
-            ]}
-          >
-            <SettingsFieldGrid>
-              <SettingsField label="In-app notifications" group>
-                <label className="mc-next-settings-check">
-                  <input
-                    type="checkbox"
-                    checked={notifications.toastsEnabled}
-                    onChange={(event) => setNotificationToastsEnabled(event.target.checked)}
-                  />
-                  <span>Show operator attention toasts</span>
-                </label>
-                <p className="mc-next-settings-field-note">
-                  Toasts stay tied to realtime events and Ops notification history.
-                </p>
-              </SettingsField>
-              <SettingsField label="Sound cue">
-                <select
-                  className="mc-next-settings-input"
-                  value={notifications.soundMode}
-                  onChange={(event) => setNotificationSoundMode(normalizeNotificationSoundMode(event.target.value))}
-                >
-                  <option value="off">Off</option>
-                  <option value="subtle">Subtle</option>
-                  <option value="normal">Normal</option>
-                </select>
-                <p className="mc-next-settings-field-note">
-                  Sounds use short synthesized cues for done, waiting, and problem states.
-                </p>
-              </SettingsField>
-              <SettingsField label="Desktop notifications" group>
-                <label className="mc-next-settings-check">
-                  <input
-                    type="checkbox"
-                    checked={notifications.desktopEnabled}
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        void requestBrowserNotificationPermission();
-                      }
-                      setNotificationDesktopEnabled(event.target.checked);
-                    }}
-                  />
-                  <span>Use system notifications when permission is granted</span>
-                </label>
-                <p className="mc-next-settings-field-note">
-                  Desktop notifications stay permission-aware in browser and native hosts.
-                </p>
-              </SettingsField>
-              <SettingsField label="Attention scope" group>
-                <label className="mc-next-settings-check">
-                  <input
-                    type="checkbox"
-                    checked={notifications.onlyWhenUnfocused}
-                    onChange={(event) => setNotificationOnlyWhenUnfocused(event.target.checked)}
-                  />
-                  <span>Only notify when Mission Control is unfocused</span>
-                </label>
-                <p className="mc-next-settings-field-note">
-                  Keep the active workspace quieter while preserving background completion alerts.
-                </p>
-              </SettingsField>
-            </SettingsFieldGrid>
-            <SettingsButtonRow>
-              <NativeButton variant="secondary" onClick={() => void requestBrowserNotificationPermission()}>
-                <Bell size={16} />
-                Check permission
-              </NativeButton>
-              <NativeButton
-                variant="secondary"
-                onClick={() => setNotificationSoundMode(notifications.soundMode === "off" ? "subtle" : "off")}
-              >
-                <Volume2 size={16} />
-                {notifications.soundMode === "off" ? "Enable subtle sound" : "Mute sound"}
-              </NativeButton>
-            </SettingsButtonRow>
-          </NativeCard>
-        </SettingsGrid>
-      ) : null}
-    </SettingsSectionShell>
-  );
+          </SettingsStack> : null}
+  </SettingsSectionShell>;
 }
 
 function labelForNotificationSoundMode(value: "off" | "subtle" | "normal"): string {

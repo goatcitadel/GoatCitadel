@@ -21,6 +21,39 @@ describe("dashboard cron routes", () => {
     app = null;
   });
 
+  it("reads canonical cron occurrence linkage through the runtime owner and redacts output", async () => {
+    const canonical = {
+      runId: "cron-run-1",
+      jobId: "reminder",
+      trigger: "scheduled_due",
+      scheduledFor: "2026-09-12T12:00:00.000Z",
+      jobRevision: 2,
+      executionGeneration: 1,
+      status: "completed",
+      phase: "settlement",
+      childSessionId: "cron-session",
+      childTurnId: "cron-turn",
+      childDurableRunId: "chat-run",
+      deliveryRunId: "delivery-run",
+    };
+    const findCronRunById = vi.fn(async (runId: string) =>
+      runId === canonical.runId
+        ? { runId, jobId: canonical.jobId, status: "ok", canonical, output: "Authorization: Bearer cron-lookup-secret" }
+        : undefined,
+    );
+    app = Fastify();
+    app.decorate("services", { cron: { findCronRunById } } as never);
+    await app.register(dashboardRoutes);
+    const response = await app.inject({ method: "GET", url: "/api/v1/cron/runs/cron-run-1" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ runId: "cron-run-1", canonical });
+    expect(response.body).not.toContain("cron-lookup-secret");
+    expect(findCronRunById).toHaveBeenCalledWith("cron-run-1");
+    const missing = await app.inject({ method: "GET", url: "/api/v1/cron/runs/missing" });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: "Cron run not found." });
+  });
+
   it("creates a cron job", async () => {
     const createCronJob = vi.fn((input: Record<string, unknown>) => ({
       ...input,

@@ -1202,6 +1202,17 @@ int RunProtectedArtifactSigningTests() noexcept {
   g_interop_receipts = {};
   gc::ResetProtectedSigningStateForTest();
   TestRfcAndDomains(&failures);
+  for (const std::uint64_t length : {130U, 146U}) {
+    IsolatedRoot root;
+    gc::ProtectedSigningLease lease;
+    std::array<std::uint8_t, 64U> signature{};
+    signature.fill(0xa5U);
+    if (!CreateLease(root, gc::ProtectedArtifactPurpose::TlsClientCertificateVerify, length, &lease) ||
+        gc::SignProtectedArtifact(&lease, &signature) || !AllZero(signature.data(), signature.size())) {
+      std::fprintf(stderr, "FAIL: protected TLS signing rejects arbitrary file bytes before key access\n");
+      ++failures;
+    }
+  }
   TestBoundariesAndDeterminism(&failures);
   TestMoveDriftStopAndRevoke(&failures);
   TestDivergenceFailureCutsAndWipes(&failures);

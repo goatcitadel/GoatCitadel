@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { PendingApprovalAction, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
+import { isNativeMcpToolName } from "./gateway/native-mcp-chat-binding.js";
+import { isMeshChatToolName } from "./gateway/mesh-chat-binding.js";
 
 const APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS = 5 * 60 * 1000;
 const inFlightByStorage = new WeakMap<object, Map<string, Promise<ToolInvokeResult>>>();
@@ -254,7 +256,8 @@ function readResultExternalBoundaryState(result: ToolInvokeResult): ApprovedSide
 }
 
 function usesApprovedExternalRuntimeAdapter(request: ToolInvokeRequest): boolean {
-  return request.externalRuntime === true || request.toolName === "mcp.invoke";
+  return request.externalRuntime === true || request.toolName === "mcp.invoke" ||
+    isNativeMcpToolName(request.toolName) || isMeshChatToolName(request.toolName);
 }
 
 function pendingResultMatches(pending: PendingApprovalAction, result: ToolInvokeResult): boolean {
@@ -306,7 +309,7 @@ async function resolveManualReconciliationState(
   return reconciled.status === "unknown_external_outcome" ? "manual_review_unknown_external_outcome" : undefined;
 }
 
-function toolInvokeResultFromPendingAction(pending: PendingApprovalAction): ToolInvokeResult {
+export function toolInvokeResultFromPendingAction(pending: PendingApprovalAction): ToolInvokeResult {
   const result = pending.result ?? {};
   const outcome = result.outcome === "executed" || result.outcome === "blocked" ? result.outcome : "blocked";
   return {

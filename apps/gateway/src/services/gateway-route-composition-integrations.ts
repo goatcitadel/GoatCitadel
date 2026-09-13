@@ -563,6 +563,8 @@ function createIntegrationChannelPortForGateway(
       await gateway.syncSignalInboundRuntime();
     },
     getDiscordRuntimeStatus: (connectionId) => gateway.discordRuntimeService.getConnectionStatus(connectionId),
+    latestAcceptedInboundAt: (channelKey, connectionId) =>
+      gateway.storage.inboundChannelEvents.latestAcceptedAt(channelKey, connectionId),
     getIntegrationConnection: (connectionId) => gateway.storage.integrationConnections.get(connectionId),
     assertDiscordConnection,
     readDiscordPairings: async () => gateway.readDiscordPairings(),

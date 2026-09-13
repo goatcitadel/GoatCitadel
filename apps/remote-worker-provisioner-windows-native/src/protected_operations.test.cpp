@@ -257,6 +257,40 @@ SignRuntimePopV2Body(
   return body;
 }
 
+using TlsSigningBody = std::array<std::uint8_t, gc::kSignTlsClientCertificateVerifyRequestBytes>;
+
+bool BindTlsSigningBody(TlsSigningBody* body) noexcept {
+  if (body == nullptr) return false;
+  std::fill_n(body->data(), 16U, std::uint8_t{0U});
+  gc::SignTlsClientCertificateVerifyRequest decoded{};
+  gc::Byte16 operation{};
+  if (!gc::DecodeSignTlsClientCertificateVerifyCallerRequest(body->data(), body->size(), &decoded) ||
+      !gc::DeriveTlsClientCertificateVerifyOperationId(kOperatorSid.data(),
+          static_cast<std::uint16_t>(kOperatorSid.size()), decoded.expected_state_sha256,
+          decoded.expected_generation, decoded.expected_keyset_receipt_sha256,
+          decoded.expected_worker_public_key_spki_sha256, decoded.preimage.data(), decoded.preimage_length,
+          &operation)) return false;
+  std::memcpy(body->data(), operation.data(), operation.size());
+  return true;
+}
+
+TlsSigningBody TlsClientSigningBody(const gc::ProtectedOperationsState& state, std::size_t hash_length = 32U) noexcept {
+  TlsSigningBody body{};
+  std::memcpy(body.data() + 16U, state.state_sha256.data(), 32U);
+  WriteU16(body.data() + 48U, 1U);
+  body[50U] = 4U;
+  WriteU64(body.data() + 52U, state.active_generation);
+  std::memcpy(body.data() + 60U, state.active_receipt_sha256.data(), 32U);
+  WriteU32(body.data() + 92U, static_cast<std::uint32_t>(98U + hash_length));
+  std::memcpy(body.data() + 96U, state.runtime_manifest_spki_sha256.data(), 32U);
+  std::fill_n(body.data() + 128U, 64U, std::uint8_t{0x20U});
+  constexpr char kContext[] = "TLS 1.3, client CertificateVerify";
+  std::memcpy(body.data() + 192U, kContext, sizeof(kContext));
+  std::fill_n(body.data() + 226U, hash_length, std::uint8_t{0x17U});
+  if (!BindTlsSigningBody(&body)) body.fill(0U);
+  return body;
+}
+
 template <std::size_t BodyBytes>
 void SeedReplay(
     gc::ProtectedOperationReplayState* replay,
@@ -2500,6 +2534,71 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
         "protected_operations: admission evidence cross-opcode collision\n");
   }
 
+  const auto tls_body = TlsClientSigningBody(state);
+  std::array<std::uint8_t, gc::kCreateKeysetResultBytes> tls_result{};
+  std::uint32_t tls_result_length = 0U;
+  const auto run_tls = [&](const TlsSigningBody& body, const std::array<std::uint8_t, 12U>& sid = kOperatorSid) noexcept {
+    tls_result.fill(0U);
+    tls_result_length = 0U;
+    return gc::ExecuteProtectedOperation(&state,
+        static_cast<std::uint8_t>(gc::Opcode::SignTlsClientCertificateVerify), body.data(),
+        static_cast<std::uint32_t>(body.size()), sid.data(), static_cast<std::uint16_t>(sid.size()),
+        authenticated_binding, GetTickCount64() + 30'000U, stop, &tls_result, &tls_result_length);
+  };
+  const auto expect_tls_disposition = [&](const TlsSigningBody& body, std::uint16_t disposition) noexcept {
+    const bool accepted = run_tls(body) == gc::ProtectedOperationResult::Success &&
+        tls_result_length == gc::kSignTlsClientCertificateVerifyResultBytes &&
+        ReadU16(tls_result.data() + 2U) == disposition &&
+        (disposition == 1U || AllZero(tls_result.data() + 8U, 172U));
+    if (!accepted) CanonicalFailure(&failures, "protected_operations: TLS signing disposition/authority\n");
+    return accepted;
+  };
+  for (const std::size_t hash_length : {32U, 48U}) {
+    const auto body = TlsClientSigningBody(state, hash_length);
+    if (!expect_tls_disposition(body, 1U) ||
+        !gc::CheckTlsClientCertificateVerifyForTest(state.runtime_manifest_spki, tls_result.data() + 116U, 64U,
+            body.data() + 128U, 98U + hash_length) ||
+        state.state_sha256 != created_state || state.operation_id_count != 1U) {
+      CanonicalFailure(&failures, "protected_operations: TLS client exact-byte protected signature\n");
+    }
+  }
+  expect_tls_disposition(tls_body, 1U);
+  const auto tls_signature_receipt = tls_result;
+  expect_tls_disposition(tls_body, 1U);
+  if (tls_result != tls_signature_receipt) CanonicalFailure(&failures, "protected_operations: TLS deterministic signature\n");
+  for (const std::size_t offset : {16U, 52U, 60U, 96U, 226U}) {
+    auto changed = tls_body;
+    changed[offset] ^= 1U;
+    if (offset == 52U) WriteU64(changed.data() + 52U, 2U);
+    expect_tls_disposition(changed, 5U);
+    if (offset != 226U) {
+      // A newly derived operation still cannot authorize stale/different custody.
+      if (offset == 52U) WriteU64(changed.data() + 52U, 2U);
+      if (!BindTlsSigningBody(&changed)) CanonicalFailure(&failures, "protected_operations: TLS negative binding fixture\n");
+      expect_tls_disposition(changed, offset == 16U ? 3U : 4U);
+    }
+  }
+  if (run_tls(tls_body, other_sid) != gc::ProtectedOperationResult::Success ||
+      ReadU16(tls_result.data() + 2U) != 5U || !AllZero(tls_result.data() + 8U, 172U)) {
+    CanonicalFailure(&failures, "protected_operations: TLS authenticated caller mismatch\n");
+  }
+  auto wrong_purpose = tls_body;
+  wrong_purpose[201U] ^= 1U;
+  if (run_tls(wrong_purpose) != gc::ProtectedOperationResult::ProtocolInvalid || !AllZero(tls_result.data(), tls_result.size())) {
+    CanonicalFailure(&failures, "protected_operations: TLS signing rejects cross-purpose bytes\n");
+  }
+  const auto tls_key_identity = state.active_keyset_file_identities[0U];
+  state.active_keyset_file_identities[0U].file_id[0U] ^= 1U;
+  expect_tls_disposition(tls_body, 8U);
+  state.active_keyset_file_identities[0U] = tls_key_identity;
+  gc::SetProtectedFilesystemFailureForTest(gc::ProtectedFilesystemTestCutpoint::Write, 1U);
+  expect_tls_disposition(tls_body, 8U);
+  gc::ResetProtectedFilesystemFailuresForTest();
+  std::size_t tls_child_count = 0U;
+  if (!CountTestRootChildren(fixture, &tls_child_count) || tls_child_count != 4U) {
+    CanonicalFailure(&failures, "protected_operations: TLS failed staging cleanup\n");
+  }
+
   const auto crash_cutpoint_body = SignRuntimePopV2Body(
       created_state,
       1U,
@@ -2551,6 +2650,9 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
         &failures,
         "protected_operations: runtime PoP-v2 separate invocation reproduction\n");
   }
+
+  expect_tls_disposition(tls_body, 1U);
+  if (tls_result != tls_signature_receipt) CanonicalFailure(&failures, "protected_operations: TLS signer restart reproduction\n");
 
   const auto revoke = RevokeBody(created_state, 1U, 1U, &created_receipt);
   gc::ResetProtectedFilesystemFailuresForTest();
@@ -2611,6 +2713,10 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
         "protected_operations: committed fixture revoke\n");
   }
   const gc::Byte32 revoked_state = state.state_sha256;
+  auto revoked_tls_body = tls_body;
+  std::memcpy(revoked_tls_body.data() + 16U, revoked_state.data(), 32U);
+  if (!BindTlsSigningBody(&revoked_tls_body)) CanonicalFailure(&failures, "protected_operations: revoked TLS binding\n");
+  expect_tls_disposition(revoked_tls_body, 4U);
   const auto revoked_runtime_pop_body = SignRuntimePopV2Body(
       revoked_state,
       1U,

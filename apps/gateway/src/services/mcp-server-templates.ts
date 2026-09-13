@@ -92,10 +92,10 @@ export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "playwright",
     label: "Playwright Browser",
-    description: "Browser automation MCP server for dynamic website workflows.",
+    description: "Browser automation with reviewed Playwright MCP 0.0.80 packages, verified archive and runtime file hashes, and isolated browser contexts.",
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-playwright"],
+    args: ["-y", "@playwright/mcp@0.0.80", "--isolated", "--headless"],
     authType: "none",
     category: "automation",
     trustTier: "restricted",

@@ -158,6 +158,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     set: vi.fn((key: string, value: unknown) => {
       systemSettingsStore.set(key, value);
     }),
+    compareAndSet: vi.fn((key: string, expected: { value: unknown } | undefined, value: unknown) => {
+      if (JSON.stringify(systemSettingsStore.get(key)) !== JSON.stringify(expected?.value)) return undefined;
+      systemSettingsStore.set(key, value);
+      return { key, value, updatedAt: "fixture" };
+    }),
   };
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   Object.assign(gateway, {
@@ -172,7 +177,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     syntheticPermissionProfiles: new Map(),
     // Real store over the harness's map-backed systemSettings (B5a): MCP
     // read/write behavior assertions keep flowing through systemSettingsStore.
-    mcpServerStore: new McpServerStore({ systemSettings }),
+    mcpServerStore: new McpServerStore({ systemSettings, runImmediateTransaction: async (callback) => await callback() }),
     closing: false,
     configGenerationService: {
       assertRuntimeReadsReady: vi.fn(),
@@ -574,7 +579,12 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
       },
     ]);
     expect(
-      await GatewayService.prototype.evaluateToolAccess.call(gateway, { sessionId: "session-1" } as never),
+      await GatewayService.prototype.evaluateToolAccess.call(gateway, {
+        agentId: "agent-1",
+        sessionId: "session-1",
+        toolName: "browser.search",
+        args: { query: "test" },
+      }),
     ).toMatchObject({
       allowed: true,
       input: expect.objectContaining({ workspaceId: "workspace-a" }),
@@ -1135,8 +1145,18 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     await expect(GatewayService.prototype.requireMcpServer.call(gateway, "missing")).rejects.toThrow(
       /Unknown MCP server/,
     );
-    await GatewayService.prototype.writeMcpServers.call(gateway, [{ serverId: "server-2" }] as never);
-    expect(gateway.storage.systemSettings.set).toHaveBeenCalledWith("mcp_servers_v1", [{ serverId: "server-2" }]);
+    await GatewayService.prototype.writeMcpServers.call(gateway, [{ serverId: "server-2" }] as never,
+      await GatewayService.prototype.readMcpServers.call(gateway));
+    expect(systemSettingsStore.get("mcp_servers_v1")).toEqual([
+      expect.objectContaining({ serverId: "server-2", configurationBindingId: expect.any(String) }),
+    ]);
+    expect(systemSettingsStore.get("mcp_tools_v1")).toEqual([{ serverId: "", toolName: "ignored" }]);
+    expect(systemSettingsStore.get("mcp_auth_state_v1")).toEqual({});
+    // The deleted incarnation no longer retains these rows; seed the next read fixture explicitly.
+    systemSettingsStore.set("mcp_tools_v1", [
+      { serverId: "server-1", toolName: "z.tool" }, { serverId: "server-1", toolName: "a.tool" },
+    ]);
+    systemSettingsStore.set("mcp_auth_state_v1", { "server-1": { connected: true } });
     systemSettingsStore.set("mcp_servers_v1", [
       {
         serverId: "server-1",
@@ -1168,10 +1188,14 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       { serverId: "server-1", toolName: "new.tool" },
     ]);
     expect(await GatewayService.prototype.readMcpAuthState.call(gateway)).toEqual({ "server-1": { connected: true } });
-    await GatewayService.prototype.writeMcpAuthState.call(gateway, { "server-2": { connected: false } } as never);
-    expect(gateway.storage.systemSettings.set).toHaveBeenCalledWith("mcp_auth_state_v1", {
-      "server-2": { connected: false },
-    });
+    const authServer = { ...await GatewayService.prototype.requireMcpServer.call(gateway, "server-1"), authType: "oauth2" as const };
+    delete authServer.authState;
+    systemSettingsStore.set("mcp_servers_v1", [authServer]);
+    const expectedAuth = { updatedAt: "2026-09-11T00:00:00.000Z" };
+    systemSettingsStore.set("mcp_auth_state_v1", { "server-1": expectedAuth });
+    const nextAuth = { ...expectedAuth, oauthState: "fixture-handshake" };
+    await GatewayService.prototype.writeMcpAuthState.call(gateway, { server: authServer, expected: expectedAuth, next: nextAuth });
+    expect(systemSettingsStore.get("mcp_auth_state_v1")).toEqual({ "server-1": nextAuth });
     systemSettingsStore.set("mcp_servers_v1", [
       { serverId: "server-1", label: "Server One", transport: "stdio", status: "connected", enabled: true },
     ]);
@@ -1468,6 +1492,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       improvementService: { initialize: vi.fn(async () => undefined), stopScheduler: vi.fn() },
       initCritical: vi.fn(async () => undefined),
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
+      mcpStdioSessions: { close: vi.fn() },
       loadOnboardingMarker: vi.fn(async () => undefined),
       npuSidecar: { close: vi.fn(async () => undefined) },
       recordDevDiagnostic: vi.fn(),
@@ -1524,6 +1549,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
 
     gateway.backgroundTasks.add(Promise.resolve("done"));
     await GatewayService.prototype.close.call(gateway);
+    expect(gateway.mcpStdioSessions.close).toHaveBeenCalledTimes(1);
     expect(gateway.chatProactiveService.stopScheduler).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.stopWorker).toHaveBeenCalled();
     expect(gateway.storage.close).toHaveBeenCalled();

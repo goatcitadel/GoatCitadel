@@ -20,6 +20,7 @@ import {
   type FilterPillOption,
 } from "../primitives";
 import {
+  toMemoryMaintenancePolicyDraft,
   describeQmdImpact,
   formatBytes,
   formatMaybeDateTime,
@@ -28,9 +29,14 @@ import {
   shortId,
   summarizeMemorySubspaces,
 } from "@goatcitadel/mission-control-shared/content/memory-helpers";
+import { useSessionViewState } from "../../../hooks/use-session-view-state";
+import { useSessionDraft, hasSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
+import { DetailInspector } from "../../../components/DetailInspector";
 import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { MemoryBatchToolbar } from "./MemoryBatchToolbar";
+import { MemoryEnumerationControls } from "./MemoryEnumerationControls";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from "../shared/native-helpers";
@@ -140,9 +146,28 @@ function formatRecommendationPatchValue(value: unknown): string {
   return "Runtime-provided value";
 }
 
-export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
-  const memory = useMemoryOperatorSnapshot(activeWorkspaceId);
-  const [search, setSearch] = useState("");
+export function MemoryRoutePage(props: NativeRoutePagesProps) { return <MemoryWorkspace key={props.activeWorkspaceId} {...props} />; }
+function MemoryWorkspace({ route, activeWorkspaceName, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
+  const view = ["quality", "maintenance", "graph"].includes(route.view ?? "") ? route.view as "quality" | "maintenance" | "graph" : "items";
+  const [search, setSearch] = useSessionViewState(`memory:${activeWorkspaceId}:query`, "");
+  const [query, setQuery] = useState(search);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [policyEditing, setPolicyEditing] = useState(false);
+  const leave = useDraftLeave();
+  useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 250); return () => clearTimeout(timer); }, [search]);
+  const memory = useMemoryOperatorSnapshot(activeWorkspaceId, { view, query, sourcesOpen, itemDetailsOpen: detailOpen });
+  const canonicalPolicy = memory.data?.maintenanceStatus?.policy;
+  const policyEditor = useSessionDraft(JSON.stringify(["memory", activeWorkspaceId, "maintenance-policy"]), canonicalPolicy ? toMemoryMaintenancePolicyDraft(canonicalPolicy) : memory.policyDraft, canonicalPolicy?.revision, {
+    label: "Memory maintenance policy", active: view === "maintenance" && policyEditing, available: Boolean(canonicalPolicy), onSave: savePolicyDraft,
+  });
+  async function savePolicyDraft(): Promise<boolean> {
+    const submitted = policyEditor.value;
+    if (!submitted) return false;
+    const saved = await memory.savePolicy(submitted, policyEditor.baseRevision as string | undefined);
+    return saved ? policyEditor.acceptSaved(toMemoryMaintenancePolicyDraft(saved), saved.revision, submitted) : false;
+  }
   const [namespaceFilter, setNamespaceFilter] = useState<string>(NAMESPACE_FILTER_ALL);
   // 5.2: gate the destructive "Forget item" action behind a confirm step (the button's
   // own aria-label calls it permanent), matching how Curator/Approvals confirm.
@@ -150,12 +175,6 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   // 13: multi-select for atomic batch forget/pin (pruned against the visible
   // list below via batchIds, so hidden or stale rows never enter a batch).
   const [batchSelected, setBatchSelected] = useState<ReadonlySet<string>>(new Set());
-  const [draft, setDraft] = useState({
-    title: "",
-    content: "",
-    pinned: false,
-    ttlOverrideSeconds: "",
-  });
   const [evidence, setEvidence] = useState<{
     loading: boolean;
     error: string | null;
@@ -246,25 +265,20 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   }, [namespaceFilter, namespacePillOptions]);
 
   const visibleItems = useMemo(() => {
-    const query = search.trim().toLowerCase();
     return memoryItems.filter((item) => {
       if (namespaceFilter !== NAMESPACE_FILTER_ALL && namespaceGroup(item.namespace) !== namespaceFilter) {
         return false;
       }
-      if (!query) {
-        return true;
-      }
-      return (
-        item.namespace.toLowerCase().includes(query) ||
-        item.title.toLowerCase().includes(query) ||
-        item.content.toLowerCase().includes(query)
-      );
+      return true;
     });
-  }, [memoryItems, namespaceFilter, search]);
-  const selectedVisibleItem = useMemo(
-    () => visibleItems.find((item) => item.itemId === memory.selectedItemId) ?? null,
-    [memory.selectedItemId, visibleItems],
-  );
+  }, [memoryItems, namespaceFilter]);
+  const selectedVisibleItem = memoryItems.find((item) => item.itemId === memory.selectedItemId) ?? null;
+  const draftKey = (id: string | null) => JSON.stringify(["memory", activeWorkspaceId, id, "edit"]);
+  const editorDraft = useSessionDraft(draftKey(memory.selectedItemId), {
+    title: selectedVisibleItem?.title ?? "", content: selectedVisibleItem?.content ?? "", pinned: selectedVisibleItem?.pinned ?? false,
+    ttlOverrideSeconds: selectedVisibleItem?.ttlOverrideSeconds ? String(selectedVisibleItem.ttlOverrideSeconds) : "",
+  }, selectedVisibleItem?.updatedAt, { label: selectedVisibleItem?.title ?? "Memory item", active: editing && detailOpen, available: Boolean(selectedVisibleItem) });
+  const { value: draft, setValue: setDraft } = editorDraft;
   // Prune batch ids against the *visible* list, not the full snapshot: the
   // destructive atomic batch must only count and touch rows the operator can
   // currently see (checked rows hidden by search/namespace filters drop out of
@@ -276,23 +290,6 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     [batchSelected, visibleItems],
   );
 
-  useEffect(() => {
-    if (!selectedVisibleItem) {
-      setDraft({
-        title: "",
-        content: "",
-        pinned: false,
-        ttlOverrideSeconds: "",
-      });
-      return;
-    }
-    setDraft({
-      title: selectedVisibleItem.title,
-      content: selectedVisibleItem.content,
-      pinned: selectedVisibleItem.pinned,
-      ttlOverrideSeconds: selectedVisibleItem.ttlOverrideSeconds ? String(selectedVisibleItem.ttlOverrideSeconds) : "",
-    });
-  }, [selectedVisibleItem]);
 
   const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
   const sectionErrors = memory.data?.sectionErrors;
@@ -300,7 +297,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryAdminState = memory.data?.memoryAdminState ?? "unknown";
   const memoryAdminTruthUnknown = memoryAdminState === "unknown";
   const memoryCanMutate = memoryAdminState === "enabled";
-  const batchBusy = memory.busyKey?.startsWith("memory-batch:") ?? false;
+  const queryPending = search.trim() !== query || memory.loading;
+  const batchBusy = (memory.busyKey?.startsWith("memory-batch:") ?? false) || queryPending;
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
   const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
   const recentContextPacks = useMemo(() => memory.data?.qmdStats?.recent ?? [], [memory.data?.qmdStats?.recent]);
@@ -380,6 +378,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   }, [memory.data?.memoryDecisions]);
 
   useEffect(() => {
+    if (view !== "quality" && !detailOpen) return;
     let cancelled = false;
     setEvidence((current) => ({ ...current, loading: true, error: null }));
     void fetchEvidenceEnvelopes({ workspaceId: activeWorkspaceId, limit: 12 })
@@ -396,7 +395,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, view, detailOpen]);
 
   const runRecallProbe = () => {
     const prompt = recallPrompt.trim();
@@ -443,9 +442,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       setBatchSelected(new Set());
     }
   };
-  const handleBatchForget = () => memory.batchForgetItems(batchIds).then(clearBatchSelectionOnSuccess);
-  const handleBatchPin = (pinned: boolean) =>
-    void memory.batchSetItemsPinned(batchIds, pinned).then(clearBatchSelectionOnSuccess);
+  const handleBatchForget = () => queryPending ? Promise.resolve() : memory.batchForgetItems(batchIds).then(clearBatchSelectionOnSuccess);
+  const handleBatchPin = (pinned: boolean) => {
+    if (!queryPending) void memory.batchSetItemsPinned(batchIds, pinned).then(clearBatchSelectionOnSuccess);
+  };
 
   return (
     <NativePageFrame
@@ -453,13 +453,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       kicker={routeKicker(route)}
       title="Memory"
       description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture."
-      loading={memory.loading}
+      loading={memory.loading && !memory.data}
       error={memory.error}
       metrics={[
-        { label: "Visible", value: String(visibleItems.length) },
+        { label: "Visible", value: memory.data ? String(visibleItems.length) : "Unavailable" },
         { label: "Workspace", value: activeWorkspaceName },
       ]}
     >
+      <nav className="mc-next-view-tabs" aria-label="Memory views">{(["items", "quality", "maintenance", "graph"] as const).map((id) => <NativeButton key={id} variant={view === id ? "secondary" : "ghost"} aria-current={view === id ? "page" : undefined} onClick={() => leave.request(() => { setDetailOpen(false); setEditing(false); navigate({ ...route, view: id }); })}>{id.charAt(0).toUpperCase() + id.slice(1)}</NativeButton>)}<NativeButton variant="ghost" aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>Sources</NativeButton><NativeButton variant="ghost" onClick={() => void memory.reload()}>Refresh</NativeButton></nav>
       {memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
       {memory.pendingMutationApprovals.map((pending) => (
         <div
@@ -476,6 +477,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               {pending.replayed ? " (already requested)" : ""}. Nothing has changed yet — resolve it from the Approvals
               surface to apply.
             </span>
+            <NativeButton variant="outline" onClick={() => leave.request(() => navigate({ area: "ops", section: "approvals", approvalId: pending.approvalId, theme: route.theme }))}>Review approval</NativeButton>
             <NativeButton variant="outline" onClick={() => memory.dismissPendingMutationApproval(pending.approvalId)}>
               Dismiss
             </NativeButton>
@@ -486,7 +488,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}
       <NativeGrid className="mc-next-memory-shell">
-        <NativeCard
+        {view === "graph" ? <NativeCard
           title="Memory model"
           subtitle="Presentation taxonomy for existing lifecycle records; it does not grant new memory authority."
           stats={[
@@ -505,12 +507,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               </div>
             ))}
           </div>
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "items" ? <NativeCard
           title="Memory items"
           subtitle="Real memory item truth comes first; files and QMD stay secondary."
           stats={[
-            { label: "Visible", value: String(visibleItems.length) },
+            { label: "Visible", value: memory.data ? String(visibleItems.length) : "Unavailable" },
             { label: "Workspace", value: activeWorkspaceName },
           ]}
         >
@@ -528,6 +530,18 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               />
             </label>
           </div>
+          <MemoryEnumerationControls
+            loaded={memoryItems.length}
+            visible={visibleItems.length}
+            total={memory.data?.memoryItemsPage?.total}
+            hasMore={Boolean(memory.data?.memoryItemsPage?.nextCursor)}
+            searching={memory.loading || search.trim() !== query}
+            unavailable={Boolean(sectionErrors?.memoryItems || memoryAdminTruthUnknown)}
+            loadingMore={memory.loadingMoreMemoryItems}
+            error={memory.memoryItemsPageError}
+            onLoadMore={memory.loadMoreMemoryItems}
+            onReload={memory.reload}
+          />
           {namespacePillOptions.length > 1 ? (
             <FilterPillGroup
               label="Memory namespace filter"
@@ -539,13 +553,13 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           ) : null}
           <div className="mc-next-approvals-risk-strip">
             <StatusChip tone="success">
-              Active {memory.data?.memoryItems.filter((item) => item.lifecycleState === "active").length ?? 0}
+              Active {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "unavailable" : memory.data?.memoryItems.filter((item) => item.lifecycleState === "active").length ?? 0}
             </StatusChip>
             <StatusChip tone="warning">
-              Expired {memory.data?.memoryItems.filter((item) => item.lifecycleState === "expired").length ?? 0}
+              Expired {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "unavailable" : memory.data?.memoryItems.filter((item) => item.lifecycleState === "expired").length ?? 0}
             </StatusChip>
             <StatusChip tone="muted">
-              Forgotten {memory.data?.memoryItems.filter((item) => item.lifecycleState === "forgotten").length ?? 0}
+              Forgotten {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "unavailable" : memory.data?.memoryItems.filter((item) => item.lifecycleState === "forgotten").length ?? 0}
             </StatusChip>
             <StatusChip
               tone={memoryAdminState === "enabled" ? "success" : memoryAdminTruthUnknown ? "warning" : "muted"}
@@ -571,7 +585,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             }
           />
           <div id={memoryListCountId} className="mc-next-sr-only" aria-live="polite" aria-atomic="true">
-            {visibleItems.length === 0
+            {memoryAdminTruthUnknown || sectionErrors?.memoryItems ? "Memory results unavailable." : visibleItems.length === 0
               ? "No memory items match the current filter."
               : `${visibleItems.length} memory ${visibleItems.length === 1 ? "item" : "items"} visible.`}
           </div>
@@ -581,7 +595,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <EmptyState
                   size="compact"
                   title={
-                    memoryAdminTruthUnknown
+                    sectionErrors?.memoryItems ? "Memory results unavailable. Retry to load current records." : memoryAdminTruthUnknown
                       ? "Memory item truth is unavailable until backend settings truth reloads."
                       : memoryAdminState === "disabled"
                         ? "Memory lifecycle admin is disabled in settings."
@@ -629,10 +643,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       aria-current={isSelected ? "true" : undefined}
                       aria-label={`Memory item ${item.title} in namespace ${item.namespace}, lifecycle ${item.lifecycleState}, ${item.pinned ? "pinned" : "unpinned"}, updated ${formatShortDateTime(item.updatedAt)}`}
                       className={`mc-next-approvals-list-item${isSelected ? " is-selected" : ""}`}
-                      onClick={() => memory.setSelectedItemId(item.itemId)}
+                      onClick={() => leave.request(() => { memory.setSelectedItemId(item.itemId); setDetailOpen(true); setEditing(false); }, [editorDraft.key])}
                     >
                       <div className="mc-next-directory-list-head">
-                        <strong>{item.title}</strong>
+                        <strong>{item.title}{hasSessionDraft(draftKey(item.itemId)) ? " · Unsaved" : ""}</strong>
                         <span>{formatShortDateTime(item.updatedAt)}</span>
                       </div>
                       <div className="mc-next-approvals-chip-row">
@@ -673,36 +687,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               onClear={() => setBatchSelected(new Set())}
             />
           ) : null}
-        </NativeCard>
-        <NativeCard
-          title={selectedVisibleItem?.title ?? "Memory detail"}
-          subtitle={
-            selectedVisibleItem
-              ? `Lifecycle ${selectedVisibleItem.lifecycleState} · ${selectedVisibleItem.namespace}`
-              : "Select a memory item to inspect lifecycle state, history, and patch actions."
-          }
-        >
+        </NativeCard> : null}
+        <DetailInspector open={detailOpen} title={selectedVisibleItem?.title ?? "Memory detail"} subtitle={selectedVisibleItem ? `${selectedVisibleItem.lifecycleState} · ${selectedVisibleItem.namespace}` : "Record unavailable"} onClose={() => leave.request(() => { setDetailOpen(false); setEditing(false); }, [editorDraft.key])}>
+{memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
+
           {selectedVisibleItem ? (
             <>
-              <div className="mc-next-runtime-metric-grid">
-                <div className="mc-next-runtime-metric">
-                  <span>Lifecycle</span>
-                  <strong>{selectedVisibleItem.lifecycleState}</strong>
-                  <p>{selectedVisibleItem.status}</p>
-                </div>
-                <div className="mc-next-runtime-metric">
-                  <span>Expires</span>
-                  <strong>{formatMaybeDateTime(selectedVisibleItem.expiresAt)}</strong>
-                  <p>TTL {selectedVisibleItem.ttlOverrideSeconds ?? "default"}</p>
-                </div>
-                <div className="mc-next-runtime-metric">
-                  <span>Item ID</span>
-                  <strong>{shortId(selectedVisibleItem.itemId)}</strong>
-                  <p>{formatShortDateTime(selectedVisibleItem.updatedAt)}</p>
-                </div>
-              </div>
-              <MemoryProvenancePanel item={selectedVisibleItem} writeEnvelopeCount={memoryWriteEnvelopes.length} />
-              <div
+              {!editing ? <><div className="mc-next-memory-content">{selectedVisibleItem.content}</div><NativeButton variant="outline" onClick={() => setEditing(true)}>{editorDraft.isDirty ? "Resume edit · Unsaved" : "Edit item"}</NativeButton></> : null}
+              {editing ? <div
                 className="mc-next-settings-field-grid"
                 role="group"
                 aria-label={`Edit memory item ${selectedVisibleItem.title}`}
@@ -760,9 +752,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     aria-label="Memory item content"
                   />
                 </label>
-              </div>
+              </div> : null}
               <div className="mc-next-runtime-actions" role="group" aria-label="Memory item actions">
-                <NativeButton
+                {editing ? <NativeButton
                   variant="default"
                   disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
                   aria-label={`Save changes to memory item ${selectedVisibleItem.title}`}
@@ -777,8 +769,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     })
                   }
                 >
-                  Save item
-                </NativeButton>
+                  Request item changes
+                </NativeButton> : null}
                 <NativeButton
                   variant="destructive"
                   disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
@@ -802,15 +794,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   setPendingForget(false);
                 }}
               />
-              <div className="mc-next-settings-code-block">
-                <span>Item history</span>
+              <details className="mc-next-memory-sources"><summary>Sources and lifecycle</summary><dl className="mc-next-memory-metadata"><div><dt>Lifecycle</dt><dd>{selectedVisibleItem.lifecycleState} · {selectedVisibleItem.status}</dd></div><div><dt>Expires</dt><dd>{formatMaybeDateTime(selectedVisibleItem.expiresAt)} · TTL {selectedVisibleItem.ttlOverrideSeconds ?? "default"}</dd></div><div><dt>Item ID</dt><dd><code>{selectedVisibleItem.itemId}</code></dd></div><div><dt>Updated</dt><dd>{formatShortDateTime(selectedVisibleItem.updatedAt)}</dd></div></dl><MemoryProvenancePanel item={selectedVisibleItem} writeEnvelopeCount={memoryWriteEnvelopes.length} /></details>
+              <details className="mc-next-memory-history"><summary>Item history</summary>
                 <SectionTruthNotice message={sectionErrors?.memoryHistory ?? null} />
                 {memory.data?.memoryHistory.length ? (
                   // Visible "·" separators wrapped in aria-hidden so screen
                   // readers don't announce them as "middle dot" between the
                   // change type, timestamp, and actor id (a11y H-8 follow-up).
                   <ul className="mc-next-approvals-compact-list">
-                    {memory.data.memoryHistory.slice(0, 10).map((entry) => (
+                    {memory.data.memoryHistory.map((entry) => (
                       <li key={entry.changeId}>
                         <strong>{entry.changeType}</strong>
                         <span aria-hidden="true">{" · "}</span>
@@ -827,13 +819,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 ) : (
                   <EmptyState size="compact" title="No item history loaded." />
                 )}
-              </div>
+              </details>
             </>
           ) : (
             <EmptyState size="compact" title="Select a memory item to inspect it." />
           )}
-        </NativeCard>
-        <NativeCard
+
+</DetailInspector>
+        {view === "quality" ? <NativeCard
           title="Evidence and write gate"
           subtitle="Recent runtime envelopes and memory-write decisions without exposing secret payloads."
           stats={[
@@ -855,7 +848,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           <SectionTruthNotice message={evidence.error ? `Evidence envelopes unavailable: ${evidence.error}` : null} />
           {memoryWriteEnvelopes.length > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memoryWriteEnvelopes.slice(0, 6).map((item) => {
+              {memoryWriteEnvelopes.map((item) => {
                 const decision = readMemoryWriteDecision(item);
                 return (
                   <li key={item.envelopeId}>
@@ -897,8 +890,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               Refresh evidence
             </NativeButton>
           </div>
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "quality" ? <NativeCard
           title="Recall quality"
           subtitle="Recent feedback on stale, missing, irrelevant, and useful memory selections."
           stats={[
@@ -914,7 +907,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           </div>
           {memoryFeedback.length > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memoryFeedback.slice(0, 6).map((item) => (
+              {memoryFeedback.map((item) => (
                 <li key={item.feedbackId}>
                   <strong>{item.kind}</strong>
                   {" · "}
@@ -928,8 +921,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           ) : (
             <EmptyState size="compact" title="No recall feedback has been recorded yet." />
           )}
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "quality" ? <NativeCard
           title="Quality queue"
           subtitle="Open memory quality findings from lifecycle scans, feedback, and learning staleness checks."
           stats={[
@@ -971,7 +964,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           </div>
           {memoryQualityIssues.length > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memoryQualityIssues.slice(0, 6).map((issue) => (
+              {memoryQualityIssues.map((issue) => (
                 <li key={issue.issueId}>
                   <strong>{formatMemoryQualityIssueKind(issue.kind)}</strong>
                   {" · "}
@@ -1017,8 +1010,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           ) : (
             <EmptyState size="compact" title="No memory quality issues are queued." />
           )}
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "quality" ? <NativeCard
           title="Recall workbench"
           subtitle="Prompt-level retrieval benchmark for explicit memory recall."
           stats={[
@@ -1090,8 +1083,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               title={recallBenchmark.loading ? "Running recall probe." : "No recall probe has run yet."}
             />
           )}
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "quality" ? <NativeCard
           title="Trace candidates"
           subtitle="Trace-derived memory stays proposed until promotion passes operator authority and write-gate checks."
           stats={[
@@ -1102,7 +1095,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           <SectionTruthNotice message={sectionErrors?.traceMemoryCandidates ?? null} />
           {(traceMemoryCandidates.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {traceMemoryCandidates.slice(0, 6).map((item) => (
+              {traceMemoryCandidates.map((item) => (
                 <li key={item.candidateId}>
                   <strong>{item.candidateType}</strong>
                   {" · "}
@@ -1151,10 +1144,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           ) : (
             <EmptyState size="compact" title="No trace-derived candidates are waiting for review." />
           )}
-        </NativeCard>
+        </NativeCard> : null}
       </NativeGrid>
       <NativeGrid>
-        <NativeCard
+        {view === "graph" ? <NativeCard
           title="Graph projection"
           subtitle="Read-only entity and relation projection from MemoryLifecycleService; no external graph store."
           stats={[
@@ -1186,8 +1179,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             }))}
             emptyLabel="No relation types are available for graph projection."
           />
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "graph" ? <NativeCard
           title="Provenance map"
           subtitle="Typed relationship coverage from MemoryLifecycleService snapshots; no separate graph store."
           stats={[
@@ -1211,8 +1204,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               </div>
             ))}
           </div>
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "graph" ? <NativeCard
           title="Memory entities"
           subtitle="Typed memory records owned by MemoryLifecycleService and governed by the write gate."
           stats={[
@@ -1226,7 +1219,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           <SectionTruthNotice message={sectionErrors?.memoryEntities ?? null} />
           {(memory.data?.memoryEntities.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memory.data?.memoryEntities.slice(0, 8).map((entity) => (
+              {memory.data?.memoryEntities.map((entity) => (
                 <li key={entity.id}>
                   <strong>{entity.title}</strong>
                   {" · "}
@@ -1247,8 +1240,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               title={memoryCanMutate ? "No typed entities have been recorded yet." : "Entity truth is currently gated."}
             />
           )}
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "graph" ? <NativeCard
           title="Relations"
           subtitle="Entity links degrade visibly when an endpoint is forgotten or superseded."
           stats={[
@@ -1262,7 +1255,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           <SectionTruthNotice message={sectionErrors?.memoryRelations ?? null} />
           {(memory.data?.memoryRelations.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memory.data?.memoryRelations.slice(0, 8).map((relation) => (
+              {memory.data?.memoryRelations.map((relation) => (
                 <li key={relation.id}>
                   <strong>{relation.title}</strong>
                   {" · "}
@@ -1285,8 +1278,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               }
             />
           )}
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "graph" ? <NativeCard
           title="Decision journal"
           subtitle="Decisions carry alternatives, rationale, review timing, and retrospective evidence."
           stats={[
@@ -1297,7 +1290,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           <SectionTruthNotice message={sectionErrors?.memoryDecisions ?? null} />
           {(memory.data?.memoryDecisions.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memory.data?.memoryDecisions.slice(0, 8).map((decision) => (
+              {memory.data?.memoryDecisions.map((decision) => (
                 <li key={decision.id} className="mc-next-decision-journal-item">
                   <strong>{decision.title}</strong>
                   <span>
@@ -1331,22 +1324,22 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               }
             />
           )}
-        </NativeCard>
+        </NativeCard> : null}
       </NativeGrid>
       <NativeGrid>
-        <NativeCard
+        {view === "maintenance" ? <NativeCard
           title="Maintenance posture"
           subtitle="Policy, runs, recommendations, and durable linkage stay visible as operator truth."
           stats={[
             {
               label: "Enabled",
-              value: memoryAdminTruthUnknown
-                ? "unknown"
+              value: memoryAdminTruthUnknown || !memory.data?.maintenanceStatus
+                ? "unavailable"
                 : memory.data?.maintenanceStatus?.policy.enabled
                   ? "yes"
                   : "no",
             },
-            { label: "Durable ready", value: memory.data?.maintenanceDurableReady ? "yes" : "no" },
+            { label: "Durable ready", value: memoryAdminTruthUnknown ? "unavailable" : memory.data?.maintenanceDurableReady ? "yes" : "no" },
           ]}
         >
           <SectionTruthNotice
@@ -1359,19 +1352,20 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           />
           {memory.data?.maintenanceEnabled ? (
             <>
-              {memory.policyDraft ? (
+              <NativeButton variant="outline" aria-expanded={policyEditing} onClick={() => leave.request(() => setPolicyEditing((open) => !open), [policyEditor.key])}>{policyEditing ? "Close policy editor" : policyEditor.isDirty ? "Resume policy edit · Unsaved" : "Edit policy"}</NativeButton>
+              {policyEditing && policyEditor.value ? (
                 <div className="mc-next-settings-field-grid" role="group" aria-label="Memory maintenance policy">
                   <label className="mc-next-settings-field" htmlFor={policyEnabledId}>
                     <span>Enabled</span>
                     <select
                       id={policyEnabledId}
                       className="mc-next-settings-input"
-                      value={memory.policyDraft.enabled ? "true" : "false"}
+                      value={policyEditor.value.enabled ? "true" : "false"}
                       disabled={!maintenanceControlsReady}
                       aria-label="Maintenance policy enabled state"
                       onChange={(event) => {
-                        memory.setPolicyDirty(true);
-                        memory.setPolicyDraft((current) =>
+
+                        policyEditor.setValue((current) =>
                           current ? { ...current, enabled: event.target.value === "true" } : current,
                         );
                       }}
@@ -1385,12 +1379,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <select
                       id={policyRunModeId}
                       className="mc-next-settings-input"
-                      value={memory.policyDraft.runMode}
+                      value={policyEditor.value.runMode}
                       disabled={!maintenanceControlsReady}
                       aria-label="Maintenance run mode"
                       onChange={(event) => {
-                        memory.setPolicyDirty(true);
-                        memory.setPolicyDraft((current) =>
+
+                        policyEditor.setValue((current) =>
                           current
                             ? {
                                 ...current,
@@ -1411,12 +1405,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       id={policyProviderId}
                       type="text"
                       className="mc-next-settings-input"
-                      value={memory.policyDraft.providerId}
+                      value={policyEditor.value.providerId}
                       disabled={!maintenanceControlsReady}
                       aria-label="Maintenance provider identifier"
                       onChange={(event) => {
-                        memory.setPolicyDirty(true);
-                        memory.setPolicyDraft((current) =>
+
+                        policyEditor.setValue((current) =>
                           current ? { ...current, providerId: event.target.value } : current,
                         );
                       }}
@@ -1428,12 +1422,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       id={policyModelId}
                       type="text"
                       className="mc-next-settings-input"
-                      value={memory.policyDraft.model}
+                      value={policyEditor.value.model}
                       disabled={!maintenanceControlsReady}
                       aria-label="Maintenance model identifier"
                       onChange={(event) => {
-                        memory.setPolicyDirty(true);
-                        memory.setPolicyDraft((current) =>
+
+                        policyEditor.setValue((current) =>
                           current ? { ...current, model: event.target.value } : current,
                         );
                       }}
@@ -1441,6 +1435,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   </label>
                 </div>
               ) : null}
+              {policyEditing && policyEditor.hasRemoteChanges ? <NoticeBanner tone="warning" message="The policy changed since editing began. Your draft is preserved." /> : null}
+              {policyEditing && policyEditor.hasRemoteChanges ? <details><summary>Review current policy</summary><dl>{canonicalPolicy ? Object.entries(toMemoryMaintenancePolicyDraft(canonicalPolicy)).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>) : null}</dl><NativeButton onClick={policyEditor.rebaseToCurrent}>Use this version and keep my draft</NativeButton></details> : null}
               <div className="mc-next-runtime-actions" role="group" aria-label="Memory maintenance actions">
                 <NativeButton
                   variant="default"
@@ -1452,9 +1448,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </NativeButton>
                 <NativeButton
                   variant="default"
-                  disabled={!maintenanceControlsReady || !memory.policyDirty || memory.busyKey === "maintenance:policy"}
+                  hidden={!policyEditing}
+                  disabled={!maintenanceControlsReady || !policyEditor.isDirty || memory.busyKey === "maintenance:policy"}
                   aria-label="Save memory maintenance policy"
-                  onClick={() => void memory.savePolicy()}
+                  onClick={() => void savePolicyDraft()}
                 >
                   Save policy
                 </NativeButton>
@@ -1470,7 +1467,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               <div className="mc-next-runtime-metric-grid">
                 <div className="mc-next-runtime-metric">
                   <span>Changed sessions</span>
-                  <strong>{String(memory.data?.maintenanceStatus?.state.changedSessionCount ?? 0)}</strong>
+                  <strong>{memory.data?.maintenanceStatus ? String(memory.data.maintenanceStatus.state.changedSessionCount) : "Unavailable"}</strong>
                   <p>waiting for next run</p>
                 </div>
                 <div className="mc-next-runtime-metric">
@@ -1480,7 +1477,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </div>
                 <div className="mc-next-runtime-metric">
                   <span>Last run</span>
-                  <strong>{memory.data?.maintenanceStatus?.lastRun?.status ?? "none"}</strong>
+                  <strong>{memory.data?.maintenanceStatus ? memory.data.maintenanceStatus.lastRun?.status ?? "No recorded run" : "Unavailable"}</strong>
                   <p>{formatMaybeDateTime(memory.data?.maintenanceStatus?.lastRun?.updatedAt)}</p>
                 </div>
               </div>
@@ -1495,8 +1492,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               }
             />
           )}
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {view === "maintenance" ? <NativeCard
           title="Maintenance review"
           subtitle="Review proposed memory changes before accepting them, with durable-run linkage kept alongside the queue."
         >
@@ -1512,7 +1509,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </header>
                 {(memory.data?.maintenanceRecommendations.length ?? 0) > 0 ? (
                   <ul>
-                    {memory.data?.maintenanceRecommendations.slice(0, 8).map((item) => (
+                    {memory.data?.maintenanceRecommendations.map((item) => (
                       <li key={item.recommendationId}>
                         <div className="mc-next-memory-review-head">
                           <div>
@@ -1587,7 +1584,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       memory.selectedRunId ? `memory-maintenance-run-${memory.selectedRunId}` : undefined
                     }
                   >
-                    {memory.data?.maintenanceRuns.slice(0, 8).map((run) => {
+                    {memory.data?.maintenanceRuns.map((run) => {
                       const isSelected = memory.selectedRunId === run.runId;
                       return (
                         <button
@@ -1658,7 +1655,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     </p>
                     {(memory.data?.selectedRunProvenance?.sources.length ?? 0) > 0 ? (
                       <ul className="mc-next-approvals-compact-list">
-                        {memory.data?.selectedRunProvenance?.sources.slice(0, 4).map((source) => (
+                        {memory.data?.selectedRunProvenance?.sources.map((source) => (
                           <li key={source.sourceId}>
                             <strong>{source.sourceKind}</strong>
                             {" · "}
@@ -1670,7 +1667,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     ) : null}
                     {(memory.data?.selectedRunProvenance?.changes.length ?? 0) > 0 ? (
                       <ul className="mc-next-approvals-compact-list">
-                        {memory.data?.selectedRunProvenance?.changes.slice(0, 4).map((change) => (
+                        {memory.data?.selectedRunProvenance?.changes.map((change) => (
                           <li key={change.changeId}>
                             <strong>{change.changeKind}</strong>
                             {" · "}
@@ -1690,10 +1687,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               </div>
             </div>
           </div>
-        </NativeCard>
+        </NativeCard> : null}
       </NativeGrid>
       <NativeGrid>
-        <NativeCard
+        {view === "quality" ? <NativeCard
           title="QMD and context posture"
           subtitle="Recent context packs and efficiency stay visible, but secondary to memory item truth."
           stats={[
@@ -1716,7 +1713,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           </div>
           {recentContextPacks.length > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {recentContextPacks.slice(0, 6).map((item) => (
+              {recentContextPacks.map((item) => (
                 <li key={item.contextId}>
                   <strong>{item.scope}</strong>
                   {" · "}
@@ -1753,15 +1750,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             maxHeight="min(32vh, 18rem)"
             ariaLabel="Memory why-used citations"
           />
-        </NativeCard>
-        <NativeCard
+        </NativeCard> : null}
+        {sourcesOpen ? <NativeCard
           title="Memory files"
           subtitle="File and QMD evidence stay available as secondary context, not the main memory story."
         >
           <SectionTruthNotice message={sectionErrors?.files ?? null} />
           {(fileAreas.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {fileAreas.slice(0, 8).map((area) => (
+              {fileAreas.map((area) => (
                 <li key={area.area}>
                   <strong>{area.area}</strong>
                   {" · "}
@@ -1776,7 +1773,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           ) : (
             <EmptyState size="compact" title="No memory file subspaces discovered." />
           )}
-        </NativeCard>
+        </NativeCard> : null}
         <QuickJumpCard
           title="Related routes"
           subtitle="Move between memory, approvals, and runtime without losing context."
@@ -1789,6 +1786,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           navigate={navigate}
         />
       </NativeGrid>
+      {leave.dialog}
     </NativePageFrame>
   );
 }

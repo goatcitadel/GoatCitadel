@@ -99,11 +99,27 @@ std::uint32_t AvailabilityWaitMilliseconds(
 
 bool ValidateAvailabilityBrokerSnapshot(
     const AvailabilityServiceSnapshot& snapshot,
-    const AvailabilityFixedPath& expected_binary_path) noexcept;
+    const AvailabilityFixedPath& expected_binary_path,
+    bool starting = true) noexcept;
 
 bool ValidateAvailabilityTargetSnapshot(
     const AvailabilityServiceSnapshot& snapshot,
     const AvailabilityFixedPath& expected_binary_path) noexcept;
+
+// The administrator starts this fixed service. It owns repeated bounded signer
+// starts; clients never receive a control endpoint or service-start authority.
+struct AvailabilitySupervisorPorts final {
+  void* context = nullptr;
+  bool (*stop_requested)(void*) noexcept = nullptr;
+  bool (*verify_broker)(void*, bool starting) noexcept = nullptr;
+  bool (*publish_running)(void*) noexcept = nullptr;
+  AvailabilityIdentityValidation (*ensure_target)(void*, bool* completed) noexcept = nullptr;
+  AvailabilityIdentityValidation (*await_target_completion)(void*) noexcept = nullptr;
+  AvailabilityIdentityValidation (*pause_before_restart)(void*) noexcept = nullptr;
+};
+
+AvailabilityIdentityValidation RunAvailabilitySupervisor(
+    const AvailabilitySupervisorPorts& ports) noexcept;
 
 int RunAvailabilityBrokerDispatcher() noexcept;
 

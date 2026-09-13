@@ -24,6 +24,7 @@ import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js"
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { DocumentEditingService } from "./document-editing-service.js";
+import { WorkflowSkillCaptureService } from "./workflow-skill-capture-service.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import { createSessionControlRouteService } from "./session-control-route-service.js";
 import { getSessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
@@ -312,6 +313,8 @@ export function composeChatRouteDependencies(
       chatWorkbenchService.revertChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, input),
     runChatSessionWorkbenchCommand: (sessionId, input) =>
       chatWorkbenchService.runChatSessionWorkbenchCommand(ChatWorkbenchDependencies, sessionId, input),
+    previewChatSessionWorkbenchFileOperation: (sessionId, input) =>
+      chatWorkbenchService.previewChatSessionWorkbenchFileOperation(ChatWorkbenchDependencies, sessionId, input),
     runChatSessionWorkbenchFileOperation: (sessionId, input) =>
       chatWorkbenchService.runChatSessionWorkbenchFileOperation(ChatWorkbenchDependencies, sessionId, input),
     saveChatSessionWorkbenchFile: (sessionId, input) =>
@@ -396,7 +399,14 @@ export function composeChatRouteDependencies(
     resolveChatToolApproval: (sessionId, approvalId, decision, options) =>
       gateway.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options),
   };
+  const skillCapture = new WorkflowSkillCaptureService({
+    storage: gateway.storage,
+    rootDir: gateway.config.rootDir,
+    candidateRoot: gateway.config.assistant.capabilities.candidateRoot,
+  });
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
+    prepareWorkflowSkillCapture: (sessionId, input, actor) => skillCapture.prepare(sessionId, input, actor),
+    stageWorkflowSkillCapture: (sessionId, input, actor) => skillCapture.stage(sessionId, input, actor),
     agentSendChatMessage: async (sessionId, input, authenticatedOperator, externalCompanion) =>
       await gateway.chatTurnRuntime.agentSendChatMessage(
         sessionId,

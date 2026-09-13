@@ -13,6 +13,7 @@ import {
 } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { useApprovalQueue } from "@goatcitadel/mission-control-shared/hooks/useApprovalQueue";
 import { buildAppHref, routeKicker, type AppRoute } from "@next/app/route-model";
+import { DetailInspector } from "../../../components/DetailInspector";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import { ShellExplanationList } from "./ShellExplanationList";
@@ -26,13 +27,48 @@ type ApprovalConfirmation =
   | { kind: "decision"; approvalId: string; decision: "approve" | "reject" }
   | { kind: "resume"; approvalId: string };
 
-export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
+export function ApprovalsRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  pendingApprovals,
+  navigate,
+}: NativeRoutePagesProps) {
   const [pendingConfirmation, setPendingConfirmation] = useState<ApprovalConfirmation | null>(null);
   const approvals = useApprovalQueue({
     focusedApprovalId: route.approvalId ?? null,
   });
 
-  const selectedApproval = approvals.selectedApproval;
+  const [inspectedId, setInspectedId] = useState<string | null>(route.approvalId ?? null);
+  const inspectedScope = useRef(activeWorkspaceId);
+  const lastDeepLink = useRef(route.approvalId);
+  useEffect(() => {
+    if (inspectedScope.current !== activeWorkspaceId) {
+      inspectedScope.current = activeWorkspaceId;
+      lastDeepLink.current = route.approvalId;
+      setInspectedId(null);
+    } else if (lastDeepLink.current !== route.approvalId) {
+      lastDeepLink.current = route.approvalId;
+      setInspectedId(route.approvalId ?? null);
+    }
+  }, [activeWorkspaceId, route.approvalId]);
+  const openApproval = (approvalId: string) => {
+    approvals.setSelectedApprovalId(approvalId);
+    setInspectedId(approvalId);
+  };
+  // The queue may select another item after refresh. Inspection always stays on
+  // the record the operator opened; a missing target never becomes a new decision.
+  const selectedApproval =
+    inspectedScope.current !== activeWorkspaceId
+      ? null
+      : approvals.selectedApproval?.approvalId === inspectedId
+        ? approvals.selectedApproval
+        : ([
+            ...approvals.pendingItems,
+            ...approvals.historyItems,
+            ...approvals.recoveryItems,
+            ...approvals.visibleItems,
+          ].find((approval) => approval.approvalId === inspectedId) ?? null);
   const liveLaneRoute = selectedApproval ? buildLiveLaneRoute(selectedApproval) : null;
   const selectedLifecycle = selectedApproval ? approvals.lifecycleByApprovalId[selectedApproval.approvalId] : undefined;
   const selectedDurable = selectedApproval ? approvals.durableByApprovalId[selectedApproval.approvalId] : undefined;
@@ -165,14 +201,15 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         actions={
           approvals.view === "pending" ? (
             <NativeButton
-              variant="outline"
-              className="danger"
-              disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
-              onClick={() => setPendingConfirmation({ kind: "bulk-reject" })}
+              disabled={!approvals.pendingItems.length}
+              onClick={() => {
+                const next = approvals.pendingItems[0];
+                if (next) openApproval(next.approvalId);
+              }}
             >
-              {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
+              Review next
             </NativeButton>
-          ) : null
+          ) : undefined
         }
       >
         {approvals.error ? (
@@ -180,7 +217,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
             <NoticeBanner tone="error" message={approvals.error} />
           </div>
         ) : null}
-        <NativeGrid>
+        <NativeGrid className="mc-next-calm-directory">
           <NativeCard
             title="Approval queue"
             subtitle="Work the pending queue, audit history, or jump straight to recovery-linked approvals."
@@ -210,20 +247,33 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 />
               </div>
             </div>
-            <div className="mc-next-approvals-risk-strip">
-              <StatusChip tone={approvals.pendingRiskCounts.safe > 0 ? "success" : "muted"}>
-                Safe {approvals.pendingRiskCounts.safe}
-              </StatusChip>
-              <StatusChip tone={approvals.pendingRiskCounts.caution > 0 ? "warning" : "muted"}>
-                Caution {approvals.pendingRiskCounts.caution}
-              </StatusChip>
-              <StatusChip tone={approvals.pendingRiskCounts.danger > 0 ? "warning" : "muted"}>
-                Danger {approvals.pendingRiskCounts.danger}
-              </StatusChip>
-              <StatusChip tone={approvals.pendingRiskCounts.nuclear > 0 ? "critical" : "muted"}>
-                Nuclear {approvals.pendingRiskCounts.nuclear}
-              </StatusChip>
-            </div>
+            <details className="mc-next-approvals-details">
+              <summary>Queue details and actions</summary>
+              <div className="mc-next-approvals-risk-strip">
+                <StatusChip tone={approvals.pendingRiskCounts.safe > 0 ? "success" : "muted"}>
+                  Safe {approvals.pendingRiskCounts.safe}
+                </StatusChip>
+                <StatusChip tone={approvals.pendingRiskCounts.caution > 0 ? "warning" : "muted"}>
+                  Caution {approvals.pendingRiskCounts.caution}
+                </StatusChip>
+                <StatusChip tone={approvals.pendingRiskCounts.danger > 0 ? "warning" : "muted"}>
+                  Danger {approvals.pendingRiskCounts.danger}
+                </StatusChip>
+                <StatusChip tone={approvals.pendingRiskCounts.nuclear > 0 ? "critical" : "muted"}>
+                  Nuclear {approvals.pendingRiskCounts.nuclear}
+                </StatusChip>
+              </div>
+              {approvals.view === "pending" ? (
+                <NativeButton
+                  variant="outline"
+                  className="danger"
+                  disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
+                  onClick={() => setPendingConfirmation({ kind: "bulk-reject" })}
+                >
+                  {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
+                </NativeButton>
+              ) : null}
+            </details>
             <div
               className="mc-next-approvals-list"
               aria-live="polite"
@@ -251,7 +301,8 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                       type="button"
                       className={`mc-next-approvals-list-item${selected ? " is-selected" : ""}`}
                       data-mc-approval-new={isNewArrival ? "true" : undefined}
-                      onClick={() => approvals.setSelectedApprovalId(approval.approvalId)}
+                      aria-expanded={selected}
+                      onClick={() => openApproval(approval.approvalId)}
                     >
                       <div className="mc-next-directory-list-head">
                         <strong>{approval.kind || approval.approvalId}</strong>
@@ -294,28 +345,15 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
               </div>
             ) : null}
           </NativeCard>
-          <NativeCard
-            className="mc-next-approvals-detail-card"
-            title={selectedApproval ? selectedApproval.kind || selectedApproval.approvalId : "Approval detail"}
-            subtitle={
-              selectedApproval
-                ? "Replay trail, durable recovery, and runtime linkage in one operator view."
-                : "Select a queue item to inspect evidence, replay, and failure context."
-            }
-            stats={
-              selectedApproval
-                ? [
-                    {
-                      label: "Status",
-                      value: isExpiredApproval(selectedApproval) ? "expired" : selectedApproval.status,
-                    },
-                    { label: "Risk", value: selectedApproval.riskLevel },
-                  ]
-                : undefined
-            }
+          <DetailInspector
+            open={Boolean(inspectedId) && inspectedScope.current === activeWorkspaceId}
+            title={selectedApproval?.kind || "Approval detail"}
+            subtitle="Replay trail, durable recovery, and runtime linkage"
+            onClose={() => setInspectedId(null)}
           >
             {selectedApproval ? (
               <ApprovalInspectorCard
+                key={selectedApproval.approvalId}
                 approval={selectedApproval}
                 replay={approvals.replayById[selectedApproval.approvalId]}
                 lifecycle={selectedLifecycle}
@@ -371,10 +409,17 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 }
               />
             ) : (
-              <EmptyState size="compact" title="Select a queue item to inspect its replay trail and recovery state." />
+              <EmptyState
+                size="compact"
+                title="This approval is unavailable in the current queue. Select a queue item to review another request."
+              />
             )}
-            {approvals.summary ? <p className="mc-next-approvals-summary">{approvals.summary}</p> : null}
-          </NativeCard>
+          </DetailInspector>
+          {approvals.summary ? (
+            <p role="status" className="mc-next-approvals-summary">
+              {approvals.summary}
+            </p>
+          ) : null}
         </NativeGrid>
       </NativePageFrame>
       <ConfirmModal
@@ -572,7 +617,7 @@ function ApprovalInspectorCard(props: {
                     : "muted"
             }
           >
-            {approval.explanationStatus}
+            Summary {approval.explanationStatus}
           </StatusChip>
         ) : null}
         {approval.followUp && approval.followUp.status !== "none" ? (
@@ -588,6 +633,34 @@ function ApprovalInspectorCard(props: {
           <h3>{decisionCopy.title}</h3>
           {approval.explanation?.riskExplanation ? <p>{approval.explanation.riskExplanation}</p> : null}
           <ApprovalDecisionContextStrip approval={approval} />
+          {evidence ? (
+            <div className="mc-next-approval-evidence">
+              <h3>Operator evidence</h3>
+              {evidence.targets.length > 0 ? (
+                <ul className="mc-next-approvals-compact-list">
+                  {evidence.targets.map((line) => (
+                    <li key={`${approval.approvalId}-${line}`}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {evidence.commands.length > 0 ? (
+                <ShellExplanationList commands={evidence.commands} explanations={approval.shellExplanations} />
+              ) : null}
+              {evidence.supporting.length > 0 ? (
+                <ul className="mc-next-approvals-compact-list">
+                  {evidence.supporting.map((line) => (
+                    <li key={`${approval.approvalId}-support-${line}`}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {evidence.changes.map((block) => (
+                <details key={`${approval.approvalId}-${block.label}`} className="mc-next-approvals-details">
+                  <summary>{block.label}</summary>
+                  <pre>{block.content}</pre>
+                </details>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="mc-next-approvals-actions">
           {approval.status === "pending" && !expired ? (
@@ -608,9 +681,7 @@ function ApprovalInspectorCard(props: {
               </NativeButton>
             </>
           ) : null}
-          <NativeButton variant="outline" className="subtle" onClick={onReplay}>
-            Load replay trail
-          </NativeButton>
+
           {liveLaneHref && onOpenLiveLane ? (
             <a href={liveLaneHref} className="mc-next-approvals-link-button" onClick={onOpenLiveLane}>
               Open live session
@@ -650,48 +721,9 @@ function ApprovalInspectorCard(props: {
         />
       ) : null}
 
-      <div className="mc-next-approvals-support-grid">
-        {evidence ? (
-          <div className="mc-next-directory-card mc-next-directory-card-compact">
-            <div className="mc-next-directory-card-head">
-              <div>
-                <h2>Operator evidence</h2>
-                <p>Paths, commands, and supporting context pulled from the approval payload.</p>
-              </div>
-            </div>
-            {evidence.targets.length > 0 ? (
-              <ul className="mc-next-approvals-compact-list">
-                {evidence.targets.map((line) => (
-                  <li key={`${approval.approvalId}-${line}`}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
-            {evidence.commands.length > 0 ? (
-              <ShellExplanationList commands={evidence.commands} explanations={approval.shellExplanations} />
-            ) : null}
-            {evidence.supporting.length > 0 ? (
-              <ul className="mc-next-approvals-compact-list">
-                {evidence.supporting.map((line) => (
-                  <li key={`${approval.approvalId}-support-${line}`}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
-            {evidence.changes.map((block) => (
-              <details key={`${approval.approvalId}-${block.label}`} className="mc-next-approvals-details">
-                <summary>{block.label}</summary>
-                <pre>{block.content}</pre>
-              </details>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="mc-next-directory-card mc-next-directory-card-compact">
-          <div className="mc-next-directory-card-head">
-            <div>
-              <h2>Recovery</h2>
-              <p>Inspect the current durable checkpoint and resume a paused run without starting over.</p>
-            </div>
-          </div>
+      <div className="mc-next-approvals-support-grid mc-next-calm-directory">
+        <details className="mc-next-approvals-details">
+          <summary>Recovery</summary>
           <div className="mc-next-approvals-inline-actions">
             <NativeButton variant="outline" className="subtle" disabled={durableBusy} onClick={onLoadDurableStatus}>
               <Waypoints size={16} />
@@ -718,16 +750,11 @@ function ApprovalInspectorCard(props: {
           ) : (
             <EmptyState size="compact" title="No checkpoint details loaded yet." />
           )}
-        </div>
+        </details>
 
         {(traceMetadata?.traceId || traceMetadata?.correlationId) && (
-          <div className="mc-next-directory-card mc-next-directory-card-compact">
-            <div className="mc-next-directory-card-head">
-              <div>
-                <h2>Trace linkage</h2>
-                <p>Inspect operator-visible trace correlation without leaving approvals.</p>
-              </div>
-            </div>
+          <details className="mc-next-approvals-details">
+            <summary>Trace linkage</summary>
             <ul className="mc-next-approvals-compact-list">
               {traceMetadata.traceId ? <li>trace: {traceMetadata.traceId}</li> : null}
               {traceMetadata.correlationId ? <li>correlation: {traceMetadata.correlationId}</li> : null}
@@ -742,34 +769,24 @@ function ApprovalInspectorCard(props: {
                 {tracePreview ? "Refresh trace detail" : "Load trace detail"}
               </NativeButton>
             ) : null}
-          </div>
+          </details>
         )}
       </div>
 
       {tracePreview?.length ? (
-        <div className="mc-next-directory-card mc-next-directory-card-compact">
-          <div className="mc-next-directory-card-head">
-            <div>
-              <h2>Trace detail</h2>
-              <p>Recent diagnostic breadcrumbs correlated to this approval.</p>
-            </div>
-          </div>
+        <details className="mc-next-approvals-details">
+          <summary>Trace detail</summary>
           <ul className="mc-next-approvals-compact-list">
             {tracePreview.map((item) => (
               <li key={`${approval.approvalId}-${item}`}>{item}</li>
             ))}
           </ul>
-        </div>
+        </details>
       ) : null}
 
       {lifecycle ? (
-        <div className="mc-next-directory-card mc-next-directory-card-compact">
-          <div className="mc-next-directory-card-head">
-            <div>
-              <h2>Runtime linkage</h2>
-              <p>Canonical and inferred runtime relationships surfaced directly in one operator view.</p>
-            </div>
-          </div>
+        <details className="mc-next-approvals-details">
+          <summary>Runtime linkage</summary>
           <ul className="mc-next-approvals-compact-list">
             <li>
               Canonical session: {lifecycle.canonical?.sessionId ?? lifecycle.approval?.linkage?.sessionId ?? "absent"}
@@ -802,7 +819,7 @@ function ApprovalInspectorCard(props: {
               </li>
             ) : null}
           </ul>
-        </div>
+        </details>
       ) : null}
 
       {(lifecycle?.approvalEffects?.length ?? 0) > 0 || (replay?.effects?.length ?? 0) > 0 ? (
@@ -825,12 +842,15 @@ function ApprovalInspectorCard(props: {
         </div>
       ) : null}
 
-      {replay ? (
-        <details className="mc-next-approvals-details">
-          <summary>
-            <History size={16} />
-            Replay trail and pending action
-          </summary>
+      <details className="mc-next-approvals-details">
+        <summary>
+          <History size={16} />
+          Replay trail and pending action
+        </summary>
+        <NativeButton variant="outline" className="subtle" onClick={onReplay}>
+          Load replay trail
+        </NativeButton>
+        {replay ? (
           <div className="mc-next-directory-card mc-next-directory-card-compact">
             <ul className="mc-next-approvals-compact-list">
               {replay.events.map((event) => (
@@ -841,8 +861,10 @@ function ApprovalInspectorCard(props: {
             </ul>
             {replay.pendingAction ? <pre>{JSON.stringify(replay.pendingAction, null, 2)}</pre> : null}
           </div>
-        </details>
-      ) : null}
+        ) : (
+          <p>No replay trail loaded.</p>
+        )}
+      </details>
 
       <details className="mc-next-approvals-details">
         <summary>Raw request and preview payload</summary>
@@ -1101,15 +1123,15 @@ function formatApprovalAge(createdAt: string | number | Date | undefined): strin
 function formatApprovalFollowUp(status: NonNullable<ApprovalRequest["followUp"]>["status"]): string {
   switch (status) {
     case "queued":
-      return "Accepted, waking worker";
+      return "Follow-up queued";
     case "running":
-      return "Worker wake running";
+      return "Follow-up running";
     case "completed":
-      return "Worker resumed";
+      return "Follow-up completed";
     case "skipped":
-      return "Wake skipped";
+      return "Follow-up skipped";
     case "failed":
-      return "Wake failed";
+      return "Follow-up failed";
   }
   return "Follow-up status unknown";
 }

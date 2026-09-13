@@ -48,31 +48,47 @@ describe("InboundChannelEventService", () => {
     await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
   });
 
-  it("parks approval-required agent turns without advancing to delivery", async () => {
-    const respondToExistingChatMessage = vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
-      async (_sessionId, _messageId, options) => {
-        await options.inboundDurableIdentity.onDurableRunLaunched?.(options.inboundDurableIdentity.durableRunId);
-        return {
-          ...buildResponse(options.inboundDurableIdentity),
-          trace: { status: "waiting_for_approval" } as ChatSendMessageResponse["trace"],
-        };
-      },
-    );
-    const harness = await createHarness({ respondToExistingChatMessage });
+  it.each(["telegram", "discord", "slack"] as const)(
+    "parks %s approval-required turns without advancing to delivery or replaying on reconnect",
+    async (channel) => {
+      const respondToExistingChatMessage = vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+        async (_sessionId, _messageId, options) => {
+          await options.inboundDurableIdentity.onDurableRunLaunched?.(options.inboundDurableIdentity.durableRunId);
+          return {
+            ...buildResponse(options.inboundDurableIdentity),
+            trace: { status: "waiting_for_approval" } as ChatSendMessageResponse["trace"],
+          };
+        },
+      );
+      const activity = vi.fn<InboundChannelEventServiceDeps["emitChannelActivity"]>(async () => undefined);
+      const harness = await createHarness({
+        respondToExistingChatMessage,
+        emitChannelActivity: activity,
+        getIntegrationConnection: () => ({ key: channel, enabled: true, status: "connected", config: {} }),
+      });
 
-    const accepted = await harness.service.accept(buildInput());
-    await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "waiting");
+      const input = buildInput({ channel, idempotencyKey: `${channel}:approval-1` });
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "waiting");
 
-    expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)).toMatchObject({
-      status: "waiting",
-      attemptCount: 1,
-      turnId: expect.stringMatching(/^inbound-turn-/),
-      durableRunId: expect.stringMatching(/^inbound-run-/),
-      deliveryId: undefined,
-      providerMessageId: undefined,
-    });
-    expect(respondToExistingChatMessage).toHaveBeenCalledTimes(1);
-  });
+      expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)).toMatchObject({
+        status: "waiting",
+        attemptCount: 1,
+        turnId: expect.stringMatching(/^inbound-turn-/),
+        durableRunId: expect.stringMatching(/^inbound-run-/),
+        deliveryId: undefined,
+        providerMessageId: undefined,
+      });
+      expect(respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+      expect(activity.mock.calls.map(([input]) => input.phase)).toContain("waiting_approval");
+      harness.service.close();
+      const restarted = harness.createAdditionalService();
+      const replay = await restarted.accept(input);
+      await restarted.drain();
+      expect(replay.inboundEventId).toBe(accepted.inboundEventId);
+      expect(respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("initializes the first Discord route as canonical Chat state before turn admission", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "discord-inbound-session-"));

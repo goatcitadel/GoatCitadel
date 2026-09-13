@@ -189,6 +189,7 @@ export interface GatewayRouteCompositionPort {
   isConnectionUrlAllowlisted: IntegrationChannelServicePort["isConnectionUrlAllowlisted"];
   isFeatureEnabled: RouteDependencyMethod<"toolsInvoke", "isFeatureEnabled">;
   activatePermissionProfile: RouteDependencyMethod<"tools", "activatePermissionProfile">;
+  reviewPermissionProfileSelection: RouteDependencyMethod<"tools", "reviewPermissionProfileSelection">;
   archivePermissionProfile: RouteDependencyMethod<"tools", "archivePermissionProfile">;
   createLocalOperatorOverride: RouteDependencyMethod<"tools", "createLocalOperatorOverride">;
   createPermissionProfile: RouteDependencyMethod<"tools", "createPermissionProfile">;
@@ -216,6 +217,8 @@ export interface GatewayRouteCompositionPort {
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
   patchMcpServerState: mcpServerAdminService.McpServerAdminHost["patchMcpServerState"];
+  prepareMcpStaticEnvironment: NonNullable<mcpServerAdminService.McpServerAdminHost["prepareMcpStaticEnvironment"]>;
+  resolveMcpOAuthClientId: NonNullable<mcpServerAdminService.McpServerAdminHost["resolveMcpOAuthClientId"]>;
   mcpOAuth: Pick<GatewayMcpOAuthService, "exchangeAuthorizationCode">;
   patchSessionAutonomyPrefs: chatSessionService.ChatSessionDependencies["patchSessionAutonomyPrefs"];
   publishRealtime: RouteDependencyMethod<"devVerification", "publishRealtime">;
@@ -418,6 +421,7 @@ export function createGatewayRouteCompositionPort(
     isConnectionUrlAllowlisted: gateway.isConnectionUrlAllowlisted.bind(gateway),
     isFeatureEnabled: gateway.isFeatureEnabled.bind(gateway),
     activatePermissionProfile: gateway.activatePermissionProfile.bind(gateway),
+    reviewPermissionProfileSelection: gateway.reviewPermissionProfileSelection.bind(gateway),
     archivePermissionProfile: gateway.archivePermissionProfile.bind(gateway),
     createLocalOperatorOverride: gateway.createLocalOperatorOverride.bind(gateway),
     createPermissionProfile: gateway.createPermissionProfile.bind(gateway),
@@ -445,6 +449,8 @@ export function createGatewayRouteCompositionPort(
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
     patchMcpServerState: gateway.patchMcpServerState.bind(gateway),
+    prepareMcpStaticEnvironment: gateway.prepareMcpStaticEnvironment.bind(gateway),
+    resolveMcpOAuthClientId: gateway.resolveMcpOAuthClientId.bind(gateway),
     mcpOAuth: gateway.mcpOAuth,
     patchSessionAutonomyPrefs: gateway.patchSessionAutonomyPrefs.bind(gateway),
     publishRealtime: gateway.publishRealtime.bind(gateway),

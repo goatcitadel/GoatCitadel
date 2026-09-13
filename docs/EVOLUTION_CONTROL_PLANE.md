@@ -1,6 +1,6 @@
 # Evolution Control Plane
 
-Last updated: 2026-08-14
+Last updated: 2026-09-13
 
 Status: implemented Gateway owner contract. The durable control-plane foundation and hermetic verification lane are present. Real-provider onboarding, retained browser secure-input evidence, Windows live restart/restore evidence, and signed packaged-update promotion evidence remain held claim rows.
 
@@ -65,6 +65,10 @@ Not every plan visits every state. `applied` is retained for one compatibility w
 Canonical state is stored in `change_plans`; transitions are append-only in `change_plan_events`; immutable owner, approval, artifact, and rollback relationships are stored in `change_plan_links`. SQLite migrations 201-204 and PostgreSQL migrations 145-148 provide the Change Plan, legacy backfill, managed-source, and source-update schemas.
 
 Startup recovery inspects the linked owner and reconciles observed state. It never blindly repeats `apply` after a process interruption.
+
+A denied canonical approval settles its waiting parent as `cancelled`; an expired approval settles it as `failed`. Both clear the pending action, release the target claim and retain the exact approval reference and terminal event. The durable approval-resolution signal, startup reconciliation and explicit resume all use this path. A refusal that arrives before the parent wait is persisted is rechecked immediately afterward. Pending approval expiry uses the repository's database clock; a completed rejection uses its recorded resolution timestamp. Lookup uses the current required-action binding, not historical approval links. Duplicate delivery and competing transitions retain one canonical outcome under revision checks.
+
+Refusing rollback approval instead records `manual_required`: the earlier effect remains in place, with its recovery evidence retained for operator review. Refusal settlement never invokes apply or rollback or activates a candidate. Initial-apply refusals discard temporary setup inputs through the existing adapter cleanup owner before releasing the target claim; cleanup failure remains retryable. Pending and approved decisions do not auto-apply through reconciliation; approved resume still requires its original scope, revision, approval binding, deadline and owner checks. `GET` and list projections remain read-only.
 
 ## APIs and Compatibility
 

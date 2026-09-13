@@ -304,6 +304,8 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { llamaCpp: { ...request.change.config } };
     case "feature_flag":
       return { features: { [request.change.flag]: request.change.enabled } };
+    case "feature_flags":
+      return { features: { ...request.change.flags } };
   }
 }
 
@@ -345,6 +347,10 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesPartial(settings.llamaCpp, request.change.config, true);
     case "feature_flag":
       return settings.features[request.change.flag] === request.change.enabled;
+    case "feature_flags":
+      return Object.entries(request.change.flags).every(
+        ([flag, enabled]) => settings.features[flag as keyof RuntimeSettings["features"]] === enabled,
+      );
   }
 }
 
@@ -466,6 +472,19 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         completedSummary: `${request.change.flag} is now ${request.change.enabled ? "enabled" : "disabled"}.`,
         impact: "The server-owned rollout posture changes without exposing arbitrary configuration keys.",
         risk: protectedFlag && request.change.enabled ? ("danger" as const) : ("caution" as const),
+      };
+    }
+    case "feature_flags": {
+      const description = Object.entries(request.change.flags)
+        .map(([flag, enabled]) => `${flag}: ${enabled ? "enabled" : "disabled"}`)
+        .join("; ");
+      return {
+        title: "Apply reviewed runtime presets",
+        summary: description,
+        completedSummary: `Runtime presets now match: ${description}`,
+        impact:
+          "The selected registered flags change together at one settings revision. Tool and memory governance remain authoritative.",
+        risk: request.change.flags.productSourceEvolutionV1Enabled ? ("danger" as const) : ("caution" as const),
       };
     }
   }

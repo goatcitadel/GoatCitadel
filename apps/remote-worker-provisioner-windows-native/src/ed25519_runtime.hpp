@@ -148,6 +148,11 @@ bool RunFixedInteropForTest(
 
 bool WasLastSha512ContextWipedForTest() noexcept;
 
+bool CheckTlsClientCertificateVerifyForTest(
+    const std::array<std::uint8_t, 44U>& spki,
+    const std::uint8_t* signature, std::size_t signature_length,
+    const std::uint8_t* preimage, std::size_t preimage_length) noexcept;
+
 #endif
 
 }  // namespace goatcitadel::remote_worker_provisioner

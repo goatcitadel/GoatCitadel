@@ -2,6 +2,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import {
   projectChatGeneratedArtifactForPublic,
   projectChatSessionForPublic,
@@ -181,13 +182,17 @@ const workbenchFileQuerySchema = z.object({
 const workbenchSaveFileBodySchema = z.object({
   path: z.string().min(1),
   content: z.string(),
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
 });
 
-const workbenchFileOperationBodySchema = z.object({
+const workbenchFileOperationPreviewBodySchema = z.object({
   operation: z.enum(["create_file", "create_folder", "rename", "delete", "duplicate", "move"]),
-  path: z.string().min(1),
-  targetPath: z.string().min(1).optional(),
-  content: z.string().optional(),
+  path: z.string().min(1).max(2048),
+  targetPath: z.string().min(1).max(2048).optional(),
+  content: z.string().max(256 * 1024).optional(),
+});
+const workbenchFileOperationBodySchema = workbenchFileOperationPreviewBodySchema.extend({
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
 const workbenchCommandRunBodySchema = z.object({
@@ -766,11 +771,23 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(
-        await fastify.services.chatSessions.saveChatSessionWorkbenchFile(params.data.sessionId, body.data),
-      );
+      const saved = await fastify.services.chatSessions.saveChatSessionWorkbenchFile(params.data.sessionId, body.data);
+      await markMutationCommitted(request);
+      return reply.send(saved);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/workbench/file-operation/preview", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = workbenchFileOperationPreviewBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid file action review request." });
+    try {
+      return reply.send(await fastify.services.chatSessions.previewChatSessionWorkbenchFileOperation(params.data.sessionId, body.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -786,11 +803,12 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(
-        await fastify.services.chatSessions.runChatSessionWorkbenchFileOperation(params.data.sessionId, body.data),
-      );
+      const result = await fastify.services.chatSessions.runChatSessionWorkbenchFileOperation(params.data.sessionId, body.data);
+      await markMutationCommitted(request);
+      return reply.send(result);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 

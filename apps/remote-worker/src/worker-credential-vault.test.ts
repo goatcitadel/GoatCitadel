@@ -5,6 +5,7 @@ import {
   WorkerCredentialVault,
   WorkerCredentialVaultError,
   type RetainedRuntimeCredential,
+  type RetainedPemRuntimeCredential,
 } from "./worker-credential-vault.js";
 
 function signingKeyPem(): string {
@@ -16,7 +17,7 @@ function base64Url32(): string {
   return randomBytes(32).toString("base64url");
 }
 
-function validCredential(overrides: Partial<RetainedRuntimeCredential> = {}): RetainedRuntimeCredential {
+function validCredential(overrides: Partial<RetainedPemRuntimeCredential> = {}): RetainedPemRuntimeCredential {
   return {
     credentialId: "cred-abc",
     credentialGeneration: 1,
@@ -119,5 +120,44 @@ describe("worker credential vault", () => {
     await expect(vault.retainCredential(validCredential({ signingPrivateKeyPem: "not-a-pem" }))).rejects.toBeInstanceOf(
       WorkerCredentialVaultError,
     );
+  });
+
+  it("does not publish uncommitted custody after a failed write", async () => {
+    const backing = createInMemoryWorkerDurableState();
+    let fail = true;
+    const state = {
+      ...backing,
+      write: async (key: string, value: string) => {
+        if (fail) throw new Error("disk full");
+        await backing.write(key, value);
+      },
+    };
+    const vault = await WorkerCredentialVault.open(state);
+    await expect(vault.retainCredential(validCredential())).rejects.toThrow("disk full");
+    expect(vault.hasCredential()).toBe(false);
+    const lease = {
+      assignmentId: "assignment",
+      assignmentGeneration: 1,
+      leaseRevision: 1,
+      rawLeaseToken: base64Url32(),
+    };
+    await expect(vault.retainLease(lease)).rejects.toThrow("disk full");
+    expect(vault.hasLease(lease.assignmentId)).toBe(false);
+    fail = false;
+    await vault.retainLease(lease);
+    fail = true;
+    await expect(vault.advanceLease(lease.assignmentId, 2, base64Url32())).rejects.toThrow("disk full");
+    await expect(vault.forgetLease(lease.assignmentId)).rejects.toThrow("disk full");
+    expect(vault.getLease(lease.assignmentId)).toEqual(lease);
+  });
+
+  it("serializes concurrent lease writes and rejects secret replacement at the same revision", async () => {
+    const state = createInMemoryWorkerDurableState();
+    const vault = await WorkerCredentialVault.open(state);
+    const lease = { assignmentId: "one", assignmentGeneration: 1, leaseRevision: 1, rawLeaseToken: base64Url32() };
+    await Promise.all([vault.retainLease(lease), vault.retainLease({ ...lease, assignmentId: "two" })]);
+    expect((await WorkerCredentialVault.open(state)).listLeaseAssignmentIds()).toEqual(["one", "two"]);
+    await expect(vault.advanceLease("one", 1, base64Url32())).rejects.toThrow("change its secret");
+    await expect(vault.retainLease({ ...lease, rawLeaseToken: base64Url32() })).rejects.toThrow("same revision");
   });
 });

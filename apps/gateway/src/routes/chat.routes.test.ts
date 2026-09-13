@@ -247,6 +247,7 @@ describe("chat routes additional coverage", () => {
       language: "ts",
       changed: true,
       content: "export const demo = false;",
+      revision: "b".repeat(64),
     }));
     const getChatSessionWorkbenchFileDiff = vi.fn(async () => ({
       state: {
@@ -513,12 +514,14 @@ describe("chat routes additional coverage", () => {
       payload: {
         path: "index.ts",
         content: "export const demo = false;",
+        expectedRevision: "a".repeat(64),
       },
     });
     expect(saveFileResponse.statusCode).toBe(200);
     expect(saveChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", {
       path: "index.ts",
       content: "export const demo = false;",
+      expectedRevision: "a".repeat(64),
     });
 
     const fileDiffResponse = await app.inject({
@@ -585,6 +588,7 @@ describe("chat routes additional coverage", () => {
       method: "POST",
       url: "/api/v1/chat/sessions/sess-1/workbench/file-operation",
       payload: {
+        expectedRevision: "a".repeat(64),
         operation: "create_file",
         path: "src/new.ts",
       },
@@ -595,6 +599,7 @@ describe("chat routes additional coverage", () => {
       path: "src/new.ts",
     });
     expect(runChatSessionWorkbenchFileOperation).toHaveBeenCalledWith("sess-1", {
+      expectedRevision: "a".repeat(64),
       operation: "create_file",
       path: "src/new.ts",
     });

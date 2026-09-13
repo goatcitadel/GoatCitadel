@@ -11,6 +11,8 @@ import {
   useDraftTransitionGuard,
   useFormDirty,
   useNavigateGuard,
+  setSectionDirty,
+  withDraftLeaveDecision,
 } from "./use-form-dirty";
 
 // react-test-renderer doesn't render `host` elements as DOM, but it does run
@@ -279,7 +281,7 @@ describe("useNavigateGuard", () => {
       latest!.navigate({ area: "settings", section: "providers" });
     });
     expect(rawNavigate).not.toHaveBeenCalled();
-    expect(latest!.pending).toEqual({ route: { area: "settings", section: "providers" } });
+    expect(latest!.pending).toEqual({ route: { area: "settings", section: "providers" }, keys: ["settings:foo"] });
 
     // Confirm discards dirty + forwards nav.
     await act(async () => {
@@ -458,5 +460,57 @@ describe("useDraftTransitionGuard", () => {
     });
     expect(callOrder).toEqual(["reset", "apply:confirmed"]);
     expect(latest!.pendingTransition).toBeNull();
+  });
+});
+
+
+describe("scoped leave decisions", () => {
+  it("shares one decision with nested guards without clearing retained dirty state", () => {
+    setSectionDirty("notes:a", true);
+    setSectionDirty("projects:b", true);
+    withDraftLeaveDecision(["notes:a"], () => {
+      expect(getDirtySectionKeys()).toEqual(["projects:b"]);
+      withDraftLeaveDecision(["projects:b"], () => expect(hasDirtySections()).toBe(false));
+      expect(getDirtySectionKeys()).toEqual(["projects:b"]);
+    });
+    expect(getDirtySectionKeys()).toEqual(["notes:a", "projects:b"]);
+    expect(() => withDraftLeaveDecision(["notes:a"], () => { throw new Error("navigation failed"); })).toThrow("navigation failed");
+    expect(getDirtySectionKeys()).toEqual(["notes:a", "projects:b"]);
+  });
+
+  it("keeps the confirmed draft and forwards nested navigation once", async () => {
+    const navigate = vi.fn();
+    let inner: ReturnType<typeof useNavigateGuard<string>>;
+    let outer: ReturnType<typeof useNavigateGuard<string>>;
+    function Nested() {
+      useFormDirty("notes:a", true, { keepDraft: true });
+      outer = useNavigateGuard(navigate, () => false);
+      inner = useNavigateGuard(outer.navigate, () => false);
+      return null;
+    }
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(createElement(Nested)); });
+    await act(async () => { inner.navigate("projects"); });
+    expect(navigate).not.toHaveBeenCalled();
+    await act(async () => { inner.confirmKeep(); });
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("projects");
+    expect(outer!.pending).toBeNull();
+    expect(getDirtySectionKeys()).toEqual(["notes:a"]);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("discards only the editors named when the leave decision opened", async () => {
+    const navigate = vi.fn();
+    let guard: ReturnType<typeof useNavigateGuard<string>>;
+    function Driver() { guard = useNavigateGuard(navigate, () => false); return null; }
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(createElement(Driver)); });
+    setSectionDirty("notes:a", true);
+    await act(async () => { guard.navigate("projects"); });
+    setSectionDirty("notes:new-background-draft", true);
+    await act(async () => { guard.confirmDiscard(); });
+    expect(getDirtySectionKeys()).toEqual(["notes:new-background-draft"]);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("projects");
+    await act(async () => { renderer.unmount(); });
   });
 });

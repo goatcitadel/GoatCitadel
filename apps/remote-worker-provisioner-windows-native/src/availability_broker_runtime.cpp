@@ -1,4 +1,5 @@
 #include "availability_broker.hpp"
+#include "local_transport.hpp"
 
 #include <aclapi.h>
 #include <bcrypt.h>
@@ -31,7 +32,8 @@ constexpr wchar_t kProgramDataSuffix[] =
 constexpr wchar_t kSystemRootObjectPath[] = L"\\\\?\\GLOBALROOT\\SystemRoot";
 constexpr std::uint64_t kAvailabilityDeadlineMilliseconds = 30U * 1000U;
 constexpr std::uint64_t kMaximumProtectedExecutableBytes = 64U * 1024U * 1024U;
-constexpr std::size_t kConfigurationBufferBytes = 64U * 1024U;
+// QueryServiceConfigW has an 8 KiB maximum RPC buffer.
+constexpr std::size_t kConfigurationBufferBytes = 8U * 1024U;
 constexpr std::size_t kTokenBufferBytes = 64U * 1024U;
 constexpr std::size_t kHashObjectMaximumBytes = 1024U;
 constexpr DWORD kProtectedReadMask = 0x001200A9U;
@@ -80,7 +82,8 @@ struct HeldImage final {
 };
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
-SERVICE_STATUS g_status{};
+SRWLOCK g_stop_lock = SRWLOCK_INIT;
+volatile LONG g_stop_requested = 0;
 HANDLE g_stop_event = nullptr;
 
 constexpr int HexNibble(char value) noexcept {
@@ -381,6 +384,7 @@ bool ValidateExactProtectedDacl(HANDLE handle) noexcept {
   SidBuffer system{};
   SidBuffer service{};
   SidBuffer administrators{};
+  SidBuffer worker{};
   PSID owner = nullptr;
   PACL dacl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -392,6 +396,8 @@ bool ValidateExactProtectedDacl(HANDLE handle) noexcept {
           kAdministratorsSidParts.data(),
           kAdministratorsSidParts.size(),
           &administrators) ||
+      !MakeNtSid(
+          kRuntimeWorkerSidParts.data(), kRuntimeWorkerSidParts.size(), &worker) ||
       GetSecurityInfo(
           handle,
           SE_FILE_OBJECT,
@@ -420,13 +426,13 @@ bool ValidateExactProtectedDacl(HANDLE handle) noexcept {
       GetSecurityDescriptorDacl(
           descriptor, &present, &descriptor_dacl, &defaulted) != FALSE &&
       present != FALSE && defaulted == FALSE && descriptor_dacl == dacl &&
-      (control & SE_DACL_PROTECTED) != 0U && dacl->AceCount == 3U &&
+      (control & SE_DACL_PROTECTED) != 0U && dacl->AceCount == 4U &&
       EqualSidBytes(owner, system.bytes.data());
-  const std::array<PSID, 3U> expected_sids = {
-      system.bytes.data(), service.bytes.data(), administrators.bytes.data()};
-  const std::array<DWORD, 3U> expected_masks = {
-      kProtectedFullMask, kProtectedReadMask, kProtectedReadMask};
-  for (DWORD index = 0U; valid && index < 3U; ++index) {
+  const std::array<PSID, 4U> expected_sids = {
+      system.bytes.data(), service.bytes.data(), administrators.bytes.data(), worker.bytes.data()};
+  const std::array<DWORD, 4U> expected_masks = {
+      kProtectedFullMask, kProtectedReadMask, kProtectedReadMask, kProtectedReadMask};
+  for (DWORD index = 0U; valid && index < expected_sids.size(); ++index) {
     void* raw_ace = nullptr;
     if (GetAce(dacl, index, &raw_ace) == FALSE || raw_ace == nullptr) {
       valid = false;
@@ -1148,19 +1154,31 @@ bool PublishStatus(
   if (g_status_handle == nullptr) {
     return false;
   }
-  g_status = SERVICE_STATUS{};
-  g_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
-  g_status.dwCurrentState = state;
-  g_status.dwControlsAccepted = 0U;
-  g_status.dwCheckPoint = checkpoint;
-  g_status.dwWaitHint = state == SERVICE_START_PENDING ? 30000U : 0U;
+  SERVICE_STATUS status{};
+  status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+  status.dwCurrentState = state;
+  status.dwControlsAccepted = state == SERVICE_RUNNING
+      ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0U;
+  status.dwCheckPoint = checkpoint;
+  status.dwWaitHint = state == SERVICE_START_PENDING || state == SERVICE_STOP_PENDING ? 30000U : 0U;
   if (state == SERVICE_STOPPED && service_specific_code != 0U) {
-    g_status.dwWin32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR;
-    g_status.dwServiceSpecificExitCode = service_specific_code;
+    status.dwWin32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR;
+    status.dwServiceSpecificExitCode = service_specific_code;
   } else {
-    g_status.dwWin32ExitCode = NO_ERROR;
+    status.dwWin32ExitCode = NO_ERROR;
   }
-  return SetServiceStatus(g_status_handle, &g_status) != FALSE;
+  return SetServiceStatus(g_status_handle, &status) != FALSE;
+}
+
+bool StopRequested() noexcept {
+  return InterlockedCompareExchange(&g_stop_requested, 0, 0) != 0;
+}
+
+void PublishStopHandle(HANDLE event) noexcept {
+  AcquireSRWLockExclusive(&g_stop_lock);
+  g_stop_event = event;
+  if (event != nullptr && StopRequested()) SetEvent(event);
+  ReleaseSRWLockExclusive(&g_stop_lock);
 }
 
 DWORD WINAPI ControlHandler(
@@ -1168,9 +1186,11 @@ DWORD WINAPI ControlHandler(
     DWORD,
     void*,
     void*) noexcept {
-  if ((control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN) &&
-      g_stop_event != nullptr) {
-    SetEvent(g_stop_event);
+  if (control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN) {
+    InterlockedExchange(&g_stop_requested, 1);
+    AcquireSRWLockShared(&g_stop_lock);
+    if (g_stop_event != nullptr) SetEvent(g_stop_event);
+    ReleaseSRWLockShared(&g_stop_lock);
     return NO_ERROR;
   }
   return control == SERVICE_CONTROL_INTERROGATE ? NO_ERROR
@@ -1202,7 +1222,8 @@ AvailabilityIdentityValidation ValidateBrokerIdentity(
     DWORD argument_count,
     wchar_t** arguments,
     SC_HANDLE broker,
-    const InstalledPaths& paths) noexcept {
+    const InstalledPaths& paths,
+    bool starting) noexcept {
   AvailabilityServiceSnapshot snapshot{};
   if (!CollectServiceSnapshot(broker, &snapshot)) {
     return AvailabilityIdentityValidation::ServiceIdentity;
@@ -1210,7 +1231,7 @@ AvailabilityIdentityValidation ValidateBrokerIdentity(
   snapshot.exact_service_main_arguments =
       ExactServiceMainArguments(argument_count, arguments);
   snapshot.current_process_id = GetCurrentProcessId();
-  if (!ValidateAvailabilityBrokerSnapshot(snapshot, paths.broker_quoted) ||
+  if (!ValidateAvailabilityBrokerSnapshot(snapshot, paths.broker_quoted, starting) ||
       !ProveNoAmbientThreadToken() ||
       !ValidateServiceProcess(
           snapshot.current_process_id,
@@ -1225,8 +1246,10 @@ AvailabilityIdentityValidation ValidateBrokerIdentity(
 AvailabilityIdentityValidation EnsureTargetAvailable(
     SC_HANDLE target,
     const InstalledPaths& paths,
-    HeldImage* held_image) noexcept {
-  if (target == nullptr || held_image == nullptr ||
+    HeldImage* held_image,
+    DWORD* ready_pid,
+    bool* completed) noexcept {
+  if (target == nullptr || held_image == nullptr || ready_pid == nullptr || completed == nullptr ||
       IsAllZero(kExpectedTargetSha256.data(), kExpectedTargetSha256.size()) ||
       !OpenProtectedImage(
           paths.target_extended, &kExpectedTargetSha256, held_image)) {
@@ -1239,10 +1262,13 @@ AvailabilityIdentityValidation EnsureTargetAvailable(
           : start + kAvailabilityDeadlineMilliseconds;
   bool start_issued = false;
   bool saw_start_pending = false;
-  bool initial_stop_pending = false;
-  DWORD checkpoint = 2U;
+  *ready_pid = 0U;
+  *completed = false;
 
   while (true) {
+    if (StopRequested()) return AvailabilityIdentityValidation::LaunchContext;
+    if (AvailabilityWaitMilliseconds(GetTickCount64(), deadline) == 0U)
+      return AvailabilityIdentityValidation::Deadline;
     AvailabilityServiceSnapshot snapshot{};
     if (!CollectServiceSnapshot(target, &snapshot) ||
         !ValidateAvailabilityTargetSnapshot(snapshot, paths.target_quoted) ||
@@ -1271,6 +1297,7 @@ AvailabilityIdentityValidation EnsureTargetAvailable(
           !RehashHeldImage(*held_image)) {
         return AvailabilityIdentityValidation::TargetIdentity;
       }
+      *ready_pid = snapshot.service_process_id;
       return AvailabilityIdentityValidation::Valid;
     }
     if (action == AvailabilityAction::Reject) {
@@ -1278,11 +1305,19 @@ AvailabilityIdentityValidation EnsureTargetAvailable(
     }
     if (action == AvailabilityAction::Start) {
       if (start_issued || saw_start_pending) {
-        return AvailabilityIdentityValidation::TargetStart;
+        // A one-exchange signer may finish between status polls. This is a
+        // completed cycle, never a claim that a running PID was observed.
+        if (snapshot.win32_exit_code != NO_ERROR || !RevalidateHeldImage(*held_image))
+          return AvailabilityIdentityValidation::TargetStart;
+        *completed = true;
+        return AvailabilityIdentityValidation::Valid;
       }
       if (!RehashHeldImage(*held_image)) {
         return AvailabilityIdentityValidation::TargetIdentity;
       }
+      if (StopRequested()) return AvailabilityIdentityValidation::LaunchContext;
+      if (AvailabilityWaitMilliseconds(GetTickCount64(), deadline) == 0U)
+        return AvailabilityIdentityValidation::Deadline;
       SetLastError(NO_ERROR);
       const BOOL started = StartServiceW(target, 0U, nullptr);
       const DWORD error = GetLastError();
@@ -1292,12 +1327,7 @@ AvailabilityIdentityValidation EnsureTargetAvailable(
       start_issued = true;
     } else if (snapshot.current_state == SERVICE_START_PENDING) {
       saw_start_pending = true;
-    } else if (snapshot.current_state == SERVICE_STOP_PENDING) {
-      if (start_issued || saw_start_pending) {
-        return AvailabilityIdentityValidation::TargetStart;
-      }
-      initial_stop_pending = true;
-    } else {
+    } else if (snapshot.current_state != SERVICE_STOP_PENDING) {
       return AvailabilityIdentityValidation::TargetIdentity;
     }
 
@@ -1306,9 +1336,6 @@ AvailabilityIdentityValidation EnsureTargetAvailable(
     if (wait_ms == 0U) {
       return AvailabilityIdentityValidation::Deadline;
     }
-    if (!PublishStatus(SERVICE_START_PENDING, checkpoint++, 0U)) {
-      return AvailabilityIdentityValidation::ServiceIdentity;
-    }
     const DWORD wait = WaitForSingleObject(g_stop_event, wait_ms);
     if (wait == WAIT_OBJECT_0) {
       return AvailabilityIdentityValidation::LaunchContext;
@@ -1316,10 +1343,81 @@ AvailabilityIdentityValidation EnsureTargetAvailable(
     if (wait != WAIT_TIMEOUT) {
       return AvailabilityIdentityValidation::ServiceIdentity;
     }
-    if (initial_stop_pending && start_issued) {
-      initial_stop_pending = false;
-    }
   }
+}
+
+AvailabilityIdentityValidation AwaitTargetCompletion(
+    SC_HANDLE target, const InstalledPaths& paths, const HeldImage& image, DWORD ready_pid) noexcept {
+  const auto start = GetTickCount64();
+  const auto deadline = start > UINT64_MAX - 120000U ? UINT64_MAX : start + 120000U;
+  std::uint64_t stopping_deadline = 0U;
+  for (;;) {
+    if (StopRequested()) return AvailabilityIdentityValidation::LaunchContext;
+    const auto now = GetTickCount64();
+    if (now >= deadline || (stopping_deadline != 0U && now >= stopping_deadline))
+      return AvailabilityIdentityValidation::Deadline;
+    AvailabilityServiceSnapshot snapshot{};
+    if (!CollectServiceSnapshot(target, &snapshot) ||
+        !ValidateAvailabilityTargetSnapshot(snapshot, paths.target_quoted) ||
+        snapshot.win32_exit_code != NO_ERROR || !RevalidateHeldImage(image))
+      return AvailabilityIdentityValidation::TargetIdentity;
+    if (snapshot.current_state == SERVICE_STOPPED) return AvailabilityIdentityValidation::Valid;
+    if (snapshot.current_state == SERVICE_RUNNING) {
+      // The PID was authenticated by EnsureTargetAvailable. Watch its canonical
+      // state here; opening its token again races ordinary one-exchange exit.
+      if (stopping_deadline != 0U || snapshot.service_process_id != ready_pid)
+        return AvailabilityIdentityValidation::TargetIdentity;
+    } else if (snapshot.current_state == SERVICE_STOP_PENDING &&
+        (snapshot.service_process_id == 0U || snapshot.service_process_id == ready_pid)) {
+      if (stopping_deadline == 0U)
+        stopping_deadline = now > UINT64_MAX - kAvailabilityDeadlineMilliseconds
+            ? UINT64_MAX : now + kAvailabilityDeadlineMilliseconds;
+    } else {
+      return AvailabilityIdentityValidation::TargetIdentity;
+    }
+    const DWORD wait = WaitForSingleObject(g_stop_event, 250U);
+    if (wait == WAIT_OBJECT_0) return AvailabilityIdentityValidation::LaunchContext;
+    if (wait != WAIT_TIMEOUT) return AvailabilityIdentityValidation::ServiceIdentity;
+  }
+}
+
+struct SupervisorContext final {
+  DWORD argument_count = 0U;
+  wchar_t** arguments = nullptr;
+  SC_HANDLE broker = nullptr;
+  SC_HANDLE target = nullptr;
+  const InstalledPaths* paths = nullptr;
+  HeldImage* image = nullptr;
+  DWORD ready_pid = 0U;
+};
+
+AvailabilitySupervisorPorts SupervisorPorts(SupervisorContext* context) noexcept {
+  AvailabilitySupervisorPorts ports{};
+  ports.context = context;
+  ports.stop_requested = [](void*) noexcept { return StopRequested(); };
+  ports.verify_broker = [](void* raw, bool starting) noexcept {
+    const auto& current = *static_cast<SupervisorContext*>(raw);
+    return ValidateBrokerIdentity(current.argument_count, current.arguments,
+        current.broker, *current.paths, starting) == AvailabilityIdentityValidation::Valid;
+  };
+  ports.publish_running = [](void*) noexcept { return PublishStatus(SERVICE_RUNNING, 0U, 0U); };
+  ports.ensure_target = [](void* raw, bool* completed) noexcept {
+    auto& current = *static_cast<SupervisorContext*>(raw);
+    CloseHeldImage(current.image);
+    return EnsureTargetAvailable(current.target, *current.paths, current.image, &current.ready_pid, completed);
+  };
+  ports.await_target_completion = [](void* raw) noexcept {
+    const auto& current = *static_cast<SupervisorContext*>(raw);
+    return AwaitTargetCompletion(current.target, *current.paths, *current.image, current.ready_pid);
+  };
+  ports.pause_before_restart = [](void*) noexcept {
+    // Every completed cycle yields; rapid requests cannot create a busy start loop.
+    const DWORD wait = WaitForSingleObject(g_stop_event, 250U);
+    return wait == WAIT_TIMEOUT ? AvailabilityIdentityValidation::Valid
+        : wait == WAIT_OBJECT_0 ? AvailabilityIdentityValidation::LaunchContext
+        : AvailabilityIdentityValidation::ServiceIdentity;
+  };
+  return ports;
 }
 
 void WINAPI BrokerServiceMain(DWORD argument_count, wchar_t** arguments) noexcept {
@@ -1329,10 +1427,11 @@ void WINAPI BrokerServiceMain(DWORD argument_count, wchar_t** arguments) noexcep
       !PublishStatus(SERVICE_START_PENDING, 1U, 0U)) {
     return;
   }
-  ScopedHandle stop_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-  g_stop_event = stop_event.get();
-  InstalledPaths paths{};
   AvailabilityIdentityValidation result = AvailabilityIdentityValidation::ServiceIdentity;
+  {
+  ScopedHandle stop_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  PublishStopHandle(stop_event.get());
+  InstalledPaths paths{};
   HeldImage target_image{};
   const ScopedServiceHandle manager(
       OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
@@ -1354,22 +1453,15 @@ void WINAPI BrokerServiceMain(DWORD argument_count, wchar_t** arguments) noexcep
   if (stop_event.get() != nullptr && manager.get() != nullptr &&
       broker.get() != nullptr && target.get() != nullptr &&
       BuildInstalledPaths(&paths)) {
-    result = ValidateBrokerIdentity(
-        argument_count, arguments, broker.get(), paths);
-    if (result == AvailabilityIdentityValidation::Valid) {
-      result = EnsureTargetAvailable(target.get(), paths, &target_image);
-    }
+    SupervisorContext context{argument_count, arguments, broker.get(), target.get(), &paths, &target_image};
+    result = RunAvailabilitySupervisor(SupervisorPorts(&context));
   }
+  if (!PublishStatus(SERVICE_STOP_PENDING, 1U, 0U)) result = AvailabilityIdentityValidation::ServiceIdentity;
   CloseHeldImage(&target_image);
-  g_stop_event = nullptr;
-  if (result == AvailabilityIdentityValidation::Valid) {
-    if (PublishStatus(SERVICE_RUNNING, 0U, 0U)) {
-      PublishStatus(SERVICE_STOPPED, 0U, 0U);
-    }
-  } else {
-    PublishStatus(
-        SERVICE_STOPPED, 0U, static_cast<std::uint32_t>(result));
+  PublishStopHandle(nullptr);
   }
+  // Close the image, SCM and event handles before the terminal status publication.
+  PublishStatus(SERVICE_STOPPED, 0U, static_cast<std::uint32_t>(result));
 }
 
 }  // namespace

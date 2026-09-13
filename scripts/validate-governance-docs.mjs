@@ -454,8 +454,8 @@ if (!/Evolution Control Plane/i.test(contract) || !/verify:chat-evolution/i.test
 
 const evolutionControlPlaneDoc = await readFile(path.join(root, "docs", "EVOLUTION_CONTROL_PLANE.md"), "utf8");
 await validateRelativeMarkdownLinks("docs/EVOLUTION_CONTROL_PLANE.md", evolutionControlPlaneDoc);
-if (!/^Last updated: 2026-08-14$/m.test(evolutionControlPlaneDoc)) {
-  errors.push("docs/EVOLUTION_CONTROL_PLANE.md must carry the current 2026-08-14 freshness header.");
+if (!/^Last updated: 2026-09-13$/m.test(evolutionControlPlaneDoc)) {
+  errors.push("docs/EVOLUTION_CONTROL_PLANE.md must carry the current 2026-09-13 freshness header.");
 }
 if (!/`change\.request`[\s\S]*cannot confirm or apply/m.test(evolutionControlPlaneDoc)) {
   errors.push("docs/EVOLUTION_CONTROL_PLANE.md must keep the model tool plan-only boundary explicit.");

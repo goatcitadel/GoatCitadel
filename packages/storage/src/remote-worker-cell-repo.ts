@@ -1,10 +1,12 @@
 import {
+  REMOTE_WORKER_CELL_CAPACITY_SCHEMA_VERSION,
   REMOTE_WORKER_CELL_EVIDENCE_GENESIS_SHA256,
   REMOTE_WORKER_CELL_EVIDENCE_SCHEMA_VERSION,
   canonicalJsonString,
   normalizeRemoteWorkerCellEvidencePayload,
   normalizeRemoteWorkerCellPlatformIdentity,
   normalizeRemoteWorkerCellProfile,
+  normalizeRemoteWorkerCellCapacityReservation,
   remoteWorkerCellBackupCanTransition,
   remoteWorkerCellCanonicalSha256,
   remoteWorkerCellCapacityFootprintSha256,
@@ -16,6 +18,7 @@ import {
   remoteWorkerCellProfileSha256,
   type RemoteWorkerCellBackupState,
   type RemoteWorkerCellCapacityFootprint,
+  type RemoteWorkerCellCapacityReservation,
   type RemoteWorkerCellCleanupState,
   type RemoteWorkerCellEvidenceDomain,
   type RemoteWorkerCellExecutionState,
@@ -68,6 +71,8 @@ export interface RemoteWorkerCellProvisioningClaimInput extends RemoteWorkerCell
 
 export interface RemoteWorkerCellPlatformInput extends RemoteWorkerCellKey {
   readonly provisioningOwner: string;
+  /** Exact lease returned by claimProvisioning; owner names can survive restarts. */
+  readonly provisioningLeaseExpiresAt: string;
   readonly platformIdentity: RemoteWorkerCellPlatformIdentity;
   readonly detailSha256: string;
   readonly now: string;
@@ -99,6 +104,10 @@ export interface RemoteWorkerCellDiagnosticsInput extends RemoteWorkerCellKey {
 }
 
 export interface RemoteWorkerCellCapacityHighWaterInput extends RemoteWorkerCellKey {
+  /** An admission decision must commit against the capacity snapshot it evaluated. */
+  readonly expectedCapacityRevision?: number;
+  /** Cleanup can retain additional bytes without advancing the capacity revision. */
+  readonly expectedCleanupRevision?: number;
   readonly footprint: RemoteWorkerCellCapacityFootprint;
   readonly peakDiskBytes: number;
   readonly peakMemoryBytes: number;
@@ -134,7 +143,7 @@ export interface RemoteWorkerCellRecord {
   readonly cellId: string;
   readonly workerId: string;
   readonly workerGeneration: number;
-  readonly backend: "container";
+  readonly backend: "container" | "windows_native";
   readonly idempotencyKey: string;
   readonly profileSha256: string;
   readonly requestSha256: string;
@@ -152,8 +161,10 @@ export interface RemoteWorkerCellRecord {
   readonly containerName?: string;
   readonly imageDigest?: string;
   readonly networkName?: string;
+  readonly nativePlatform?: RemoteWorkerCellPlatformIdentity;
   readonly logicalDiskBytes: number;
   readonly allocatedDiskBytes: number;
+  readonly capacity: RemoteWorkerCellCapacityReservation;
   readonly peakDiskBytes: number;
   readonly peakMemoryBytes: number;
   readonly peakFileCount: number;
@@ -258,9 +269,14 @@ export class RemoteWorkerCellRepository {
   public claimProvisioning(input: RemoteWorkerCellProvisioningClaimInput): RemoteWorkerCellRecord | undefined {
     const owner = assertBounded(input.provisioningOwner, "provisioningOwner");
     const leaseExpiresAt = assertTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
-    const now = assertTimestamp(input.now, "now");
+    // Retained for compatibility as an observed timestamp, never lease authority.
+    assertTimestamp(input.now, "now");
     return this.db.transaction("immediate", () => {
       const current = this.getCellRow(input);
+      const now = this.readProvisioningDatabaseNow();
+      if (leaseExpiresAt <= now) {
+        throw new RemoteWorkerCellConflictError("Remote worker cell provisioning lease must expire in the future.");
+      }
       if (current.executionState === "profiled") {
         const changed = this.db
           .prepare(
@@ -269,7 +285,8 @@ export class RemoteWorkerCellRepository {
                    provisioning_owner = @owner, provisioning_lease_expires_at = @lease, updated_at = @now
              WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
                AND assignment_generation = @assignmentGeneration
-               AND execution_state = 'profiled' AND provisioning_owner IS NULL`,
+               AND execution_state = 'profiled' AND provisioning_owner IS NULL
+               AND @lease > ${this.provisioningDatabaseClockSql()}`,
           )
           .run({ owner, lease: leaseExpiresAt, now, ...keyOf(input) }).changes;
         if (changed !== 1) return undefined;
@@ -287,13 +304,17 @@ export class RemoteWorkerCellRepository {
                SET provisioning_owner = @owner, provisioning_lease_expires_at = @lease, updated_at = @now
              WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
                AND assignment_generation = @assignmentGeneration
-               AND execution_state = 'provisioning' AND provisioning_lease_expires_at = @expectedLease`,
+               AND execution_state = 'provisioning' AND provisioning_owner = @expectedOwner
+               AND provisioning_lease_expires_at = @expectedLease
+               AND provisioning_lease_expires_at <= ${this.provisioningDatabaseClockSql()}
+               AND @lease > ${this.provisioningDatabaseClockSql()}`,
           )
           .run({
             owner,
             lease: leaseExpiresAt,
             now,
             expectedLease: current.provisioningLeaseExpiresAt,
+            expectedOwner: current.provisioningOwner,
             ...keyOf(input),
           }).changes;
         return changed === 1 ? this.getCellRow(input) : undefined;
@@ -307,9 +328,11 @@ export class RemoteWorkerCellRepository {
     const platform = normalizeRemoteWorkerCellPlatformIdentity(input.platformIdentity);
     const platformIdentitySha256 = remoteWorkerCellPlatformIdentitySha256(input.platformIdentity);
     const owner = assertBounded(input.provisioningOwner, "provisioningOwner");
-    const now = assertTimestamp(input.now, "now");
+    const lease = assertTimestamp(input.provisioningLeaseExpiresAt, "provisioningLeaseExpiresAt");
+    assertTimestamp(input.now, "now");
     return this.db.transaction("immediate", () => {
       const current = this.getCellRow(input);
+      const now = this.readProvisioningDatabaseNow();
       if (current.executionState !== "provisioning") {
         throw new RemoteWorkerCellConflictError(
           `Remote worker cell cannot persist a platform identity in state ${current.executionState}.`,
@@ -318,20 +341,30 @@ export class RemoteWorkerCellRepository {
       if (current.provisioningOwner !== owner) {
         throw new RemoteWorkerCellConflictError("Remote worker cell provisioning owner mismatch.");
       }
+      if (current.provisioningLeaseExpiresAt !== lease || lease <= now) {
+        throw new RemoteWorkerCellConflictError("Remote worker cell provisioning lease is stale or expired.");
+      }
+      if (current.backend !== platform.backend)
+        throw new RemoteWorkerCellConflictError("Cell and platform backends must match.");
       const changed = this.db
         .prepare(
           `UPDATE remote_worker_cells
              SET execution_state = 'ready', execution_revision = execution_revision + 1,
                  platform_identity_sha256 = @platformIdentitySha256, container_name = @containerName,
-                 image_digest = @imageDigest, network_name = @networkName, updated_at = @now
+                 image_digest = @imageDigest, network_name = @networkName, native_platform_json = @nativePlatformJson, updated_at = @now
            WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
-             AND assignment_generation = @assignmentGeneration AND execution_state = 'provisioning'`,
+             AND assignment_generation = @assignmentGeneration AND execution_state = 'provisioning'
+             AND provisioning_owner = @owner AND provisioning_lease_expires_at = @lease
+             AND provisioning_lease_expires_at > ${this.provisioningDatabaseClockSql()}`,
         )
         .run({
           platformIdentitySha256,
-          containerName: platform.containerName,
-          imageDigest: platform.imageDigest,
-          networkName: platform.networkName,
+          containerName: platform.backend === "container" ? platform.containerName : null,
+          imageDigest: platform.backend === "container" ? platform.imageDigest : null,
+          networkName: platform.backend === "container" ? platform.networkName : null,
+          nativePlatformJson: platform.backend === "windows_native" ? JSON.stringify(platform) : null,
+          owner,
+          lease,
           now,
           ...keyOf(input),
         }).changes;
@@ -463,8 +496,14 @@ export class RemoteWorkerCellRepository {
     const now = assertTimestamp(input.now, "now");
     return this.db.transaction("immediate", () => {
       const current = this.getCellRow(input);
+      if (input.expectedCapacityRevision !== undefined && input.expectedCapacityRevision !== current.capacityRevision) {
+        throw new RemoteWorkerCellConflictError("Remote worker cell capacity revision mismatch.");
+      }
+      if (input.expectedCleanupRevision !== undefined && input.expectedCleanupRevision !== current.cleanupRevision) {
+        throw new RemoteWorkerCellConflictError("Remote worker cell cleanup revision mismatch.");
+      }
       const nextCapacityRevision = current.capacityRevision + 1;
-      this.db
+      const changed = this.db
         .prepare(
           `UPDATE remote_worker_cells
              SET peak_disk_bytes = @peakDiskBytes, peak_memory_bytes = @peakMemoryBytes,
@@ -473,7 +512,8 @@ export class RemoteWorkerCellRepository {
                  quarantine_retained_bytes = @quarantineRetainedBytes,
                  capacity_revision = @capacityRevision, last_footprint_sha256 = @footprintSha256, updated_at = @now
            WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
-             AND assignment_generation = @assignmentGeneration`,
+             AND assignment_generation = @assignmentGeneration AND capacity_revision = @expectedCapacityRevision
+             AND cleanup_revision = @expectedCleanupRevision`,
         )
         .run({
           peakDiskBytes: Math.max(current.peakDiskBytes, assertNonNegative(input.peakDiskBytes, "peakDiskBytes")),
@@ -496,10 +536,16 @@ export class RemoteWorkerCellRepository {
             assertNonNegative(input.quarantineRetainedBytes, "quarantineRetainedBytes"),
           ),
           capacityRevision: nextCapacityRevision,
+          expectedCapacityRevision: current.capacityRevision,
+          expectedCleanupRevision: current.cleanupRevision,
           footprintSha256,
           now,
           ...keyOf(input),
-        });
+        }).changes;
+      if (changed !== 1)
+        throw new RemoteWorkerCellConflictError(
+          "Remote worker cell capacity revision or cleanup revision changed before commit.",
+        );
       this.appendEvidence(
         current,
         {
@@ -545,7 +591,7 @@ export class RemoteWorkerCellRepository {
           ? current.quarantineRetainedBytes
           : assertNonNegative(input.quarantineRetainedBytes, "quarantineRetainedBytes"),
       );
-      this.db
+      const changed = this.db
         .prepare(
           `UPDATE remote_worker_cells
              SET cleanup_state = @toState, cleanup_revision = cleanup_revision + 1,
@@ -553,17 +599,23 @@ export class RemoteWorkerCellRepository {
                  quarantine_retained_bytes = @quarantineBytes, updated_at = @now
            WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
              AND assignment_generation = @assignmentGeneration
-             AND cleanup_state = @expectedState AND cleanup_revision = @expectedRevision`,
+             AND cleanup_state = @expectedState AND cleanup_revision = @expectedRevision
+             AND capacity_revision = @expectedCapacityRevision`,
         )
         .run({
           toState: input.toState,
           expectedState: current.cleanupState,
           expectedRevision: input.expectedRevision,
+          expectedCapacityRevision: current.capacityRevision,
           failedBytes,
           quarantineBytes,
           now,
           ...keyOf(input),
-        });
+        }).changes;
+      if (changed !== 1)
+        throw new RemoteWorkerCellConflictError(
+          "Remote worker cell cleanup revision or capacity revision changed before commit.",
+        );
       this.appendEvidence(current, cleanupEvidence(current.cleanupState, input.toState, input.detailSha256), now);
       return this.getCellRow(input);
     });
@@ -613,6 +665,18 @@ export class RemoteWorkerCellRepository {
   public getCell(key: RemoteWorkerCellKey): RemoteWorkerCellRecord | undefined {
     const row = this.selectStmt().get({ ...keyOf(key) }) as CellRow | undefined;
     return row ? mapCell(row) : undefined;
+  }
+
+  private provisioningDatabaseClockSql(): string {
+    return this.db.dialect === "postgres"
+      ? `to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+      : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+  }
+
+  private readProvisioningDatabaseNow(): string {
+    const row = this.db.prepare(`SELECT ${this.provisioningDatabaseClockSql()} AS now_iso`).get<{ now_iso?: unknown }>();
+    if (typeof row?.now_iso !== "string") throw new Error("Remote worker cell database clock is unavailable.");
+    return assertTimestamp(row.now_iso, "database clock");
   }
 
   public getCellByIdempotency(registryWorkspaceId: string, idempotencyKey: string): RemoteWorkerCellRecord | undefined {
@@ -790,8 +854,20 @@ interface CellRow {
   container_name: string | null;
   image_digest: string | null;
   network_name: string | null;
+  native_platform_json: string | null;
   logical_disk_bytes: number | bigint | string;
   allocated_disk_bytes: number | bigint | string;
+  file_limit: number | bigint | string;
+  inode_limit: number | bigint | string;
+  process_limit: number | bigint | string;
+  cpu_limit_milli: number | bigint | string;
+  wall_limit_ms: number | bigint | string;
+  memory_limit_bytes: number | bigint | string;
+  raw_output_limit_bytes: number | bigint | string;
+  diagnostic_limit_bytes: number | bigint | string;
+  artifact_ceiling_bytes: number | bigint | string;
+  backup_staging_bytes: number | bigint | string;
+  backup_publication_bytes: number | bigint | string;
   peak_disk_bytes: number | bigint | string;
   peak_memory_bytes: number | bigint | string;
   peak_file_count: number | bigint | string;
@@ -831,7 +907,7 @@ function mapCell(row: CellRow): RemoteWorkerCellRecord {
     cellId: row.cell_id,
     workerId: row.worker_id,
     workerGeneration: asInt(row.worker_generation),
-    backend: row.backend as "container",
+    backend: row.backend as "container" | "windows_native",
     idempotencyKey: row.idempotency_key,
     profileSha256: row.profile_sha256,
     requestSha256: row.request_sha256,
@@ -851,8 +927,27 @@ function mapCell(row: CellRow): RemoteWorkerCellRecord {
     ...(row.container_name === null ? {} : { containerName: row.container_name }),
     ...(row.image_digest === null ? {} : { imageDigest: row.image_digest }),
     ...(row.network_name === null ? {} : { networkName: row.network_name }),
+    ...(row.native_platform_json == null
+      ? {}
+      : { nativePlatform: normalizeRemoteWorkerCellPlatformIdentity(JSON.parse(row.native_platform_json)) }),
     logicalDiskBytes: asInt(row.logical_disk_bytes),
     allocatedDiskBytes: asInt(row.allocated_disk_bytes),
+    capacity: normalizeRemoteWorkerCellCapacityReservation({
+      schemaVersion: REMOTE_WORKER_CELL_CAPACITY_SCHEMA_VERSION,
+      logicalDiskBytes: asInt(row.logical_disk_bytes),
+      allocatedDiskBytes: asInt(row.allocated_disk_bytes),
+      fileLimit: asInt(row.file_limit),
+      inodeLimit: asInt(row.inode_limit),
+      processLimit: asInt(row.process_limit),
+      cpuLimitMilli: asInt(row.cpu_limit_milli),
+      wallLimitMs: asInt(row.wall_limit_ms),
+      memoryLimitBytes: asInt(row.memory_limit_bytes),
+      rawOutputLimitBytes: asInt(row.raw_output_limit_bytes),
+      diagnosticLimitBytes: asInt(row.diagnostic_limit_bytes),
+      artifactCeilingBytes: asInt(row.artifact_ceiling_bytes),
+      backupStagingBytes: asInt(row.backup_staging_bytes),
+      backupPublicationBytes: asInt(row.backup_publication_bytes),
+    }),
     peakDiskBytes: asInt(row.peak_disk_bytes),
     peakMemoryBytes: asInt(row.peak_memory_bytes),
     peakFileCount: asInt(row.peak_file_count),

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 /**
@@ -76,8 +76,20 @@ export function createFileWorkerDurableState(rootDir: string): WorkerDurableStat
       const target = pathFor(key);
       await mkdir(dirname(target), { recursive: true });
       const temporary = `${target}.${randomBytes(8).toString("hex")}.tmp`;
-      await writeFile(temporary, assertValue(value), { encoding: "utf8", mode: 0o600 });
-      await rename(temporary, target);
+      const content = assertValue(value);
+      const handle = await open(temporary, "wx", 0o600);
+      try {
+        try {
+          await handle.writeFile(content, "utf8");
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await rename(temporary, target);
+      } catch (error) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
     },
     delete: async (key: string): Promise<void> => {
       await rm(pathFor(key), { force: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { wardMatchesAction, evaluateWards, type CitadelWard } from "./citadel-wards.js";
+import { wardMatchesAction, evaluateWards, evaluateWardsForActions, type CitadelWard } from "./citadel-wards.js";
 
 describe("wardMatchesAction", () => {
   it("exact match succeeds", () => {
@@ -34,6 +34,17 @@ describe("wardMatchesAction", () => {
 });
 
 describe("evaluateWards", () => {
+  it("combines native and policy identities using the same precedence", () => {
+    const wards: CitadelWard[] = [
+      { name: "parent", actionPattern: "mcp.invoke", effect: "redact" },
+      { name: "native", actionPattern: "mcp.docs.*", effect: "require_approval" },
+      { name: "unrelated", actionPattern: "fs.*", effect: "deny" },
+    ];
+    expect(evaluateWardsForActions(wards, ["mcp.invoke", "mcp.docs.read"])).toBe("require_approval");
+    wards.push({ name: "root-deny", actionPattern: "mcp.invoke", effect: "deny" });
+    expect(evaluateWardsForActions(wards, ["mcp.docs.read", "mcp.invoke"])).toBe("deny");
+    expect(evaluateWardsForActions(wards, [])).toBe("allow");
+  });
   it("no matching ward → allow", () => {
     const wards: CitadelWard[] = [{ name: "email-deny", actionPattern: "email.*", effect: "deny" }];
     expect(evaluateWards(wards, "filesystem.read")).toBe("allow");

@@ -251,8 +251,8 @@ export async function markOnboardingComplete(
   completedBy = "operator",
 ): Promise<OnboardingState> {
   runtime.onboardingMarker = {
-    completedAt: new Date().toISOString(),
-    completedBy: completedBy.trim() || "operator",
+    completedAt: runtime.onboardingMarker.completedAt ?? new Date().toISOString(),
+    completedBy: runtime.onboardingMarker.completedBy ?? (completedBy.trim() || "operator"),
   };
   onboardingMarkerHelpers.persistOnboardingMarker(runtime);
   await runtime.publishRealtime("system", "onboarding", {
@@ -570,23 +570,22 @@ function buildFirstRunChecklist(input: {
     },
     {
       id: "first_cowork",
-      label: "First Cowork task",
+      label: "First supervised task in Chat",
       status: taskStatus,
-      detail:
-        "Run one supervised Cowork task so approvals, checkpoints, durable state, and delegation truth can be inspected.",
+      detail: "Run one supervised task in Chat to inspect approvals, checkpoints, durable state, and delegation.",
       proofRefs: [
-        { kind: "route", label: "Cowork", ref: "/cowork" },
+        { kind: "route", label: "Chat", ref: "/chat" },
         { kind: "runtime_evidence", label: "Durable run", ref: "durable.run" },
       ],
     },
     {
       id: "first_code",
-      label: "First Code task",
+      label: "First code task in Chat",
       status: taskStatus,
       detail:
         "Run one governed Code task with explicit approval and retained artifacts; this remains trusted-code execution, not hostile-code sandboxing proof.",
       proofRefs: [
-        { kind: "route", label: "Code", ref: "/code" },
+        { kind: "route", label: "Chat", ref: "/chat" },
         { kind: "runtime_evidence", label: "Code artifact trace", ref: "code_mode.artifact" },
       ],
     },

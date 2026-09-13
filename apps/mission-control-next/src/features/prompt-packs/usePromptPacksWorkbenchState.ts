@@ -1,3 +1,4 @@
+import { useSessionDraft, hasSessionDraft } from "../native-routes/library/session-drafts";
 /* eslint-disable max-lines -- Prompt Lab workbench state keeps variable, benchmark, and retune transitions in one route-owned coordinator. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -85,6 +86,8 @@ import {
 
 export interface UsePromptPacksWorkbenchStateOptions {
   variant: "library" | "ops";
+  workspaceId?: string;
+  reviewOpen?: boolean;
   navigate?: (route: AppRoute, options?: { replace?: boolean }) => void;
   initialPackId?: string;
 }
@@ -115,7 +118,8 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   const [packs, setPacks] = useState<PromptPackRecord[]>([]);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [tests, setTests] = useState<PromptPackTestRecord[]>([]);
-  const [importText, setImportText] = useState("");
+  const importDraft = useSessionDraft("prompt-pack-import:" + (options.workspaceId ?? "global"), "", undefined, { label: "Prompt pack import" });
+  const importText = importDraft.value, setImportText = importDraft.setValue;
   const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
   const [runVariableBindings, setRunVariableBindings] = useState<RunVariableBindings>({});
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
@@ -148,7 +152,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   const [retunePending, setRetunePending] = useState(false);
   const [trendSeries, setTrendSeries] = useState<Awaited<ReturnType<typeof fetchPromptPackTrends>>["items"]>([]);
   const [exportInfo, setExportInfo] = useState<PromptPackExportRecord | null>(null);
-  const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
+  const [reviewedRunId, setReviewedRunId] = useState<string | null>(null);
 
   const running = activeRun !== null;
   const benchmarkActive = Boolean(
@@ -460,21 +464,18 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     setBenchmarkProvidersInput(`${selectedRunModel.providerId}/${model}`);
   }, [benchmarkProvidersInput, selectedModel, selectedRunModel]);
 
-  useEffect(() => {
-    if (selectedAssessment?.humanReview) {
-      setScoreDraft({
-        taskSuccess: selectedAssessment.humanReview.scores.taskSuccess ?? null,
-        honesty: selectedAssessment.humanReview.scores.honesty ?? null,
-        executionQuality: selectedAssessment.humanReview.scores.executionQuality ?? null,
-        robustness: selectedAssessment.humanReview.scores.robustness ?? null,
-        usability: selectedAssessment.humanReview.scores.usability ?? null,
-        overrideVerdict: selectedAssessment.humanReview.overrideVerdict ?? "",
-        notes: selectedAssessment.humanReview.notes ?? "",
-      });
-      return;
-    }
-    setScoreDraft(DEFAULT_SCORE_DRAFT);
-  }, [selectedAssessment, selectedTestId]);
+  const canonicalScore: ScoreDraft = selectedAssessment?.humanReview ? {
+    taskSuccess: selectedAssessment.humanReview.scores.taskSuccess ?? null,
+    honesty: selectedAssessment.humanReview.scores.honesty ?? null,
+    executionQuality: selectedAssessment.humanReview.scores.executionQuality ?? null,
+    robustness: selectedAssessment.humanReview.scores.robustness ?? null,
+    usability: selectedAssessment.humanReview.scores.usability ?? null,
+    overrideVerdict: selectedAssessment.humanReview.overrideVerdict ?? "",
+    notes: selectedAssessment.humanReview.notes ?? "",
+  } : DEFAULT_SCORE_DRAFT;
+  const reviewDraft = useSessionDraft("prompt-pack-review:" + (options.workspaceId ?? "global") + ":" + selectedPackId + ":" + selectedTestId, canonicalScore, selectedRun?.runId, { label: "Prompt test review", available: Boolean(selectedRun), active: options.reviewOpen !== false, onSave: (): Promise<boolean> => submitScore() });
+  const scoreDraft = reviewDraft.value, setScoreDraft = reviewDraft.setValue;
+  const reviewRevisionConflict = reviewDraft.hasRemoteChanges && reviewedRunId !== selectedRun?.runId;
 
   const buildRunInput = useCallback(
     (
@@ -746,10 +747,10 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     }
   }, [selectedRunLink]);
 
-  const submitScore = useCallback(async () => {
-    if (!selectedPackId || !selectedTest || !selectedRun) {
-      return;
-    }
+  const submitScore = useCallback(async (): Promise<boolean> => {
+    if (!selectedPackId || !selectedTest || !selectedRun) return false;
+    if (reviewRevisionConflict) { setError("This draft belongs to an earlier run. Review the current output and explicitly apply the draft before saving."); return false; }
+    const submitted = reviewDraft.value;
     setSavingScore(true);
     setError(null);
     try {
@@ -764,13 +765,16 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         notes: scoreDraft.notes.trim() || undefined,
       });
       await loadPack(selectedPackId);
+      const clean = reviewDraft.acceptSaved(submitted, selectedRun.runId, submitted);
       setSuccess(`Saved review for ${selectedTest.code}.`);
+      return clean;
     } catch (err) {
       setError((err as Error).message);
+      return false;
     } finally {
       setSavingScore(false);
     }
-  }, [loadPack, scoreDraft, selectedPackId, selectedRun, selectedTest]);
+  }, [loadPack, scoreDraft, selectedPackId, selectedRun, selectedTest, reviewDraft, reviewRevisionConflict]);
 
   const autoScoreSelected = useCallback(async () => {
     if (!selectedPackId || !selectedTest || !selectedRun) {
@@ -1053,7 +1057,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         content,
         sourceLabel: isOpsVariant ? "ops-workbench" : "manual-import",
       });
-      setImportText("");
+      importDraft.acceptSaved("", undefined, importText);
       await load();
       selectPack(imported.pack.packId);
       setSuccess(`Imported ${imported.tests.length} tests.`);
@@ -1062,7 +1066,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     } finally {
       setImporting(false);
     }
-  }, [importText, isOpsVariant, load, selectPack]);
+  }, [importText, isOpsVariant, load, selectPack, importDraft]);
 
   const selectedCategory = classifyTestResultCategory(selectedRun, selectedAssessment);
   const completedDraftDimensions = DIMENSION_ROWS.filter(({ key }) => scoreDraft[key] !== null).length;
@@ -1233,6 +1237,12 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     setTestResultFilter,
     setSelectedTestId,
     setScoreDraft,
+    reviewDraftKey: reviewDraft.key,
+    reviewDirty: reviewDraft.isDirty,
+    hasReviewDraft: (testId: string) => hasSessionDraft("prompt-pack-review:" + (options.workspaceId ?? "global") + ":" + selectedPackId + ":" + testId),
+    reviewRevisionConflict,
+    confirmReviewRevision: () => setReviewedRunId(selectedRun?.runId ?? null),
+    importDirty: importDraft.isDirty,
     load,
     runNext,
     runAll,

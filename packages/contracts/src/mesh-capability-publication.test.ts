@@ -105,6 +105,9 @@ describe("governed mesh capability publication contracts", () => {
       ],
     });
     expect(() => assertMeshCapabilityManifest(mcpManifest)).not.toThrow();
+    const bound = { ...mcpManifest, entries: [{ ...mcpManifest.entries[0]!, descriptor: mcpDescriptor({ configurationSha256: SHA }) }] };
+    expect(() => assertMeshCapabilityManifest(bound)).not.toThrow();
+    expect(() => assertMeshCapabilityManifest({ ...bound, entries: [{ ...bound.entries[0]!, descriptor: mcpDescriptor({ configurationSha256: "not-a-digest" }) }] })).toThrow(/configurationSha256/);
     expect(() =>
       assertMeshCapabilityManifest({
         ...mcpManifest,

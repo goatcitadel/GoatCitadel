@@ -25,13 +25,15 @@ import {
 } from "lucide-react";
 import type { RuntimeBuildIdentity } from "@goatcitadel/contracts";
 import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
-import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
+import { DetailInspector } from "../components/DetailInspector";
 import type { ShellDetailPanelEntry } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
 import { useModalDialogBehavior } from "@next/features/threaded-surface/useModalDialogBehavior";
+import { SidebarChatSlot, useUnifiedSidebar } from "./UnifiedSidebar";
 import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
 import { isRuntimeReleaseVerified } from "./runtime-build-identity";
 import {
   AREA_META,
+  navigationAreaForRoute,
   buildNavigationTarget,
   describeReleaseScopeForOperator,
   describeReleaseSurfaceStatus,
@@ -172,128 +174,21 @@ export function ShellTopbar({
       : []),
   ];
 
+  const sidebar = useUnifiedSidebar();
   return (
     <header className="mc-next-topbar" data-compact={isCompactTopbar || undefined}>
       <div className="mc-next-topbar-left">
-        <button
-          type="button"
-          className="mc-next-icon-button mc-next-nav-toggle"
-          onClick={onOpenNav}
-          aria-label="Open navigation"
-          title="Open navigation"
-        >
-          <Menu size={16} />
-          <span>Menu</span>
+        <button type="button" className="mc-next-icon-button mc-next-nav-toggle" onClick={sidebar?.toggle ?? onOpenNav} aria-label={sidebar?.mobile ? "Open navigation" : sidebar?.collapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebar?.collapsed ? "Expand sidebar" : "Navigation"}>
+          <Menu size={18} />
         </button>
-        <div className="mc-next-brand">
-          <p>GoatCitadel</p>
-          <h1>Mission Control</h1>
-        </div>
-        <label className="mc-next-select-field mc-next-citadel-field">
-          <span>Citadel</span>
-          <select
-            aria-label="Active Citadel"
-            value={activeCitadelId}
-            onChange={(event) => handleSelectCitadel(event.target.value)}
-          >
-            {[...citadelOptions, { citadelId: activeCitadelId, name: activeCitadelName }]
-              .filter(
-                (item, index, items) =>
-                  items.findIndex((candidate) => candidate.citadelId === item.citadelId) === index,
-              )
-              .map((item) => (
-                <option key={item.citadelId} value={item.citadelId}>
-                  {item.name}
-                </option>
-              ))}
-          </select>
-        </label>
-        <nav className="mc-next-primary-nav" aria-label="Primary mission areas">
-          {PRIMARY_NAV.map(({ area, icon: Icon }) => {
-            const target = buildPrimaryAreaRoute(area);
-            return (
-              <button
-                key={area}
-                type="button"
-                className={`mc-next-primary-link${route.area === area ? " active" : ""}`}
-                aria-current={route.area === area ? "page" : undefined}
-                onFocus={() => preloadRouteChunk(target)}
-                onMouseEnter={() => preloadRouteChunk(target)}
-                onClick={() => navigate(target)}
-              >
-                <Icon size={16} />
-                <span>{AREA_META[area].label}</span>
-              </button>
-            );
-          })}
-        </nav>
+        <span className="mc-next-page-context">{AREA_META[navigationAreaForRoute(route)].label}</span>
       </div>
       <div className="mc-next-topbar-right">
-        <button
-          type="button"
-          className="mc-next-command-search"
-          onClick={onOpenPalette}
-          title="Command Palette"
-          aria-label="Command Palette"
-        >
-          <Search size={15} />
-          <span>Command Palette</span>
-          <kbd>Ctrl K</kbd>
-        </button>
-        <label className="mc-next-select-field mc-next-workspace-field">
-          <span>Workspace</span>
-          <select
-            aria-label="Active Workspace"
-            title={workspaceSelectionReady ? activeWorkspaceName : workspacePlaceholder}
-            value={workspaceSelectionReady ? activeWorkspaceId : ""}
-            disabled={!workspaceSelectionReady}
-            onChange={(event) => handleSelectWorkspace(event.target.value)}
-          >
-            {!workspaceSelectionReady ? <option value="">{workspacePlaceholder}</option> : null}
-            {workspaceOptions.map((item) => (
-              <option key={item.workspaceId} value={item.workspaceId}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="mc-next-topbar-divider" aria-hidden="true" />
-        <div className="mc-next-topbar-status">
-          {realtimeDegraded ? (
-            <span className="mc-next-badge mc-next-realtime-badge" data-realtime="degraded">
-              {realtimeBadge}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            className="mc-next-badge mc-next-badge-button"
-            onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
-            aria-label="Open approvals"
-            title="Open approvals"
-          >
-            <span className="mc-next-badge-count">{pendingApprovals}</span>
-            <span className="mc-next-badge-label">{pendingApprovals === 1 ? "approval" : "approvals"}</span>
-          </button>
-        </div>
-        <button
-          type="button"
-          className="mc-next-icon-button"
-          onClick={() => navigate({ area: "ops", section: "notifications", theme: route.theme })}
-          aria-label="Open notifications"
-          title="Notifications"
-        >
-          <Bell size={16} />
-          <span>{operatorNotificationCount}</span>
-        </button>
-        <button
-          type="button"
-          className="mc-next-icon-button mc-next-theme-toggle"
-          onClick={handleToggleTheme}
-          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        >
-          {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
-        </button>
+        <button type="button" className="mc-next-icon-button" onClick={onOpenPalette} aria-label="Command Palette" title="Command Palette · Ctrl K"><Search size={17} /></button>
+        {realtimeDegraded ? <span className="mc-next-badge" data-realtime="degraded">{realtimeBadge}</span> : null}
+        {pendingApprovals > 0 ? <button type="button" className="mc-next-badge mc-next-badge-button" onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })} aria-label="Open approvals"><ShieldCheck size={16} />{pendingApprovals} pending</button> : null}
+        <button type="button" className="mc-next-icon-button" aria-label="Open notifications" title="Notifications" onClick={() => navigate({ area: "ops", section: "notifications", theme: route.theme })}><Bell size={16} />{operatorNotificationCount > 0 ? <span>{operatorNotificationCount}</span> : null}</button>
+        <button type="button" className="mc-next-icon-button" onClick={handleToggleTheme} aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"} title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>{theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}</button>
         <TopbarOverflowMenu items={topbarOverflowItems} />
       </div>
     </header>
@@ -349,6 +244,7 @@ export function ShellRail({
   workspaceOptions: Array<{ workspaceId: string; name: string }>;
   workspaceSelectionStatus?: WorkspaceSelectionStatus;
 }) {
+  const sidebar = useUnifiedSidebar();
   const railRef = useRef<HTMLElement | null>(null);
   const modalOpen = isMobileNav && navOpen;
   const workspaceSelectionReady = workspaceSelectionStatus === "ready";
@@ -379,14 +275,14 @@ export function ShellRail({
       >
         <div className="mc-next-rail-head">
           <div>
-            <p>{currentAreaMeta.kicker}</p>
-            <h2>{currentAreaMeta.label}</h2>
+            <h2>GoatCitadel</h2>
+            <p>Mission Control</p>
           </div>
-          <button type="button" className="mc-next-rail-close" onClick={onClose} aria-label="Close navigation">
+          <button type="button" className="mc-next-rail-close" onClick={sidebar?.toggle ?? onClose} aria-label={isMobileNav ? "Close navigation" : sidebar?.collapsed ? "Expand sidebar" : "Collapse sidebar"}>
             <X size={16} />
           </button>
         </div>
-        {isMobileNav ? (
+        {(
           <>
             <div className="mc-next-rail-mobile-context" aria-label="Active scope and commands">
               <label className="mc-next-rail-mobile-select">
@@ -434,7 +330,7 @@ export function ShellRail({
               <button
                 type="button"
                 className="mc-next-rail-command-button"
-                aria-label="Open Command Palette"
+                aria-label="Command Palette"
                 onClick={() => {
                   onOpenPalette();
                   onClose();
@@ -445,13 +341,15 @@ export function ShellRail({
                 <kbd>Ctrl K</kbd>
               </button>
             </div>
-            <div className="mc-next-rail-areas">
+            <nav className="mc-next-rail-areas" aria-label="Primary mission areas">
               {PRIMARY_NAV.map(({ area, icon: Icon }) => (
                 <button
                   key={area}
                   type="button"
-                  className={`mc-next-rail-area-link${route.area === area ? " active" : ""}`}
+                  className={`mc-next-rail-area-link${navigationAreaForRoute(route) === area ? " active" : ""}`}
                   aria-current={route.area === area ? "page" : undefined}
+                  aria-label={AREA_META[area].label}
+                  title={AREA_META[area].label}
                   onClick={() => {
                     navigate(buildPrimaryAreaRoute(area));
                     onClose();
@@ -461,10 +359,11 @@ export function ShellRail({
                   <span>{AREA_META[area].label}</span>
                 </button>
               ))}
-            </div>
+            </nav>
           </>
-        ) : null}
-        <div className="mc-next-rail-menu">
+        )}
+        {route.area === "chat" ? <SidebarChatSlot /> : null}
+        <div className="mc-next-rail-menu" hidden={route.area === "chat"}>
           {groupedRailItems.map((group) => {
             const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;
             return (
@@ -494,7 +393,7 @@ export function ShellRail({
                         aria-label={`${item.label}: ${item.description}`}
                         onFocus={() => preloadRouteChunk(target)}
                         onMouseEnter={() => preloadRouteChunk(target)}
-                        onClick={() => navigate(target)}
+                        onClick={() => { navigate(target); if (isMobileNav) onClose(); }}
                       >
                         <div>
                           <strong>
@@ -523,7 +422,7 @@ export function ShellRail({
             );
           })}
         </div>
-        <div className="mc-next-rail-signal-card">
+        <details className="mc-next-rail-signal-card"><summary>Workspace status</summary>
           <div className="mc-next-rail-signal-head">
             <FolderKanban size={18} />
             <span>{railSignalTitle}</span>
@@ -533,7 +432,7 @@ export function ShellRail({
               <li key={line}>{line}</li>
             ))}
           </ul>
-        </div>
+        </details>
       </aside>
     </>
   );
@@ -709,35 +608,7 @@ export function ShellInspectorLayer({
   onClose: () => void;
   onTogglePinned: () => void;
 }) {
-  return (
-    <>
-      <button
-        type="button"
-        className={`mc-next-inspector-scrim${hasVisibleInspector ? " open" : ""}`}
-        aria-hidden={!hasVisibleInspector}
-        aria-label="Close context panel"
-        onClick={onClose}
-        tabIndex={hasVisibleInspector ? 0 : -1}
-      />
-
-      {hasVisibleInspector && inspectorEntry ? (
-        <SideInspectorDrawer
-          kicker={inspectorEntry.kicker}
-          title={inspectorEntry.title}
-          subtitle={inspectorEntry.subtitle}
-          open={hasVisibleInspector}
-          pinned={detailPanelPinned}
-          draggable
-          onClose={onClose}
-          onTogglePinned={onTogglePinned}
-          actions={inspectorEntry.actions}
-          className="mc-next-shell-inspector"
-        >
-          {inspectorEntry.body}
-        </SideInspectorDrawer>
-      ) : null}
-    </>
-  );
+  return inspectorEntry ? <DetailInspector open={hasVisibleInspector} title={inspectorEntry.title} subtitle={inspectorEntry.subtitle} pinned={detailPanelPinned} onClose={onClose} onTogglePinned={onTogglePinned} actions={inspectorEntry.actions}>{inspectorEntry.body}</DetailInspector> : null;
 }
 
 function StatusPill({

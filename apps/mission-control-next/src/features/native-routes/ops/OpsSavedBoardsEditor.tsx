@@ -85,6 +85,7 @@ export function OpsSavedBoardsEditor({
         <label>
           <span>Board name</span>
           <input
+            disabled={busy}
             value={session.draft.name}
             maxLength={OPS_SAVED_BOARD_LIMITS.nameCharacters}
             autoComplete="off"
@@ -94,6 +95,7 @@ export function OpsSavedBoardsEditor({
         <label>
           <span>Description</span>
           <textarea
+            disabled={busy}
             value={session.draft.description}
             maxLength={OPS_SAVED_BOARD_LIMITS.descriptionCharacters}
             rows={3}
@@ -102,32 +104,35 @@ export function OpsSavedBoardsEditor({
         </label>
       </div>
 
-      <section className="mc-next-ops-board-catalog" aria-labelledby="ops-saved-board-catalog-title">
-        <div className="mc-next-ops-board-section-heading">
-          <div>
-            <span>Compiled registry</span>
-            <h3 id="ops-saved-board-catalog-title">Add a widget</h3>
+      <details>
+        <summary>Add a widget</summary>
+        <section className="mc-next-ops-board-catalog" aria-labelledby="ops-saved-board-catalog-title">
+          <div className="mc-next-ops-board-section-heading">
+            <div>
+              <span>Compiled registry</span>
+              <h3 id="ops-saved-board-catalog-title">Add a widget</h3>
+            </div>
+            <small>{session.draft.placements.length}/12 placed</small>
           </div>
-          <small>{session.draft.placements.length}/12 placed</small>
-        </div>
-        <div className="mc-next-ops-board-catalog-grid">
-          {OPS_SAVED_BOARDS_WIDGET_OPTIONS.map((option) => (
-            <article key={option.kind}>
-              <div>
-                <strong>{option.label}</strong>
-                <p>{option.description}</p>
-              </div>
-              <NativeButton
-                variant="outline"
-                disabled={atWidgetLimit || busy}
-                onClick={() => updateDraft(addOpsSavedBoardsWidget(session.draft, option.kind))}
-              >
-                Add {option.label}
-              </NativeButton>
-            </article>
-          ))}
-        </div>
-      </section>
+          <div className="mc-next-ops-board-catalog-grid">
+            {OPS_SAVED_BOARDS_WIDGET_OPTIONS.map((option) => (
+              <article key={option.kind}>
+                <div>
+                  <strong>{option.label}</strong>
+                  <p>{option.description}</p>
+                </div>
+                <NativeButton
+                  variant="outline"
+                  disabled={atWidgetLimit || busy}
+                  onClick={() => updateDraft(addOpsSavedBoardsWidget(session.draft, option.kind))}
+                >
+                  Add {option.label}
+                </NativeButton>
+              </article>
+            ))}
+          </div>
+        </section>
+      </details>
 
       <section className="mc-next-ops-board-placement-editor" aria-labelledby="ops-saved-board-layout-title">
         <div className="mc-next-ops-board-section-heading">

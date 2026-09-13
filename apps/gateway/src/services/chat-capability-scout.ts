@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
+import { hasArtifactInspectionOnlyIntent } from "./chat-artifact-intent.js";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatTurnTraceRecord,
@@ -341,6 +342,7 @@ function looksLikeMissingRequestedDocumentArtifact(input: CapabilityScoutInput, 
 }
 
 function detectPresentationArtifactIntent(content: string): boolean {
+  if (hasArtifactInspectionOnlyIntent(content)) return false;
   const normalized = content.toLowerCase();
   return (
     /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
@@ -349,6 +351,7 @@ function detectPresentationArtifactIntent(content: string): boolean {
 }
 
 function detectDocumentArtifactIntent(content: string): boolean {
+  if (hasArtifactInspectionOnlyIntent(content)) return false;
   const normalized = content.toLowerCase();
   return (
     /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(

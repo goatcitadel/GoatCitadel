@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Eye, EyeOff, KeyRound, Lock, Trash2 } from "lucide-react";
 import type { CitadelVaultSecretMetadata } from "@goatcitadel/contracts";
 import {
@@ -12,6 +12,9 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { useSessionDraft } from "./session-drafts";
+import { useDraftLeave } from "./DraftLeaveDialog";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -21,14 +24,7 @@ interface SecretsState {
   items: CitadelVaultSecretMetadata[];
 }
 
-interface DraftState {
-  name: string;
-  value: string;
-  busy: boolean;
-  error: string | null;
-}
-
-const INITIAL_DRAFT: DraftState = { name: "", value: "", busy: false, error: null };
+const EMPTY_SECRET = { name: "", value: "" };
 
 function describeStoreError(error: unknown): string {
   if (isApiRequestError(error) && error.status === 503) {
@@ -52,7 +48,15 @@ export function CitadelVaultRoutePage({
   const nameId = useId();
   const valueId = useId();
   const [secrets, setSecrets] = useState<SecretsState>({ loading: true, error: null, items: [] });
-  const [draft, setDraft] = useState<DraftState>(INITIAL_DRAFT);
+  const [formOpen, setFormOpen] = useState(false);
+  const [selectedSecretId, setSelectedSecretId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [storeError, setStoreError] = useState<string | null>(null);
+  const leave = useDraftLeave();
+  const secretDraft = useSessionDraft(`vault-secret:${activeCitadelId}:new`, EMPTY_SECRET, undefined, { label: "New secret", active: formOpen, onSave: (): Promise<boolean> => store() });
+  const draft = secretDraft.value;
+  const setDraft = secretDraft.setValue;
+  const revealGeneration = useRef(0);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   // Reveal failures are tracked separately from revealed plaintext so an error message is
   // never rendered inside the secret-value <code> block (which would look like the secret).
@@ -90,17 +94,22 @@ export function CitadelVaultRoutePage({
 
   const store = useCallback(async () => {
     if (draft.name.trim().length === 0 || draft.value.length === 0) {
-      return;
+      return false;
     }
-    setDraft((current) => ({ ...current, busy: true, error: null }));
+    setBusy(true); setStoreError(null);
     try {
       await storeCitadelVaultSecret(activeCitadelId, draft.name.trim(), draft.value);
-      setDraft(INITIAL_DRAFT);
+      const clean = secretDraft.acceptSaved(EMPTY_SECRET, undefined, draft);
+      if (clean) setFormOpen(false);
       await load();
+      return true;
     } catch (error) {
-      setDraft((current) => ({ ...current, busy: false, error: describeStoreError(error) }));
+      setStoreError(describeStoreError(error));
+      return false;
+    } finally {
+      setBusy(false);
     }
-  }, [activeCitadelId, draft.name, draft.value, load]);
+  }, [activeCitadelId, draft, load, secretDraft.acceptSaved]);
 
   const clearRevealError = useCallback((secretId: string) => {
     setRevealErrors((current) => {
@@ -116,7 +125,9 @@ export function CitadelVaultRoutePage({
   const reveal = useCallback(
     async (secretId: string) => {
       try {
+        const generation = revealGeneration.current;
         const value = await revealCitadelVaultSecret(activeCitadelId, secretId);
+        if (generation !== revealGeneration.current) return;
         setRevealed((current) => ({ ...current, [secretId]: value }));
         clearRevealError(secretId);
       } catch (error) {
@@ -140,6 +151,18 @@ export function CitadelVaultRoutePage({
     [clearRevealError],
   );
 
+  useEffect(() => {
+    if (!Object.keys(revealed).length) return;
+    const timer = globalThis.setTimeout(() => setRevealed({}), 30_000);
+    return () => globalThis.clearTimeout(timer);
+  }, [revealed]);
+  const closeDetails = () => leave.request(() => {
+    revealGeneration.current += 1; setRevealed({}); setRevealErrors({});
+    setFormOpen(false); setSelectedSecretId(null);
+  }, [secretDraft.key]);
+  useEffect(() => () => { revealGeneration.current += 1; }, [activeCitadelId]);
+  const selectedSecret = secrets.items.find((item) => item.secretId === selectedSecretId);
+
   const remove = useCallback(
     async (secretId: string) => {
       try {
@@ -160,11 +183,12 @@ export function CitadelVaultRoutePage({
       kicker={routeKicker(route)}
       title="Vault"
       description={`Secrets for ${activeCitadelName}, sealed at rest under a per-Citadel key in your OS keychain. Names are listed; values are revealed only on request.`}
-      loading={secrets.loading}
+      loading={secrets.loading && !secrets.items.length}
       error={secrets.error}
       onRetry={() => void load()}
     >
-      <NativeGrid>
+      <div className="mc-next-settings-button-row"><NativeButton onClick={() => leave.request(() => { revealGeneration.current += 1; setRevealed({}); setSelectedSecretId(null); setFormOpen(true); }, [secretDraft.key])}>Store secret{secretDraft.isDirty ? " · Unsaved" : ""}</NativeButton></div>
+      <NativeGrid className="mc-next-calm-directory">
         <NativeCard
           title="Stored secrets"
           subtitle="The plaintext is never persisted — only the sealed envelope."
@@ -177,48 +201,18 @@ export function CitadelVaultRoutePage({
               {secrets.items.map((secret) => (
                 <li key={secret.secretId} className="mc-next-vault-item">
                   <div className="mc-next-vault-item-head">
-                    <strong>{secret.secretName}</strong>
-                    <div className="mc-next-vault-item-actions">
-                      {revealed[secret.secretId] === undefined ? (
-                        <NativeButton variant="default" onClick={() => void reveal(secret.secretId)}>
-                          <Eye size={16} />
-                          Reveal
-                        </NativeButton>
-                      ) : (
-                        <NativeButton variant="default" onClick={() => hide(secret.secretId)}>
-                          <EyeOff size={16} />
-                          Hide
-                        </NativeButton>
-                      )}
-                      <NativeButton
-                        variant="outline"
-                        className="danger"
-                        onClick={() => setPendingDelete({ id: secret.secretId, name: secret.secretName })}
-                        aria-label={`Delete ${secret.secretName}`}
-                      >
-                        <Trash2 size={16} />
-                      </NativeButton>
-                    </div>
+                    <NativeButton variant="ghost" onClick={() => leave.request(() => { revealGeneration.current += 1; setRevealed({}); setFormOpen(false); setSelectedSecretId(secret.secretId); }, [secretDraft.key])}>{secret.secretName}</NativeButton>
+
                   </div>
-                  {revealed[secret.secretId] !== undefined ? (
-                    <code className="mc-next-vault-value">{revealed[secret.secretId]}</code>
-                  ) : null}
-                  {revealErrors[secret.secretId] !== undefined ? (
-                    <p className="mc-next-mason-error" role="alert">
-                      {revealErrors[secret.secretId]}
-                    </p>
-                  ) : null}
                 </li>
               ))}
             </ul>
           )}
         </NativeCard>
 
-        <NativeCard
-          title="Store a secret"
-          subtitle="It is sealed before it leaves the request and never written in plaintext."
-        >
-          {draft.error ? <NoticeBanner tone="error" message={draft.error} /> : null}
+        <DetailInspector open={formOpen} title="Store a secret" subtitle={secretDraft.isDirty ? "Unsaved changes" : undefined} onClose={closeDetails}>
+
+          {storeError ? <NoticeBanner tone="error" message={storeError} /> : null}
           <label className="mc-next-mason-field" htmlFor={nameId}>
             <span>Name</span>
             <input
@@ -242,15 +236,28 @@ export function CitadelVaultRoutePage({
           </label>
           <NativeButton
             variant="default"
-            disabled={draft.busy || draft.name.trim().length === 0 || draft.value.length === 0}
+            disabled={busy || draft.name.trim().length === 0 || draft.value.length === 0}
             onClick={() => void store()}
           >
             <Lock size={16} />
-            {draft.busy ? "Sealing…" : "Seal & store"}
+            {busy ? "Sealing…" : "Seal & store"}
           </NativeButton>
-        </NativeCard>
+
+</DetailInspector>
       </NativeGrid>
 
+      {leave.dialog}
+      <DetailInspector open={Boolean(selectedSecret)} title={selectedSecret?.secretName ?? "Secret"} subtitle="Vault value · hides after 30 seconds or closing" onClose={closeDetails}>
+        {selectedSecret ? <>
+          <dl className="mc-next-native-facts">{Object.entries(selectedSecret).map(([key, value]) => <div key={key}><dt>{key.replace(/([A-Z])/g, " $1")}</dt><dd>{String(value ?? "Unavailable")}</dd></div>)}</dl>
+          <div className="mc-next-settings-button-row">
+            <NativeButton onClick={() => revealed[selectedSecret.secretId] === undefined ? void reveal(selectedSecret.secretId) : hide(selectedSecret.secretId)}>{revealed[selectedSecret.secretId] === undefined ? <><Eye size={16} /> Reveal</> : <><EyeOff size={16} /> Hide</>}</NativeButton>
+            <NativeButton variant="destructive" aria-label={`Delete ${selectedSecret.secretName}`} onClick={() => setPendingDelete({ id: selectedSecret.secretId, name: selectedSecret.secretName })}><Trash2 size={16} />Delete secret</NativeButton>
+          </div>
+          {revealed[selectedSecret.secretId] !== undefined ? <code className="mc-next-vault-value">{revealed[selectedSecret.secretId]}</code> : null}
+          {revealErrors[selectedSecret.secretId] ? <NoticeBanner tone="error" message={revealErrors[selectedSecret.secretId]} /> : null}
+        </> : null}
+      </DetailInspector>
       <ConfirmModal
         open={pendingDelete !== null}
         danger

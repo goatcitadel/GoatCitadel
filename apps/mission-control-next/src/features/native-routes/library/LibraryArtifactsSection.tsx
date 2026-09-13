@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { FocusedDetail } from "../shared/FocusedDetail";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Download, FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/client";
@@ -26,12 +28,17 @@ import {
   LibrarySelectableList,
 } from "../shared/library-primitives";
 
+const ArtifactViewer = lazy(async () => ({ default: (await import("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer")).GeneratedArtifactViewer }));
+
 export function LibraryArtifactsSection({
   activeCitadelId,
   activeWorkspaceId,
   route,
   navigate,
 }: NativeRoutePagesProps) {
+  const [detailOpen, setDetailOpen] = useState(Boolean(route.artifactId));
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  useEffect(() => { if (route.artifactId) { setSelectedArtifactId(route.artifactId); setDetailOpen(true); setMetadataOpen(false); } }, [route.artifactId]);
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [surfaceFilter, setSurfaceFilter] = useState<ChatGeneratedArtifactRecord["sourceSurface"] | "all">("all");
   const [search, setSearch] = useState("");
@@ -88,10 +95,10 @@ export function LibraryArtifactsSection({
   const selectedArtifactRunId = selectedArtifact ? readArtifactRunId(selectedArtifact) : undefined;
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <div className="mc-next-settings-grid">
-        <NativeCard
+      <div className="mc-next-calm-directory">
+        {!detailOpen ? <NativeCard
           title="Generated artifacts"
           subtitle="Actual artifact records, not just a folder listing."
           stats={[
@@ -132,7 +139,7 @@ export function LibraryArtifactsSection({
               } · ${formatDateTime(item.updatedAt)}`,
             }))}
             selectedId={selectedArtifactId}
-            onSelect={setSelectedArtifactId}
+            onSelect={(id) => { setSelectedArtifactId(id); setDetailOpen(true); setMetadataOpen(false); }}
             emptyLabel="No generated artifacts match the current filter."
           />
           <LibraryButtonRow>
@@ -141,9 +148,9 @@ export function LibraryArtifactsSection({
               Refresh
             </button>
           </LibraryButtonRow>
-        </NativeCard>
+        </NativeCard> : null}
         <div className="mc-next-settings-stack">
-          <NativeCard
+          {detailOpen ? <FocusedDetail title={selectedArtifact?.title ?? "Artifact unavailable"} onClose={() => { setDetailOpen(false); setMetadataOpen(false); }}><NativeCard
             title={selectedArtifact?.title ?? "Artifact detail"}
             subtitle={
               selectedArtifact
@@ -153,7 +160,70 @@ export function LibraryArtifactsSection({
           >
             {selectedArtifact ? (
               <>
-                <LibraryMetricGrid
+
+
+                <LibraryButtonRow>
+                  <NativeButton variant="outline" onClick={() => downloadArtifact(selectedArtifact)}>
+                    <Download size={16} />
+                    Download artifact
+                  </NativeButton>
+                  <NativeButton
+                    variant="default"
+                    onClick={() =>
+                      navigate({
+                        area: "chat",
+                        sessionId: selectedArtifact.sessionId,
+                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                        turnId: selectedArtifact.turnId,
+                        artifactId: selectedArtifact.artifactId,
+                        theme: route.theme,
+                      })
+                    }
+                  >
+                    <Workflow size={16} />
+                    Open source thread
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={() =>
+                      navigate({
+                        area: "library",
+                        section: "artifacts",
+                        artifactId: selectedArtifact.artifactId,
+                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                        theme: route.theme,
+                      })
+                    }
+                  >
+                    <FileText size={16} />
+                    Reopen artifact
+                  </NativeButton>
+                  {selectedArtifactRunId ? (
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() =>
+                        navigate({
+                          area: "ops",
+                          section: "sessions",
+                          view: "run-detail",
+                          runId: selectedArtifactRunId,
+                          artifactId: selectedArtifact.artifactId,
+                          sessionId: selectedArtifact.sessionId,
+                          turnId: selectedArtifact.turnId,
+                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                          theme: route.theme,
+                        })
+                      }
+                    >
+                      <Waypoints size={16} />
+                      Open run detail
+                    </NativeButton>
+                  ) : null}
+                </LibraryButtonRow>
+
+                <NativeButton variant="outline" onClick={() => setMetadataOpen(true)}>Provenance and versions</NativeButton>
+                <Suspense fallback={<p role="status">Loading artifact viewer…</p>}><ArtifactViewer artifact={selectedArtifact} /></Suspense>
+                <DetailInspector open={metadataOpen} title="Provenance and versions" onClose={() => setMetadataOpen(false)}><LibraryMetricGrid
                   items={[
                     {
                       label: "Kind",
@@ -184,7 +254,7 @@ export function LibraryArtifactsSection({
                     { label: "Updated", value: formatDateTime(selectedArtifact.updatedAt), meta: "Artifact timestamp" },
                   ]}
                 />
-                <LibraryActionCardGrid
+<LibraryActionCardGrid
                   items={[
                     {
                       id: "viewer",
@@ -270,73 +340,14 @@ export function LibraryArtifactsSection({
                     },
                   ]}
                 />
-                <LibraryButtonRow>
-                  <NativeButton variant="outline" onClick={() => downloadArtifact(selectedArtifact)}>
-                    <Download size={16} />
-                    Download artifact
-                  </NativeButton>
-                  <NativeButton
-                    variant="default"
-                    onClick={() =>
-                      navigate({
-                        area: "chat",
-                        sessionId: selectedArtifact.sessionId,
-                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                        turnId: selectedArtifact.turnId,
-                        artifactId: selectedArtifact.artifactId,
-                        theme: route.theme,
-                      })
-                    }
-                  >
-                    <Workflow size={16} />
-                    Open source thread
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      navigate({
-                        area: "library",
-                        section: "artifacts",
-                        artifactId: selectedArtifact.artifactId,
-                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                        theme: route.theme,
-                      })
-                    }
-                  >
-                    <FileText size={16} />
-                    Reopen artifact
-                  </NativeButton>
-                  {selectedArtifactRunId ? (
-                    <NativeButton
-                      variant="secondary"
-                      onClick={() =>
-                        navigate({
-                          area: "ops",
-                          section: "sessions",
-                          view: "run-detail",
-                          runId: selectedArtifactRunId,
-                          artifactId: selectedArtifact.artifactId,
-                          sessionId: selectedArtifact.sessionId,
-                          turnId: selectedArtifact.turnId,
-                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                          theme: route.theme,
-                        })
-                      }
-                    >
-                      <Waypoints size={16} />
-                      Open run detail
-                    </NativeButton>
-                  ) : null}
-                </LibraryButtonRow>
-                <LibraryCodeBlock label="Artifact provenance">
+<LibraryCodeBlock label="Artifact provenance">
                   {formatArtifactProvenance(selectedArtifact)}
-                </LibraryCodeBlock>
-                <LibraryCodeBlock label="Content">{truncateText(selectedArtifact.content, 2800)}</LibraryCodeBlock>
+                </LibraryCodeBlock></DetailInspector>
               </>
             ) : (
               <LibraryEmptyState label="Select an artifact to inspect it." />
             )}
-          </NativeCard>
+          </NativeCard></FocusedDetail> : null}
         </div>
       </div>
     </LibrarySectionShell>

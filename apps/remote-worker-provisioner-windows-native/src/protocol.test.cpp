@@ -288,12 +288,13 @@ void TestHeaderFieldMatrix() {
 }
 
 void TestKnownDarkAndUnknownOpcodes() {
-  constexpr std::array<std::uint8_t, 11U> kDarkOpcodes = {
+  constexpr std::array<std::uint8_t, 12U> kDarkOpcodes = {
       static_cast<std::uint8_t>(gc::Opcode::CreateKeyset),
       static_cast<std::uint8_t>(gc::Opcode::AcquireKeyForSigning),
       static_cast<std::uint8_t>(gc::Opcode::SignAdmissionEvidence),
       static_cast<std::uint8_t>(gc::Opcode::RevokeLocalKeyset),
       static_cast<std::uint8_t>(gc::Opcode::SignRuntimePopV2),
+      static_cast<std::uint8_t>(gc::Opcode::SignTlsClientCertificateVerify),
       static_cast<std::uint8_t>(gc::Opcode::BeginInstall),
       static_cast<std::uint8_t>(gc::Opcode::SealAndPublishInstall),
       static_cast<std::uint8_t>(gc::Opcode::AbandonToQuarantine),
@@ -324,6 +325,56 @@ void TestKnownDarkAndUnknownOpcodes() {
             gc::ErrorCode::ProtocolInvalid,
             gc::ExitCode::ProtocolInvalid),
         "unknown opcode invalid");
+  }
+}
+
+void TestTlsClientCertificateVerifyCodecs() {
+  constexpr char kContext[] = "TLS 1.3, client CertificateVerify";
+  for (const std::size_t hash_length : {32U, 48U}) {
+    std::array<std::uint8_t, gc::kSignTlsClientCertificateVerifyRequestBytes> body{};
+    std::fill_n(body.data() + 16U, 32U, std::uint8_t{0x41U});
+    WriteU16(body.data() + 48U, 1U);
+    body[50U] = 4U;
+    WriteU64(body.data() + 52U, 7U);
+    std::fill_n(body.data() + 60U, 32U, std::uint8_t{0x51U});
+    WriteU32(body.data() + 92U, static_cast<std::uint32_t>(98U + hash_length));
+    std::fill_n(body.data() + 96U, 32U, std::uint8_t{0x61U});
+    std::fill_n(body.data() + 128U, 64U, std::uint8_t{0x20U});
+    std::memcpy(body.data() + 192U, kContext, sizeof(kContext));
+    std::fill_n(body.data() + 226U, hash_length, std::uint8_t{0x17U});
+    gc::SignTlsClientCertificateVerifyRequest decoded{};
+    Expect(gc::DecodeSignTlsClientCertificateVerifyCallerRequest(body.data(), body.size(), &decoded) &&
+        decoded.preimage_length == 98U + hash_length && decoded.expected_generation == 7U,
+        "TLS client CertificateVerify exact caller request");
+    Expect(!gc::DecodeSignTlsClientCertificateVerifyRequest(body.data(), body.size(), &decoded),
+        "TLS client CertificateVerify service rejects unassigned operation identity");
+    auto inner = body;
+    inner[0U] = 0x71U;
+    Expect(gc::DecodeSignTlsClientCertificateVerifyRequest(inner.data(), inner.size(), &decoded) &&
+        !gc::DecodeSignTlsClientCertificateVerifyCallerRequest(inner.data(), inner.size(), &decoded),
+        "TLS client CertificateVerify ordinary caller cannot supply inner operation identity");
+    for (std::size_t length = 0U; length < body.size(); ++length) {
+      Expect(!gc::DecodeSignTlsClientCertificateVerifyCallerRequest(body.data(), length, &decoded),
+          "TLS client CertificateVerify truncated frame rejected");
+    }
+    for (const std::size_t offset : {0U, 48U, 50U, 51U, 92U, 279U}) {
+      auto changed = body;
+      changed[offset] ^= 1U;
+      Expect(!gc::DecodeSignTlsClientCertificateVerifyCallerRequest(changed.data(), changed.size(), &decoded),
+          "TLS client CertificateVerify framing mutation rejected");
+    }
+    for (std::size_t offset = 128U; offset < 226U; ++offset) {
+      auto changed = body;
+      changed[offset] ^= 1U;
+      Expect(!gc::DecodeSignTlsClientCertificateVerifyCallerRequest(changed.data(), changed.size(), &decoded),
+          "TLS client CertificateVerify cross-purpose bytes rejected");
+    }
+    for (const std::uint32_t invalid_length : {0U, 129U, 131U, 145U, 147U, UINT32_MAX}) {
+      auto changed = body;
+      WriteU32(changed.data() + 92U, invalid_length);
+      Expect(!gc::DecodeSignTlsClientCertificateVerifyCallerRequest(changed.data(), changed.size(), &decoded),
+          "TLS client CertificateVerify invalid bounded length rejected");
+    }
   }
 }
 
@@ -811,7 +862,7 @@ void TestProtectedMutationCodecs() {
     } else if (offset == 130U) {
       mutated[offset] = 2U;
     } else if (offset == 131U) {
-      mutated[offset] = 13U;
+      mutated[offset] = 14U;
     } else if (offset == 132U) {
       mutated[offset] = 1U;
     } else if (offset == 133U) {
@@ -825,7 +876,7 @@ void TestProtectedMutationCodecs() {
         InvalidPopRequestClears(mutated, mutated.size()),
         "remote-worker PoP-v2 request mutation rejected");
   }
-  for (std::uint8_t route = 1U; route <= 12U; ++route) {
+  for (std::uint8_t route = 1U; route <= 13U; ++route) {
     auto bound = pop_request;
     bound[131U] = route;
     bound[132U] = route == 1U ? 1U : 2U;
@@ -903,6 +954,7 @@ int main(int argument_count, char* arguments[]) {
   TestLengthCapsAndExactEof();
   TestHeaderFieldMatrix();
   TestKnownDarkAndUnknownOpcodes();
+  TestTlsClientCertificateVerifyCodecs();
   TestProtectedMutationCodecs();
   TestSeededFuzz();
   if (g_failures != 0) {

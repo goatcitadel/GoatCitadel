@@ -423,6 +423,32 @@ describe("ChatToolRunRepository", () => {
     assert.equal(record.effectEvidence?.reason, "approval_wait_after_auxiliary_dispatch");
   });
 
+  it("preserves canonical pre-dispatch failure after approval replay", () => {
+    const { repo } = createStore();
+    const record = repo.create({
+      toolRunId: "approved-before-dispatch",
+      turnId: "turn-approved-before-dispatch",
+      sessionId: "session-approved-before-dispatch",
+      toolName: "mcp.invoke",
+      status: "failed",
+      approvalId: "approval-before-dispatch",
+      effectPotential: "unknown",
+      effectDisposition: "none",
+      effectOutcomeKind: "none",
+      effectEvidence: {
+        version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+        outcomeKind: "none",
+        reason: "pre_dispatch_blocked",
+        refs: [],
+      },
+      startedAt: "2026-09-09T00:00:00.000Z",
+      finishedAt: "2026-09-09T00:00:01.000Z",
+    });
+    assert.equal(record.effectDisposition, "none");
+    assert.equal(record.effectOutcomeKind, "none");
+    assert.equal(repo.get(record.toolRunId).effectEvidence?.reason, "pre_dispatch_blocked");
+  });
+
   it("keeps a post-dispatch output rejection coherent instead of degrading to legacy", () => {
     const { repo } = createStore();
     const record = repo.create({

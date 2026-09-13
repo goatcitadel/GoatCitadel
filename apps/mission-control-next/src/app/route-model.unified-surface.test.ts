@@ -129,11 +129,11 @@ describe("trusted saved Ops boards route", () => {
 
     expect(route).toMatchObject({ area: "ops", section: "boards" });
     expect(buildAppHref(route)).toBe("/ops/boards");
-    expect(getRouteLabel(route)).toBe("Boards");
-    expect(routeKicker(route)).toBe("Ops · Observe · Boards");
+    expect(getRouteLabel(route)).toBe("Saved boards");
+    expect(routeKicker(route)).toBe("Ops · Overview · Saved boards");
     expect(getRouteReleaseScope(route)).toMatchObject({ status: "ship" });
     expect(RAIL_ITEMS.ops.some((item) => item.id === "ops-boards" && item.section === "boards")).toBe(true);
-    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-observe")?.sections).toContain("boards");
+    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-overview")?.sections).toContain("boards");
   });
 });
 
@@ -143,9 +143,9 @@ describe("remote-worker Ops route (HX-507B)", () => {
 
     expect(route).toMatchObject({ area: "ops", section: "workers" });
     expect(buildAppHref(route)).toBe("/ops/workers");
-    expect(getRouteLabel(route)).toBe("Workers");
-    expect(routeKicker(route)).toBe("Ops · Observe · Workers");
+    expect(getRouteLabel(route)).toBe("Remote workers");
+    expect(routeKicker(route)).toBe("Ops · Monitor · Remote workers");
     expect(RAIL_ITEMS.ops.some((item) => item.id === "ops-workers" && item.section === "workers")).toBe(true);
-    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-observe")?.sections).toContain("workers");
+    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-monitor")?.sections).toContain("workers");
   });
 });

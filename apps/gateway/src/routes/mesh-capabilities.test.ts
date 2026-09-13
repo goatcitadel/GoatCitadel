@@ -710,6 +710,15 @@ describe("mesh capability invocation routes (M3)", () => {
     const harness = await buildHarness();
     const { invocationId, args, generation, dispatchPromise } = await dispatchInvocation(harness);
 
+    const pending = await harness.app.inject({ method: "GET",
+      url: "/api/v1/mesh/capabilities/invocations/pending", headers: nodeHeaders() });
+    expect(pending.statusCode).toBe(200);
+    expect(pending.headers["cache-control"]).toBe("no-store");
+    expect(pending.headers.vary).toContain("Authorization");
+    expect(pending.json()).toMatchObject({ items: [{ invocationId, nodeId: "node-a", ...generation }] });
+    expect(pending.json().items).toHaveLength(1);
+    expect(pending.body).not.toContain("release notes");
+
     const input = await harness.app.inject({
       method: "GET",
       url: `/api/v1/mesh/capabilities/invocations/${invocationId}/input`,
@@ -782,6 +791,26 @@ describe("mesh capability invocation routes (M3)", () => {
       headers: nodeHeaders(),
     });
     expect(inputAfter.statusCode).toBe(404);
+    const pendingAfter = await harness.app.inject({ method: "GET",
+      url: "/api/v1/mesh/capabilities/invocations/pending", headers: nodeHeaders() });
+    expect(pendingAfter.json()).toEqual({ items: [] });
+  });
+
+  it.each(["token", "none"] as const)("requires node admission for pending delivery with Gateway auth %s", async (authMode) => {
+    const harness = await buildHarness(authMode);
+    const url = "/api/v1/mesh/capabilities/invocations/pending";
+    expect((await harness.app.inject({ method: "GET", url })).statusCode).toBe(401);
+    expect((await harness.app.inject({ method: "GET", url,
+      headers: { authorization: `Bearer ${OPERATOR_TOKEN}` } })).statusCode).toBe(403);
+    const wrongCertificate = await harness.app.inject({ method: "GET", url,
+      headers: { ...nodeHeaders(), [MESH_NODE_TLS_FINGERPRINT_HEADER]: "changed" } });
+    expect(wrongCertificate.statusCode).toBe(403);
+    for (const query of ["workspaceId=other", "nodeId=node-b", "cursor=anything", "limit=999999"]) {
+      expect((await harness.app.inject({ method: "GET", url: `${url}?${query}`, headers: nodeHeaders() })).statusCode).toBe(400);
+    }
+    const current = await harness.app.inject({ method: "GET", url, headers: nodeHeaders() });
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toEqual({ items: [] });
   });
 
   it("rejects operator credentials, foreign nodes, anonymous callers, and malformed bodies", async () => {

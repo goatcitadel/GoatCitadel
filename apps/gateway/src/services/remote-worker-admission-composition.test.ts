@@ -70,6 +70,7 @@ describe("remote worker admission production composition", () => {
     const assignmentProtocol = unusedAssignmentProtocol();
     const assignmentDispatch = unusedAssignmentDispatch();
     const assignmentExecution = unusedAssignmentExecution();
+    const meshCapabilities = { assertAvailable: vi.fn(async () => undefined), execute: vi.fn(async () => { throw new Error("not exercised"); }) };
     const handler = await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
       config,
       admissionStore: unusedAdmissionStore() as never,
@@ -77,6 +78,7 @@ describe("remote worker admission production composition", () => {
       assignmentProtocol,
       assignmentDispatch,
       assignmentExecution,
+      meshCapabilities,
       createEvidenceVerifier: vi.fn(() => verifier),
     });
 
@@ -85,6 +87,7 @@ describe("remote worker admission production composition", () => {
     expect(assignmentProtocol.assertAvailable).toHaveBeenCalledTimes(1);
     expect(assignmentDispatch.assertAvailable).toHaveBeenCalledTimes(1);
     expect(assignmentExecution.assertAvailable).toHaveBeenCalledTimes(1);
+    expect(meshCapabilities.assertAvailable).toHaveBeenCalledTimes(1);
     expect(handler).toBeTypeOf("function");
   });
 

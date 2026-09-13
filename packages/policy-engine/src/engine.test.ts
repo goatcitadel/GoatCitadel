@@ -700,6 +700,22 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(scopesQueried).not.toContain("chamber");
   });
 
+  it("keeps Citadel deny-wins policy when replaying a stored approved action", async () => {
+    const storage = createStorageStub();
+    Object.assign(storage.toolGrants, { listActive: vi.fn((scope: string, scopeRef: string) =>
+      scope === "citadel" && scopeRef === "c1" ? [{ grantId: "approved-citadel-deny",
+        toolPattern: "session.status", decision: "deny", scope: "citadel", scopeRef: "c1",
+        grantType: "persistent", createdBy: "test", createdAt: new Date().toISOString() }] : []) });
+    vi.mocked(storage.pendingApprovalActions.find).mockResolvedValue(createPendingApprovalAction({
+      approvalId: "apr-citadel-scope", expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      request: { toolName: "session.status", args: {}, agentId: "assistant", sessionId: "session",
+        turnId: "turn", toolRunId: "remote-tool:intent", citadelId: "c1" },
+    }));
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    expect(await engine.executeApprovedAction("apr-citadel-scope")).toMatchObject({ outcome: "blocked" });
+    expect(storage.toolGrants.listActive).toHaveBeenCalledWith("citadel", "c1");
+  });
+
   it("denies a tool when a Citadel Ward matches with deny (engine consults the Wards table)", async () => {
     const storage = createStorageStub();
     Object.assign(storage, {
@@ -4820,7 +4836,8 @@ describe("ToolPolicyEngine outside-root read access", () => {
       });
       expect(storage.toolAccessDecisions.record).toHaveBeenCalledWith(
         expect.objectContaining({
-          toolName: "mcp.invoke",
+          toolName: "mcp.srv-1.tool.echo",
+          policyToolName: "mcp.invoke",
           countsTowardLimits: true,
         }),
       );

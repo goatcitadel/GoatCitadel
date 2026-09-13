@@ -177,7 +177,7 @@ export function TrustPolicyRowDetails({ row }: { row: TrustPolicyMatrixRow }) {
                 <strong>Last Active:</strong> {row.lastUse.at ? new Date(row.lastUse.at).toLocaleString() : "Unknown"}
               </div>
               <div>
-                <strong>Usage:</strong> {row.lastUse.label ?? "1+ times"}
+                <strong>Usage:</strong> {row.lastUse.label ?? "Unavailable"}
               </div>
               {row.lastUse.runId && (
                 <div>
@@ -197,7 +197,7 @@ export function TrustPolicyRowDetails({ row }: { row: TrustPolicyMatrixRow }) {
             </div>
           ) : (
             <div style={{ fontStyle: "italic", marginTop: "0.25rem" }}>
-              No recorded runtime activations or security events.
+              No retained last-use evidence was supplied in this snapshot.
             </div>
           )}
         </div>

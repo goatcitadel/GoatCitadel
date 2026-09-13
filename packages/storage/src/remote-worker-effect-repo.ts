@@ -115,12 +115,15 @@ interface IntentRow extends GenerationIdentityRow {
   intent_index: number;
   effect_selector: string;
   canonical_args_sha256: string;
+  canonical_args_json: string;
   intent_sha256: string;
   worker_idempotency_key: string;
   recorded_at: string;
 }
 
 interface TransitionRow {
+  correlation_json: string;
+  previous_transition_sha256: string;
   intent_id: string;
   transition_sequence: number;
   transition_state: RemoteWorkerEffectTransitionState;
@@ -142,13 +145,29 @@ interface ReceiptRow {
 export class RemoteWorkerEffectRepository {
   public constructor(private readonly db: DatabaseClient) {}
 
+  /** Allocate a bounded effect index under the same generation locks as intent
+   * insertion. Concurrent model calls and exact replay cannot share an index. */
+  public recordNextIntent(input: Omit<RecordRemoteWorkerEffectIntentCommand, "intentIndex">): RemoteWorkerEffectIntentRecord {
+    const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
+    const assignmentId = identifier(input.assignmentId, "assignmentId");
+    const assignmentGeneration = positiveInteger(input.assignmentGeneration, "assignmentGeneration");
+    const idempotencyKey = identifier(input.idempotencyKey, "idempotencyKey", 512);
+    return this.db.transaction("immediate", () => {
+      this.acquireGenerationLocks(registryWorkspaceId, assignmentId, assignmentGeneration);
+      const replay = this.findIntentByIdempotency(registryWorkspaceId, idempotencyKey);
+      const intents = replay ? [] : this.listIntents(registryWorkspaceId, assignmentId, assignmentGeneration);
+      const intentIndex = replay?.intent_index ?? ((intents.at(-1)?.intentIndex ?? -1) + 1);
+      return this.recordIntent({ ...input, intentIndex });
+    });
+  }
+
   public recordIntent(input: RecordRemoteWorkerEffectIntentCommand): RemoteWorkerEffectIntentRecord {
     const registryWorkspaceId = identifier(input.registryWorkspaceId, "registryWorkspaceId");
     const assignmentId = identifier(input.assignmentId, "assignmentId");
     const assignmentGeneration = positiveInteger(input.assignmentGeneration, "assignmentGeneration");
     const idempotencyKey = identifier(input.idempotencyKey, "idempotencyKey", 512);
     const canonicalArgsJson = canonicalJsonString(input.canonicalArgs ?? {});
-    if (canonicalArgsJson.length > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxEffectArgsBytes) {
+    if (Buffer.byteLength(canonicalArgsJson, "utf8") > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxEffectArgsBytes) {
       throw new ValidationError({ field: "canonicalArgs", message: "Remote worker effect args exceed the bound." });
     }
     const canonicalArgsSha256 = sha256Utf8(canonicalArgsJson);
@@ -437,6 +456,41 @@ export class RemoteWorkerEffectRepository {
     return this.mapReceipt(this.getReceiptRow(registryWorkspaceId, assignmentId, assignmentGeneration, intentId));
   }
 
+  public findSettlement(
+    registryWorkspaceId: string,
+    assignmentId: string,
+    assignmentGeneration: number,
+    intentId: string,
+  ):
+    | {
+        receipt: RemoteWorkerEffectReceiptRecord;
+        transitions: RemoteWorkerEffectTransitionRecord[];
+      }
+    | undefined {
+    const params = { registryWorkspaceId, assignmentId, assignmentGeneration, intentId };
+    const receipt = this.db
+      .prepare(
+        `SELECT * FROM remote_worker_effect_receipts
+      WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+        AND assignment_generation = @assignmentGeneration AND intent_id = @intentId`,
+      )
+      .get(params) as ReceiptRow | undefined;
+    if (!receipt) return undefined;
+    const transitions = (
+      this.db
+        .prepare(
+          `SELECT * FROM remote_worker_effect_transitions
+      WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+        AND assignment_generation = @assignmentGeneration AND intent_id = @intentId
+        AND transition_sequence <= @finalSequence ORDER BY transition_sequence ASC`,
+        )
+        .all({ ...params, finalSequence: receipt.final_transition_sequence }) as TransitionRow[]
+    ).map((row) => this.mapTransition(row));
+    if (transitions.at(-1)?.transitionSha256 !== receipt.final_transition_sha256)
+      throw conflict("remote worker effect settlement chain");
+    return { receipt: this.mapReceipt(receipt), transitions };
+  }
+
   public listIntents(
     registryWorkspaceId: string,
     assignmentId: string,
@@ -451,6 +505,76 @@ export class RemoteWorkerEffectRepository {
         )
         .all({ registryWorkspaceId, assignmentId, assignmentGeneration }) as IntentRow[]
     ).map((row) => this.mapIntent(row));
+  }
+
+  /** Bounded canonical history, including an approval wait without a terminal
+   * receipt. Recovery verifies the retained prefix before appending to it. */
+  public readTransitionHistory(
+    registryWorkspaceId: string, assignmentId: string, assignmentGeneration: number, intentId: string,
+  ): Array<{ record: RemoteWorkerEffectTransitionRecord; correlation: RemoteWorkerEffectCorrelation }> {
+    const intent = this.getIntentRow(registryWorkspaceId, assignmentId, assignmentGeneration, intentId);
+    const rows = this.db.prepare(`SELECT * FROM remote_worker_effect_transitions
+      WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+        AND assignment_generation = @assignmentGeneration AND intent_id = @intentId
+      ORDER BY transition_sequence ASC LIMIT @limit`).all({
+        registryWorkspaceId, assignmentId, assignmentGeneration, intentId,
+        limit: REMOTE_WORKER_SETTLEMENT_BOUNDS.maxEffectTransitions + 1,
+      }) as TransitionRow[];
+    if (rows.length > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxEffectTransitions)
+      throw conflict("remote worker effect transition bound");
+    let previous = REMOTE_WORKER_SETTLEMENT_GENESIS_SHA256;
+    let state: RemoteWorkerEffectTransitionState | undefined;
+    return rows.map((row, index) => {
+      const correlation = normalizeRemoteWorkerEffectCorrelation(JSON.parse(row.correlation_json));
+      const correlationSha256 = remoteWorkerEffectCorrelationSha256(correlation);
+      const transitionSha256 = remoteWorkerEffectTransitionSha256({
+        intentSha256: intent.intent_sha256, transitionSequence: index + 1, correlationSha256,
+        previousTransitionSha256: previous,
+      });
+      if (asPositiveInteger(row.transition_sequence) !== index + 1 || row.transition_state !== correlation.transitionState ||
+        row.correlation_sha256 !== correlationSha256 || row.previous_transition_sha256 !== previous ||
+        row.transition_sha256 !== transitionSha256 ||
+        (state ? !remoteWorkerEffectCanTransition(state, correlation.transitionState) : correlation.transitionState !== "recorded"))
+        throw conflict("remote worker effect transition history");
+      state = correlation.transitionState;
+      previous = transitionSha256;
+      return { record: this.mapTransition(row), correlation };
+    });
+  }
+
+  /** Internal dispatch read. Public inventory deliberately omits the retained arguments. */
+  public readIntentForDispatch(input: {
+    registryWorkspaceId: string;
+    assignmentId: string;
+    assignmentGeneration: number;
+    intentId: string;
+    effectSelector: string;
+    canonicalArgsSha256: string;
+    workerIdempotencyKey: string;
+  }): { intent: RemoteWorkerEffectIntentRecord; args: Record<string, unknown> } {
+    const row = this.getIntentRow(
+      input.registryWorkspaceId,
+      input.assignmentId,
+      input.assignmentGeneration,
+      input.intentId,
+    );
+    if (
+      row.effect_selector !== input.effectSelector ||
+      row.worker_idempotency_key !== input.workerIdempotencyKey ||
+      row.canonical_args_sha256 !== input.canonicalArgsSha256 ||
+      sha256Utf8(row.canonical_args_json) !== row.canonical_args_sha256 ||
+      Buffer.byteLength(row.canonical_args_json, "utf8") > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxEffectArgsBytes
+    )
+      throw conflict("remote worker effect dispatch identity");
+    const args: unknown = JSON.parse(row.canonical_args_json);
+    if (
+      args === null ||
+      typeof args !== "object" ||
+      Array.isArray(args) ||
+      canonicalJsonString(args) !== row.canonical_args_json
+    )
+      throw conflict("remote worker effect dispatch arguments");
+    return { intent: this.mapIntent(row), args: args as Record<string, unknown> };
   }
 
   // --- internals ------------------------------------------------------------

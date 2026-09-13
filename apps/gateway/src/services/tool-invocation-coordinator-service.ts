@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { posix as posixPath, win32 as winPath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { StaticMcpChatDispatchPort } from "./mcp-static-chat-service.js";
 import {
   classifyToolEffectPotential,
   isToolEffectPotentialRecord,
@@ -27,7 +28,7 @@ import {
   type WorkspacePathBridgeReasonCode,
   type WardEffect,
 } from "@goatcitadel/contracts";
-import { ToolExecutionPreconditionError, type ToolProcessSpawnBoundary } from "@goatcitadel/policy-engine";
+import { ToolExecutionPreconditionError, type McpToolPolicyBinding, type MeshToolPolicyBinding, type ToolProcessSpawnBoundary } from "@goatcitadel/policy-engine";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import {
@@ -48,7 +49,11 @@ import {
   resolveMcpInvokeAuthReadiness,
 } from "./mcp-oauth-token-service.js";
 import type { McpRequesterScopedTurnContextHandle } from "./mcp-requester-resolution-service.js";
+import { isMeshChatToolName, type MeshChatTurnContextHandle, type MeshChatToolBinding } from "./gateway/mesh-chat-binding.js";
+import { dispatchMeshChatTool, type MeshChatDispatchPort, type MeshChatDispatchOptions } from "./gateway/mesh-chat-dispatch.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
+import { toMcpInvokeRequest, toolInvokeResultFromMcpRuntime } from "./gateway/external-runtime-approval-adapter.js";
+import { isNativeMcpToolName, type NativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
 import type {
   PluginToolExecutionContext,
   PluginToolHandler,
@@ -75,7 +80,7 @@ interface ToolPolicyAccessResult {
 
 export interface ToolExternalSideEffectBoundary {
   /** Record immediately before a concrete provider or irreversible mutation starts. */
-  markStarted(): void;
+  markStarted(): void | Promise<void>;
   /** Record that execution finished or failed without crossing that boundary. */
   markNotRequired(): void;
 }
@@ -125,14 +130,17 @@ function buildMcpInvocationRealtimeOptions(input: {
   };
 }
 
-function buildPluginOverridePolicyFailure(finalPolicyCheck: ToolInvokeResult): ToolInvokeResult | undefined {
+function buildExternalRuntimePolicyFailure(
+  finalPolicyCheck: ToolInvokeResult,
+  runtimeLabel = "plugin override",
+): ToolInvokeResult | undefined {
   if (finalPolicyCheck.outcome === "blocked" || finalPolicyCheck.outcome === "approval_required") {
     return finalPolicyCheck;
   }
   if (readDryRunRequiresApproval(finalPolicyCheck.result)) {
     return {
       outcome: "blocked",
-      policyReason: `blocked: plugin override requires policy approval before execution (${finalPolicyCheck.policyReason})`,
+      policyReason: `blocked: ${runtimeLabel} requires policy approval before execution (${finalPolicyCheck.policyReason})`,
       auditEventId: finalPolicyCheck.auditEventId,
       result: finalPolicyCheck.result,
       internalCall: finalPolicyCheck.internalCall,
@@ -580,6 +588,8 @@ export interface ToolInvocationCoordinatorHost {
       options?: {
         beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void>;
         externalSideEffect?: ToolExternalSideEffectBoundary;
+        mcpToolBinding?: McpToolPolicyBinding;
+        meshToolBinding?: MeshToolPolicyBinding;
       },
     ): Promise<ToolInvokeResult>;
     evaluateAccess(request: {
@@ -596,6 +606,12 @@ export interface ToolInvocationCoordinatorHost {
   };
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   normalizeToolInvokeRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest>;
+  resolveNativeMcpChatToolBinding?(
+    request: ToolInvokeRequest,
+    handle: McpRequesterScopedTurnContextHandle | undefined,
+  ): Promise<NativeMcpChatToolBinding | undefined>;
+  resolveMeshChatToolBinding?: MeshChatDispatchPort["resolveBinding"];
+  dispatchMeshCapabilityInvocation?: MeshChatDispatchPort["dispatch"];
   isValidToolName(name: string): boolean;
   evaluateToolDeploymentGuard(request: ToolInvokeRequest): { reason: string } | null | undefined;
   isFeatureEnabled?(flag: "computerUseGuardrailsV1Enabled"): Promise<boolean>;
@@ -627,7 +643,7 @@ export interface ToolInvocationCoordinatorHost {
   isMcpToolApproved(serverId: string, toolName: string): Promise<boolean>;
   invokeMcpRuntimeTool(
     server: McpServerRecord,
-    input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
+    input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal" | "workspaceId" | "sessionId" | "policyContext">,
   ): Promise<McpRuntimeInvocationResult>;
   /**
    * HX-415 app-private requester-scoped MCP dispatch. Undefined until a
@@ -637,6 +653,7 @@ export interface ToolInvocationCoordinatorHost {
    * authority from server-owned request context — never from `McpInvokeRequest`.
    */
   readonly requesterScopedMcpDispatch?: RequesterScopedMcpDispatchPort;
+  readonly staticMcpChatDispatch?: StaticMcpChatDispatchPort;
   resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
     connectorId: string;
@@ -674,18 +691,22 @@ export interface ToolInvocationCoordinatorHost {
 }
 
 export interface ToolInvocationRuntimeOptions {
+  /** Private profile identity for mesh authority; never accepted from a tool request body. */
+  meshTurnContext?: MeshChatTurnContextHandle;
   /** Process-local cancellation signal for fresh workspace-path verification. */
   workspacePathBridgeSignal?: AbortSignal;
   /**
    * HX-415 app-private branded turn context for requester-scoped MCP dispatch.
-   * Originated ONLY by the chat-turn runner from the frozen capability-profile
-   * record; the direct route and approval replay never populate it, so those
-   * paths keep failing closed (`requester_context_missing`) one level deeper.
+   * Originated only by Chat/Gateway composition from a frozen capability-profile
+   * record. Direct routes and callers without that canonical context continue
+   * to fail closed (`requester_context_missing`) one level deeper.
    * Never serialized; brand-checked at the dispatch provider.
    */
   mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
   /** Process-local durable fence immediately before the main tool executor. */
   executionFence?: () => Promise<void>;
+  /** Canonical owner's execution receipt, after policy and deepest spawn fences. */
+  beforeBuiltinExecute?: () => Promise<void>;
   /**
    * Process-local durable fence immediately before an auxiliary hook effect.
    * This is deliberately distinct from the main executor boundary so an
@@ -724,15 +745,19 @@ export interface ToolInvocationCoordinator {
   invokeMcpTool(input: McpInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<McpInvokeResponse>;
   invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
-    markExternalCallStarted?: () => void,
+    markExternalCallStarted?: () => void | Promise<void>,
     options?: ApprovedExternalRuntimeInvocationOptions,
   ): Promise<ToolInvokeResult>;
-  invokeApprovedMcpRuntime(input: McpInvokeRequest, markExternalCallStarted?: () => void): Promise<McpInvokeResponse>;
+  invokeApprovedMcpRuntime(
+    input: McpInvokeRequest,
+    markExternalCallStarted?: () => void | Promise<void>,
+  ): Promise<McpInvokeResponse>;
 }
 
 export interface ApprovedExternalRuntimeInvocationOptions {
   /** Process-local approval-worker cancellation authority; never deserialize from model input. */
   signal?: AbortSignal;
+  runtimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
 }
 
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
@@ -744,10 +769,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
    */
   public async prepareApprovedBuiltinBeforeExecute(
     request: ToolInvokeRequest,
-    options: { invocationId: string; signal?: AbortSignal },
+    options: { invocationId: string; signal?: AbortSignal; runtimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding },
   ): Promise<((boundary?: ToolProcessSpawnBoundary) => Promise<void>) | undefined> {
+    const checkOwner = () => {
+      if (!options.runtimeOwner) return;
+      const owner = this.resolveCurrentToolRuntimeOwnerBinding(request.toolName);
+      if (owner?.kind !== options.runtimeOwner.kind || owner.bindingHash !== options.runtimeOwner.bindingHash)
+        throw new ToolExecutionPreconditionError("Approved tool runtime owner changed from its admitted binding.");
+    };
+    checkOwner();
     if (!isWorkspacePathBridgeCwdTool(request.toolName)) {
-      return undefined;
+      return options.runtimeOwner ? async () => checkOwner() : undefined;
     }
     const initial = await applyFreshWorkspacePathBridge(this.host, request, {
       invocationId: options.invocationId,
@@ -760,7 +792,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
     const snapshotIds = initial.snapshotId ? [initial.snapshotId] : [];
-    return createDeepWorkspacePathBridgePrecondition({
+    const bridge = createDeepWorkspacePathBridgePrecondition({
       host: this.host,
       request: initial.request,
       initial,
@@ -768,6 +800,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       snapshotIds,
       ...(options.signal ? { signal: options.signal } : {}),
     });
+    return async (boundary) => { checkOwner(); await bridge(boundary); checkOwner(); };
   }
 
   private resolveCurrentToolRuntimeOwnerBinding(
@@ -864,7 +897,15 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     input: McpInvokeRequest,
     options?: { externalRuntime?: boolean },
   ): Promise<McpPolicyEvaluation> {
-    const request = this.buildMcpPolicyRequest(input);
+    // Use the same server-owned workspace, Citadel and permission resolution
+    // as Chat tool calls before evaluating either MCP policy identity.
+    const wrapper = this.buildMcpPolicyRequest(input);
+    const request = {
+      ...(await this.host.normalizeToolInvokeRequest(wrapper)),
+      // Policy must inspect the exact target/arguments the MCP owner will send.
+      toolName: wrapper.toolName,
+      args: wrapper.args,
+    };
     return {
       access: await this.host.policyEngine.evaluateAccess(request),
       decision: await this.host.policyEngine.invoke({
@@ -919,7 +960,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     request: ToolInvokeRequest,
     options: ToolInvocationRuntimeOptions = {},
   ): Promise<ToolInvokeResult> {
-    if (!this.host.isValidToolName(request.toolName)) {
+    if (!this.host.isValidToolName(request.toolName) && !isMeshChatToolName(request.toolName)) {
       return {
         outcome: "blocked",
         policyReason: "blocked: invalid tool name format",
@@ -935,6 +976,25 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
 
     const normalizedRequest = await this.host.normalizeToolInvokeRequest(request);
+    if (isMeshChatToolName(normalizedRequest.toolName)) {
+      try {
+        await this.resolveMeshBinding(normalizedRequest, options);
+      } catch {
+        return { outcome: "blocked", policyReason: "blocked: mesh tool requires its exact frozen Chat capability binding",
+          auditEventId: randomUUID() };
+      }
+    }
+    if (isNativeMcpToolName(normalizedRequest.toolName)) {
+      try {
+        await this.resolveNativeMcpBinding(normalizedRequest, options);
+      } catch {
+        return {
+          outcome: "blocked",
+          policyReason: "blocked: native MCP tool requires its exact frozen Chat capability binding",
+          auditEventId: randomUUID(),
+        };
+      }
+    }
     if (containsRawApprovalActionBearer(normalizedRequest.args)) {
       return {
         outcome: "blocked",
@@ -1082,7 +1142,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       }
     }
 
-    if (options.effectPotential && hookableRequest.toolName !== normalizedRequest.toolName) {
+    if ((options.effectPotential || isNativeMcpToolName(normalizedRequest.toolName) || isMeshChatToolName(normalizedRequest.toolName)) &&
+      hookableRequest.toolName !== normalizedRequest.toolName) {
       return {
         outcome: "blocked",
         policyReason: "blocked: tool hook cannot rewrite an immutable Chat capability binding",
@@ -1101,7 +1162,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
 
-    if (!this.host.isValidToolName(hookableRequest.toolName)) {
+    if (!this.host.isValidToolName(hookableRequest.toolName) && !isMeshChatToolName(hookableRequest.toolName)) {
       return {
         outcome: "blocked",
         policyReason: "blocked: invalid post-hook tool name format",
@@ -1147,6 +1208,9 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const admittedOverrideRuntimeOwner = overrideHandler
       ? this.admitPluginRuntimeOwner(hookableRequest.toolName, overrideHandler)
       : undefined;
+    if (overrideHandler && (isNativeMcpToolName(hookableRequest.toolName) || isMeshChatToolName(hookableRequest.toolName))) {
+      return buildPluginRuntimeOwnerDriftResult();
+    }
     if (overrideHandler && !admittedOverrideRuntimeOwner) {
       return buildPluginRuntimeOwnerDriftResult();
     }
@@ -1183,7 +1247,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         ...executionRequest,
         externalRuntime: true,
       });
-      const overridePolicyFailure = buildPluginOverridePolicyFailure(finalPolicyCheck);
+      const overridePolicyFailure = buildExternalRuntimePolicyFailure(finalPolicyCheck);
       if (overridePolicyFailure) {
         return overridePolicyFailure;
       }
@@ -1281,7 +1345,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
             } else {
               // Plugin handlers do not expose a deeper provider adapter boundary, so
               // conservatively record it immediately before the approved handler.
-              options.externalSideEffect?.markStarted();
+              await options.externalSideEffect?.markStarted();
               if (
                 !this.isPluginRuntimeOwnerAdmissionCurrent(
                   hookableRequest.toolName,
@@ -1302,8 +1366,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
             }
           }
         }
+      } else if (isMeshChatToolName(executionRequest.toolName)) {
+        result = await this.invokeMeshToolFromToolRequest(executionRequest, options);
+      } else if (executionRequest.toolName === "mcp.invoke" || isNativeMcpToolName(executionRequest.toolName)) {
+        result = await this.invokeMcpToolFromToolRequest(executionRequest, options);
       } else {
-        const beforeExecute = isWorkspacePathBridgeCwdTool(executionRequest.toolName)
+        const beforeExecutionFence = isWorkspacePathBridgeCwdTool(executionRequest.toolName)
           ? createDeepWorkspacePathBridgePrecondition({
               host: this.host,
               request: executionRequest,
@@ -1314,6 +1382,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
               ...(options.executionFence ? { executionFence: options.executionFence } : {}),
             })
           : options.executionFence;
+        const beforeExecute = options.beforeBuiltinExecute
+          ? async (boundary?: ToolProcessSpawnBoundary) => {
+              await beforeExecutionFence?.(boundary);
+              await options.beforeBuiltinExecute!();
+            }
+          : beforeExecutionFence;
         const policyOptions = {
           ...(beforeExecute ? { beforeExecute } : {}),
           ...(options.externalSideEffect ? { externalSideEffect: options.externalSideEffect } : {}),
@@ -1509,7 +1583,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
   public async invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
-    markExternalCallStarted?: () => void,
+    markExternalCallStarted?: () => void | Promise<void>,
     options: ApprovedExternalRuntimeInvocationOptions = {},
   ): Promise<ToolInvokeResult> {
     if (!this.host.isValidToolName(request.toolName)) {
@@ -1554,6 +1628,9 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (!admittedOverrideRuntimeOwner) {
       return buildPluginRuntimeOwnerDriftResult();
     }
+    if (options.runtimeOwner && (options.runtimeOwner.kind !== admittedOverrideRuntimeOwner.kind ||
+      options.runtimeOwner.bindingHash !== admittedOverrideRuntimeOwner.bindingHash))
+      return buildPluginRuntimeOwnerDriftResult();
     const workspacePathBridgeInvocationId = `approved:${randomUUID()}`;
     const policyBridge = await applyFreshWorkspacePathBridge(this.host, normalizedRequest, {
       invocationId: workspacePathBridgeInvocationId,
@@ -1572,7 +1649,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       ...executionRequest,
       externalRuntime: true,
     });
-    const overridePolicyFailure = buildPluginOverridePolicyFailure(finalPolicyCheck);
+    const overridePolicyFailure = buildExternalRuntimePolicyFailure(finalPolicyCheck);
     if (overridePolicyFailure) {
       return overridePolicyFailure;
     }
@@ -1630,7 +1707,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         ? buildApprovedExternalRuntimeCancelledResult()
         : buildPluginRuntimeOwnerDriftResult();
     }
-    markExternalCallStarted?.();
+    await markExternalCallStarted?.();
     if (
       options.signal?.aborted ||
       !this.isPluginRuntimeOwnerAdmissionCurrent(
@@ -1712,16 +1789,132 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     return result;
   }
 
+  private async resolveMeshBinding(
+    request: ToolInvokeRequest,
+    options: Pick<ToolInvocationRuntimeOptions, "meshTurnContext">,
+  ): Promise<MeshChatToolBinding> {
+    if (!request.turnId || !request.toolRunId || !this.host.dispatchMeshCapabilityInvocation) {
+      throw new ToolExecutionPreconditionError("Mesh invocation requires canonical Chat correlation and its runtime owner");
+    }
+    const binding = await this.host.resolveMeshChatToolBinding?.(request, options.meshTurnContext);
+    if (!binding) throw new ToolExecutionPreconditionError("Mesh invocation has no frozen target binding");
+    return binding;
+  }
+
+  private async invokeMeshToolFromToolRequest(request: ToolInvokeRequest, options: ToolInvocationRuntimeOptions): Promise<ToolInvokeResult> {
+    const binding = await this.resolveMeshBinding(request, options);
+    const policyResult = await this.host.policyEngine.invoke({ ...request, externalRuntime: true }, {
+      meshToolBinding: binding.schema.policyBinding,
+    });
+    const failure = buildExternalRuntimePolicyFailure(policyResult, "Mesh runtime");
+    if (failure) return failure;
+    const approvalId = extractVerifiedApprovalReplayId(policyResult, request);
+    if (approvalId) return { ...policyResult, outcome: "blocked",
+      policyReason: "blocked: approved mesh actions execute only through the canonical approval-effect worker",
+      result: { approvalId, executionOwner: "approval_effect" } };
+    return this.invokeApprovedMeshRuntime(request, policyResult, {
+      meshTurnContext: options.meshTurnContext, executionFence: options.executionFence,
+      ...(options.externalSideEffect ? { markExternalCallStarted: () => options.externalSideEffect!.markStarted() } : {}),
+    });
+  }
+
+  public async invokeApprovedMeshRuntime(
+    request: ToolInvokeRequest, policyResult: ToolInvokeResult, options: MeshChatDispatchOptions,
+  ): Promise<ToolInvokeResult> {
+    const result = await dispatchMeshChatTool({
+      resolveBinding: async (input, context) => {
+        if (this.host.pluginToolOverrideService?.resolveActiveHandler(input.toolName))
+          throw new ToolExecutionPreconditionError("Mesh runtime owner drifted");
+        return this.resolveMeshBinding(input, { meshTurnContext: context });
+      },
+      dispatch: (input, dispatchOptions) => this.host.dispatchMeshCapabilityInvocation!(input, dispatchOptions),
+    }, request, policyResult, options);
+    return withRedactWardApplied(result, policyResult);
+  }
+
+  private async resolveNativeMcpBinding(
+    request: ToolInvokeRequest,
+    options: ToolInvocationRuntimeOptions,
+  ): Promise<NativeMcpChatToolBinding | undefined> {
+    if (!isNativeMcpToolName(request.toolName)) return undefined;
+    if (!request.turnId || !request.toolRunId) {
+      throw new ToolExecutionPreconditionError("Native MCP invocation requires canonical Chat correlation");
+    }
+    const binding = await this.host.resolveNativeMcpChatToolBinding?.(request, options.mcpRequesterTurnContext);
+    if (!binding) throw new ToolExecutionPreconditionError("Native MCP invocation has no frozen target binding");
+    return binding;
+  }
+
+  private async invokeMcpToolFromToolRequest(
+    request: ToolInvokeRequest,
+    options: ToolInvocationRuntimeOptions,
+  ): Promise<ToolInvokeResult> {
+    // Retain the exact Chat/worker invocation and correlation in policy. MCP has
+    // its own transport owner; the ordinary built-in executor cannot run it.
+    const nativeBinding = await this.resolveNativeMcpBinding(request, options);
+    const policyRequest = { ...request, externalRuntime: true };
+    const policyResult = nativeBinding
+      ? await this.host.policyEngine.invoke(policyRequest, { mcpToolBinding: nativeBinding.policyBinding })
+      : await this.host.policyEngine.invoke(policyRequest);
+    const failure = buildExternalRuntimePolicyFailure(policyResult, "MCP runtime");
+    if (failure) return failure;
+    const approvalId = extractVerifiedApprovalReplayId(policyResult, request);
+    if (approvalId) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: approved external-runtime actions execute only through the canonical approval-effect worker",
+        auditEventId: policyResult.auditEventId,
+        result: { approvalId, executionOwner: "approval_effect" },
+        audit: policyResult.audit,
+      };
+    }
+    if (request.dryRun || policyResult.result?.dryRun === true) return policyResult;
+    const input = toMcpInvokeRequest({
+      ...request,
+      policyContext: mergePolicyContexts(request.policyContext, readPolicyContextFromResult(policyResult)),
+    }, request.signal ?? options.workspacePathBridgeSignal, nativeBinding);
+    const runtimeStartedAt = Date.now();
+    // A tool grant does not replace the server's first-use approval or auth,
+    // native-tool allowlist, capability scope, and requester-resolution checks.
+    const server = await this.resolveMcpRuntimeTarget(input);
+    if (nativeBinding && "serverId" in server && resolveMcpServerConnectionMode(server) !==
+      (nativeBinding.staticBinding ? "static" : "requester_scoped")) {
+      throw new ToolExecutionPreconditionError("Native MCP server connection mode drifted from the frozen binding");
+    }
+    const response = "serverId" in server
+      ? await this.executeMcpRuntime(
+          input, server, runtimeStartedAt, undefined, policyResult.wardEffect,
+          options.externalSideEffect ? () => options.externalSideEffect!.markStarted() : undefined,
+          options.executionFence, options.mcpRequesterTurnContext,
+          nativeBinding ? request.toolName : undefined,
+        )
+      : server;
+    return toolInvokeResultFromMcpRuntime(policyResult, response, "", request.toolName);
+  }
+
   public async invokeApprovedMcpRuntime(
     input: McpInvokeRequest,
-    markExternalCallStarted?: () => void,
+    markExternalCallStarted?: () => void | Promise<void>,
+    options: Pick<ToolInvocationRuntimeOptions, "mcpRequesterTurnContext" | "executionFence"> & {
+      wardEffect?: WardEffect; nativeCanonicalToolName?: string;
+    } = {},
   ): Promise<McpInvokeResponse> {
     const runtimeStartedAt = Date.now();
-    const server = await this.resolveMcpRuntimeTarget(input);
+    // This app-private entry point is reached only after the canonical pending
+    // invocation has passed approval replay and current deny-wins policy. That
+    // exact invocation satisfies first-use consent; it grants no future access.
+    const server = await this.resolveMcpRuntimeTarget(input, { approvedInvocation: true });
     if (!("serverId" in server)) {
       return server;
     }
-    return this.executeMcpRuntime(input, server, runtimeStartedAt, undefined, undefined, markExternalCallStarted);
+    if (options.nativeCanonicalToolName &&
+      ((resolveMcpServerConnectionMode(server) === "static" && !options.mcpRequesterTurnContext) ||
+        options.nativeCanonicalToolName !== `mcp.${input.serverId}.${input.toolName}` ||
+        this.host.pluginToolOverrideService?.resolveActiveHandler(options.nativeCanonicalToolName))) {
+      throw new ToolExecutionPreconditionError("Approved native MCP target or runtime owner drifted");
+    }
+    return this.executeMcpRuntime(input, server, runtimeStartedAt, undefined, options.wardEffect,
+      markExternalCallStarted, options.executionFence, options.mcpRequesterTurnContext, options.nativeCanonicalToolName);
   }
 
   public async invokeMcpTool(
@@ -1758,16 +1951,15 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
     // The runtime policy decision (slice 3.1a) surfaces the matched Citadel Ward
     // effect; pass it so a `redact` Ward scrubs the MCP output below. Note: the
-    // model-approval-replay entry point (invokeApprovedMcpRuntime) does no policy
-    // evaluation and therefore has no ward decision to honor — that gap is flagged
-    // in the slice report; it still gets the server-policy redactionMode scrub.
+    // approved entry point receives its ward decision from the canonical policy
+    // replay owner instead of performing a second policy evaluation here.
     return this.executeMcpRuntime(
       input,
       server,
       runtimeStartedAt,
       autonomyGate.evidence,
       runtimeEvaluation.decision.wardEffect,
-      undefined,
+      options.externalSideEffect ? () => options.externalSideEffect!.markStarted() : undefined,
       options.executionFence,
       options.mcpRequesterTurnContext,
     );
@@ -1834,7 +2026,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
   }
 
-  private async resolveMcpRuntimeTarget(input: McpInvokeRequest): Promise<McpServerRecord | McpInvokeResponse> {
+  private async resolveMcpRuntimeTarget(
+    input: McpInvokeRequest,
+    consent?: { approvedInvocation: true },
+  ): Promise<McpServerRecord | McpInvokeResponse> {
     const server = await this.host.requireMcpServer(input.serverId);
     if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
       // HX-415 precondition routing: a requester-scoped server never joins global
@@ -1861,7 +2056,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           error: `MCP server ${server.label} is quarantined and cannot execute tools.`,
         };
       }
-      return server;
+      return (await this.checkMcpServerToolPolicy(input, server, consent)) ?? server;
     }
     if (!server.enabled || server.status !== "connected") {
       return {
@@ -1895,6 +2090,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         error: `MCP tool ${input.toolName} is not enabled on server ${input.serverId}.`,
       };
     }
+    return (await this.checkMcpServerToolPolicy(input, server, consent)) ?? server;
+  }
+
+  private async checkMcpServerToolPolicy(
+    input: McpInvokeRequest,
+    server: McpServerRecord,
+    consent?: { approvedInvocation: true },
+  ): Promise<McpInvokeResponse | undefined> {
     if (server.policy.blockedToolPatterns.some((pattern) => this.host.matchesWildcard(input.toolName, pattern))) {
       return {
         ok: false,
@@ -1912,14 +2115,15 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
     if (
       server.policy.requireFirstToolApproval &&
+      !consent?.approvedInvocation &&
       !(await this.host.isMcpToolApproved(input.serverId, input.toolName))
     ) {
       return {
         ok: false,
-        error: `First-use approval required for ${input.toolName}. Approve this tool in MCP policy or disable first-use approval.`,
+        error: `First-use approval required for ${input.toolName}. Request this MCP invocation in Chat and approve the displayed tool action.`,
       };
     }
-    return server;
+    return undefined;
   }
 
   private async executeMcpRuntime(
@@ -1928,9 +2132,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     runtimeStartedAt: number,
     autonomousActivation?: AutonomousActivationRuntimeEvidence,
     wardEffect?: WardEffect,
-    markExternalCallStarted?: () => void,
+    markExternalCallStarted?: () => void | Promise<void>,
     executionFence?: () => Promise<void>,
     mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle,
+    nativeCanonicalToolName?: string,
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
@@ -1943,7 +2148,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     let runtime: McpRuntimeInvocationResult;
     if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
       // HX-415: requester-scoped servers converge on the app-private dispatch
-      // port. The direct route and approval replay cannot manufacture a
+      // port. Direct routes and approval request DTOs cannot manufacture a
       // requester profile from `McpInvokeRequest`; without a server-built
       // dispatch provider this server is not callable, and the HX-305 execution
       // fence / external-effect marker stay untouched (a pre-dispatch failure).
@@ -1965,21 +2170,28 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           arguments: input.arguments,
           signal: input.signal,
           // Server-built turn context threads ONLY from the app-private runtime
-          // options (chat-turn runner origin). `McpInvokeRequest` fields can
-          // never populate it; replay/direct callers pass no options context and
-          // therefore fail closed inside the provider.
+          // options (Chat/Gateway origin). `McpInvokeRequest` fields can never
+          // populate it; callers without a canonical profile fail closed.
           ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
         },
         {
           effectDispatch: async () => {
             await executionFence?.();
-            markExternalCallStarted?.();
+            await markExternalCallStarted?.();
           },
         },
       );
+    } else if (nativeCanonicalToolName) {
+      if (!this.host.staticMcpChatDispatch || nativeCanonicalToolName !== `mcp.${server.serverId}.${input.toolName}`) {
+        return { ok: false, error: "Static MCP tool requires its canonical Chat execution owner." };
+      }
+      runtime = await this.host.staticMcpChatDispatch.invoke({ server, toolName: input.toolName,
+        arguments: input.arguments, signal: input.signal, mcpRequesterTurnContext }, {
+        effectDispatch: async () => { await executionFence?.(); await markExternalCallStarted?.(); },
+      });
     } else {
       await executionFence?.();
-      markExternalCallStarted?.();
+      await markExternalCallStarted?.();
       runtime = isInternalMcpApprovalInboxServer(server)
         ? await handleInternalMcpApprovalInboxInvoke(server, input, {
             approvalInbox: this.host.approvalInbox,
@@ -1993,6 +2205,9 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
               toolName: input.toolName,
               arguments: input.arguments,
               signal: input.signal,
+              ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+              ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+              ...(input.policyContext ? { policyContext: input.policyContext } : {}),
             });
     }
     const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;

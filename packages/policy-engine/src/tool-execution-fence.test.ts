@@ -13,6 +13,73 @@ afterEach(async () => {
 });
 
 describe("ToolPolicyEngine execution fence", () => {
+  it.each(["complete", "fail"] as const)(
+    "awaits durable effect recording before a file mutation (%s)",
+    async (mode) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-effect-marker-"));
+      tempRoots.push(root);
+      const source = path.join(root, "source.txt"),
+        destination = path.join(root, "destination.txt");
+      await fs.writeFile(source, "bounded fixture");
+      const storage = new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      });
+      const asyncStorage = createSqliteAsyncStorage(storage);
+      const engine = new ToolPolicyEngine(createPolicy(root), asyncStorage);
+      let release!: () => void;
+      let entered!: () => void;
+      const markerEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const markerGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const markerFailure = new Error("durable boundary unavailable");
+      const invocation = engine.invoke(
+        {
+          toolName: "fs.copy",
+          args: { from: source, to: destination },
+          agentId: "assistant",
+          sessionId: "effect-marker-session",
+        },
+        {
+          externalSideEffect: {
+            markStarted: async () => {
+              entered();
+              await markerGate;
+              if (mode === "fail") throw markerFailure;
+            },
+            markNotRequired: () => undefined,
+          },
+        },
+      );
+      // Attach rejection handling before releasing the gate.
+      const observed = invocation.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await markerEntered;
+        await expect(fs.access(destination)).rejects.toThrow();
+        release();
+        const outcome = await observed;
+        if (mode === "complete") {
+          expect(outcome).toMatchObject({ result: { outcome: "executed" } });
+          expect(await fs.readFile(destination, "utf8")).toBe("bounded fixture");
+        } else {
+          expect(outcome).toEqual({ error: markerFailure });
+          await expect(fs.access(destination)).rejects.toThrow();
+        }
+      } finally {
+        release();
+        await observed;
+        await asyncStorage.close();
+      }
+    },
+    20_000,
+  );
   it("checks durable ownership at the concrete executor boundary before fs.copy starts", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-fence-"));
     tempRoots.push(root);

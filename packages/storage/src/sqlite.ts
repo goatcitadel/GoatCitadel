@@ -17,7 +17,30 @@ import {
   runSqliteMigrations,
   type SqliteMigrationGroup,
 } from "./sqlite/migration-registry.js";
-import { createChangePlanSchema } from "./change-plan-schema.js";
+import { createChangePlanSchema, upgradeChangePlanPackSchema } from "./change-plan-schema.js";
+import { upgradeNativeWorkerCells } from "./remote-worker-native-cell-migration.js";
+import { createRemoteWorkerBudgetSchema } from "./remote-worker-budget-schema.js";
+import { createRemoteWorkerChatContextSchema } from "./remote-worker-chat-context-schema.js";
+import { createRemoteWorkerBudgetDispatchSchema } from "./remote-worker-budget-dispatch-schema.js";
+import { createRemoteWorkerChatPlacementSchema } from "./remote-worker-chat-placement-schema.js";
+import { createRemoteWorkerChatResumeSchema } from "./remote-worker-chat-resume-schema.js";
+import { createRemoteWorkerChatResumeRecoverySchema } from "./remote-worker-chat-resume-recovery-schema.js";
+import { createRemoteWorkerChatParentRecoverySchema } from "./remote-worker-chat-parent-recovery-schema.js";
+import { upgradeRemoteWorkerCanonicalBounds } from "./remote-worker-canonical-bounds-migration.js";
+import { createRemoteWorkerToolBudgetSchema } from "./remote-worker-tool-budget-schema.js";
+import { createRemoteWorkerChatTaskSchema } from "./remote-worker-chat-task-schema.js";
+import { addToolPolicyIdentity } from "./tool-policy-identity-schema.js";
+import { extendMeshToolPolicyIdentity } from "./mesh-tool-policy-identity-schema.js";
+import { createChannelDeliveryPartsSchema } from "./channel-delivery-parts-schema.js";
+import { createRemoteWorkerCellProvisioningSchema } from "./remote-worker-cell-provisioning-schema.js";
+import { createRemoteWorkerCellVolumeSchema } from "./remote-worker-cell-volume-schema.js";
+import { createRemoteWorkerCellFormatSchema } from "./remote-worker-cell-format-schema.js";
+import { createRemoteWorkerCellProtectionSchema } from "./remote-worker-cell-protection-schema.js";
+import { createRemoteWorkerCellMountSchema } from "./remote-worker-cell-mount-schema.js";
+import { createRemoteWorkerCellMountedWorkspaceSchema } from "./remote-worker-cell-mounted-workspace-schema.js";
+import { createMemoryItemEnumerationSchema } from "./memory-item-enumeration-schema.js";
+import { createPermissionProfileSelectionSchema } from "./permission-profile-selection-schema.js";
+import { upgradeRemoteWorkerCancellationSettlement } from "./remote-worker-cancellation-settlement-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "./managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL } from "./product-source-update-repo.js";
 import {
@@ -7180,6 +7203,30 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           db.exec(PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL);
         },
       },
+      { version: 205, name: "capability_pack_execution_plans", up: upgradeChangePlanPackSchema },
+      { version: 206, name: "native_windows_worker_cells", up: upgradeNativeWorkerCells },
+      { version: 207, name: "remote_worker_budget_authority", up: createRemoteWorkerBudgetSchema },
+      { version: 208, name: "remote_worker_chat_context", up: createRemoteWorkerChatContextSchema },
+      { version: 209, name: "remote_worker_budget_dispatches", up: createRemoteWorkerBudgetDispatchSchema },
+      { version: 210, name: "chat_execution_placement", up: createRemoteWorkerChatPlacementSchema },
+      { version: 211, name: "remote_worker_chat_resume", up: createRemoteWorkerChatResumeSchema },
+      { version: 212, name: "remote_worker_chat_resume_recovery", up: createRemoteWorkerChatResumeRecoverySchema },
+      { version: 213, name: "remote_worker_chat_parent_recovery", up: createRemoteWorkerChatParentRecoverySchema },
+      { version: 214, name: "remote_worker_canonical_bounds", up: upgradeRemoteWorkerCanonicalBounds },
+      { version: 215, name: "remote_worker_tool_budget_dispatches", up: createRemoteWorkerToolBudgetSchema },
+      { version: 216, name: "remote_worker_chat_tasks", up: createRemoteWorkerChatTaskSchema },
+      { version: 217, name: "tool_policy_identity", up: addToolPolicyIdentity },
+      { version: 218, name: "remote_worker_cancellation_settlement", up: upgradeRemoteWorkerCancellationSettlement },
+      { version: 219, name: "mesh_tool_policy_identity", up: extendMeshToolPolicyIdentity },
+      { version: 220, name: "channel_delivery_parts", up: createChannelDeliveryPartsSchema },
+      { version: 221, name: "remote_worker_cell_provisioning", up: createRemoteWorkerCellProvisioningSchema },
+      { version: 222, name: "remote_worker_cell_volume_checkpoints", up: createRemoteWorkerCellVolumeSchema },
+      { version: 223, name: "remote_worker_cell_format_checkpoints", up: createRemoteWorkerCellFormatSchema },
+      { version: 224, name: "remote_worker_cell_protection_checkpoints", up: createRemoteWorkerCellProtectionSchema },
+      { version: 225, name: "remote_worker_cell_mount_checkpoints", up: createRemoteWorkerCellMountSchema },
+      { version: 226, name: "remote_worker_cell_mounted_workspace_checkpoints", up: createRemoteWorkerCellMountedWorkspaceSchema },
+      { version: 227, name: "memory_item_enumeration", up: createMemoryItemEnumerationSchema },
+      { version: 228, name: "permission_profile_selection", up: createPermissionProfileSelectionSchema },
     ],
   },
 ];

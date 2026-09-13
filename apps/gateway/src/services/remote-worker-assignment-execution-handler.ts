@@ -43,6 +43,7 @@ export function createRemoteWorkerAssignmentExecutionNativeRequestHandler(input:
         headers: request.headers,
         body,
         transportIdentity: request.transportIdentity,
+        ...(request.signal ? { signal: request.signal } : {}),
       });
       const encoded = canonicalJsonString(response);
       if (Buffer.byteLength(encoded, "utf8") > REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES) {

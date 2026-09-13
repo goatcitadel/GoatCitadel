@@ -202,6 +202,9 @@ const CHECK_GROUPS = Object.freeze({
           "--reporter",
           "verbose",
           "src/services/chat-workbench-service.test.ts",
+          "src/services/workbench-file-revisions.test.ts",
+          "src/services/workbench-path-revisions.test.ts",
+          "src/routes/workbench-file-revisions.test.ts",
           "src/routes/chat.routes.test.ts",
         ],
         {

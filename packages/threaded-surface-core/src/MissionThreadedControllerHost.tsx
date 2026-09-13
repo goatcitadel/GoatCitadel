@@ -1,3 +1,4 @@
+import { useChatSessionStatus } from "./chat/useChatSessionStatus";
 /* eslint-disable max-lines -- Shared threaded controller host centralizes session/thread behavior for both Mission Control apps. */
 import {
   useCallback,
@@ -20,7 +21,6 @@ import type {
   ChatModePresetRecord,
   ChatSessionRecord,
   ChatSessionSearchHitRecord,
-  ChatSessionStatusResponse,
   ChatTimerRecord,
   DocumentPatchProposalRecord,
   NoteRecord,
@@ -28,6 +28,8 @@ import type {
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
   ChatSessionWorkbenchFileOperationRequest,
+  ChatSessionWorkbenchFileOperationPreviewRequest,
+  ChatSessionWorkbenchFileOperationPreviewResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchRecord,
@@ -78,7 +80,6 @@ import {
   fetchChatGeneratedArtifact,
   fetchChatSessionGoal,
   fetchChatSessionPrefs,
-  fetchChatSessionStatus,
   fetchAutonomousActivationGrants,
   fetchChatTimers,
   fetchNotificationRules,
@@ -89,7 +90,6 @@ import {
   parseChatCommand,
   removeThreadKnowledgeAttachment,
   setChatSessionGoal,
-  stopChatFanout as stopChatFanoutAggregate,
   steerChatSession,
   updateChatSessionPrefs,
   uploadChatAttachment,
@@ -767,7 +767,7 @@ export interface MissionThreadedSessionRailData {
   hasMoreSessions?: boolean;
   loadingMoreSessions?: boolean;
   onToggleProjectCreate: () => void;
-  onCreateSession: () => void;
+  onCreateSession: () => void | Promise<void>;
   onSearchChange: (value: string) => void;
   onProjectNameChange: (value: string) => void;
   onProjectPathChange: (value: string) => void;
@@ -829,6 +829,10 @@ export interface MissionThreadedCodeWorkflowPanelProps {
   saving: boolean;
   error: string | null;
   hasDirtyDraft: boolean;
+  hasRemoteChanges?: boolean;
+  retainedDraftPaths?: string[];
+  onRebaseDraft?: () => void;
+  onSaveDraftForLeave?: () => Promise<boolean>;
   generatedArtifact: ChatGeneratedArtifactRecord | null;
   onCloseGeneratedArtifact?: () => void;
   availableProjects?: Array<{ projectId: string; name: string; workspacePath: string }>;
@@ -848,6 +852,7 @@ export interface MissionThreadedCodeWorkflowPanelProps {
   onExpandedPathsChange: (nextPaths: string[]) => void;
   onRefresh: () => void;
   onSaveFile: () => void;
+  onFileOperationPreview?: (input: ChatSessionWorkbenchFileOperationPreviewRequest) => Promise<ChatSessionWorkbenchFileOperationPreviewResponse | null>;
   onFileOperation?: (input: ChatSessionWorkbenchFileOperationRequest) => Promise<boolean>;
   onDiscardDraft: () => void;
   onRunValidationCommand?: (input: ChatSessionWorkbenchCommandRunRequest) => void;
@@ -881,6 +886,7 @@ export interface MissionThreadedRenderSurfaceInput {
   onSessionRailOpenChange: (next: boolean) => void;
   dockOpen: boolean;
   onDockOpenChange: (next: boolean) => void;
+  onWorkbenchOpenChange?: (open: boolean) => void;
   sessionRail: MissionThreadedSessionRailData;
   activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null;
   emptyStateProps: MissionThreadedEmptyStateProps;
@@ -892,6 +898,8 @@ export interface MissionThreadedRenderSurfaceInput {
   changePlans?: readonly ChangePlanRecord[];
   /** At most one transcript-adjacent plan receipt; all records remain in Activity history. */
   changePlanReceipt?: MissionThreadedChangePlanReceipt;
+  /** Admit a returned plan to its owning Chat and open its governed review. */
+  onReviewChangePlan?: (plan: ChangePlanRecord) => void;
   /** A monotonically increasing request to reveal Activity from transcript-adjacent UI. */
   activityOpenRequest?: number;
 }
@@ -1005,6 +1013,7 @@ export function MissionThreadedControllerHost({
   }, [initialModeOverride]);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [selectedContextTurnIds, setSelectedContextTurnIds] = useState<string[]>([]);
+  const [workbenchRequested, setWorkbenchRequested] = useState(false);
   const [pendingThreadContext, setPendingThreadContext] = useState<OutboundContextBlock | null>(null);
   const [draft, setDraft] = useState("");
   const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
@@ -1117,12 +1126,6 @@ export function MissionThreadedControllerHost({
   const [selectedPresetId, setSelectedPresetId] = useState<string>("");
   const [composerPaletteGlobalOpen, setComposerPaletteGlobalOpen] = useState(false);
   const [composerPaletteQuery, setComposerPaletteQuery] = useState("");
-  const [sessionStatusPanel, setSessionStatusPanel] = useState<{
-    open: boolean;
-    loading: boolean;
-    error: string | null;
-    status: ChatSessionStatusResponse | null;
-  }>({ open: false, loading: false, error: null, status: null });
   const [chatTimerPanel, setChatTimerPanel] = useState({
     open: false,
     busy: false,
@@ -1146,11 +1149,6 @@ export function MissionThreadedControllerHost({
   const [pendingTemplateInvocation, setPendingTemplateInvocation] = useState<{
     invocation: RunTemplateInvocation;
     resolvedContent: string;
-  } | null>(null);
-  const [workbenchDiscardConfirm, setWorkbenchDiscardConfirm] = useState<{
-    title: string;
-    message: string;
-    onConfirm: () => void;
   } | null>(null);
   const [activeChangePlan, setActiveChangePlan] = useState<ChangePlanRecord | null>(null);
   const [linkedDefaultChangePlan, setLinkedDefaultChangePlan] = useState<ChangePlanRecord | null>(null);
@@ -1389,66 +1387,12 @@ export function MissionThreadedControllerHost({
       };
     }
   }, [runVariablePanel]);
-  const refreshSessionStatus = useCallback(async () => {
-    if (!selectedSessionId || !sessionStatusEnabled) return;
-    setSessionStatusPanel((current) => ({ ...current, open: true, loading: true, error: null }));
-    try {
-      const status = await fetchChatSessionStatus(selectedSessionId);
-      setSessionStatusPanel({ open: true, loading: false, error: null, status });
-    } catch (statusError) {
-      setSessionStatusPanel((current) => ({
-        ...current,
-        open: true,
-        loading: false,
-        error: statusError instanceof Error ? statusError.message : String(statusError),
-      }));
-    }
-  }, [selectedSessionId, sessionStatusEnabled]);
-
-  const stopSessionFanout = useCallback(
-    async (invocationId: string) => {
-      if (!selectedSessionId || !sessionStatusEnabled) return;
-      setSessionStatusPanel((current) => ({ ...current, open: true, loading: true, error: null }));
-      let stoppedStatus: string;
-      try {
-        const stopped = await stopChatFanoutAggregate(selectedSessionId, invocationId);
-        stoppedStatus = stopped.status;
-      } catch (stopError) {
-        setSessionStatusPanel((current) => ({
-          ...current,
-          open: true,
-          loading: false,
-          error: stopError instanceof Error ? stopError.message : String(stopError),
-        }));
-        return;
-      }
-      pushLocalNotice(
-        `Fan-out stop requested (${stoppedStatus}). Active children are being cancelled durably.`,
-        "success",
-      );
-      try {
-        const status = await fetchChatSessionStatus(selectedSessionId);
-        setSessionStatusPanel({ open: true, loading: false, error: null, status });
-      } catch (refreshError) {
-        setSessionStatusPanel((current) => ({
-          ...current,
-          open: true,
-          loading: false,
-          error: `Stop was requested (${stoppedStatus}), but canonical status could not be refreshed: ${
-            refreshError instanceof Error ? refreshError.message : String(refreshError)
-          }`,
-        }));
-      }
-    },
-    [pushLocalNotice, selectedSessionId, sessionStatusEnabled],
-  );
 
   useEffect(() => {
     // The controller owns one transient UI-error channel. It is rendered with
     // the selected chat, so discard any prior chat's recovery state before a
     // new selection can expose it as that chat's error.
     setUiError(null);
-    setSessionStatusPanel({ open: false, loading: false, error: null, status: null });
     setChatTimerPanel((current) => ({ ...current, open: false, error: null, timers: [] }));
     setRunVariablePanel(null);
     setPendingTemplateInvocation(null);
@@ -1585,18 +1529,6 @@ export function MissionThreadedControllerHost({
   );
 
   useEffect(() => {
-    if (sessionStatusPanel.open && sessionStatusEnabled) void refreshSessionStatus();
-    // Thread and attention changes are fed by the existing realtime refresh path.
-  }, [
-    approvalsCount,
-    eventStreamStatus.state,
-    refreshSessionStatus,
-    sessionStatusEnabled,
-    sessionStatusPanel.open,
-    thread,
-  ]);
-
-  useEffect(() => {
     if (chatTimerPanel.open && chatTimersEnabled) void refreshChatTimers();
   }, [chatTimerPanel.open, chatTimersEnabled, eventStreamStatus.state, refreshChatTimers, thread]);
 
@@ -1695,6 +1627,19 @@ export function MissionThreadedControllerHost({
     visibleSessionLabelById,
     availableFolders,
   } = threadController;
+  const { panel: sessionStatusPanel, refresh: refreshSessionStatus, stopFanout: stopSessionFanout, close: closeSessionStatus } = useChatSessionStatus({ sessionId: selectedSessionId, workspaceId: selectedSession?.workspaceId ?? workspaceId, enabled: sessionStatusEnabled, pushLocalNotice });
+  useEffect(() => {
+    if (sessionStatusPanel.open && sessionStatusEnabled) void refreshSessionStatus(false);
+    // Thread and attention changes are fed by the existing realtime refresh path.
+  }, [
+    approvalsCount,
+    eventStreamStatus.state,
+    refreshSessionStatus,
+    sessionStatusEnabled,
+    sessionStatusPanel.open,
+    thread,
+  ]);
+
   const automaticFanout = useMemo(() => {
     if (settings?.features?.durableChatFanoutV1Enabled !== true) {
       return {
@@ -2004,14 +1949,22 @@ export function MissionThreadedControllerHost({
     pushLocalNotice,
   });
   const documentWorkspaceId = selectedSession?.workspaceId ?? workspaceId;
+  const documentScope = JSON.stringify([documentWorkspaceId, selectedSessionId, documentEditingEnabled]);
+  const documentOwner = useRef({ scope: documentScope, generation: 0 });
+  if (documentOwner.current.scope !== documentScope) documentOwner.current = { scope: documentScope, generation: documentOwner.current.generation + 1 };
+  const documentGeneration = documentOwner.current.generation;
+  const documentRequest = useRef(0);
+  const ownsDocuments = () => documentOwner.current.generation === documentGeneration;
   const [documentNotes, setDocumentNotes] = useState<NoteRecord[]>([]);
   const [documentProposals, setDocumentProposals] = useState<DocumentPatchProposalRecord[]>([]);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [pendingDocumentContextRefs, setPendingDocumentContextRefs] = useState<ChatRoutedContextRef[]>([]);
   const refreshDocuments = useCallback(async () => {
+    if (documentOwner.current.generation !== documentGeneration) return;
+    const request = ++documentRequest.current;
+    const current = () => documentOwner.current.generation === documentGeneration && documentRequest.current === request;
     if (!documentEditingEnabled || !selectedSessionId) {
-      setDocumentNotes([]);
-      setDocumentProposals([]);
+      setDocumentNotes([]); setDocumentProposals([]); setDocumentLoading(false);
       return;
     }
     setDocumentLoading(true);
@@ -2020,18 +1973,20 @@ export function MissionThreadedControllerHost({
         listNotes(documentWorkspaceId),
         listDocumentPatchProposals({ workspaceId: documentWorkspaceId, sessionId: selectedSessionId }),
       ]);
+      if (!current()) return;
       setDocumentNotes(notesResponse.items);
       setDocumentProposals(proposalsResponse.items);
+    } catch (error) {
+      if (current()) setUiError(error instanceof Error ? error.message : "Unable to refresh Chat documents.");
     } finally {
-      setDocumentLoading(false);
+      if (current()) setDocumentLoading(false);
     }
-  }, [documentEditingEnabled, documentWorkspaceId, selectedSessionId]);
+  }, [documentEditingEnabled, documentGeneration, documentWorkspaceId, selectedSessionId, setUiError]);
   useEffect(() => {
-    setPendingDocumentContextRefs([]);
-    void refreshDocuments().catch((error: unknown) => {
-      setUiError(error instanceof Error ? error.message : "Unable to load Chat documents.");
-    });
-  }, [refreshDocuments, selectedSessionId, setUiError]);
+    setPendingDocumentContextRefs([]); setDocumentNotes([]); setDocumentProposals([]);
+    void refreshDocuments();
+    return () => { documentRequest.current += 1; };
+  }, [refreshDocuments]);
   const toggleDocumentContext = useCallback((ref: ChatRoutedContextRef) => {
     setPendingDocumentContextRefs((current) => {
       const key = `${ref.kind}:${ref.ref}`;
@@ -2809,12 +2764,16 @@ export function MissionThreadedControllerHost({
     workbenchSaving,
     workbenchError,
     hasDirtyWorkbenchDraft,
+    workbenchHasRemoteChanges,
+    workbenchDraftPaths,
+    rebaseWorkbenchDraft,
     setWorkbenchDraftContent,
     setWorkbenchExpandedPaths,
     refreshWorkbench,
     createWorkbenchWorktree,
     openWorkbenchFile,
     saveWorkbenchFile,
+    previewWorkbenchFileOperation,
     runWorkbenchFileOperation,
     discardWorkbenchDraft,
     runWorkbenchValidationCommand,
@@ -2832,6 +2791,7 @@ export function MissionThreadedControllerHost({
     selectedSessionProjectValue,
     dockSectionStyle,
   } = useChatDockWorkbenchController({
+    workbenchEnabled: workbenchRequested,
     messageMode,
     selectedSessionId,
     selectedSession,
@@ -2894,30 +2854,6 @@ export function MissionThreadedControllerHost({
       workspaceId,
     ],
   );
-  const guardWorkbenchNavigation = useCallback(
-    (action: () => void, message: string) => {
-      if (!hasDirtyWorkbenchDraft) {
-        action();
-        return;
-      }
-      setWorkbenchDiscardConfirm({
-        title: "Discard unsaved workbench changes?",
-        message,
-        onConfirm: () => {
-          discardWorkbenchDraft();
-          action();
-        },
-      });
-    },
-    [discardWorkbenchDraft, hasDirtyWorkbenchDraft],
-  );
-
-  useEffect(() => {
-    if (!hasDirtyWorkbenchDraft && workbenchDiscardConfirm) {
-      setWorkbenchDiscardConfirm(null);
-    }
-  }, [hasDirtyWorkbenchDraft, workbenchDiscardConfirm]);
-
   useEffect(() => {
     if (!compactSurfaceLayout && sessionRailOpen) {
       setSessionRailOpen(false);
@@ -3195,7 +3131,7 @@ export function MissionThreadedControllerHost({
         });
         return;
       }
-      guardWorkbenchNavigation(() => {
+      {
         setSelectedSessionId(sessionId);
         openRequestedHistory();
         setSelectedTurnId(options?.turnId ?? null);
@@ -3208,10 +3144,9 @@ export function MissionThreadedControllerHost({
           turnId: options?.turnId ?? null,
           artifactId: null,
         });
-      }, "Switching sessions will discard the unsaved editor changes in the current Code workbench file.");
+      }
     },
     [
-      guardWorkbenchNavigation,
       messageMode,
       onNavigateSurface,
       openHistoricalWindow,
@@ -3258,25 +3193,10 @@ export function MissionThreadedControllerHost({
           artifactId: nextArtifactId,
         });
 
-      if (hasDirtyWorkbenchDraft && (nextSurface !== messageMode || nextSessionId !== selectedSessionId)) {
-        setWorkbenchDiscardConfirm({
-          title: "Discard unsaved workbench changes?",
-          message: "Switching surfaces will discard the unsaved editor changes in the current Code workbench file.",
-          onConfirm: () => {
-            discardWorkbenchDraft();
-            runNavigation();
-          },
-        });
-        return;
-      }
-
       runNavigation();
     },
     [
       activeGeneratedArtifact?.artifactId,
-      discardWorkbenchDraft,
-      hasDirtyWorkbenchDraft,
-      messageMode,
       onNavigateSurface,
       selectedSessionId,
       selectedTurnId,
@@ -3294,7 +3214,10 @@ export function MissionThreadedControllerHost({
 
   const revealGeneratedArtifact = useCallback(
     async (artifact: ChatGeneratedArtifactRecord) => {
+      const generation = documentOwner.current.generation;
       await revealGeneratedArtifactInSurface({
+        isCurrent: () => documentOwner.current.generation === generation,
+        onOpenArtifact: () => setActivityOpenRequest(current => current + 1),
         artifact,
         compactSurfaceLayout,
         messageMode,
@@ -3319,21 +3242,26 @@ export function MissionThreadedControllerHost({
   useRouteGeneratedArtifactReveal({
     routeArtifactId,
     workspaceId,
+    activeArtifactId: activeGeneratedArtifact?.artifactId,
+    onError: (error) => setUiError(error),
     revealGeneratedArtifact,
     setActiveGeneratedArtifact,
   });
 
   const handleOpenGeneratedArtifactFromTurn = useCallback(
-    async (turnId: string) => {
+    async (turnId: string, artifactId?: string) => {
+      const generation = documentOwner.current.generation;
       try {
         await runWithSelectedSessionId(selectedSessionId, async () => {
           const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
-          const existingArtifactId = targetTurn?.generatedArtifacts?.[0]?.artifactId;
+          const existingArtifactId = artifactId ? targetTurn?.generatedArtifacts?.find(item => item.artifactId === artifactId)?.artifactId : targetTurn?.generatedArtifacts?.[0]?.artifactId;
           if (!existingArtifactId) {
             pushLocalNotice("Create an artifact from this turn before opening it.", "warning");
             return;
           }
           const artifact = (await fetchChatGeneratedArtifact(existingArtifactId, workspaceId)).item;
+          if (documentOwner.current.generation !== generation) return;
+          if (artifact.artifactId !== existingArtifactId || artifact.sessionId !== selectedSessionId || artifact.turnId !== turnId) throw new Error("The returned artifact does not match this turn.");
           await revealGeneratedArtifact(artifact);
         });
       } catch (err) {
@@ -4962,7 +4890,7 @@ export function MissionThreadedControllerHost({
       loadingMoreSessions: sidebarLoadingMore,
       onToggleProjectCreate: () => setShowProjectCreate((current) => !current),
       onCreateSession: () => {
-        if (!blockHistoricalMutation()) void handleCreateCurrentModeSession();
+        if (!blockHistoricalMutation()) return handleCreateCurrentModeSession();
       },
       onSearchChange: setSearch,
       onProjectNameChange: setProjectName,
@@ -5099,7 +5027,7 @@ export function MissionThreadedControllerHost({
               ...sessionStatusPanel,
               onRefresh: () => void refreshSessionStatus(),
               onStopFanout: (invocationId) => void stopSessionFanout(invocationId),
-              onClose: () => setSessionStatusPanel((current) => ({ ...current, open: false })),
+              onClose: closeSessionStatus,
             }
           : undefined,
         chatTimerPanel: chatTimersEnabled
@@ -5194,7 +5122,7 @@ export function MissionThreadedControllerHost({
           handleDockOpenChange(true);
         },
         onExportRunBundle: () => void handleExportRunBundle(),
-        onOpenGeneratedArtifact: (turnId) => void handleOpenGeneratedArtifactFromTurn(turnId),
+        onOpenGeneratedArtifact: (turnId, artifactId) => void handleOpenGeneratedArtifactFromTurn(turnId, artifactId),
         onCreateGeneratedArtifact: (turnId) => {
           if (!blockHistoricalMutation()) void handleCreateGeneratedArtifactFromTurn(turnId);
         },
@@ -5625,6 +5553,10 @@ export function MissionThreadedControllerHost({
               saving: workbenchSaving,
               error: workbenchError,
               hasDirtyDraft: hasDirtyWorkbenchDraft,
+              hasRemoteChanges: workbenchHasRemoteChanges,
+              retainedDraftPaths: workbenchDraftPaths,
+              onRebaseDraft: rebaseWorkbenchDraft,
+              onSaveDraftForLeave: async () => !blockHistoricalMutation() && await saveWorkbenchFile(),
               generatedArtifact: activeGeneratedArtifact,
               onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
               availableProjects: activeCodeProjects,
@@ -5647,6 +5579,10 @@ export function MissionThreadedControllerHost({
               onRefresh: () => void refreshWorkbench(),
               onSaveFile: () => {
                 if (!blockHistoricalMutation()) void saveWorkbenchFile();
+              },
+              onFileOperationPreview: async (input) => {
+                if (blockHistoricalMutation()) return null;
+                return previewWorkbenchFileOperation(input);
               },
               onFileOperation: async (input) => {
                 if (blockHistoricalMutation()) return false;
@@ -5734,6 +5670,7 @@ export function MissionThreadedControllerHost({
     onSessionRailOpenChange: handleSessionRailOpenChange,
     dockOpen,
     onDockOpenChange: handleDockOpenChange,
+    onWorkbenchOpenChange: setWorkbenchRequested,
     sessionRail: sessionRailData,
     activeSessionSurfaceProps,
     emptyStateProps,
@@ -5760,6 +5697,10 @@ export function MissionThreadedControllerHost({
     workflowPanel,
     changePlans: chatChangePlans,
     changePlanReceipt,
+    onReviewChangePlan: (plan) => {
+      if (plan.origin.sessionId !== selectedSessionIdRef.current || plan.origin.workspaceId !== workspaceId) return;
+      recordChangePlanResult(plan);
+    },
     activityOpenRequest,
     btwSideChatProps,
     contextDockProps: selectedSession
@@ -5828,8 +5769,12 @@ export function MissionThreadedControllerHost({
                 baseContentHash: artifact.contentHash,
                 content,
               });
-              await loadSessionSecondaryState(selectedSession.sessionId, { background: true });
-              setActiveGeneratedArtifact(response.item);
+              if (ownsDocuments()) {
+                setActiveGeneratedArtifact(response.item);
+                await loadSessionSecondaryState(selectedSession.sessionId, { background: true }).catch((error: unknown) => {
+                  if (ownsDocuments()) setUiError(error instanceof Error ? error.message : "Artifact saved; refreshed evidence is unavailable.");
+                });
+              }
               return response.item;
             },
             onCreateProposal: async (input) => {
@@ -5843,10 +5788,12 @@ export function MissionThreadedControllerHost({
             },
             onApplyProposal: async (proposalId) => {
               const response = await applyDocumentPatchProposal(proposalId, documentWorkspaceId);
-              await Promise.all([
+              if (ownsDocuments()) await Promise.all([
                 refreshDocuments(),
                 loadSessionSecondaryState(selectedSession.sessionId, { background: true }),
-              ]);
+              ]).catch((error: unknown) => {
+                if (ownsDocuments()) setUiError(error instanceof Error ? error.message : "Proposal applied; refreshed evidence is unavailable.");
+              });
               return response.item;
             },
             onRejectProposal: async (proposalId) => {
@@ -6062,22 +6009,6 @@ export function MissionThreadedControllerHost({
         onCancel={() => setCapabilitySuggestionConfirm(null)}
         onConfirm={async () => {
           if (!blockHistoricalMutation()) await handleConfirmCapabilitySuggestion();
-        }}
-      />
-      <ConfirmModal
-        open={Boolean(workbenchDiscardConfirm)}
-        title={workbenchDiscardConfirm?.title ?? "Discard unsaved workbench changes?"}
-        message={workbenchDiscardConfirm?.message ?? ""}
-        confirmLabel="Discard changes"
-        danger
-        onCancel={() => setWorkbenchDiscardConfirm(null)}
-        onConfirm={() => {
-          if (!workbenchDiscardConfirm) {
-            return;
-          }
-          const action = workbenchDiscardConfirm.onConfirm;
-          setWorkbenchDiscardConfirm(null);
-          action();
         }}
       />
       <ChatChangePlanActionDialog

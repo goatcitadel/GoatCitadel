@@ -816,6 +816,35 @@ describe("ModelUsageEventRepository", () => {
     assert.equal(interrupted?.costUsd, undefined);
   });
 
+  it("retains exact no-dispatch evidence only for the owner of an unaccepted intent", () => {
+    const storage = createStorage();
+    const owner = storage.modelUsageEvents;
+    owner.begin(beginInput({ source: "llm_service" }));
+    assert.throws(() =>
+      owner.confirmTransportNotStarted("usage-event-1", "different-owner", "2026-07-13T11:00:00.000Z"),
+    );
+    const first = owner.confirmTransportNotStarted("usage-event-1", "gateway-owner-a", "2026-07-13T11:00:00.000Z");
+    assert.equal(first.dispatchReconciliation, "confirmed_not_dispatched");
+    assert.equal(first.terminalOutcome, "failed_before_usage");
+    assert.deepEqual(
+      owner.confirmTransportNotStarted("usage-event-1", "gateway-owner-a", "2026-07-13T11:01:00.000Z"),
+      first,
+    );
+    assert.throws(() => owner.acceptTransport("usage-event-1", "gateway-owner-a", "2026-07-13T12:00:00.000Z"));
+    owner.begin(
+      beginInput({
+        source: "llm_service",
+        eventId: "accepted-event",
+        idempotencyKey: "accepted-event",
+        operationId: "accepted-operation",
+      }),
+    );
+    owner.acceptTransport("accepted-event", "gateway-owner-a", "2026-07-13T12:00:00.000Z");
+    assert.throws(() =>
+      owner.confirmTransportNotStarted("accepted-event", "gateway-owner-a", "2026-07-13T11:00:00.000Z"),
+    );
+  });
+
   it("treats an exact reconciliation retry as idempotent even when the server timestamp changes", () => {
     const storage = createStorage();
     storage.modelUsageEvents.begin(beginInput({ dispatchLeaseExpiresAt: "2000-01-01T00:00:00.000Z" }));

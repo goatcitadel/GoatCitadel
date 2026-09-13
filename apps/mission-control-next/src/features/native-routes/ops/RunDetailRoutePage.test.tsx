@@ -664,6 +664,7 @@ describe("RunDetailRoutePage", () => {
       await Promise.resolve();
     });
 
+    await act(async () => findButton(renderer!.root, "Exports").props.onClick());
     await act(async () => {
       findButton(renderer!.root, "Copy trace export").props.onClick();
       await Promise.resolve();
@@ -761,6 +762,7 @@ describe("RunDetailRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("Signature valid");
     expect(collectText(renderer!.root)).toContain("The Gateway verified the posted receipt");
 
+    await act(async () => findButton(renderer!.root, "Exports").props.onClick());
     await act(async () => {
       findButton(renderer!.root, "Download evidence receipt").props.onClick();
       await Promise.resolve();
@@ -811,7 +813,11 @@ async function renderText(runId: string, workspaceId = "default"): Promise<strin
     await Promise.resolve();
     await Promise.resolve();
   });
-  const text = collectText(renderer!.root);
+  let text = collectText(renderer!.root);
+  for (const label of ["Timeline", "Recovery", "Exports", "Evidence"]) {
+    await act(async () => findButton(renderer!.root, label).props.onClick());
+    text += collectText(renderer!.root);
+  }
   act(() => {
     renderer!.unmount();
   });

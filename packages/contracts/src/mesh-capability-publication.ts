@@ -63,6 +63,8 @@ export interface MeshMcpServerCapabilityDescriptor extends MeshCapabilityDescrip
   kind: "mcp_server";
   protocol: "mcp";
   protocolVersion: string;
+  /** Opaque local endpoint/credential binding; never the endpoint or credential material. */
+  configurationSha256?: string;
   tools: Array<{
     name: string;
     description?: string;
@@ -305,6 +307,42 @@ export interface MeshCapabilityCatalogEntryActivationProjection {
   revoked: boolean;
 }
 
+export interface MeshCapabilityManifestEntrySubmission {
+  localId: string;
+  kind: MeshCapabilityKind;
+  descriptor: Record<string, unknown>;
+  descriptorSha256: string;
+}
+
+export interface MeshCapabilityManifestPublishSubmission {
+  publicationKey: string;
+  supersedesManifestSha256?: string;
+  entries: MeshCapabilityManifestEntrySubmission[];
+}
+
+export interface MeshCapabilityManifestPublishReceipt {
+  replayed: boolean;
+  manifest: MeshCapabilityManifest;
+  entries: MeshCapabilityCatalogEntryProjection[];
+}
+
+export interface MeshCapabilityPublicationManifestView {
+  publicationKey: string;
+  manifestSha256: string;
+  admissionGeneration: number;
+  publisherGeneration: number;
+  createdAt: string;
+  supersedesManifestSha256?: string;
+  supersededByManifestSha256?: string;
+  entries: MeshCapabilityCatalogEntryProjection[];
+}
+
+export interface MeshCapabilityOwnPublicationList {
+  workspaceId: string;
+  nodeId: string;
+  manifests: MeshCapabilityPublicationManifestView[];
+}
+
 export function deriveMeshCapabilityId(nodeId: string, kind: MeshCapabilityKind, localId: string): string {
   assertCanonicalIdentifier(nodeId, "nodeId", 128);
   assertMeshCapabilityLocalId(localId);
@@ -440,11 +478,12 @@ export function assertMeshCapabilityDescriptor(descriptor: MeshCapabilityDescrip
     assertJsonSchema(descriptor.outputSchema, "outputSchema");
     assertEnum(descriptor.idempotency, ["none", "keyed", "intrinsic"] as const, "idempotency");
   } else if (descriptor.kind === "mcp_server") {
-    assertExactKeys(descriptor, [...baseKeys, "protocol", "protocolVersion", "tools"], "MCP descriptor", [
-      "description",
+    assertExactKeys(descriptor, [...baseKeys, "protocol", "protocolVersion", "tools", "configurationSha256"], "MCP descriptor", [
+      "description", "configurationSha256",
     ]);
     if (descriptor.protocol !== "mcp") throw new TypeError("Mesh MCP descriptor protocol must be mcp.");
     assertCanonicalIdentifier(descriptor.protocolVersion, "protocolVersion", 64);
+    if (descriptor.configurationSha256 !== undefined) assertSha256(descriptor.configurationSha256, "configurationSha256");
     if (!Array.isArray(descriptor.tools) || descriptor.tools.length < 1 || descriptor.tools.length > 128) {
       throw new TypeError("Mesh MCP descriptor must contain between 1 and 128 bounded tool metadata records.");
     }

@@ -1,3 +1,4 @@
+import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -125,7 +126,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot", () => ({
-  useMemoryOperatorSnapshot: () => memorySnapshot,
+  useMemoryOperatorSnapshot: (_workspace: string, options: { query?: string }) => ({ ...memorySnapshot, data: { ...memorySnapshot.data, memoryItems: memorySnapshot.data.memoryItems.filter((item) => !options.query || [item.title, item.content, item.namespace].join(" ").toLowerCase().includes(options.query.toLowerCase())) } }),
 }));
 
 function collectText(node: ReactTestInstance): string {
@@ -212,6 +213,7 @@ async function renderPage(): Promise<ReactTestRenderer> {
 describe("MemoryRoutePage batch selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionViewStateForTests();
     memorySnapshot.selectedItemId = null;
     memorySnapshot.selectedItem = null;
     memorySnapshot.busyKey = null;
@@ -322,6 +324,8 @@ describe("MemoryRoutePage batch selection", () => {
     await act(async () => {
       findSearchInput(renderer.root).props.onChange({ target: { value: "approval" } });
     });
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
 
     // mem-1 is checked but filtered out of view — the destructive batch must
     // only count and touch the rows the operator can still see.

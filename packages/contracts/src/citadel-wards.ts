@@ -29,7 +29,12 @@ export function wardMatchesAction(actionPattern: string, action: string): boolea
 }
 
 export function evaluateWards(wards: CitadelWard[], action: string): WardEffect {
-  const matching = wards.filter((w) => wardMatchesAction(w.actionPattern, action));
+  return evaluateWardsForActions(wards, [action]);
+}
+
+/** Apply the same deny-wins precedence to every identity of one invocation. */
+export function evaluateWardsForActions(wards: CitadelWard[], actions: readonly string[]): WardEffect {
+  const matching = wards.filter((w) => actions.some((action) => wardMatchesAction(w.actionPattern, action)));
 
   if (matching.length === 0) {
     return "allow";

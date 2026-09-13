@@ -29,7 +29,7 @@ import {
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
   insertMemoryContextMessage,
-  isAuthoritativeModelUsageAccountingError,
+  isAuthoritativeChatDispatchError,
   shouldAttemptCrossProviderFallback,
   shouldReportProviderRetryCooldownExhausted,
   shouldRetryToolProtocolError,
@@ -42,6 +42,8 @@ import {
   parseLlmRequestHookPatch,
 } from "./hook-patch-helpers.js";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
+import type { LlmService } from "./llm-service.js";
+import type { LlmDispatchGuard } from "./llm-dispatch-guard.js";
 import {
   composeChatCompletionMemoryContext,
   shouldUseChatCompletionMemoryContext,
@@ -55,6 +57,35 @@ import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatc
 import { StreamIdleTimeoutError, resolveStreamIdleTimeoutMs, withStreamIdleWatchdog } from "./stream-idle-watchdog.js";
 
 export type { LlmCompletionHost } from "./llm-completion-host.js";
+
+export interface GovernedLlmCompletionHost extends LlmCompletionHost {
+  readonly llmService: LlmCompletionHost["llmService"] &
+    Pick<LlmService, "runWithDispatchGuard" | "streamWithDispatchGuard">;
+}
+
+/** Preserve the canonical memory, hook and retry pipeline under the same
+ * server-owned dispatch authority, including its nested utility model calls. */
+export function createGovernedChatCompletion(
+  host: GovernedLlmCompletionHost,
+  request: ChatCompletionRequest,
+  attribution: ModelUsageAttributionContext,
+  guard: LlmDispatchGuard,
+): Promise<ChatCompletionResponse> {
+  return host.llmService.runWithDispatchGuard(guard, () => createChatCompletion(host, request, attribution));
+}
+
+/** Preparation and deferred provider iteration both execute under authority;
+ * returning the generator never transfers that authority to its consumer. */
+export function createGovernedChatCompletionStream(
+  host: GovernedLlmCompletionHost,
+  request: ChatCompletionRequest,
+  attribution: ModelUsageAttributionContext,
+  guard: LlmDispatchGuard,
+): AsyncGenerator<Record<string, unknown>> {
+  return host.llmService.streamWithDispatchGuard(guard, async function* () {
+    yield* await createChatCompletionStream(host, request, attribution);
+  });
+}
 
 // Retry after normalizing provider tool-call output into GoatCitadel's expected protocol shape.
 const TOOL_PROTOCOL_RETRY_NORMALIZED = 1;
@@ -86,7 +117,7 @@ export async function createChatCompletion(
   const memoryInput = request.memory;
   const useMemoryContext = shouldUseChatCompletionMemoryContext(host, memoryInput);
   let response: ChatCompletionResponse | undefined;
-  const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
+  const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput, attributionInput);
   const memoryContextInsertion = memoryContext ? insertMemoryContextMessage(request, memoryContext) : undefined;
   const withContext = memoryContextInsertion?.request ?? request;
   const memoryContextPlacement = memoryContextInsertion?.placement;
@@ -339,7 +370,7 @@ export async function createChatCompletion(
           },
         });
 
-        if (isAuthoritativeModelUsageAccountingError(lastError)) {
+        if (isAuthoritativeChatDispatchError(lastError)) {
           break attemptLoop;
         }
 
@@ -448,7 +479,7 @@ export async function createChatCompletion(
           lastError =
             resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ??
             normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
-          if (isAuthoritativeModelUsageAccountingError(lastError)) {
+          if (isAuthoritativeChatDispatchError(lastError)) {
             break fallbackLoop;
           }
           if (
@@ -657,7 +688,7 @@ export async function* createChatCompletionStream(
       idleTimeoutMs,
     },
   });
-  const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
+  const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput, attributionInput);
   const memoryContextInsertion = memoryContext ? insertMemoryContextMessage(request, memoryContext) : undefined;
   const withContext = memoryContextInsertion?.request ?? request;
   const memoryContextPlacement = memoryContextInsertion?.placement;
@@ -896,7 +927,7 @@ export async function* createChatCompletionStream(
             durableRunId: memoryInput?.runId,
           },
         });
-        if (isAuthoritativeModelUsageAccountingError(lastError)) {
+        if (isAuthoritativeChatDispatchError(lastError)) {
           if (attemptStreamed) streamFailedAfterEmit = true;
           break attemptLoop;
         }
@@ -1112,7 +1143,7 @@ export async function* createChatCompletionStream(
               durableRunId: memoryInput?.runId,
             },
           });
-          if (isAuthoritativeModelUsageAccountingError(lastError)) {
+          if (isAuthoritativeChatDispatchError(lastError)) {
             if (attemptStreamed) streamFailedAfterEmit = true;
             break fallbackLoop;
           }

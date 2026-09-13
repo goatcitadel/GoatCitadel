@@ -84,6 +84,10 @@ export async function startDeterministicLlmStub(options = {}) {
   let dispatchPlan = normalizeDispatchPlan(options.dispatchPlan, replyText);
   let promptReplyRules = normalizePromptReplyRules(options.promptReplyRules);
   const dispatchPlanModel = normalizeOptionalBoundedText(options.dispatchPlanModel, "dispatchPlanModel");
+  const dispatchPlanRequiredTool =
+    options.dispatchPlanRequiredTool === undefined
+      ? undefined
+      : normalizeToolName(options.dispatchPlanRequiredTool, "dispatchPlanRequiredTool");
   const expectedAuthorization = normalizeOptionalBoundedText(options.expectedAuthorization, "expectedAuthorization");
   const requestSummaries = [];
   const sockets = new Set();
@@ -171,7 +175,13 @@ export async function startDeterministicLlmStub(options = {}) {
         completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
         return;
       }
-      const isDispatchPlanRequest = dispatchPlanModel === undefined || body.model === dispatchPlanModel;
+      const isDispatchPlanRequest =
+        (dispatchPlanModel === undefined || body.model === dispatchPlanModel) &&
+        (dispatchPlanRequiredTool === undefined ||
+          (Array.isArray(body.tools) &&
+            body.tools.some(
+              (tool) => tool?.type === "function" && (tool.function?.name ?? tool.name) === dispatchPlanRequiredTool,
+            )));
       const planned = isDispatchPlanRequest ? dispatchPlan[dispatchPlanDispatches] : undefined;
       if (isDispatchPlanRequest) {
         dispatchPlanDispatches += 1;
@@ -663,7 +673,7 @@ function writeNonStreamingSuccess(response, model, replyText, requestPath) {
           content: [{ type: "output_text", text: replyText, annotations: [] }],
         },
       ],
-      usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+      usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16, input_tokens_details: { cached_tokens: 0 } },
     });
     return;
   }
@@ -678,7 +688,7 @@ function writeNonStreamingSuccess(response, model, replyText, requestPath) {
         finish_reason: "stop",
       },
     ],
-    usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16, prompt_tokens_details: { cached_tokens: 0 } },
   });
 }
 
@@ -708,7 +718,7 @@ function writeStreamingSuccess(response, model, replyText, requestPath = "/v1/ch
               content: [{ type: "output_text", text: replyText, annotations: [] }],
             },
           ],
-          usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+          usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16, input_tokens_details: { cached_tokens: 0 } },
         },
       },
     ];
@@ -729,7 +739,7 @@ function writeStreamingSuccess(response, model, replyText, requestPath = "/v1/ch
       object: "chat.completion.chunk",
       model,
       choices: [{ index: 0, delta: { content: replyText.slice(splitAt) }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16, prompt_tokens_details: { cached_tokens: 0 } },
     },
   ];
   for (const frame of frames) response.write(`data: ${JSON.stringify(frame)}\n\n`);
@@ -745,7 +755,7 @@ function writeNonStreamingToolCall(response, model, behavior, requestPath) {
       status: "completed",
       model,
       output: [item],
-      usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+      usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20, input_tokens_details: { cached_tokens: 0 } },
     });
     return;
   }
@@ -764,7 +774,7 @@ function writeNonStreamingToolCall(response, model, behavior, requestPath) {
         finish_reason: "tool_calls",
       },
     ],
-    usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+    usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20, prompt_tokens_details: { cached_tokens: 0 } },
   });
 }
 
@@ -782,7 +792,7 @@ function writeStreamingToolCall(response, model, behavior, requestPath) {
           status: "completed",
           model,
           output: [item],
-          usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+          usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20, input_tokens_details: { cached_tokens: 0 } },
         },
       },
     ];
@@ -802,7 +812,7 @@ function writeStreamingToolCall(response, model, behavior, requestPath) {
       object: "chat.completion.chunk",
       model,
       choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-      usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+      usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20, prompt_tokens_details: { cached_tokens: 0 } },
     },
   ];
   for (const frame of frames) response.write(`data: ${JSON.stringify(frame)}\n\n`);
@@ -839,7 +849,7 @@ function writeStreamingProviderError(response, model, behavior, requestPath) {
           status: "failed",
           model,
           error: { code: behavior.code, type: behavior.code, message: behavior.message },
-          usage: { input_tokens: 12, output_tokens: 0, total_tokens: 12 },
+          usage: { input_tokens: 12, output_tokens: 0, total_tokens: 12, input_tokens_details: { cached_tokens: 0 } },
         },
       })}\n\n`,
     );

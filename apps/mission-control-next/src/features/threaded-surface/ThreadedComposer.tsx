@@ -14,10 +14,13 @@ import { ContextStrip, type ContextStripMode, StatusChip } from "../native-route
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
+import { ChatOptionsPopover } from "./ChatOptionsPopover";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
 import { ChatCapabilityProfilePreflight } from "./ChatCapabilityProfilePanel";
+import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
+import { WorkflowSkillCaptureEvidence } from "@goatcitadel/mission-control-shared/components/chat/WorkflowSkillCaptureEvidence";
 
 /* C7: soft character ceiling for the draft. Not enforced (sending isn't
    blocked); the counter only surfaces once a message gets long. */
@@ -62,24 +65,23 @@ function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
 }
 
 export function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["thread"]) {
-  return (thread?.turns ?? []).reduce(
-    (next, turn) => {
-      const messages = [turn.userMessage, turn.assistantMessage].filter(Boolean);
-      for (const message of messages) {
-        next.tokens += (message?.tokenInput ?? 0) + (message?.tokenOutput ?? 0);
-        next.costUsd += message?.costUsd ?? 0;
-      }
-      return next;
-    },
-    { tokens: 0, costUsd: 0 },
-  );
+  let tokens=0, costUsd=0, tokenFields=0, costFields=0, messages=0;
+  for (const turn of thread?.turns ?? []) for (const message of [turn.userMessage,turn.assistantMessage]) {
+    if (!message) continue;
+    messages += 1;
+    for (const value of [message.tokenInput,message.tokenOutput]) if(typeof value === "number" && Number.isFinite(value) && value >= 0) {tokens += value;tokenFields += 1;}
+    if(typeof message.costUsd === "number" && Number.isFinite(message.costUsd) && message.costUsd >= 0) {costUsd += message.costUsd;costFields += 1;}
+  }
+  return {tokens:tokenFields?tokens:null,costUsd:costFields?costUsd:null,partialTokens:tokenFields<messages*2,partialCost:costFields<messages};
 }
 
-export function formatTokenLabel(tokens: number): string {
+export function formatTokenLabel(tokens: number | null): string {
+  if (tokens === null) return "Tokens unavailable";
   return `${new Intl.NumberFormat("en-US").format(tokens)} tokens`;
 }
 
-export function formatCostLabel(costUsd: number): string {
+export function formatCostLabel(costUsd: number | null): string {
+  if (costUsd === null) return "Cost unavailable";
   if (costUsd <= 0) {
     return "$0.00";
   }
@@ -92,12 +94,12 @@ export function formatCostLabel(costUsd: number): string {
   // Sub-cent costs are kept truthful: report three significant figures so a
   // long delegation that has crossed $0.005 reads as $0.005 rather than the
   // misleading flat "<$0.01" placeholder it used to show.
-  return `$${costUsd.toFixed(3)}`;
+  return "$" + Number(costUsd.toPrecision(3));
 }
 
 export function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
   const totals = computeUsageTotals(thread);
-  return `${formatTokenLabel(totals.tokens)} / ${formatCostLabel(totals.costUsd)}`;
+  return `${formatTokenLabel(totals.tokens)}${totals.partialTokens && totals.tokens !== null ? " recorded" : ""} / ${formatCostLabel(totals.costUsd)}${totals.partialCost && totals.costUsd !== null ? " recorded" : ""}`;
 }
 
 function formatDelegationMode(mode: string): string {
@@ -411,6 +413,8 @@ function ExternalSourceStrip({
     stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [openAttachFormToken]);
 
+  if (!attachFormOpen && controls.attachments.length === 0 && !controls.error) return null;
+
   return (
     <section
       ref={stripRef}
@@ -603,7 +607,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         : props.currentWebMode === "quick"
           ? "Quick web"
           : "Web auto";
-  const thinkingLabel = `Think ${props.currentThinkingLevel}`;
+  const thinkingLabel = props.currentThinkingLevel ? `Think ${props.currentThinkingLevel}` : "Thinking setting unavailable";
   const speedLabel = props.currentSpeedMode === "fast" ? "Fast" : "Standard";
   const composerStatus =
     props.hasActiveStream && props.midTurnDisposition === "steer"
@@ -743,6 +747,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   );
   const personality = getComposerPersonality(props);
   const plusActions = [
+    ...(props.externalSourceControls ? [{
+      label: "Attach imported item",
+      disabled: composerActionDisabled,
+      onSelect: () => setExternalSourceOpenToken((current) => current + 1),
+    }] : []),
     {
       label: "Browse personalities",
       disabled: !props.onOpenPersonalitiesSettings,
@@ -1048,14 +1057,15 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <ComposerBlockingPrompt props={props} />
 
+      <ChatOptionsPopover active={Boolean(props.planningMode === "advisory" || researchArmed || reviewArmed || props.modelCouncilEnabled)}>
       {composerV2Enabled ? (
-        <div className="mc-next-composer-context-strip mc-next-technical-detail">
+        <div className="mc-next-composer-context-strip">
           <ContextStrip
             model={contextStripModel}
             mode={contextStripMode}
             memory={memoryLabel}
-            tokens={formatTokenLabel(usageTotals.tokens)}
-            cost={formatCostLabel(usageTotals.costUsd)}
+            tokens={formatTokenLabel(usageTotals.tokens)+(usageTotals.partialTokens && usageTotals.tokens !== null ? " recorded" : "")}
+            cost={formatCostLabel(usageTotals.costUsd)+(usageTotals.partialCost && usageTotals.costUsd !== null ? " recorded" : "")}
           />
         </div>
       ) : null}
@@ -1075,19 +1085,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             interactive={false}
           />
         </div>
-        <div className="mc-next-composer-chip-row mc-next-technical-detail">
-          {props.contextSelection ? (
-            <button
-              type="button"
-              className="mc-next-composer-chip action"
-              onClick={props.onClearContextSelection}
-              title={
-                props.contextSelection.sourceLabel ? `Context from ${props.contextSelection.sourceLabel}` : undefined
-              }
-            >
-              Context: {props.contextSelection.label} ×
-            </button>
-          ) : null}
+        <div className="mc-next-composer-chip-row">
           {capabilityUseChips.map((chip) => (
             <span key={chip} className="mc-next-composer-chip subtle">
               {chip}
@@ -1169,6 +1167,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       ) : null}
 
+
+      </ChatOptionsPopover>
+      {contextArmed || props.fullWebAccess || props.pinnedGoal ? <div className="mc-next-composer-active-context" aria-label="Active context and overrides">
+      {props.contextSelection ? <button type="button" className="mc-next-composer-chip action" onClick={props.onClearContextSelection}>Context: {props.contextSelection.label} ×</button> : null}
+      {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web access</span> : null}
+      {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
+      </div> : null}
       {props.selectedTurnRecovery ? (
         <div className="mc-next-composer-banner warning">
           <StatusChip tone={props.selectedTurn?.trace.status === "failed" ? "critical" : "warning"}>
@@ -1242,7 +1247,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         <textarea
           ref={props.composerRef}
           disabled={props.historicalReadOnly}
-          value={props.draft}
+          value={getWorkflowSkillCaptureDisplay(props.draft)?.summary ?? props.draft}
+          readOnly={Boolean(getWorkflowSkillCaptureDisplay(props.draft))}
           onChange={(event) => props.onDraftChange(event.target.value)}
           onKeyDown={props.onComposerKeyDown}
           onPaste={props.onComposerPaste}
@@ -1256,6 +1262,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           aria-activedescendant={commandSuggestionsActiveDescendant}
         />
       </div>
+
+      <WorkflowSkillCaptureEvidence
+        content={props.draft}
+        onClear={props.historicalReadOnly ? undefined : () => props.onDraftChange("")}
+      />
 
       {composerPaletteVisible ? (
         <div

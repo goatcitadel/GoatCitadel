@@ -78,6 +78,7 @@ Notes:
 - Content-bearing results retain snapshot/source hashes, entry index/reference, and exact line ranges in the tool run. Chat derives normal tool citations from those receipts. `session.status` projects the four tool names only when its invocation carries the same valid active-turn snapshot binding.
 - `ChatSessionStatusService` is the Gateway-owned read model for one Chat session's provider/model selection, routed-context budget and receipt, active/waiting turn counts, linked durable worker/recovery posture, pending attention, delegation progress, persisted capability profile, model-usage totals, and runtime build identity. `GET /api/v1/chat/sessions/:sessionId/status` returns the operator projection; `session.status` returns a smaller secret-free projection from the same service. Background tasks carry the same `attention.state`, `attention.reason`, and canonical blocker truth as the durable background-task rail. The read joins only exact session/workspace linkage and exact persisted run IDs. Realtime events trigger refresh but never replace the underlying repositories as authority.
 - `NotificationRoutingService` owns workspace-scoped notification targets, rules, client-presence leases, canonical notification events, and delivery state. Targets contain only configured channel connection IDs or OS-keychain secret references for allowlisted HTTPS webhooks; URLs and credentials never enter Chat/model payloads or notification tables. Active rules select external targets, `when_away` treats unknown/expired presence as away, and each delivery persists its idempotency key, attempts, suppression, failure, completion, or `unknown_after_send` posture. Channel delivery re-enters the governed comms path; webhook delivery re-enters the durable external-side-effect runner and stops automatic retries after an unknown post-boundary outcome. Mission Control toast, sound, and desktop preferences consume the same retained event stream but remain local client preferences rather than canonical external targets.
+- `ChannelDeliveryRuntimeService` owns queued outbound channel delivery. `channel_delivery_parts` binds each normalized message part to its queue attempt, request/payload hashes, approval and provider receipt before dispatch. Approval waits pause the same attempt; reopening the runtime reuses acknowledged parts and never repeats an ambiguous send. Linked provider receipts remain exact-ID evidence rather than additional logical queue jobs. Cron settles the original queued delivery only after its canonical send outcome is recorded. Persisted delivery diagnostics survive cold API reads.
 - `ChatTimerService` and `chat_timers` own one-shot, session-scoped reminder state. The existing scheduler provides only database-clock wake and leased claim mechanics; firing performs no provider or model call. A successful claim idempotently persists one `chat-timer` system message, one canonical `timer.due` notification event, retained realtime evidence, and the final delivery posture. Lease-owner settlement plus deterministic notice/event IDs prevent duplicate visible firing across workers and restart recovery. The create boundary enforces a five-second minimum, one-year maximum, 25 active timers per session, and 100 per workspace. `cancelOnNextReply` is evaluated only from the user-message canonical commit callback. `/schedule` remains the separate restricted scheduled-agent-turn path and is not implemented through Chat timers.
 - Versioned `RunVariableSchema` contracts belong to prompt packs and active agent presets; defaults belong to those owners, while entered values are stored only in browser `sessionStorage` for Prompt Lab or `chat_session_run_variable_bindings` for the durable Chat session. A palette selection sends the owner ID, owner revision, schema hash, template ID when applicable, and typed bindings. The Gateway reloads the owner, rejects stale revisions or schemas, validates every declared value, substitutes only declared placeholders, compares the exact server-resolved input with the client preview, and freezes schema, binding, and resolved-input hashes into run/turn evidence. Paths are inert strings and v1 has no secret field type. Entered bindings never become owner defaults or learned memory without a separate operator-authored update.
 - `notify.request` is an approval-gated model-callable attention request. The Gateway binds it to the active session/workspace and rejects model-supplied target IDs, raw URLs, and credentials. Its internal retained signal may be projected locally, while external delivery exists only when an active operator-authored rule selects a target.
@@ -111,6 +112,9 @@ A resumable execution lifecycle used when work must survive pause/resume, approv
 Authority:
 - Contract shape: `packages/contracts/src/durable.ts`
 - Persistence: `packages/storage/src/durable-run-repo.ts`
+- Chat execution placement: `packages/storage/src/remote-worker-chat-placement-repo.ts`
+- Generated worker Chat task binding: `packages/storage/src/remote-worker-chat-task-repo.ts`, through the assignment and durable-run repositories
+- Worker Chat resume evidence: `packages/storage/src/remote-worker-chat-resume-ledger.ts`, through the assignment repository
 
 Implementation status:
 - Schema and storage repository: complete through the protected storage migration set.
@@ -122,6 +126,16 @@ Implementation status:
 
 Notes:
 - A run records execution intent and outcome for the shipped resumable operator flow set.
+- `chat_execution_placements` retains the immutable local or remote-worker choice before Chat starts its runner. Remote placement commits with its exact assignment; local placement excludes a later worker offer. Retries preserve the choice, while the current durable lease and mutation admission still govern execution and writes. Worker failure never authorizes a second local runner.
+- Automatic remote placement requires frozen admitted context, a supported text/tool profile, delegation disabled, explicit runtime activation, and an eligible native Windows worker covered by the admitted operator's execution-workspace spending grant. Native MCP tools require the Gateway's current requester authority or static configuration/environment authority; mesh tools require current activation authority and composed Gateway effect/approval owners. Inference and tool execution revalidate the retained profile; the Gateway mints and verifies private contexts and preserves the exact target through approved replay. Credentials and context handles never enter the worker protocol. Native MCP without an explicit supported binding and council/delegation workflows remain local. See `docs/testing/COMPARISON_IMPLEMENTATION_STATUS.md` for proof limits.
+- Mesh tool profiles bind a `mesh_tool` or `mesh_mcp_server` catalog entry by its derived publication capability ID. Preflight and replay validate the publisher, manifest, entry, effect posture and activation projection against the frozen binding, reject local-name collisions, and preserve conservative remote-effect classification. The shared Chat/worker authority gate also requires the Gateway's current activation owner; absent or changed authority fails before model dispatch. Placement and effect dispatch use the Gateway owners described below; destination-node execution remains unfinished.
+- Chat without a caller-selected task can receive a generated execution task when its worker offer commits. `remote_worker_chat_tasks` (SQLite 216 / PostgreSQL 161) immutably binds that task to the original run, workspace, session, turn and payload hash. Task creation, parent-context metadata and placement commit together; the admitted request is not rewritten. Failed offers and local placement create no task. Generated task status follows the durable transition in the same transaction; existing caller-selected task lifecycles retain their owners. Oversized generic Chat input keeps the local path without truncating a worker snapshot.
+- Worker model tool requests are retained in the canonical inference terminal frame. A protected call selection resolves exact arguments and current profile authority through `RemoteWorkerChatToolRuntime`, then enters the existing effect and Chat tool owners. `readCanonicalWorkerChatInput` and `readCanonicalWorkerChatOutput` reconstruct bounded model continuations from the frozen context, retained calls and canonical settled results; artifact verification and Chat materialization check the whole sequence and account for every model step, including tool-owned model attempts. The verified assignment supplies the task owner for canonical usage ingestion. A tool result alone cannot complete Chat.
+- Pending worker tool approvals retain nonterminal effect history and the original approval correlation. `retainRemoteWorkerChatApprovalWait` verifies exact Chat/assignment linkage inside the parent write fence; the normal Chat finalizer owns the durable wait and approval-keyed checkpoint. `assertLocalApprovedActionOwner` prevents the ordinary approval executor from taking over a worker-owned tool, including historical assignments without a placement row. An operator decision still requires current native generation, lease, capability and policy authority before execution.
+- `RemoteWorkerChatApprovalWaitReadService` lets protected native sync observe an exact sealed approval wait across restart, including expiry of the retained lease. It checks current credentials, mesh admission, assignment generation, retained token and canonical approval/checkpoint linkage. This read does not renew authority. The foreground worker retains its assignment and polls while waiting.
+- The assignment repository retains separate immutable approval-wake, parent-dispatch and recovery bindings. Gateway wake and worker reconnect use these owners to resume the original approved action under a fresh admitted parent claim and protected native lease. Approved effects enter the canonical pending-action executor and retain execution receipts; uncertain outcomes require reconciliation rather than redispatch. Local real-process proof does not certify protected native hosting, an installed Windows service or a second physical machine.
+- Windows worker service mode reads its fixed `configuration/worker.environment` through `InstalledWorkerFiles`. The native owner checks protected payload/configuration permissions, separates worker-writable state, and retains file handles for the child lifetime. The stopped-service installer requires an independently pinned v3 package inventory; uninstall retains configuration and state. These source owners do not authorize protected signer access or establish successful installed-service custody, startup or recovery.
+- The native signing transport classifies OS-collected callers as an elevated interactive operator or the dedicated runtime worker. The latter is restricted to inspect, runtime PoP and TLS client signatures. Primary/pipe token identity and LSA logon authority are checked before protected execution; the exchange advertises and verifies the caller's exact operation set. The installer and native validators require worker read/execute access to the signer/client images and their protected directories, bounded pipe read/write access, and query-only signer SCM access. After validating its own service identity, signer startup adds worker query/wait access to its process and query-only access to its primary token while retaining existing ACL entries and owner/protection state; failure prevents transport startup. Broker control remains SYSTEM/Administrators-only. Fresh-install status 1077 is accepted only for a stopped signer with no PID and clean remaining status metadata. Actual cross-account authentication, availability and installed custody remain incomplete; these source grants do not establish an operational installed signing path.
 - Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption for mission-session Chat operator work.
 - A durable child watcher's `attached` or `detached` state is presentation/attention truth only. `Continue in background` detaches the watcher without changing the child run, scheduling, policy, grants, approvals, waits, recovery, steering, inspection, or cancellation authority; reattach restores foreground attention. Canonical blockers remain visible in both the background rail and Chat status.
 - A detached child that reaches an approval, user-input, recovery, or other attention blocker may dispatch an idempotent `durable.attention_required` event only through active operator-configured notification routing. Dispatch begins after the durable transition commits, and delivery failure is non-authoritative: it cannot roll back, advance, fail, or otherwise alter the run.
@@ -195,6 +209,358 @@ Notes:
 ### Chat Tool Effect Truth
 
 Chat planning freezes a server-authored `effectPotential` of `none` or `unknown`, one secret-safe binding for every enabled `tool.call.before`, `tool.call.after`, `tool.call.error`, and `after_tool_call` hook, and the exact built-in/plugin runtime-owner generation into the immutable capability profile. `chat_tool_runs` owns recovery `effectDisposition` plus operator-facing `effectOutcomeKind`/`effectEvidence`; the runner durably crosses an auxiliary-effect fence immediately before hook delivery/materialization and a separate main-executor fence immediately before the admitted built-in, plugin, MCP, or browser-fallback owner. This separation preserves a legitimate approval reached after a hook as `approval_wait_after_auxiliary_dispatch` while suppressing an approval reported only after the main executor crossed its boundary. Only a proven pre-dispatch block, approval wait, skip, reuse, or trusted built-in safe read may settle `none`; opaque legacy invokers, hook or owner drift, browser/shell/MCP/plugin/remote/mutating paths, interruption after either effect boundary, approval-resume execution, and post-dispatch output rejection remain `unknown`/`uncertain`, carry inspect-before-retry guidance, and are never automatically replayed. A `concrete` outcome requires a typed out-of-band receipt whose Chat tool-run, tool, scope, and idempotency correlation exactly match a completed canonical owner; result payload IDs are never evidence. Chat tool cards, expanded trace detail, ordinary decision traces, and trusted Ops Run Detail project the same fields but withhold raw receipt IDs until a dedicated server-verified owner projection exists; expert raw JSON is explicitly diagnostic and non-canonical. These internal classifications are stripped at the shared complete/stream provider-send boundary.
+
+MCP requester context is an app-private branded handle derived from the frozen
+Chat capability profile. Ordinary Chat and worker execution pass it through
+runtime options; request DTOs and pending-action payloads cannot carry that
+authority. Ordinary approved MCP replay restores the profile only through an
+exact join of the retained request, approval, Chat tool run and admitted actor
+scope. Worker approval continuation uses its protected execution-owner checks.
+The MCP dispatch owner revalidates the profile and requester connection before
+calling the remote tool, awaits the execution/effect boundaries, and applies the
+canonical approval policy's redaction decision. Named-tool placement additionally
+requires the explicit static or requester binding and its current Gateway owner,
+as described below.
+
+The policy engine has a process-local named-MCP mapping to the registered
+`mcp.invoke` definition. It preserves the exact native name and arguments in
+pending approvals and audit records while inheriting MCP risk and untrusted-input
+restrictions. Deny patterns and Citadel Wards match either identity, and the
+active permission ceiling must cover the native name or its MCP policy owner.
+Scoped allow grants retain the existing selection and consumption rules. A grant
+whose pattern covers `mcp.invoke` counts all mapped MCP calls; a native-only grant
+counts that exact tool. SQLite 217 / PostgreSQL 162 persist this shared accounting
+identity without changing historical records. Inspection and dry-run rows do not
+consume the limits. The mapping is neither requester authority nor a credential,
+and approved replay requires a fresh process-local mapping as well as the exact
+retained approval request. Generic MCP wrappers project their target from the
+same trimmed server/tool fields used by transport and evaluate the actual nested
+arguments. Both forms record the canonical native target plus the shared MCP
+identity in access decisions; approvals and audit retain the original invocation
+form and arguments. Historical generic rows continue to count toward MCP-wide
+limits without invented native-target attribution. This projection cannot create
+a named dispatch handle or requester authority. Direct MCP policy checks use the
+same Gateway context normalizer as generic Chat calls, including canonical
+workspace/Citadel resolution, while retaining the exact target and arguments sent
+to transport. Both forms reject a native target that collides with a registered
+tool.
+
+The policy engine also has a process-local mesh mapping for exact `mesh_tool`
+and `mesh_mcp_server` publication identities. Its private `mesh.invoke` policy
+template is absent from the public tool registry and cannot be invoked as a
+generic tool. It supplies conservative network, secret and mutation posture;
+MCP permission does not grant mesh access. Denies, Wards, permission ceilings and
+scoped grants consider both the publication and shared mesh identity. Approved
+replay retains the exact request and requires a fresh mapping plus current policy.
+SQLite 219 / PostgreSQL 164 widen the constrained accounting column while
+preserving recorded values and the existing index. Mesh and MCP counters remain
+separate. This mapping grants no publication or transport authority.
+
+Chat schema admission now reads mesh descriptors through the digest-verifying
+publication repository and binds them to current activation authority. Tool
+publications retain their exact input schema. MCP-server publications expose an
+explicit advertised-tool selector and argument envelope; their native schema
+digests are not treated as schema bytes. A bounded inventory interleaves nodes,
+shares immutable manifest reads, and batches current activation checks. Private
+schema handles carry the policy mapping, while persisted profiles retain only
+the exact provider definition, alias and publication binding. Profile freeze
+rechecks selected activations after policy inspection. Current mesh policy
+probes require a process-local context and reload the exact profile/catalog,
+actor, scope, schema and activation. Cloned handles and drift fail closed.
+Chat mesh calls enter the canonical invocation coordinator and retain its hooks,
+policy, plugin-owner exclusion and Ward redaction. Ordinary invocation cannot
+execute an approval replay inline. The approved-effect owner recovers the exact
+Chat approval/profile join and supplies a fresh mapping to approved policy and
+dispatch. The shared dispatch adapter rechecks identity after execution/effect
+fences, and the invocation service rechecks activation and deadline before
+exposure. Node polling exposes only its own exact, confirmed replication
+envelopes through `/api/v1/mesh/capabilities/invocations/pending`. The bounded
+transient input vault owns discoverability; generic replication events cannot
+mint a delivery, and a restart cannot fabricate lost arguments. Neither pending
+delivery nor arguments are exposed before the transport confirms the exact
+envelope. Input reads recheck admission/certificate, current activation, health,
+lease, deadline and terminal settlement. Polling is not an execution claim.
+The destination worker's optional `WorkerMeshCapabilityRuntime` binds deliveries
+to constructor-supplied local owners and verifies complete manifest, entry,
+descriptor, permission and input hashes. The worker process's state lock owns
+its local execution journal. An execution marker precedes local authority
+checks and the effect; after disk/progress awaits, a fresh input read rechecks
+origin admission and activation. The local owner enforces its schemas,
+permissions, path/network policy and execution limits.
+The exact bounded result precedes settlement transmission. A confirmed receipt
+replaces transient output with a permanent invocation/hash tombstone. Recovery
+resends a retained settlement, or settles an interrupted execution as unknown;
+it never re-enters the local owner. A retained unknown receipt also prevents
+fresh work after another process restart; restart is not reconciliation. Both
+local authority checks and effect entry obey the invocation's cancellation and
+deadline. One budget starts before the first input read and includes subsequent
+disk/progress waits, input revalidation and local execution. Transport receives
+the same cancellation signal; checks after awaits use both wall and monotonic
+time so a delayed timer or backwards clock cannot admit late work. Expiry before
+the execution marker leaves no effect claim; expiry after the marker but before
+the owner records a known timeout. A late result after owner entry is unknown
+and requires reconciliation. Retained settlement reporting does not inherit the
+expired execution deadline. An active journal without room for its terminal
+receipt is rejected.
+After retained recovery, the process can drive one assignment and one serialized
+mesh cycle concurrently. This allows an assignment to await a mesh effect on the
+same worker. Normal assignment completion stops polling and drains the current
+mesh cycle; failure cancels both branches and awaits their coordinators before
+returning. The local execution adapter still owns OS process termination and
+resource enforcement. This coordinator is not a native isolation boundary; the
+shipped protected host still needs its local capability adapters and custody.
+Worker lease/control refresh tolerates at most two raced control-read rejections
+by renewing from its newly retained lease before another authenticated read.
+Each renewal re-enters current assignment, credential and parent authority.
+Persistent rejection, malformed receipts and ambiguous renewal still stop work;
+the helper never retries a model/tool operation. Cancellation may proceed only
+to the existing terminal-settlement path.
+The native `CellWorkspaceDirectories` helper verifies the admitted parent's
+exact owner/group, protected DACL and integrity label before walking its path,
+then reopens and pins its NTFS ancestry and rechecks the admitted identity and
+security. Creation uses that retained parent handle. Later verification rejects
+parent permission or label drift as well as cell-root drift; closing releases
+handles without deleting partial or completed directories. The descriptor grants
+SYSTEM and the frozen controller full control and suppresses implicit owner
+DACL rights. This is internal parent/root custody, not volume provisioning,
+quota enforcement, AppContainer profile storage confinement or installed-service
+authority. Those remain required before native backend activation.
+The internal `CellVirtualDiskFile` owner creates only a new fixed VHDX backing
+file under the verified controller directory. It takes a frozen nonzero disk
+identifier and explicit virtual/file-byte reservations. The file preserves the
+controller's owner, group, protected access rights and medium no-write-up label;
+inheritance flags are normalized for a file before kernel creation. Verification
+checks the retained NTFS identity, exact file descriptor, single unnamed stream,
+actual physical/allocated bytes, VHDX provider/type, fixed subtype, identifier,
+sector size and unattached state. It never adopts an existing image or ordinary
+file. Cancellation and provisioning expiry cancel and join submitted I/O; a slow
+driver may delay that join. Closing releases handles without deleting disk state.
+This helper verifies allocation after creation and requires reserved metadata
+headroom. It does not provide a transient allocation limit, attached/formatted
+volume, disk/file-count quota, AppContainer profile confinement or installed
+service authority. Native backend readiness remains gated on those owners.
+The internal `CellVirtualDiskAttachment` operation retains an already-created,
+verified backing-file identity before opening the SDK handle for attachment.
+It checks the effective thread token's existing volume-management privilege;
+process-token fallback occurs only without an impersonating thread token. The
+production helper neither enables privileges nor grants account rights. Attach
+requests no drive letter and permanent lifetime. A lost controller handle thus
+does not silently detach an uncertain workload. Cancellation/expiry joins a
+submitted asynchronous attach, and any uncertain result remains `unknown`.
+Verification rechecks the exact file/disk identity and SDK-reported attached
+device path. That path is diagnostic data, not authority to format a numbered
+disk. Explicit detach rechecks current identity and privilege, with cancellation
+and deadline checks before and after the synchronous Windows operation. The
+outer service watchdog remains required for a stalled driver. The caller must
+establish canonical provisioning and zero-workload authority; this helper does
+not implement those owners, volume formatting, quotas or recovery admission.
+The local native lane exercises rejection and records attachment as unexecuted.
+`verify:remote-worker:windows-cell-attachment` is the separate administrator-run
+attachment/detach lane, with a privilege preflight before any fixture image is
+created. Its successful physical attachment path remains unverified on the
+current non-elevated host. These helpers do not enable native backend readiness.
+The internal Windows `RunVerifiedRuntimeJob` adapter consumes the admitted
+`goatcitadel.worker-runtime-bundle.v1` manifest and its expected root identity.
+It verifies exact runtime inventory, sizes and content hashes and holds the
+verified file/directory handles through the existing AppContainer/job lifecycle.
+An entry executable outside that inventory is rejected before process creation.
+The job and complete-bundle entrypoints reject input above the explicit allowance
+or the internal 1 MiB ceiling before copying request bytes. Empty input remains
+the default. A private first-instance pipe gives the child only a read handle;
+the controller pumps bounded writes alongside output and cancels and joins any
+pending write on termination. Early closure cannot report complete delivery.
+Recorded byte counts describe pipe delivery, not tool acceptance or effect
+completion; the invocation owner must still verify its result and settlement.
+The shared contract owns the domain-separated binary manifest digest. This
+adapter does not establish package trust or protected volume authority: the
+caller must supply governed publication, immutable root custody, quotas and
+assignment authority. The native backend remains unavailable without all its
+existing readiness requirements.
+The internal `PinnedCellRuntimeBundle::InstallTo` operation copies an already
+pinned source into an empty, verified protected runtime root. It creates names
+exclusively relative to held parent handles, applies the root's exact security
+descriptor, copies from verified source handles, flushes the files and verifies
+the installed inventory before returning retained output pins. Cancellation or
+failure preserves partial files and exact creation/byte counters; another call
+refuses to adopt a nonempty destination. This is a serialized internal copy
+operation, not governed publication or recovery authority. Filesystem admission
+and job launch share literal drive-root and volume-GUID path validation and
+recheck the actual fixed NTFS volume and file identities. Directory index growth
+is permitted; alternate streams and unsafe metadata remain rejected. Controlled
+native proof launches the installed executable inside the existing AppContainer
+and verifies both complete and interrupted copying. Protected volume provisioning,
+quotas and installed service/assignment composition remain required.
+Native node settlements carry the authenticated worker's exact M3 authority
+fence into storage. Both first submission and replay recheck current worker,
+credential and mesh admission in the committing transaction. Activation
+withdrawal alone still permits an admitted node to report a dispatched outcome;
+worker or mesh-authority revocation rejects that node's submission and replay.
+The protected Windows listener exposes these owners through the fixed POST
+`/api/v1/remote-workers/mesh-capability-exchanges` route (PoP-v2 code 13).
+Its closed actions publish/list publications, discover pending deliveries,
+read input, report progress and settle. Current M2/M3 authority supplies node
+identity; caller-supplied node identity, activation and arbitrary targets are
+rejected. Each exchange requires governed-tool scope, exporter-bound proof and
+a durable fresh nonce. Read responses recheck admission before disclosure;
+publication and settlement retain their canonical transaction fences. This
+transport does not grant execution, retry or capability-activation authority.
+Recovery requires the retained intent's exact session, turn, run, approval, execution
+profile and publication identity; matching tool-run and input hashes alone are
+insufficient. Uncertain delivery retains manual-reconciliation truth and is not
+presented as a successful tool result. Worker placement requires current mesh
+authority, composed effect/approval owners and the worker's governed-tool
+capability. Worker effects resolve the exact actor/profile/schema binding before
+creating a Chat tool run and carry a fresh private context into the coordinator
+and approved continuation. Protected lease and spending checks remain in force.
+Gateway dispatch now validates exact published tool input schemas before retaining
+an intent or entering its execution fence. The destination validates the same
+hash-bound bytes before recording execution, and checks successful tool output
+against the published output schema. Invalid post-execution output remains unknown
+and cannot authorize a retry. Gateway settlement separately checks the immutable
+descriptor, declared byte limit, digest and output schema; missing manifest
+authority cannot widen its response limit. Successful node submissions require
+output bytes, captured with their settlement metadata before asynchronous work.
+
+The Node-only contracts schema validator uses draft 2020-12 validation in at most
+four temporary worker threads, with bounded JSON size/depth, V8 resource limits,
+a five-second deadline and joined termination. It does not coerce values, insert
+defaults, remove properties or resolve remote schemas. This contains expensive
+schema work without claiming a hostile-code sandbox. MCP manifests expose only
+native schema digests, so this layer validates their selector names and envelope;
+the destination registry owner enforces the actual native tool schema.
+The stock worker entrypoint now loads an optional digest-pinned local tool
+registry independently of remote publication. Its filesystem reader and Windows
+NTFS writer require exact native schemas and permission envelopes, bound file and
+response bytes, recheck local configuration/root identity and preserve relative
+paths in output. The writer launches only a fixed digest-pinned native helper,
+pins directory ancestry, and compares previous contents before replacing a file
+through an exclusive handle. Failures after mutation require reconciliation;
+replacement is not an atomic rollback transaction. The destination HTTP MCP owner
+pins an exact endpoint and native schemas in the local registry, validates fresh
+discovery and rechecks Gateway admission/activation plus identical input bytes
+immediately before sending a tool call. Its network-only permission and unknown
+effect posture grant no worker filesystem or process authority. Lost replies and
+invalid output after dispatch require reconciliation. The owner supports
+anonymous and bearer-authenticated Streamable HTTP JSON/SSE responses. The bearer
+file is independent of Gateway credentials, pinned by exact bytes and rechecked
+before every send. An authenticated descriptor binds the endpoint, native schemas
+and credential reference through an opaque configuration digest. Changes require
+new publication/activation authority. Credentials must remain outside destination
+filesystem roots; the operator owns their file permissions. OAuth, stdio and
+protected process/custody hosting remain unfinished. Registry content is never executable
+code or approval. Omitting the registry still recovers retained mesh work and
+refuses unknown outcomes, while never polling for new invocations. Additional
+destination tools, native cell/service composition and physical two-machine/live
+acceptance remain unfinished. Installed service configuration now uses an
+administrator-owned immutable registry and atomic selection, guarded by the
+expected prior selection, a writer lock and stopped-service checks. The native
+host derives the two registry settings from protected files and pins them for the
+child lifetime; the worker cannot change them. This source composition has
+temporary-file proof, not installed lifecycle/custody acceptance. Setup is documented in
+`testing/REMOTE_WORKER_MESH_TOOLS.md`.
+
+For a native tool already selected with an explicit requester binding, Gateway
+dispatch re-reads the durable profile through the branded Chat context and checks
+its actor, turn, workspace, catalog, profile hash and binding integrity. The exact
+stored server ID identifies the native tool suffix, including dotted names; tool
+arguments cannot redirect that mapping. Last-moment Chat policy probes and ordinary
+approval replay use the same native policy identity. Approved replay retains one
+context for its policy and dispatch checks and preserves the reviewed native
+request and uncertain-after-send result. A changed connection mode, missing
+binding or substituted runtime owner blocks dispatch. Server tool allowlists,
+denies and first-use consent apply to both static and requester-scoped modes.
+Chat now enumerates requester-scoped native schemas through the authenticated,
+secret-scanning discovery owner. A second connection per server revalidates the
+selected descriptors against the final catalog before native schemas enter the
+frozen profile. Private policy handles remain outside persistence. Enumeration
+is bounded to 16 servers and 256 candidate tools, shared across servers; final
+Chat selection retains its existing count and token limits. Both discovery
+passes use four concurrent connections and a shared 30-second deadline per pass.
+New provider aliases encode the complete SHA-256 identity in 48 characters.
+
+Runtime catalog checks revalidate the native requester/server authority and the
+shared MCP capability without adding requester tools to the global catalog.
+Missing process-local discovery outcomes can be reconstructed only from the
+exact retained profile, binding and provider alias, with current scope, auth and
+server checks before fresh credential resolution. Changed schemas cannot replace
+that alias. Recovery remains before the existing effect boundary and never
+authorizes replay of an uncertain effect. Credentials and discovery outcomes are
+not persisted. Requester-scoped worker placement and effect execution use these
+same Gateway owners, including approval continuation and current identity checks.
+Controlled built-application process restarts now prove discovery reconstruction,
+one MCP effect and final Chat materialization, before dispatch and across an
+approval wait. The fixture supplies synthetic resolvers through `buildApp` and
+the runtime factory to the service constructor. Stock startup keeps the default
+empty registry; no environment, route, skill or add-on can register a resolver.
+Installed-service custody and physical/live acceptance remain unfinished. See
+`docs/testing/COMPARISON_IMPLEMENTATION_STATUS.md` for the exact process and
+transport boundaries.
+
+Static native tools use `McpStaticChatService` for bounded, authenticated discovery
+and current-configuration checks. Server-supplied metadata is normalized and
+secret-scanned before it enters Chat. Generated catalog names are excluded from
+connection-material scanning so a public `mcp.` prefix cannot collide with an
+endpoint path segment. The immutable binding retains the exact native target,
+definition, final catalog, actor/turn scope and opaque configuration identity;
+endpoint, environment and credential material stay private. Static and requester
+tools share the 256-tool candidate limit and collision rejection.
+
+`McpServerStore` records superseded OAuth and environment references in the
+private `McpCredentialRetirementStore` within the publication/removal transaction.
+Reconciliation checks all current auth/environment bindings before claiming a
+retired slot, performs keychain deletion outside the database transaction, and
+retains a permanent tombstone that bars republication of that version. Failed or
+unacknowledged deletion remains pending; a lost completion acknowledgement does
+not restore authority. A bounded index holds at most 4,096 pending retirements,
+while completed tombstones remain individually indexed in storage. Cleanup runs
+after critical startup, acknowledged credential publications and maintenance ticks. Its failures
+do not make a completed OAuth request retryable, and diagnostics contain counts
+rather than credential references or values. Windows deletion requires explicit
+absence/removal acknowledgement and rejects other PasswordVault failures.
+`McpCredentialStagingStore` registers each fresh immutable OAuth/environment
+reference before the synchronous keychain writer runs outside the transaction.
+Its private journal stores no credential values or value hashes. An acknowledged
+writer becomes ready for ten minutes; canonical publication consumes that
+readiness in the same transaction as auth/environment state. Expired ready
+versions cannot publish, and bounded reconciliation transfers unreferenced
+versions to the retirement owner. An owner-bound write that fails, encounters
+an occupied slot, or loses its terminal acknowledgement remains `writing`: it is
+unpublishable and is never automatically deleted based on age alone, because a
+suspended writer may still resume. The staging index holds at most 4,096 entries;
+each pass defaults to 32, permits at most 256 and rotates retained entries to
+avoid starvation. Reconciliation checks all current bindings, including corrupt
+cross-server aliases. Journals use existing settings transactions on SQLite and
+PostgreSQL; no schema change is required.
+
+Version 2 private staging/retirement records preserve an opaque Windows custodian
+binding from the original write. The helper derives it from the native registry's
+machine identity, current Windows SID and GoatCitadel resource namespace. Only
+the domain-separated digest enters the journal. Each Windows mutation checks its
+own current identity before constructing PasswordVault. Immutable writes reject
+occupied slots and verify the saved value; credentials travel through stdin.
+Production cleanup requires a matching original custodian plus an explicit
+absence/removal receipt. Unknown or foreign custody stays pending, and retirement
+passes rotate retained entries so they cannot starve this host's cleanup.
+An unfinished writer supplies no retirement authority even if a corrupt canonical
+binding references it. Version 1 records remain readable with unknown custody;
+they are never silently rebound to the current host. Other keychain backends
+remain usable, but automatic retirement lacks a supported custody owner there.
+
+This is a local OS identity check, not installed service custody, hardware
+attestation or clone-resistant identity. Unacknowledged writers, older unindexed
+credentials and custodian migration/rebinding still require inventory and recovery
+authority. Neither owner discovers or deletes arbitrary secrets.
+
+Static invocation reads fresh `tools/list` metadata on the same connection as
+`tools/call` and requires the frozen provider definition to match. A one-use
+process-local authority checks the current profile, scope, actor, shared MCP
+capability, configuration and captured environment before the effect marker,
+then rechecks authority after its asynchronous storage work. Failure after that
+marker is conservatively retained for reconciliation, never automatically retried.
+Worker placement, inference and approved continuation use the same static owner.
+Two stock built-Gateway/Windows-worker cases prove restart before dispatch and
+across approval with one MCP call and one Chat reply, using loopback services and
+synthetic worker custody. No constructor resolver is needed for the static path.
 
 ### Work Passport
 

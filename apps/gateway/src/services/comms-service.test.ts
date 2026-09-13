@@ -43,6 +43,36 @@ function createHost(): CommsHost & { invokeAndUnwrap: ReturnType<typeof vi.fn> }
 }
 
 describe("comms service governance", () => {
+  it("preserves executable channel arguments through approval JSON storage", async () => {
+    const host = createHost();
+    const supplied = { connectionId: "conn-1", target: "-123456", messageId: "message-1" };
+    await commsSend(host, { connectionId: "conn-1", target: "-123456", message: "hello" });
+    await commsSend(host, {
+      connectionId: "conn-1",
+      target: "-123456",
+      message: "with attachment",
+      attachments: [{ url: "https://example.com/a.txt", title: "a.txt" }],
+      replyToMessageId: "message-1",
+      replyToPartIndex: 0,
+    });
+    await commsReact(host, { ...supplied, reaction: "👍", partIndex: 0, messageText: "" });
+    await commsUnsend(host, supplied);
+
+    const requests = host.invokeAndUnwrap.mock.calls.map(([request]) => request as ToolInvokeRequest);
+    for (const request of requests) {
+      // Approval storage uses JSON, and the policy engine requires exact equality
+      // with the executable request after loading the approved payload.
+      expect(JSON.parse(JSON.stringify(request.args))).toStrictEqual(request.args);
+    }
+    expect(requests[1]!.args).toMatchObject({
+      attachments: [{ url: "https://example.com/a.txt", title: "a.txt" }],
+      replyToPartIndex: 0,
+      replyToMessageId: "message-1",
+    });
+    expect(requests[2]!.args).toMatchObject({ partIndex: 0, messageText: "", reaction: "👍" });
+    expect(supplied).toStrictEqual({ connectionId: "conn-1", target: "-123456", messageId: "message-1" });
+  });
+
   it("carries channel governance into the final channel.send tool request", async () => {
     const host = createHost();
 

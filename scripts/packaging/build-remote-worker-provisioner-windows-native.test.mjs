@@ -80,7 +80,7 @@ after(() => {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
-test("W1B1A freezes the exact 47-file fence and canonical current-byte source manifest", () => {
+test("W1B1A freezes the exact 54-file fence and canonical current-byte source manifest", () => {
   const expected = [
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj",
@@ -91,6 +91,7 @@ test("W1B1A freezes the exact 47-file fence and canonical current-byte source ma
     "apps/remote-worker-provisioner-windows-native/src/availability_broker.test.cpp",
     "apps/remote-worker-provisioner-windows-native/src/availability_broker_main.cpp",
     "apps/remote-worker-provisioner-windows-native/src/availability_broker_runtime.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/caller_authority.test.cpp",
     "apps/remote-worker-provisioner-windows-native/src/client_main.cpp",
     "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.cpp",
     "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.hpp",
@@ -116,14 +117,20 @@ test("W1B1A freezes the exact 47-file fence and canonical current-byte source ma
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.cpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.hpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.test.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/signer_inspection.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/signer_inspection.hpp",
+    "apps/remote-worker-provisioner-windows-native/src/signer_inspection.test.cpp",
     "apps/remote-worker-provisioner/src/protected-admission-evidence.test.ts",
     "apps/remote-worker-provisioner/src/protected-admission-evidence.ts",
     "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.test.ts",
     "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.ts",
+    "apps/remote-worker-provisioner/src/protected-tls-client-certificate-verify.test.ts",
     "apps/remote-worker-provisioner/src/windows-helper-protocol.test.ts",
     "apps/remote-worker-provisioner/src/windows-helper-protocol.ts",
     "apps/remote-worker-provisioner/src/windows-service-client.test.ts",
     "apps/remote-worker-provisioner/src/windows-service-client.ts",
+    "apps/remote-worker-windows-host-native/src/service_inspection.cpp",
+    "apps/remote-worker-windows-host-native/src/service_inspection.hpp",
     "packages/contracts/src/remote-worker-protocol.test.ts",
     "packages/contracts/src/remote-worker-protocol.ts",
     "scripts/packaging/build-remote-worker-provisioner-windows-native.mjs",
@@ -132,14 +139,14 @@ test("W1B1A freezes the exact 47-file fence and canonical current-byte source ma
   ];
   assert.deepEqual(REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS, expected);
   assert.deepEqual(expected, [...expected].sort(asciiCompare));
-  assert.equal(new Set(expected).size, 47);
+  assert.equal(new Set(expected).size, 54);
   const manifest = computeW1B1aCanonicalSourceManifest();
   assert.equal(manifest.schema, "goatcitadel.remote-worker.provisioner.w1b1a-source-manifest.v2");
-  assert.equal(manifest.fileCount, 47);
-  assert.equal(manifest.entries.length, 47);
+  assert.equal(manifest.fileCount, 54);
+  assert.equal(manifest.entries.length, 54);
   assert.equal(manifest.bytes.toString("utf8").endsWith("\n"), false);
   const lines = manifest.bytes.toString("utf8").split("\n");
-  assert.equal(lines.length, 47);
+  assert.equal(lines.length, 54);
   for (let index = 0; index < lines.length; index += 1) {
     assert.match(lines[index], /^[a-f0-9]{64}  [a-zA-Z0-9_./-]+$/u);
     assert.equal(lines[index], `${manifest.entries[index].sha256}  ${expected[index]}`);
@@ -208,8 +215,14 @@ test("M2/M3 source freezes the authority-bound production-callable signing surfa
   assert.match(header, /kRemoteWorkerPopV2ArtifactBytes\s*=\s*UINT64_C\(285\)/u);
   assert.match(
     source,
-    /input\.purpose\s*==\s*ProtectedArtifactPurpose::RemoteWorkerPopV2\s*&&\s*input\.artifact_length\s*!=\s*kRemoteWorkerPopV2ArtifactBytes/u,
+    /case ProtectedArtifactPurpose::RemoteWorkerPopV2:\s*return length == kRemoteWorkerPopV2ArtifactBytes;/u,
   );
+  assert.match(header, /TlsClientCertificateVerify\s*=\s*4U/u);
+  assert.match(source, /!ValidProtectedArtifactLength\(input\.purpose, input\.artifact_length\)/u);
+  assert.match(source, /!ValidProtectedArtifactLength\(authority_\.purpose_, authority_\.length_\)/u);
+  const signingBody = source.slice(source.indexOf("bool SignProtectedArtifact("));
+  assert.ok(signingBody.indexOf("IsTlsClientCertificateVerifyPreimage(") >= 0);
+  assert.ok(signingBody.indexOf("IsTlsClientCertificateVerifyPreimage(") < signingBody.indexOf("ReadExactKey("));
   assert.equal(nativeTest.includes("Equal(runtime_pop_reference, pop_signature)"), true);
   assert.equal(source.includes("MapViewOfFile"), false);
   assert.equal(source.includes("CreateFileMapping"), false);
@@ -319,6 +332,26 @@ test("shared path-leak proof rejects ASCII and UTF-16 build identities", () => {
   );
 });
 
+test("availability supervision publishes RUNNING before bounded starts and keeps clients query-only", () => {
+  const runtime = fs.readFileSync(availabilityBrokerRuntimePath, "utf8");
+  const broker = fs.readFileSync(path.join(nativeRoot, "src", "availability_broker.cpp"), "utf8");
+  const transport = fs.readFileSync(localTransportSourcePath, "utf8");
+  const supervisor = broker.slice(broker.indexOf("AvailabilityIdentityValidation RunAvailabilitySupervisor("));
+  assert.ok(supervisor.indexOf("ports.publish_running(ports.context)") < supervisor.indexOf("ports.ensure_target(ports.context"));
+  assert.match(runtime, /ports\.publish_running = [^\n]+PublishStatus\(SERVICE_RUNNING, 0U, 0U\)/u);
+  assert.match(runtime, /RunAvailabilitySupervisor\(SupervisorPorts\(&context\)\)/u);
+  const startOwner = runtime.slice(runtime.indexOf("AvailabilityIdentityValidation EnsureTargetAvailable("), runtime.indexOf("AvailabilityIdentityValidation AwaitTargetCompletion("));
+  assert.doesNotMatch(startOwner, /PublishStatus\(SERVICE_START_PENDING/u);
+  assert.match(startOwner, /if \(StopRequested\(\)\) return AvailabilityIdentityValidation::LaunchContext;[\s\S]*?StartServiceW\(target, 0U, nullptr\)/u);
+  assert.match(runtime, /AcquireSRWLockShared\(&g_stop_lock\);[\s\S]*?SetEvent\(g_stop_event\);[\s\S]*?ReleaseSRWLockShared\(&g_stop_lock\);/u);
+  assert.match(runtime, /PublishStopHandle\(nullptr\)/u);
+  const connection = transport.slice(transport.indexOf("bool OpenClientPipeAtName("), transport.indexOf("bool ExpectedInspectResult("));
+  assert.match(connection, /AddDeadline\(GetTickCount64\(\), maximum_wait_ms\)/u);
+  assert.match(connection, /error != ERROR_FILE_NOT_FOUND && error != ERROR_PIPE_BUSY && error != ERROR_SEM_TIMEOUT/u);
+  assert.match(connection, /OpenClientPipeAtName\(output, kProvisionerPipeName,/u);
+  assert.doesNotMatch(transport, /\bStartServiceW\s*\(/u);
+});
+
 test("service completes protected-state recovery before arming any live transport", () => {
   const source = fs.readFileSync(serviceRuntimeSourcePath, "utf8");
   const workerStart = source.indexOf("DWORD WINAPI ServiceStartupWorker(");
@@ -326,10 +359,14 @@ test("service completes protected-state recovery before arming any live transpor
   assert.notEqual(workerStart, -1, "StartupWorker owner is present");
   assert.notEqual(workerEnd, -1, "StartupWorker has a bounded source body");
   const worker = source.slice(workerStart, workerEnd);
+  const identity = worker.indexOf("if (validation != ServiceIdentityValidation::Valid)");
+  const inspection = worker.indexOf("if (!GrantCurrentSignerInspectionAccess())");
   const recovery = worker.indexOf("RecoverProtectedServiceState(");
   const recoveryFailure = worker.indexOf("if (recovery_result != ServiceTransportResult::Success)", recovery);
   const arm = worker.indexOf("ArmServiceTransport(", recovery);
   const armedStage = worker.indexOf("StartupStage::TransportArmed", arm);
+  assert.ok(identity >= 0 && inspection > identity && inspection < recovery,
+    "inspection grants require validated signer identity and precede protected recovery/transport");
   assert.ok(recovery >= 0, "protected-state recovery is owned by StartupWorker");
   assert.ok(recoveryFailure > recovery, "recovery failure is checked before startup proceeds");
   assert.ok(arm > recoveryFailure, "live transport cannot arm before recovery succeeds");
@@ -339,6 +376,26 @@ test("service completes protected-state recovery before arming any live transpor
     false,
     "no earlier transport-arm path bypasses protected-state recovery",
   );
+});
+
+test("signer inspection grants stay on its own process and token with read-only worker masks", () => {
+  const signer = fs.readFileSync(path.join(nativeRoot, "src", "signer_inspection.cpp"), "utf8");
+  const source = fs.readFileSync(path.join(nativeRoot, "../remote-worker-windows-host-native/src/service_inspection.cpp"), "utf8");
+  assert.match(source, /PROCESS_QUERY_LIMITED_INFORMATION \| SYNCHRONIZE/u);
+  assert.match(source, /WorkerInspectionObject::Token \? TOKEN_QUERY : 0U/u);
+  assert.match(signer, /HasSignerServiceSid\(token\.value\)/u);
+  assert.match(signer, /return worker_host::GrantCurrentSystemWorkerInspectionAccess\(\)/u);
+  assert.equal([...source.matchAll(/SetKernelObjectSecurity\(/gu)].length, 1);
+  assert.match(source, /SetKernelObjectSecurity\(handle, DACL_SECURITY_INFORMATION \| protection, &descriptor\)/u);
+  assert.match(source, /PrepareGrant\(GetCurrentProcess\(\), SystemSid\(\), WorkerInspectionObject::Process/u);
+  assert.match(source, /PrepareGrant\(token\.value, SystemSid\(\), WorkerInspectionObject::Token/u);
+  assert.doesNotMatch(source, /\b(?:OpenProcess|SetTokenInformation|AdjustTokenPrivileges|CreateProcessW)\(/u);
+  for (const target of ["windows-x64", "windows-arm64"]) {
+    const imported = (kind) => REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS[kind][target].flatMap((entry) => entry.functions);
+    assert.ok(imported("service").includes("SetKernelObjectSecurity"));
+    assert.ok(!imported("client").includes("SetKernelObjectSecurity"));
+    assert.ok(!imported("availability").includes("SetKernelObjectSecurity"));
+  }
 });
 
 test("protected recovery preserves one deadline and STOP authority across iterative restart", () => {
@@ -2083,10 +2140,12 @@ test("native projects freeze separate service, client, availability, and paired 
   const availabilityCompiles = extractCompileIncludes(availabilityProject);
   const testCompiles = extractCompileIncludes(testProject);
   assert.deepEqual(productionCompiles, [
+    "../remote-worker-windows-host-native/src/service_inspection.cpp",
     "src/local_transport.cpp",
     "src/main.cpp",
     "src/protocol.cpp",
     "src/service_runtime.cpp",
+    "src/signer_inspection.cpp",
   ]);
   for (const source of [
     "ed25519_runtime.cpp",
@@ -2109,8 +2168,10 @@ test("native projects freeze separate service, client, availability, and paired 
     "src/availability_broker_runtime.cpp",
   ]);
   assert.deepEqual(testCompiles, [
+    "../remote-worker-windows-host-native/src/service_inspection.cpp",
     "src/availability_broker.cpp",
     "src/availability_broker.test.cpp",
+    "src/caller_authority.test.cpp",
     "src/ed25519_runtime.test.cpp",
     "src/ed25519_runtime.test.cpp",
     "src/key_custody.test.cpp",
@@ -2128,8 +2189,11 @@ test("native projects freeze separate service, client, availability, and paired 
     "src/protocol.test.cpp",
     "src/service_runtime.cpp",
     "src/service_runtime.test.cpp",
+    "src/signer_inspection.cpp",
+    "src/signer_inspection.test.cpp",
   ]);
   assert.deepEqual(extractIncludeIncludes(productionProject), [
+    "../remote-worker-windows-host-native/src/service_inspection.hpp",
     "src/ed25519_runtime.hpp",
     "src/key_custody.hpp",
     "src/local_transport.hpp",
@@ -2139,10 +2203,12 @@ test("native projects freeze separate service, client, availability, and paired 
     "src/protected_operations.hpp",
     "src/protocol.hpp",
     "src/service_runtime.hpp",
+    "src/signer_inspection.hpp",
   ]);
   assert.deepEqual(extractIncludeIncludes(clientProject), ["src/local_transport.hpp", "src/protocol.hpp"]);
   assert.deepEqual(extractIncludeIncludes(availabilityProject), ["src/availability_broker.hpp"]);
   assert.deepEqual(extractIncludeIncludes(testProject), [
+    "../remote-worker-windows-host-native/src/service_inspection.hpp",
     "src/availability_broker.hpp",
     "src/ed25519_runtime.hpp",
     "src/key_custody.hpp",
@@ -2153,6 +2219,7 @@ test("native projects freeze separate service, client, availability, and paired 
     "src/protected_operations.hpp",
     "src/protocol.hpp",
     "src/service_runtime.hpp",
+    "src/signer_inspection.hpp",
   ]);
   const preflightCompileGroup = extractSingle(
     testProject,
@@ -3317,12 +3384,13 @@ for (const [target, machine] of [
       assert.equal(result.sha256, result.service.sha256);
       assert.match(result.service.sha256, /^[a-f0-9]{64}$/u);
       assert.match(result.client.sha256, /^[a-f0-9]{64}$/u);
+      assert.equal(result.service.targetClientSha256, result.client.sha256);
       assert.match(result.availability.sha256, /^[a-f0-9]{64}$/u);
       assert.equal(result.availability.targetServiceSha256, result.service.sha256);
       const expectedClient =
         target === "windows-x64"
-          ? { bytes: 74_240, sha256: "bdb71ccc09ac26347faf20159ed3dc427c208d989c49de339cd571b4c569a890" }
-          : { bytes: 64_512, sha256: "da7a6c0cffa6987e6fa5e80ccf26ff3c78f7e3e1c2bf1b9efc32b49c85976fe1" };
+          ? { bytes: 81_408, sha256: "6d0c6d53272c1564b70906193be452358af0f30a81788d469599b125735c9469" }
+          : { bytes: 72_192, sha256: "030d82606b3f3a5ab97b67d7f2e4cfd717bff3cf6ebb8429887e0f64384512fd" };
       assert.equal(result.client.byteLength, expectedClient.bytes);
       assert.equal(result.client.sha256, expectedClient.sha256);
       const serviceInspection = inspectRemoteWorkerProvisionerPe(serviceBytes, {
@@ -3404,7 +3472,7 @@ function proveProductionInspectMode(executablePath, machine) {
   assert.equal(accepted.stdout.readUInt32LE(20), 2 * 1024 * 1024);
   assert.equal(accepted.stdout.readUInt32LE(24), 8 * 1024);
   assert.equal(accepted.stdout.readUInt32LE(28), 0);
-  assert.equal(accepted.stdout.readBigUInt64LE(32), 0x00070007001f0002n);
+  assert.equal(accepted.stdout.readBigUInt64LE(32), 0x00070007003f0002n);
   assert.equal(accepted.stdout.readBigUInt64LE(40), 0x0000000000000002n);
 }
 

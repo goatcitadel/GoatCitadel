@@ -423,6 +423,8 @@ export interface ChatSessionWorkbenchTreeResponse {
 export interface ChatSessionWorkbenchFileResponse {
   state: ChatSessionWorkbenchRecord;
   path: string;
+  /** Opaque revision bound to the session, project, physical file identity and bytes. */
+  revision: string;
   sizeBytes: number;
   modifiedAt: string;
   contentType: string;
@@ -435,6 +437,8 @@ export interface ChatSessionWorkbenchFileResponse {
 export interface ChatSessionWorkbenchSaveFileRequest {
   path: string;
   content: string;
+  /** The reviewed file revision, or null to create a path that must still be absent. */
+  expectedRevision: string | null;
 }
 
 export type ChatSessionWorkbenchFileOperationKind =
@@ -445,11 +449,25 @@ export type ChatSessionWorkbenchFileOperationKind =
   | "duplicate"
   | "move";
 
-export interface ChatSessionWorkbenchFileOperationRequest {
+export interface ChatSessionWorkbenchFileOperationPreviewRequest {
   operation: ChatSessionWorkbenchFileOperationKind;
   path: string;
   targetPath?: string;
   content?: string;
+}
+
+export interface ChatSessionWorkbenchFileOperationPreviewResponse {
+  /** Binds the action, session, project, source contents and destination parent. */
+  revision: string;
+  input: ChatSessionWorkbenchFileOperationPreviewRequest;
+  sourceKind: "absent" | "file" | "directory";
+  affectedPaths: Array<{ path: string; kind: "file" | "directory"; sizeBytes: number }>;
+  totalBytes: number;
+}
+
+export interface ChatSessionWorkbenchFileOperationRequest extends ChatSessionWorkbenchFileOperationPreviewRequest {
+  /** Required revision returned by an explicit file-action review. */
+  expectedRevision: string;
 }
 
 export interface ChatSessionWorkbenchFileOperationResponse {

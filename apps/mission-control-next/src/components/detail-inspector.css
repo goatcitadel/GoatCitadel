@@ -1,0 +1,13 @@
+.mc-next-detail-inspector { position: fixed; inset: 52px 0 32px auto; width: 400px; max-width: 100vw; z-index: var(--z-panel); display: flex; flex-direction: column; min-height: 0; background: var(--bg-surface-1); color: var(--fg-primary); border-left: 1px solid var(--border-subtle); }
+.mc-next-detail-inspector > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 20px; border-bottom: 1px solid var(--border-subtle); }
+.mc-next-detail-inspector h2 { margin: 0; font-size: var(--text-lg); }
+.mc-next-detail-subtitle { margin-top: 8px; color: var(--fg-secondary); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.mc-next-detail-actions { display: flex; align-items: center; gap: 4px; }
+.mc-next-detail-body { min-height: 0; overflow: auto; padding: 20px; }
+.mc-next-detail-scrim { position: fixed; inset: 0; background: var(--bg-scrim); z-index: var(--z-scrim); }
+@media (min-width: 1180px) {
+  .mc-next-shell.has-shell-inspector .mc-next-app-frame[data-unified-sidebar] .mc-next-stage { padding-right: 400px; }
+}
+@media (max-width: 1179px) {
+  .mc-next-detail-inspector { inset: 0; width: 100vw; height: 100dvh; z-index: var(--z-side-sheet); border: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+}

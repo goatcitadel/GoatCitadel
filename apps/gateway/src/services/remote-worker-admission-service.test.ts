@@ -1,9 +1,11 @@
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_CREDENTIAL_PURPOSE,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerRuntimeCredentialClaims,
+  buildRemoteWorkerPopV2Preimage,
   canonicalJsonString,
   remoteWorkerRuntimeCredentialClaimsSha256,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
@@ -391,6 +393,49 @@ function service(fixture: Fixture, includeEvidence = true): RemoteWorkerAdmissio
 }
 
 describe("RemoteWorkerAdmissionService", () => {
+  it.each([true, false])(
+    "binds bootstrap v2 proof to the stored worker generation (matching: %s)",
+    async (matching) => {
+      const fixture = createFixture();
+      const generation = fixture.bootstrap.targetWorkerGeneration + (matching ? 0 : 1);
+      fixture.input.body = {
+        ...fixture.input.body,
+        schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+        workerGeneration: generation,
+      };
+      fixture.input.headers[REMOTE_WORKER_PROTOCOL_HEADERS.proof] = sign(
+        null,
+        Buffer.from(
+          buildRemoteWorkerPopV2Preimage({
+            schemaVersion: REMOTE_WORKER_POP_V2_SCHEMA_VERSION,
+            method: "POST",
+            rawPath: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
+            operation: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_OPERATION,
+            bodySha256: remoteWorkerProtocolBodySha256(fixture.input.body),
+            nonce: NONCE,
+            timestamp: NOW.toISOString(),
+            idempotencyKey: fixture.input.body.idempotencyKey,
+            authorityKind: "bootstrap",
+            authorityId: fixture.bootstrap.bootstrapId,
+            authorityGeneration: fixture.bootstrap.targetWorkerGeneration,
+            workerGeneration: generation,
+            tlsExporterSha256: fixture.input.transportIdentity.tlsExporterSha256,
+            clientCertificateSha256: fixture.input.transportIdentity.certificateDerSha256,
+            workerPublicKeySpkiSha256: fixture.input.transportIdentity.publicKeySpkiSha256,
+          }),
+        ),
+        fixture.clientPrivateKey,
+      ).toString("base64url");
+      const result = service(fixture).exchange(fixture.input);
+      if (matching) {
+        await expect(result).resolves.toMatchObject({ disposition: "admitted" });
+        expect(fixture.store.finalizeBootstrapAdmissionWithNonce).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toThrow();
+        expect(fixture.store.finalizeBootstrapAdmissionWithNonce).not.toHaveBeenCalled();
+      }
+    },
+  );
   beforeEach(() => {
     vi.restoreAllMocks();
   });

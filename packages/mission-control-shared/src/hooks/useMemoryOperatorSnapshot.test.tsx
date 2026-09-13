@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMemoryOperatorSnapshot } from "./useMemoryOperatorSnapshot";
+import { ApiRequestError } from "../api/http-internal";
 
 const apiMocks = vi.hoisted(() => ({
   acceptMemoryMaintenanceRecommendation: vi.fn(),
@@ -70,8 +71,8 @@ vi.mock("../api/client", () => ({
 
 type HookValue = ReturnType<typeof useMemoryOperatorSnapshot>;
 
-function Harness({ onValue }: { onValue: (value: HookValue) => void }) {
-  const value = useMemoryOperatorSnapshot("default");
+function Harness({ onValue, options }: { onValue: (value: HookValue) => void; options?: Parameters<typeof useMemoryOperatorSnapshot>[1] }) {
+  const value = useMemoryOperatorSnapshot("default", options);
   onValue(value);
   return null;
 }
@@ -331,6 +332,7 @@ describe("useMemoryOperatorSnapshot", () => {
       workspaceId: "default",
       policy: {
         workspaceId: "default",
+        revision: "a".repeat(64),
         enabled: true,
         runMode: "manual",
         timingStrategy: "fixed",
@@ -372,6 +374,7 @@ describe("useMemoryOperatorSnapshot", () => {
         {
           recommendationId: "rec-1",
           workspaceId: "default",
+          revision: "c".repeat(64),
           kind: "policy_tuning",
           status: "queued",
           summary: "Tighten cadence for fresh context.",
@@ -429,8 +432,9 @@ describe("useMemoryOperatorSnapshot", () => {
       resolvedAt: "2026-04-22T00:05:00.000Z",
       resolutionNote: "Resolved from test.",
     });
-    apiMocks.patchMemoryMaintenancePolicy.mockResolvedValue({
+    apiMocks.patchMemoryMaintenancePolicy.mockImplementation(async (_workspace, patch) => ({
       workspaceId: "default",
+      revision: "b".repeat(64),
       enabled: true,
       runMode: "manual",
       timingStrategy: "fixed",
@@ -441,7 +445,8 @@ describe("useMemoryOperatorSnapshot", () => {
       unavailableModelPolicy: "skip",
       createdAt: "2026-04-22T00:00:00.000Z",
       updatedAt: "2026-04-22T00:07:00.000Z",
-    });
+      ...patch,
+    }));
     apiMocks.acceptMemoryMaintenanceRecommendation.mockResolvedValue(undefined);
     apiMocks.rejectMemoryMaintenanceRecommendation.mockResolvedValue(undefined);
     apiMocks.promoteTraceMemoryCandidate.mockResolvedValue({ candidateId: "candidate-1", status: "promoted" });
@@ -1069,13 +1074,13 @@ describe("useMemoryOperatorSnapshot", () => {
     await act(async () => {
       await latest?.resolveRecommendation("rec-1", "accept");
     });
-    expect(apiMocks.acceptMemoryMaintenanceRecommendation).toHaveBeenCalledWith("rec-1");
+    expect(apiMocks.acceptMemoryMaintenanceRecommendation).toHaveBeenCalledWith("rec-1", { expectedRevision: "c".repeat(64), expectedPolicyRevision: "a".repeat(64) });
     expect(latest?.notice).toEqual({ tone: "success", message: "Recommendation accepted." });
 
     await act(async () => {
       await latest?.resolveRecommendation("rec-1", "reject");
     });
-    expect(apiMocks.rejectMemoryMaintenanceRecommendation).toHaveBeenCalledWith("rec-1");
+    expect(apiMocks.rejectMemoryMaintenanceRecommendation).toHaveBeenCalledWith("rec-1", { expectedRevision: "c".repeat(64) });
     expect(latest?.notice).toEqual({ tone: "success", message: "Recommendation rejected." });
   });
 
@@ -1254,4 +1259,148 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(apiMocks.fetchDurableRun).toHaveBeenLastCalledWith("durable-2");
     expect(apiMocks.fetchDurableRunTimeline).toHaveBeenCalledTimes(2);
   });
+  it("loads only item essentials and defers history until requested", async () => {
+    let value!: HookValue;
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness options={{ view: "items", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
+    await flush();
+    expect(apiMocks.fetchMemoryItems).toHaveBeenCalledWith({ workspaceId: "default", limit: 500, status: "all" });
+    for (const read of [apiMocks.fetchMemoryEntities, apiMocks.fetchMemoryRelations, apiMocks.fetchMemoryDecisions, apiMocks.fetchMemoryQualityIssues, apiMocks.fetchMemoryFiles, apiMocks.fetchMemoryQmdStats, apiMocks.fetchMemoryMaintenanceRuns, apiMocks.fetchMemoryItemHistory]) expect(read).not.toHaveBeenCalled();
+    expect(value.selectedItemId).toBeNull();
+    await act(async () => { value.setSelectedItemId("mem-1"); });
+    expect(apiMocks.fetchMemoryItemHistory).not.toHaveBeenCalled();
+    await act(async () => { renderer.update(<Harness options={{ view: "items", itemDetailsOpen: true }} onValue={(next) => { value = next; }} />); });
+    await flush();
+    expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-1", 100);
+    await act(async () => renderer.unmount());
+  });
+  it("uses the server query and rejects a superseded search response", async () => {
+    const slow = deferred<any>();
+    apiMocks.fetchMemoryItems.mockImplementation(({ query }) => query === "first" ? slow.promise : Promise.resolve({ items: [{ itemId: "outside-initial-200", title: "Second match" }] }));
+    let value!: HookValue;
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness options={{ view: "items", query: "first", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
+    await flush();
+    await act(async () => { renderer.update(<Harness options={{ view: "items", query: "second", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
+    await flush();
+    expect(value.data?.memoryItems[0]?.itemId).toBe("outside-initial-200");
+    await act(async () => { slow.resolve({ items: [{ itemId: "stale-first-result" }] }); });
+    await flush();
+    expect(value.data?.memoryItems[0]?.itemId).toBe("outside-initial-200");
+    expect(apiMocks.fetchMemoryItems).toHaveBeenLastCalledWith({ workspaceId: "default", limit: 500, status: "all", query: "second" });
+    await act(async () => renderer.unmount());
+  });
+
+  it("loads beyond 500 without duplicate requests and stops at the canonical total", async () => {
+    const items = Array.from({ length: 503 }, (_, index) => ({ itemId: `paged-${index}`, title: `Item ${index}` }));
+    const page = { snapshotAt: "2026-09-13T00:00:00.000Z", total: 503 };
+    const pending = deferred<any>();
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce({ ...page, items: items.slice(0, 500), nextCursor: "page-two" }).mockImplementationOnce(() => pending.promise);
+    await act(async () => { renderer = create(<Harness options={{ view: "items", query: "needle", itemDetailsOpen: false }} onValue={value => { latest = value; }} />); });
+    await flush();
+    let loading!: Promise<void>;
+    await act(async () => { loading = latest!.loadMoreMemoryItems(); void latest!.loadMoreMemoryItems(); });
+    expect(apiMocks.fetchMemoryItems).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchMemoryItems).toHaveBeenLastCalledWith({ workspaceId: "default", status: "all", limit: 500, query: "needle", cursor: "page-two" });
+    expect(latest!.loadingMoreMemoryItems).toBe(true);
+    await act(async () => { pending.resolve({ ...page, items: items.slice(500) }); await loading; });
+    expect(latest!.data?.memoryItems).toHaveLength(503);
+    expect(latest!.data?.memoryItemsPage?.nextCursor).toBeUndefined();
+    expect(latest!.loadingMoreMemoryItems).toBe(false);
+    await act(async () => { await latest!.loadMoreMemoryItems(); });
+    expect(apiMocks.fetchMemoryItems).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["search", "reload"])("drops a page that finishes after a newer %s", async action => {
+    const page = { snapshotAt: "2026-09-13T00:00:00.000Z", total: 2 };
+    const pending = deferred<any>();
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce({ ...page, items: [{ itemId: "old-first" }], nextCursor: "old-next" })
+      .mockImplementationOnce(() => pending.promise)
+      .mockResolvedValueOnce({ ...page, total: 1, items: [{ itemId: "new-first" }] });
+    renderer = await mountHook(value => { latest = value; });
+    let loading!: Promise<void>;
+    await act(async () => { loading = latest!.loadMoreMemoryItems(); });
+    await act(async () => {
+      if (action === "search") renderer!.update(<Harness options={{ query: "new query" }} onValue={value => { latest = value; }} />);
+      else await latest!.reload();
+    });
+    await flush();
+    await act(async () => { pending.resolve({ ...page, items: [{ itemId: "old-second" }] }); await loading; });
+    expect(latest!.data?.memoryItems.map(item => item.itemId)).toEqual(["new-first"]);
+    expect(latest!.loadingMoreMemoryItems).toBe(false);
+    expect(latest!.memoryItemsPageError).toBeNull();
+  });
+
+  it.each(["conflict", "duplicate"])("keeps the loaded page and requires reload after a %s", async failure => {
+    const page = { snapshotAt: "2026-09-13T00:00:00.000Z", total: 2, items: [{ itemId: "first" }], nextCursor: "next" };
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce(page);
+    renderer = await mountHook(value => { latest = value; });
+    if (failure === "conflict") apiMocks.fetchMemoryItems.mockRejectedValueOnce(new ApiRequestError('API error 409: {"details":{"reason":"MEMORY_CURSOR_STALE"}}', {
+      kind: "http", method: "GET", path: "/api/v1/memory/items", status: 409,
+    }));
+    else apiMocks.fetchMemoryItems.mockResolvedValueOnce({ ...page, nextCursor: undefined });
+    await act(async () => { await latest!.loadMoreMemoryItems(); });
+    expect(latest!.data?.memoryItems.map(item => item.itemId)).toEqual(["first"]);
+    expect(latest!.memoryItemsPageError).toMatch(/Reload memory/);
+    expect(latest!.memoryItemsPageError).not.toMatch(/API error|MEMORY_CURSOR_STALE|details/);
+    await act(async () => { await latest!.loadMoreMemoryItems(); });
+    expect(apiMocks.fetchMemoryItems).toHaveBeenCalledTimes(2);
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce({ ...page, total: 1, nextCursor: undefined });
+    await act(async () => { await latest!.reload(); });
+    expect(latest!.memoryItemsPageError).toBeNull();
+    expect(latest!.data?.memoryItemsPage?.total).toBe(1);
+  });
+
+  it("rejects a changed policy before mutation and an unrelated policy acknowledgement", async () => {
+    renderer = await mountHook(value => { latest = value; });
+    await act(async () => { expect(await latest!.savePolicy(latest!.policyDraft, "older-revision")).toBeNull(); });
+    expect(apiMocks.patchMemoryMaintenancePolicy).not.toHaveBeenCalled();
+    expect(latest!.notice?.message).toContain("policy changed");
+    apiMocks.patchMemoryMaintenancePolicy.mockResolvedValueOnce({ ...latest!.data!.maintenanceStatus!.policy, workspaceId: "another-workspace" });
+    await act(async () => { expect(await latest!.savePolicy()).toBeNull(); });
+    expect(latest!.notice?.message).toContain("does not confirm");
+  });
+
+  it("preserves a dirty draft when the policy changes after the preflight read", async () => {
+    renderer = await mountHook(value => { latest = value; });
+    const observed = latest!.data!.maintenanceStatus!;
+    const draft = { ...latest!.policyDraft!, model: "operator-draft" };
+    await act(async () => { latest!.setPolicyDraft(draft); latest!.setPolicyDirty(true); });
+    apiMocks.patchMemoryMaintenancePolicy.mockImplementationOnce(async () => {
+      apiMocks.fetchMemoryMaintenanceStatus.mockResolvedValue({ ...observed, policy: { ...observed.policy, revision: "b".repeat(64), model: "concurrent-model" } });
+      throw new ApiRequestError('API error 409: {"details":{"reason":"MEMORY_POLICY_REVISION_CONFLICT"}}', {
+        kind: "http", method: "PATCH", path: "/api/v1/memory/maintenance/policy", status: 409,
+      });
+    });
+    await act(async () => { expect(await latest!.savePolicy()).toBeNull(); });
+    expect(apiMocks.patchMemoryMaintenancePolicy).toHaveBeenCalledWith("default", expect.objectContaining({ expectedRevision: "a".repeat(64), model: "operator-draft" }));
+    expect(latest!.policyDraft).toEqual(draft);
+    expect(latest!.policyDirty).toBe(true);
+    expect(latest!.data!.maintenanceStatus!.policy.model).toBe("concurrent-model");
+    expect(latest!.notice?.message).toContain("draft is preserved");
+    expect(latest!.notice?.message).not.toMatch(/API error|MEMORY_POLICY_REVISION_CONFLICT/);
+    await act(async () => { expect(await latest!.savePolicy()).toBeNull(); });
+    expect(apiMocks.patchMemoryMaintenancePolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps edits made while a save is pending dirty after the earlier draft is acknowledged", async () => {
+    renderer = await mountHook(value => { latest = value; });
+    const observed = latest!.data!.maintenanceStatus!;
+    const submitted = { ...latest!.policyDraft!, model: "submitted-model" };
+    await act(async () => { latest!.setPolicyDraft(submitted); latest!.setPolicyDirty(true); });
+    const response = deferred<unknown>();
+    apiMocks.patchMemoryMaintenancePolicy.mockReturnValueOnce(response.promise);
+    let save!: ReturnType<HookValue["savePolicy"]>;
+    await act(async () => { save = latest!.savePolicy(); await Promise.resolve(); });
+    const laterDraft = { ...submitted, model: "typed-after-submit" };
+    await act(async () => { latest!.setPolicyDraft(laterDraft); latest!.setPolicyDirty(true); });
+    const saved = { ...observed.policy, model: submitted.model, revision: "b".repeat(64) };
+    apiMocks.fetchMemoryMaintenanceStatus.mockResolvedValue({ ...observed, policy: saved });
+    await act(async () => { response.resolve(saved); await save; });
+    expect(latest!.policyDraft).toEqual(laterDraft);
+    expect(latest!.policyDirty).toBe(true);
+    expect(latest!.data!.maintenanceStatus!.policy.model).toBe("submitted-model");
+    expect(apiMocks.patchMemoryMaintenancePolicy).toHaveBeenCalledTimes(1);
+  });
+
 });

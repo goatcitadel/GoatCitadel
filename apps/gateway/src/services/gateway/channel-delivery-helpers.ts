@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ChannelDeliveryApprovalPendingError } from "../channel-delivery-approval-pending.js";
 import type {
   ChannelDeliveryDiagnostics,
   ChannelDeliveryStatus,
@@ -205,6 +206,7 @@ export async function sendQueuedChannelDelivery(
       throw coerceChannelDeliveryFailureError(error);
     }
     const unwrapped = extractCommsSendResult(result);
+    assertChannelSendOutcome(unwrapped);
     if (unwrapped.status === "failed") {
       throw createChannelDeliveryFailureError(
         readOptionalString(unwrapped.error) ??
@@ -232,7 +234,9 @@ export async function sendQueuedChannelDelivery(
         replyToPartIndex: index,
       });
       unwrapped = extractCommsSendResult(result);
+      assertChannelSendOutcome(unwrapped);
     } catch (error) {
+      if (error instanceof ChannelDeliveryApprovalPendingError) throw error;
       const failure = coerceChannelDeliveryFailureError(error);
       if (index > 0) {
         throw createChannelDeliveryFailureError(
@@ -330,7 +334,17 @@ export function mapPersistedChannelDeliveryRuntimeStatus(
     }
     return "failed";
   }
-  return deliveryStatus === "retrying" ? "retrying" : "queued";
+  return deliveryStatus === "waiting_approval" ? "waiting_approval" : deliveryStatus === "retrying" ? "retrying" : "queued";
+}
+
+function assertChannelSendOutcome(result: Record<string, unknown>): void {
+  if (result?.status === "failed") return;
+  if (result?.status === "sent" && (result.deliveryStatus === undefined || result.deliveryStatus === "sent")) return;
+  throw createChannelDeliveryFailureError(
+    "Channel transport returned no acknowledged send outcome.",
+    "manual_reconciliation_required",
+    readOptionalString(result?.providerMessageId),
+  );
 }
 
 export function extractCommsSendResult(result: ToolInvokeResult | Record<string, unknown>): Record<string, unknown> {
@@ -361,6 +375,7 @@ export function createChannelDeliveryFailureError(message: string, status: unkno
 }
 
 export function coerceChannelDeliveryFailureError(error: unknown): Error {
+  if (error instanceof ChannelDeliveryApprovalPendingError) return error;
   if (error instanceof Error) {
     const status = (error as Error & { deliveryStatus?: unknown }).deliveryStatus;
     if (typeof status === "string" && CHANNEL_DELIVERY_FAILURE_STATUSES.has(status as ChannelDeliveryStatus)) {

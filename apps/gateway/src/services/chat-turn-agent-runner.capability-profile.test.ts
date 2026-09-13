@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   canonicalJsonString,
+  classifyToolEffectPotential,
   type CapabilityCatalogEntry,
   type CapabilityCatalogSnapshotRecord,
   type ChatCompletionRequest,
@@ -10,7 +11,9 @@ import {
   type ToolCatalogEntry,
 } from "@goatcitadel/contracts";
 import { sealChatTurnCapabilityProfile } from "@goatcitadel/storage";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
+import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
+import { createMeshToolPolicyBinding } from "@goatcitadel/policy-engine";
+import { dispatchMeshChatTool, type MeshChatDispatchPort } from "./gateway/mesh-chat-dispatch.js";
 import {
   createMockStorage,
   createToolCatalog,
@@ -31,9 +34,18 @@ const MESH_PUBLICATION_BINDING = {
   healthGeneration: 4,
 };
 
+const MESH_TOOL_NAME = "mesh:node-a:tool:browser.search";
+const MESH_TOOL_ENTRY: CapabilityCatalogEntry = {
+  capabilityId: MESH_TOOL_NAME, kind: "mesh_tool", category: "mesh_published",
+  title: "Remote search", summary: "Search through the activated publisher.", callable: true,
+  effectPotential: classifyToolEffectPotential({ toolName: MESH_TOOL_NAME, trustedBuiltin: false, sourceKind: "remote" }),
+  mesh: { ...MESH_PUBLICATION_BINDING, admissionGeneration: 1, localId: "browser.search", capabilityKind: "tool",
+    status: "active", reasons: ["activation_live"] },
+};
+
 const MESH_DISPATCH_RECEIPT = {
   invocationId: `mesh-invocation-${"a".repeat(48)}`,
-  capabilityId: "browser.search",
+  capabilityId: MESH_TOOL_NAME,
   nodeId: "node-a",
   activationId: MESH_PUBLICATION_BINDING.activationId,
   activationRevision: MESH_PUBLICATION_BINDING.activationRevision,
@@ -42,6 +54,26 @@ const MESH_DISPATCH_RECEIPT = {
   inputSha256: "b".repeat(64),
   deadlineAt: "2026-07-23T00:00:00.000Z",
 };
+
+/** Controlled coordinator port; runtime/policy owners are covered separately. */
+function createMeshInvocationPort(profile: ChatTurnCapabilityProfileRecord, dispatch: MeshChatDispatchPort["dispatch"]) {
+  return vi.fn<NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>>(async (request, options) => {
+    expect(options.meshTurnContext).toBeDefined();
+    expect(() => JSON.stringify(options.meshTurnContext)).toThrow("cannot be serialized");
+    if (profile.governance.policyDecisions[0]?.requiresApproval) return {
+      outcome: "approval_required", approvalId: "mesh-call-approval", policyReason: "Mesh approval required", auditEventId: "mesh-policy",
+    };
+    const tool = profile.selection.tools[0]!;
+    return dispatchMeshChatTool({
+      resolveBinding: async () => ({ executionProfileSha256: profile.hashes.profileHash, schema: {
+        canonicalName: tool.canonicalName, modelName: tool.modelName, providerDefinition: tool.providerDefinition,
+        entry: MESH_TOOL_ENTRY, publication: tool.meshPublication!, policyBinding: createMeshToolPolicyBinding({
+          canonicalName: MESH_TOOL_NAME, nodeId: "node-a", kind: "tool", localId: "browser.search",
+        }),
+      } }), dispatch,
+    }, request, { outcome: "executed", policyReason: "allowed", auditEventId: "mesh-policy" }, options);
+  });
+}
 
 const TOOL_DEFINITION = {
   type: "function",
@@ -221,13 +253,14 @@ function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJsonString(value)).digest("hex");
 }
 
-function buildCatalogSnapshot(includeTrustedSkill = false): CapabilityCatalogSnapshotRecord {
+function buildCatalogSnapshot(includeTrustedSkill = false, meshTool = false): CapabilityCatalogSnapshotRecord {
+  const tool = meshTool ? MESH_TOOL_ENTRY : TOOL_CATALOG_ENTRY;
   const inspectableEntries = [
-    TOOL_CATALOG_ENTRY,
+    tool,
     ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : []),
     INSPECTABLE_ONLY_ENTRY,
   ].sort((left, right) => left.capabilityId.localeCompare(right.capabilityId));
-  const callableEntries = [TOOL_CATALOG_ENTRY, ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : [])].sort(
+  const callableEntries = [tool, ...(includeTrustedSkill ? [TRUSTED_SKILL_ENTRY] : [])].sort(
     (left, right) => left.capabilityId.localeCompare(right.capabilityId),
   );
   return {
@@ -243,7 +276,8 @@ function buildProfile(
 ): ChatTurnCapabilityProfileRecord {
   const requiresApproval = options.requiresApproval ?? false;
   const heartbeat = options.heartbeat ?? false;
-  const snapshot = buildCatalogSnapshot(options.trustedSkill);
+  const snapshot = buildCatalogSnapshot(options.trustedSkill, options.meshTool);
+  const canonicalName = options.meshTool ? MESH_TOOL_NAME : "browser.search";
   return sealChatTurnCapabilityProfile({
     profileId: "chat-capability-profile-turn-frozen",
     schemaVersion: "chat.turn.capability-profile.v1",
@@ -286,7 +320,7 @@ function buildProfile(
       toolAutonomy: "safe_auto",
       tools: [
         {
-          canonicalName: "browser.search",
+          canonicalName,
           modelName: "browser_search",
           definitionHash: digest(TOOL_DEFINITION),
           providerDefinition: TOOL_DEFINITION,
@@ -294,11 +328,12 @@ function buildProfile(
             ? {
                 runtimeOwner: buildToolRuntimeOwnerBinding("builtin"),
                 meshPublication: MESH_PUBLICATION_BINDING,
+                effectPotential: MESH_TOOL_ENTRY.effectPotential,
               }
             : {}),
         },
       ],
-      modelNameAllowMap: [{ modelName: "browser_search", canonicalName: "browser.search" }],
+      modelNameAllowMap: [{ modelName: "browser_search", canonicalName }],
       trustedSkills: options.trustedSkill
         ? [
             {
@@ -328,7 +363,7 @@ function buildProfile(
       },
       policyDecisions: [
         {
-          toolName: "browser.search",
+          toolName: canonicalName,
           allowed: true,
           requiresApproval,
           reasonCodes: [requiresApproval ? "frozen_approval_required" : "frozen_allow"],
@@ -337,7 +372,7 @@ function buildProfile(
       authReadiness: [
         { kind: "provider", ref: "provider-a", status: "ready", reasonCodes: [] },
         { kind: "channel", ref: "channel-frozen", status: "ready", reasonCodes: [] },
-        { kind: "tool", ref: "browser.search", status: "unknown", reasonCodes: ["runtime_auth_check_required"] },
+        { kind: "tool", ref: canonicalName, status: "unknown", reasonCodes: ["runtime_auth_check_required"] },
         ...(options.trustedSkill
           ? [{ kind: "skill" as const, ref: "repo-review", status: "ready" as const, reasonCodes: [] }]
           : []),
@@ -345,7 +380,7 @@ function buildProfile(
       approval: {
         mode: heartbeat ? "bypass" : "approve_all",
         selectedToolCount: 1,
-        toolsRequiringApproval: requiresApproval ? ["browser.search"] : [],
+        toolsRequiringApproval: requiresApproval ? [canonicalName] : [],
         approvalGranted: false,
       },
     },
@@ -362,7 +397,7 @@ function createProfileStorage(profile: ChatTurnCapabilityProfileRecord, lifecycl
   storage.capabilityCatalogSnapshots = {
     get: vi.fn((snapshotId: string) => {
       expect(snapshotId).toBe(profile.catalog.snapshotId);
-      return buildCatalogSnapshot(profile.selection.trustedSkills.length > 0);
+      return buildCatalogSnapshot(profile.selection.trustedSkills.length > 0, Boolean(profile.selection.tools[0]?.meshPublication));
     }),
   };
   storage.skillLifecycle = { list: vi.fn(() => lifecycleRows) };
@@ -370,7 +405,7 @@ function createProfileStorage(profile: ChatTurnCapabilityProfileRecord, lifecycl
 }
 
 function liveCallableCatalog(profile: ChatTurnCapabilityProfileRecord): CapabilityCatalogEntry[] {
-  return buildCatalogSnapshot(profile.selection.trustedSkills.length > 0).callableEntries;
+  return buildCatalogSnapshot(profile.selection.trustedSkills.length > 0, Boolean(profile.selection.tools[0]?.meshPublication)).callableEntries;
 }
 
 function buildInput(profile: ChatTurnCapabilityProfileRecord) {
@@ -603,6 +638,37 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     });
   });
 
+  it.each(["missing", "withdrawn"] as const)("rejects %s mesh authority before model dispatch", async (authority) => {
+    const profile = buildProfile({ meshTool: true });
+    const createChatCompletion = vi.fn();
+    const invokeTool = vi.fn();
+    const dispatchMeshCapabilityInvocation = vi.fn();
+    const revalidateMeshTool = vi.fn(async () => {
+      throw new Error("Mesh Chat tool publication authority changed.");
+    });
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      ...(authority === "withdrawn" ? { revalidateMeshTool } : {}),
+      createChatCompletion,
+      invokeTool,
+      meshChatRuntimeAvailable: true,
+      invokeToolWithEffectTruth: createMeshInvocationPort(profile, dispatchMeshCapabilityInvocation),
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+
+    await expect(runner.run(buildInput(profile))).rejects.toThrow(
+      authority === "missing" ? "cannot verify its current mesh authority" : "publication authority changed",
+    );
+    if (authority === "withdrawn") {
+      expect(revalidateMeshTool).toHaveBeenCalledExactlyOnceWith(profile, MESH_TOOL_NAME);
+    }
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(dispatchMeshCapabilityInvocation).not.toHaveBeenCalled();
+  });
+
   it("terminates a still-valid mesh-published callable on the M3-pending rejection before any dispatch", async () => {
     const createChatCompletion = vi
       .fn()
@@ -618,6 +684,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       storage: createProfileStorage(profile) as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
       listCapabilityCatalog: () => liveCallableCatalog(profile),
+      revalidateMeshTool: vi.fn(async () => {}),
       createChatCompletion,
       invokeTool,
       evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
@@ -636,7 +703,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(result.turnTrace.toolRuns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          toolName: "browser.search",
+          toolName: MESH_TOOL_NAME,
           status: "blocked",
           error: expect.stringContaining("mesh_capability_dispatch_unready"),
         }),
@@ -656,6 +723,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
         storage: createProfileStorage(profile) as never,
         listToolCatalog: () => createToolCatalog(["browser.search"]),
         listCapabilityCatalog: () => liveCallableCatalog(profile),
+        revalidateMeshTool: vi.fn(async () => {}),
         createChatCompletion: vi
           .fn()
           .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
@@ -700,10 +768,10 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
         choices: [{ index: 0, message: { role: "assistant", content: "The mesh tool ran." } }],
       });
     const invokeTool = vi.fn();
-    const dispatchMeshCapabilityInvocation = vi.fn(async (_input: unknown, options: { executionFence: () => void }) => {
+    const dispatchMeshCapabilityInvocation = vi.fn(async (_input: unknown, options: { executionFence: () => Promise<void> }) => {
       // The invocation owner fires the durable fence exactly once at the
       // envelope append; the mock mirrors that discipline.
-      options.executionFence();
+      await options.executionFence();
       return {
         invocationId: `mesh-invocation-${"a".repeat(48)}`,
         disposition: "succeeded" as const,
@@ -719,11 +787,13 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       storage: createProfileStorage(profile) as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
       listCapabilityCatalog: () => liveCallableCatalog(profile),
+      revalidateMeshTool: vi.fn(async () => {}),
       createChatCompletion,
       invokeTool,
       evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
       resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
-      dispatchMeshCapabilityInvocation,
+      meshChatRuntimeAvailable: true,
+      invokeToolWithEffectTruth: createMeshInvocationPort(profile, dispatchMeshCapabilityInvocation),
     });
 
     const result = await runner.run(buildInput(profile));
@@ -735,22 +805,22 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       {
         workspaceId: "workspace-frozen",
         binding: MESH_PUBLICATION_BINDING,
-        capabilityId: "browser.search",
+        capabilityId: MESH_TOOL_NAME,
         args: { query: "release notes" },
         toolRunId: expect.any(String),
         sessionId: "session-frozen",
         turnId: "turn-frozen",
-        executionProfileSha256: "f".repeat(64),
+        executionProfileSha256: profile.hashes.profileHash,
       },
       { executionFence: expect.any(Function), signal: expect.any(AbortSignal) },
     );
     expect(result.turnTrace.toolRuns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          toolName: "browser.search",
+          toolName: MESH_TOOL_NAME,
           status: "executed",
           result: expect.objectContaining({
-            status: "ok",
+            output: { status: "ok" },
             meshInvocation: expect.objectContaining({
               invocationId: `mesh-invocation-${"a".repeat(48)}`,
               disposition: "succeeded",
@@ -777,11 +847,13 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       storage: createProfileStorage(profile) as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
       listCapabilityCatalog: () => liveCallableCatalog(profile),
+      revalidateMeshTool: vi.fn(async () => {}),
       createChatCompletion,
       invokeTool,
       evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
       resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_binding_drift" as const),
-      dispatchMeshCapabilityInvocation,
+      meshChatRuntimeAvailable: true,
+      invokeToolWithEffectTruth: createMeshInvocationPort(profile, dispatchMeshCapabilityInvocation),
     });
 
     const result = await runner.run(buildInput(profile));
@@ -798,7 +870,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     );
   });
 
-  it("keeps an approval-gated mesh callable fail-closed instead of bypassing the approval", async () => {
+  it("keeps a mesh callable awaiting its canonical per-call approval without dispatch", async () => {
     const createChatCompletion = vi
       .fn()
       .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
@@ -813,11 +885,13 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       storage: createProfileStorage(profile) as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
       listCapabilityCatalog: () => liveCallableCatalog(profile),
+      revalidateMeshTool: vi.fn(async () => {}),
       createChatCompletion,
       invokeTool,
       evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: true, reasonCodes: [] })),
       resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
-      dispatchMeshCapabilityInvocation,
+      meshChatRuntimeAvailable: true,
+      invokeToolWithEffectTruth: createMeshInvocationPort(profile, dispatchMeshCapabilityInvocation),
     });
 
     const result = await runner.run(buildInput(profile));
@@ -827,8 +901,8 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(result.turnTrace.toolRuns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          status: "blocked",
-          error: expect.stringContaining("mesh_capability_approval_dispatch_deferred"),
+          status: "approval_required",
+          approvalId: "mesh-call-approval",
         }),
       ]),
     );
@@ -862,11 +936,13 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       storage: createProfileStorage(profile) as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
       listCapabilityCatalog: () => liveCallableCatalog(profile),
+      revalidateMeshTool: vi.fn(async () => {}),
       createChatCompletion,
       invokeTool,
       evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
       resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
-      dispatchMeshCapabilityInvocation,
+      meshChatRuntimeAvailable: true,
+      invokeToolWithEffectTruth: createMeshInvocationPort(profile, dispatchMeshCapabilityInvocation),
     });
 
     const result = await runner.run(buildInput(profile));
@@ -876,7 +952,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(result.turnTrace.toolRuns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          toolName: "browser.search",
+          toolName: MESH_TOOL_NAME,
           status: "failed",
           error: expect.stringContaining("mesh_capability_dispatch_deadline_expired"),
           failureGuidance: expect.stringContaining("reconcile"),
@@ -899,11 +975,13 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       storage: storage as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
       listCapabilityCatalog: () => liveCallableCatalog(profile),
+      revalidateMeshTool: vi.fn(async () => {}),
       createChatCompletion,
       invokeTool,
       evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
       resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
-      dispatchMeshCapabilityInvocation,
+      meshChatRuntimeAvailable: true,
+      invokeToolWithEffectTruth: createMeshInvocationPort(profile, dispatchMeshCapabilityInvocation),
     });
 
     await expect(runner.run(buildHeartbeatInput(profile))).rejects.toMatchObject({
@@ -1030,6 +1108,29 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       }),
     ).resolves.toMatchObject({ assistantContent: "Continued." });
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks an approved skill against the frozen workspace's callable catalog", async () => {
+    const profile = buildProfile({ trustedSkill: true });
+    const listCapabilityCatalog = vi.fn(async (_scope: "callable", workspaceId?: string) =>
+      workspaceId === profile.identity.workspaceId ? liveCallableCatalog(profile) : [],
+    );
+    const createChatCompletion = vi.fn(async () => ({
+      model: "model-a",
+      choices: [{ index: 0, message: { role: "assistant", content: "Reviewed with the approved instructions." } }],
+    }));
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile, [TRUSTED_SKILL_LIFECYCLE]) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog,
+      createChatCompletion,
+      invokeTool: vi.fn(),
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+    await expect(runner.run(buildInput(profile))).resolves.toMatchObject({
+      assistantContent: "Reviewed with the approved instructions.",
+    });
+    expect(listCapabilityCatalog).toHaveBeenCalledWith("callable", profile.identity.workspaceId);
   });
 
   it("refuses catalog collisions and inactive or exact-byte-drifted skills before the provider boundary", async () => {

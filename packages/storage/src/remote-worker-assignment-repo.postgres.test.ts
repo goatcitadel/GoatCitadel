@@ -26,6 +26,9 @@ import {
 } from "@goatcitadel/contracts";
 import { Pool } from "pg";
 import { DurableRunRepository } from "./durable-run-repo.js";
+import { prepareChatOfferFixture } from "./remote-worker-chat-offer-fixture.js";
+import { verifyWorkerChatApprovalResume } from "./remote-worker-chat-resume-fixture.js";
+import { verifyWorkerChatParentRecovery } from "./remote-worker-chat-parent-recovery-fixture.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
 import { PostgresDatabaseClient } from "./postgres/client.js";
@@ -43,12 +46,162 @@ import {
 import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
 import type { RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
 import { TaskRepository } from "./task-repo.js";
+import type { DatabaseClient } from "./db.js";
+import { createDatabase } from "./sqlite.js";
+import { verifyWorkerToolBudgets } from "./remote-worker-tool-budget-fixture.js";
+import { verifyWorkerArtifactContinuation } from "./remote-worker-artifact-continuation-fixture.js";
+import { verifyWorkerTerminalRenewal } from "./remote-worker-terminal-renewal-fixture.js";
+import { verifyRemoteWorkerMeshSettlements } from "./remote-worker-mesh-settlement-fixture.js";
+import { createRemoteWorkerPostgresTestScope } from "./remote-worker-test-fixtures.js";
+import { verifyCellProvisioningExchange } from "./remote-worker-cell-exchange-fixture.js";
+import { verifyNativeCellPreparation, NATIVE_CELL_PREPARATION_TEST_POLICY } from "./remote-worker-cell-preparation-fixture.js";
 
 const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 const postgresIt = postgresConnectionString ? it : it.skip;
 const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 const DBytes = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex");
 const FUTURE = "2099-01-01T00:00:00.000Z";
+
+for (const { boundary, kind, verifyExchange } of (["worker", "mesh_authority", "parent"] as const).flatMap((boundary) => [
+  { boundary, kind: "provisioning exchange", verifyExchange: verifyCellProvisioningExchange },
+  { boundary, kind: "preparation", verifyExchange: verifyNativeCellPreparation },
+])) {
+  const verify = (db: DatabaseClient, seed: string) => {
+    const h = seedProtectedFenceHarness(db, seed, true);
+    const token = D(`${seed}:lease`);
+    const { assignmentId, durableRunId } = seedFencedAssignment(h, seed, "cell", h.meshFence.admissionGeneration, token);
+    verifyExchange(db, { registryWorkspaceId: "default", assignmentId, assignmentGeneration: 1 }, token, h.fence, () => {
+      if (boundary === "worker") h.workerAdmissions.revokeGeneration({
+        registryWorkspaceId: "default", workerId: h.meshFence.workerId, workerGeneration: h.meshFence.workerGeneration,
+        reasonCode: "operator_revoked", reasonSha256: D("cell-revoke"), actorId: "operator-a", idempotencyKey: `${seed}:revoke`,
+      });
+      else if (boundary === "mesh_authority") h.meshNodeAdmissions.revokeJoinAuthority({
+        registryWorkspaceId: "default", workerId: h.meshFence.workerId, workerGeneration: h.meshFence.workerGeneration,
+        workspaceId: h.meshFence.workspaceId, joinAuthorityGeneration: h.meshFence.joinAuthorityGeneration,
+        reasonCode: "operator_revoked", reason: "Controlled cell exchange test", revokedByActorId: "operator-a", idempotencyKey: `${seed}:revoke`,
+      });
+      else {
+        const parent = h.durableRuns.getRun(durableRunId);
+        h.durableRuns.updateRun({ runId: durableRunId, status: "cancelled", clearLease: true, expectedVersion: parent.version });
+      }
+    });
+  };
+  it(`cell ${kind} rejects ${boundary} revocation on SQLite`, () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    try { verify(db, `sqlite-cell-${boundary}`); } finally { db.close(); }
+  });
+  postgresIt(`cell ${kind} rejects ${boundary} revocation on PostgreSQL`, { timeout: 120_000 }, async () => {
+    assert.ok(postgresConnectionString);
+    const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "cell_exchange");
+    try { verify(scope.db, `pg-cell-${boundary}`); } finally { await scope.teardown(); }
+  });
+}
+
+postgresIt("cell preparation has one creation winner under concurrent PostgreSQL requests", { timeout: 120_000 }, async () => {
+  assert.ok(postgresConnectionString);
+  const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "cell_prepare_race");
+  const workers: FencedRepositoryWorker[] = [];
+  let hold: Awaited<ReturnType<typeof holdAdvisoryLock>> | undefined;
+  try {
+    const h = seedProtectedFenceHarness(scope.db, "native-prepare-race", true);
+    const token = D("native-prepare-race:lease");
+    const { assignmentId } = seedFencedAssignment(h, "native-prepare-race", "cell", h.meshFence.admissionGeneration, token);
+    const input = { registryWorkspaceId: "default", assignmentId, assignmentGeneration: 1, leaseRevision: 1,
+      leaseTokenSha256: token, protectedAuthority: h.fence, policy: NATIVE_CELL_PREPARATION_TEST_POLICY,
+      submission: { kind: "cell.provisioning.prepare", parentIdentityHex: "0100000000000000" + "1".repeat(32) } };
+    const connection = new URL(postgresConnectionString);
+    connection.searchParams.set("options", `-csearch_path=${scope.schemaName}`);
+    const database = decodeURIComponent(connection.pathname.slice(1)) || "postgres";
+    hold = await holdAdvisoryLock(scope.scopedPool, 411, "default");
+    for (const name of ["native-create-one", "native-create-two"]) workers.push(runFencedRepositoryWorker(
+      connection.toString(), database, name, { repositoryModule: "remote-worker-cell-provisioning-repo",
+        repositoryExport: "RemoteWorkerCellProvisioningRepository", operation: "prepareForAssignment", args: [input] }));
+    await Promise.all(workers.map((worker) => worker.ready));
+    // Observe both transactions actually waiting on the held canonical lock.
+    await waitForAdvisoryLockWait(scope.scopedPool, "native-create-one", ", 411)");
+    await waitForAdvisoryLockWait(scope.scopedPool, "native-create-two", ", 411)");
+    await hold.release();
+    const results = await Promise.all(workers.map((worker) => worker.result));
+    for (const result of results) assert.equal(result.ok, true, JSON.stringify(result));
+    const values = results.map((result) => { assert.ok(result.ok); return result.value; });
+    assert.deepEqual(values.map((value) => value.decision).sort(), ["create_once", "reconcile"]);
+    const [left, right] = values;
+    assert.ok(left && right);
+    assert.deepEqual(left.exchange, right.exchange);
+    const key = { registryWorkspaceId: "default", assignmentId };
+    assert.equal(countRows(scope.db, `SELECT COUNT(*) AS count FROM remote_worker_cells
+      WHERE registry_workspace_id=@registryWorkspaceId AND assignment_id=@assignmentId`, key), 1);
+    assert.equal(countRows(scope.db, `SELECT COUNT(*) AS count FROM remote_worker_cell_provisioning
+      WHERE registry_workspace_id=@registryWorkspaceId AND assignment_id=@assignmentId`, key), 1);
+  } finally {
+    await hold?.release();
+    await Promise.allSettled(workers.map((worker) => worker.result));
+    await scope.teardown();
+  }
+});
+
+it("worker tool model budgets use canonical protected authority on SQLite", () => {
+  const db = createDatabase({ dbPath: ":memory:" });
+  try {
+    seedProtectedFenceHarness(db, "sqlite-existing-worker");
+    prepareChatOfferFixture(db, true, "-existing-budget-profile");
+    const h = seedProtectedFenceHarness(db, "sqlite-tool-budget", true);
+    verifyWorkerToolBudgets(db, "sqlite-tool-budget", { workerId: h.finalized.generation.workerId,
+      workerGeneration: h.finalized.generation.workerGeneration, nodeId: h.finalized.generation.nodeId,
+      nodeAdmissionGeneration: h.admitted.admission.admissionGeneration }, h.fence);
+  } finally { db.close(); }
+});
+
+it("worker artifact publication preserves continuous authority on SQLite", () => {
+  const db = createDatabase({ dbPath: ":memory:" });
+  try {
+    const h = seedProtectedFenceHarness(db, "sqlite-artifact", true);
+    verifyWorkerArtifactContinuation(db, "sqlite-artifact", { workerId: h.finalized.generation.workerId,
+      workerGeneration: h.finalized.generation.workerGeneration, nodeId: h.finalized.generation.nodeId,
+      nodeAdmissionGeneration: h.admitted.admission.admissionGeneration }, h.fence);
+  } finally { db.close(); }
+});
+
+it("worker terminal renewal and settlement commit atomically on SQLite", () => {
+  const db = createDatabase({ dbPath: ":memory:" });
+  try {
+    const h = seedProtectedFenceHarness(db, "sqlite-terminal", true);
+    verifyWorkerTerminalRenewal(db, "sqlite-terminal", { workerId: h.finalized.generation.workerId,
+      workerGeneration: h.finalized.generation.workerGeneration, nodeId: h.finalized.generation.nodeId,
+      nodeAdmissionGeneration: h.admitted.admission.admissionGeneration }, h.fence);
+  } finally { db.close(); }
+});
+
+for (const boundary of ["worker", "mesh_authority"] as const) {
+  const verify = (db: DatabaseClient, seed: string) => {
+    const h = seedProtectedFenceHarness(db, seed, true);
+    verifyRemoteWorkerMeshSettlements(db, seed, h.meshFence, h.finalized.generation.clientCertificateSha256, () => {
+      if (boundary === "worker") {
+        h.workerAdmissions.revokeGeneration({
+          registryWorkspaceId: h.meshFence.registryWorkspaceId, workerId: h.meshFence.workerId,
+          workerGeneration: h.meshFence.workerGeneration, reasonCode: "operator_revoked",
+          reasonSha256: D(`${seed}:reason`), actorId: "operator-a", idempotencyKey: `${seed}:revoke`,
+        });
+      } else {
+        h.meshNodeAdmissions.revokeJoinAuthority({
+          registryWorkspaceId: h.meshFence.registryWorkspaceId, workerId: h.meshFence.workerId,
+          workerGeneration: h.meshFence.workerGeneration, workspaceId: h.meshFence.workspaceId,
+          joinAuthorityGeneration: h.meshFence.joinAuthorityGeneration, reasonCode: "operator_revoked", reason: "Controlled revocation",
+          revokedByActorId: "operator-a", idempotencyKey: `${seed}:revoke`,
+        });
+      }
+    });
+  };
+  it(`native mesh settlement rejects ${boundary} revocation on SQLite`, () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    try { verify(db, `sqlite-mesh-${boundary}`); } finally { db.close(); }
+  });
+  postgresIt(`native mesh settlement rejects ${boundary} revocation on PostgreSQL`, { timeout: 120_000 }, async () => {
+    assert.ok(postgresConnectionString);
+    const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "mesh_settlement");
+    try { verify(scope.db, `pg-mesh-${boundary}`); } finally { await scope.teardown(); }
+  });
+}
 
 describe("RemoteWorkerAssignmentRepository live PostgreSQL authority", () => {
   postgresIt(
@@ -437,6 +590,67 @@ describe("RemoteWorkerAssignmentRepository live PostgreSQL authority", () => {
         await adminPool.query(`CREATE SCHEMA ${schemaName}`);
         await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
         const h = seedProtectedFenceHarness(setupDb, suffix);
+        const toolBudget = seedProtectedFenceHarness(setupDb, `${suffix}-tool-budget`, true);
+        verifyWorkerToolBudgets(setupDb, `${suffix}-tool-budget`, { workerId: toolBudget.finalized.generation.workerId,
+          workerGeneration: toolBudget.finalized.generation.workerGeneration, nodeId: toolBudget.finalized.generation.nodeId,
+          nodeAdmissionGeneration: toolBudget.admitted.admission.admissionGeneration }, toolBudget.fence);
+        const artifactWorker = seedProtectedFenceHarness(setupDb, `${suffix}-artifact`, true);
+        verifyWorkerArtifactContinuation(setupDb, `${suffix}-artifact`, { workerId: artifactWorker.finalized.generation.workerId,
+          workerGeneration: artifactWorker.finalized.generation.workerGeneration, nodeId: artifactWorker.finalized.generation.nodeId,
+          nodeAdmissionGeneration: artifactWorker.admitted.admission.admissionGeneration }, artifactWorker.fence);
+        const terminalWorker = seedProtectedFenceHarness(setupDb, `${suffix}-terminal`, true);
+        verifyWorkerTerminalRenewal(setupDb, `${suffix}-terminal`, { workerId: terminalWorker.finalized.generation.workerId,
+          workerGeneration: terminalWorker.finalized.generation.workerGeneration, nodeId: terminalWorker.finalized.generation.nodeId,
+          nodeAdmissionGeneration: terminalWorker.admitted.admission.admissionGeneration }, terminalWorker.fence);
+        await verifyWorkerChatParentRecovery(setupDb, suffix, {
+          workerId: h.finalized.generation.workerId, workerGeneration: h.finalized.generation.workerGeneration,
+          nodeId: h.finalized.generation.nodeId, nodeAdmissionGeneration: h.admitted.admission.admissionGeneration,
+        }, h.fence);
+        for (const decision of ["approve", "reject", "edit"] as const) {
+          await verifyWorkerChatApprovalResume(setupDb, `${suffix}-${decision}`, {
+            workerId: h.finalized.generation.workerId, workerGeneration: h.finalized.generation.workerGeneration,
+            nodeId: h.finalized.generation.nodeId, nodeAdmissionGeneration: h.admitted.admission.admissionGeneration,
+          }, h.fence, decision);
+        }
+        // An expired retained lease authenticates only a read while the exact
+        // Chat parent is parked. It cannot revive execution, renewal or events.
+        const waitToken = D(`${suffix}:wait:lease`);
+        const waitSeed = prepareChatOfferFixture(setupDb, true, `-wait-${suffix}`);
+        const waitAssignment = h.assignments.createAssignment({ ...waitSeed.legacyCommand,
+          manifest: { ...waitSeed.legacyCommand.manifest, leaseTtlSeconds: 1,
+            requiredCapabilityClasses: ["durable_compute", "gateway_inference"] },
+        }).assignment;
+        const parked = { assignmentId: waitAssignment.assignmentId, durableRunId: waitSeed.durableRunId };
+        h.assignments.startGeneration({ registryWorkspaceId: "default", assignmentId: parked.assignmentId,
+          workerId: h.finalized.generation.workerId, workerGeneration: h.finalized.generation.workerGeneration,
+          nodeId: h.finalized.generation.nodeId, nodeAdmissionGeneration: h.admitted.admission.admissionGeneration,
+          dispatchOwnerId: waitSeed.offerInput.dispatchOwnerId, durableRunAttempt: waitSeed.offerInput.durableRunAttempt,
+          leaseTokenSha256: waitToken, idempotencyKey: `${suffix}:wait:generation`,
+        });
+        const waitInput = { registryWorkspaceId: "default", assignmentId: parked.assignmentId,
+          expectedAssignmentGeneration: 1, expectedLeaseRevision: 1, leaseTokenSha256: waitToken };
+        assert.equal(h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash(waitInput, h.fence), undefined);
+        const originalWait = h.assignments.findAssignmentAggregate("default", parked.assignmentId);
+        const parentWait = h.durableRuns.getRun(parked.durableRunId);
+        h.durableRuns.updateRun({ runId: parentWait.runId, status: "waiting", clearLease: true,
+          expectedVersion: parentWait.version });
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        assert.ok(Date.parse(originalWait!.lease!.expiresAt) <= Date.parse(h.durableRuns.readDatabaseNow()));
+        assert.equal(h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash(waitInput, h.fence)?.assignment.assignmentId,
+          parked.assignmentId);
+        assert.equal(h.assignments.resolveActiveAuthorityByLeaseTokenHash(waitToken, h.fence), undefined);
+        for (const changed of [{ leaseTokenSha256: D("wrong-wait-token") }, { expectedLeaseRevision: 2 }])
+          assert.equal(h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash({ ...waitInput, ...changed }, h.fence), undefined);
+        assert.throws(() => h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash(waitInput, {
+          ...h.fence, credentialAuthority: { ...h.fence.credentialAuthority, authorizationCredentialSha256: D("wrong-credential") },
+        }));
+        assert.throws(() => h.assignments.renewLease({ ...waitInput, expectedLeaseTokenSha256: waitToken,
+          leaseTokenSha256: D("forbidden-wait-renewal"), workerSentThrough: 0, idempotencyKey: `${suffix}:wait:renew` }, h.fence));
+        assert.deepEqual(h.assignments.findAssignmentAggregate("default", parked.assignmentId), originalWait);
+        const queuedWait = h.durableRuns.updateRun({ runId: parentWait.runId, status: "queued",
+          expectedVersion: h.durableRuns.getRun(parentWait.runId).version });
+        assert.equal(h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash(waitInput, h.fence), undefined);
+        h.durableRuns.updateRun({ runId: parentWait.runId, status: "waiting", expectedVersion: queuedWait.version });
         const workerId = h.finalized.generation.workerId;
         const nodeId = h.finalized.generation.nodeId;
         const leaseA1 = D(`${suffix}:alpha:lease:1`);
@@ -713,6 +927,10 @@ describe("RemoteWorkerAssignmentRepository live PostgreSQL authority", () => {
           },
           meshAdmission: rotatedMeshFence,
         };
+        // Parking does not preserve revoked credentials or an obsolete mesh
+        // admission, even when the worker still possesses its retained token.
+        assert.throws(() => h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash(waitInput, h.fence));
+        assert.throws(() => h.assignments.resolveWaitingChatAssignmentByLeaseTokenHash(waitInput, rotatedFence));
         const leaseB1 = D(`${suffix}:beta:lease:1`);
         const assignmentB = seedFencedAssignment(
           h,
@@ -1365,16 +1583,13 @@ async function waitForAdvisoryLockWait(pool: Pool, applicationName: string, lock
   assert.fail(`timed out waiting for ${applicationName} to block on the "${lockLiteral}" advisory lock`);
 }
 
-function postgresNonceClock(db: PostgresSyncDatabaseClient): { timestamp: string; expiresAt: string } {
-  const row = db
-    .prepare(`SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS now_iso`)
-    .get<{ now_iso: string }>();
-  if (typeof row?.now_iso !== "string") throw new Error("PostgreSQL nonce clock unavailable");
-  return { timestamp: row.now_iso, expiresAt: new Date(Date.parse(row.now_iso) + 60_000).toISOString() };
+function postgresNonceClock(db: DatabaseClient): { timestamp: string; expiresAt: string } {
+  const timestamp = new DurableRunRepository(db).readDatabaseNow();
+  return { timestamp, expiresAt: new Date(Date.parse(timestamp) + 60_000).toISOString() };
 }
 
 function protectedBootstrapNonce(
-  db: PostgresSyncDatabaseClient,
+  db: DatabaseClient,
   bootstrap: RemoteWorkerBootstrapRecord,
   seed: string,
 ): RemoteWorkerNonceConsumeInput {
@@ -1394,7 +1609,7 @@ function protectedBootstrapNonce(
 }
 
 function protectedCredentialNonce(
-  db: PostgresSyncDatabaseClient,
+  db: DatabaseClient,
   credential: RemoteWorkerRuntimeCredentialRecord,
   seed: string,
 ): RemoteWorkerNonceConsumeInput {
@@ -1438,7 +1653,7 @@ function protectedBootstrapInput(seed: string): CreateRemoteWorkerBootstrapComma
 }
 
 function protectedFinalizeInput(
-  db: PostgresSyncDatabaseClient,
+  db: DatabaseClient,
   bootstrap: RemoteWorkerBootstrapRecord,
   bootstrapSeed: string,
   connectionSeed: string,
@@ -1541,15 +1756,17 @@ function protectedFinalizeInput(
   return { nonce, command };
 }
 
-function seedProtectedFenceHarness(setupDb: PostgresSyncDatabaseClient, suffix: string) {
+function seedProtectedFenceHarness(setupDb: DatabaseClient, suffix: string, tools = false) {
   const tasks = new TaskRepository(setupDb);
   const durableRuns = new DurableRunRepository(setupDb);
   const workerAdmissions = new RemoteWorkerAdmissionRepository(setupDb);
   const meshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(setupDb);
   const capabilityAdmissions = new MeshCapabilityNodeAdmissionRepository(setupDb);
   const assignments = new RemoteWorkerAssignmentRepository(setupDb);
-  const bootstrap = workerAdmissions.createBootstrap(protectedBootstrapInput(suffix)).record;
-  const finalizeInput = protectedFinalizeInput(setupDb, bootstrap, suffix, "first");
+  const bootstrap = workerAdmissions.createBootstrap({ ...protectedBootstrapInput(suffix),
+    ...(tools ? { capabilityClasses: ["artifact_stage", "durable_compute", "gateway_inference", "governed_tool"] as const } : {}),
+  }).record;
+  const finalizeInput = protectedFinalizeInput(setupDb, bootstrap, suffix, tools ? `${suffix}:tool-first` : "first");
   const finalized = workerAdmissions.finalizeBootstrapAdmissionWithNonce(finalizeInput);
   const evidence = finalizeInput.command.verifiedProtectedAdmissionEvidence;
   assert.ok(evidence);
@@ -1568,7 +1785,7 @@ function seedProtectedFenceHarness(setupDb: PostgresSyncDatabaseClient, suffix: 
     expiresInSeconds: 300,
     issuedByActorId: "operator-a",
   } as const;
-  const rawMeshNodeCredential = "a".repeat(43);
+  const rawMeshNodeCredential = tools ? Buffer.from(D(`${suffix}:mesh-credential`), "hex").toString("base64url") : "a".repeat(43);
   const issued = meshNodeAdmissions.issueJoinAuthority({
     ...joinAuthorityInput,
     idempotencyKey: `${suffix}:mesh-authority:1`,
@@ -1729,8 +1946,8 @@ function seedFencedAssignment(
 }
 
 interface FencedRepositoryWorkerRequest {
-  readonly repositoryModule: "remote-worker-assignment-repo" | "remote-worker-mesh-node-admission-repo";
-  readonly repositoryExport: "RemoteWorkerAssignmentRepository" | "RemoteWorkerMeshNodeAdmissionRepository";
+  readonly repositoryModule: "remote-worker-assignment-repo" | "remote-worker-mesh-node-admission-repo" | "remote-worker-cell-provisioning-repo";
+  readonly repositoryExport: "RemoteWorkerAssignmentRepository" | "RemoteWorkerMeshNodeAdmissionRepository" | "RemoteWorkerCellProvisioningRepository";
   readonly operation: string;
   readonly args: readonly unknown[];
 }

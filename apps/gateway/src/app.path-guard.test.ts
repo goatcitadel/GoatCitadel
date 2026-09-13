@@ -14,8 +14,30 @@ describe("gateway encoded-path guard", () => {
     expect(isSuspiciousEncodedPath("/api/v1/durable/child-watchers/orchestration-child%3Arun-1%3Aphase-1/detach")).toBe(
       false,
     );
-    expect(isSuspiciousEncodedPath("/api/v1/durable/runs/parent%3Aads/background-tasks/watcher/control")).toBe(true);
+    expect(isSuspiciousEncodedPath("/api/v1/durable/runs/parent%3Aads/background-tasks/watcher/control")).toBe(false);
     expect(isSuspiciousEncodedPath("/api/v1/other/delegation-child%3Astep-1/control")).toBe(true);
+  });
+
+  it("allows native durable run keys only in owned database route parameters", () => {
+    for (const id of ["autonomous-delivery:run_cron_chat_123", "autonomous-delivery%3Arun_cron_chat_123"]) {
+      for (const suffix of [
+        "",
+        "/checkpoints",
+        "/timeline",
+        "/pause",
+        "/resume",
+        "/cancel",
+        "/retry",
+        "/events/wake",
+      ]) {
+        expect(isSuspiciousEncodedPath(`/api/v1/durable/runs/${id}${suffix}`)).toBe(false);
+      }
+      expect(isSuspiciousEncodedPath(`/api/v1/files/${id}`)).toBe(true);
+      expect(isSuspiciousEncodedPath(`/api/v1/durable/runs/${id}/unowned-route`)).toBe(true);
+    }
+    for (const id of ["CON", "file.txt::$DATA", "x%2Fy", "x%5Cy", "%252e%252e", "x%00y"]) {
+      expect(isSuspiciousEncodedPath(`/api/v1/durable/runs/${id}/checkpoints`)).toBe(true);
+    }
   });
 
   it("rejects encoded traversal-like sequences", () => {

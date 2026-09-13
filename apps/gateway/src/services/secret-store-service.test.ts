@@ -43,6 +43,65 @@ describe("SecretStoreService", () => {
     expect(isSecretStoreUnavailableLikeError("not an error")).toBe(false);
   });
 
+  it("captures only an opaque Windows custodian and keeps bound writes out of argv and environment", () => {
+    setPlatform("win32");
+    const custodyId = "a".repeat(64), secret = "private-custody-value";
+    const service = new SecretStoreService();
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never)
+      .mockReturnValueOnce({ status: 0, stdout: custodyId + "\n", stderr: "" } as never)
+      .mockReturnValueOnce({ status: 0 } as never)
+      .mockReturnValueOnce({ status: 0, stdout: "ok\n", stderr: "" } as never);
+    expect(service.getCredentialCustodyId()).toBe(custodyId);
+    service.setSecretForCustody("mcp:fixture:environment:version", secret, custodyId);
+    const [, args, options] = spawnSyncMock.mock.calls[3]!;
+    expect(JSON.stringify(args)).not.toContain(secret);
+    expect(JSON.stringify(options?.env)).not.toContain(secret);
+    expect(options).toEqual(expect.objectContaining({ input: secret, timeout: 10000, maxBuffer: 64 * 1024, windowsHide: true,
+      env: expect.objectContaining({ GOATCITADEL_SECRET_CUSTODY: custodyId, GOATCITADEL_SECRET_SERVICE: "goatcitadel" }) }));
+  });
+
+  it.each(["win32", "linux", "darwin"] as const)("refuses unowned cleanup without opening a keychain on %s", (platform) => {
+    setPlatform(platform);
+    const service = new SecretStoreService();
+    expect(service.deleteSecretForCustody("mcp:fixture:environment:version", null)).toBe(false);
+    if (platform !== "win32") {
+      expect(service.getCredentialCustodyId()).toBeUndefined();
+      expect(service.deleteSecretForCustody("mcp:fixture:environment:version", "a".repeat(64))).toBe(false);
+    }
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 0, stdout: "ok", expected: true },
+    { status: 0, stdout: "absent", expected: true },
+    { status: 4, stdout: "custody_mismatch", expected: false },
+  ])("requires a custody-aware delete receipt: $stdout", ({ status, stdout, expected }) => {
+    setPlatform("win32");
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ status, stdout, stderr: "" } as never);
+    expect(new SecretStoreService().deleteSecretForCustody("mcp:fixture:access-token:version", "a".repeat(64))).toBe(expected);
+    expect(spawnSyncMock.mock.calls[1]?.[2]).toEqual(expect.objectContaining({ timeout: 10000, maxBuffer: 64 * 1024,
+      env: expect.objectContaining({ GOATCITADEL_SECRET_CUSTODY: "a".repeat(64) }) }));
+  });
+
+  it.each([
+    { status: 0, stdout: "" },
+    { status: 4, stdout: "absent" },
+    { status: 1, stdout: "" },
+  ])("rejects an invalid custody deletion acknowledgement: $status / $stdout", (response) => {
+    setPlatform("win32");
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ ...response, stderr: "failed" } as never);
+    expect(() => new SecretStoreService().deleteSecretForCustody("mcp:fixture:environment:version", "a".repeat(64))).toThrow();
+  });
+
+  it("rejects an unacknowledged custody read or changed custody write", () => {
+    setPlatform("win32");
+    const service = new SecretStoreService();
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ status: 0, stdout: "not-a-custodian", stderr: "" } as never);
+    expect(() => service.getCredentialCustodyId()).toThrow("not acknowledged");
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ status: 4, stdout: "custody_mismatch", stderr: "" } as never);
+    expect(() => service.setSecretForCustody("mcp:fixture:environment:version", "private-value", "a".repeat(64))).toThrow("custody changed");
+  });
+
   it("validates provider/account inputs before calling the host keychain", () => {
     setPlatform("linux");
     spawnSyncMock.mockReturnValue({ status: 0, stdout: "", stderr: "" } as never);
@@ -159,6 +218,24 @@ describe("SecretStoreService", () => {
     for (const call of spawnSyncMock.mock.calls) {
       expect(call[2]).toEqual(expect.objectContaining({ windowsHide: true }));
     }
+  });
+
+  it.each(["absent", "ok"])("accepts only explicit Windows credential deletion receipts: %s", (receipt) => {
+    setPlatform("win32");
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never)
+      .mockReturnValueOnce({ status: 0, stdout: receipt, stderr: "" } as never);
+    expect(() => new SecretStoreService().deleteSecret("mcp:fixture:access-token")).not.toThrow();
+    expect(spawnSyncMock.mock.calls[1]?.[2]).toMatchObject({ windowsHide: true, timeout: 10000, maxBuffer: 64 * 1024 });
+  });
+
+  it.each([
+    { status: 0, stdout: "", stderr: "" },
+    { status: 0, stdout: "credential_not_found", stderr: "" },
+    { status: 1, stdout: "", stderr: "Windows credential deletion failed." },
+  ])("rejects unavailable or unacknowledged Windows deletion: %j", (result) => {
+    setPlatform("win32");
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "", stderr: "" } as never).mockReturnValueOnce(result as never);
+    expect(() => new SecretStoreService().deleteSecret("mcp:fixture:access-token")).toThrow();
   });
 
   it("surfaces command stderr when the keychain command exits unexpectedly", () => {

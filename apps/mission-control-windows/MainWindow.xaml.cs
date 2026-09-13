@@ -545,14 +545,16 @@ public sealed partial class MainWindow : Window
         MissionWebView.Visibility = Visibility.Collapsed;
         RecoveryActions.Visibility = Visibility.Collapsed;
         StatusCopy.Text = "Starting the local runtime...";
-        ProgressBar.Value = 42;
+        ProgressBar.Visibility = Visibility.Visible;
+        ProgressBar.IsIndeterminate = true;
         RuntimeMeta.Text = "Gateway and Mission Control will stay warm while the desktop app is open.";
     }
 
     private void RenderRuntime(DesktopRuntimeStatus result)
     {
         StatusCopy.Text = result.Status == "ready" ? "Runtime ready. Opening Mission Control..." : $"Runtime status: {result.Status}";
-        ProgressBar.Value = result.Status == "ready" ? 100 : 64;
+        ProgressBar.IsIndeterminate = result.Status != "ready";
+        ProgressBar.Value = result.Status == "ready" ? 100 : 0;
         RuntimeMeta.Text = string.Join(
             " / ",
             $"Gateway {(result.Readiness.Gateway ? "ready" : "not ready")}",
@@ -566,7 +568,8 @@ public sealed partial class MainWindow : Window
         MissionWebView.Visibility = Visibility.Collapsed;
         RecoveryActions.Visibility = Visibility.Visible;
         StatusCopy.Text = message;
-        ProgressBar.Value = 18;
+        ProgressBar.IsIndeterminate = false;
+        ProgressBar.Visibility = Visibility.Collapsed;
         RuntimeMeta.Text = _lastRuntime is not null
             ? $"Logs: {_lastRuntime.LogFiles.GatewayStderr}"
             : "Runtime did not return a status payload. Open logs for captured launcher output.";
@@ -579,7 +582,8 @@ public sealed partial class MainWindow : Window
         MissionWebView.Visibility = Visibility.Collapsed;
         RecoveryActions.Visibility = Visibility.Visible;
         StatusCopy.Text = "Runtime stopped.";
-        ProgressBar.Value = 0;
+        ProgressBar.IsIndeterminate = false;
+        ProgressBar.Visibility = Visibility.Collapsed;
         RuntimeMeta.Text = _lastRuntime is not null
             ? $"Gateway {(_lastRuntime.Readiness.Gateway ? "ready" : "not ready")} / UI {(_lastRuntime.Readiness.Ui ? "ready" : "not ready")}"
             : "Use Retry to start GoatCitadel again.";

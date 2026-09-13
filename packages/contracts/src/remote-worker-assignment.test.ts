@@ -9,6 +9,7 @@ import {
   REMOTE_WORKER_ASSIGNMENT_EVENT_TYPES,
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
   assertRemoteWorkerAssignmentLeaseRecord,
+  assertRemoteWorkerAssignmentDispatchAuthority,
   buildRemoteWorkerAssignmentFlowControl,
   buildRemoteWorkerAssignmentParentContext,
   normalizeAppendRemoteWorkerAssignmentEventsCommand,
@@ -91,6 +92,14 @@ function authority(
 }
 
 describe("remote worker assignment contracts", () => {
+  it.each([0, 1, 2])("retains canonical durable attempt %i in signed authority", (durableRunAttempt) => {
+    expect(() => assertRemoteWorkerAssignmentDispatchAuthority(authority({ durableRunAttempt }))).not.toThrow();
+  });
+
+  it.each([-1, 0.5, Number.MAX_SAFE_INTEGER + 1])("rejects invalid durable attempt %s", (durableRunAttempt) => {
+    expect(() => assertRemoteWorkerAssignmentDispatchAuthority(authority({ durableRunAttempt }))).toThrow();
+  });
+
   it("binds the manifest to strict canonical parent context and bounded sorted ceilings", () => {
     const normalized = normalizeRemoteWorkerAssignmentManifest(manifest());
     expect(Object.isFrozen(normalized)).toBe(true);
@@ -247,6 +256,50 @@ describe("remote worker assignment contracts", () => {
         resultSha256: D("result"),
       } as never),
     ).toThrow(/result and output/u);
+  });
+
+  it("binds optional terminal renewal to worker authority and exact replay", () => {
+    const command = {
+      registryWorkspaceId: "registry-a",
+      assignmentId: "assignment-a",
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 2,
+      origin: "worker" as const,
+      leaseTokenSha256: D("lease"),
+      outcome: "failed" as const,
+      failureSha256: D("failure"),
+      finalEventSequence: 0,
+      finalEventSha256: REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
+      idempotencyKey: "terminal-a",
+    };
+    expect(normalizeSettleRemoteWorkerAssignmentCommand(command)).not.toHaveProperty("renewalLeaseTokenSha256");
+    expect(
+      normalizeSettleRemoteWorkerAssignmentCommand({ ...command, renewalLeaseTokenSha256: D("next") }),
+    ).toHaveProperty("renewalLeaseTokenSha256", D("next"));
+    expect(() =>
+      normalizeSettleRemoteWorkerAssignmentCommand({ ...command, renewalLeaseTokenSha256: D("lease") }),
+    ).toThrow("distinct lease token");
+    expect(() =>
+      normalizeSettleRemoteWorkerAssignmentCommand({ ...command, renewalLeaseTokenSha256: "invalid" }),
+    ).toThrow();
+    expect(() =>
+      normalizeSettleRemoteWorkerAssignmentCommand({
+        ...command,
+        outcome: "cancelled",
+        failureSha256: undefined,
+        renewalLeaseTokenSha256: D("next"),
+      }),
+    ).toThrow("cannot renew execution authority");
+    const { leaseTokenSha256: _lease, ...recovery } = command;
+    expect(() =>
+      normalizeSettleRemoteWorkerAssignmentCommand({
+        ...recovery,
+        origin: "gateway_recovery",
+        gatewayActorId: "gateway-a",
+        recoveryEvidenceSha256: D("control"),
+        renewalLeaseTokenSha256: D("next"),
+      } as never),
+    ).toThrow("origin evidence");
   });
 
   it("requires explicit canonical materialization owners and never accepts a caller receipt", () => {

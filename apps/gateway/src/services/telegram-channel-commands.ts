@@ -203,7 +203,7 @@ export function readActiveChannelPersonality(config: Record<string, unknown>, ch
 export function buildChannelPersonalitySystemOverlay(
   config: Record<string, unknown>,
   chatId: string,
-  catalog?: PersonalityCatalogResponse,
+  catalog?: Pick<PersonalityCatalogResponse, "items">,
 ): string | undefined {
   return buildPersonalityOverlay(readActiveChannelPersonality(config, chatId), catalog?.items);
 }

@@ -1,5 +1,12 @@
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetSessionDraftsForTests } from "./library/session-drafts";
+import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
+import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
+const renderers: ReactTestRenderer[] = [];
+function create(...args: Parameters<typeof createRenderer>) { const renderer = createRenderer(...args); renderers.push(renderer); return renderer; }
+beforeEach(() => { __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests(); });
+afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
 import {
   getErrorMessage,
   NativeRoutePages,
@@ -722,6 +729,7 @@ describe("NativeRoutePages library coverage", () => {
     expect(collectText(agents.root)).toContain("Agent profiles");
     await click(findButton(agents.root, "Architect"));
     await click(findButton(agents.root, "Refresh"));
+    await click(findButton(agents.root, "Edit profile"));
     await change(field(agents.root, "Specialties", "input"), "architecture, test coverage");
     await change(field(agents.root, "Aliases", "input"), "design, review");
     await change(field(agents.root, "Default tools", "input"), "browser.search, shell.run");
@@ -772,6 +780,7 @@ describe("NativeRoutePages library coverage", () => {
 
   it("covers skills, capability browsing, knowledge, files, and artifacts", async () => {
     const skills = await mount("library", "skills");
+    await click(findButton(skills.root, "Safe improvement"));
     expect(collectText(skills.root)).toContain("Installed skills");
     expect(collectText(skills.root)).toContain("Validation lane");
     expect(collectText(skills.root)).toContain("Proposal review");
@@ -787,7 +796,8 @@ describe("NativeRoutePages library coverage", () => {
     const capabilities = await mount("library", "capabilities");
     expect(collectText(capabilities.root)).toContain("Capability browser");
     expect(collectText(capabilities.root)).toContain("can inspect or use when callable");
-    expect(collectText(capabilities.root)).toContain("2 Inspectable");
+    expect(collectText(capabilities.root)).toContain("Inspectable 2");
+    await click(findButton(capabilities.root, "Shell tool"));
     expect(collectText(capabilities.root)).toContain("Why this state");
     expect(collectText(capabilities.root)).toContain("Activation path");
     await click(findButton(capabilities.root, "Degraded"));
@@ -802,7 +812,9 @@ describe("NativeRoutePages library coverage", () => {
     const knowledge = await mount("library", "knowledge");
     await flush();
     expect(collectText(knowledge.root)).toContain("Knowledge sources");
-    expect(collectText(knowledge.root)).toContain("Distilled context.");
+    const contextKnowledge = await mount("library", "knowledge", { route: { area: "library", section: "knowledge", view: "context", theme: "ops" } });
+    expect(collectText(contextKnowledge.root)).toContain("Distilled context.");
+    await click(findButton(knowledge.root, "memory/workspace.md"));
     expect(collectText(knowledge.root)).toContain("Ingestion health");
     expect(collectText(knowledge.root)).toContain("Retrieval test");
     expect(journeyMocks.fetchJourneyTimeline).toHaveBeenCalledWith({
@@ -812,6 +824,7 @@ describe("NativeRoutePages library coverage", () => {
     });
     expect(collectText(knowledge.root)).toContain("Recovered external snapshots");
     expect(collectText(knowledge.root)).toContain("Snapshot created");
+    await click(findButton(knowledge.root, "memory/workspace.md"));
     expect(routeMocks.downloadFile).toHaveBeenCalledWith("memory/workspace.md");
     await change(knowledge.root.findByProps({ placeholder: "Search the knowledge file list" }), "workspace");
     expect(collectText(knowledge.root)).toContain("memory/workspace.md");
@@ -819,10 +832,11 @@ describe("NativeRoutePages library coverage", () => {
     const files = await mount("library", "files");
     await flush();
     expect(collectText(files.root)).toContain("Workspace files");
-    expect(collectText(files.root)).toContain("Import / upload");
-    expect(collectText(files.root)).toContain("Link to project");
+    expect(collectText(files.root)).toContain("Add file");
+    expect(collectText(files.root)).toContain("Upload text file");
     await change(files.root.findByProps({ placeholder: "Search relative path" }), "brief");
     expect(collectText(files.root)).toContain("docs/brief.md");
+    await click(findButton(files.root, "Create from template"));
     await change(field(files.root, "Template", "select"), "brief");
     await change(files.root.findByProps({ placeholder: "Optional target path override" }), "docs/new-brief.md");
     await click(findButton(files.root, "Create file"));
@@ -834,6 +848,8 @@ describe("NativeRoutePages library coverage", () => {
     const artifacts = await mount("library", "artifacts");
     expect(collectText(artifacts.root)).toContain("Generated artifacts");
     expect(collectText(artifacts.root)).toContain("Release notes");
+    await click(findButton(artifacts.root, "Release notes"));
+    await click(findButton(artifacts.root, "Provenance and versions"));
     expect(collectText(artifacts.root)).toContain("Use in Chat");
     expect(collectText(artifacts.root)).toContain("Validation");
     expect(artifacts.root.findAllByType("code").map((node) => node.props["aria-label"])).toEqual(
@@ -843,9 +859,15 @@ describe("NativeRoutePages library coverage", () => {
         "Turn identifier: turn-1",
       ]),
     );
+    await click(artifacts.root.findAllByType("button").find(node => node.props["aria-label"] === "Close details")!);
+    await click(findButton(artifacts.root, "Back to list"));
     await click(findButton(artifacts.root, "Plan"));
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
-    expect(collectText(artifacts.root)).toContain("# Release");
+    await click(findButton(artifacts.root, "Release notes"));
+    await act(async () => { await import("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer"); });
+    await flush();
+    expect(collectText(artifacts.root)).toContain("Proof.");
+    await click(findButton(artifacts.root, "Back to list"));
     await click(findButton(artifacts.root, "Refresh"));
     expect(routeMocks.fetchChatGeneratedArtifacts).toHaveBeenCalledWith({
       citadelId: "company",
@@ -864,6 +886,7 @@ describe("NativeRoutePages library coverage", () => {
     });
 
     const skills = await mount("library", "skills");
+    await click(findButton(skills.root, "Safe improvement"));
     await click(exactButton(skills.root, "Enable"));
 
     expect(routeMocks.updateSkillState).toHaveBeenCalledTimes(1);
@@ -887,6 +910,7 @@ describe("NativeRoutePages library coverage", () => {
   it("fails closed when a skill list row has no positive canonical revision", async () => {
     routeMocks.fetchSkills.mockResolvedValue({ items: [{ ...skill, revision: undefined }] });
     const skills = await mount("library", "skills");
+    await click(findButton(skills.root, "Safe improvement"));
 
     await click(exactButton(skills.root, "Enable"));
 
@@ -1008,6 +1032,7 @@ describe("NativeRoutePages library coverage", () => {
   it("covers skill evaluation proposal creation, review, and lifecycle actions", async () => {
     routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRunWithoutProposal] });
     const skills = await mount("library", "skills");
+    await click(findButton(skills.root, "Safe improvement"));
     expect(collectText(skills.root)).toContain("Safe improvement");
 
     await click(findButton(skills.root, "Generate scenarios"));
@@ -1036,6 +1061,7 @@ describe("NativeRoutePages library coverage", () => {
     routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRun] });
     const navigate = vi.fn();
     const skillsWithProposal = await mount("library", "skills", { navigate });
+    await click(findButton(skillsWithProposal.root, "Safe improvement"));
     await click(findButton(skillsWithProposal.root, "Open proposal"));
     expect(routeMocks.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-1");
     await click(findButton(skillsWithProposal.root, "Trust review"));
@@ -1084,6 +1110,7 @@ describe("NativeRoutePages library coverage", () => {
     setupResponses();
     routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRunWithoutProposal, evaluationRun] });
     const skillsWithStoredRun = await mount("library", "skills");
+    await click(findButton(skillsWithStoredRun.root, "Safe improvement"));
     await click(exactButton(skillsWithStoredRun.root, "Open"));
     expect(collectText(skillsWithStoredRun.root)).toContain("proposal_created");
   });
@@ -1108,6 +1135,7 @@ describe("NativeRoutePages library coverage", () => {
     routeMocks.fetchAgents.mockResolvedValueOnce({ items: [{ ...agent, lifecycleStatus: "archived" }] });
     routeMocks.restoreAgentProfile.mockRejectedValueOnce(new Error("restore failed"));
     const agents = await mount("library", "agents");
+    await click(findButton(agents.root, "Architect"));
     await click(findButton(agents.root, "Restore"));
     expect(collectText(agents.root)).toContain("restore failed");
 
@@ -1116,6 +1144,7 @@ describe("NativeRoutePages library coverage", () => {
     routeMocks.updateSkillState.mockRejectedValueOnce(new Error("state failed"));
     routeMocks.fetchSkillEvaluations.mockRejectedValueOnce(new Error("runs offline"));
     const skillsWithFailures = await mount("library", "skills");
+    await click(findButton(skillsWithFailures.root, "Safe improvement"));
     expect(collectText(skillsWithFailures.root)).toContain("runs offline");
     await click(findButton(skillsWithFailures.root, "Reload skills"));
     expect(collectText(skillsWithFailures.root)).toContain("reload failed");
@@ -1161,6 +1190,7 @@ describe("NativeRoutePages library coverage", () => {
       candidate: undefined,
     } as never);
     const proposalFallback = await mount("library", "skills");
+    await click(findButton(proposalFallback.root, "Safe improvement"));
     await click(findButton(proposalFallback.root, "Open proposal"));
     const proposalText = collectText(proposalFallback.root);
     expect(proposalText).toContain("Payload issue");

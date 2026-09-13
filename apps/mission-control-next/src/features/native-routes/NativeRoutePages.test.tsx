@@ -906,7 +906,19 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       await Promise.resolve();
     });
 
-    const text = collectText(renderer!.root);
+    expect(mocks.fetchPromptPackReport).not.toHaveBeenCalled();
+    let text = collectText(renderer!.root);
+    for (const label of [
+      "Inspect Security Red Team",
+      "Security packs",
+      "Execution depth",
+      "Design",
+      "Evaluations",
+      "Exports and checks",
+    ]) {
+      await act(async () => findButton(renderer!.root, label).props.onClick());
+      text += collectText(renderer!.root);
+    }
     expect(mocks.fetchOpsQualitySnapshot).toHaveBeenCalledWith({ packLimit: 200, evalLimit: 25 });
     expect(mocks.fetchPromptPackReport).toHaveBeenCalledWith("pack-1");
     expect(mocks.fetchPromptPackExport).toHaveBeenCalledWith("pack-1");
@@ -959,6 +971,8 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       "Copied eval proof export goatcitadel-llm-eval-proof-2026-05-02T20-05-00-000Z.json.",
     );
 
+    await act(async () => findButton(renderer!.root, "Gates").props.onClick());
+    await act(async () => findButton(renderer!.root, "Security packs").props.onClick());
     await act(async () => {
       findButton(renderer!.root, "Import and open defensive security pack").props.onClick();
       await Promise.resolve();
@@ -972,6 +986,7 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       theme: "ops",
     });
 
+    await act(async () => findButton(renderer!.root, "Inspect Security Red Team").props.onClick());
     await act(async () => {
       findButton(renderer!.root, "Copy prompt-pack export path").props.onClick();
       await Promise.resolve();
@@ -1018,11 +1033,13 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       await Promise.resolve();
     });
 
-    const text = collectText(renderer!.root);
+    let text = collectText(renderer!.root);
+    await act(async () => findButton(renderer!.root, "Evaluations").props.onClick());
+    text += collectText(renderer!.root);
     expect(mocks.fetchOpsQualitySnapshot).toHaveBeenCalledWith({ packLimit: 200, evalLimit: 25 });
     expect(text).toContain("Prompt packs");
     expect(text).toContain("prompt pack store unavailable");
-    expect(text).toContain("No prompt packs are available.");
+    expect(text).toContain("Prompt-pack evidence unavailable.");
     expect(text).toContain("Eval proof");
     expect(mocks.fetchPromptPackReport).not.toHaveBeenCalled();
     expect(mocks.fetchPromptPackExport).not.toHaveBeenCalled();
@@ -1097,6 +1114,9 @@ describe("NativeRoutePages Library provenance helpers", () => {
       workspaceId: "default",
       limit: 80,
     });
+    await act(async () => {
+      findButton(renderer!.root, "Provenance and versions").props.onClick();
+    });
     expect(collectText(renderer!.root)).toContain("Artifact provenance");
 
     await act(async () => {
@@ -1118,6 +1138,13 @@ describe("NativeRoutePages proposal trust review", () => {
 
     await act(async () => {
       renderer = renderLibrarySkills();
+    });
+    await act(async () => {
+      const row = renderer!.root
+        .findAll((node) => typeof node.props.onSelect === "function" && Array.isArray(node.props.items))
+        .find((node) => node.props.items.some((item: { id: string }) => item.id === "skill-safe-improvement"));
+      if (!row) throw new Error("Missing skill directory");
+      row.props.onSelect("skill-safe-improvement");
     });
     await act(async () => {
       findButton(renderer!.root, "Open proposal").props.onClick();

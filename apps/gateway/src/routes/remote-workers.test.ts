@@ -2,6 +2,7 @@ import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance, type RouteOptions } from "fastify";
 import {
   NotFoundError,
+  ConflictError,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
@@ -15,6 +16,7 @@ import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
 import {
   RemoteWorkerOperatorControlUnavailableError,
   RemoteWorkerRegistryInputError,
+  RemoteWorkerRuntimeReadUnavailableError,
 } from "../services/remote-workers-route-service.js";
 import { remoteWorkersRoutes } from "./remote-workers.js";
 import { installRouteAccessTracking } from "./route-access.js";
@@ -72,6 +74,7 @@ function fullService(overrides: Record<string, unknown> = {}) {
     getReconciliation: vi.fn(() => RECONCILIATION),
     listAssignments: vi.fn(() => ASSIGNMENT_PAGE),
     getAssignmentEvents: vi.fn(() => EVENT_PAGE),
+    getAssignmentRuntime: vi.fn(async () => ({ readOnly: true })),
     issueBootstrap: vi.fn(() => bootstrapResponse()),
     issueMeshNodeJoinAuthority: vi.fn(() => meshJoinAuthorityResponse()),
     revokeMeshNodeJoinAuthority: vi.fn(() => meshJoinRevocationResponse()),
@@ -87,6 +90,36 @@ describe("remote worker operator registry routes HX-507A", () => {
   afterEach(async () => {
     await app?.close();
     app = undefined;
+  });
+
+  it("binds budget limits to the authenticated operator and path workspace", async () => {
+    const budgetOperator = { create: vi.fn(async () => ({ grantId: "grant-a" })), list: vi.fn(async () => []), revoke: vi.fn(async () => ({ revision: 2 })) };
+    app = await buildOperatorMutationHarness({ budgetOperator });
+    const body = { grantId: "grant-a", executionWorkspaceId: "workspace-b", workerId: "worker-a", workerGeneration: 2,
+      maxRequests: 40, maxCostMicrousd: 5_000_000, expiresAt: "2099-01-01T00:00:00.000Z" };
+    const response = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
+      headers: { "Idempotency-Key": "budget-request" }, payload: body });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(budgetOperator.create).toHaveBeenCalledWith({ ...body, registryWorkspaceId: "workspace-a" }, "operator-a");
+    const forged = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
+      headers: { "Idempotency-Key": "budget-forged" }, payload: { ...body, actorId: "another-operator" } });
+    expect(forged.statusCode).toBe(400);
+    expect(budgetOperator.create).toHaveBeenCalledTimes(1);
+    const revoke = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets/grant-a/revoke",
+      headers: { "Idempotency-Key": "budget-revoke" }, payload: { expectedRevision: 1 } });
+    expect(revoke.statusCode).toBe(200);
+    expect(budgetOperator.revoke).toHaveBeenCalledWith({ registryWorkspaceId: "workspace-a", grantId: "grant-a", expectedRevision: 1, actorId: "operator-a" });
+  });
+
+  it("rejects device, companion and peer principals at the budget authorization route", async () => {
+    app = await buildAuthenticatedHarness(vi.fn());
+    for (const headers of [{ authorization: "Bearer device-bearer" }, { authorization: "Bearer companion-bearer" },
+      { authorization: "Bearer operator-token", "x-test-a2a-peer": "peer-a" }]) {
+      const response = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
+        headers: { ...headers, "Idempotency-Key": "untrusted-budget" }, payload: {} });
+      expect([401, 403]).toContain(response.statusCode);
+    }
   });
 
   it("exposes only actor-keyed operator GETs with strict inputs and no-cache headers", async () => {
@@ -123,10 +156,12 @@ describe("remote worker operator registry routes HX-507A", () => {
     expect(detail.statusCode).toBe(200);
     expect(getRegistryEntry).toHaveBeenCalledWith({ workspaceId: "workspace-a", workerId: "worker-a" });
     const getRoutes = routes.filter((route) => route.method === "GET");
-    expect(getRoutes).toHaveLength(5);
+    expect(getRoutes).toHaveLength(7);
     expect(getRoutes.map((route) => route.url).sort()).toEqual([
       "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments",
       "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/events",
+      "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/runtime",
+      "/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/reconciliation",
@@ -134,6 +169,8 @@ describe("remote worker operator registry routes HX-507A", () => {
     expect(getRoutes.every((route) => route.config.goatcitadelRouteAccessClass === "operator")).toBe(true);
     const postRoutes = routes.filter((route) => route.method === "POST");
     expect(postRoutes.map((route) => route.url).sort()).toEqual([
+      "/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets",
+      "/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets/:grantId/revoke",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities/:joinAuthorityGeneration/revoke",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/quarantine",
@@ -215,16 +252,15 @@ describe("remote worker operator registry routes HX-507A", () => {
     ] as const;
 
     for (const probe of probes) {
-      const response = await app.inject({
-        method: "GET",
-        url: "/api/v1/ops/workspaces/workspace-a/remote-workers",
-        headers: probe.headers,
-      });
-      expect(response.statusCode, probe.label).toBe(probe.expectedStatus);
-      expect(response.headers["cache-control"], probe.label).toBe("no-store");
-      expect(response.headers.pragma, probe.label).toBe("no-cache");
-      expect(response.headers.vary, probe.label).toContain("Authorization");
-      expect(response.body, probe.label).not.toMatch(/device-bearer|companion-bearer|worker-runtime-bearer/u);
+      for (const url of ["/api/v1/ops/workspaces/workspace-a/remote-workers",
+        "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime"]) {
+        const response = await app.inject({ method: "GET", url, headers: probe.headers });
+        expect(response.statusCode, probe.label).toBe(probe.expectedStatus);
+        expect(response.headers["cache-control"], probe.label).toBe("no-store");
+        expect(response.headers.pragma, probe.label).toBe("no-cache");
+        expect(response.headers.vary, probe.label).toContain("Authorization");
+        expect(response.body, probe.label).not.toMatch(/device-bearer|companion-bearer|worker-runtime-bearer/u);
+      }
     }
     expect(listRegistry).not.toHaveBeenCalled();
   });
@@ -374,6 +410,36 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
       limit: 10,
       cursor: "opaque",
     });
+  });
+
+  it("awaits the runtime read owner with path scope and rejects client-selected generations", async () => {
+    const getAssignmentRuntime = vi.fn(async () => ({ readOnly: true, mutationSemantics: "none" }));
+    const { app: instance } = await harness({ getAssignmentRuntime });
+    const url = "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime";
+    const response = await instance.inject({ method: "GET", url });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual({ readOnly: true, mutationSemantics: "none" });
+    expect(getAssignmentRuntime).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", assignmentId: "assign-a" });
+    for (const query of ["?assignmentGeneration=2", "?raw=true", "?private-token=secret"]) {
+      const invalid = await instance.inject({ method: "GET", url: url + query });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.body).not.toContain("secret");
+    }
+    expect(getAssignmentRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [new RemoteWorkerRuntimeReadUnavailableError(), 503],
+    [new NotFoundError("Remote worker assignment not found"), 404],
+    [new ConflictError({ message: "Remote worker assignment generation changed" }), 409],
+    [new Error("secret=private-provider-value"), 500],
+  ])("maps runtime read failures without exposing owner details: %s", async (error, status) => {
+    const { app: instance } = await harness({ getAssignmentRuntime: vi.fn(async () => { throw error; }) });
+    const response = await instance.inject({ method: "GET", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime" });
+    expect(response.statusCode).toBe(status);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.body).not.toContain("private-provider-value");
   });
 
   it("passes afterSequence and limit to the events route and 404s an unstarted assignment", async () => {

@@ -31,6 +31,9 @@ import {
   type RemoteWorkerProtectedAdmissionAuthorityStorePort,
 } from "./remote-worker-protected-admission-authority-service.js";
 import type { RemoteWorkerDurableNonceConsumePort } from "./remote-worker-protocol.js";
+import type { RemoteWorkerChatApprovalWaitReadPort } from "./remote-worker-chat-approval-wait-read-service.js";
+import { RemoteWorkerMeshCapabilityProtocolService, type RemoteWorkerMeshCapabilityOwners,
+  type RemoteWorkerMeshCapabilityProtocolPort } from "./remote-worker-mesh-capability-protocol-service.js";
 
 /**
  * Explicit activation gate for the connected-worker assignment runtime. This is
@@ -74,6 +77,7 @@ export interface RemoteWorkerAssignmentExecutionOwner {
 }
 
 export interface RemoteWorkerAssignmentRuntimeComposition {
+  readonly meshCapabilities?: RemoteWorkerMeshCapabilityProtocolPort;
   readonly assignmentProtocol: RemoteWorkerAssignmentProtocolOwner;
   readonly assignmentDispatch: RemoteWorkerAssignmentDispatchOwner;
   /**
@@ -93,15 +97,19 @@ export interface RemoteWorkerAssignmentExecutionOwnerDependencies {
 }
 
 export interface RemoteWorkerAssignmentRuntimeCompositionDependencies {
+  readonly meshCapabilities?: RemoteWorkerMeshCapabilityOwners;
+  readonly approvalWait?: RemoteWorkerChatApprovalWaitReadPort;
   readonly admissionStore: RemoteWorkerCurrentRuntimeCredentialStorePort &
     RemoteWorkerProtectedAdmissionAuthorityStorePort;
   readonly meshAdmissions: RemoteWorkerAssignmentMeshAuthorityPort & RemoteWorkerAssignmentMeshAdmissionPort;
   readonly assignments: RemoteWorkerAssignmentProtocolStorePort & RemoteWorkerAssignmentDispatchStorePort;
   readonly nonceConsumer: RemoteWorkerDurableNonceConsumePort;
   /**
-   * Optional routes 11-12 inner owners. Production has no live governance,
-   * budget, LLM, CAS, or effect-coordinator adapters, so it omits this and the
-   * whole listener stays dark; the connected-worker E2E injects both owners.
+   * Optional routes 11-12 inner owners. Text-inference governance, spending,
+   * LlmService, CAS and canonical tool-effect adapters are composed by the
+   * Gateway behind the explicit assignment-runtime activation setting. Without
+   * these owners the all-or-nothing listener remains unavailable. Normal Chat
+   * scheduling and protected native execution are separate unfinished owners.
    */
   readonly execution?: RemoteWorkerAssignmentExecutionOwnerDependencies;
   readonly clock?: () => Date;
@@ -121,7 +129,12 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
   const clock = dependencies.clock ?? ((): Date => new Date());
   const protectedAuthority = new RemoteWorkerProtectedAdmissionAuthorityService(dependencies.admissionStore);
   const currentAuthority = new RemoteWorkerCurrentAuthorityService(dependencies.admissionStore, protectedAuthority);
+  const meshCapabilities = dependencies.meshCapabilities === undefined ? undefined : new RemoteWorkerMeshCapabilityProtocolService({
+    ...dependencies.meshCapabilities, credentialAuthority: currentAuthority,
+    meshAdmissions: dependencies.meshAdmissions, nonceConsumer: dependencies.nonceConsumer, clock,
+  });
   const assignmentProtocolService = new RemoteWorkerAssignmentProtocolService({
+    approvalWait: dependencies.approvalWait,
     credentialAuthority: currentAuthority,
     meshAdmissions: dependencies.meshAdmissions,
     nonceConsumer: dependencies.nonceConsumer,
@@ -166,6 +179,7 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
     assertPort(dependencies.execution?.settlement.effects, "dispatchEffect", "effect settlement owner");
   };
   return Object.freeze({
+    ...(meshCapabilities === undefined ? {} : { meshCapabilities }),
     assignmentProtocol: Object.freeze({
       assertAvailable: preflight,
       execute: (input: RemoteWorkerAssignmentProtocolRequest) => assignmentProtocolService.execute(input),
@@ -186,7 +200,10 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
 }
 
 function assertPort(value: unknown, method: string, label: string): void {
-  if (value === null || typeof value !== "object" || typeof (value as Record<string, unknown>)[method] !== "function") {
+  // AsyncStorage repositories are callable path proxies on both supported
+  // adapters. Require the method, without rejecting that canonical facade.
+  if (value === null || (typeof value !== "object" && typeof value !== "function")
+    || typeof (value as Record<string, unknown>)[method] !== "function") {
     throw new TypeError(`Remote worker ${label} is unavailable.`);
   }
 }

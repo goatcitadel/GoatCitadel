@@ -60,6 +60,14 @@
   }
 }
 
+.mc-next-settings-grid.mc-next-onboarding-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+}
+
+.mc-next-onboarding-grid > .mc-next-disclosure-card {
+  grid-column: 1 / -1;
+}
+
 .mc-next-directory-header {
   gap: 0.34rem;
   padding: 0.92rem 0 0.86rem;

@@ -271,6 +271,8 @@ export interface PersonalityPreset {
 }
 
 export interface PersonalityCatalogResponse {
+  /** Opaque revision of the complete saved catalog and shipped presets. */
+  revision: string;
   items: PersonalityPreset[];
   defaultPersonalityId: string;
 }
@@ -284,6 +286,10 @@ export interface PersonalityPresetMutationInput {
   style?: string;
   systemOverlay?: string;
   safetyNotes?: string[];
+}
+
+export interface PersonalityCatalogMutationInput extends PersonalityPresetMutationInput {
+  expectedRevision: string;
 }
 
 export interface ChannelPersonalitySelection {

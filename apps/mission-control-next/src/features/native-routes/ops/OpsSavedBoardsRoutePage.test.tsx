@@ -1,4 +1,5 @@
-import { StrictMode } from "react";
+import { __resetSessionDraftsForTests } from "../library/session-drafts";
+import { StrictMode, type ReactNode } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import type { OpsSavedBoardRecord, RealtimeEvent } from "@goatcitadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,15 @@ const apiMocks = vi.hoisted(() => ({
   fetchTasksByView: vi.fn(),
   restoreOpsSavedBoard: vi.fn(),
   updateOpsSavedBoard: vi.fn(),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/components/ui/GCModal", () => ({
+  GCModal: ({ open, children, title }: { open: boolean; children: ReactNode; title: string }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        {children}
+      </div>
+    ) : null,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/ops-saved-boards", () => ({
@@ -57,6 +67,7 @@ const FIVE_PLACEMENTS: OpsSavedBoardRecord["placements"] = [
 let canonicalBoards: OpsSavedBoardRecord[];
 
 beforeEach(() => {
+  __resetSessionDraftsForTests();
   vi.resetAllMocks();
   canonicalBoards = [makeBoard()];
   apiMocks.fetchOpsSavedBoards.mockImplementation(async ({ workspaceId }: { workspaceId: string }) => ({
@@ -279,6 +290,26 @@ describe("OpsSavedBoardsRoutePage", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "costs", theme: "ops" });
   });
 
+  it("keeps a layout draft across close, refresh, and remount with its original revision", async () => {
+    let renderer = await renderBoards();
+    await click(renderer, "Edit layout");
+    await change(findTextInput(renderer), "Retained board edit");
+    await click(renderer, "Cancel");
+    await click(renderer, "Keep draft and close");
+    expect(collectText(renderer.root)).toContain("Unsaved");
+    await act(async () => renderer.unmount());
+    canonicalBoards = [makeBoard({ name: "Remote update", revision: 2 })];
+    renderer = await renderBoards();
+    await click(renderer, "Edit layout");
+    expect(findTextInput(renderer).props.value).toBe("Retained board edit");
+    await click(renderer, "Save changes");
+    expect(apiMocks.updateOpsSavedBoard).toHaveBeenCalledWith(
+      "board-1",
+      expect.objectContaining({ expectedRevision: 1, name: "Retained board edit" }),
+    );
+    await act(async () => renderer.unmount());
+  });
+
   it("keeps one widget failure local and retries only that source", async () => {
     apiMocks.fetchHealthSummary.mockRejectedValueOnce(new Error("runtime probe unavailable"));
     const renderer = await renderBoards();
@@ -330,6 +361,7 @@ describe("OpsSavedBoardsRoutePage", () => {
       expectedRevision: 1,
     });
     expect(collectText(renderer.root)).toContain("archived");
+    await click(renderer, "Board details");
     expect(collectText(renderer.root)).toContain("revision 2");
 
     await click(renderer, "Restore");
@@ -410,10 +442,12 @@ describe("OpsSavedBoardsRoutePage", () => {
     await change(findTextInput(renderer), "Conflicting create");
     await click(renderer, "Create board");
 
+    expect(collectText(renderer.root)).toContain("This create identity already committed");
+    await click(renderer, "Cancel");
+    await click(renderer, "Keep draft and close");
     const archiveToggle = renderer.root.findAllByType("input").find((node) => node.props.type === "checkbox");
     expect(archiveToggle?.props.checked).toBe(true);
     expect(apiMocks.fetchOpsSavedBoards).toHaveBeenLastCalledWith({ workspaceId: "ws-1", includeArchived: true });
-    expect(collectText(renderer.root)).toContain("This create identity already committed different content");
   });
 
   it("cannot strand a new workspace behind a late editor mutation", async () => {

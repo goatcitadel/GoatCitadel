@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,9 @@ const uninstaller = readLf(path.join(scriptsDir, "uninstall-broker-coordinator.p
 const brokerHeader = readLf(path.join(nativeSrcDir, "availability_broker.hpp"));
 const brokerValidation = readLf(path.join(nativeSrcDir, "availability_broker.cpp"));
 const brokerRuntime = readLf(path.join(nativeSrcDir, "availability_broker_runtime.cpp"));
+const localTransport = readLf(path.join(nativeSrcDir, "local_transport.cpp"));
+const transportHeader = readLf(path.join(nativeSrcDir, "local_transport.hpp"));
+const signerRuntime = readLf(path.join(nativeSrcDir, "service_runtime.cpp"));
 const packagingScript = readLf(
   path.join(repoRoot, "scripts", "packaging", "build-remote-worker-provisioner-windows-native.mjs"),
 );
@@ -131,7 +135,8 @@ test("the broker SCM DACL, demand-start configuration, and privilege list are fr
     /SERVICE_START \| SERVICE_STOP \| SERVICE_QUERY_CONFIG \|\n\s*SERVICE_QUERY_STATUS \| READ_CONTROL \| SYNCHRONIZE/u,
   );
   assert.match(brokerValidation, /system_ace\.mask == SERVICE_ALL_ACCESS/u);
-  assert.match(brokerValidation, /snapshot\.service_ace_count != 2U/u);
+  assert.match(brokerValidation, /snapshot\.service_ace_count != \(allow_worker_query \? 3U : 2U\)/u);
+  assert.match(brokerValidation, /snapshot, expected_binary_path, SERVICE_DEMAND_START, false/u);
   assert.match(brokerValidation, /service_dacl_protected/u);
 
   // Demand-start law: the broker validates SERVICE_DEMAND_START for itself
@@ -149,12 +154,33 @@ test("the broker SCM DACL, demand-start configuration, and privilege list are fr
   assert.match(brokerValidation, /kLocalSystemAccount\[\] = L"LocalSystem"/u);
 
   // Unrestricted service SID type and the exact single-privilege multi-string.
-  assert.match(common, /\$script:ExpectedServiceSidType = 3\s+# SERVICE_SID_TYPE_UNRESTRICTED/u);
-  assert.match(common, /ServiceSidTypeUnrestricted = 3u/u);
+  assert.match(common, /\$script:ExpectedServiceSidType = 1\s+# SERVICE_SID_TYPE_UNRESTRICTED/u);
+  assert.match(common, /ServiceSidTypeUnrestricted = 1u/u);
   assert.match(brokerValidation, /SERVICE_SID_TYPE_UNRESTRICTED/u);
   assert.equal(extractCppWideLiteral(brokerValidation, "kRequiredPrivileges"), "SeChangeNotifyPrivilege\\0");
   assert.equal(extractPsString(common, "ExpectedRequiredPrivilege"), "SeChangeNotifyPrivilege");
   assert.ok(common.includes('string multiSz = "SeChangeNotifyPrivilege\\0";'));
+});
+
+test("the worker receives exact signer query rights without broker control", () => {
+  const workerSid = deriveVirtualServiceAccountSid("GoatCitadelRemoteWorker");
+  assert.equal(extractPsString(common, "RuntimeWorkerServiceSid"), workerSid);
+  assert.equal(extractCppSidParts(transportHeader, "kRuntimeWorkerSidParts"), workerSid);
+  assert.equal(
+    extractPsString(common, "SignerServiceObjectSddl"),
+    `${extractPsString(common, "ServiceObjectSddl")}(A;;0x00020005;;;${workerSid})`,
+  );
+  assert.match(transportHeader, /kRuntimeWorkerSignerQueryMask =\n\s*SERVICE_QUERY_CONFIG \| SERVICE_QUERY_STATUS \| READ_CONTROL;/u);
+  assert.match(signerRuntime, /snapshot\.service_ace_count != 3U/u);
+  assert.match(signerRuntime, /worker_ace\.mask != kRuntimeWorkerSignerQueryMask/u);
+  assert.match(brokerValidation, /worker_ace\.mask != kRuntimeWorkerSignerQueryMask/u);
+  assert.match(brokerValidation, /snapshot, expected_binary_path, SERVICE_DEMAND_START, true/u);
+  assert.ok(installer.includes("SetServiceSddl($script:SignerServiceName, $script:SignerServiceObjectSddl)"));
+  assert.ok(installer.includes("SetServiceSddl($script:BrokerServiceName, $script:ServiceObjectSddl)"));
+  assert.match(installer, /SignerQuotedBinaryPath -ExpectedServiceSddl \$script:SignerServiceObjectSddl/u);
+  assert.match(installer, /BrokerQuotedBinaryPath -ExpectedServiceSddl \$script:ServiceObjectSddl/u);
+  assert.match(installer, /signerServiceObjectSddl = \$script:SignerServiceObjectSddl/u);
+  assert.match(installer, /runtimeWorkerBrokerRights = "none"/u);
 });
 
 test("the protected image and directory ACLs pin the broker's exact masks and SID order", () => {
@@ -169,21 +195,29 @@ test("the protected image and directory ACLs pin the broker's exact masks and SI
 
   const brokerSid = extractPsString(common, "BrokerServiceSid");
   const signerSid = extractPsString(common, "SignerServiceSid");
+  const workerSid = extractPsString(common, "RuntimeWorkerServiceSid");
   assert.equal(
     extractPsString(common, "SignerImageSddl"),
-    `O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;${signerSid})(A;;0x001200a9;;;BA)`,
+    `O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;${signerSid})(A;;0x001200a9;;;BA)(A;;0x001200a9;;;${workerSid})`,
   );
   assert.equal(
     extractPsString(common, "BrokerImageSddl"),
     `O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;${brokerSid})(A;;0x001200a9;;;BA)`,
   );
-  assert.equal(extractPsString(common, "ProtectedDirectorySddl"), "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001200a9;;;BA)");
+  assert.equal(extractPsString(common, "ClientImageSddl"), extractPsString(common, "SignerImageSddl"));
+  assert.equal(extractPsString(common, "ProtectedDirectorySddl"), extractPsString(common, "SignerImageSddl"));
+  assert.match(localTransport, /dacl->AceCount == 4U/u);
+  assert.match(localTransport, /ValidateExactProtectedDacl\(layout->provisioner_root\)/u);
+  assert.match(localTransport, /ValidateExactProtectedDacl\(layout->bin\)/u);
+  assert.match(localTransport, /system\.bytes\.data\(\), service\.bytes\.data\(\), administrators\.bytes\.data\(\), worker\.bytes\.data\(\)/u);
+  assert.match(localTransport, /kProtectedFullMask, kProtectedReadMask, kProtectedReadMask, kProtectedReadMask/u);
   assert.equal(extractPsString(common, "SharedRootSddl"), "O:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001f01ff;;;BA)");
   assert.equal(FILE_ALL_ACCESS, 0x001f01ff);
-  // The broker's exact three-ACE order for the signer image: SYSTEM full,
-  // then the signer service SID, then Administrators, all read-only.
-  assert.match(brokerRuntime, /system\.bytes\.data\(\), service\.bytes\.data\(\), administrators\.bytes\.data\(\)/u);
-  assert.match(brokerRuntime, /kProtectedFullMask, kProtectedReadMask, kProtectedReadMask/u);
+  // Both validators require SYSTEM full control, then signer, administrators,
+  // and worker read/execute, with no additional principal or writable mask.
+  assert.match(brokerRuntime, /dacl->AceCount == 4U/u);
+  assert.match(brokerRuntime, /system\.bytes\.data\(\), service\.bytes\.data\(\), administrators\.bytes\.data\(\), worker\.bytes\.data\(\)/u);
+  assert.match(brokerRuntime, /kProtectedFullMask, kProtectedReadMask, kProtectedReadMask, kProtectedReadMask/u);
 
   // 64 MiB image bound, single hard link, and single-stream closure.
   assert.match(brokerRuntime, /kMaximumProtectedExecutableBytes = 64U \* 1024U \* 1024U/u);
@@ -210,7 +244,7 @@ test("the SHA-256 pin flow is mandatory, package-anchored, and fail-closed", () 
   assert.match(installer, /the package-verified pin is authoritative/u);
   // Destination re-verification happens after the copy and again after the
   // descriptors are applied.
-  const copyIndex = installer.indexOf("Copy-Item -LiteralPath");
+  const copyIndex = installer.indexOf("Copy-RecipePinnedImage -Source");
   const destinationRecheck = installer.indexOf("does not match the pin");
   const postProtectionRecheck = installer.indexOf("drifted after protection");
   assert.ok(copyIndex >= 0 && destinationRecheck > copyIndex && postProtectionRecheck > destinationRecheck);
@@ -220,7 +254,8 @@ test("the SHA-256 pin flow is mandatory, package-anchored, and fail-closed", () 
 test("the refusal branches are frozen", () => {
   assert.match(installer, /already exists; this recipe never reconfigures an existing service/u);
   assert.match(installer, /already exists; refusing to compose over a pre-existing tree/u);
-  assert.match(installer, /not SYSTEM or Administrators; an untrusted principal may have planted it, refusing/u);
+  assert.match(common, /an install ancestor owner is not SYSTEM or TrustedInstaller/u);
+  assert.match(installer, /Get-BrokerCoordinatorDirectoryLease/u);
   assert.match(installer, /must run from an elevated administrator context/u);
   assert.match(installer, /ProgramData is relocated/u);
   assert.match(installer, /carries alternate data streams/u);
@@ -286,24 +321,28 @@ test("nothing in the repo wires the untrusted helper to start the broker or sign
   }
 });
 
-test("the recipe is production-dark: services stay stopped and the client is never deployed", () => {
+test("the installed client receives no service-control rights and both services stay stopped", () => {
   assert.match(installer, /a production-dark install must leave it SERVICE_STOPPED/u);
   assert.match(installer, /a production-dark install must leave no process/u);
   assert.match(common, /\$script:ServiceStoppedState = 1\s+# SERVICE_STOPPED/u);
   assert.match(installer, /startsAnyService = \$false/u);
-  assert.match(installer, /deploysUntrustedClient = \$false/u);
-  // Only the two service images are copied; the untrusted client executable
-  // is named solely to document that it is never deployed.
-  const copyCount = [...installer.matchAll(/Copy-Item -LiteralPath/gu)].length;
-  assert.equal(copyCount, 2);
-  assert.doesNotMatch(installer, /Copy-Item[^\n]*Client/u);
+  assert.match(installer, /deploysUntrustedClient = \$true/u);
+  assert.match(installer, /clientServiceControlRights = "none"/u);
+  const copyCount = [...installer.matchAll(/Copy-RecipePinnedImage -Source/gu)].length;
+  assert.equal(copyCount, 3);
+  assert.match(installer, /Copy-RecipePinnedImage[^\n]*ClientImagePath[^\n]*ClientImageSddl/u);
+  assert.match(installer, /\[System\.IO\.FileMode\]::CreateNew/u);
   assert.match(common, /\$script:ClientExecutableName = "GoatCitadelRemoteWorkerProvisionerClient\.exe"/u);
-  assert.match(common, /never deploys the\s+untrusted client executable/u);
-  // ERROR_SERVICE_NEVER_STARTED stays documented for the held installed-host
-  // broker contract proof: the broker requires NO_ERROR status metadata.
+  assert.match(common, /client image grants the dedicated worker only signer query access, never\s+service start, stop, or configuration authority/u);
+  // The first-start exception applies only to a stopped, process-free target.
   assert.match(common, /\$script:ServiceNeverStartedExitCode = 1077/u);
   assert.match(installer, /ERROR_SERVICE_NEVER_STARTED \(1077\)/u);
   assert.match(brokerValidation, /win32_exit_code != NO_ERROR/u);
+  assert.match(brokerValidation, /snapshot\.current_state == SERVICE_STOPPED && snapshot\.service_process_id == 0U/u);
+  assert.match(brokerValidation, /snapshot\.win32_exit_code == ERROR_SERVICE_NEVER_STARTED/u);
+  assert.match(brokerValidation, /StatusMetadataIsExact\(snapshot, false\)/u);
+  assert.match(brokerValidation, /StatusMetadataIsExact\(snapshot, true\)/u);
+  assert.match(brokerRuntime, /kConfigurationBufferBytes = 8U \* 1024U/u);
 });
 
 test("uninstall is identity-bound, restore-then-delete ordered, and preserves shared roots", () => {
@@ -352,6 +391,43 @@ test("the scripts stay Windows PowerShell 5.1 compatible", () => {
     assert.match(source, /Set-StrictMode -Version Latest/u);
   }
 });
+
+for (const engine of ["powershell", "pwsh"]) {
+  test(
+    `installer filesystem and refusal behavior under ${engine}`,
+    {
+      skip: process.platform !== "win32",
+      timeout: 60_000,
+    },
+    (t) => {
+      const artifactRoot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goat-broker-recipe-")), engine);
+      const result = spawnSync(
+        engine,
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          path.join(scriptsDir, "broker-coordinator-behavior.test.ps1"),
+          "-RepositoryRoot",
+          repoRoot,
+          "-ArtifactRoot",
+          artifactRoot,
+        ],
+        { encoding: "utf8", timeout: 50_000, maxBuffer: 65_536, windowsHide: true },
+      );
+      assert.equal(result.status, 0, `${engine}: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`);
+      const receipt = JSON.parse(fs.readFileSync(path.join(artifactRoot, "behavior-receipt.json"), "utf8"));
+      assert.equal(receipt.passed, true);
+      assert.equal(receipt.scenarioCount, 30);
+      assert.equal(receipt.scenarios.length, 30);
+      assert.equal(receipt.serviceMutations, 0);
+      assert.equal(receipt.installedPathMutations, 0);
+      t.diagnostic(`Retained ${engine} behavior evidence: ${artifactRoot}`);
+    },
+  );
+}
 
 test("the scripts AST-parse cleanly under available PowerShell engines", { timeout: 240_000 }, (t) => {
   const scriptPaths = allRecipeScripts.map(([name]) => path.join(scriptsDir, name));

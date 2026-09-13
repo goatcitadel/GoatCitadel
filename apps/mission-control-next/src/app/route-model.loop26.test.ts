@@ -121,7 +121,7 @@ describe("library/curator route", () => {
     expect(route.section).toBe("curator");
     const entry = RAIL_ITEMS.library.find((item) => item.id === "library-curator");
     expect(entry?.section).toBe("curator");
-    expect(getRouteLabel({ area: "library", section: "curator" })).toBe("Skill Curator");
+    expect(getRouteLabel({ area: "library", section: "curator" })).toBe("Skill curator");
   });
 });
 
@@ -131,7 +131,7 @@ describe("settings/trust-policy route", () => {
     expect(route.area).toBe("settings");
     expect(route.section).toBe("trust-policy");
     expect(buildAppHref(route)).toBe("/settings/trust-policy");
-    expect(getRouteLabel(route)).toBe("Trust & Policy");
+    expect(getRouteLabel(route)).toBe("Trust & policy");
     expect(RAIL_ITEMS.settings.find((item) => item.id === "settings-trust-policy")?.section).toBe("trust-policy");
     expect(getRouteReleaseScope(route).status).toBe("ship");
   });

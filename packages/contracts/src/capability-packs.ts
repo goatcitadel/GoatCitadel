@@ -10,6 +10,8 @@ export interface CapabilityPackAsset {
   runtimeSupport: "available" | "requires_configuration" | "unsupported";
   installMode: CapabilityPackInstallMode;
   warnings?: string[];
+  /** Executable only when the Gateway resolves this exact reviewed binding. */
+  binding?: { owner: "mcp" | "capability_candidate" | "runtime_configuration"; revision: string; sha256: string };
 }
 
 export interface CapabilityPackPolicyDefaults {

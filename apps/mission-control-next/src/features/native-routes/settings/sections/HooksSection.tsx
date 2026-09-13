@@ -1,4 +1,8 @@
-import { useCallback, useState } from "react";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { useSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { useCallback, useRef, useState } from "react";
 import { Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { HookMode, HookTrigger } from "@goatcitadel/contracts";
 import {
@@ -79,22 +83,19 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [selectedHookId, setSelectedHookId] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState<{
-    label: string;
-    trigger: HookTrigger;
-    mode: HookMode;
-    url: string;
-    secret: string;
-  }>({
-    label: "",
-    trigger: "tool.call.after",
-    mode: "observe",
-    url: "",
-    secret: "",
-  });
+  const [view, setView] = useState<"new" | "hook" | "history" | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const creatingRef = useRef(false);
+  const leave = useDraftLeave();
+  const emptyForm = { label: "", trigger: "tool.call.after" as HookTrigger, mode: "observe" as HookMode, url: "", secret: "" };
+  const editor = useSessionDraft(`hook:${activeWorkspaceId}:new`, emptyForm, undefined, { label: "New hook", active: view === "new", onSave: () => create() });
+  const form = editor.value;
+  const setForm = editor.setValue;
+  const openView = (next: typeof view) => leave.request(() => setView(next), [editor.key]);
   const hooks = data?.hooks ?? [];
-  const selectedHook = hooks.find((hook) => hook.hookId === selectedHookId) ?? hooks[0];
-  const selectedRuns = (data?.runs ?? []).filter((run) => run.hookId === selectedHook?.hookId).slice(0, 12);
+  const selectedHook = hooks.find((hook) => hook.hookId === selectedHookId) ;
+  const selectedRuns = (data?.runs ?? []).filter((run) => view === "history" || run.hookId === selectedHook?.hookId);
   const selectedRun = selectedRuns.find((run) => run.runId === selectedRunId);
   const selectedRunCanRedrive = Boolean(
     selectedRun &&
@@ -103,12 +104,14 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
     selectedRun.status === "completed",
   );
 
-  const create = async () => {
+  const create = async (): Promise<boolean> => {
+    if (creatingRef.current) return false;
     if (!form.label.trim() || !form.url.trim() || !form.secret.trim()) {
       setNotice({ tone: "warning", message: "Label, HTTPS URL, and signing secret are required." });
-      return;
+      return false;
     }
-    setCreating(true);
+    setCreating(true); creatingRef.current = true;
+    const submitted = form;
     try {
       const created = await createWorkspaceHook(activeWorkspaceId, {
         label: form.label.trim(),
@@ -118,13 +121,16 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
         action: { type: "webhook", webhook: { url: form.url.trim(), secret: form.secret } },
       });
       setSelectedHookId(created.hookId);
-      setForm((current) => ({ ...current, label: "", url: "", secret: "" }));
+      const clean = editor.acceptSaved(emptyForm, undefined, submitted);
+      if (clean) setView("hook");
       setNotice({ tone: "success", message: "Hook created with a keychain-backed signing secret." });
       await reload();
+      return clean;
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
+      return false;
     } finally {
-      setCreating(false);
+      setCreating(false); creatingRef.current = false;
     }
   };
   const test = async (hookId: string) => {
@@ -146,23 +152,25 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
   const remove = async (hookId: string) => {
-    if (!globalThis.confirm("Delete this hook? Existing delivery evidence remains available.")) return;
+    if (deleting) return;
+    setDeleting(true);
     try {
       await deleteWorkspaceHook(activeWorkspaceId, hookId);
-      setSelectedHookId("");
+      setSelectedHookId(""); setPendingDelete(null); setView(null);
       setNotice({ tone: "success", message: "Hook deleted." });
       await reload();
     } catch (deleteError) {
       setNotice({ tone: "error", message: getErrorMessage(deleteError) });
-    }
+    } finally { setDeleting(false); }
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       <SettingsStack>
         {notice ? <SettingsNotice notice={notice} /> : null}
         <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-        <NativeCard
+        <SettingsButtonRow><NativeButton onClick={() => openView("new")}>Register hook{editor.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="outline" onClick={() => openView("history")}>Delivery history</NativeButton><NativeButton variant="outline" onClick={() => void reload()}>Refresh</NativeButton></SettingsButtonRow>
+        {view === "new" ? <DetailInspector open title="Register hook" onClose={() => openView(null)}><NativeCard
           density="compact"
           className="mc-next-settings-panel"
           title="Governed hooks"
@@ -238,7 +246,7 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
               Refresh
             </NativeButton>
           </SettingsButtonRow>
-        </NativeCard>
+        </NativeCard></DetailInspector> : null}
         {hooks.length ? (
           <NativeCard
             density="compact"
@@ -255,8 +263,7 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
               }))}
               selectedId={selectedHook?.hookId ?? ""}
               onSelect={(hookId) => {
-                setSelectedHookId(hookId);
-                setSelectedRunId("");
+                leave.request(() => { setSelectedHookId(hookId); setSelectedRunId(""); setView("hook"); }, [editor.key]);
               }}
               emptyLabel="No hooks configured."
             />
@@ -265,12 +272,14 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
           <SettingsEmptyState label="No hooks yet. Create a signed HTTPS hook to receive a governed lifecycle event." />
         )}
         {selectedHook ? (
-          <NativeCard
+          <DetailInspector open={view === "hook"} title={selectedHook.label} onClose={() => openView(null)}><NativeCard
             density="compact"
             className="mc-next-settings-panel"
             title={selectedHook.label}
             subtitle={`${selectedHook.trigger} · ${selectedHook.phase} phase · ${selectedHook.failPolicy} failure policy`}
           >
+            <p className="mc-next-settings-field-note">Workspace: {activeWorkspaceId} · {selectedHook.enabled ? "Enabled" : "Disabled"}</p>
+            <details><summary>Configuration and governance</summary><pre>{JSON.stringify({ hookId: selectedHook.hookId, workspaceId: selectedHook.workspaceId, enabled: selectedHook.enabled, trigger: selectedHook.trigger, phase: selectedHook.phase, mode: selectedHook.mode, priority: selectedHook.priority, timeoutMs: selectedHook.timeoutMs, failPolicy: selectedHook.failPolicy, dataScope: selectedHook.dataScope, actionType: selectedHook.action.type, createdAt: selectedHook.createdAt, updatedAt: selectedHook.updatedAt }, null, 2)}</pre></details>
             <NativeMetricGrid
               items={[
                 { label: "Priority", value: String(selectedHook.priority) },
@@ -283,7 +292,7 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
                       : "Legacy / needs rotation",
                 },
                 { label: "Data scope", value: selectedHook.dataScope ?? "metadata" },
-                { label: "Endpoint health", value: selectedRuns[0]?.status ?? "No delivery" },
+                { label: "Latest retained outcome", value: data?.issues.some((issue) => issue.label === "Hook deliveries") ? "Unavailable" : selectedRuns[0]?.status ?? "No delivery" },
                 { label: "Last delivery", value: selectedRuns[0] ? `Attempt ${selectedRuns[0].attemptCount}` : "None" },
               ]}
             />
@@ -292,7 +301,7 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
                 <Play size={16} />
                 Run safe test
               </NativeButton>
-              <NativeButton variant="destructive" onClick={() => void remove(selectedHook.hookId)}>
+              <NativeButton variant="destructive" onClick={() => setPendingDelete(selectedHook.hookId)}>
                 <Trash2 size={16} />
                 Delete
               </NativeButton>
@@ -330,8 +339,15 @@ export function HooksSection({ activeWorkspaceId }: SettingsSectionProps) {
               Only a selected completed post-event observer delivery can be redriven. Inline control hooks are never
               replayed.
             </p>
-          </NativeCard>
+          </NativeCard></DetailInspector>
         ) : null}
+        <DetailInspector open={view === "history"} title="Hook delivery history" onClose={() => openView(null)}>
+          {data?.issues.some((issue) => issue.label === "Hook deliveries") ? <p role="status">Delivery history is unavailable. Retry the read; no delivery outcome can be inferred.</p> : null}
+          <NativeSelectableList items={(data?.runs ?? []).map((run) => ({ id: run.runId, title: `${run.status} · ${run.trigger}`, meta: run.createdAt, body: `Hook ${run.hookId} · attempt ${run.attemptCount}` }))} selectedId={selectedRunId} onSelect={setSelectedRunId} emptyLabel="No retained deliveries returned." maxHeight="" />
+          {selectedRun ? <details open key={selectedRun.runId}><summary>Delivery details</summary><pre>{JSON.stringify({ runId: selectedRun.runId, hookId: selectedRun.hookId, workspaceId: selectedRun.workspaceId, trigger: selectedRun.trigger, entityType: selectedRun.entityType, entityId: selectedRun.entityId, mode: selectedRun.mode, status: selectedRun.status, attemptCount: selectedRun.attemptCount, createdAt: selectedRun.createdAt, updatedAt: selectedRun.updatedAt }, null, 2)}</pre></details> : null}
+        </DetailInspector>
+        {leave.dialog}
+        <ConfirmModal open={pendingDelete !== null} danger pending={deleting} title="Delete hook?" message={`Delete ${hooks.find((hook) => hook.hookId === pendingDelete)?.label ?? "this hook"} from workspace ${activeWorkspaceId}? Existing delivery evidence remains available.`} confirmLabel="Delete hook" onCancel={() => setPendingDelete(null)} onConfirm={() => pendingDelete && void remove(pendingDelete)} />
       </SettingsStack>
     </SettingsSectionShell>
   );

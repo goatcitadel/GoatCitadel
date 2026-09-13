@@ -1,6 +1,7 @@
+import { SettingsChangeStatus, useSettingsChange } from "../use-settings-change";
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Play, Plus, RefreshCw, RotateCcw, Save, Square } from "lucide-react";
 import type { LlamaCppRuntimeLeaseDiagnostics } from "@goatcitadel/contracts";
 import {
@@ -37,28 +38,32 @@ import {
   SettingsStack,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { ErrorState, NativeButton, NativeMetricGrid } from "../../primitives";
 import { deriveLlamaCppAlias } from "../../SettingsNativePage";
 import type { NativeLoadIssue } from "../../shared/native-helpers";
-import { useFormDirty } from "../../library/use-form-dirty";
+import { useSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { FocusedDetail } from "../../shared/FocusedDetail";
 
 const VISUAL_REGRESSION_MODE =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
 
 export function RuntimeSection(props: SettingsSectionProps) {
+  const [view, setView] = useState<"daemon" | "llama" | "npu" | "voice" | null>(null);
+  const [savingLlama, setSavingLlama] = useState(false);
+  const savingLlamaRef = useRef(false);
+  const leave = useDraftLeave();
+  const llamaRequested = view === "llama";
+  const npuRequested = view === "npu";
   const load = useCallback(async () => {
     const settings = await fetchSettings();
-    const shouldLoadNpuModels =
-      (settings.npu?.enabled ?? false) &&
-      ((settings.npu?.status?.healthy ?? false) || settings.npu?.status?.processState === "running");
     const [daemon, voiceRuntime, llamaModels, npuModels] = await Promise.all([
       nativeLoad("Daemon status", fetchDaemonStatus(), null),
       nativeLoad("Voice runtime", fetchVoiceRuntimeStatus(), null),
-      nativeLoad("llama.cpp models", fetchLlamaCppModels(), { items: [] }),
-      shouldLoadNpuModels
-        ? nativeLoad("NPU models", fetchNpuModels(), { items: [] })
-        : Promise.resolve({ data: { items: [] }, issue: null }),
+      Promise.resolve({ data: { items: [], degraded: false, warning: undefined }, issue: null }),
+      Promise.resolve({ data: { items: [] }, issue: null }),
     ]);
     if (VISUAL_REGRESSION_MODE) {
       return {
@@ -131,34 +136,20 @@ export function RuntimeSection(props: SettingsSectionProps) {
       npuModels: npuModels.data.items,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  const { loading, error, data: baseData, reload: reloadBase } = useAsyncLoad(load, [load]);
+  const llamaModelsLoad = useAsyncLoad(() => llamaRequested && !VISUAL_REGRESSION_MODE ? fetchLlamaCppModels() : Promise.resolve(null), [llamaRequested, baseData?.settings.llamaCpp?.modelsRootPath]);
+  const canReadNpuModels = npuRequested && !VISUAL_REGRESSION_MODE && Boolean(baseData?.settings.npu?.enabled && (baseData.settings.npu.status?.healthy || baseData.settings.npu.status?.processState === "running"));
+  const npuModelsLoad = useAsyncLoad(() => canReadNpuModels ? fetchNpuModels() : Promise.resolve(null), [canReadNpuModels]);
+  const data = useMemo(() => baseData ? { ...baseData, llamaModels: llamaModelsLoad.data?.items ?? [], llamaModelsWarning: llamaModelsLoad.data?.degraded ? llamaModelsLoad.data.warning : undefined, npuModels: npuModelsLoad.data?.items ?? [], issues: [...baseData.issues, ...(llamaModelsLoad.error ? [{ label: "llama.cpp models", message: llamaModelsLoad.error }] : []), ...(npuModelsLoad.error ? [{ label: "NPU models", message: npuModelsLoad.error }] : [])] } : null, [baseData, llamaModelsLoad.data, llamaModelsLoad.error, npuModelsLoad.data, npuModelsLoad.error]);
+  const reload = async () => { await Promise.all([reloadBase(), ...(llamaRequested ? [llamaModelsLoad.reload()] : []), ...(canReadNpuModels ? [npuModelsLoad.reload()] : [])]); };
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [llamaForm, setLlamaForm] = useState({
-    enabled: false,
-    autoStart: false,
-    baseUrl: "",
-    command: "",
-    modelsRootPath: "",
-    modelPath: "",
-    alias: "",
-  });
-  const [llamaBaseline, setLlamaBaseline] = useState({
-    enabled: false,
-    autoStart: false,
-    baseUrl: "",
-    command: "",
-    modelsRootPath: "",
-    modelPath: "",
-    alias: "",
-  });
-  const [npuForm, setNpuForm] = useState({
-    enabled: false,
-    autoStart: false,
-    sidecarUrl: "",
-  });
-  const preserveLlamaDraftRef = useRef(false);
-  const llamaDirty = !areRuntimeFormsEqual(llamaForm, llamaBaseline);
-  useFormDirty("settings:runtime", llamaDirty, { label: "Runtime" });
+  const canonicalLlama = { enabled: data?.settings.llamaCpp?.enabled ?? false, autoStart: data?.settings.llamaCpp?.autoStart ?? false, baseUrl: data?.settings.llamaCpp?.baseUrl ?? "", command: data?.settings.llamaCpp?.command ?? "", modelsRootPath: data?.settings.llamaCpp?.modelsRootPath ?? "", modelPath: data?.settings.llamaCpp?.modelPath ?? "", alias: data?.settings.llamaCpp?.alias ?? "" };
+  const llamaEditor = useSessionDraft("runtime:system:llama", canonicalLlama, data?.settings.revision, { label: "llama.cpp configuration", active: view === "llama", available: Boolean(data), onSave: () => saveLlamaSettings() });
+  const llamaChange = useSettingsChange({ key: llamaEditor.key, operation: "llama_cpp_configuration", matches: (settings, submitted: typeof llamaEditor.value) => Object.entries(submitted).every(([key, value]) => (settings.llamaCpp?.[key as keyof typeof settings.llamaCpp] ?? "") === value), acceptSaved: llamaEditor.acceptSaved, reload });
+  const llamaForm = llamaEditor.value;
+  const setLlamaForm = llamaEditor.setValue;
+  const npuForm = { enabled: false, autoStart: false, sidecarUrl: data?.settings.npu?.sidecarUrl ?? "" };
+  const openView = (next: typeof view) => leave.request(() => setView(next), [llamaEditor.key]);
   const discoveredLlamaModels = useMemo(
     () => (data?.llamaModels ?? []).filter((item) => typeof item.filePath === "string" && item.filePath.length > 0),
     [data],
@@ -185,15 +176,26 @@ export function RuntimeSection(props: SettingsSectionProps) {
     [llamaForm],
   );
 
-  const saveLlamaSettings = useCallback(() => {
-    if (!data) {
-      throw new Error("Reload settings before saving llama.cpp changes.");
-    }
-    return patchSettings({
-      expectedRevision: data.settings.revision,
-      llamaCpp: buildLlamaSettingsPatch(),
-    });
-  }, [buildLlamaSettingsPatch, data]);
+  const saveLlamaSettings = async (): Promise<boolean> => {
+    if (llamaChange.isPending()) { await llamaChange.refresh(); return false; }
+    if (savingLlamaRef.current || llamaEditor.hasRemoteChanges) return false;
+    if (!llamaEditor.isDirty) return true;
+    if (!data) { setNotice({ tone: "warning", message: "Reload settings before saving llama.cpp changes." }); return false; }
+    const submitted = llamaForm;
+    savingLlamaRef.current = true; setSavingLlama(true);
+    try {
+      const updated = await patchSettings({ expectedRevision: Number(llamaEditor.baseRevision ?? data.settings.revision), llamaCpp: buildLlamaSettingsPatch() });
+      const clean = llamaChange.receive(updated, submitted, Number(llamaEditor.baseRevision ?? data.settings.revision));
+      if (clean) setNotice({ tone: "success", message: "llama.cpp settings saved." });
+      await reload();
+      return clean;
+    } catch (error) {
+      if (isApiRequestError(error) && error.status === 409) {
+        await reload(); setNotice({ tone: "warning", message: "Runtime settings changed elsewhere. Your llama.cpp draft is preserved; review the current settings, then retry." });
+      } else setNotice({ tone: "error", message: getErrorMessage(error) });
+      return false;
+    } finally { savingLlamaRef.current = false; setSavingLlama(false); }
+  };
 
   const handleDiscoveredModelChange = useCallback(
     (nextModelPath: string) => {
@@ -207,49 +209,19 @@ export function RuntimeSection(props: SettingsSectionProps) {
     [discoveredLlamaModels],
   );
 
-  useEffect(() => {
-    if (!data) {
-      return;
-    }
-    const preserveLlamaDraft = preserveLlamaDraftRef.current;
-    preserveLlamaDraftRef.current = false;
-    const nextLlamaForm = {
-      enabled: data.settings.llamaCpp?.enabled ?? false,
-      autoStart: data.settings.llamaCpp?.autoStart ?? false,
-      baseUrl: data.settings.llamaCpp?.baseUrl ?? "",
-      command: data.settings.llamaCpp?.command ?? "",
-      modelsRootPath: data.settings.llamaCpp?.modelsRootPath ?? "",
-      modelPath: data.settings.llamaCpp?.modelPath ?? "",
-      alias: data.settings.llamaCpp?.alias ?? "",
-    };
-    const canonicalMatchesDraft = areRuntimeFormsEqual(llamaForm, nextLlamaForm);
-    if (canonicalMatchesDraft) {
-      if (!areRuntimeFormsEqual(llamaBaseline, nextLlamaForm)) {
-        setLlamaBaseline(nextLlamaForm);
-      }
-    } else if (!llamaDirty && !preserveLlamaDraft) {
-      setLlamaForm(nextLlamaForm);
-      setLlamaBaseline(nextLlamaForm);
-    }
-    setNpuForm({
-      enabled: false,
-      autoStart: false,
-      sidecarUrl: data.settings.npu?.sidecarUrl ?? "",
-    });
-  }, [data, llamaBaseline, llamaDirty, llamaForm]);
-
   const runAndReload = async (
     operation: () => Promise<unknown>,
     successMessage: string,
     conflictDraft?: "llama" | "npu",
   ) => {
     try {
-      await operation();
-      setNotice({ tone: "success", message: successMessage });
+      const result = await operation();
+      if (result === false) return;
+      const receipt = result && typeof result === "object" && "changePlanReceipt" in result ? (result as { changePlanReceipt?: Awaited<ReturnType<typeof patchSettings>>["changePlanReceipt"] }).changePlanReceipt : undefined;
+      setNotice(receipt && receipt.status !== "completed" && receipt.status !== "applied" ? { tone: "warning", message: `${receipt.summary} Finish the required action in Chat or Approvals (plan ${receipt.planId}).` } : { tone: "success", message: successMessage });
       await reload();
     } catch (actionError) {
       if (conflictDraft && isApiRequestError(actionError) && actionError.status === 409) {
-        preserveLlamaDraftRef.current = conflictDraft === "llama";
         await reload();
         setNotice({
           tone: "warning",
@@ -266,7 +238,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
 
   return (
     <SettingsSectionShell
-      loading={loading}
+      loading={loading && !data}
       error={error}
       onRetry={reload}
       errorContext={{
@@ -286,6 +258,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
       }
     >
       {notice ? <SettingsNotice notice={notice} /> : null}
+      <SettingsChangeStatus change={llamaChange.change} onRefresh={llamaChange.refresh} navigate={props.navigate} route={props.route} />
       {data ? (
         <SettingsStack>
           <RuntimeLoadWarnings
@@ -312,12 +285,12 @@ export function RuntimeSection(props: SettingsSectionProps) {
                 {
                   label: "llama.cpp",
                   value: data.settings.llamaCpp?.status?.processState ?? "unknown",
-                  meta: `${data.llamaModels?.length ?? 0} models discovered`,
+                  meta: llamaRequested ? `${data.llamaModels?.length ?? 0} models returned` : "Model catalog opens with configuration",
                 },
                 {
                   label: "NPU",
                   value: data.settings.npu?.status?.processState ?? "unknown",
-                  meta: `${data.npuModels?.length ?? 0} models discovered`,
+                  meta: "Retired sidecar compatibility",
                 },
                 {
                   label: "Voice",
@@ -327,8 +300,9 @@ export function RuntimeSection(props: SettingsSectionProps) {
               ]}
             />
           </NativeCard>
-          <SettingsGrid variant="balanced">
-            <NativeCard
+          <SettingsButtonRow><NativeButton onClick={() => openView("llama")}>Configure llama.cpp{llamaEditor.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="outline" onClick={() => openView("daemon")}>Gateway controls</NativeButton><NativeButton variant="outline" onClick={() => openView("voice")}>Voice setup</NativeButton><NativeButton variant="outline" onClick={() => openView("npu")}>Legacy acceleration</NativeButton><NativeButton variant="outline" onClick={() => props.navigate({ area: "ops", section: "runtime", theme: props.route.theme })}>Open Ops Runtime</NativeButton></SettingsButtonRow>
+          <SettingsStack>
+            <DetailInspector open={view === "daemon"} title="Gateway controls" onClose={() => openView(null)}><NativeCard
               density="compact"
               className="mc-next-settings-panel"
               title="Gateway daemon"
@@ -377,13 +351,14 @@ export function RuntimeSection(props: SettingsSectionProps) {
               {!data.daemon?.controllable && data.daemon?.controlMessage ? (
                 <p className="mc-next-settings-help">{data.daemon.controlMessage}</p>
               ) : null}
-            </NativeCard>
-            <NativeCard
+            </NativeCard></DetailInspector>
+            {view === "llama" ? <FocusedDetail title="Configure llama.cpp" onClose={() => openView(null)}><NativeCard
               density="compact"
               className="mc-next-settings-panel"
               title="llama.cpp runtime"
               subtitle="Configure and control the local llama.cpp runtime."
             >
+              {llamaEditor.hasRemoteChanges ? <div role="status"><p>The saved runtime settings changed. Your llama.cpp draft is preserved.</p><details><summary>Current saved runtime configuration</summary><pre>{JSON.stringify(canonicalLlama, null, 2)}</pre></details><NativeButton variant="outline" onClick={llamaEditor.rebaseToCurrent}>Apply draft to current runtime</NativeButton></div> : null}
               <SettingsFieldGrid>
                 <SettingsField label="Base URL">
                   <input
@@ -472,7 +447,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
               <SettingsButtonRow>
                 <NativeButton
                   variant="default"
-                  onClick={() => void runAndReload(saveLlamaSettings, "llama.cpp settings saved.", "llama")}
+                  disabled={savingLlama || llamaChange.hasPending || llamaEditor.hasRemoteChanges} onClick={() => void saveLlamaSettings()}
                 >
                   <Save size={16} />
                   Save
@@ -482,7 +457,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
                   onClick={() =>
                     void runAndReload(
                       async () => {
-                        await saveLlamaSettings();
+                        if (!await saveLlamaSettings()) return false;
                         await startLlamaCppRuntime();
                       },
                       "llama.cpp start requested.",
@@ -522,9 +497,9 @@ export function RuntimeSection(props: SettingsSectionProps) {
                   },
                 ]}
               />
-              <LlamaCppLeaseDiagnostics diagnostics={data.settings.llamaCpp?.status?.leaseDiagnostics} />
-            </NativeCard>
-            <NativeCard
+              <NativeDisclosureCard id="runtime-llama-lifecycle" title="Lifecycle diagnostics"><LlamaCppLeaseDiagnostics diagnostics={data.settings.llamaCpp?.status?.leaseDiagnostics} /></NativeDisclosureCard>
+            </NativeCard></FocusedDetail> : null}
+            <DetailInspector open={view === "npu"} title="Legacy acceleration" onClose={() => openView(null)}><NativeCard
               density="compact"
               className="mc-next-settings-panel"
               title="Local acceleration"
@@ -574,8 +549,8 @@ export function RuntimeSection(props: SettingsSectionProps) {
                   },
                 ]}
               />
-            </NativeCard>
-            <NativeCard
+            </NativeCard></DetailInspector>
+            <DetailInspector open={view === "voice"} title="Voice setup" onClose={() => openView(null)}><NativeCard
               density="compact"
               className="mc-next-settings-panel"
               title="Voice runtime"
@@ -628,7 +603,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
               </SettingsButtonRow>
               <SettingsActionList
                 ariaLabel="Voice model catalog"
-                items={(data.voiceRuntime?.catalog ?? []).slice(0, 8).map((item) => ({
+                items={(data.voiceRuntime?.catalog ?? []).map((item) => ({
                   label: item.label,
                   description: `${item.languageScope} · ${item.approxSizeLabel}`,
                   meta: item.id,
@@ -638,10 +613,11 @@ export function RuntimeSection(props: SettingsSectionProps) {
                 }))}
                 emptyLabel="No voice model catalog available."
               />
-            </NativeCard>
-          </SettingsGrid>
+            </NativeCard></DetailInspector>
+          </SettingsStack>
         </SettingsStack>
       ) : null}
+      {leave.dialog}
     </SettingsSectionShell>
   );
 }

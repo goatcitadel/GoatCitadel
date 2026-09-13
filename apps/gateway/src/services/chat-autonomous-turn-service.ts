@@ -597,7 +597,9 @@ async function ensureCronAgentSession(
   if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
     throw new Error("stable cron session key already belongs to another workspace");
   }
-  if ((await deps.getSession(sessionId)) && existingMeta) {
+  // The session owner throws for missing records. Only look up an existing
+  // scheduler session; a fresh one must reach the creation transaction below.
+  if (existingMeta && (await deps.getSession(sessionId))) {
     return sessionId;
   }
   await deps.storage.runImmediateTransaction(async () => {

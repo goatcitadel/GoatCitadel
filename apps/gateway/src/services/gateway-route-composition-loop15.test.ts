@@ -22,8 +22,9 @@ const mocks = vi.hoisted(() => ({
     report,
   })),
   completeMcpOAuth: vi.fn(async (deps: any, serverId: string, code: string, state?: string) => {
-    await deps.readMcpAuthState();
-    await deps.writeMcpAuthState({ [serverId]: { code, state } });
+    const expected = (await deps.readMcpAuthState())[serverId];
+    const server = await deps.requireMcpServer(serverId);
+    await deps.writeMcpAuthState({ server, expected, next: { code, state } });
     return {
       method: "completeMcpOAuth",
       deps,
@@ -40,7 +41,8 @@ const mocks = vi.hoisted(() => ({
     return { method: "connectMcpServer", deps, serverId };
   }),
   createMcpServer: vi.fn(async (deps: any, input: unknown) => {
-    await deps.writeMcpServers([...(await deps.readMcpServers()), input]);
+    const previous = await deps.readMcpServers();
+    await deps.writeMcpServers([...previous, input], previous);
     return { method: "createMcpServer", deps, input };
   }),
   deleteMcpServer: vi.fn(async (deps: unknown, serverId: string) => ({ method: "deleteMcpServer", deps, serverId })),

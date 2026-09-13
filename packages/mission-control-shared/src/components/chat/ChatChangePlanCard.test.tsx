@@ -175,3 +175,13 @@ function detailsRegion(renderer: ReactTestRenderer) {
 function secondaryActionsRegion(renderer: ReactTestRenderer) {
   return renderer.root.findByProps({ className: "chat-change-plan-secondary-actions" });
 }
+
+it("keeps rollback references available in the explicit receipt details", () => {
+  const renderer = create(<ChatChangePlanCard plan={plan({status: "failed", phase: "terminal", rollbackRefs: ["owner:rollback:exact"], result: {summary: "One child applied; another failed."}})} />);
+  expect(detailsRegion(renderer).props.hidden).toBe(true);
+  act(() => findButton(renderer, "Details").props.onClick());
+  expect(detailsRegion(renderer).props.hidden).toBe(false);
+  expect(JSON.stringify(renderer.toJSON())).toContain("owner:rollback:exact");
+  expect(JSON.stringify(renderer.toJSON())).toContain("One child applied; another failed.");
+  renderer.unmount();
+});

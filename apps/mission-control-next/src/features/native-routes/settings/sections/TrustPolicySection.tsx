@@ -1,3 +1,5 @@
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import {
@@ -21,8 +23,8 @@ import {
   useAsyncLoad,
   type SettingsSectionProps,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
-import { NativeButton, NativeMetricGrid } from "../../primitives";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
+import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import {
   TrustPolicyRowDetails,
   hasDeclaredDependencies,
@@ -91,7 +93,8 @@ const STATUS_ORDER: TrustPolicyDashboardStatus[] = [
 ];
 
 export function TrustPolicySection({ activeWorkspaceId, route, navigate }: SettingsSectionProps) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useSessionViewState(`trust:${activeWorkspaceId}:search`, "");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<TrustPolicyStatusFilter>("all");
   const [kindFilter, setKindFilter] = useState<TrustPolicyKindFilter>("all");
   const load = useCallback(async () => {
@@ -121,11 +124,23 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
     () => filterTrustPolicyRows(rows, { search, statusFilter, kindFilter }),
     [kindFilter, rows, search, statusFilter],
   );
+  const selected = rows.find((row) => row.id === selectedId);
+  const available = Boolean(data && !data.issues.length);
+  const openOwner = (row: TrustPolicyMatrixRow) => {
+    const [ownerArea, ownerSection] = (row.owner ?? "Settings").split(" / ");
+    const area = ownerArea === "Library" ? "library" : ownerArea === "Ops" ? "ops" : "settings";
+    const destinations = { Permissions: "permissions", Tools: "tools", MCP: "mcp", "Add-ons": "addons", Skills: "skills", Capabilities: "capabilities", Approvals: "approvals" } as const;
+    const section = destinations[ownerSection as keyof typeof destinations] ?? "general";
+    navigate({ area, section, theme: route.theme });
+  };
   const summary = useMemo(() => summarizeTrustPolicyRows(rows), [rows]);
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      <p className="mc-next-settings-field-note">Scope: {activeWorkspaceId} · {data?.snapshot.generatedAt ? `Snapshot ${formatEvidenceDate(data.snapshot.generatedAt)}` : "Snapshot time unavailable"}</p>
+      <SettingsButtonRow><NativeButton variant="outline" onClick={() => void reload()}>Refresh snapshot</NativeButton></SettingsButtonRow>
+      <NativeDisclosureCard id="trust-snapshot-summary" title="Snapshot summary and setting owners">
       <SettingsGrid variant="detail-wide">
         <NativeCard
           density="compact"
@@ -133,29 +148,29 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           title="Trust & Policy snapshot"
           subtitle={`Read-only dashboard for ${activeWorkspaceId} capability, tool, and source posture. Open owner surfaces to edit.`}
           stats={[
-            { label: "Rows", value: String(rows.length) },
-            { label: "Visible", value: String(visibleRows.length) },
-            { label: "Ready", value: String(summary.ready) },
+            { label: "Rows", value: available ? String(rows.length) : "Unavailable" },
+            { label: "Visible", value: available ? String(visibleRows.length) : "Unavailable" },
+            { label: "Ready", value: available ? String(summary.ready) : "Unavailable" },
             {
               label: "Needs review",
-              value: String(summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust),
+              value: available ? String(summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust) : "Unavailable",
             },
           ]}
         >
           <NativeMetricGrid
             items={[
-              { label: "Ready", value: String(summary.ready), meta: "Callable under current policy" },
-              { label: "Not callable", value: String(summary.not_callable), meta: "Inspectable or setup-only" },
-              { label: "Blocked", value: String(summary.blocked), meta: "Denied or missing required state" },
-              { label: "Quarantined", value: String(summary.quarantined), meta: "Held out of runtime use" },
-              { label: "Approval required", value: String(summary.approval_required), meta: "Human gate expected" },
+              { label: "Ready", value: available ? String(summary.ready) : "Unavailable", meta: "Callable under current policy" },
+              { label: "Not callable", value: available ? String(summary.not_callable) : "Unavailable", meta: "Inspectable or setup-only" },
+              { label: "Blocked", value: available ? String(summary.blocked) : "Unavailable", meta: "Denied or missing required state" },
+              { label: "Quarantined", value: available ? String(summary.quarantined) : "Unavailable", meta: "Held out of runtime use" },
+              { label: "Approval required", value: available ? String(summary.approval_required) : "Unavailable", meta: "Human gate expected" },
               {
                 label: "Medium trust",
-                value: String(summary.medium_trust),
+                value: available ? String(summary.medium_trust) : "Unavailable",
                 meta: "Elevated declarations to review",
               },
-              { label: "Experimental", value: String(summary.experimental), meta: "Visible with release caveats" },
-              { label: "Unknown", value: String(summary.unknown), meta: "Snapshot lacks enough evidence" },
+              { label: "Experimental", value: available ? String(summary.experimental) : "Unavailable", meta: "Visible with release caveats" },
+              { label: "Unknown", value: available ? String(summary.unknown) : "Unavailable", meta: "Snapshot lacks enough evidence" },
             ]}
           />
           <SettingsButtonRow>
@@ -211,13 +226,13 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           </NativeCard>
         </SettingsStack>
       </SettingsGrid>
+      </NativeDisclosureCard>
       <NativeCard
         density="compact"
         className="mc-next-settings-panel"
         title="Trust matrix"
         subtitle="Capability, tool, and source rows with callable posture, grants, blockers, and last-use evidence."
-        scrollBody
-        bodyMaxHeight="min(64vh, 40rem)"
+
       >
         {rows.length > 0 ? (
           <>
@@ -232,7 +247,10 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
               onKindFilterChange={setKindFilter}
             />
             {visibleRows.length > 0 ? (
-              <TrustPolicyMatrix rows={visibleRows} />
+              <>
+                <NativeSelectableList items={visibleRows.map((row) => ({ id: row.id, title: row.label, meta: `${labelForKind(row.kind)} · ${labelForTrustPolicyStatus(row.status)} · ${labelForCallableState(row)}`, body: row.blockers?.[0] ?? row.actionNeeded ?? "Inspect effective policy" }))} selectedId={selectedId ?? ""} onSelect={setSelectedId} emptyLabel="No matching policy rows." maxHeight="" />
+                <NativeDisclosureCard id="trust-full-matrix" title="Full matrix"><TrustPolicyMatrix rows={visibleRows} /></NativeDisclosureCard>
+              </>
             ) : (
               <SettingsEmptyState label="No Trust & Policy rows match the current filter." />
             )}
@@ -241,6 +259,15 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           <TrustPolicyEmptyState hasIssues={Boolean(data?.issues.length)} />
         )}
       </NativeCard>
+      <DetailInspector open={selectedId !== null} title={selected?.label ?? "Policy details unavailable"} onClose={() => setSelectedId(null)}>
+        {selected ? <>
+          <p><TrustPolicyStatusBadge status={selected.status} /> · {labelForCallableState(selected)}</p>
+          <dl className="mc-next-detail-fields"><dt>Source</dt><dd>{selected.source ?? "Unavailable"}</dd><dt>Trust state</dt><dd>{selected.trustState ?? "Unknown"}</dd><dt>Grants</dt><dd>{formatList(selected.grants, "No grants attached")}</dd><dt>Blockers</dt><dd>{formatList(selected.blockers, "No blockers reported")}</dd></dl>
+          <p>{selected.actionNeeded}</p><NativeButton variant="outline" onClick={() => openOwner(selected)}>Open {selected.owner ?? "setting owner"}</NativeButton>
+          <TrustPolicyRowDetails row={selected} />
+          <details><summary>Declared governance and retained evidence</summary>{renderDeclaredGovernance(selected)}<p>{formatLastUse(selected)}</p></details>
+        </> : <p role="status">This row is unavailable in the latest snapshot. Refresh or inspect its setting owner.</p>}
+      </DetailInspector>
     </SettingsSectionShell>
   );
 }
@@ -275,7 +302,7 @@ function TrustPolicyFilters({
           placeholder="Search trust, grants, blockers, or source"
         />
       </label>
-      <div className="mc-next-settings-filter-bar" role="radiogroup" aria-label="Trust status filter">
+      <div className="mc-next-settings-filter-bar" role="group" aria-label="Trust status filter">
         {[
           { id: "all", label: "All" },
           { id: "needs_review", label: "Needs review" },
@@ -295,7 +322,7 @@ function TrustPolicyFilters({
           </button>
         ))}
       </div>
-      <div className="mc-next-settings-filter-bar" role="radiogroup" aria-label="Trust row type filter">
+      <div className="mc-next-settings-filter-bar" role="group" aria-label="Trust row type filter">
         {[
           { id: "all", label: "All types" },
           { id: "capability", label: "Capabilities" },

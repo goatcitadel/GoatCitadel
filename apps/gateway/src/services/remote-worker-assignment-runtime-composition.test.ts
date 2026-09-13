@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   createGatewayRemoteWorkerAssignmentRuntimeComposition,
   remoteWorkerAssignmentRuntimeActivated,
@@ -71,6 +72,31 @@ describe("remote worker assignment runtime activation flag", () => {
 });
 
 describe("remote worker assignment runtime composition", () => {
+  it("accepts the canonical callable async repository facade", async () => {
+    const syncStorage = new Storage({ dbPath: ":memory:", transcriptsDir: ".tmp", auditDir: ".tmp" });
+    const storage = createSqliteAsyncStorage(syncStorage);
+    try {
+      const composition = createGatewayRemoteWorkerAssignmentRuntimeComposition({
+        admissionStore: storage.remoteWorkerAdmissions,
+        meshAdmissions: storage.remoteWorkerMeshNodeAdmissions,
+        assignments: storage.remoteWorkerAssignments,
+        nonceConsumer: storage.remoteWorkerNonces,
+        execution: fakeExecutionOwners() as RemoteWorkerAssignmentRuntimeCompositionDependencies["execution"],
+      });
+      expect(typeof storage.remoteWorkerNonces).toBe("function");
+      await expect(composition.assignmentProtocol.assertAvailable()).resolves.toBeUndefined();
+      await expect(composition.assignmentDispatch.assertAvailable()).resolves.toBeUndefined();
+      await expect(composition.assignmentExecution!.assertAvailable()).resolves.toBeUndefined();
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("still rejects a callable port without the required method", async () => {
+    const composition = createGatewayRemoteWorkerAssignmentRuntimeComposition(fakeDependencies({ nonceConsumer: () => undefined }));
+    await expect(composition.assignmentProtocol.assertAvailable()).rejects.toThrow("durable nonce consumer is unavailable");
+  });
+
   it("builds both owners with a passing structural preflight over canonical stores", async () => {
     const composition = createGatewayRemoteWorkerAssignmentRuntimeComposition(fakeDependencies());
     expect(composition.assignmentProtocol.execute).toBeTypeOf("function");

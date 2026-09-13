@@ -1,3 +1,4 @@
+import { __resetSessionDraftsForTests } from "./session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +84,7 @@ function deleteSecretModal(renderer: ReactTestRenderer): ReactTestInstance {
 describe("CitadelVaultRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionDraftsForTests();
     apiMocks.listCitadelVaultSecrets.mockResolvedValue([
       { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
     ]);
@@ -112,6 +114,7 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
     expect(treeString(renderer!)).not.toContain("sk-live-REVEALED");
 
     await act(async () => {
@@ -126,6 +129,7 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "Store secret").props.onClick(); });
     await act(async () => {
       inputByPlaceholder(renderer!, "stripe-secret-key").props.onChange({ target: { value: "openai" } });
     });
@@ -145,6 +149,7 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
 
     expect(deleteSecretModal(renderer!).props.open).toBe(false);
 
@@ -162,6 +167,7 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
 
     await act(async () => {
       deleteButtonFor(renderer!, "stripe").props.onClick();
@@ -183,6 +189,7 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
 
     await act(async () => {
       deleteButtonFor(renderer!, "stripe").props.onClick();

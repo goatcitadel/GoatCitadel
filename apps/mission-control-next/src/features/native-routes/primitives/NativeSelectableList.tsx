@@ -1,4 +1,6 @@
-import { type ReactNode } from "react";
+import { lazy, Suspense, useRef, type ReactNode } from "react";
+import type { VirtuosoHandle } from "react-virtuoso";
+const WindowedSelectableRows = lazy(() => import("./WindowedSelectableRows").then((module) => ({ default: module.WindowedSelectableRows })));
 import { EmptyState } from "./EmptyState";
 
 /**
@@ -41,6 +43,7 @@ export interface NativeSelectableListProps {
   density?: "standard" | "compact";
   className?: string;
   ariaLabel?: string;
+  virtualized?: boolean;
 }
 
 export function NativeSelectableList({
@@ -54,7 +57,27 @@ export function NativeSelectableList({
   density = "compact",
   className,
   ariaLabel,
+  virtualized = false,
 }: NativeSelectableListProps) {
+  const virtualList = useRef<VirtuosoHandle>(null);
+  const rowButtons = useRef(new Map<number, HTMLButtonElement>());
+  const focusTarget = useRef<number | null>(null);
+  const windowed = virtualized && !children && Boolean(maxHeight) && (items?.length ?? 0) > 50;
+  const renderRow = (item: NativeSelectableListItem, index: number) => <button key={item.id} type="button"
+    ref={(node) => { if (node) { rowButtons.current.set(index, node); if (focusTarget.current === index) { focusTarget.current = null; node.focus(); } } else rowButtons.current.delete(index); }}
+    className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`} aria-pressed={selectedId === undefined ? undefined : selectedId === item.id}
+    onClick={() => onSelect?.(item.id)} onKeyDown={(event) => {
+      let target: number;
+      if (event.key === "ArrowDown") target = Math.min((items?.length ?? 1) - 1, index + 1);
+      else if (event.key === "ArrowUp") target = Math.max(0, index - 1);
+      else if (event.key === "Home") target = 0;
+      else if (event.key === "End") target = (items?.length ?? 1) - 1;
+      else return;
+      event.preventDefault(); focusTarget.current = target;
+      const button = rowButtons.current.get(target);
+      if (button) { focusTarget.current = null; button.focus(); }
+      else virtualList.current?.scrollToIndex({ index: target, align: "center" });
+    }}><div className="mc-next-settings-selectable-head"><strong>{item.title}</strong>{item.meta ? <span>{item.meta}</span> : null}</div>{item.body ? <p>{item.body}</p> : null}</button>;
   if (!children && (!items || items.length === 0)) {
     return emptyContent ?? <EmptyState size="compact" title={emptyLabel} />;
   }
@@ -73,22 +96,7 @@ export function NativeSelectableList({
       role={ariaLabel ? "group" : undefined}
       aria-label={ariaLabel}
     >
-      {children ??
-        items!.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-            aria-pressed={selectedId === undefined ? undefined : selectedId === item.id}
-            onClick={() => onSelect?.(item.id)}
-          >
-            <div className="mc-next-settings-selectable-head">
-              <strong>{item.title}</strong>
-              {item.meta ? <span>{item.meta}</span> : null}
-            </div>
-            {item.body ? <p>{item.body}</p> : null}
-          </button>
-        ))}
+      {children ?? (windowed ? <Suspense fallback={items!.map(renderRow)}><WindowedSelectableRows listRef={virtualList} items={items!} maxHeight={maxHeight} renderRow={renderRow} /></Suspense> : items!.map(renderRow))}
     </div>
   );
 }

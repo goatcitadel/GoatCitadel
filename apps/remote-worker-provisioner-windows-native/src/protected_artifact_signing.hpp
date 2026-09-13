@@ -19,6 +19,7 @@ enum class ProtectedArtifactPurpose : std::uint8_t {
   RuntimeManifest = 1U,
   AdmissionEvidence = 2U,
   RemoteWorkerPopV2 = 3U,
+  TlsClientCertificateVerify = 4U,
 };
 
 struct ProtectedArtifactControlSnapshot final {

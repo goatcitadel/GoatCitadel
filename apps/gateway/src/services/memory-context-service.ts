@@ -48,7 +48,8 @@ import {
   MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
   sanitizeMemoryContextWrite,
 } from "./memory-context-safety.js";
-import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { createUtilityModelUsageAttribution, type TrustedUtilityModelUsageLineage } from "./utility-model-usage-attribution.js";
+import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { runBoundedUtilityModelCall } from "./utility-model-call.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import {
@@ -67,12 +68,12 @@ export class MemoryContextService {
     private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
     private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
   ) {}
-  public async compose(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
-    const pack = await this.composeInternal(input);
+  public async compose(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
+    const pack = await this.composeInternal(input, usageLineage);
     return this.degradeUnsafeMemoryContext(input, pack);
   }
 
-  private async composeInternal(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
+  private async composeInternal(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
     throwIfMemoryContextAborted(input.signal);
     const startedAt = Date.now();
     const memoryConfig = this.config.assistant.memory;
@@ -90,7 +91,7 @@ export class MemoryContextService {
           embedding: input.queryEmbedding,
           providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
         }
-      : await this.resolveQueryEmbedding(input, prompt);
+      : await this.resolveQueryEmbedding(input, prompt, usageLineage);
     const queryEmbedding = resolvedQueryEmbedding.embedding;
     const queryHash = buildQueryHash(prompt, queryEmbedding);
     if (shouldShortCircuit) {
@@ -289,9 +290,10 @@ export class MemoryContextService {
         requestedProviderId: providerId,
         requestedModelId: model,
         lineage: {
+          ...usageLineage,
           workspaceId: (await resolveTrustedMemoryUsageWorkspaceId(this.storage, input.sessionId)) ?? input.workspaceId,
           sessionId: input.sessionId,
-          durableRunId: input.runId,
+          durableRunId: usageLineage?.durableRunId ?? input.runId,
           taskId: input.taskId,
           agentId: "memory-context-distiller",
           contextSnapshotId: cacheKey,
@@ -420,7 +422,7 @@ export class MemoryContextService {
       }
       return enrichedGenerated;
     } catch (error) {
-      if (isAuthoritativeModelUsageAccountingError(error)) {
+      if (isAuthoritativeModelUsageAccountingError(error) || error instanceof LlmDispatchGuardRejectedError) {
         throw error;
       }
       if (isMemoryContextAbort(error, input.signal)) {
@@ -562,6 +564,7 @@ export class MemoryContextService {
   private async resolveQueryEmbedding(
     input: MemoryContextComposeRequest,
     prompt: string,
+    usageLineage?: TrustedUtilityModelUsageLineage,
   ): Promise<{ embedding?: number[]; providerIsReal: boolean }> {
     if (input.queryEmbedding && input.queryEmbedding.length > 0) {
       return {
@@ -581,9 +584,10 @@ export class MemoryContextService {
           ? { prepareModelUsageDispatch: this.prepareEmbeddingUsageDispatch }
           : {}),
         modelUsageAttribution: {
+          ...usageLineage,
           workspaceId: input.workspaceId,
           sessionId: input.sessionId,
-          durableRunId: input.runId,
+          durableRunId: usageLineage?.durableRunId ?? input.runId,
           taskId: input.taskId,
           utilityKind: "memory_context_query_embedding",
         },
@@ -1043,12 +1047,8 @@ function toMemoryContextAbortError(signal: AbortSignal): Error {
 }
 
 function isMemoryContextAbort(error: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (error === signal.reason) {
-    return true;
-  }
+  if (!signal?.aborted) return false;
+  if (error === signal.reason) return true;
   const record = error as { name?: unknown; message?: unknown };
   return (
     record.name === "AbortError" ||

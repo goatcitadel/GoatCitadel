@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createDatabase, SystemSettingsRepository, type DatabaseClient } from "@goatcitadel/storage";
 import {
   buildPersonalityOverlay,
   getPersonalityPreset,
@@ -9,28 +9,14 @@ import {
   PersonalityCatalogService,
 } from "./channel-personalities.js";
 
+const databases: DatabaseClient[] = [];
+afterEach(() => { for (const db of databases.splice(0)) db.close(); });
+
 function createPersonalityService(initial?: unknown) {
-  const store = new Map<string, unknown>();
-  if (initial !== undefined) {
-    store.set("personality.catalog.v1", initial);
-  }
-  const settings = {
-    get: vi.fn((key: string) => {
-      if (!store.has(key)) {
-        return undefined;
-      }
-      return { key, value: store.get(key) };
-    }),
-    set: vi.fn((key: string, value: unknown) => {
-      store.set(key, value);
-      return { key, value };
-    }),
-  };
-  return {
-    service: new PersonalityCatalogService(settings as never),
-    settings,
-    store,
-  };
+  const db = createDatabase({ dbPath: ":memory:" }); databases.push(db);
+  const settings = new SystemSettingsRepository(db);
+  if (initial !== undefined) settings.set("personality.catalog.v1", initial);
+  return { service: new PersonalityCatalogService(settings as never), settings };
 }
 
 describe("channel personalities", () => {
@@ -91,7 +77,7 @@ describe("channel personalities", () => {
     for (const preset of listPersonalityPresets()) {
       expect(preset.category).toMatch(/^(core|critical|execution|social|thinking|flavor|chaos)$/);
       expect(preset.soulFile).toBe(`docs/personalities/${preset.category}/${preset.id}.md`);
-      expect(fs.existsSync(path.resolve(process.cwd(), "..", "..", preset.soulFile))).toBe(true);
+      expect(fs.existsSync(new URL(`../../../../${preset.soulFile}`, import.meta.url))).toBe(true);
     }
   });
 
@@ -151,6 +137,7 @@ describe("PersonalityCatalogService", () => {
     const { service } = createPersonalityService();
 
     await service.createPersonality({
+      expectedRevision: (await service.getCatalog()).revision,
       id: "Direct Custom",
       label: "Direct Custom",
       category: "execution",
@@ -160,16 +147,17 @@ describe("PersonalityCatalogService", () => {
       systemOverlay: "Be direct.",
       safetyNotes: ["Tone only."],
     });
-    await expect(service.createPersonality({ id: "operator", label: "Duplicate built-in" })).rejects.toThrow(
+    await expect(service.createPersonality({ expectedRevision: (await service.getCatalog()).revision, id: "operator", label: "Duplicate built-in" })).rejects.toThrow(
       /already exists/,
     );
 
     await service.updatePersonality("direct-custom", {
+      expectedRevision: (await service.getCatalog()).revision,
       id: "Direct Custom Edited",
       label: "Direct Custom Edited",
       systemOverlay: "Be direct and kind.",
     });
-    await service.setDefaultPersonality("direct-custom-edited");
+    await service.setDefaultPersonality("direct-custom-edited", (await service.getCatalog()).revision);
     let catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("direct-custom-edited");
     expect(catalog.items.find((item) => item.id === "direct-custom-edited")).toMatchObject({
@@ -177,7 +165,7 @@ describe("PersonalityCatalogService", () => {
       systemOverlay: "Be direct and kind.",
     });
 
-    await service.deletePersonality("direct-custom-edited");
+    await service.deletePersonality("direct-custom-edited", catalog.revision);
     catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("default");
     expect(catalog.items.some((item) => item.id === "direct-custom-edited")).toBe(false);
@@ -187,17 +175,18 @@ describe("PersonalityCatalogService", () => {
     const { service } = createPersonalityService();
 
     await service.updatePersonality("operator", {
+      expectedRevision: (await service.getCatalog()).revision,
       label: "Operator Prime",
       systemOverlay: "Use terse command-center language.",
     });
-    await service.setDefaultPersonality("operator");
+    await service.setDefaultPersonality("operator", (await service.getCatalog()).revision);
     let catalog = await service.getCatalog();
     expect(catalog.items.find((item) => item.id === "operator")).toMatchObject({
       label: "Operator Prime",
       modified: true,
     });
 
-    await service.deletePersonality("operator");
+    await service.deletePersonality("operator", catalog.revision);
     catalog = await service.getCatalog();
     expect(catalog.defaultPersonalityId).toBe("default");
     expect(catalog.items.find((item) => item.id === "operator")).toMatchObject({

@@ -1,8 +1,10 @@
+import { acknowledgeWorkbenchDraft, discardWorkbenchSessionDraft, getWorkbenchDraft, listWorkbenchDrafts, rebaseWorkbenchDraft, updateWorkbenchDraft, useWorkbenchDraftVersion } from "./workbench-session-drafts.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
   ChatSessionWorkbenchFileOperationRequest,
+  ChatSessionWorkbenchFileOperationPreviewRequest,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchRecord,
@@ -21,6 +23,7 @@ import {
   revertChatSessionWorkbenchChanges,
   revertChatSessionWorkbenchFile,
   runChatSessionWorkbenchCommand,
+  previewChatSessionWorkbenchFileOperation,
   runChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile,
 } from "@goatcitadel/mission-control-shared/api/chat";
@@ -163,12 +166,22 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const activeSessionRef = useRef<string | null>(null);
+  const ownerRef = useRef({ sessionId, enabled });
+  if (ownerRef.current.sessionId !== sessionId || ownerRef.current.enabled !== enabled) ownerRef.current = { sessionId, enabled };
+  const owner = ownerRef.current;
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  const savingRef = useRef(false);
+  const fileReadRef = useRef(0);
+  useWorkbenchDraftVersion();
   const selectedFileRef = useRef<ChatSessionWorkbenchFileResponse | null>(null);
   const draftContentRef = useRef("");
   const dirtyDraftRef = useRef(false);
 
-  const hasDirtyDraft = Boolean(selectedFile && draftContent !== selectedFile.content);
+  const retainedDrafts = listWorkbenchDrafts(sessionId);
+  const activeDraft = sessionId && selectedFile ? getWorkbenchDraft(sessionId, selectedFile.path) : undefined;
+  const hasDirtyDraft = Boolean(activeDraft);
+  const hasRemoteChanges = Boolean(activeDraft && selectedFile && (activeDraft.base.revision !== selectedFile.revision || activeDraft.base.content !== selectedFile.content || activeDraft.base.state.worktreePath !== selectedFile.state.worktreePath || activeDraft.base.state.projectId !== selectedFile.state.projectId));
 
   useEffect(() => {
     selectedFileRef.current = selectedFile;
@@ -214,21 +227,23 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   }, []);
 
   const isCurrentSession = useCallback((candidateSessionId: string | null) => {
-    return Boolean(candidateSessionId) && activeSessionRef.current === candidateSessionId;
-  }, []);
+    return mountedRef.current && enabled && Boolean(candidateSessionId) && ownerRef.current === owner && owner.sessionId === candidateSessionId;
+  }, [enabled, owner]);
 
   const applySelectedFileState = useCallback(
     (
       nextFile: ChatSessionWorkbenchFileResponse,
       nextFileDiff: ChatSessionWorkbenchFileDiffResponse,
-      options: { preserveDraft?: boolean } = {},
+      _options: { preserveDraft?: boolean } = {},
     ) => {
+      selectedFileRef.current = nextFile;
       setSelectedFile(nextFile);
       setSelectedFileDiff(nextFileDiff);
       setState(nextFile.state);
-      if (!options.preserveDraft) {
-        setDraftContent(nextFile.content);
-      }
+      const retained = sessionId ? getWorkbenchDraft(sessionId, nextFile.path) : undefined;
+      const nextContent = retained?.content ?? nextFile.content;
+      draftContentRef.current = nextContent;
+      setDraftContent(nextContent);
       updateSelectedFilePath(nextFile.path);
       setExpandedPaths((current) => {
         const merged = normalizeWorkbenchPaths([...current, ...expandAncestorPaths(nextFile.path)]);
@@ -245,13 +260,15 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       relativePath: string,
       options: { preserveDraft?: boolean } = {},
     ): Promise<ChatSessionWorkbenchFileResponse | null> => {
+      const readId = ++fileReadRef.current;
       const [nextFile, nextFileDiff] = await Promise.all([
         fetchChatSessionWorkbenchFile(requestSessionId, relativePath),
         fetchChatSessionWorkbenchFileDiff(requestSessionId, relativePath),
       ]);
-      if (!isCurrentSession(requestSessionId)) {
+      if (!isCurrentSession(requestSessionId) || readId !== fileReadRef.current) {
         return null;
       }
+      if (nextFile.path !== relativePath || nextFile.state.sessionId !== requestSessionId || nextFileDiff.path !== relativePath || nextFileDiff.state.sessionId !== requestSessionId) throw new Error("File evidence does not match the selected session and path.");
       applySelectedFileState(nextFile, nextFileDiff, options);
       return nextFile;
     },
@@ -274,7 +291,9 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return true;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(describeWorkbenchActionError(cause, "Unable to load workbench file."));
+          const retained = getWorkbenchDraft(requestSessionId, relativePath);
+          if (retained) { selectedFileRef.current = retained.base; setSelectedFile(retained.base); setSelectedFileDiff(null); draftContentRef.current = retained.content; setDraftContent(retained.content); }
+          setError(retained ? "Current file unavailable. This is your retained draft; saving requires a current file read." : describeWorkbenchActionError(cause, "Unable to load workbench file."));
         }
         return false;
       } finally {
@@ -304,9 +323,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
 
       if (workbench.state.worktreeStatus !== "ready") {
         setTree(null);
-        setSelectedFile(null);
-        setSelectedFileDiff(null);
-        setDraftContent("");
+        if (!dirtyDraftRef.current) { setSelectedFile(null); setSelectedFileDiff(null); setDraftContent(""); }
         setDiff(null);
         setOutput(null);
         return;
@@ -340,9 +357,8 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       );
 
       if (candidatePaths.length === 0) {
-        setSelectedFile(null);
-        setSelectedFileDiff(null);
-        setDraftContent("");
+        if (dirtyDraftRef.current) setError("The current file is no longer listed. Your draft is preserved; refresh before saving.");
+        else { setSelectedFile(null); setSelectedFileDiff(null); setDraftContent(""); }
         return;
       }
 
@@ -361,9 +377,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       }
 
       if (!loaded && isCurrentSession(requestSessionId)) {
-        setSelectedFile(null);
-        setSelectedFileDiff(null);
-        setDraftContent("");
+        if (!dirtyDraftRef.current) { setSelectedFile(null); setSelectedFileDiff(null); setDraftContent(""); }
         setError(describeWorkbenchActionError(lastError, "Unable to load the active workbench file."));
       }
     } catch (cause) {
@@ -378,53 +392,79 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   }, [enabled, isCurrentSession, loadWorkbenchFileSelection, resetWorkbench, sessionId, setPersistedExpandedPaths]);
 
   const saveFile = useCallback(async () => {
-    if (!sessionId || !selectedFileRef.current) {
-      return false;
-    }
-    const requestSessionId = sessionId;
-    const activeFile = selectedFileRef.current;
-    setBusy(true);
-    setSaving(true);
+    if (!sessionId || !selectedFileRef.current || savingRef.current) return false;
+    const requestSessionId = sessionId, activeFile = selectedFileRef.current;
+    const draft = getWorkbenchDraft(sessionId, activeFile.path);
+    if (!draft) return true;
+    const submitted = draft.content;
+    savingRef.current = true; setBusy(true); setSaving(true);
     try {
-      const nextFile = await saveChatSessionWorkbenchFile(requestSessionId, {
-        path: activeFile.path,
-        content: draftContentRef.current,
-      });
-      if (!isCurrentSession(requestSessionId)) {
-        return false;
+      const currentFile = await fetchChatSessionWorkbenchFile(requestSessionId, activeFile.path);
+      if (!isCurrentSession(requestSessionId)) return false;
+      if (currentFile.path !== activeFile.path || currentFile.state.sessionId !== requestSessionId) throw new Error("The file response does not match this editor. Your draft is preserved.");
+      if (currentFile.revision !== draft.base.revision || currentFile.content !== draft.base.content || currentFile.state.worktreePath !== draft.base.state.worktreePath || currentFile.state.projectId !== draft.base.state.projectId) {
+        if (selectedFileRef.current?.path === activeFile.path) { selectedFileRef.current = currentFile; setSelectedFile(currentFile); }
+        throw new Error("This file changed since editing began. Review the latest version before saving your retained draft.");
       }
-
-      const [nextTree, nextDiff, nextOutput, nextFileDiff] = await Promise.all([
-        fetchChatSessionWorkbenchTree(requestSessionId),
-        fetchChatSessionWorkbenchDiff(requestSessionId),
-        fetchChatSessionWorkbenchOutput(requestSessionId),
-        fetchChatSessionWorkbenchFileDiff(requestSessionId, activeFile.path),
-      ]);
-      if (!isCurrentSession(requestSessionId)) {
-        return false;
+      const nextFile = await saveChatSessionWorkbenchFile(requestSessionId, { path: activeFile.path, content: submitted, expectedRevision: draft.base.revision });
+      if (nextFile.path !== activeFile.path || nextFile.state.sessionId !== requestSessionId || nextFile.content !== submitted) throw new Error("The Gateway did not confirm the submitted file contents. Your draft is preserved.");
+      const clean = acknowledgeWorkbenchDraft(requestSessionId, nextFile, submitted);
+      if (isCurrentSession(requestSessionId)) fileReadRef.current += 1;
+      if (!isCurrentSession(requestSessionId)) return clean;
+      if (selectedFileRef.current?.path === activeFile.path) {
+        selectedFileRef.current = nextFile; setSelectedFile(nextFile);
+        const nextContent = getWorkbenchDraft(requestSessionId, activeFile.path)?.content ?? nextFile.content;
+        draftContentRef.current = nextContent; setDraftContent(nextContent);
       }
-
-      setTree(nextTree);
-      setDiff(nextDiff);
-      setOutput(nextOutput);
-      setPersistedExpandedPaths(
-        deriveDefaultExpandedPaths(nextTree, activeFile.path, readWorkbenchUiState(requestSessionId).expandedPaths),
-      );
-      applySelectedFileState(nextFile, nextFileDiff, { preserveDraft: false });
       setError(null);
-      return true;
+      try {
+        const [nextTree, nextDiff, nextOutput, nextFileDiff] = await Promise.all([
+          fetchChatSessionWorkbenchTree(requestSessionId), fetchChatSessionWorkbenchDiff(requestSessionId),
+          fetchChatSessionWorkbenchOutput(requestSessionId), fetchChatSessionWorkbenchFileDiff(requestSessionId, activeFile.path),
+        ]);
+        if (isCurrentSession(requestSessionId)) {
+          setTree(nextTree); setDiff(nextDiff); setOutput(nextOutput);
+          if (selectedFileRef.current?.path === activeFile.path) setSelectedFileDiff(nextFileDiff);
+          setPersistedExpandedPaths(deriveDefaultExpandedPaths(nextTree, activeFile.path, readWorkbenchUiState(requestSessionId).expandedPaths));
+        }
+      } catch { if (isCurrentSession(requestSessionId)) setError("File saved. Updated workbench evidence is unavailable; refresh to retry."); }
+      return clean;
     } catch (cause) {
-      if (isCurrentSession(requestSessionId)) {
-        setError(describeWorkbenchActionError(cause, "Unable to save the active workbench file."));
-      }
+      const isConflict = cause && typeof cause === "object" && "status" in cause && cause.status === 409;
+      if (isConflict && isCurrentSession(requestSessionId)) {
+        let currentUnavailable = false;
+        try {
+          const latestFile = await fetchChatSessionWorkbenchFile(requestSessionId, activeFile.path);
+          if (latestFile.state.sessionId !== requestSessionId || latestFile.path !== activeFile.path) throw new Error("Mismatched file response", { cause });
+          if (isCurrentSession(requestSessionId) && selectedFileRef.current?.path === activeFile.path) {
+            selectedFileRef.current = latestFile; setSelectedFile(latestFile);
+          }
+        } catch { currentUnavailable = true; }
+        if (isCurrentSession(requestSessionId)) setError(currentUnavailable
+          ? "Save was blocked and the current file is unavailable. Your draft is preserved; reload before trying again."
+          : "Save was blocked by a concurrent Workbench operation. Review the latest file before saving your retained draft.");
+      } else if (isCurrentSession(requestSessionId)) setError(describeWorkbenchActionError(cause, "Unable to save the active workbench file."));
       return false;
     } finally {
-      if (isCurrentSession(requestSessionId)) {
-        setBusy(false);
-        setSaving(false);
-      }
+      savingRef.current = false;
+      if (isCurrentSession(requestSessionId)) { setBusy(false); setSaving(false); }
     }
-  }, [applySelectedFileState, isCurrentSession, sessionId, setPersistedExpandedPaths]);
+  }, [isCurrentSession, sessionId, setPersistedExpandedPaths]);
+
+  const previewFileOperation = useCallback(async (input: ChatSessionWorkbenchFileOperationPreviewRequest) => {
+    if (!sessionId) return null;
+    const requestSessionId = sessionId;
+    setBusy(true);
+    try {
+      const review = await previewChatSessionWorkbenchFileOperation(requestSessionId, input);
+      if (!isCurrentSession(requestSessionId)) return null;
+      setError(null);
+      return review;
+    } catch (cause) {
+      if (isCurrentSession(requestSessionId)) setError(describeWorkbenchActionError(cause, "Unable to review this file action."));
+      return null;
+    } finally { if (isCurrentSession(requestSessionId)) setBusy(false); }
+  }, [isCurrentSession, sessionId]);
 
   const runFileOperation = useCallback(
     async (input: ChatSessionWorkbenchFileOperationRequest) => {
@@ -489,7 +529,9 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return true;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(describeWorkbenchActionError(cause, "Unable to update the workbench file tree."));
+          const isConflict = cause && typeof cause === "object" && "status" in cause && cause.status === 409;
+          setError(isConflict ? "The file action's source, destination or project changed. Review the action again before applying it."
+            : describeWorkbenchActionError(cause, "Unable to update the workbench file tree."));
         }
         return false;
       } finally {
@@ -530,9 +572,26 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   );
 
   const discardDraft = useCallback(() => {
-    setDraftContent(selectedFileRef.current?.content ?? "");
+    const file = selectedFileRef.current;
+    if (sessionId && file) discardWorkbenchSessionDraft(sessionId, file.path);
+    draftContentRef.current = file?.content ?? "";
+    setDraftContent(draftContentRef.current);
     setError(null);
-  }, []);
+  }, [sessionId]);
+
+  const updateDraft = useCallback((content: string) => {
+    const file = selectedFileRef.current;
+    if (!sessionId || !file || !isCurrentSession(sessionId)) return;
+    updateWorkbenchDraft(sessionId, file, content);
+    draftContentRef.current = content; dirtyDraftRef.current = Boolean(getWorkbenchDraft(sessionId, file.path));
+    setDraftContent(content);
+  }, [isCurrentSession, sessionId]);
+
+  const reviewCurrentFile = useCallback(() => {
+    const file = selectedFileRef.current;
+    if (sessionId && file) rebaseWorkbenchDraft(sessionId, file);
+    setError(null);
+  }, [sessionId]);
 
   const runValidationCommand = useCallback(
     async (input: { command: string; args?: string[]; timeoutMs?: number }) => {
@@ -696,7 +755,8 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   }, [isCurrentSession, refresh, sessionId]);
 
   useEffect(() => {
-    activeSessionRef.current = enabled ? sessionId : null;
+    selectedFileRef.current = null; draftContentRef.current = ""; dirtyDraftRef.current = false;
+    resetWorkbench();
     if (!enabled || !sessionId) {
       resetWorkbench();
       return;
@@ -745,12 +805,16 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     workbenchSaving: saving,
     workbenchError: error,
     hasDirtyWorkbenchDraft: hasDirtyDraft,
-    setWorkbenchDraftContent: setDraftContent,
+    workbenchHasRemoteChanges: hasRemoteChanges,
+    workbenchDraftPaths: retainedDrafts.map((entry) => entry.base.path),
+    rebaseWorkbenchDraft: reviewCurrentFile,
+    setWorkbenchDraftContent: updateDraft,
     setWorkbenchExpandedPaths: setPersistedExpandedPaths,
     refreshWorkbench: refresh,
     createWorkbenchWorktree: createWorktree,
     openWorkbenchFile: loadFile,
     saveWorkbenchFile: saveFile,
+    previewWorkbenchFileOperation: previewFileOperation,
     runWorkbenchFileOperation: runFileOperation,
     discardWorkbenchDraft: discardDraft,
     runWorkbenchValidationCommand: runValidationCommand,

@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { types as nodeUtilTypes } from "node:util";
 import {
+  REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS,
+  REMOTE_WORKER_ASSIGNMENT_INFERENCE_EXCHANGE_SCHEMA_VERSION,
+  REMOTE_WORKER_ASSIGNMENT_SETTLEMENT_SUBMISSION_SCHEMA_VERSION,
   REMOTE_WORKER_POP_V2_ROUTE_BINDINGS,
   REMOTE_WORKER_ROUTE_ACCESS_CLASS,
   REMOTE_WORKER_SETTLEMENT_BOUNDS,
@@ -9,12 +12,21 @@ import {
   evaluateRemoteWorkerRuntimeCredentialRoutePolicy,
   normalizeRemoteWorkerArtifactManifest,
   normalizeRemoteWorkerArtifactPart,
+  normalizeRemoteWorkerInferenceUsageEventIds,
+  normalizeRemoteWorkerChatToolSubmission,
+  normalizeRemoteWorkerCellProvisioningSubmission,
+  normalizeRemoteWorkerCellPreparationSubmission, type RemoteWorkerCellPreparationSubmission, type RemoteWorkerCellPreparation,
   normalizeRemoteWorkerMeshNodeAuthorityFence,
+  remoteWorkerInferenceUsageEventIdsSha256,
   type RemoteWorkerArtifactManifest,
   type RemoteWorkerArtifactPartDescriptor,
   type RemoteWorkerAssignmentGenerationRecord,
   type RemoteWorkerAssignmentRecord,
   type RemoteWorkerInferenceRequestSubmission,
+  type RemoteWorkerChatToolSubmission,
+  type RemoteWorkerChatToolResult,
+  type RemoteWorkerCellProvisioningSubmission,
+  type RemoteWorkerCellProvisioningExchange,
   type RemoteWorkerPopV2RouteBinding,
   type ResolvedRemoteWorkerAssignmentAuthority,
 } from "@goatcitadel/contracts";
@@ -41,6 +53,9 @@ import type {
   RemoteWorkerInferencePerformInput,
   RemoteWorkerInferencePerformOutcome,
 } from "./remote-worker-inference-service.js";
+import type { DispatchRemoteWorkerChatToolInput } from "./remote-worker-chat-tool-runtime.js";
+import { exchangeRemoteWorkerCellProvisioning, prepareRemoteWorkerCellProvisioning,
+  type RemoteWorkerCellProvisioningExchangePort } from "./remote-worker-cell-provisioning-exchange.js";
 import {
   RemoteWorkerAssignmentExecutionProtocolError,
   assertPlainRecord,
@@ -75,10 +90,8 @@ export { RemoteWorkerAssignmentExecutionProtocolError } from "./remote-worker-as
 
 export const REMOTE_WORKER_ASSIGNMENT_EXECUTION_RESPONSE_SCHEMA_VERSION =
   "goatcitadel.remote-worker-assignment-execution-response.v1" as const;
-export const REMOTE_WORKER_ASSIGNMENT_INFERENCE_EXCHANGE_SCHEMA_VERSION =
-  "goatcitadel.remote-worker-assignment-inference-exchange.v1" as const;
-export const REMOTE_WORKER_ASSIGNMENT_SETTLEMENT_SUBMISSION_SCHEMA_VERSION =
-  "goatcitadel.remote-worker-assignment-settlement-submission.v1" as const;
+export { REMOTE_WORKER_ASSIGNMENT_INFERENCE_EXCHANGE_SCHEMA_VERSION } from "@goatcitadel/contracts";
+export { REMOTE_WORKER_ASSIGNMENT_SETTLEMENT_SUBMISSION_SCHEMA_VERSION } from "@goatcitadel/contracts";
 
 /**
  * Owner-call ceiling, pinned strictly below the native listener's per-request
@@ -110,6 +123,7 @@ export interface RemoteWorkerAssignmentExecutionProtocolRequest {
   readonly headers: RemoteWorkerRequestHeaders;
   readonly body: unknown;
   readonly transportIdentity: RemoteWorkerTransportIdentity;
+  readonly signal?: AbortSignal;
 }
 
 export interface RemoteWorkerAssignmentExecutionProtocolPort {
@@ -123,14 +137,9 @@ export interface RemoteWorkerAssignmentExecutionProtocolPort {
  * boundary (the sole raw-lease hash point) and resolves the active assignment
  * authority through its own injected lease resolver.
  *
- * NOTE the exact division of labour: this wire owner resolves and rechecks the
- * complete protected commit fence in the assignment storage transaction BEFORE
- * calling in, but the inner owner's authority port takes only a lease-token
- * hash, so it cannot re-evaluate that fence itself. Authority revoked strictly
- * between this owner's fenced read and the inner owner's own lease read is
- * therefore caught only by the inner owner's lease check. Closing that window
- * requires a fence parameter on the inner ports and is deliberately out of
- * scope while both owners stay production-dark.
+ * The wire owner passes the server-resolved protected commit fence and connection
+ * cancellation signal. Inner execution owners must recheck that fence at their
+ * mutation and provider-dispatch boundaries; the initial read is not a grant.
  */
 export interface RemoteWorkerInferenceExchangeOwnerPort {
   performInference(input: RemoteWorkerInferencePerformInput): Awaitable<RemoteWorkerInferencePerformOutcome>;
@@ -146,6 +155,10 @@ export interface RemoteWorkerSettlementSubmissionOwnerPort {
   readonly effects: {
     dispatchEffect(input: DispatchRemoteWorkerEffectInput): Awaitable<DispatchRemoteWorkerEffectResult>;
   };
+  readonly chatTools?: {
+    dispatchTool(input: DispatchRemoteWorkerChatToolInput): Awaitable<RemoteWorkerChatToolResult>;
+  };
+  readonly cellProvisioning?: RemoteWorkerCellProvisioningExchangePort;
 }
 
 export interface RemoteWorkerAssignmentExecutionStorePort {
@@ -202,11 +215,16 @@ export interface RemoteWorkerInferenceExchangeRequestProjection {
   readonly state: InferenceRequestRecord["state"];
   readonly governanceDecision: InferenceRequestRecord["governanceDecision"];
   readonly requestSha256: string;
+  /** Hash only; enables worker frame-chain verification without exposing route credentials. */
+  readonly effectiveRouteSha256: string;
   readonly outputTokenCeiling: number;
   readonly reasoningTokenCeiling: number;
   readonly governanceOutputTokenCeiling: number;
   readonly governanceReasoningTokenCeiling: number;
   readonly governanceExpiresAt: string;
+  /** Every canonical provider attempt, including output-cap recovery retries. */
+  readonly usageEventIds?: readonly string[];
+  readonly usageEventIdsSha256?: string;
 }
 
 /** Secret-free wire projection of one ordered provider-output frame. */
@@ -236,9 +254,12 @@ export type RemoteWorkerAssignmentExecutionProtocolResponse =
       }>)
   | (ResponseBase &
       Readonly<{
-        disposition: "effect_settled";
+        disposition: "effect_settled" | "effect_waiting";
         effect: DispatchRemoteWorkerEffectResult;
-      }>);
+      }>)
+  | (ResponseBase & Readonly<{ disposition: "chat_tool_recorded"; tool: RemoteWorkerChatToolResult }>)
+  | (ResponseBase & Readonly<{ disposition: "cell_provisioning_recorded"; cellProvisioning: RemoteWorkerCellProvisioningExchange }>)
+  | (ResponseBase & Readonly<{ disposition: "cell_provisioning_prepared"; cellPreparation: RemoteWorkerCellPreparation }>);
 
 interface InferencePayload {
   readonly kind: "inference";
@@ -258,6 +279,9 @@ interface SettlementEnvelope {
 }
 
 type SettlementSubmission =
+  | RemoteWorkerChatToolSubmission
+  | RemoteWorkerCellProvisioningSubmission
+  | RemoteWorkerCellPreparationSubmission
   | Readonly<{
       kind: "artifact.open";
       uploadAttempt: number;
@@ -294,6 +318,7 @@ interface SettlementPayload extends SettlementEnvelope {
 type NormalizedPayload = InferencePayload | SettlementPayload;
 
 interface SnapshotRequest {
+  readonly signal?: AbortSignal;
   readonly method: "POST";
   readonly rawPath: RemoteWorkerAssignmentExecutionRoute["rawPath"];
   readonly route: RemoteWorkerAssignmentExecutionRoute;
@@ -304,18 +329,11 @@ interface SnapshotRequest {
   readonly transportIdentity: RemoteWorkerTransportIdentity;
 }
 
-/**
- * Production-dark protected-v2 wire owner for route codes 11-12. It carries the
- * routes 2-6 fence discipline verbatim: resolve the canonical M2
- * credential/protected authority before PoP, consume the durable nonce before
- * any owner outcome is observed, resolve the current mesh-node admission for
- * the assignment's execution workspace, then recheck that complete protected
- * commit fence inside the assignment storage transaction
- * (`resolveActiveAuthorityByLeaseTokenHash` with the fence) before the HX-503
- * inference owner or HX-506 settlement owner is reached. The raw inference
- * lease is hashed only by the owner's canonical authorize boundary; the raw
- * settlement lease is hashed here and never persisted or returned.
- */
+/** Protected-v2 routes 11-12 share canonical credential, PoP, durable nonce,
+ * mesh admission and transactional assignment checks. Inference, settlement
+ * and cell checkpoint owners must also recheck authority at their own commit
+ * boundaries. The inference owner hashes its raw lease; settlement hashes it
+ * here and never persists or returns the secret. */
 export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWorkerAssignmentExecutionProtocolPort {
   public constructor(private readonly dependencies: RemoteWorkerAssignmentExecutionProtocolDependencies) {
     if (typeof dependencies.clock !== "function") throw rejected("Remote worker execution clock is unavailable.");
@@ -387,7 +405,8 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
       const fencedRecords = await this.recheckProtectedFenceInTransaction(request.payload, authority.current);
       return await this.executeAuthorized(request.route, request.body.idempotencyKey, request.payload, {
         authority: authority.current,
-        records: fencedRecords,
+        ...fencedRecords,
+        signal: request.signal,
       });
     } catch (error) {
       if (error instanceof RemoteWorkerAssignmentExecutionProtocolError) throw error;
@@ -406,7 +425,10 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
   private async recheckProtectedFenceInTransaction(
     payload: NormalizedPayload,
     credential: CurrentRemoteWorkerRuntimeCredentialAuthority,
-  ): Promise<ResolvedRemoteWorkerAssignmentAuthority> {
+  ): Promise<{
+    records: ResolvedRemoteWorkerAssignmentAuthority;
+    protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+  }> {
     const aggregate = await this.dependencies.assignments.findAssignmentAggregate(
       payload.registryWorkspaceId,
       payload.assignmentId,
@@ -435,7 +457,7 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
     ) {
       throw rejected("Remote worker execution lease authority is unavailable.");
     }
-    return resolved;
+    return { records: resolved, protectedAuthority: fence };
   }
 
   private async resolveProtectedCommitFence(
@@ -531,13 +553,19 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
     fenced: {
       readonly authority: CurrentRemoteWorkerRuntimeCredentialAuthority;
       readonly records: ResolvedRemoteWorkerAssignmentAuthority;
+      readonly protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+      readonly signal?: AbortSignal;
     },
   ): Promise<RemoteWorkerAssignmentExecutionProtocolResponse> {
     if (
       payload.kind === "inference" &&
       route.code === REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.inferenceExchange.code
     ) {
-      const outcome = await this.dependencies.inference.performInference({ submission: payload.submission });
+      const outcome = await this.dependencies.inference.performInference({
+        submission: payload.submission,
+        protectedAuthority: fenced.protectedAuthority,
+        signal: executionSignal(fenced.signal, REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS),
+      });
       return responseSnapshot({
         ...responseBase(route, fenced.authority.registryWorkspaceId),
         disposition: outcome.disposition,
@@ -561,6 +589,8 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
     fenced: {
       readonly authority: CurrentRemoteWorkerRuntimeCredentialAuthority;
       readonly records: ResolvedRemoteWorkerAssignmentAuthority;
+      readonly protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+      readonly signal?: AbortSignal;
     },
   ): Promise<RemoteWorkerAssignmentExecutionProtocolResponse> {
     const base = responseBase(route, fenced.authority.registryWorkspaceId);
@@ -569,8 +599,30 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
       assignmentId: payload.assignmentId,
       assignmentGeneration: payload.assignmentGeneration,
       leaseTokenSha256: payload.leaseTokenSha256,
+      protectedAuthority: fenced.protectedAuthority,
     });
     const submission = payload.submission;
+    if (submission.kind === "cell.provisioning.prepare") {
+      const cellPreparation = await prepareRemoteWorkerCellProvisioning(this.dependencies.settlement.cellProvisioning,
+        { ...identity, leaseRevision: payload.leaseRevision, submission, signal: executionSignal(fenced.signal) });
+      return responseSnapshot({ ...base, disposition: "cell_provisioning_prepared", cellPreparation });
+    }
+    if (submission.kind === "cell.provisioning.snapshot" || submission.kind === "cell.provisioning.checkpoint" ||
+        submission.kind === "cell.volume.checkpoint" || submission.kind === "cell.format.checkpoint" ||
+        submission.kind === "cell.protection.checkpoint" || submission.kind === "cell.mount.checkpoint" || submission.kind === "cell.mounted-workspace.checkpoint") {
+      const cellProvisioning = await exchangeRemoteWorkerCellProvisioning(this.dependencies.settlement.cellProvisioning,
+        { ...identity, leaseRevision: payload.leaseRevision, submission, signal: executionSignal(fenced.signal) });
+      return responseSnapshot({ ...base, disposition: "cell_provisioning_recorded", cellProvisioning });
+    }
+    if (submission.kind === "chat.tool") {
+      const owner = this.dependencies.settlement.chatTools;
+      if (!owner) throw rejected("Worker Chat tool execution is unavailable.");
+      const tool = await owner.dispatchTool({
+        fence: { ...identity, sessionControlGeneration: null },
+        submission, signal: executionSignal(fenced.signal),
+      });
+      return responseSnapshot({ ...base, disposition: "chat_tool_recorded", tool });
+    }
     if (submission.kind === "artifact.open") {
       const upload = await this.dependencies.settlement.artifacts.openUpload({
         ...identity,
@@ -615,7 +667,7 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
         // Bounded strictly below the native listener's per-request deadline so
         // a CAS commit cannot keep installing blobs after the socket is gone
         // and the durable nonce is already spent.
-        signal: AbortSignal.timeout(REMOTE_WORKER_EXECUTION_OWNER_TIMEOUT_MS),
+        signal: executionSignal(fenced.signal),
       });
       return responseSnapshot({ ...base, disposition: "artifact_recorded", upload });
     }
@@ -629,14 +681,16 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
         // pins "no session-control generation" rather than a worker's claim.
         sessionControlGeneration: null,
         leaseTokenSha256: payload.leaseTokenSha256,
+        protectedAuthority: fenced.protectedAuthority,
       },
       intentIndex: submission.intentIndex,
       effectSelector: submission.effectSelector,
       canonicalArgs: submission.canonicalArgs,
       workerIdempotencyKey: submission.workerIdempotencyKey,
       intentIdempotencyKey: idempotencyKey,
+      signal: executionSignal(fenced.signal),
     });
-    return responseSnapshot({ ...base, disposition: "effect_settled", effect });
+    return responseSnapshot({ ...base, disposition: effect.receipt ? "effect_settled" : "effect_waiting", effect });
   }
 }
 
@@ -644,11 +698,14 @@ function snapshotRequest(value: unknown): SnapshotRequest {
   const fields = exactOwnDataFields(
     value,
     ["method", "rawPath", "headers", "body", "transportIdentity"],
-    [],
+    ["signal"],
     "execution protocol input",
   );
   if (fields.method !== "POST" || typeof fields.rawPath !== "string") {
     throw rejected("Remote worker assignment execution target is invalid.");
+  }
+  if (fields.signal !== undefined && !(fields.signal instanceof AbortSignal)) {
+    throw rejected("Remote worker execution lifetime is invalid.");
   }
   const route = routeForPath(fields.rawPath);
   const headers = snapshotHeaders(fields.headers);
@@ -665,7 +722,13 @@ function snapshotRequest(value: unknown): SnapshotRequest {
     payload: normalizePayload(route, body.payload),
     credentialTokenSha256: credentialAuthorizationSha256(headers),
     transportIdentity: snapshotTransportIdentity(fields.transportIdentity),
+    ...(fields.signal ? { signal: fields.signal as AbortSignal } : {}),
   });
+}
+
+function executionSignal(signal?: AbortSignal, timeoutMs = REMOTE_WORKER_EXECUTION_OWNER_TIMEOUT_MS): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
 }
 
 function routeForPath(rawPath: string): RemoteWorkerAssignmentExecutionRoute {
@@ -761,6 +824,15 @@ function normalizeSettlementPayload(value: unknown): SettlementPayload {
 function normalizeSettlementSubmission(value: unknown): SettlementSubmission {
   assertPlainRecord(value, "settlement submission");
   const kind = (value as Record<string, unknown>)["kind"];
+  if (kind === "cell.provisioning.prepare") {
+    try { return normalizeRemoteWorkerCellPreparationSubmission(value); }
+    catch { throw rejected("Worker cell preparation submission is invalid."); }
+  }
+  if (kind === "cell.provisioning.snapshot" || kind === "cell.provisioning.checkpoint" ||
+      kind === "cell.volume.checkpoint" || kind === "cell.format.checkpoint" || kind === "cell.protection.checkpoint" || kind === "cell.mount.checkpoint" || kind === "cell.mounted-workspace.checkpoint") {
+    try { return normalizeRemoteWorkerCellProvisioningSubmission(value); }
+    catch { throw rejected("Worker cell provisioning submission is invalid."); }
+  }
   if (kind === "artifact.open") {
     const fields = exactOwnDataFields(
       value,
@@ -858,6 +930,11 @@ function normalizeSettlementSubmission(value: unknown): SettlementSubmission {
       workerIdempotencyKey: identifier(fields.workerIdempotencyKey, "workerIdempotencyKey", 512),
     });
   }
+  if (kind === "chat.tool") {
+    const fields = exactOwnDataFields(value, ["kind", "inferenceRequestId", "attempt", "callIndex"], [], "Chat tool submission");
+    try { return normalizeRemoteWorkerChatToolSubmission(fields); }
+    catch { throw rejected("Worker Chat tool selection is invalid."); }
+  }
   throw rejected("Remote worker assignment settlement submission kind is invalid.");
 }
 
@@ -871,12 +948,32 @@ function inferenceRequestProjection(record: InferenceRequestRecord): RemoteWorke
     state: record.state,
     governanceDecision: record.governanceDecision,
     requestSha256: record.requestSha256,
+    effectiveRouteSha256: record.effectiveRouteSha256,
     outputTokenCeiling: record.outputTokenCeiling,
     reasoningTokenCeiling: record.reasoningTokenCeiling,
     governanceOutputTokenCeiling: record.governanceOutputTokenCeiling,
     governanceReasoningTokenCeiling: record.governanceReasoningTokenCeiling,
     governanceExpiresAt: record.governanceExpiresAt,
+    ...inferenceUsageProjection(record),
   });
+}
+
+function inferenceUsageProjection(
+  record: InferenceRequestRecord,
+): Pick<RemoteWorkerInferenceExchangeRequestProjection, "usageEventIds" | "usageEventIdsSha256"> {
+  if (record.usageEventIdsJson === undefined && record.usageEventIdsSha256 === undefined) return {};
+  try {
+    if (typeof record.usageEventIdsJson !== "string" || record.usageEventIdsJson.length > 65_536) {
+      throw new Error("Usage receipt is unavailable.");
+    }
+    const ids = normalizeRemoteWorkerInferenceUsageEventIds(JSON.parse(record.usageEventIdsJson));
+    if (remoteWorkerInferenceUsageEventIdsSha256(ids) !== record.usageEventIdsSha256) {
+      throw new Error("Usage receipt hash mismatch.");
+    }
+    return { usageEventIds: ids, usageEventIdsSha256: record.usageEventIdsSha256 };
+  } catch {
+    throw rejected("Remote worker inference usage receipt is invalid.");
+  }
 }
 
 function inferenceFrameProjection(record: InferenceFrameRecord): RemoteWorkerInferenceExchangeFrameProjection {

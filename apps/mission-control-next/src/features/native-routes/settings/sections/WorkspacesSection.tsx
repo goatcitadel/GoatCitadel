@@ -1,40 +1,16 @@
-// Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
-// per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import type { CitadelRecord } from "@goatcitadel/contracts";
-import {
-  archiveCitadel,
-  archiveWorkspace,
-  createCitadel,
-  createWorkspace,
-  fetchWorkspaces,
-  isApiRequestError,
-  listCitadels,
-  restoreCitadel,
-  restoreWorkspace,
-  updateCitadel,
-  updateWorkspace,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { archiveCitadel, archiveWorkspace, createCitadel, createWorkspace, fetchWorkspaces, isApiRequestError, listCitadels, restoreCitadel, restoreWorkspace, updateCitadel, updateWorkspace } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import {
-  getErrorMessage,
-  type Notice,
-  SettingsButtonRow,
-  SettingsEmptyState,
-  SettingsField,
-  SettingsFieldGrid,
-  SettingsFilterBar,
-  SettingsGrid,
-  SettingsNotice,
-  type SettingsSectionProps,
-  SettingsSectionShell,
-  SettingsStack,
-  useAsyncLoad,
-} from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
-import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
-import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
+import { getErrorMessage, type Notice, SettingsButtonRow, SettingsEmptyState, SettingsField, SettingsFieldGrid, SettingsFilterBar, SettingsNotice, type SettingsSectionProps, SettingsSectionShell, SettingsStack, useAsyncLoad } from "../SettingsShared";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
+import { NativeButton, NativeSelectableList } from "../../primitives";
+import { hasSessionDraft, discardSessionDraft, useSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { useSessionViewState } from "../../../../hooks/use-session-view-state";
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { FocusedDetail } from "../../shared/FocusedDetail";
 import { formatDateTime } from "../../SettingsNativePage";
 
 const CITADEL_KIND_OPTIONS: Array<CitadelRecord["kind"]> = [
@@ -50,13 +26,18 @@ const CITADEL_KIND_OPTIONS: Array<CitadelRecord["kind"]> = [
 ];
 
 type DirectoryView = "active" | "archived" | "all";
-type DirectoryTransition = { kind: "select"; id: string } | { kind: "filter"; view: DirectoryView };
 type PendingArchive =
-  | { kind: "citadel"; id: string; label: string }
+  | { kind: "citadel"; id: string; label: string; expectedRevision: string }
   | { kind: "workspace"; id: string; label: string; expectedRevision: number };
 
 function createEmptyCitadelDraft() {
   return { name: "", description: "", slug: "", kind: "custom" };
+}
+
+function isCitadelSaveConflict(error: unknown): boolean {
+  if (!isApiRequestError(error) || error.status !== 409 || !error.body || typeof error.body !== "object" || !("details" in error.body)) return false;
+  const details = error.body.details;
+  return Boolean(details && typeof details === "object" && "reason" in details && details.reason === "CITADEL_RECORD_REVISION_CONFLICT");
 }
 
 function createCitadelEditDraft(citadel: CitadelRecord | null) {
@@ -80,382 +61,150 @@ function createWorkspaceEditDraft(workspace: { name: string; description?: strin
   };
 }
 
-function areDirectoryDraftsEqual(a: object, b: object): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 
-export function WorkspacesSection({
-  activeCitadelId,
-  activeCitadelName,
-  activeWorkspaceId,
-  setActiveCitadelId,
-  setActiveWorkspaceId,
-}: SettingsSectionProps) {
-  const [view, setView] = useState<DirectoryView>("all");
-  const [citadelView, setCitadelView] = useState<DirectoryView>("all");
-  const load = useCallback(
-    async () => (activeCitadelId ? fetchWorkspaces("all", 500, activeCitadelId) : fetchWorkspaces("all", 500)),
-    [activeCitadelId],
-  );
-  const loadCitadels = useCallback(() => listCitadels("all", 500), []);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
-  const {
-    loading: citadelsLoading,
-    error: citadelsError,
-    data: citadelsData,
-    reload: reloadCitadels,
-  } = useAsyncLoad(loadCitadels, [loadCitadels]);
-  const [selectedCitadelId, setSelectedCitadelId] = useState(activeCitadelId ?? "");
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
+export function WorkspacesSection({ activeCitadelId, activeCitadelName, activeWorkspaceId, activeWorkspaceName, setActiveCitadelId, setActiveWorkspaceId }: SettingsSectionProps) {
+  const scope = activeCitadelId ?? "legacy";
+  const [directory, setDirectory] = useSessionViewState<"workspaces" | "citadels">("workspaces:directory", "workspaces");
+  const [view, setView] = useSessionViewState<DirectoryView>("workspaces:" + scope + ":filter", "all");
+  const [citadelView, setCitadelView] = useSessionViewState<DirectoryView>("citadels:filter", "all");
+  const [selectedCitadelId, setSelectedCitadelId] = useSessionViewState("citadels:selection", "");
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useSessionViewState("workspaces:" + scope + ":selection", "");
+  const [search, setSearch] = useSessionViewState("workspaces:" + scope + ":search", "");
+  const [inspector, setInspector] = useState<"citadel" | "workspace" | null>(null);
+  const [editor, setEditor] = useState<"citadel-new" | "citadel-edit" | "workspace-new" | "workspace-edit" | null>(null);
+  const editorRef = useRef(editor); editorRef.current = editor;
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const leave = useDraftLeave();
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [citadelCreateForm, setCitadelCreateForm] = useState(createEmptyCitadelDraft);
-  const [citadelEditForm, setCitadelEditForm] = useState(() => createCitadelEditDraft(null));
-  const [citadelEditBaseline, setCitadelEditBaseline] = useState(() => createCitadelEditDraft(null));
-  const [createForm, setCreateForm] = useState(createEmptyWorkspaceDraft);
-  const [editForm, setEditForm] = useState(() => createWorkspaceEditDraft(null));
-  const [workspaceEditBaseline, setWorkspaceEditBaseline] = useState(() => createWorkspaceEditDraft(null));
   const [pendingArchive, setPendingArchive] = useState<PendingArchive | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
-
-  const filtered = useMemo(() => {
-    const items = data?.items ?? [];
-    if (view === "all") {
-      return items;
-    }
-    return items.filter((item) => item.lifecycleStatus === view);
-  }, [data?.items, view]);
-  const filteredCitadels = useMemo(() => {
-    const items = citadelsData?.items ?? [];
-    if (citadelView === "all") {
-      return items;
-    }
-    return items.filter((item) => item.lifecycleStatus === citadelView);
-  }, [citadelView, citadelsData?.items]);
-  const selectedCitadel = (citadelsData?.items ?? []).find((item) => item.citadelId === selectedCitadelId) ?? null;
-  const selectedWorkspace = (data?.items ?? []).find((item) => item.workspaceId === selectedWorkspaceId) ?? null;
-  const citadelEditDirty = !areDirectoryDraftsEqual(citadelEditForm, citadelEditBaseline);
-  const workspaceEditDirty = !areDirectoryDraftsEqual(editForm, workspaceEditBaseline);
-  const citadelCreateDirty = !areDirectoryDraftsEqual(citadelCreateForm, createEmptyCitadelDraft());
-  const workspaceCreateDirty = !areDirectoryDraftsEqual(createForm, createEmptyWorkspaceDraft());
-  useFormDirty(
-    "settings:workspaces",
-    citadelEditDirty || workspaceEditDirty || citadelCreateDirty || workspaceCreateDirty,
-    { label: "Workspaces" },
-  );
-
-  const resetCitadelEditDraft = useCallback(() => {
-    setCitadelEditForm(citadelEditBaseline);
-  }, [citadelEditBaseline]);
-  const applyCitadelTransition = useCallback((transition: DirectoryTransition) => {
-    if (transition.kind === "filter") {
-      setCitadelView(transition.view);
-      return;
-    }
-    setSelectedCitadelId(transition.id);
-  }, []);
-  const citadelTransitionGuard = useDraftTransitionGuard(
-    citadelEditDirty,
-    applyCitadelTransition,
-    resetCitadelEditDraft,
-  );
-
-  const resetWorkspaceEditDraft = useCallback(() => {
-    setEditForm(workspaceEditBaseline);
-  }, [workspaceEditBaseline]);
-  const applyWorkspaceTransition = useCallback((transition: DirectoryTransition) => {
-    if (transition.kind === "filter") {
-      setView(transition.view);
-      return;
-    }
-    setSelectedWorkspaceId(transition.id);
-  }, []);
-  const workspaceTransitionGuard = useDraftTransitionGuard(
-    workspaceEditDirty,
-    applyWorkspaceTransition,
-    resetWorkspaceEditDraft,
-  );
-
-  useEffect(() => {
-    setSelectedCitadelId((current) => activeCitadelId || current);
-  }, [activeCitadelId]);
-
-  useEffect(() => {
-    if (!filteredCitadels.length) {
-      setSelectedCitadelId("");
-      return;
-    }
-    setSelectedCitadelId((current) =>
-      current && filteredCitadels.some((item) => item.citadelId === current)
-        ? current
-        : filteredCitadels[0]?.citadelId || "",
-    );
-  }, [filteredCitadels]);
-
-  useEffect(() => {
-    if (citadelEditDirty) {
-      return;
-    }
-    if (!selectedCitadel) {
-      const emptyEditDraft = createCitadelEditDraft(null);
-      setCitadelEditForm(emptyEditDraft);
-      setCitadelEditBaseline(emptyEditDraft);
-      return;
-    }
-    const nextEditDraft = createCitadelEditDraft(selectedCitadel);
-    setCitadelEditForm(nextEditDraft);
-    setCitadelEditBaseline(nextEditDraft);
-    // Preserve local edits while background directory data refreshes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCitadel]);
-
-  useEffect(() => {
-    if (!filtered.length) {
-      setSelectedWorkspaceId("");
-      return;
-    }
-    setSelectedWorkspaceId((current) =>
-      current && filtered.some((item) => item.workspaceId === current) ? current : filtered[0]?.workspaceId || "",
-    );
-  }, [filtered]);
-
-  useEffect(() => {
-    if (workspaceEditDirty) {
-      return;
-    }
-    if (!selectedWorkspace) {
-      const emptyEditDraft = createWorkspaceEditDraft(null);
-      setEditForm(emptyEditDraft);
-      setWorkspaceEditBaseline(emptyEditDraft);
-      return;
-    }
-    const nextEditDraft = createWorkspaceEditDraft(selectedWorkspace);
-    setEditForm(nextEditDraft);
-    setWorkspaceEditBaseline(nextEditDraft);
-    // Preserve local edits while background directory data refreshes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkspace]);
-
-  const handleCreateCitadel = async () => {
-    if (!citadelCreateForm.name.trim()) {
-      setNotice({ tone: "warning", message: "Citadel name is required." });
-      return;
-    }
-    try {
-      const created = await createCitadel({
-        name: citadelCreateForm.name.trim(),
-        description: citadelCreateForm.description.trim() || undefined,
-        slug: citadelCreateForm.slug.trim() || undefined,
-        kind: citadelCreateForm.kind as CitadelRecord["kind"],
-      });
-      setNotice({ tone: "success", message: `Citadel ${created.name} created.` });
-      setCitadelCreateForm(createEmptyCitadelDraft());
+  const archiveBusyRef = useRef(false);
+  const [citadelConflict, setCitadelConflict] = useState<{ key: string; revision: string } | null>(null);
+  const load = useCallback(() => activeCitadelId ? fetchWorkspaces("all", 500, activeCitadelId) : fetchWorkspaces("all", 500), [activeCitadelId]);
+  const loadCitadels = useCallback(() => listCitadels("all", 500), []);
+  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  const { loading: citadelsLoading, error: citadelsError, data: citadelsData, reload: reloadCitadels } = useAsyncLoad(loadCitadels, [loadCitadels]);
+  const selectedCitadel = citadelsData?.items?.find(item => item.citadelId === selectedCitadelId) ?? null;
+  const selectedWorkspace = data?.items?.find(item => item.workspaceId === selectedWorkspaceId) ?? null;
+  const workspaceKey = "workspace:" + scope + ":" + selectedWorkspaceId + ":edit";
+  const citadelKey = "citadel:" + selectedCitadelId + ":edit";
+  const citadelCreate = useSessionDraft("citadel:global:new", createEmptyCitadelDraft(), undefined, { label: "New Citadel", active: editor === "citadel-new", onSave: () => handleCreateCitadel() });
+  const citadelEdit = useSessionDraft(citadelKey, createCitadelEditDraft(selectedCitadel), selectedCitadel?.revision, { label: selectedCitadel?.name ?? "Citadel", active: editor === "citadel-edit", available: Boolean(selectedCitadel), onSave: () => handleSaveCitadel() });
+  const hasCitadelConflict = citadelConflict?.key === citadelEdit.key;
+  const workspaceCreate = useSessionDraft("workspace:" + scope + ":new", createEmptyWorkspaceDraft(), undefined, { label: "New workspace in " + (activeCitadelName ?? scope), active: editor === "workspace-new", onSave: () => handleCreate() });
+  const workspaceEdit = useSessionDraft(workspaceKey, createWorkspaceEditDraft(selectedWorkspace), selectedWorkspace?.revision, { label: selectedWorkspace?.name ?? "Workspace", active: editor === "workspace-edit", available: Boolean(selectedWorkspace), onSave: () => handleSave() });
+  const { value: citadelCreateForm, setValue: setCitadelCreateForm } = citadelCreate;
+  const { value: citadelEditForm, setValue: setCitadelEditForm } = citadelEdit;
+  const { value: createForm, setValue: setCreateForm } = workspaceCreate;
+  const { value: editForm, setValue: setEditForm } = workspaceEdit;
+  const activeDraft = editor === "citadel-new" ? citadelCreate : editor === "citadel-edit" ? citadelEdit : editor === "workspace-new" ? workspaceCreate : workspaceEdit;
+  const transition = (next: () => void) => leave.request(next, editor ? [activeDraft.key] : []);
+  const closeEditor = () => transition(() => setEditor(null));
+  useEffect(() => { setInspector(null); setEditor(null); }, [scope]);
+  const filtered = useMemo(() => (data?.items ?? []).filter(item => (view === "all" || item.lifecycleStatus === view) && [item.name, item.slug, item.description].join(" ").toLowerCase().includes(search.toLowerCase())), [data?.items, view, search]);
+  const filteredCitadels = useMemo(() => (citadelsData?.items ?? []).filter(item => citadelView === "all" || item.lifecycleStatus === citadelView), [citadelsData?.items, citadelView]);
+  const run = async (action: () => Promise<boolean>): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true; setBusy(true);
+    try { return await action(); } catch (cause) { setNotice({ tone: "error", message: getErrorMessage(cause) }); return false; }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  async function handleCreateCitadel(): Promise<boolean> {
+    if (!citadelCreateForm.name.trim()) { setNotice({ tone: "warning", message: "Citadel name is required." }); return false; }
+    const submitted = citadelCreateForm;
+    return run(async () => {
+      const created = await createCitadel({ name: submitted.name.trim(), description: submitted.description.trim() || undefined, slug: submitted.slug.trim() || undefined, kind: submitted.kind as CitadelRecord["kind"] });
+      const saved = citadelCreate.acceptSaved(createEmptyCitadelDraft(), undefined, submitted);
+      setNotice({ tone: "success", message: "Citadel " + created.name + " created." });
       await reloadCitadels();
-      setSelectedCitadelId(created.citadelId);
-      setActiveCitadelId?.(created.citadelId);
-    } catch (createError) {
-      setNotice({ tone: "error", message: getErrorMessage(createError) });
-    }
-  };
-
-  const handleSaveCitadel = async () => {
-    if (!selectedCitadel) {
-      return;
-    }
-    try {
-      const updated = await updateCitadel(selectedCitadel.citadelId, {
-        name: citadelEditForm.name.trim() || undefined,
-        description: citadelEditForm.description.trim() || undefined,
-        slug: citadelEditForm.slug.trim() || undefined,
-        kind: citadelEditForm.kind as CitadelRecord["kind"],
-      });
-      setCitadelEditBaseline(citadelEditForm);
-      setNotice({ tone: "success", message: `Citadel ${updated.name} updated.` });
-      await reloadCitadels();
-    } catch (saveError) {
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    }
-  };
-
-  const handleRestoreCitadel = async () => {
-    if (!selectedCitadel) {
-      return;
-    }
-    try {
-      await restoreCitadel(selectedCitadel.citadelId);
-      setNotice({ tone: "success", message: `Citadel ${selectedCitadel.name} restored.` });
-      await reloadCitadels();
-    } catch (restoreError) {
-      setNotice({ tone: "error", message: getErrorMessage(restoreError) });
-    }
-  };
-
-  const handleCreate = async () => {
-    if (!createForm.name.trim()) {
-      setNotice({ tone: "warning", message: "Workspace name is required." });
-      return;
-    }
-    try {
-      const created = await createWorkspace({
-        ...(activeCitadelId ? { citadelId: activeCitadelId } : {}),
-        name: createForm.name.trim(),
-        description: createForm.description.trim() || undefined,
-        slug: createForm.slug.trim() || undefined,
-      });
-      setNotice({ tone: "success", message: `Workspace ${created.name} created.` });
-      setCreateForm(createEmptyWorkspaceDraft());
-      await reload();
-      setSelectedWorkspaceId(created.workspaceId);
-      setActiveWorkspaceId(created.workspaceId);
-    } catch (createError) {
-      setNotice({ tone: "error", message: getErrorMessage(createError) });
-    }
-  };
-
-  const handleSave = async () => {
-    if (!selectedWorkspace) {
-      return;
-    }
-    try {
-      const updated = await updateWorkspace(selectedWorkspace.workspaceId, {
-        expectedRevision: selectedWorkspace.revision,
-        name: editForm.name.trim() || undefined,
-        description: editForm.description.trim() || undefined,
-        slug: editForm.slug.trim() || undefined,
-      });
-      setWorkspaceEditBaseline(editForm);
-      setNotice({ tone: "success", message: `Workspace ${updated.name} updated.` });
-      await reload();
-    } catch (saveError) {
-      if (isApiRequestError(saveError) && saveError.status === 409) {
-        await reload();
-        setNotice({
-          tone: "warning",
-          message:
-            "This workspace changed elsewhere. Your draft is preserved and the current revision was reloaded. Review it, then save again to retry.",
-        });
-        return;
+      if (saved && editorRef.current === "citadel-new") { setEditor(null); setSelectedCitadelId(created.citadelId); setInspector("citadel"); }
+      return saved;
+    });
+  }
+  async function handleSaveCitadel(): Promise<boolean> {
+    if (!selectedCitadel || citadelEdit.hasRemoteChanges || hasCitadelConflict || typeof citadelEdit.baseRevision !== "string") { setNotice({ tone: "warning", message: "Review the current Citadel before applying this draft." }); return false; }
+    const expectedRevision = citadelEdit.baseRevision;
+    const submitted = citadelEditForm;
+    return run(async () => {
+      try {
+        const updated = await updateCitadel(selectedCitadel.citadelId, { expectedRevision, name: submitted.name.trim() || undefined, description: submitted.description.trim(), slug: submitted.slug.trim() || undefined, kind: submitted.kind as CitadelRecord["kind"] });
+        const saved = citadelEdit.acceptSaved(createCitadelEditDraft(updated), updated.revision, submitted);
+        setCitadelConflict(null);
+        setNotice({ tone: "success", message: "Citadel " + updated.name + " updated." }); await reloadCitadels(); return saved;
+      } catch (cause) {
+        if (isCitadelSaveConflict(cause)) {
+          setCitadelConflict({ key: citadelEdit.key, revision: expectedRevision });
+          await reloadCitadels(); setNotice({ tone: "warning", message: "This Citadel changed elsewhere. Your draft is preserved. Review the current revision before applying it." }); return false;
+        }
+        throw cause;
       }
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    });
+  }
+  async function handleCreate(): Promise<boolean> {
+    if (!createForm.name.trim()) { setNotice({ tone: "warning", message: "Workspace name is required." }); return false; }
+    const submitted = createForm;
+    return run(async () => {
+      const created = await createWorkspace({ ...(activeCitadelId ? { citadelId: activeCitadelId } : {}), name: submitted.name.trim(), description: submitted.description.trim() || undefined, slug: submitted.slug.trim() || undefined });
+      const saved = workspaceCreate.acceptSaved(createEmptyWorkspaceDraft(), undefined, submitted);
+      setNotice({ tone: "success", message: "Workspace " + created.name + " created." }); await reload();
+      if (saved && editorRef.current === "workspace-new") { setEditor(null); setSelectedWorkspaceId(created.workspaceId); setInspector("workspace"); }
+      return saved;
+    });
+  }
+  async function handleSave(): Promise<boolean> {
+    if (!selectedWorkspace || workspaceEdit.hasRemoteChanges) { setNotice({ tone: "warning", message: "Review the current workspace before applying this draft." }); return false; }
+    const submitted = editForm;
+    return run(async () => {
+      try {
+        const updated = await updateWorkspace(selectedWorkspace.workspaceId, { expectedRevision: workspaceEdit.baseRevision as number, name: submitted.name.trim() || undefined, description: submitted.description.trim() || undefined, slug: submitted.slug.trim() || undefined });
+        const saved = workspaceEdit.acceptSaved(createWorkspaceEditDraft(updated), updated.revision, submitted);
+        setNotice({ tone: "success", message: "Workspace " + updated.name + " updated." }); await reload(); return saved;
+      } catch (cause) {
+        if (isApiRequestError(cause) && cause.status === 409) {
+          await reload(); setNotice({ tone: "warning", message: "This workspace changed elsewhere. Your draft is preserved. Review the current revision before applying it." }); return false;
+        }
+        throw cause;
+      }
+    });
+  }
+  const restore = (kind: "citadel" | "workspace") => void run(async () => {
+    try {
+      if (kind === "citadel" && selectedCitadel?.revision) { await restoreCitadel(selectedCitadel.citadelId, selectedCitadel.revision); await reloadCitadels(); }
+      else if (kind === "workspace" && selectedWorkspace) { await restoreWorkspace(selectedWorkspace.workspaceId, selectedWorkspace.revision); await reload(); }
+      else return false;
+      setNotice({ tone: "success", message: (kind === "citadel" ? "Citadel" : "Workspace") + " restored." }); return true;
+    } catch (cause) {
+      if (isApiRequestError(cause) && cause.status === 409) { await (kind === "citadel" ? reloadCitadels() : reload()); setNotice({ tone: "warning", message: "This " + (kind === "citadel" ? "Citadel" : "workspace") + " changed elsewhere. Review the current revision and restore again." }); return false; }
+      throw cause;
     }
-  };
-
+  });
   const handleConfirmArchive = async () => {
-    if (!pendingArchive) {
-      return;
-    }
-    setArchiveBusy(true);
+    if (!pendingArchive || archiveBusyRef.current) return;
+    archiveBusyRef.current = true; setArchiveBusy(true);
     try {
-      if (pendingArchive.kind === "citadel") {
-        await archiveCitadel(pendingArchive.id);
-        setNotice({ tone: "success", message: `Citadel ${pendingArchive.label} archived.` });
-        await reloadCitadels();
-      } else {
-        await archiveWorkspace(pendingArchive.id, pendingArchive.expectedRevision);
-        setNotice({ tone: "success", message: `Workspace ${pendingArchive.label} archived.` });
-        await reload();
-      }
-      setPendingArchive(null);
-    } catch (archiveError) {
-      if (pendingArchive.kind === "workspace" && isApiRequestError(archiveError) && archiveError.status === 409) {
-        await reload();
-        setPendingArchive(null);
-        setNotice({
-          tone: "warning",
-          message: "This workspace changed elsewhere. The current revision was reloaded; review it and archive again.",
-        });
-        return;
-      }
-      setNotice({ tone: "error", message: getErrorMessage(archiveError) });
-    } finally {
-      setArchiveBusy(false);
-    }
+      if (pendingArchive.kind === "citadel") { await archiveCitadel(pendingArchive.id, pendingArchive.expectedRevision); discardSessionDraft("citadel:" + pendingArchive.id + ":edit"); await reloadCitadels(); }
+      else { await archiveWorkspace(pendingArchive.id, pendingArchive.expectedRevision); discardSessionDraft("workspace:" + scope + ":" + pendingArchive.id + ":edit"); await reload(); }
+      setNotice({ tone: "success", message: pendingArchive.label + " archived." }); setPendingArchive(null); setInspector(null);
+    } catch (cause) {
+      if (isApiRequestError(cause) && cause.status === 409) { await (pendingArchive.kind === "citadel" ? reloadCitadels() : reload()); setPendingArchive(null); setNotice({ tone: "warning", message: "This " + (pendingArchive.kind === "citadel" ? "Citadel" : "workspace") + " changed elsewhere. Review the current revision and archive again." }); }
+      else setNotice({ tone: "error", message: getErrorMessage(cause) });
+    } finally { archiveBusyRef.current = false; setArchiveBusy(false); }
   };
-
-  const handleRestore = async () => {
-    if (!selectedWorkspace) {
-      return;
-    }
-    try {
-      await restoreWorkspace(selectedWorkspace.workspaceId, selectedWorkspace.revision);
-      setNotice({ tone: "success", message: `Workspace ${selectedWorkspace.name} restored.` });
-      await reload();
-    } catch (restoreError) {
-      if (isApiRequestError(restoreError) && restoreError.status === 409) {
-        await reload();
-        setNotice({
-          tone: "warning",
-          message: "This workspace changed elsewhere. The current revision was reloaded; review it and restore again.",
-        });
-        return;
-      }
-      setNotice({ tone: "error", message: getErrorMessage(restoreError) });
-    }
-  };
-
-  return (
-    <SettingsSectionShell
-      loading={loading || citadelsLoading}
-      error={error || citadelsError}
-      onRetry={() => {
-        void reload();
-        void reloadCitadels();
-      }}
-    >
-      {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsNotice
-        notice={{
-          tone: "info",
-          message:
-            "Workspace lifecycle is archive-based right now. The gateway supports create, edit, archive, and restore; permanent delete is not exposed yet.",
-        }}
-      />
-      <SettingsGrid variant="detail-wide">
-        <SettingsStack>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Citadel manager"
-            subtitle="Create, select, archive, and restore the top-level operating worlds that contain workspaces."
-            stats={[
-              { label: "Citadels", value: String(citadelsData?.items?.length ?? 0) },
-              { label: "Active", value: activeCitadelId ?? "legacy" },
-            ]}
-          >
-            <SettingsFilterBar
-              options={[
-                { id: "all", label: "All", ariaLabel: "All Citadels" },
-                { id: "active", label: "Active", ariaLabel: "Active Citadels" },
-                { id: "archived", label: "Archived", ariaLabel: "Archived Citadels" },
-              ]}
-              value={citadelView}
-              onChange={(next) => {
-                const nextView = next as DirectoryView;
-                const hidesSelection =
-                  selectedCitadel !== null && nextView !== "all" && selectedCitadel.lifecycleStatus !== nextView;
-                if (hidesSelection) {
-                  citadelTransitionGuard.requestTransition({ kind: "filter", view: nextView });
-                } else {
-                  setCitadelView(nextView);
-                }
-              }}
-            />
-            <NativeSelectableList
-              items={filteredCitadels.map((item) => ({
-                id: item.citadelId,
-                title: item.name,
-                meta: item.lifecycleStatus,
-                body: item.description || item.slug,
-              }))}
-              selectedId={selectedCitadelId}
-              onSelect={(citadelId) => {
-                if (citadelId !== selectedCitadelId) {
-                  citadelTransitionGuard.requestTransition({ kind: "select", id: citadelId });
-                }
-              }}
-              emptyLabel="No Citadels in this view."
-              maxHeight="14rem"
-            />
-            <SettingsFieldGrid>
+  return <SettingsSectionShell loading={loading || citadelsLoading} error={error || citadelsError} onRetry={() => { void reload(); void reloadCitadels(); }}>
+    {notice ? <SettingsNotice notice={notice} /> : null}
+    {editor ? <FocusedDetail title={editor === "workspace-new" ? "New workspace" : editor === "citadel-new" ? "New Citadel" : editor === "workspace-edit" ? "Edit workspace" : "Edit Citadel"} onClose={closeEditor}>
+      <SettingsStack>
+      <p>{editor.startsWith("workspace") ? "Citadel: " + (activeCitadelName ?? scope) : "Citadels contain workspaces, projects, and their governed settings."}</p>
+      {activeDraft.hasRemoteChanges || (editor === "citadel-edit" && hasCitadelConflict) ? <NativeCard title="Current saved values" subtitle="">
+        <p>The record changed while this draft was open. Review these values before retrying.</p>
+        <dl><dt>Name</dt><dd>{editor === "workspace-edit" ? selectedWorkspace?.name : selectedCitadel?.name}</dd><dt>Description</dt><dd>{(editor === "workspace-edit" ? selectedWorkspace?.description : selectedCitadel?.description) || "None"}</dd><dt>Slug</dt><dd>{editor === "workspace-edit" ? selectedWorkspace?.slug : selectedCitadel?.slug}</dd>
+          {editor === "citadel-edit" ? <><dt>Kind</dt><dd>{selectedCitadel?.kind}</dd><dt>Status</dt><dd>{selectedCitadel?.lifecycleStatus}</dd><dt>Default workspace</dt><dd>{selectedCitadel?.defaultWorkspaceId || "None"}</dd></> : null}</dl>
+        <NativeButton disabled={editor === "citadel-edit" && (!selectedCitadel?.revision || (hasCitadelConflict && selectedCitadel.revision === citadelConflict.revision))}
+          onClick={() => { activeDraft.rebaseToCurrent(); if (editor === "citadel-edit") setCitadelConflict(null); }}>{editor === "workspace-edit" ? "Apply draft to current workspace" : "Apply draft to current Citadel"}</NativeButton>
+        {editor === "citadel-edit" ? <NativeButton variant="secondary" onClick={() => void reloadCitadels()}>Reload latest Citadel</NativeButton> : null}
+      </NativeCard> : null}
+      {editor === "citadel-new" ? (<SettingsFieldGrid>
               <SettingsField label="New Citadel">
                 <input
                   className="mc-next-settings-input"
@@ -497,10 +246,7 @@ export function WorkspacesSection({
                   }
                 />
               </SettingsField>
-            </SettingsFieldGrid>
-            {selectedCitadel ? (
-              <>
-                <SettingsFieldGrid>
+            </SettingsFieldGrid>) : editor === "citadel-edit" ? (<SettingsFieldGrid>
                   <SettingsField label="Selected name">
                     <input
                       className="mc-next-settings-input"
@@ -542,66 +288,7 @@ export function WorkspacesSection({
                       }
                     />
                   </SettingsField>
-                </SettingsFieldGrid>
-                <SettingsButtonRow>
-                  <NativeButton
-                    variant="default"
-                    aria-label={`Make active Citadel ${selectedCitadel.name}`}
-                    onClick={() => setActiveCitadelId?.(selectedCitadel.citadelId)}
-                  >
-                    <CheckCircle2 size={16} />
-                    Make active
-                  </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => void handleSaveCitadel()}>
-                    <Save size={16} />
-                    Save Citadel
-                  </NativeButton>
-                  {selectedCitadel.lifecycleStatus === "archived" ? (
-                    <NativeButton
-                      variant="secondary"
-                      aria-label={`Restore Citadel ${selectedCitadel.name}`}
-                      onClick={() => void handleRestoreCitadel()}
-                    >
-                      <RotateCcw size={16} />
-                      Restore
-                    </NativeButton>
-                  ) : (
-                    <NativeButton
-                      variant="destructive"
-                      aria-label={`Archive Citadel ${selectedCitadel.name}`}
-                      onClick={() =>
-                        setPendingArchive({
-                          kind: "citadel",
-                          id: selectedCitadel.citadelId,
-                          label: selectedCitadel.name,
-                        })
-                      }
-                    >
-                      <Trash2 size={16} />
-                      Archive
-                    </NativeButton>
-                  )}
-                </SettingsButtonRow>
-              </>
-            ) : null}
-            <SettingsButtonRow>
-              <NativeButton variant="default" onClick={() => void handleCreateCitadel()}>
-                <Plus size={16} />
-                Create Citadel
-              </NativeButton>
-            </SettingsButtonRow>
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Create workspace"
-            subtitle={
-              activeCitadelName
-                ? `Add a functional workspace inside ${activeCitadelName}.`
-                : "Add a new workspace before digging through the directory."
-            }
-          >
-            <SettingsFieldGrid>
+                </SettingsFieldGrid>) : editor === "workspace-new" ? (<SettingsFieldGrid>
               <SettingsField label="Name">
                 <input
                   aria-label="New workspace name"
@@ -624,70 +311,7 @@ export function WorkspacesSection({
                   onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))}
                 />
               </SettingsField>
-            </SettingsFieldGrid>
-            <SettingsButtonRow>
-              <NativeButton variant="default" onClick={() => void handleCreate()}>
-                <Plus size={16} />
-                Create workspace
-              </NativeButton>
-            </SettingsButtonRow>
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Workspace directory"
-            subtitle="Switch between active and archived workspaces, then edit the selected one."
-            stats={[
-              { label: "Total", value: String(data?.items?.length ?? 0) },
-              ...(activeCitadelId ? [{ label: "Citadel", value: activeCitadelId }] : []),
-              { label: "Active workspace", value: activeWorkspaceId },
-            ]}
-          >
-            <SettingsFilterBar
-              options={[
-                { id: "all", label: "All", ariaLabel: "All workspaces" },
-                { id: "active", label: "Active", ariaLabel: "Active workspaces" },
-                { id: "archived", label: "Archived", ariaLabel: "Archived workspaces" },
-              ]}
-              value={view}
-              onChange={(next) => {
-                const nextView = next as DirectoryView;
-                const hidesSelection =
-                  selectedWorkspace !== null && nextView !== "all" && selectedWorkspace.lifecycleStatus !== nextView;
-                if (hidesSelection) {
-                  workspaceTransitionGuard.requestTransition({ kind: "filter", view: nextView });
-                } else {
-                  setView(nextView);
-                }
-              }}
-            />
-            <NativeSelectableList
-              items={filtered.map((item) => ({
-                id: item.workspaceId,
-                title: item.name,
-                meta: item.lifecycleStatus,
-                body: item.description || item.slug,
-              }))}
-              selectedId={selectedWorkspaceId}
-              onSelect={(workspaceId) => {
-                if (workspaceId !== selectedWorkspaceId) {
-                  workspaceTransitionGuard.requestTransition({ kind: "select", id: workspaceId });
-                }
-              }}
-              emptyLabel="No workspaces in this view."
-              maxHeight="min(42vh, 23rem)"
-            />
-          </NativeCard>
-        </SettingsStack>
-        <NativeCard
-          density="compact"
-          className="mc-next-settings-panel"
-          title={selectedWorkspace?.name ?? "Workspace editor"}
-          subtitle="Rename, describe, archive, restore, or make the selected workspace active."
-        >
-          {selectedWorkspace ? (
-            <>
-              <SettingsFieldGrid>
+            </SettingsFieldGrid>) : (<SettingsFieldGrid>
                 <SettingsField label="Name">
                   <input
                     className="mc-next-settings-input"
@@ -709,102 +333,36 @@ export function WorkspacesSection({
                     onChange={(event) => setEditForm((current) => ({ ...current, description: event.target.value }))}
                   />
                 </SettingsField>
-              </SettingsFieldGrid>
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Workspace ID",
-                    value: selectedWorkspace.workspaceId,
-                    meta: selectedWorkspace.lifecycleStatus,
-                  },
-                  {
-                    label: "Created",
-                    value: formatDateTime(selectedWorkspace.createdAt),
-                    meta: `Updated ${formatDateTime(selectedWorkspace.updatedAt)}`,
-                  },
-                  {
-                    label: "Revision",
-                    value: String(selectedWorkspace.revision),
-                    meta: "Used to fence concurrent edits",
-                  },
-                ]}
-              />
-              <SettingsButtonRow>
-                <NativeButton variant="default" onClick={() => void handleSave()}>
-                  <Save size={16} />
-                  Save changes
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  aria-label={`Make active workspace ${selectedWorkspace.name}`}
-                  onClick={() => setActiveWorkspaceId(selectedWorkspace.workspaceId)}
-                >
-                  <CheckCircle2 size={16} />
-                  Make active
-                </NativeButton>
-                {selectedWorkspace.lifecycleStatus === "archived" ? (
-                  <NativeButton
-                    variant="secondary"
-                    aria-label={`Restore workspace ${selectedWorkspace.name}`}
-                    onClick={() => void handleRestore()}
-                  >
-                    <RotateCcw size={16} />
-                    Restore
-                  </NativeButton>
-                ) : (
-                  <NativeButton
-                    variant="destructive"
-                    aria-label={`Archive workspace ${selectedWorkspace.name}`}
-                    onClick={() =>
-                      setPendingArchive({
-                        kind: "workspace",
-                        id: selectedWorkspace.workspaceId,
-                        label: selectedWorkspace.name,
-                        expectedRevision: selectedWorkspace.revision,
-                      })
-                    }
-                  >
-                    <Trash2 size={16} />
-                    Archive
-                  </NativeButton>
-                )}
-              </SettingsButtonRow>
-            </>
-          ) : (
-            <SettingsEmptyState label="Choose a workspace to edit or create a new one." />
-          )}
-        </NativeCard>
-      </SettingsGrid>
-      <ConfirmModal
-        open={citadelTransitionGuard.pendingTransition !== null}
-        danger
-        title="Discard Citadel changes?"
-        message="The selected Citadel has unsaved edits. Discard them and continue?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={citadelTransitionGuard.cancelDiscard}
-        onConfirm={citadelTransitionGuard.confirmDiscard}
-      />
-      <ConfirmModal
-        open={workspaceTransitionGuard.pendingTransition !== null}
-        danger
-        title="Discard workspace changes?"
-        message="The selected workspace has unsaved edits. Discard them and continue?"
-        confirmLabel="Discard changes"
-        cancelLabel="Keep editing"
-        onCancel={workspaceTransitionGuard.cancelDiscard}
-        onConfirm={workspaceTransitionGuard.confirmDiscard}
-      />
-      <ConfirmModal
-        open={pendingArchive !== null}
-        danger
-        pending={archiveBusy}
-        title={`Archive ${pendingArchive?.kind === "citadel" ? "Citadel" : "workspace"}?`}
-        message={`Archive ${pendingArchive?.label ?? "this item"}? It remains available from the archived view.`}
-        confirmLabel={pendingArchive?.kind === "citadel" ? "Confirm archive Citadel" : "Confirm archive workspace"}
-        onCancel={() => setPendingArchive(null)}
-        onConfirm={() => void handleConfirmArchive()}
-      />
-    </SettingsSectionShell>
-  );
+              </SettingsFieldGrid>)}
+      <SettingsButtonRow><NativeButton disabled={busy || activeDraft.hasRemoteChanges || (editor === "workspace-edit" && !selectedWorkspace) || (editor === "citadel-edit" && (!selectedCitadel?.revision || hasCitadelConflict))} onClick={() => void (editor === "workspace-new" ? handleCreate() : editor === "workspace-edit" ? handleSave() : editor === "citadel-new" ? handleCreateCitadel() : handleSaveCitadel())}><Save size={16} />{editor === "workspace-new" ? "Create workspace" : editor === "citadel-new" ? "Create Citadel" : editor === "workspace-edit" ? "Save changes" : "Save Citadel"}</NativeButton><NativeButton variant="secondary" onClick={closeEditor}>Close editor</NativeButton></SettingsButtonRow>
+      </SettingsStack>
+    </FocusedDetail> : <SettingsStack>
+      <SettingsButtonRow><NativeButton onClick={() => { setInspector(null); setEditor(directory === "citadels" ? "citadel-new" : "workspace-new"); }}><Plus size={16} />{directory === "citadels" ? "New Citadel" : "New workspace"}{(directory === "citadels" ? citadelCreate.isDirty : workspaceCreate.isDirty) ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" onClick={() => { void reload(); void reloadCitadels(); }}>Refresh</NativeButton></SettingsButtonRow>
+      <SettingsFilterBar options={[{id:"workspaces",label:"Workspaces"},{id:"citadels",label:"Citadel manager"}]} value={directory} onChange={next => { setDirectory(next as "workspaces" | "citadels"); setInspector(null); }} />
+      {directory === "workspaces" ? <NativeCard title="Workspace directory" subtitle={"Citadel: " + (activeCitadelName ?? scope)} stats={[{label:"Total",value:error ? "Unavailable" : data ? (Array.isArray(data.items) ? String(data.items.length) : "Unavailable") : "Loading"},{label:"Active workspace",value:activeWorkspaceName}]}>
+        <SettingsField label="Search workspaces"><input className="mc-next-settings-input" value={search} onChange={event => setSearch(event.target.value)} placeholder="Name, slug, or description" /></SettingsField>
+        <SettingsFilterBar options={[{id:"all",label:"All",ariaLabel:"All workspaces"},{id:"active",label:"Active",ariaLabel:"Active workspaces"},{id:"archived",label:"Archived",ariaLabel:"Archived workspaces"}]} value={view} onChange={next => setView(next as DirectoryView)} />
+        <NativeSelectableList items={filtered.map(item => ({id:item.workspaceId,title:item.name,meta:[item.lifecycleStatus,item.workspaceId === activeWorkspaceId ? "Current" : "",hasSessionDraft("workspace:" + scope + ":" + item.workspaceId + ":edit") ? "Unsaved" : ""].filter(Boolean).join(" · "),body:item.description || item.slug}))} selectedId={inspector === "workspace" ? selectedWorkspaceId : undefined} onSelect={id => { setSelectedWorkspaceId(id); setInspector("workspace"); }} emptyLabel={error ? "Workspace records are unavailable." : "No workspaces in this view."} maxHeight="min(65vh, 42rem)" />
+      </NativeCard> : <NativeCard title="Citadel manager" subtitle="" stats={[{label:"Citadels",value:citadelsError ? "Unavailable" : citadelsData ? (Array.isArray(citadelsData.items) ? String(citadelsData.items.length) : "Unavailable") : "Loading"}]}>
+        <SettingsFilterBar options={[{id:"all",label:"All",ariaLabel:"All Citadels"},{id:"active",label:"Active",ariaLabel:"Active Citadels"},{id:"archived",label:"Archived",ariaLabel:"Archived Citadels"}]} value={citadelView} onChange={next => setCitadelView(next as DirectoryView)} />
+        <NativeSelectableList items={filteredCitadels.map(item => ({id:item.citadelId,title:item.name,meta:[item.lifecycleStatus,item.citadelId === activeCitadelId ? "Current" : "",hasSessionDraft("citadel:" + item.citadelId + ":edit") ? "Unsaved" : ""].filter(Boolean).join(" · "),body:item.description || item.slug}))} selectedId={inspector === "citadel" ? selectedCitadelId : undefined} onSelect={id => { setSelectedCitadelId(id); setInspector("citadel"); }} emptyLabel={citadelsError ? "Citadel records are unavailable." : "No Citadels in this view."} maxHeight="min(65vh, 42rem)" />
+      </NativeCard>}
+    </SettingsStack>}
+    <DetailInspector open={!editor && inspector !== null} title={inspector === "citadel" ? selectedCitadel?.name ?? "Citadel unavailable" : selectedWorkspace?.name ?? "Workspace unavailable"} onClose={() => setInspector(null)}>
+      {inspector === "workspace" && selectedWorkspace ? <SettingsStack>
+        <p>{selectedWorkspace.description || "No description"}</p><p>{selectedWorkspace.lifecycleStatus}{selectedWorkspace.workspaceId === activeWorkspaceId ? " · Current workspace" : ""}</p>
+        <SettingsButtonRow><NativeButton onClick={() => { setInspector(null); setEditor("workspace-edit"); }}>Edit workspace{workspaceEdit.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" aria-label={"Make active workspace " + selectedWorkspace.name} onClick={() => { setActiveWorkspaceId(selectedWorkspace.workspaceId); setInspector(null); }}><CheckCircle2 size={16} />Make active</NativeButton></SettingsButtonRow>
+        <dl><dt>Workspace ID</dt><dd>{selectedWorkspace.workspaceId}</dd><dt>Slug</dt><dd>{selectedWorkspace.slug}</dd><dt>Citadel</dt><dd>{selectedWorkspace.citadelId ?? scope}</dd><dt>Created</dt><dd>{formatDateTime(selectedWorkspace.createdAt)}</dd><dt>Updated</dt><dd>{formatDateTime(selectedWorkspace.updatedAt)}</dd><dt>Revision</dt><dd>{selectedWorkspace.revision}</dd></dl>
+        {selectedWorkspace.lifecycleStatus === "archived" ? <NativeButton disabled={busy} variant="secondary" aria-label={"Restore workspace " + selectedWorkspace.name} onClick={() => restore("workspace")}><RotateCcw size={16} />Restore</NativeButton> : <NativeButton variant="destructive" aria-label={"Archive workspace " + selectedWorkspace.name} onClick={() => setPendingArchive({kind:"workspace",id:selectedWorkspace.workspaceId,label:selectedWorkspace.name,expectedRevision:selectedWorkspace.revision})}><Trash2 size={16} />Archive</NativeButton>}
+      </SettingsStack> : inspector === "citadel" && selectedCitadel ? <SettingsStack>
+        <p>{selectedCitadel.description || "No description"}</p><p>{selectedCitadel.lifecycleStatus}{selectedCitadel.citadelId === activeCitadelId ? " · Current Citadel" : ""}</p>
+        <SettingsButtonRow><NativeButton onClick={() => { setInspector(null); setEditor("citadel-edit"); }}>Edit Citadel{citadelEdit.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" aria-label={"Make active Citadel " + selectedCitadel.name} onClick={() => { setActiveCitadelId?.(selectedCitadel.citadelId); setInspector(null); }}><CheckCircle2 size={16} />Make active</NativeButton></SettingsButtonRow>
+        <dl><dt>Citadel ID</dt><dd>{selectedCitadel.citadelId}</dd><dt>Kind</dt><dd>{selectedCitadel.kind}</dd><dt>Slug</dt><dd>{selectedCitadel.slug}</dd><dt>Created</dt><dd>{formatDateTime(selectedCitadel.createdAt)}</dd><dt>Updated</dt><dd>{formatDateTime(selectedCitadel.updatedAt)}</dd></dl>
+        {selectedCitadel.lifecycleStatus === "archived" ? <NativeButton disabled={busy || !selectedCitadel.revision} variant="secondary" aria-label={"Restore Citadel " + selectedCitadel.name} onClick={() => restore("citadel")}><RotateCcw size={16} />Restore</NativeButton> : <NativeButton disabled={!selectedCitadel.revision} variant="destructive" aria-label={"Archive Citadel " + selectedCitadel.name} onClick={() => setPendingArchive({kind:"citadel",id:selectedCitadel.citadelId,label:selectedCitadel.name,expectedRevision:selectedCitadel.revision})}><Trash2 size={16} />Archive</NativeButton>}
+      </SettingsStack> : <SettingsEmptyState label="The selected record is unavailable. Refresh or choose another record." />}
+      <NativeDisclosureCard id="workspace-lifecycle" title="Lifecycle"><p>Archive keeps records available in the archived view. Permanent deletion is not available here.</p></NativeDisclosureCard>
+    </DetailInspector>
+    {leave.dialog}
+    <ConfirmModal open={pendingArchive !== null} danger pending={archiveBusy} title={"Archive " + (pendingArchive?.kind === "citadel" ? "Citadel" : "workspace") + "?"} message={"Archive " + (pendingArchive?.label ?? "this item") + "? It remains available in the archived view. Any retained edit draft for this record will be discarded."} confirmLabel={pendingArchive?.kind === "citadel" ? "Confirm archive Citadel" : "Confirm archive workspace"} onCancel={() => setPendingArchive(null)} onConfirm={() => void handleConfirmArchive()} />
+  </SettingsSectionShell>;
 }

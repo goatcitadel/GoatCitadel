@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import type { ChatSessionWorkbenchRecord } from "@goatcitadel/contracts";
+import type { ChatSessionWorkbenchRecord, ChatSessionWorkbenchFileOperationPreviewRequest } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyChatSessionWorkbenchPatch,
@@ -20,9 +20,15 @@ import {
   resolveWorkbenchPathStatus,
   runChatSessionWorkbenchCommand,
   runChatSessionWorkbenchFileOperation,
+  previewChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile,
   type ChatWorkbenchDependencies,
 } from "./chat-workbench-service.js";
+
+async function runReviewedOperation(deps: ChatWorkbenchDependencies, sessionId: string, input: ChatSessionWorkbenchFileOperationPreviewRequest) {
+  const review = await previewChatSessionWorkbenchFileOperation(deps, sessionId, input);
+  return runChatSessionWorkbenchFileOperation(deps, sessionId, { ...input, expectedRevision: review.revision });
+}
 
 const tempRoots: string[] = [];
 
@@ -35,6 +41,76 @@ afterEach(async () => {
 });
 
 describe("chat workbench helpers", () => {
+  it("rejects Windows aliases and protected descendants before offering a path review", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    for (const filePath of [".git.", "node_modules ", ".goatcitadel-workbench.lock.", "NUL", "con.txt", "index.ts:hidden"]) {
+      await expect(previewChatSessionWorkbenchFileOperation(deps, "sess-1", { operation: "create_file", path: filePath }))
+        .rejects.toThrow(/cannot/);
+    }
+    await fs.mkdir(path.join(projectRoot, "folder", "node_modules"), { recursive: true });
+    await expect(previewChatSessionWorkbenchFileOperation(deps, "sess-1", { operation: "delete", path: "folder" }))
+      .rejects.toThrow(/cannot mutate node_modules/);
+    expect((await fs.stat(path.join(projectRoot, "folder", "node_modules"))).isDirectory()).toBe(true);
+  }, 30_000);
+
+  it("rejects path actions when reviewed source contents or folder membership changed", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const input = { operation: "rename" as const, path: "index.ts", targetPath: "renamed.ts" };
+    const reviewed = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", input);
+    await fs.writeFile(path.join(projectRoot, "index.ts"), "new writer\n");
+    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, expectedRevision: reviewed.revision }))
+      .rejects.toMatchObject({ code: "WRITE_CONFLICT", details: { reason: "WORKBENCH_PATH_REVISION_CONFLICT" } });
+    expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe("new writer\n");
+    await expect(fs.stat(path.join(projectRoot, "renamed.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.mkdir(path.join(projectRoot, "notes"));
+    await fs.writeFile(path.join(projectRoot, "notes", "first.txt"), "first");
+    const removal = { operation: "delete" as const, path: "notes" };
+    const folderReview = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", removal);
+    expect(folderReview.affectedPaths.map((entry) => entry.path)).toEqual(["notes", "notes/first.txt"]);
+    await fs.writeFile(path.join(projectRoot, "notes", "later.txt"), "keep me");
+    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...removal, expectedRevision: folderReview.revision }))
+      .rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect(await fs.readFile(path.join(projectRoot, "notes", "later.txt"), "utf8")).toBe("keep me");
+    const current = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", removal);
+    await runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...removal, expectedRevision: current.revision });
+    await expect(fs.stat(path.join(projectRoot, "notes"))).rejects.toMatchObject({ code: "ENOENT" });
+  }, 30_000);
+
+  it("binds reviewed actions and destination identity and retains post-mutation truth", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const input = { operation: "create_file" as const, path: "new.txt", content: "reviewed" };
+    const review = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", input);
+    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, content: "unreviewed", expectedRevision: review.revision }))
+      .rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    await fs.writeFile(path.join(projectRoot, "new.txt"), "another writer");
+    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, expectedRevision: review.revision }))
+      .rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect(await fs.readFile(path.join(projectRoot, "new.txt"), "utf8")).toBe("another writer");
+    const deletion = { operation: "delete" as const, path: "new.txt" };
+    const deletionReview = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", deletion);
+    vi.mocked(deps.publishRealtime).mockRejectedValueOnce(new Error("publication failed"));
+    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...deletion, expectedRevision: deletionReview.revision }))
+      .rejects.toMatchObject({ mutationCommitted: true });
+    await expect(fs.stat(path.join(projectRoot, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  }, 30_000);
+
+  it("serializes path actions and content saves sharing one reviewed file", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const file = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    const operation = { operation: "rename" as const, path: "index.ts", targetPath: "renamed.ts" };
+    const review = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", operation);
+    const results = await Promise.allSettled([
+      saveChatSessionWorkbenchFile(deps, "sess-1", { path: "index.ts", content: "winner", expectedRevision: file.revision }),
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...operation, expectedRevision: review.revision }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: "WRITE_CONFLICT" });
+    const entries = await fs.readdir(projectRoot);
+    expect(entries.filter((name) => ["index.ts", "renamed.ts"].includes(name))).toHaveLength(1);
+  }, 30_000);
+
   it("syncs existing workbench state and hydrates serialized worktree paths", async () => {
     const { deps } = await createWorkbenchFixture();
 
@@ -209,7 +285,7 @@ describe("chat workbench helpers", () => {
   it("runs governed file tree operations inside the project workbench scope", async () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
 
-    const createdFolder = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+    const createdFolder = await runReviewedOperation(deps, "sess-1", {
       operation: "create_folder",
       path: "docs",
     });
@@ -217,7 +293,7 @@ describe("chat workbench helpers", () => {
     expect(folderStat.isDirectory()).toBe(true);
     expect(createdFolder.output.output).toContain("Created folder docs.");
 
-    const createdFile = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+    const createdFile = await runReviewedOperation(deps, "sess-1", {
       operation: "create_file",
       path: "docs/notes.md",
       content: "# Notes\n",
@@ -226,7 +302,7 @@ describe("chat workbench helpers", () => {
     expect(await readNormalized(path.join(projectRoot, "docs", "notes.md"))).toBe("# Notes\n");
     expect(createdFile.tree.items.some((item) => item.path === "docs/notes.md")).toBe(true);
 
-    const renamed = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+    const renamed = await runReviewedOperation(deps, "sess-1", {
       operation: "rename",
       path: "docs/notes.md",
       targetPath: "docs/renamed.md",
@@ -235,7 +311,7 @@ describe("chat workbench helpers", () => {
     await expect(fs.stat(path.join(projectRoot, "docs", "notes.md"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readNormalized(path.join(projectRoot, "docs", "renamed.md"))).toBe("# Notes\n");
 
-    const duplicated = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+    const duplicated = await runReviewedOperation(deps, "sess-1", {
       operation: "duplicate",
       path: "docs/renamed.md",
       targetPath: "docs/copy.md",
@@ -243,7 +319,7 @@ describe("chat workbench helpers", () => {
     expect(duplicated.state.activeFilePath).toBe("docs/copy.md");
     expect(await readNormalized(path.join(projectRoot, "docs", "copy.md"))).toBe("# Notes\n");
 
-    const moved = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+    const moved = await runReviewedOperation(deps, "sess-1", {
       operation: "move",
       path: "docs/copy.md",
       targetPath: "copy.md",
@@ -251,7 +327,7 @@ describe("chat workbench helpers", () => {
     expect(moved.state.activeFilePath).toBe("copy.md");
     expect(await readNormalized(path.join(projectRoot, "copy.md"))).toBe("# Notes\n");
 
-    const deleted = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+    const deleted = await runReviewedOperation(deps, "sess-1", {
       operation: "delete",
       path: "copy.md",
     });
@@ -269,25 +345,25 @@ describe("chat workbench helpers", () => {
     const { deps } = await createGitWorkbenchFixture();
 
     await expect(
-      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      runReviewedOperation(deps, "sess-1", {
         operation: "create_file",
         path: "../escape.ts",
       }),
     ).rejects.toThrow(/Invalid relative path/);
     await expect(
-      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      runReviewedOperation(deps, "sess-1", {
         operation: "delete",
         path: ".git/config",
       }),
     ).rejects.toThrow(/Git metadata/);
     await expect(
-      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      runReviewedOperation(deps, "sess-1", {
         operation: "delete",
         path: ".GIT/config",
       }),
     ).rejects.toThrow(/Git metadata/);
     await expect(
-      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      runReviewedOperation(deps, "sess-1", {
         operation: "create_file",
         path: "NODE_MODULES/pkg/index.js",
       }),
@@ -301,7 +377,7 @@ describe("chat workbench helpers", () => {
     const canCreateFileSymlinks = await createDanglingFileSymlink(createLinkPath, createOutsideTarget);
     if (canCreateFileSymlinks) {
       await expect(
-        runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        runReviewedOperation(deps, "sess-1", {
           operation: "create_file",
           path: "dangling-create.md",
           content: "created outside\n",
@@ -316,8 +392,9 @@ describe("chat workbench helpers", () => {
           saveChatSessionWorkbenchFile(deps, "sess-1", {
             path: "dangling-save.md",
             content: "saved outside\n",
+            expectedRevision: null,
           }),
-        ).rejects.toThrow(/dangling symbolic link/);
+        ).rejects.toThrow(/symbolic.link writes/);
         await expect(fs.stat(saveOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
       }
       await fs.rm(saveOutsideTarget, { force: true });
@@ -330,7 +407,7 @@ describe("chat workbench helpers", () => {
       const duplicateLinkPath = path.join(projectRoot, "dangling-duplicate.md");
       if (await createDanglingFileSymlink(duplicateLinkPath, duplicateOutsideTarget)) {
         await expect(
-          runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+          runReviewedOperation(deps, "sess-1", {
             operation: "duplicate",
             path: "source.md",
             targetPath: "dangling-duplicate.md",
@@ -351,7 +428,7 @@ describe("chat workbench helpers", () => {
       throw new Error("Directory symlink/junction coverage unavailable; cannot verify parent escape guard.");
     }
     await expect(
-      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      runReviewedOperation(deps, "sess-1", {
         operation: "create_file",
         path: "linked-parent/escaped.md",
         content: "escaped project scope\n",
@@ -362,6 +439,7 @@ describe("chat workbench helpers", () => {
       saveChatSessionWorkbenchFile(deps, "sess-1", {
         path: "linked-parent/escaped-save.md",
         content: "escaped save scope\n",
+        expectedRevision: null,
       }),
     ).rejects.toThrow(/outside the project root/);
     await expect(fs.stat(path.join(outsideProjectDir, "escaped-save.md"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -401,6 +479,7 @@ describe("chat workbench helpers", () => {
     const file = await saveChatSessionWorkbenchFile(deps, "sess-1", {
       path: "index.ts",
       content: existingContent,
+      expectedRevision: (await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts")).revision,
     });
 
     expect(file.changed).toBe(false);
@@ -421,6 +500,64 @@ describe("chat workbench helpers", () => {
         eventAuthority: "retained_stream",
       }),
     );
+  }, 30_000);
+
+  it("rejects a stale editor save after another writer changes the file", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const reviewed = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    await fs.writeFile(path.join(projectRoot, "index.ts"), "export const winner = true;\n", "utf8");
+
+    await expect(saveChatSessionWorkbenchFile(deps, "sess-1", {
+      path: "index.ts",
+      content: "export const stale = true;\n",
+      expectedRevision: reviewed.revision,
+    })).rejects.toMatchObject({
+      code: "WRITE_CONFLICT",
+    });
+    expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe("export const winner = true;\n");
+  }, 30_000);
+
+  it("allows only one simultaneous Gateway save of the same reviewed file", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const before = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    const outcomes = await Promise.allSettled(["first", "second"].map((label) =>
+      saveChatSessionWorkbenchFile({ ...deps }, "sess-1", {
+        path: "index.ts", content: `export const writer = "${label}";\n`, expectedRevision: before.revision,
+      })));
+    const saved = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    expect(saved).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ code: "WRITE_CONFLICT" }) }),
+    ]);
+    if (saved[0]?.status !== "fulfilled") throw new Error("Missing successful writer");
+    expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe(saved[0].value.content);
+  }, 30_000);
+
+  it("acknowledges its saved snapshot even if another writer changes the file during follow-up validation", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const before = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    vi.mocked(deps.publishRealtime).mockImplementation(async (_channel, _topic, payload) => {
+      if (payload.type === "chat_workbench_post_write_validation_completed") {
+        await fs.writeFile(path.join(projectRoot, "index.ts"), "export const later = true;\n", "utf8");
+      }
+    });
+    const saved = await saveChatSessionWorkbenchFile(deps, "sess-1", {
+      path: "index.ts", content: "export const submitted = true;\n", expectedRevision: before.revision,
+    });
+    expect(saved.content).toBe("export const submitted = true;\n");
+    const current = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    expect(current.content).toBe("export const later = true;\n");
+    expect(current.revision).not.toBe(saved.revision);
+  }, 30_000);
+
+  it("preserves non-retryable write truth if post-write publication fails", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    const before = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    vi.mocked(deps.publishRealtime).mockRejectedValue(new Error("publication failed"));
+    await expect(saveChatSessionWorkbenchFile(deps, "sess-1", {
+      path: "index.ts", content: "export const saved = true;\n", expectedRevision: before.revision,
+    })).rejects.toMatchObject({ mutationCommitted: true });
+    expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe("export const saved = true;\n");
   }, 30_000);
 
   it("returns a scoped tree and marks changed nested files without surfacing node_modules", async () => {
@@ -451,18 +588,21 @@ describe("chat workbench helpers", () => {
       saveChatSessionWorkbenchFile(deps, "sess-1", {
         path: "large.txt",
         content: "x".repeat(256 * 1024 + 1),
+        expectedRevision: null,
       }),
     ).rejects.toThrow(/too large for the workbench editor/i);
     await expect(
       saveChatSessionWorkbenchFile(deps, "sess-1", {
         path: "src",
         content: "not a file",
+        expectedRevision: null,
       }),
     ).rejects.toThrow(/Path is a directory: src/);
     await expect(
       saveChatSessionWorkbenchFile(deps, "sess-1", {
         path: "missing/child.ts",
         content: "export const child = true;\n",
+        expectedRevision: null,
       }),
     ).rejects.toThrow(/Parent directory does not exist/);
 
@@ -483,6 +623,7 @@ describe("chat workbench helpers", () => {
     const file = await saveChatSessionWorkbenchFile(deps, "sess-1", {
       path: "config.json",
       content: "{ invalid json",
+      expectedRevision: (await getChatSessionWorkbenchFile(deps, "sess-1", "config.json")).revision,
     });
     expect(file).toEqual(
       expect.objectContaining({
@@ -997,6 +1138,11 @@ async function createDirectorySymlink(linkPath: string, targetPath: string): Pro
 }
 
 async function removeTestWorkspace(target: string): Promise<void> {
+  const resolved = path.resolve(target);
+  const ownedPrefix = path.basename(resolved).startsWith("goatcitadel-workbench-") || path.basename(resolved).startsWith("goatcitadel-pm-");
+  if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !ownedPrefix) {
+    throw new Error("Refusing cleanup outside a task-owned temporary Workbench fixture.");
+  }
   const transientCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
   for (let attempt = 0; attempt < 8; attempt += 1) {
     try {

@@ -181,6 +181,7 @@ describe("CuratorRoutePage", () => {
 
   it("requires confirmation before archiving and sends confirm: true", async () => {
     const renderer = await renderPage();
+    await act(async () => { findButton(renderer.root, "alpha").props.onClick(); });
 
     await act(async () => {
       findButton(renderer.root, "Archive").props.onClick();

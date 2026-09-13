@@ -427,15 +427,24 @@ describe("RemoteWorkerInferenceRepository live PostgreSQL (skips without GOATCIT
         // --- Stream, finalize, and prove immutable terminal on the live cluster ---
         repo.appendOutputFrame({ ...keyFor(authority), dispatchClaimOwner: winner, text: "Hello ", now });
         repo.appendOutputFrame({ ...keyFor(authority), dispatchClaimOwner: winner, text: "world", now });
+        const toolCalls = [{ callId: "call-1", modelToolName: "fs_read", argumentsJson: ' {"path":"note.txt"} ' }];
+        assert.throws(() => repo.finalizeTerminal({
+          ...keyFor(authority), dispatchClaimOwner: winner, terminalState: "completed",
+          usageEventIds: ["usage-terminal-1"], toolCalls: [{ ...toolCalls[0]!, argumentsJson: "{" }], now,
+        }), /incomplete JSON/);
+        assert.equal(repo.getRequest(keyFor(authority))?.state, "streaming");
+        assert.equal(repo.listFramesAfter(keyFor(authority), 0).length, 2);
         const finalized = repo.finalizeTerminal({
           ...keyFor(authority),
           dispatchClaimOwner: winner,
           terminalState: "completed",
           usageEventIds: ["usage-intent-1", "usage-terminal-1"],
+          toolCalls,
           now,
         });
         assert.equal(finalized.state, "completed");
         assert.equal(finalized.terminalFrameSequence, 3);
+        assert.deepEqual(JSON.parse(new RemoteWorkerInferenceRepository(setupDb).listFramesAfter(keyFor(authority), 2)[0]!.payloadJson).toolCalls, toolCalls);
         assert.equal(finalized.accountingDisposition, "delegated");
         assert.throws(
           () =>

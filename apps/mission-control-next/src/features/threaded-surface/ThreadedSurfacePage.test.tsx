@@ -1,3 +1,4 @@
+vi.mock("./ChatOptionsPopover", () => ({ ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 import { readFileSync } from "node:fs";
 import React from "react";
 import { createRef } from "react";
@@ -527,6 +528,22 @@ describe("ThreadedSurfacePage", () => {
     expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.tabIndex).toBe(-1);
   });
 
+  it("keeps the old composer covered until new Chat creation settles", async () => {
+    setMediaQuery("(width < 1180px)", true);
+    const input = buildInput() as any;
+    input.sessionRailOpen = true;
+    input.onSessionRailOpenChange = vi.fn();
+    let finish!: () => void;
+    input.sessionRail.onCreateSession = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ThreadedSurfacePage surface="chat" input={input} />); });
+    await act(async () => { findButton(renderer.root, "New chat").props.onClick(); });
+    expect(input.onSessionRailOpenChange).not.toHaveBeenCalledWith(false);
+    await act(async () => { finish(); });
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
+    act(() => renderer.unmount());
+  });
+
   it("closes the mobile session drawer after starting a new chat", async () => {
     setMediaQuery("(width < 1180px)", true);
     const input = buildInput() as any;
@@ -919,8 +936,8 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain('aria-label="Approvals: Decisions clear"');
     expect(markup).toContain("OpenAI / gpt-test");
     expect(markup).toContain("Selection: session");
-    expect(markup).toContain("0 tokens");
-    expect(markup).toContain("$0.00");
+    expect(markup).toContain("Tokens unavailable");
+    expect(markup).toContain("Cost unavailable");
     expect(markup).toContain("Runtime ready");
     expect(markup).toContain("Decisions clear");
   });
@@ -1489,20 +1506,20 @@ describe("ThreadedSurfacePage", () => {
     expect(collectText(renderer!.root)).toContain("Work Record");
 
     await act(async () => {
-      findExactButton(renderer!.root, "Diff").props.onClick();
+      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "diff" } });
     });
     expect(onDockOpenChange).toHaveBeenCalledWith(true);
     expect(collectText(renderer!.root)).toContain("Repo diff");
     expect(collectText(renderer!.root)).toContain("src/app.ts");
 
     await act(async () => {
-      findExactButton(renderer!.root, "Run log").props.onClick();
+      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "terminal" } });
     });
     expect(collectText(renderer!.root)).toContain("Run log");
     expect(collectText(renderer!.root)).toContain("Validation passed.");
 
     await act(async () => {
-      findExactButton(renderer!.root, "Files").props.onClick();
+      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "files" } });
     });
     await act(async () => {
       findButton(renderer!.root, "src/app.ts").props.onClick();
@@ -1510,7 +1527,7 @@ describe("ThreadedSurfacePage", () => {
     expect(onSelectFile).toHaveBeenCalledWith("src/app.ts");
 
     await act(async () => {
-      findExactButton(renderer!.root, "Background tasks").props.onClick();
+      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "background" } });
     });
     await act(async () => {
       findButton(renderer!.root, "Open task board").props.onClick();
@@ -1932,7 +1949,7 @@ describe("ThreadedSurfacePage", () => {
       drawerHandle.props.onKeyDown({ key: "End", preventDefault: vi.fn() });
     });
     const stage = renderer!.root.findByProps({ className: "mc-next-threaded-stage mode-chat has-context" });
-    expect(stage.props.style["--mc-context-panel-width"]).toBe("420px");
+    expect(stage.props.style["--mc-context-panel-width"]).toBe("560px");
   });
 
   it("wires cowork active-session actions, project drafts, tag filters, and compact artifact dismissal", async () => {
@@ -1961,6 +1978,7 @@ describe("ThreadedSurfacePage", () => {
     const input = {
       ...buildInput(),
       showProjectCreate: true,
+      activityOpenRequest: 1,
       activeSessionSurfaceProps: activeProps,
       emptyStateProps: null,
       sessionRail: {
@@ -2009,12 +2027,10 @@ describe("ThreadedSurfacePage", () => {
     expect(input.sessionRail.onCreateProject).toHaveBeenCalledTimes(1);
     expect(input.sessionRail.onSelectTag).toHaveBeenCalledWith(null);
 
-    const sheet = renderer!.root.findAll(
-      (node) => node.props.open === true && typeof node.props.onOpenChange === "function",
-    )[0];
-    expect(sheet).toBeDefined();
+    expect(renderer!.root.findAllByProps({ "data-panel": "artifacts" })).toHaveLength(1);
+    expect(collectText(renderer!.root)).toContain("Compact brief");
     await act(async () => {
-      sheet!.props.onOpenChange(false);
+      findExactButton(renderer!.root, "Close artifact preview").props.onClick();
     });
     expect((activeProps as any).onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
   });

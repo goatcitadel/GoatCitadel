@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 import {
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
@@ -24,8 +25,10 @@ import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-ad
 import { MeshRepository } from "./mesh-repo.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
+import { assertProvisioningLeaseAuthority } from "./remote-worker-cell-provisioning-test-helpers.js";
+import { assertCanonicalProvisioningCheckpoints } from "./remote-worker-cell-checkpoint-test-helpers.js";
 import { RemoteWorkerCellRepository, type RemoteWorkerCellKey } from "./remote-worker-cell-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 import { TaskRepository } from "./task-repo.js";
 
 const clients: DatabaseClient[] = [];
@@ -304,6 +307,7 @@ function toRunning(s: Seeded) {
   s.cells.persistPlatformIdentity({
     ...s.key,
     provisioningOwner: "gateway-a",
+    provisioningLeaseExpiresAt: FUTURE,
     platformIdentity: platform("1"),
     detailSha256: D("plat"),
     now: s.now,
@@ -327,6 +331,122 @@ function toRunning(s: Seeded) {
 }
 
 describe("RemoteWorkerCellRepository (SQLite)", () => {
+  it("retains the native provisioning plan and exact ordered checkpoints under its winning lease", { timeout: 30_000 }, async () => {
+    const s = seed("canonical-checkpoints");
+    await assertCanonicalProvisioningCheckpoints(s.db, s.profile);
+  });
+
+  it("uses database lease time and fences expired or replaced provisioning owners", { timeout: 30_000 }, async () => {
+    const s = seed("lease-authority");
+    s.cells.profileOrReplay({ profile: s.profile, idempotencyKey: "cell:lease-authority", createdAt: s.now });
+    await assertProvisioningLeaseAuthority(s.db, s.key, platform("lease-authority"));
+  });
+
+  it("upgrades nonempty container cells and evidence without changing authority or triggers", () => {
+    const s = seed("upgrade-preservation");
+    toRunning(s);
+    const legacy = new DatabaseSync(":memory:");
+    try {
+      legacy.exec(
+        "PRAGMA foreign_keys = ON; CREATE TABLE remote_worker_assignment_generations (registry_workspace_id TEXT, assignment_id TEXT, assignment_generation INTEGER, PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation));",
+      );
+      legacy
+        .prepare("INSERT INTO remote_worker_assignment_generations VALUES (?, ?, ?)")
+        .run(s.key.registryWorkspaceId, s.key.assignmentId, s.key.assignmentGeneration);
+      __sqliteInternals.applySchemaMigrationForTest(178, legacy);
+      const expected = new Map<string, Record<string, unknown>[]>();
+      for (const table of ["remote_worker_cells", "remote_worker_cell_evidence"]) {
+        const rows = s.db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
+        expected.set(table, rows);
+        for (const row of rows) {
+          const columns = Object.keys(row).filter((column) => column !== "native_platform_json");
+          legacy
+            .prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+            .run(...columns.map((column) => row[column] as string | number | null));
+        }
+      }
+      legacy.exec("BEGIN IMMEDIATE");
+      __sqliteInternals.applySchemaMigrationForTest(206, legacy);
+      legacy.exec("COMMIT");
+      for (const [table, rows] of expected) assert.deepEqual(legacy.prepare(`SELECT * FROM ${table}`).all(), rows);
+      assert.deepEqual(legacy.prepare("PRAGMA foreign_key_check").all(), []);
+      assert.throws(() => legacy.exec("DELETE FROM remote_worker_cell_evidence"), /append.only|immutable/iu);
+      assert.throws(
+        () => legacy.exec("UPDATE remote_worker_cells SET profile_sha256 = '" + "f".repeat(64) + "'"),
+        /immutable/iu,
+      );
+    } finally {
+      legacy.close();
+    }
+  });
+  it("persists native v2 identity without inventing container metadata and rejects backend swaps", () => {
+    const s = seed("native");
+    const profile: RemoteWorkerCellProfile = {
+      ...s.profile,
+      schemaVersion: "goatcitadel.remote-worker-cell-profile.v2",
+      backend: "windows_native",
+      egressPosture: "deny_all",
+    };
+    assert.throws(
+      () =>
+        s.cells.profileOrReplay({
+          profile: { ...profile, schemaVersion: REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION },
+          idempotencyKey: "bad",
+          createdAt: s.now,
+        }),
+      /v2/,
+    );
+    s.cells.profileOrReplay({ profile, idempotencyKey: "native", createdAt: s.now });
+    s.cells.claimProvisioning({
+      ...s.key,
+      provisioningOwner: "gateway-a",
+      leaseExpiresAt: FUTURE,
+      detailSha256: D("claim"),
+      now: s.now,
+    });
+    assert.throws(
+      () =>
+        s.cells.persistPlatformIdentity({
+          ...s.key,
+          provisioningOwner: "gateway-a",
+          provisioningLeaseExpiresAt: FUTURE,
+          platformIdentity: platform("wrong"),
+          detailSha256: D("wrong"),
+          now: s.now,
+        }),
+      /backends/,
+    );
+    const identity: RemoteWorkerCellPlatformIdentity = {
+      schemaVersion: "goatcitadel.remote-worker-cell-platform.v2",
+      backend: "windows_native",
+      jobName: `gc-cell-${"a".repeat(32)}`,
+      appContainerName: `GoatCitadel.Worker.${"a".repeat(32)}`,
+      volumeIdentitySha256: D("volume"),
+      runtimeBundleSha256: D("runtime"),
+      launcherSha256: D("launcher"),
+      networkPolicy: "deny_all",
+    };
+    const ready = s.cells.persistPlatformIdentity({
+      ...s.key,
+      provisioningOwner: "gateway-a",
+      provisioningLeaseExpiresAt: FUTURE,
+      platformIdentity: identity,
+      detailSha256: D("native-ready"),
+      now: s.now,
+    });
+    assert.deepEqual(ready.nativePlatform, identity);
+    assert.equal(ready.containerName, undefined);
+    assert.equal(ready.imageDigest, undefined);
+    assert.equal(ready.executionState, "ready");
+    assert.throws(
+      () =>
+        s.db
+          .prepare("UPDATE remote_worker_cells SET native_platform_json = '{}' WHERE cell_id = ?")
+          .run(profile.cellId),
+      /immutable/,
+    );
+    assert.deepEqual(s.db.prepare("PRAGMA foreign_key_check").all(), []);
+  });
   it("profiles a cell once and exactly replays a repeated idempotency key", () => {
     const s = seed("profile");
     const created = s.cells.profileOrReplay({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now });
@@ -599,6 +719,7 @@ describe("RemoteWorkerCellRepository (SQLite)", () => {
     s.cells.persistPlatformIdentity({
       ...s.key,
       provisioningOwner: "gateway-a",
+      provisioningLeaseExpiresAt: FUTURE,
       platformIdentity: platform("1"),
       detailSha256: D("plat"),
       now: s.now,
@@ -632,6 +753,7 @@ describe("RemoteWorkerCellRepository (SQLite)", () => {
     s2.cells.persistPlatformIdentity({
       ...s2.key,
       provisioningOwner: "gateway-a",
+      provisioningLeaseExpiresAt: FUTURE,
       platformIdentity: platform("2"),
       detailSha256: D("plat"),
       now: s2.now,

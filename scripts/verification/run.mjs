@@ -48,6 +48,8 @@ import {
   runExtensionsPackageLane,
   runSkillsCatalogLane,
   runMemoryTruthLane,
+  runPermissionProfileRevisionsLane,
+  runPersonalityCatalogRevisionsLane,
   runMeshReadinessLane,
   runOperatorProofLane,
   runOrchestrationPerformanceLane,
@@ -110,6 +112,8 @@ const VALID_LANES = new Set([
   "auth-matrix",
   "ui-parity",
   "memory-truth",
+  "permission-profile-revisions",
+  "personality-catalog-revisions",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -182,6 +186,8 @@ const REVIEW_LANES = new Set([
   "auth-matrix",
   "ui-parity",
   "memory-truth",
+  "permission-profile-revisions",
+  "personality-catalog-revisions",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -379,6 +385,10 @@ async function runLockedVerification(lane, options) {
       await runUiParityLane(context, { profile });
     } else if (lane === "memory-truth") {
       await runMemoryTruthLane(context, { profile });
+    } else if (lane === "permission-profile-revisions") {
+      await runPermissionProfileRevisionsLane(context);
+    } else if (lane === "personality-catalog-revisions") {
+      await runPersonalityCatalogRevisionsLane(context);
     } else if (lane === "realtime-truth") {
       await runRealtimeTruthLane(context, { profile });
     } else if (lane === "journeys") {

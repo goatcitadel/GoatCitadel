@@ -1,0 +1,103 @@
+/* Shared hierarchy and disclosure; substantive data remains in its owning view. */
+.mc-next-shell .mc-next-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.mc-next-shell .mc-next-directory-header { align-items: flex-start; border: 0; background: transparent; box-shadow: none; }
+.mc-next-shell .mc-next-directory-copy .mc-next-directory-title-row h1 { font-size: var(--text-2xl); }
+.mc-next-shell .mc-next-page-explanation, .mc-next-shell .mc-next-card-explanation { color: var(--fg-muted); font-size: var(--text-xs); }
+.mc-next-shell .mc-next-page-explanation summary, .mc-next-shell .mc-next-card-explanation summary { display: flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; padding: 6px 0; }
+.mc-next-shell .mc-next-page-explanation p, .mc-next-shell .mc-next-card-explanation p { max-width: 72ch; line-height: 1.6; }
+.mc-next-shell .mc-next-page-explanation dl, .mc-next-shell .mc-next-card-explanation dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 8px 0; }
+.mc-next-shell .mc-next-page-explanation dt, .mc-next-shell .mc-next-card-explanation dt { font-size: var(--text-xs); color: var(--fg-muted); }
+.mc-next-shell .mc-next-page-explanation dd, .mc-next-shell .mc-next-card-explanation dd { margin: 3px 0 0; color: var(--fg-primary); }
+.mc-next-shell .mc-next-directory-card { box-shadow: none; border: 0; background: transparent; }
+.mc-next-shell .mc-next-directory-card-head { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
+.mc-next-shell .mc-next-directory-card .mc-next-directory-card { padding-inline: 0; }
+.mc-next-shell .mc-next-directory-card-title-row h2, .mc-next-shell .mc-next-directory-card-head h2 { font-size: var(--text-lg); }
+.mc-next-shell .mc-next-disclosure-card { box-shadow: none; border: 0; border-top: 1px solid var(--border-subtle); background: transparent; }
+.mc-next-shell .mc-next-disclosure-card > summary small { display: none; }
+.mc-next-shell .mc-next-disclosure-card[open] > summary small { display: block; }
+.mc-next-shell .mc-next-native-projects-grid { grid-template-columns: minmax(0, 1fr) !important; }
+.mc-next-shell .mc-next-project-home-base { max-width: 100%; }
+.mc-next-shell .mc-next-project-intake-panel > summary, .mc-next-shell .mc-next-project-evidence > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
+.mc-next-shell .mc-next-project-recent-item { width: 100%; text-align: left; color: var(--fg-primary); background: transparent; border: 0; border-bottom: 1px solid var(--border-subtle); cursor: pointer; }
+.mc-next-shell .mc-next-project-controls { grid-template-columns: minmax(0, 1fr); max-width: 780px; }
+@media (max-width: 1179px) { .mc-next-directory-header { gap: 12px; } .mc-next-directory-head-actions { flex-wrap: wrap; } }
+
+.mc-next-shell .mc-next-view-tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
+.mc-next-shell .mc-next-directory-grid-native:empty { display: none; }
+.mc-next-shell .mc-next-directory-grid-native.mc-next-memory-shell { grid-template-columns: minmax(0, 1fr); }
+
+.mc-next-shell .mc-next-memory-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; margin-bottom: 18px; }
+.mc-next-shell .mc-next-memory-metadata { display: grid; gap: 12px; }
+.mc-next-shell .mc-next-memory-metadata dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.mc-next-shell .mc-next-memory-metadata dt { color: var(--fg-muted); font-size: var(--text-xs); }
+.mc-next-shell .mc-next-memory-sources > summary, .mc-next-shell .mc-next-memory-history > summary { cursor: pointer; padding: 16px 0; border-top: 1px solid var(--border-subtle); }
+
+.mc-next-shell .mc-next-calm-directory { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.mc-next-focused-detail { min-width: 0; }
+.mc-next-focused-detail-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.mc-next-focused-detail-header h2 { font-size: var(--text-lg); margin: 0; }
+.mc-next-shell .mc-next-directory-quickjump-inline { padding: 0; border: 0; background: none; box-shadow: none; }
+.mc-next-directory-quickjump-inline .mc-next-directory-card-head { display: none; }
+.mc-next-directory-quickjump-inline .mc-next-directory-action { border: 0; background: none; font-size: var(--text-sm); padding: .25rem .5rem; min-height: 2.75rem; }
+.mc-next-shell .mc-next-profile-summary { display: grid; gap: .75rem; }
+.mc-next-profile-summary dt { color: var(--text-muted); font-size: var(--text-xs); }
+.mc-next-profile-summary dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Guided setup keeps the active stage legible without repeating every explanation. */
+.mc-next-mason-progress li:not([aria-current="step"]) small { display: none; }
+.mc-next-mason-progress-copy p { display: none; }
+.mc-next-mason-progress ol { gap: 8px; }
+.mc-next-calm-directory .mc-next-blueprint-json { max-height: 60vh; overflow: auto; }
+.mc-next-detail-body pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Action rows should retain control height when they share a grid with long content. */
+.mc-next-settings-button-row { align-self: start; align-items: center; }
+.mc-next-settings-experimental-note { justify-self: start; max-width: 70ch; }
+.mc-next-trust-details-grid { grid-template-columns: minmax(0, 1fr); }
+
+.mc-next-preference-stack { width: 100%; max-width: 760px; }
+
+/* Form grouping and compact tabs share the inspector's rhythm. */
+.mc-next-settings-fieldset { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.mc-next-detail-inspector .mc-next-inspector-tabs { display: flex; flex-wrap: nowrap; gap: .375rem; }
+.mc-next-detail-inspector .mc-next-inspector-tabs > button { flex: 1; width: auto; min-width: 0; }
+.mc-next-detail-inspector dl:has(> dt) { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: .75rem 1rem; }
+.mc-next-detail-inspector dt { color: var(--fg-muted); }
+.mc-next-detail-inspector dd { margin: 0; overflow-wrap: anywhere; }
+
+.mc-next-detail-inspector .mc-next-approvals-support-grid { grid-template-columns: minmax(0, 1fr); }
+.mc-next-detail-inspector .mc-next-approvals-decision-context { display: block; }
+.mc-next-detail-inspector .mc-next-approvals-decision-shell { display: grid; grid-template-columns: minmax(0, 1fr); }
+
+.mc-next-activity-record { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; text-align: left; width: 100%; border: 0; background: transparent; padding: .75rem 0; color: var(--fg); cursor: pointer; }
+.mc-next-shell .mc-next-ops-schedules-grid, .mc-next-shell .mc-next-ops-runtime-page-sessions .mc-next-directory-grid-native, .mc-next-shell .mc-next-ops-runtime-page-activity .mc-next-directory-grid-native { grid-template-columns: minmax(0, 1fr); }
+.mc-next-ops-posture-summary > summary { cursor: pointer; color: var(--fg-muted); padding: .5rem 0; }
+
+.mc-next-approval-evidence { border-top: 1px solid var(--border-subtle); padding-top: 1rem; margin-top: 1rem; }
+.mc-next-detail-inspector .mc-next-approvals-decision-shell, .mc-next-detail-inspector .mc-next-approvals-actions { border: 0; padding: 0; background: transparent; }
+
+.mc-next-shell .mc-next-ops-runtime-page-runtime .mc-next-directory-grid-native, .mc-next-shell .mc-next-ops-runtime-page-costs .mc-next-directory-grid-native, .mc-next-shell .mc-next-ops-runtime-page-diagnostics .mc-next-ops-diagnostics-grid, .mc-next-shell .mc-next-ops-runtime-page-notifications .mc-next-directory-grid-native { grid-template-columns: minmax(0, 1fr); }
+.mc-next-runtime-tabs { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+.mc-next-shell .mc-next-ops-runtime-page .mc-next-directory-list-item { border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; background: transparent; padding: 1rem 0; }
+.mc-next-ops-runtime-page .mc-next-directory-list-item:has(> .mc-next-runtime-actions) { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .25rem 1rem; }
+.mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-directory-list-head, .mc-next-ops-runtime-page .mc-next-directory-list-item > p { grid-column: 1; }
+.mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-runtime-actions { grid-column: 2; grid-row: 1 / span 2; align-self: center; margin: 0; }
+.mc-next-shell .mc-next-directory-lead:has(> .mc-next-ops-posture-summary) { border: 0; padding: 0; background: transparent; box-shadow: none; }
+@media (max-width: 599px) { .mc-next-ops-runtime-page .mc-next-directory-list-item:has(> .mc-next-runtime-actions) { grid-template-columns: minmax(0, 1fr); } .mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-runtime-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
+
+.mc-next-shell .mc-next-remote-workers { display: block; }
+.mc-next-shell .mc-next-remote-workers__detail { display: block; border: 0; }
+.mc-next-worker-runtime-section { padding: 1rem 0; border-top: 1px solid var(--border-subtle); }
+.mc-next-worker-runtime .mc-next-remote-workers__fact-grid { display: block; }
+.mc-next-worker-runtime .mc-next-remote-workers__fact-grid > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: .75rem; padding: .4rem 0; }
+.mc-next-worker-runtime small { display: block; color: var(--fg-muted); }
+
+.mc-next-worker-record { display: block; margin: .5rem 0; font-size: var(--type-small); }
+.mc-next-worker-record > div { padding: .3rem 0; }
+.mc-next-worker-record dt { color: var(--text-muted); }
+.mc-next-worker-record dd { margin-inline-start: .75rem; overflow-wrap: anywhere; }
+
+/* Card titles are the routine detail entry point, separate from selection. */
+.mc-next-kanban-card .mc-next-kanban-card-title { justify-content: flex-start; padding: 4px 0; min-height: 32px; white-space: normal; text-align: left; font: inherit; font-weight: 600; color: var(--text-primary); border: 0; background: transparent; }
+.mc-next-kanban-card .mc-next-kanban-card-title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }

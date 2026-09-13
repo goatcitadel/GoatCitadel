@@ -1,3 +1,5 @@
+import { __resetSessionDraftsForTests } from "./session-drafts";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +56,7 @@ function buttonByLabel(renderer: ReactTestRenderer, label: string): ReactTestIns
 describe("CitadelBlueprintRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionDraftsForTests();
     apiMocks.exportCitadelBlueprint.mockResolvedValue({ schemaVersion: "goatcitadel.blueprint.v1", name: "Acme" });
     apiMocks.validateCitadelBlueprint.mockResolvedValue({ ok: true, errors: [] });
     apiMocks.importCitadelBlueprint.mockResolvedValue({ citadelId: "default" });
@@ -87,6 +90,7 @@ describe("CitadelBlueprintRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />);
     });
+    await act(async () => { buttonByLabel(renderer!, "Import").props.onClick(); });
     await act(async () => {
       renderer!.root
         .findByType("textarea")
@@ -99,8 +103,10 @@ describe("CitadelBlueprintRoutePage", () => {
     expect(treeString(renderer!)).toContain("Valid");
 
     await act(async () => {
-      buttonByLabel(renderer!, "Import").props.onClick();
+      buttonByLabel(renderer!, "Review import").props.onClick();
     });
+    expect(apiMocks.importCitadelBlueprint).not.toHaveBeenCalled();
+    await act(async () => { renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
     expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledWith("default", {
       schemaVersion: "goatcitadel.blueprint.v1",
     });
@@ -122,13 +128,15 @@ describe("CitadelBlueprintRoutePage", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      buttonByLabel(renderer!, "Import").props.onClick();
+      buttonByLabel(renderer!, "Review import").props.onClick();
       await Promise.resolve();
     });
     expect(apiMocks.validateCitadelBlueprint).toHaveBeenCalledWith({
       schemaVersion: "goatcitadel.blueprint.v1",
       name: "Acme",
     });
+    expect(apiMocks.importCitadelBlueprint).not.toHaveBeenCalled();
+    await act(async () => { renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
     expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledWith("default", {
       schemaVersion: "goatcitadel.blueprint.v1",
       name: "Acme",

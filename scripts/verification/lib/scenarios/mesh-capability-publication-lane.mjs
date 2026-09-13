@@ -168,8 +168,13 @@ export function buildMeshCapabilityLaneChecks() {
     {
       id: "mesh-publication.live-postgres",
       title:
-        "Live PostgreSQL parity: full migration ledger + publication replay/conflict, approval-trigger activation, revoke removing callability, one-winner settlement, expired-unsettled recovery projection (hermetic cluster unless GOATCITADEL_TEST_POSTGRES_URL is provided; never an accepted skip)",
+        "Live PostgreSQL parity: full migration ledger + publication replay/conflict, admission/revocation and activation races, approval-trigger activation, revoke removing callability, one-winner settlement, expired-unsettled recovery projection (hermetic cluster unless GOATCITADEL_TEST_POSTGRES_URL is provided; never an accepted skip)",
       kind: "live-postgres",
+      args: [
+        "--filter", "@goatcitadel/storage", "exec", "tsx", "--test",
+        "src/mesh-capability-publication-repo.postgres.test.ts",
+        "src/mesh-capability-node-admission-repo.test.ts",
+      ],
       count: "node-test",
       requireAllExecuted: true,
     },

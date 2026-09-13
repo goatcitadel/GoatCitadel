@@ -68,12 +68,12 @@ export function PromptPacksHero({
       <header className="mc-pp-hero">
         <div className="mc-pp-hero-copy">
           <p className="mc-pp-kicker">{isOpsVariant ? "Quality" : "Prompt Packs"}</p>
-          <h3>{title}</h3>
+          <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
       </header>
 
-      <section className="mc-pp-summary-row" aria-label="Prompt pack overview">
+      <details className="mc-next-inline-details"><summary>Pack overview</summary><section className="mc-pp-summary-row" aria-label="Prompt pack overview">
         {summaryCards.map((card) => (
           <article key={card.label} className="mc-pp-summary-card">
             <span>{card.label}</span>
@@ -82,6 +82,7 @@ export function PromptPacksHero({
           </article>
         ))}
       </section>
+      {hasReport && passRate !== undefined && passThreshold !== undefined ? <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} /> : null}</details>
 
       <section className="mc-pp-command-strip" aria-label="Prompt pack run controls">
         <div className="mc-pp-command-copy">
@@ -117,9 +118,6 @@ export function PromptPacksHero({
         </div>
       </section>
 
-      {hasReport && passRate !== undefined && passThreshold !== undefined ? (
-        <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} />
-      ) : null}
 
       {error ? (
         <div className="mc-pp-alert danger" role="alert">

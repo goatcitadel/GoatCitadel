@@ -1360,3 +1360,22 @@
   outline: 2px solid color-mix(in oklab, var(--area-projects) 70%, transparent);
   outline-offset: 1px;
 }
+
+.mc-next-shell .mc-next-prompt-directory { grid-template-columns: minmax(0, 1fr); }
+.mc-next-shell .mc-pp-command-deck { grid-template-columns: minmax(0, 1fr); }
+.mc-next-shell .mc-pp-hero { padding: 0; border: 0; background: none; box-shadow: none; }
+.mc-next-shell .mc-pp-hero-copy h1 { font-size: var(--text-2xl); margin: 0; }
+.mc-next-shell .mc-pp-hero-copy > .mc-pp-kicker { display: none; }
+.mc-next-shell .mc-pp-command-copy > span { display: none; }
+.mc-next-shell .mc-pp-merged-evidence { min-width: 0; }
+
+.mc-next-shell .mc-prompt-packs { display: block; padding: 24px; overflow: auto; }
+.mc-next-shell .mc-prompt-packs > * { margin-bottom: 16px; }
+.mc-next-shell .mc-pp-hero { min-height: max-content; overflow: visible; }
+.mc-next-shell .mc-pp-panel-collapsible { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.mc-next-shell .mc-pp-panel-collapsible > summary { min-height: 44px; padding: 8px 0; }
+.mc-next-shell .mc-pp-panel-collapsible > summary h4 { margin: 0; font-size: var(--text-sm); }
+.mc-next-shell .mc-pp-panel-collapsible:not([open]) > summary p { display: none; }
+.mc-next-shell .mc-pp-test-row { border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; box-shadow: none; }
+.mc-next-shell .mc-pp-tests-column { background: none; border: 0; padding: 0; }
+@media (max-width: 600px) { .mc-next-shell .mc-prompt-packs { padding: 16px; } }

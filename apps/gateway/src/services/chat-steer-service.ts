@@ -8,13 +8,18 @@ export interface ChatSteerQueuedInstruction {
 interface ActiveTurnState {
   turnId: string;
   queue: ChatSteerQueuedInstruction[];
+  unavailableReason?: string;
 }
 
 export class ChatSteerService {
   private readonly perSession = new Map<string, ActiveTurnState>();
 
-  public registerActiveTurn(input: { sessionId: string; turnId: string }): void {
-    this.perSession.set(input.sessionId, { turnId: input.turnId, queue: [] });
+  public registerActiveTurn(input: { sessionId: string; turnId: string; unavailableReason?: string }): void {
+    this.perSession.set(input.sessionId, {
+      turnId: input.turnId,
+      queue: [],
+      unavailableReason: input.unavailableReason,
+    });
   }
 
   public unregisterActiveTurn(input: { sessionId: string; turnId: string }): void {
@@ -33,6 +38,9 @@ export class ChatSteerService {
         accepted: false,
         reason: "No active turn to steer.",
       };
+    }
+    if (state.unavailableReason) {
+      return { sessionId: input.sessionId, turnId: state.turnId, accepted: false, reason: state.unavailableReason };
     }
     state.queue.push({ instruction: input.instruction, enqueuedAt: new Date().toISOString() });
     return {

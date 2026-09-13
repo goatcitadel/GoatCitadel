@@ -212,6 +212,7 @@ export class RemoteWorkerAdmissionService {
         kind: "bootstrap",
         authorityId: bootstrap.bootstrapId,
         authorityGeneration: bootstrap.targetWorkerGeneration,
+        workerGeneration: bootstrap.targetWorkerGeneration,
         authorizationCredentialSha256: bootstrapSecretSha256,
         publicKeySpkiDer: normalizedPayload.publicKeySpkiDer,
         publicKeySpkiSha256,

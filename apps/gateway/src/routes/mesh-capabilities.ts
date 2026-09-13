@@ -2,7 +2,8 @@
  * HX-408 M1/M2/M3 route surface for governed mesh capability publication.
  *
  * - Publication routes (`/manifests`, `/manifests/self`) and the M3
- *   invocation routes (`/invocations/:invocationId/input|progress|settlement`)
+ *   invocation routes (`/invocations/pending` and
+ *   `/invocations/:invocationId/input|progress|settlement`)
  *   require the admitted-node credential (`mesh-node` access class); ordinary
  *   operator or companion authority is rejected by the class enforcement.
  * - Inspection (`/publications`) and governed activation
@@ -253,8 +254,24 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   // HX-408 M3: node-facing invocation surface. The node identity is
-  // admission-bound by the mesh-node access class; every response is
-  // content-free (typed reason codes only) and no-store.
+  // admission-bound by the mesh-node access class; errors disclose only typed
+  // reason codes and every response is no-store.
+  fastify.get("/api/v1/mesh/capabilities/invocations/pending", nodeAccess, async (request, reply) => {
+    const invocation = resolveInvocationService(fastify);
+    if (!invocation) return serviceUnavailable(reply);
+    const identity = resolveIdentity(request);
+    if (!identity) return missingIdentity(reply);
+    if (!emptyQuerySchema.safeParse(request.query).success)
+      return reply.code(400).send({ error: "Mesh capability invocation list request is invalid." });
+    try {
+      return reply.send(await invocation.listPendingInvocations(identity));
+    } catch (error) {
+      const mapped = toMeshCapabilityInvocationHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/mesh/capabilities/invocations/:invocationId/input", nodeAccess, async (request, reply) => {
     const invocation = resolveInvocationService(fastify);
     if (!invocation) return serviceUnavailable(reply);

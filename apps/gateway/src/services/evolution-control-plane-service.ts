@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { settleRefusedChangePlanApproval } from "./evolution-control-plane-approval-reconciliation.js";
 import {
   ConflictError,
   NotFoundError,
-  PolicyViolationError,
   SemanticValidationError,
   ServiceUnavailableError,
   ValidationError,
@@ -35,6 +35,7 @@ export interface EvolutionControlPlaneRepositoryPort {
   get(planId: string): Promise<ChangePlanRecord>;
   list(input: ChangePlanRepositoryListInput): Promise<ChangePlanRecord[]>;
   listActive(limit?: number): Promise<ChangePlanRecord[]>;
+  listAwaitingApproval?(approvalId: string, limit?: number): Promise<ChangePlanRecord[]>;
   transition(planId: string, input: ChangePlanRepositoryTransitionInput): Promise<ChangePlanRecord>;
 }
 
@@ -380,13 +381,11 @@ export class EvolutionControlPlaneService {
     const disposition = await this.deps.getApprovalDisposition(normalizedApprovalId);
     if (disposition !== "approved") {
       if (disposition === "denied" || disposition === "expired") {
-        throw new PolicyViolationError({
-          message: `Change Plan approval is ${disposition}; the effect cannot be applied.`,
-          details: { approvalId: normalizedApprovalId, disposition },
-        });
+        return this.settleRefusedApproval(current, disposition, actor.actorId);
       }
       throw new ConflictError({ message: "Change Plan approval is not resolved as approved." });
     }
+    if (isExpired(current)) return this.expire(current, actor.actorId);
     const adapter = this.requireMatchingAdapter(current);
     const resumesRollback = current.result?.failureCode === "rollback_approval_pending";
     if (resumesRollback && !adapter.rollback) {
@@ -461,7 +460,9 @@ export class EvolutionControlPlaneService {
     }
     const action = this.actions().confirmation({
       title: `Rollback ${current.title}`,
-      confirmationText: "Apply only the recovery material already bound to this Change Plan.",
+      confirmationText: current.kind === "capability_pack"
+        ? "Disable only MCP changes still owned by this pack. Skills and settings receive separate reversal review plans. Preserve pre-existing installations and later operator edits."
+        : "Apply only the recovery material already bound to this Change Plan.",
       purpose: "rollback",
     });
     const pending = await this.deps.repository.transition(current.planId, {
@@ -476,6 +477,43 @@ export class EvolutionControlPlaneService {
     return pending;
   }
 
+  /** Refresh a monitoring pack from owner evidence without replaying its effects. */
+  public async verifyMonitoringPlan(
+    actor: EvolutionControlPlaneActor,
+    planId: string,
+    expectedRevision: number,
+  ): Promise<ChangePlanRecord> {
+    await this.requireEnabled();
+    const current = await this.get(actor, planId);
+    requireRevision(current, expectedRevision);
+    if (current.kind !== "capability_pack" || current.status !== "monitoring") {
+      throw new ConflictError({ message: "Only a monitoring capability pack can refresh its owner evidence." });
+    }
+    const adapter = this.requireMatchingAdapter(current);
+    if (!adapter.verify) throw new ServiceUnavailableError("The capability pack verification owner is unavailable.");
+    const outcome = await adapter.verify(this.context(current.origin), current);
+    return this.persistOutcome(actor, adapter, current, outcome, "owner_verification_requested");
+  }
+
+  /** Durable approval signal delivery; rejection never invokes a mutation adapter. */
+  public async reconcileApproval(approvalId: string): Promise<number> {
+    const id = requireIdentifier(approvalId, "approvalId");
+    if (!this.deps.getApprovalDisposition) throw new ServiceUnavailableError("The canonical approval owner is unavailable.");
+    const disposition = await this.deps.getApprovalDisposition(id);
+    if (disposition !== "denied" && disposition !== "expired") return 0;
+    if (!this.deps.repository.listAwaitingApproval) throw new ServiceUnavailableError("The Change Plan approval lookup is unavailable.");
+    const plans = await this.deps.repository.listAwaitingApproval(id, 100);
+    for (const plan of plans) {
+      if (plan.status !== "awaiting_approval" || plan.requiredAction?.kind !== "approval" || plan.requiredAction.approvalId !== id)
+        throw new ConflictError({ message: "The current Change Plan approval binding is inconsistent." });
+      await this.settleRefusedApproval(plan, disposition, "gateway-approval-resolution");
+    }
+    // The durable signal retries a full batch instead of silently losing waits
+    // beyond the bounded read. Already committed transitions are not repeated.
+    if (plans.length === 100) throw new ServiceUnavailableError("Another Change Plan approval reconciliation batch is required.");
+    return plans.length;
+  }
+
   /**
    * Startup recovery inspects canonical owner state. It never calls apply and
    * therefore cannot duplicate an effect after an ambiguous process death.
@@ -484,6 +522,10 @@ export class EvolutionControlPlaneService {
     const active = await this.deps.repository.listActive(limit);
     const reconciled: ChangePlanRecord[] = [];
     for (const plan of active) {
+      if (plan.status === "awaiting_approval") {
+        const settled = await this.reconcileAwaitingApproval(plan, "gateway-recovery");
+        if (settled.revision !== plan.revision) { reconciled.push(settled); continue; }
+      }
       if (
         isExpired(plan) &&
         ["draft", "awaiting_input", "awaiting_confirmation", "awaiting_approval"].includes(plan.status)
@@ -577,7 +619,7 @@ export class EvolutionControlPlaneService {
         eventPayload: { approvalId },
       });
       await this.signal("change_plan.awaiting_approval", awaiting);
-      return awaiting;
+      return this.reconcileAwaitingApproval(awaiting, actor.actorId);
     } catch (error) {
       return await this.settleAdapterFailure(actor, staging, error);
     }
@@ -631,7 +673,7 @@ export class EvolutionControlPlaneService {
       throw new Error("Adapter returned awaiting_input without an input action.");
     }
     if (settled.status === "awaiting_confirmation") return settled;
-    if (settled.status === "awaiting_approval") return settled;
+    if (settled.status === "awaiting_approval") return this.reconcileAwaitingApproval(settled, actor.actorId);
     if (settled.status === "awaiting_input") return settled;
     if (settled.status === "staging" || settled.status === "applying") return settled;
     return settled;
@@ -681,6 +723,18 @@ export class EvolutionControlPlaneService {
     });
     await this.signal(`change_plan.${status}`, failed);
     return failed;
+  }
+
+  private async reconcileAwaitingApproval(plan: ChangePlanRecord, actorId: string): Promise<ChangePlanRecord> {
+    if (plan.requiredAction?.kind !== "approval" || !plan.requiredAction.approvalId || !this.deps.getApprovalDisposition) return plan;
+    const disposition = await this.deps.getApprovalDisposition(plan.requiredAction.approvalId);
+    return disposition === "denied" || disposition === "expired" ? this.settleRefusedApproval(plan, disposition, actorId) : plan;
+  }
+
+  private async settleRefusedApproval(plan: ChangePlanRecord, disposition: "denied" | "expired", actorId: string): Promise<ChangePlanRecord> {
+    return settleRefusedChangePlanApproval(this.deps.repository, (event, settled) => this.signal(event, settled), plan, disposition, actorId, async () => {
+      await this.requireMatchingAdapter(plan).discard?.(this.context(plan.origin), plan);
+    });
   }
 
   private async expire(plan: ChangePlanRecord, actorId: string): Promise<ChangePlanRecord> {

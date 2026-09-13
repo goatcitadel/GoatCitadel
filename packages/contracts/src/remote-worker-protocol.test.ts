@@ -29,7 +29,7 @@ const fixture = (): RemoteWorkerPopV2Input => ({
 });
 
 describe("remote worker protected proof v2 contract", () => {
-  it("pins the exact twelve protected-proof POST route and operation purposes", () => {
+  it("pins the exact thirteen protected-proof POST route and operation purposes", () => {
     expect(REMOTE_WORKER_POP_V2_ROUTE_BINDINGS).toStrictEqual([
       {
         code: 1,
@@ -114,6 +114,10 @@ describe("remote worker protected proof v2 contract", () => {
         rawPath: "/api/v1/remote-workers/assignment-settlement-submissions",
         operation: "assignment.settlement.submit",
         authorityKind: "credential",
+      },
+      {
+        code: 13, method: "POST", rawPath: "/api/v1/remote-workers/mesh-capability-exchanges",
+        operation: "mesh.capability.exchange", authorityKind: "credential",
       },
     ]);
     for (const route of REMOTE_WORKER_POP_V2_ROUTE_BINDINGS) {

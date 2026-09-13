@@ -215,55 +215,31 @@ export async function assertProviderAnchorAndAdviceContract(page) {
     { timeout: 5000 },
   );
 
-  const advice = page.locator("#providers-advice").first();
-  const summary = advice.locator("summary").first();
-  if (!(await advice.evaluate((element) => element.open))) {
-    await summary.click();
-  }
-  await page.waitForFunction(
-    (stageSelector) => {
-      const stage = document.querySelector(stageSelector);
-      const details = document.getElementById("providers-advice");
-      if (!(stage instanceof HTMLElement) || !(details instanceof globalThis.HTMLDetailsElement) || !details.open) {
-        return false;
-      }
-      const body = details.querySelector(".mc-next-disclosure-card-body");
-      const footer = document.querySelector(".mc-next-status-strip");
-      if (!(body instanceof HTMLElement)) {
-        return false;
-      }
-      const stageBottom = stage.getBoundingClientRect().bottom;
-      const footerTop = footer instanceof HTMLElement ? footer.getBoundingClientRect().top : stageBottom;
-      return body.getBoundingClientRect().bottom <= Math.min(stageBottom, footerTop) + 2;
-    },
-    STANDARD_STAGE_SELECTOR,
-    { timeout: 5000 },
-  );
-
-  // A short stability window proves live shell updates do not reset the
-  // controlled disclosure or hide its body behind the fixed status strip.
+  await page.getByRole("button", { name: "Close details", exact: true }).click();
+  await page.locator("summary").filter({ hasText: /^Provider tools$/ }).click();
+  await page.getByRole("button", { name: "Provider advice", exact: true }).click();
+  const advice = page.locator(".mc-next-detail-inspector").filter({
+    has: page.getByRole("heading", { name: "Provider advice", exact: true }),
+  });
+  await advice.waitFor({ state: "visible", timeout: 5000 });
+  await page.getByRole("button", { name: "Load advice", exact: true }).waitFor();
+  // Live shell updates must not dismiss this explicit view or obscure its scroll body.
   await page.waitForTimeout(750);
-  const snapshot = await advice.evaluate(
-    (details, { stageSelector, statusSelector }) => {
-      const stage = document.querySelector(stageSelector);
-      const footer = document.querySelector(statusSelector);
-      const body = details.querySelector(".mc-next-disclosure-card-body");
-      const stageBottom = stage instanceof HTMLElement ? stage.getBoundingClientRect().bottom : 0;
-      const footerTop = footer instanceof HTMLElement ? footer.getBoundingClientRect().top : stageBottom;
-      return {
-        open: details.open,
-        bodyBottom: body instanceof HTMLElement ? body.getBoundingClientRect().bottom : Number.POSITIVE_INFINITY,
-        visibleBottom: Math.min(stageBottom, footerTop),
-      };
-    },
-    { stageSelector: STANDARD_STAGE_SELECTOR, statusSelector: STATUS_STRIP_SELECTOR },
-  );
-  if (!snapshot.open) {
-    throw new Error("settings-providers: Provider advice closed after live shell updates");
-  }
+  const snapshot = await advice.evaluate((panel, statusSelector) => {
+    const body = panel.querySelector(".mc-next-detail-body");
+    const footer = document.querySelector(statusSelector);
+    const bottom = footer instanceof HTMLElement ? footer.getBoundingClientRect().top : window.innerHeight;
+    return {
+      visible: getComputedStyle(panel).visibility === "visible",
+      bodyBottom: body instanceof HTMLElement ? body.getBoundingClientRect().bottom : Number.POSITIVE_INFINITY,
+      visibleBottom: bottom,
+    };
+  }, STATUS_STRIP_SELECTOR);
+  if (!snapshot.visible) throw new Error("settings-providers: Provider advice closed after live shell updates");
   if (snapshot.bodyBottom > snapshot.visibleBottom + 2) {
-    throw new Error("settings-providers: Provider advice body was obscured by the stage or status strip");
+    throw new Error("settings-providers: Provider advice body was obscured by the status strip");
   }
+  await advice.getByRole("button", { name: "Close details", exact: true }).click();
 }
 
 async function readStageSnapshot(page, atBottom) {

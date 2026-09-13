@@ -45,8 +45,13 @@ import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
 import { RemoteWorkerNonceRepository } from "./remote-worker-nonce-repo.js";
 import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
+import { RemoteWorkerRuntimeReadRepository } from "./remote-worker-runtime-read-repo.js";
+import { RemoteWorkerCellProvisioningRepository } from "./remote-worker-cell-provisioning-repo.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
 import { RemoteWorkerInferenceRepository } from "./remote-worker-inference-repo.js";
+import { RemoteWorkerBudgetRepository } from "./remote-worker-budget-repo.js";
+import { RemoteWorkerChatContextRepository } from "./remote-worker-chat-context-repo.js";
+import { RemoteWorkerChatPlacementRepository } from "./remote-worker-chat-placement-repo.js";
 import { SessionControlRepository } from "./session-control-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { HeartbeatOccurrenceRepository } from "./heartbeat-occurrence-repo.js";
@@ -61,6 +66,7 @@ import { ToolAccessDecisionRepository } from "./tool-access-decision-repo.js";
 import { PermissionProfileRepository } from "./permission-profile-repo.js";
 import { KnowledgeRepository } from "./knowledge-repo.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
+import { ChannelDeliveryPartRepository } from "./channel-delivery-part-repo.js";
 import { NotificationRoutingRepository } from "./notification-routing-repo.js";
 export { NotificationRoutingRepository } from "./notification-routing-repo.js";
 import { MobilePushRepository } from "./mobile-push-repo.js";
@@ -112,6 +118,7 @@ import { RoutedContextSnapshotRepository } from "./routed-context-snapshot-repo.
 export {
   ChatTurnCapabilityProfileRepository,
   sealChatTurnCapabilityProfile,
+  resolveCapabilityCatalogToolName,
   verifyCapabilityCatalogEntryUniqueness,
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilityProfile,
@@ -163,6 +170,7 @@ import { HookRunRepository } from "./hook-run-repo.js";
 import { LearnedMemoryRepository } from "./learned-memory-repo.js";
 import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
 import { MemoryQualityIssueRepository } from "./memory-quality-issue-repo.js";
+import { MemoryItemEnumerationRepository } from "./memory-item-enumeration-repo.js";
 import { TranscriptOutboxRepository } from "./transcript-outbox-repo.js";
 import { RealtimeStreamLeaseRepository } from "./realtime-stream-lease-repo.js";
 import { CapabilityCatalogSnapshotRepository } from "./capability-catalog-snapshot-repo.js";
@@ -331,8 +339,13 @@ export class Storage {
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
   public readonly remoteWorkerNonces: RemoteWorkerNonceRepository;
   public readonly remoteWorkerCells: RemoteWorkerCellRepository;
+  public readonly remoteWorkerRuntimeReads: RemoteWorkerRuntimeReadRepository;
+  public readonly remoteWorkerCellProvisioning: RemoteWorkerCellProvisioningRepository;
   public readonly remoteWorkerEffects: RemoteWorkerEffectRepository;
   public readonly remoteWorkerInference: RemoteWorkerInferenceRepository;
+  public readonly remoteWorkerBudgets: RemoteWorkerBudgetRepository;
+  public readonly remoteWorkerChatContexts: RemoteWorkerChatContextRepository;
+  public readonly chatExecutionPlacements: RemoteWorkerChatPlacementRepository;
   public readonly sessionControls: SessionControlRepository;
   public readonly sessionMutationAdmissions: SessionMutationAdmissionRepository;
   public readonly heartbeatOccurrences: HeartbeatOccurrenceRepository;
@@ -344,6 +357,7 @@ export class Storage {
   public readonly permissionProfiles: PermissionProfileRepository;
   public readonly knowledge: KnowledgeRepository;
   public readonly commsDeliveries: CommsDeliveryRepository;
+  public readonly channelDeliveryParts: ChannelDeliveryPartRepository;
   public readonly notificationRouting: NotificationRoutingRepository;
   public readonly mobilePush: MobilePushRepository;
   public readonly mobileApprovalKeys: MobileApprovalKeyRepository;
@@ -406,6 +420,7 @@ export class Storage {
   public readonly learnedMemory: LearnedMemoryRepository;
   public readonly memoryMaintenance: MemoryMaintenanceRepository;
   public readonly memoryQualityIssues: MemoryQualityIssueRepository;
+  public readonly memoryItemEnumeration: MemoryItemEnumerationRepository;
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
   public readonly assembly: AssemblyRepository;
@@ -504,8 +519,13 @@ export class Storage {
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
     this.remoteWorkerNonces = new RemoteWorkerNonceRepository(this.db);
     this.remoteWorkerCells = new RemoteWorkerCellRepository(this.db);
+    this.remoteWorkerRuntimeReads = new RemoteWorkerRuntimeReadRepository(this.db);
+    this.remoteWorkerCellProvisioning = new RemoteWorkerCellProvisioningRepository(this.db);
     this.remoteWorkerEffects = new RemoteWorkerEffectRepository(this.db);
     this.remoteWorkerInference = new RemoteWorkerInferenceRepository(this.db);
+    this.remoteWorkerBudgets = new RemoteWorkerBudgetRepository(this.db);
+    this.remoteWorkerChatContexts = new RemoteWorkerChatContextRepository(this.db);
+    this.chatExecutionPlacements = new RemoteWorkerChatPlacementRepository(this.db);
     this.sessionControls = new SessionControlRepository(this.db);
     this.sessionMutationAdmissions = new SessionMutationAdmissionRepository(this.db);
     this.heartbeatOccurrences = new HeartbeatOccurrenceRepository(this.db);
@@ -517,6 +537,7 @@ export class Storage {
     this.permissionProfiles = new PermissionProfileRepository(this.db);
     this.knowledge = new KnowledgeRepository(this.db);
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
+    this.channelDeliveryParts = new ChannelDeliveryPartRepository(this.db);
     this.notificationRouting = new NotificationRoutingRepository(this.db);
     this.mobilePush = new MobilePushRepository(this.db);
     this.mobileApprovalKeys = new MobileApprovalKeyRepository(this.db);
@@ -579,6 +600,7 @@ export class Storage {
     this.learnedMemory = new LearnedMemoryRepository(this.db);
     this.memoryMaintenance = new MemoryMaintenanceRepository(this.db);
     this.memoryQualityIssues = new MemoryQualityIssueRepository(this.db);
+    this.memoryItemEnumeration = new MemoryItemEnumerationRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
@@ -993,7 +1015,12 @@ export * from "./remote-worker-artifact-repo.js";
 export * from "./remote-worker-assignment-repo.js";
 export * from "./remote-worker-effect-repo.js";
 export * from "./remote-worker-cell-repo.js";
+export * from "./remote-worker-runtime-read-repo.js";
+export * from "./remote-worker-cell-provisioning-repo.js";
 export * from "./remote-worker-inference-repo.js";
+export * from "./remote-worker-budget-repo.js";
+export * from "./remote-worker-chat-context-repo.js";
+export * from "./remote-worker-chat-placement-repo.js";
 export * from "./remote-worker-nonce-repo.js";
 export * from "./session-control-repo.js";
 export * from "./session-mutation-admission-repo.js";
@@ -1005,6 +1032,7 @@ export * from "./tool-access-decision-repo.js";
 export * from "./model-usage-event-repo.js";
 export * from "./knowledge-repo.js";
 export * from "./comms-delivery-repo.js";
+export * from "./channel-delivery-part-repo.js";
 export * from "./chat-project-repo.js";
 export * from "./chat-session-revision-repo.js";
 export * from "./chat-session-meta-repo.js";
@@ -1052,6 +1080,7 @@ export * from "./workspace-hook-repo.js";
 export * from "./capability-scope-repo.js";
 export * from "./hook-run-repo.js";
 export * from "./memory-maintenance-repo.js";
+export * from "./memory-item-enumeration-repo.js";
 export * from "./durable-run-repo.js";
 export * from "./safe-json.js";
 export * from "./gateway-sql-repo.js";

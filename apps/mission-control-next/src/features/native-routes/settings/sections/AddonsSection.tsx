@@ -1,6 +1,6 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Play, Plug2, Plus, RefreshCw, ShieldCheck, Square, Trash2 } from "lucide-react";
 import type {
   AddonCatalogEntry,
@@ -44,16 +44,22 @@ import {
   SettingsEmptyState,
   SettingsField,
   SettingsFieldGrid,
-  SettingsGrid,
+  SettingsStack,
+  SettingsFilterBar,
   SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
-import { useFormDirty } from "../../library/use-form-dirty";
+import { useSessionDraft } from "../../library/session-drafts";
+import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { useSessionViewState } from "../../../../hooks/use-session-view-state";
+import { DetailInspector } from "../../../../components/DetailInspector";
+import { FocusedDetail } from "../../shared/FocusedDetail";
+import { PackExecutionPanel } from "./PackExecutionPanel";
 
 type AddonPostureCriterionState = "Proven" | "Partial" | "Out of 1.0";
 
@@ -173,28 +179,39 @@ function buildAddonProductPosture(data: {
   };
 }
 
-export function AddonsSection(_props: SettingsSectionProps) {
+export function AddonsSection(props: SettingsSectionProps) {
+  const [view, setView] = useSessionViewState<"addons" | "packs">("addons:view", "addons");
+  const [panel, setPanel] = useState<"addon" | "pack" | "portable" | null>(null);
+  const [packsRequested, setPacksRequested] = useState(view === "packs");
+  const leave = useDraftLeave();
   const load = useCallback(async () => {
-    const [catalog, installed, capabilityPacks, stagedPacks] = await Promise.all([
+    const [catalog, installed] = await Promise.all([
       nativeLoad("Add-on catalog", fetchAddonsCatalog(), { items: [] }),
       nativeLoad("Installed add-ons", fetchInstalledAddons(), { items: [] }),
+    ]);
+    return { issues: nativeLoadIssues([catalog, installed]), catalog: catalog.data.items, installed: installed.data.items };
+  }, []);
+  const loadPacks = useCallback(async () => {
+    if (!packsRequested) return { issues: [], capabilityPacks: [] as CapabilityPackManifest[], stagedPacks: [] as CapabilityPackStagedRecord[] };
+    const [packs, staged] = await Promise.all([
       nativeLoad("Capability packs", fetchCapabilityPacks(), { items: [] }),
       nativeLoad("Staged capability packs", fetchStagedCapabilityPacks(), { items: [] }),
     ]);
-    return {
-      issues: nativeLoadIssues([catalog, installed, capabilityPacks, stagedPacks]),
-      catalog: catalog.data.items,
-      installed: installed.data.items,
-      capabilityPacks: capabilityPacks.data.items,
-      stagedPacks: stagedPacks.data.items,
-    };
-  }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+    return { issues: nativeLoadIssues([packs, staged]), capabilityPacks: packs.data.items, stagedPacks: staged.data.items };
+  }, [packsRequested]);
+  const { loading, error, data: addonData, reload: reloadAddons } = useAsyncLoad(load, [load]);
+  const { loading: packsLoading, error: packsError, data: packData, reload: reloadPacks } = useAsyncLoad(loadPacks, [loadPacks]);
+  const data = useMemo(() => addonData ? { ...addonData, capabilityPacks: packData?.capabilityPacks ?? [], stagedPacks: packData?.stagedPacks ?? [], issues: [...addonData.issues, ...(packData?.issues ?? [])] } : null, [addonData, packData]);
+  const reload = async () => { await Promise.all([reloadAddons(), packsRequested ? reloadPacks() : Promise.resolve()]); };
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [selectedAddonId, setSelectedAddonId] = useState("");
+  const [selectedAddonId, setSelectedAddonId] = useSessionViewState("addons:selected", "");
+  const selectionRef = useRef(selectedAddonId); selectionRef.current = selectedAddonId;
+  const actionBusy = useRef(false);
+  const [actionPending, setActionPending] = useState(false);
   const [pendingUninstall, setPendingUninstall] = useState<{ addonId: string; label: string } | null>(null);
   const [uninstallPending, setUninstallPending] = useState(false);
-  const [selectedPackId, setSelectedPackId] = useState("");
+  const [selectedPackId, setSelectedPackId] = useSessionViewState("packs:selected", "");
+  const packSelectionRef = useRef(selectedPackId); packSelectionRef.current = selectedPackId;
   const [status, setStatus] = useState<LoadState<Awaited<ReturnType<typeof fetchAddonStatus>>>>({
     loading: false,
     error: null,
@@ -205,8 +222,13 @@ export function AddonsSection(_props: SettingsSectionProps) {
     error: null,
     data: null,
   });
-  const [localPackText, setLocalPackText] = useState("");
-  const [localPackBaseline, setLocalPackBaseline] = useState("");
+  const localDraft = useSessionDraft("portable-pack:" + props.activeWorkspaceId + ":import", "", undefined, { label: "Portable pack", active: panel === "portable", onSave: () => stageLocalPack() });
+  const { value: localPackText, setValue: setLocalPackText } = localDraft;
+  const localSourceRef = useRef(localPackText); localSourceRef.current = localPackText;
+  const previewGeneration = useRef(0);
+  const [reviewedLocalText, setReviewedLocalText] = useState<string | null>(null);
+  const [staging, setStaging] = useState(false);
+  const stagingRef = useRef(false);
   const [localPackPreview, setLocalPackPreview] = useState<LoadState<CapabilityPackPreview>>({
     loading: false,
     error: null,
@@ -222,9 +244,9 @@ export function AddonsSection(_props: SettingsSectionProps) {
     () => new Map((data?.installed ?? []).map((item) => [item.addonId, item])),
     [data?.installed],
   );
-  const selectedAddon = data?.catalog?.find((item) => item.addonId === selectedAddonId) ?? data?.catalog?.[0] ?? null;
+  const selectedAddon = data?.catalog?.find((item) => item.addonId === selectedAddonId) ?? null;
   const selectedPack =
-    data?.capabilityPacks?.find((item) => item.packId === selectedPackId) ?? data?.capabilityPacks?.[0] ?? null;
+    data?.capabilityPacks?.find((item) => item.packId === selectedPackId) ?? null;
   const selectedInstalledRecord = selectedAddon
     ? (status.data?.installed ?? installedById.get(selectedAddon.addonId))
     : undefined;
@@ -235,8 +257,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
   const selectedAddonRuntimeStatus = status.data?.status ?? selectedInstalledRecord?.runtimeStatus ?? "not_installed";
   const selectedAddonCanStop =
     selectedAddonInstalled && selectedAddonEnabled && ["running", "error"].includes(selectedAddonRuntimeStatus);
-  const localPackDirty = localPackText !== localPackBaseline;
-  useFormDirty("settings:addons", localPackDirty, { label: "Add-ons" });
+
   const productPosture = useMemo(
     () =>
       data
@@ -250,18 +271,9 @@ export function AddonsSection(_props: SettingsSectionProps) {
     [data],
   );
 
-  useEffect(() => {
-    if (!data?.catalog?.length) {
-      setSelectedAddonId("");
-      return;
-    }
-    setSelectedAddonId((current) =>
-      current && data.catalog.some((item) => item.addonId === current) ? current : data.catalog[0]?.addonId || "",
-    );
-  }, [data?.catalog]);
 
   useEffect(() => {
-    if (!selectedAddon) {
+    if (!selectedAddon || panel !== "addon") {
       setStatus({ loading: false, error: null, data: null });
       return;
     }
@@ -281,22 +293,11 @@ export function AddonsSection(_props: SettingsSectionProps) {
     return () => {
       cancelled = true;
     };
-  }, [selectedAddon]);
+  }, [selectedAddon, panel]);
+
 
   useEffect(() => {
-    if (!data?.capabilityPacks?.length) {
-      setSelectedPackId("");
-      return;
-    }
-    setSelectedPackId((current) =>
-      current && data.capabilityPacks.some((item) => item.packId === current)
-        ? current
-        : data.capabilityPacks[0]?.packId || "",
-    );
-  }, [data?.capabilityPacks]);
-
-  useEffect(() => {
-    if (!selectedPack) {
+    if (!selectedPack || panel !== "pack") {
       setPackPreview({ loading: false, error: null, data: null });
       return;
     }
@@ -316,24 +317,27 @@ export function AddonsSection(_props: SettingsSectionProps) {
     return () => {
       cancelled = true;
     };
-  }, [selectedPack]);
+  }, [selectedPack, panel]);
 
   useEffect(() => {
     setPackExport({ loading: false, error: null, data: null });
   }, [selectedPackId]);
 
   const runAddonAction = async (operation: () => Promise<unknown>, successMessage: string) => {
+    if (actionBusy.current) return;
+    actionBusy.current = true; setActionPending(true);
+    const addonId = selectedAddon?.addonId;
     try {
       await operation();
       setNotice({ tone: "success", message: successMessage });
       await reload();
-      if (selectedAddon) {
-        const nextStatus = await fetchAddonStatus(selectedAddon.addonId);
-        setStatus({ loading: false, error: null, data: nextStatus });
+      if (addonId && addonId === selectionRef.current) {
+        const nextStatus = await fetchAddonStatus(addonId);
+        if (addonId === selectionRef.current) setStatus({ loading: false, error: null, data: nextStatus });
       }
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
-    }
+    } finally { actionBusy.current = false; setActionPending(false); }
   };
 
   const handleUninstall = async () => {
@@ -368,27 +372,36 @@ export function AddonsSection(_props: SettingsSectionProps) {
   };
 
   const previewLocalPack = async () => {
+    const generation = ++previewGeneration.current;
+    const source = localPackText;
+    setReviewedLocalText(null);
     setLocalPackPreview({ loading: true, error: null, data: null });
     try {
       const result = await fetchLocalCapabilityPackPreview(readLocalPackManifest());
+      if (generation !== previewGeneration.current || source !== localSourceRef.current) return;
+      setReviewedLocalText(source);
       setLocalPackPreview({ loading: false, error: null, data: result });
       setNotice({ tone: "success", message: `${result.manifest.name} preview ready.` });
     } catch (previewError) {
+      if (generation !== previewGeneration.current || source !== localSourceRef.current) return;
       setLocalPackPreview({ loading: false, error: getErrorMessage(previewError), data: null });
       setNotice({ tone: "error", message: getErrorMessage(previewError) });
     }
   };
 
-  const stageLocalPack = async () => {
+  const stageLocalPack = async (): Promise<boolean> => {
+    if (stagingRef.current) return false;
+    if (!localPackPreview.data || reviewedLocalText !== localPackText) { setNotice({tone:"warning",message:"Preview the current manifest before staging it."}); return false; }
+    const submitted = localPackText;
+    stagingRef.current = true; setStaging(true);
     try {
       const result = await installLocalCapabilityPack(readLocalPackManifest(), { actorId: "operator" });
-      setNotice({ tone: "success", message: `${result.preview.manifest.name} staged for review.` });
-      setLocalPackPreview({ loading: false, error: null, data: result.preview });
-      setLocalPackBaseline(localPackText);
-      await reload();
-    } catch (installError) {
-      setNotice({ tone: "error", message: getErrorMessage(installError) });
-    }
+      const saved = localDraft.acceptSaved(submitted, undefined, submitted);
+      setNotice({ tone: "success", message: result.preview.manifest.name + " staged for review." });
+      if (localSourceRef.current === submitted) setLocalPackPreview({loading:false,error:null,data:result.preview});
+      await reload(); return saved;
+    } catch (cause) { setNotice({tone:"error",message:getErrorMessage(cause)}); return false; }
+    finally { stagingRef.current = false; setStaging(false); }
   };
 
   const exportSelectedPack = async () => {
@@ -398,9 +411,11 @@ export function AddonsSection(_props: SettingsSectionProps) {
     setPackExport({ loading: true, error: null, data: null });
     try {
       const result = await exportCapabilityPack(selectedPack.packId);
+      if (selectedPack.packId !== packSelectionRef.current) return;
       setPackExport({ loading: false, error: null, data: result });
       setNotice({ tone: "success", message: `${result.manifest.name} export projection ready.` });
     } catch (exportError) {
+      if (selectedPack.packId !== packSelectionRef.current) return;
       setPackExport({ loading: false, error: getErrorMessage(exportError), data: null });
       setNotice({ tone: "error", message: getErrorMessage(exportError) });
     }
@@ -428,230 +443,104 @@ export function AddonsSection(_props: SettingsSectionProps) {
     }
   };
 
+  useEffect(() => { previewGeneration.current += 1; setLocalPackPreview({loading:false,error:null,data:null}); setReviewedLocalText(null); setPanel(null); }, [props.activeWorkspaceId]);
+  const closePanel = () => leave.request(() => setPanel(null), panel === "portable" ? [localDraft.key] : []);
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
-      {data ? (
-        <SettingsGrid variant="three-column">
-          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          {productPosture ? (
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="1.0 add-on posture"
-              subtitle="Experimental local extensions with operator-reviewed install and launch controls."
-              stats={productPosture.stats}
-            >
-              <SettingsActionList
-                ariaLabel="Add-on readiness criteria"
-                items={productPosture.criteria.map((item) => ({
-                  id: item.id,
-                  label: item.label,
-                  description: item.description,
-                  actionLabel: item.meta,
-                }))}
-                maxHeight="min(42vh, 24rem)"
-              />
-            </NativeCard>
-          ) : null}
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Add-on catalog"
-            subtitle="Experimental add-on runtimes and their current local install posture."
-            stats={[
-              { label: "Catalog", value: String(data.catalog?.length ?? 0) },
-              { label: "Installed", value: String(data.installed?.length ?? 0) },
-            ]}
-          >
-            <NativeSelectableList
-              items={(data.catalog ?? []).map((item) => {
-                const installed = installedById.get(item.addonId);
-                const lifecycle = installed
-                  ? installed.enabled === false || installed.runtimeStatus === "disabled"
-                    ? "disabled"
-                    : "enabled"
-                  : "not installed";
-                return {
-                  id: item.addonId,
-                  title: item.label,
-                  meta: item.trustTier,
-                  body: `${item.category} · ${lifecycle}`,
-                };
-              })}
-              selectedId={selectedAddonId}
-              onSelect={setSelectedAddonId}
-              emptyLabel="No add-ons returned from the catalog."
-              maxHeight="min(42vh, 24rem)"
-            />
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title={selectedAddon?.label ?? "Add-on detail"}
-            subtitle="Operator-reviewed lifecycle controls for the selected local add-on."
-          >
-            {selectedAddon ? (
+      <SettingsStack>
+      <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      <p className="mc-next-settings-experimental-note">Experimental local extensions · operator-reviewed installation</p>
+      {panel === "portable" ? <FocusedDetail title="Portable pack" onClose={closePanel}>
+            <SettingsFieldGrid>
+              <SettingsField label="Manifest JSON" span={2}>
+                <textarea
+                  className="mc-next-settings-textarea mc-next-settings-code"
+                  value={localPackText}
+                  rows={12}
+                  placeholder='{"packId":"local-pack","name":"Local pack","description":"Operator-reviewed local bundle","version":"1.0.0","trustTier":"community","tags":["local"],"assets":[],"policyDefaults":{"requireFirstUseApproval":true,"memoryWriteAuthority":"operator_controlled","redactionMode":"strict","autoRunEnabled":false},"provenance":{"source":"local_file","publisher":"Workspace"},"installWarnings":["Review before staging."]}'
+                  onChange={(event) => {
+                    previewGeneration.current += 1;
+                    localSourceRef.current = event.target.value;
+                    setReviewedLocalText(null);
+                    setLocalPackText(event.target.value);
+                    setLocalPackPreview({ loading: false, error: null, data: null });
+                  }}
+                />
+              </SettingsField>
+            </SettingsFieldGrid>
+            <SettingsButtonRow>
+              <NativeButton
+                variant="secondary"
+                disabled={localPackPreview.loading || !localPackText.trim()}
+                onClick={() => void previewLocalPack()}
+              >
+                <ShieldCheck size={16} />
+                Preview local pack
+              </NativeButton>
+              <NativeButton
+                variant="default"
+                disabled={staging || localPackPreview.loading || !localPackPreview.data || reviewedLocalText !== localPackText}
+                onClick={() => void stageLocalPack()}
+              >
+                <Plus size={16} />
+                Stage local pack
+              </NativeButton>
+            </SettingsButtonRow>
+            {localPackPreview.error ? <SettingsEmptyState label={`Preview failed: ${localPackPreview.error}`} /> : null}
+            {localPackPreview.data ? (
               <>
-                <SettingsCodeBlock label="Description">{selectedAddon.description}</SettingsCodeBlock>
                 <NativeMetricGrid
                   items={[
                     {
-                      label: "Trust tier",
-                      value: humanizeEnumToken(selectedAddon.trustTier),
-                      meta: selectedAddon.owner,
+                      label: "Pack",
+                      value: localPackPreview.data.manifest?.name ?? "unknown",
+                      meta: localPackPreview.data.manifest?.provenance?.source,
                     },
                     {
-                      label: "Runtime",
-                      value: humanizeEnumToken(selectedAddonRuntimeStatus),
-                      meta: humanizeEnumToken(selectedAddon.runtimeType),
+                      label: "Review",
+                      value: localPackPreview.data.reviewRequired ? "required" : "not required",
+                      meta: localPackPreview.data.policyChanges?.redactionMode,
                     },
                     {
-                      label: "Lifecycle",
-                      value: selectedAddonInstalled ? (selectedAddonEnabled ? "Enabled" : "Disabled") : "Not installed",
-                      meta: selectedInstalledRecord?.updatedAt ?? "No installed record",
-                    },
-                    {
-                      label: "Web entry",
-                      value: humanizeEnumToken(selectedAddon.webEntryMode),
-                      meta: selectedAddon.launchUrl ?? "No launch URL",
+                      label: "Assets",
+                      value: String(localPackPreview.data.installPlan?.length ?? 0),
+                      meta: `${localPackPreview.data.unsupportedAssets?.length ?? 0} unsupported`,
                     },
                   ]}
                 />
-                <SettingsButtonRow>
-                  <NativeButton
-                    variant="default"
-                    onClick={() =>
-                      void runAddonAction(
-                        () => installAddon(selectedAddon.addonId, { confirmRepoDownload: true, actorId: "operator" }),
-                        `${selectedAddon.label} install requested.`,
-                      )
-                    }
-                  >
-                    <Plus size={16} />
-                    Install
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      void runAddonAction(
-                        () => updateAddon(selectedAddon.addonId),
-                        `${selectedAddon.label} update requested.`,
-                      )
-                    }
-                  >
-                    <RefreshCw size={16} />
-                    Update
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    disabled={!selectedAddonInstalled || selectedAddonEnabled}
-                    onClick={() =>
-                      void runAddonAction(
-                        () => enableAddon(selectedAddon.addonId),
-                        `${selectedAddon.label} enabled for operator launch.`,
-                      )
-                    }
-                  >
-                    <ShieldCheck size={16} />
-                    Enable
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    disabled={!selectedAddonInstalled || !selectedAddonEnabled}
-                    onClick={() =>
-                      void runAddonAction(
-                        () => disableAddon(selectedAddon.addonId),
-                        `${selectedAddon.label} disabled and slots removed.`,
-                      )
-                    }
-                  >
-                    <Plug2 size={16} />
-                    Disable
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    disabled={!selectedAddonInstalled || !selectedAddonEnabled}
-                    onClick={() =>
-                      void runAddonAction(
-                        () => launchAddon(selectedAddon.addonId),
-                        `${selectedAddon.label} launch requested.`,
-                      )
-                    }
-                  >
-                    <Play size={16} />
-                    Launch
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    disabled={!selectedAddonCanStop}
-                    onClick={() =>
-                      void runAddonAction(
-                        () => stopAddon(selectedAddon.addonId),
-                        `${selectedAddon.label} stop requested.`,
-                      )
-                    }
-                  >
-                    <Square size={16} />
-                    Stop
-                  </NativeButton>
-                  <NativeButton
-                    variant="destructive"
-                    onClick={() => setPendingUninstall({ addonId: selectedAddon.addonId, label: selectedAddon.label })}
-                  >
-                    <Trash2 size={16} />
-                    Uninstall
-                  </NativeButton>
-                </SettingsButtonRow>
                 <SettingsActionList
-                  ariaLabel="Add-on install commands"
-                  items={selectedAddon.installCommands.map((item) => ({
-                    label: item.command,
-                    description: item.note || "Install command",
-                    meta: item.args?.join(" ") || "No args",
+                  ariaLabel="Portable pack install plan"
+                  items={(localPackPreview.data.installPlan ?? []).map((item) => ({
+                    label: `${item.kind}: ${item.assetId}`,
+                    description: item.reason,
+                    meta: item.outcome,
                   }))}
+                  emptyLabel="No staged assets in this portable pack."
                 />
-                {status.data?.healthChecks?.length ? (
-                  <SettingsActionList
-                    ariaLabel="Add-on health checks"
-                    items={status.data.healthChecks.map((item) => ({
-                      label: item.key,
-                      description: item.message,
-                      meta: item.status,
-                    }))}
-                  />
-                ) : null}
+                <SettingsActionList
+                  ariaLabel="Portable pack warnings"
+                  items={(localPackPreview.data.manifest?.installWarnings ?? []).map((warning, index) => ({
+                    id: `${localPackPreview.data?.manifest?.packId}-local-warning-${index}`,
+                    label: "Warning",
+                    description: warning,
+                    meta: "review",
+                  }))}
+                  emptyLabel="No warnings for this portable pack."
+                />
               </>
-            ) : (
-              <SettingsEmptyState label="Choose an add-on from the catalog." />
-            )}
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Capability packs"
-            subtitle="Bundled review-first packs over skills, add-ons, MCP templates, plugins, and runtime presets."
-            stats={[
-              { label: "Packs", value: String(data.capabilityPacks?.length ?? 0) },
-              { label: "Staged", value: String(data.stagedPacks?.length ?? 0) },
-              { label: "Selected", value: selectedPack?.trustTier ?? "none" },
-            ]}
-          >
-            <NativeSelectableList
-              items={(data.capabilityPacks ?? []).map((item) => ({
-                id: item.packId,
-                title: item.name,
-                meta: item.trustTier,
-                body: `${item.version} · ${item.assets.length} assets · ${item.tags.join(", ")}`,
-              }))}
-              selectedId={selectedPackId}
-              onSelect={setSelectedPackId}
-              emptyLabel="No bundled capability packs are available."
-              maxHeight="min(30vh, 17rem)"
-            />
+            ) : null}
+          </FocusedDetail> : panel === "pack" ? <FocusedDetail title={selectedPack?.name ?? "Capability pack unavailable"} onClose={closePanel}><SettingsStack><p>{selectedPack?.description}</p><p>{selectedPack?.trustTier} · {selectedPack?.version}</p>{selectedPack && packPreview.data ? (<PackExecutionPanel
+                      key={`${selectedPack.packId}:${props.activeWorkspaceId}`}
+                      manifest={selectedPack}
+                      workspaceId={props.activeWorkspaceId}
+                      navigate={props.navigate}
+                      route={props.route}
+                    />) : <p role="status">{packPreview.error ? "Pack preview unavailable: " + packPreview.error : "Loading pack preview..."}</p>}<NativeDisclosureCard id="pack-staging-and-export" title="Staging and portable manifest" subtitle="Review installation warnings, advisory policy defaults, staging evidence, and export.">
+
             {selectedPack ? (
               <>
-                <SettingsCodeBlock label="Pack preview">{selectedPack.description}</SettingsCodeBlock>
+                <p>{selectedPack.description}</p>
                 {packPreview.error ? (
                   <SettingsEmptyState label={`Preview failed: ${packPreview.error}`} />
                 ) : packPreview.data ? (
@@ -717,6 +606,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                         Export manifest
                       </NativeButton>
                     </SettingsButtonRow>
+
                     {packExport.error ? (
                       <SettingsEmptyState label={`Export failed: ${packExport.error}`} />
                     ) : packExport.data ? (
@@ -734,9 +624,49 @@ export function AddonsSection(_props: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Choose a capability pack to preview." />
             )}
-            <SettingsActionList
+
+
+          </NativeDisclosureCard></SettingsStack></FocusedDetail> : <>
+        <SettingsButtonRow><NativeButton onClick={() => {setView("packs");setPacksRequested(true);setPanel(null);}}>Browse packs</NativeButton><NativeButton variant="secondary" onClick={() => {setPacksRequested(true);setPanel("portable");}}>Import pack{localDraft.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" onClick={() => void reload()}>Refresh</NativeButton></SettingsButtonRow>
+        <SettingsFilterBar options={[{id:"addons",label:"Add-ons"},{id:"packs",label:"Capability packs"}]} value={view} onChange={next => {setView(next as "addons" | "packs");if(next === "packs")setPacksRequested(true);setPanel(null);}} />
+        {view === "addons" && data ? <NativeCard title="Add-on catalog" subtitle="" stats={[{label:"Catalog",value:data.issues.some(issue=>issue.label === "Add-on catalog") ? "Unavailable" : (Array.isArray(data.catalog) ? String(data.catalog.length) : "Unavailable")},{label:"Installed",value:data.issues.some(issue=>issue.label === "Installed add-ons") ? "Unavailable" : (Array.isArray(data.installed) ? String(data.installed.length) : "Unavailable")}]}>
+            <NativeSelectableList
+              items={(data.catalog ?? []).map((item) => {
+                const installed = installedById.get(item.addonId);
+                const lifecycle = installed
+                  ? installed.enabled === false || installed.runtimeStatus === "disabled"
+                    ? "disabled"
+                    : "enabled"
+                  : "not installed";
+                return {
+                  id: item.addonId,
+                  title: item.label,
+                  meta: item.trustTier,
+                  body: `${item.category} · ${lifecycle}`,
+                };
+              })}
+              selectedId={selectedAddonId}
+              onSelect={id => { setSelectedAddonId(id); setPanel("addon"); }}
+              emptyLabel="No add-ons returned from the catalog."
+              maxHeight="min(65vh, 42rem)"
+            />
+          </NativeCard> : view === "packs" ? <>
+          {packsError ? <SettingsNotice notice={{tone:"error",message:packsError}} /> : null}
+          {packsLoading ? <p role="status">Loading capability packs...</p> : <NativeCard title="Capability packs" subtitle="" stats={[{label:"Packs",value:!packData || packsLoading ? "Loading" : packData.issues.some(issue=>issue.label === "Capability packs") ? "Unavailable" : (Array.isArray(packData.capabilityPacks) ? String(packData.capabilityPacks.length) : "Unavailable")},{label:"Staged",value:!packData || packsLoading ? "Loading" : packData.issues.some(issue=>issue.label === "Staged capability packs") ? "Unavailable" : (Array.isArray(packData.stagedPacks) ? String(packData.stagedPacks.length) : "Unavailable")},{label:"Selected",value:selectedPack?.trustTier ?? "None selected"}]}><NativeSelectableList
+              items={(data?.capabilityPacks ?? []).map((item) => ({
+                id: item.packId,
+                title: item.name,
+                meta: item.trustTier,
+                body: `${item.version} · ${item.assets.length} assets · ${item.tags.join(", ")}`,
+              }))}
+              selectedId={selectedPackId}
+              onSelect={id => { setSelectedPackId(id); setPanel("pack"); }}
+              emptyLabel="No bundled capability packs are available."
+              maxHeight="min(30vh, 17rem)"
+            /></NativeCard>}
+          <NativeDisclosureCard id="pack-staged-evidence" title="Staged packs and review evidence"><SettingsActionList
               ariaLabel="Staged capability pack evidence"
-              items={(data.stagedPacks ?? []).map((item) => ({
+              items={(data?.stagedPacks ?? []).map((item) => ({
                 id: item.evidenceEnvelopeId ?? item.packId,
                 label: item.name,
                 description: item.latestMaterialization
@@ -749,7 +679,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
               emptyLabel="No staged capability pack evidence yet."
               maxHeight="min(24vh, 14rem)"
             />
-            <SettingsActionList
+<SettingsActionList
               ariaLabel="Capability pack materialization boundary"
               items={[
                 {
@@ -768,92 +698,164 @@ export function AddonsSection(_props: SettingsSectionProps) {
                 },
               ]}
               maxHeight=""
-            />
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Portable pack"
-            subtitle="Local-file manifests are staged for review; skills and add-ons are not auto-enabled."
-          >
-            <SettingsFieldGrid>
-              <SettingsField label="Manifest JSON" span={2}>
-                <textarea
-                  className="mc-next-settings-textarea mc-next-settings-code"
-                  value={localPackText}
-                  rows={12}
-                  placeholder='{"packId":"local-pack","name":"Local pack","description":"Operator-reviewed local bundle","version":"1.0.0","trustTier":"community","tags":["local"],"assets":[],"policyDefaults":{"requireFirstUseApproval":true,"memoryWriteAuthority":"operator_controlled","redactionMode":"strict","autoRunEnabled":false},"provenance":{"source":"local_file","publisher":"Workspace"},"installWarnings":["Review before staging."]}'
-                  onChange={(event) => {
-                    setLocalPackText(event.target.value);
-                    setLocalPackPreview({ loading: false, error: null, data: null });
-                  }}
-                />
-              </SettingsField>
-            </SettingsFieldGrid>
-            <SettingsButtonRow>
-              <NativeButton
-                variant="secondary"
-                disabled={localPackPreview.loading || !localPackText.trim()}
-                onClick={() => void previewLocalPack()}
-              >
-                <ShieldCheck size={16} />
-                Preview local pack
-              </NativeButton>
-              <NativeButton
-                variant="default"
-                disabled={localPackPreview.loading || !localPackPreview.data}
-                onClick={() => void stageLocalPack()}
-              >
-                <Plus size={16} />
-                Stage local pack
-              </NativeButton>
-            </SettingsButtonRow>
-            {localPackPreview.error ? <SettingsEmptyState label={`Preview failed: ${localPackPreview.error}`} /> : null}
-            {localPackPreview.data ? (
+            /></NativeDisclosureCard>
+        </> : null}
+      </>}
+      {productPosture ? <NativeDisclosureCard id="addon-product-posture" title="1.0 add-on posture" subtitle="Experimental local extensions with operator-reviewed install and launch controls." stats={productPosture.stats}>
+              <SettingsActionList
+                ariaLabel="Add-on readiness criteria"
+                items={productPosture.criteria.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  description: item.description,
+                  actionLabel: item.meta,
+                }))}
+                maxHeight="min(42vh, 24rem)"
+              />
+            </NativeDisclosureCard> : null}
+      </SettingsStack>
+      <DetailInspector open={panel === "addon"} title={selectedAddon?.label ?? "Add-on unavailable"} onClose={closePanel}>
+        {status.loading ? <p role="status">Loading add-on status...</p> : null}
+        {status.error ? <SettingsNotice notice={{tone:"error",message:"Add-on status unavailable: " + status.error}} /> : null}
+
+            {selectedAddon ? (
               <>
+                <p>{selectedAddon.description}</p>
                 <NativeMetricGrid
                   items={[
                     {
-                      label: "Pack",
-                      value: localPackPreview.data.manifest?.name ?? "unknown",
-                      meta: localPackPreview.data.manifest?.provenance?.source,
+                      label: "Trust tier",
+                      value: humanizeEnumToken(selectedAddon.trustTier),
+                      meta: selectedAddon.owner,
                     },
                     {
-                      label: "Review",
-                      value: localPackPreview.data.reviewRequired ? "required" : "not required",
-                      meta: localPackPreview.data.policyChanges?.redactionMode,
+                      label: "Runtime",
+                      value: humanizeEnumToken(selectedAddonRuntimeStatus),
+                      meta: humanizeEnumToken(selectedAddon.runtimeType),
                     },
                     {
-                      label: "Assets",
-                      value: String(localPackPreview.data.installPlan?.length ?? 0),
-                      meta: `${localPackPreview.data.unsupportedAssets?.length ?? 0} unsupported`,
+                      label: "Lifecycle",
+                      value: selectedAddonInstalled ? (selectedAddonEnabled ? "Enabled" : "Disabled") : "Not installed",
+                      meta: selectedInstalledRecord?.updatedAt ?? "No installed record",
+                    },
+                    {
+                      label: "Web entry",
+                      value: humanizeEnumToken(selectedAddon.webEntryMode),
+                      meta: selectedAddon.launchUrl ?? "No launch URL",
                     },
                   ]}
                 />
+                <SettingsButtonRow>
+                  <NativeButton disabled={actionPending}
+                    variant="default"
+                    onClick={() =>
+                      void runAddonAction(
+                        () => installAddon(selectedAddon.addonId, { confirmRepoDownload: true, actorId: "operator" }),
+                        `${selectedAddon.label} install requested.`,
+                      )
+                    }
+                  >
+                    <Plus size={16} />
+                    Install
+                  </NativeButton>
+                  <NativeButton disabled={actionPending}
+                    variant="secondary"
+                    onClick={() =>
+                      void runAddonAction(
+                        () => updateAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} update requested.`,
+                      )
+                    }
+                  >
+                    <RefreshCw size={16} />
+                    Update
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={actionPending || !selectedAddonInstalled || selectedAddonEnabled}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => enableAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} enabled for operator launch.`,
+                      )
+                    }
+                  >
+                    <ShieldCheck size={16} />
+                    Enable
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={actionPending || !selectedAddonInstalled || !selectedAddonEnabled}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => disableAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} disabled and slots removed.`,
+                      )
+                    }
+                  >
+                    <Plug2 size={16} />
+                    Disable
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={actionPending || !selectedAddonInstalled || !selectedAddonEnabled}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => launchAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} launch requested.`,
+                      )
+                    }
+                  >
+                    <Play size={16} />
+                    Launch
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={actionPending || !selectedAddonCanStop}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => stopAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} stop requested.`,
+                      )
+                    }
+                  >
+                    <Square size={16} />
+                    Stop
+                  </NativeButton>
+                  <NativeButton disabled={actionPending}
+                    variant="destructive"
+                    onClick={() => setPendingUninstall({ addonId: selectedAddon.addonId, label: selectedAddon.label })}
+                  >
+                    <Trash2 size={16} />
+                    Uninstall
+                  </NativeButton>
+                </SettingsButtonRow>
+                <NativeDisclosureCard id="addon-diagnostics" title="Install commands and diagnostics"><dl><dt>Repository</dt><dd>{selectedAddon.repoUrl}</dd><dt>Installed path</dt><dd>{selectedInstalledRecord?.installedPath ?? "Unavailable"}</dd><dt>Install reference</dt><dd>{selectedInstalledRecord?.installRef ?? "Unavailable"}</dd></dl>
                 <SettingsActionList
-                  ariaLabel="Portable pack install plan"
-                  items={(localPackPreview.data.installPlan ?? []).map((item) => ({
-                    label: `${item.kind}: ${item.assetId}`,
-                    description: item.reason,
-                    meta: item.outcome,
+                  ariaLabel="Add-on install commands"
+                  items={selectedAddon.installCommands.map((item) => ({
+                    label: item.command,
+                    description: item.note || "Install command",
+                    meta: item.args?.join(" ") || "No args",
                   }))}
-                  emptyLabel="No staged assets in this portable pack."
                 />
-                <SettingsActionList
-                  ariaLabel="Portable pack warnings"
-                  items={(localPackPreview.data.manifest?.installWarnings ?? []).map((warning, index) => ({
-                    id: `${localPackPreview.data?.manifest?.packId}-local-warning-${index}`,
-                    label: "Warning",
-                    description: warning,
-                    meta: "review",
-                  }))}
-                  emptyLabel="No warnings for this portable pack."
-                />
+                {status.data?.healthChecks?.length ? (
+                  <SettingsActionList
+                    ariaLabel="Add-on health checks"
+                    items={status.data.healthChecks.map((item) => ({
+                      label: item.key,
+                      description: item.message,
+                      meta: item.status,
+                    }))}
+                  />
+                ) : null}</NativeDisclosureCard>
               </>
-            ) : null}
-          </NativeCard>
-        </SettingsGrid>
-      ) : null}
+            ) : (
+              <SettingsEmptyState label="Choose an add-on from the catalog." />
+            )}
+
+      </DetailInspector>
+      {leave.dialog}
       <ConfirmModal
         open={pendingUninstall !== null}
         danger

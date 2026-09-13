@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
+import { compensatePackMcpServer, packMcpConfigurationHash } from "./capability-pack-mcp-owner.js";
 import {
   completeMcpOAuth,
   connectMcpServer,
@@ -34,6 +35,35 @@ rl.on("line", (line) => {
 `;
 
 describe("mcp-server-admin-service", () => {
+  it("binds compensation to the creating plan and current pack revision", async () => {
+    const host = createHost();
+    const created = await createMcpServer(host, {
+      label: "Pack fixture", transport: "stdio", command: "node", args: ["fixture.js"], enabled: false,
+    }, `pack-${"1".repeat(40)}`, "plan-1");
+    const input = { planId: "plan-1", serverId: created.serverId, mode: "created" as const,
+      configurationHash: packMcpConfigurationHash(created) };
+    await expect(compensatePackMcpServer(host, { ...input, planId: "foreign" })).rejects.toThrow("preserved");
+    await updateMcpServer(host, created.serverId, { enabled: true }, { planId: "plan-1", phase: "apply" });
+    expect(host.servers[0]!.packChange).toMatchObject({ revision: 2, created: true });
+    await compensatePackMcpServer(host, input);
+    expect(host.servers[0]).toMatchObject({ enabled: false, packChange: { revision: 3, phase: "compensate" } });
+    const writes = host.writeMcpServers.mock.calls.length;
+    await compensatePackMcpServer(host, input);
+    expect(host.writeMcpServers).toHaveBeenCalledTimes(writes);
+    await updateMcpServer(host, created.serverId, { enabled: true });
+    expect(host.servers[0]!.packChange).toBeUndefined();
+    await expect(compensatePackMcpServer(host, input)).rejects.toThrow("preserved");
+    expect(host.servers[0]!.enabled).toBe(true);
+  });
+  it("can reverse its enable action on an existing server while retaining the registration", async () => {
+    const host = createHost({ servers: [createServer({ enabled: false })] });
+    const original = host.servers[0]!;
+    await updateMcpServer(host, original.serverId, { enabled: true }, { planId: "enable-plan", phase: "apply" });
+    await compensatePackMcpServer(host, { planId: "enable-plan", serverId: original.serverId,
+      mode: "enabled", configurationHash: packMcpConfigurationHash(original) });
+    expect(host.servers).toHaveLength(1);
+    expect(host.servers[0]).toMatchObject({ enabled: false, command: original.command, packChange: { created: false } });
+  });
   it("creates stdio server records with normalized policy and emits realtime", async () => {
     const host = createHost();
 
@@ -71,7 +101,7 @@ describe("mcp-server-admin-service", () => {
       status: "disconnected",
     });
     expect(host.servers[0]).toEqual(created);
-    expect(host.writeMcpServers).toHaveBeenCalledWith([created]);
+    expect(host.writeMcpServers).toHaveBeenCalledWith([created], []);
     expect(host.publishRealtime).toHaveBeenCalledWith("system", "mcp", {
       type: "mcp_server_created",
       serverId: created.serverId,
@@ -138,7 +168,7 @@ describe("mcp-server-admin-service", () => {
         allowedEnvKeys: ["REMOTE_MCP_TOKEN"],
       },
     });
-    expect(host.writeMcpServers).toHaveBeenCalledWith([created]);
+    expect(host.writeMcpServers).toHaveBeenCalledWith([created], []);
   });
 
   it("updates server fields and merges policy without replacing existing defaults", async () => {
@@ -395,7 +425,7 @@ describe("mcp-server-admin-service", () => {
     expect(host.authState["server-1"]).toMatchObject({
       oauthState: started.state,
     });
-    expect(host.writeMcpAuthState).toHaveBeenCalledWith(host.authState);
+    expect(host.writeMcpAuthState).toHaveBeenCalledWith({ server: host.servers[0], expected: undefined, next: host.authState["server-1"] });
 
     await expect(completeMcpOAuth(host, "server-1", "secret-code")).rejects.toThrow(
       "OAuth state is required to complete this handshake.",
@@ -419,6 +449,44 @@ describe("mcp-server-admin-service", () => {
     await expect(completeMcpOAuth(createHost(), "missing", "code")).rejects.toThrow(
       "No OAuth handshake in progress for this server.",
     );
+  });
+
+  it("leaves shared connection state untouched when environment enrollment fails", async () => {
+    const host = createHost({ servers: [createServer({ serverId: "server-1" })] });
+    host.prepareMcpStaticEnvironment = vi.fn(async () => {
+      throw new Error("environment enrollment failed");
+    });
+    await expect(connectMcpServer(host, "server-1")).rejects.toThrow("environment enrollment failed");
+    expect(host.patchMcpServerState).not.toHaveBeenCalled();
+    expect(host.resolveConnectedMcpTools).not.toHaveBeenCalled();
+    expect(host.writeMcpTools).not.toHaveBeenCalled();
+  });
+
+  it("binds OAuth setup to the enrolled configuration without falling back to ambient client values", async () => {
+    vi.stubEnv("MCP_ENVIRONMENT_CLIENT_ID", "ambient-client-must-not-be-used");
+    try {
+      const host = createHost({ servers: [createServer({
+        serverId: "server-1",
+        authType: "oauth2",
+        oauth: {
+          authorizationUrl: "https://example.invalid/authorize",
+          tokenUrl: "https://example.invalid/token",
+          clientIdEnv: "MCP_ENVIRONMENT_CLIENT_ID",
+        },
+      })] });
+      const prepared = { ...host.servers[0]!, configurationBindingId: "00000000-0000-4000-8000-000000000001" };
+      host.prepareMcpStaticEnvironment = vi.fn(async () => {
+        host.servers = [prepared];
+        return prepared;
+      });
+      host.resolveMcpOAuthClientId = vi.fn(async () => undefined);
+      const started = await startMcpOAuth(host, "server-1");
+      expect(new URL(started.authorizeUrl).searchParams.has("client_id")).toBe(false);
+      expect(host.resolveMcpOAuthClientId).toHaveBeenCalledWith(prepared);
+      expect(host.writeMcpAuthState).toHaveBeenCalledWith(expect.objectContaining({ server: prepared }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("deletes servers, tools, approval inbox entries, and emits realtime only when present", async () => {
@@ -472,6 +540,9 @@ function createHost(input?: {
     },
     readMcpServers: vi.fn(async () => host.servers),
     writeMcpServers: vi.fn(async (servers: McpServerRecord[]) => {
+      const removed = host.servers.filter((server) => !servers.some((next) => next.serverId === server.serverId));
+      for (const server of removed) delete host.authState[server.serverId];
+      host.tools = host.tools.filter((tool) => !removed.some((server) => server.serverId === tool.serverId));
       host.servers = [...servers];
     }),
     patchMcpServerState: vi.fn(async (serverId: string, patch: Partial<McpServerRecord>) => {
@@ -505,10 +576,16 @@ function createHost(input?: {
       return server;
     }),
     readMcpAuthState: vi.fn(async () => host.authState),
-    writeMcpAuthState: vi.fn(async (state: Record<string, { oauthState?: string; updatedAt: string }>) => {
-      host.authState = state;
+    writeMcpAuthState: vi.fn(async (update: Parameters<McpServerAdminHost["writeMcpAuthState"]>[0]) => {
+      if (update.next) host.authState[update.server.serverId] = update.next;
+      else delete host.authState[update.server.serverId];
     }),
-    exchangeMcpOAuthCode: vi.fn(input?.exchangeMcpOAuthCode),
+    exchangeMcpOAuthCode: vi.fn(async (...args: Parameters<NonNullable<McpServerAdminHost["exchangeMcpOAuthCode"]>>) => {
+      const next = await input?.exchangeMcpOAuthCode?.(...args);
+      if (!next) throw new Error("OAuth exchange fixture is unavailable.");
+      host.authState[args[0].serverId] = next;
+      return next;
+    }),
     publishRealtime: vi.fn(),
   };
   return host;

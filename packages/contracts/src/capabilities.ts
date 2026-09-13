@@ -260,7 +260,14 @@ export interface SkillLifecycleRecord {
 export interface CandidateSkillVersionRecord {
   candidateId: string;
   versionId: string;
-  sourceKind: "code_mode_generated" | "manual" | "learned_correction" | "history_workshop" | "upstream_hub";
+  sourceKind:
+    | "code_mode_generated"
+    | "manual"
+    | "learned_correction"
+    | "history_workshop"
+    | "upstream_hub"
+    | "capability_pack"
+    | "workflow_capture";
   /** Derived by storage for pre-161 records; governed records carry every required lineage field. */
   lineageStatus?: "legacy_missing" | "governed";
   workspaceId?: string;
@@ -762,6 +769,13 @@ export interface CandidateSkillDetailRecord {
   originatingRun?: CodeModeRunRecord;
   activationBlocked: boolean;
   activationBlockers: string[];
+}
+
+export interface CandidateSkillArtifactReview {
+  candidateId: string;
+  versionId: string;
+  revision: number;
+  artifacts: Array<{ label: string; artifactRef: string; content: string }>;
 }
 
 export interface CapabilityProposalDetailRecord {

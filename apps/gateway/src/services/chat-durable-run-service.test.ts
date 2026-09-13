@@ -967,6 +967,58 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("rolls back terminal state when result materialization fails and replays only verified completion", async () => {
+    const state = createFinalizeState();
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const before = structuredClone(state.runs.get("run-complete"));
+    const transact = state.deps.runImmediateTransaction;
+    let insideTransaction = false;
+    let rejectReceipt = true;
+    state.deps.runImmediateTransaction = async (work) => await transact(async () => {
+      insideTransaction = true;
+      try { return await work(); } finally { insideTransaction = false; }
+    });
+    const materialize = vi.fn(async () => {
+      expect(insideTransaction).toBe(true);
+      expect(state.runs.get("run-complete")?.status).toBe("completed");
+      expect(state.checkpoints.at(-1)?.checkpointKind).toBe("run_completed");
+      expect(state.tracePatches.at(-1)?.patch).toMatchObject({ durable: { status: "completed" } });
+      if (rejectReceipt) throw new Error("worker receipt rejected");
+    });
+    state.deps.recordTerminalResultMaterialization = materialize;
+
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace))
+      .rejects.toThrow("worker receipt rejected");
+    expect(state.runs.get("run-complete")).toEqual(before);
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([]);
+
+    rejectReceipt = false;
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    const settled = structuredClone(state.runs.get("run-complete"));
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    expect(state.runs.get("run-complete")).toEqual(settled);
+    expect(state.checkpoints).toHaveLength(1);
+    expect(materialize).toHaveBeenCalledTimes(3);
+
+    state.runs.set("run-complete", { ...settled!, metadata: { ...settled!.metadata, finalOutput: "changed" } });
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).rejects.toThrow();
+    expect(materialize).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not materialize a completed result for a failed or cancelled Chat run", async () => {
+    for (const status of ["failed", "cancelled"] as const) {
+      const state = createFinalizeState();
+      const materialize = vi.fn();
+      state.deps.recordTerminalResultMaterialization = materialize;
+      await finalizeDurableChatRun(state.deps, "run-complete", createPreparedTurn(), createTrace({ status }));
+      expect(state.runs.get("run-complete")?.status).toBe(status);
+      expect(materialize).not.toHaveBeenCalled();
+    }
+  });
+
   it("does not infer autonomous finalizer authority from descriptive autonomous metadata", async () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });

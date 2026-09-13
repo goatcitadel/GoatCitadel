@@ -1,5 +1,6 @@
+import { DetailInspector } from "../../../components/DetailInspector";
 /* eslint-disable max-lines -- RunDetailRoutePage centralizes run evidence, replay checkpoints, exports, and trace panels until the Ops evidence surface is split. */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClipboardCopy, FileText, GitBranch, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   exportObserveRunTrace,
@@ -64,7 +65,19 @@ interface RunDetailModel {
   raw: unknown;
 }
 
-export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
+export function RunDetailRoutePage(props: NativeRoutePagesProps) {
+  return <SelectedRunDetailPage key={props.activeWorkspaceId + ":" + (props.route.runId ?? "none")} {...props} />;
+}
+function SelectedRunDetailPage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
+  const [runView, setRunView] = useState<"overview" | "timeline" | "evidence" | "recovery">("overview");
+  const [supportPanel, setSupportPanel] = useState<"receipt" | "exports" | null>(null);
+  const receiptSequence = useRef(0);
+  useEffect(() => {
+    const sequence = receiptSequence;
+    return () => {
+      sequence.current++;
+    };
+  }, []);
   const runId = route.runId?.trim();
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -89,24 +102,30 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       fetchObserveRunTrace(runId).then((value) => value as unknown as RunTracePayload),
       buildEmptyRunTrace(runId),
     );
-    const orchestrationRunId = getLinkedOrchestrationRunId(trace.data);
-    const orchestrationTrace = orchestrationRunId
-      ? await fetchOrchestrationRunTrace(orchestrationRunId, { workspaceId: activeWorkspaceId }).catch(() => null)
-      : null;
     const structuredReview = runId.startsWith("review-")
       ? await fetchStructuredReviewRun(runId).catch(() => null)
       : null;
     return {
       issues: nativeLoadIssues([trace]),
       trace: trace.data,
-      orchestrationTrace,
       structuredReview,
     };
   }, [activeWorkspaceId, runId]);
+  const orchestrationRunId = data?.trace ? getLinkedOrchestrationRunId(data.trace) : null;
+  const wantsOrchestration = runView === "evidence" || runView === "recovery";
+  const orchestration = useAsyncLoad(async () => {
+    if (!wantsOrchestration || !orchestrationRunId) return { id: orchestrationRunId, issues: [], trace: null };
+    const result = await nativeLoad(
+      "Orchestration evidence",
+      fetchOrchestrationRunTrace(orchestrationRunId, { workspaceId: activeWorkspaceId }),
+      null,
+    );
+    return { id: orchestrationRunId, issues: nativeLoadIssues([result]), trace: result.data };
+  }, [activeWorkspaceId, orchestrationRunId, wantsOrchestration]);
   const detail = buildRunDetailModel(
     data?.trace ?? buildEmptyRunTrace(runId ?? "unknown"),
     runId ?? "unknown",
-    data?.orchestrationTrace ?? null,
+    orchestration.data?.id === orchestrationRunId ? (orchestration.data?.trace ?? null) : null,
   );
 
   const copyTraceExport = async () => {
@@ -168,15 +187,19 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
   };
 
   const inspectEvidenceReceipt = async () => {
-    if (!runId) return;
+    if (!runId || receiptInspection.loading) return;
+    setSupportPanel("receipt");
+    const sequence = ++receiptSequence.current;
     setReceiptInspection({ loading: true, receipt: null, verification: null });
     setReceiptError(null);
     setReceiptNotice(null);
     try {
       const receipt = await fetchEvidenceReceipt(runId);
       const verification = await verifyEvidenceReceipt(receipt);
+      if (sequence !== receiptSequence.current) return;
       setReceiptInspection({ loading: false, receipt, verification });
     } catch (err) {
+      if (sequence !== receiptSequence.current) return;
       setReceiptInspection({ loading: false, receipt: null, verification: null });
       setReceiptError(err instanceof Error ? err.message : String(err));
     }
@@ -215,7 +238,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       kicker={routeKicker(route)}
       title={runId ? `Run ${runId}` : "Run detail"}
       description={`Operator-visible request, execution, evidence, and recovery posture for ${activeWorkspaceName}.`}
-      loading={loading}
+      loading={loading && !data}
       error={error}
       metrics={[
         { label: "Status", value: detail.status },
@@ -225,354 +248,429 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       ]}
       actions={
         <>
+          {detail.sessionId ? (
+            <NativeButton
+              onClick={() =>
+                navigate({ area: "chat", sessionId: detail.sessionId, turnId: detail.turnId, theme: route.theme })
+              }
+            >
+              Open in Chat
+            </NativeButton>
+          ) : null}
           <NativeButton
-            variant="default"
+            variant="outline"
             onClick={() => void inspectEvidenceReceipt()}
             disabled={!runId || receiptInspection.loading}
           >
             <ShieldCheck size={16} />
             {receiptInspection.loading ? "Verifying receipt..." : "Inspect signed receipt"}
           </NativeButton>
-          <NativeButton
-            variant="secondary"
-            onClick={() => void downloadEvidenceReceipt()}
-            disabled={!runId || downloadingReceipt}
-          >
-            <ShieldCheck size={16} />
-            {downloadingReceipt ? "Preparing receipt..." : "Download evidence receipt"}
+          <NativeButton variant="outline" onClick={() => setSupportPanel("exports")}>
+            Exports
           </NativeButton>
-          <NativeButton variant="secondary" onClick={() => void copyTraceExport()} disabled={!runId || exporting}>
-            <ClipboardCopy size={16} />
-            {exporting ? "Exporting..." : "Copy trace export"}
-          </NativeButton>
-          <NativeButton variant="secondary" onClick={() => void reload()}>
+          <NativeButton variant="ghost" onClick={() => void reload()}>
             <RefreshCw size={16} />
             Refresh
           </NativeButton>
         </>
       }
     >
-      <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      <LibraryLoadWarnings
+        issues={[...(data?.issues ?? []), ...(wantsOrchestration ? (orchestration.data?.issues ?? []) : [])]}
+        onRetry={async () => {
+          await reload();
+          await orchestration.reload();
+        }}
+      />
       {receiptNotice ? <NoticeBanner tone="success" message={receiptNotice} /> : null}
       {receiptError ? <ErrorState size="inline" description={receiptError} /> : null}
       {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
       {exportError ? <ErrorState size="inline" description={exportError} /> : null}
+      <div className="mc-next-runtime-actions">
+        <StatusChip tone={/failed|blocked|cancelled/.test(detail.status) ? "warning" : "neutral"}>
+          {detail.status}
+        </StatusChip>
+        {detail.evidenceStates.length ? (
+          <NativeButton variant="outline" onClick={() => setRunView("evidence")}>
+            {detail.evidenceStates.length} evidence groups need review
+          </NativeButton>
+        ) : null}
+        {detail.memoryWarning ? <span>{detail.memoryWarning}</span> : null}
+      </div>
+      <div className="mc-next-settings-filter-bar" role="group" aria-label="Run detail views">
+        {(["overview", "timeline", "evidence", "recovery"] as const).map((view) => (
+          <NativeButton key={view} variant="ghost" aria-pressed={runView === view} onClick={() => setRunView(view)}>
+            {view === "overview"
+              ? "Overview"
+              : view === "timeline"
+                ? "Timeline"
+                : view === "evidence"
+                  ? "Evidence"
+                  : "Recovery"}
+          </NativeButton>
+        ))}
+      </div>
       <NativeGrid className="mc-next-run-detail-grid">
-        {data?.structuredReview ? (
+        {runView === "overview" ? (
+          <>
+            {data?.structuredReview ? (
+              <NativeCard
+                title="Structured review findings"
+                subtitle="Read-only reviewer output tied to the frozen SHA and diff hash. Fixes still require an approved Code Mode run and follow-up review evidence."
+                stats={[
+                  { label: "Status", value: data.structuredReview.status },
+                  { label: "Findings", value: String(data.structuredReview.findings.length) },
+                  { label: "Reviewed SHA", value: data.structuredReview.reviewedSha.slice(0, 12) },
+                  {
+                    label: "Preflight",
+                    value: data.structuredReview.preflight
+                      ? `${data.structuredReview.preflight.estimatedReviewCalls} calls / $${data.structuredReview.preflight.costBudgetUsd.toFixed(2)} cap`
+                      : "External import",
+                  },
+                ]}
+              >
+                <NativeList
+                  density="compact"
+                  items={data.structuredReview.findings.map((finding) => ({
+                    title: `${finding.severity.toUpperCase()} · ${finding.title}`,
+                    meta: `${finding.status} · confidence ${finding.confidence}% · ${finding.fixClass} · owner ${finding.ownerRole ?? "unassigned"}`,
+                    body: [
+                      finding.whyItMatters,
+                      finding.suggestedFix ? `Suggested fix: ${finding.suggestedFix}` : undefined,
+                      finding.verificationEvidence?.length
+                        ? `Verification: ${finding.verificationEvidence.join(", ")}`
+                        : finding.requiresVerification
+                          ? "Verification evidence required before closure."
+                          : undefined,
+                      finding.followUpReviewRunId ? `Follow-up review: ${finding.followUpReviewRunId}` : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                  }))}
+                  emptyLabel="The review completed without persisted findings."
+                  maxHeight="min(52vh, 32rem)"
+                />
+              </NativeCard>
+            ) : null}
+            <NativeCard
+              title="Request"
+              subtitle="The requested work and runtime linkage when the trace projection includes it."
+              stats={[
+                { label: "Run", value: detail.runId },
+                { label: "Session", value: detail.sessionId ?? "Unknown" },
+              ]}
+            >
+              <RunSummary detail={detail} />
+            </NativeCard>
+            {detail.errors.length ? (
+              <NativeCard
+                title="Errors"
+                subtitle="Failures and warnings are displayed without assuming a retry path."
+                className={detail.errors.length > 0 ? "mc-next-run-detail-attention" : undefined}
+              >
+                <NativeList
+                  density="compact"
+                  items={detail.errors}
+                  emptyLabel="No errors are attached to this run."
+                  maxHeight="min(38vh, 24rem)"
+                />
+              </NativeCard>
+            ) : null}
+            <NativeCard title="Cost and latency" subtitle="Provider usage and timing only when the trace reports it.">
+              <LibraryMetricGrid
+                items={[
+                  { label: "Input", value: formatCount(detail.inputTokens), meta: "tokens" },
+                  { label: "Output", value: formatCount(detail.outputTokens), meta: "tokens" },
+                  { label: "Cost", value: formatCost(detail.costUsd), meta: detail.costSource ?? "source unknown" },
+                  { label: "Latency", value: formatDuration(detail.latencyMs), meta: "overall" },
+                ]}
+              />
+            </NativeCard>
+          </>
+        ) : runView === "timeline" ? (
           <NativeCard
-            title="Structured review findings"
-            subtitle="Read-only reviewer output tied to the frozen SHA and diff hash. Fixes still require an approved Code Mode run and follow-up review evidence."
-            stats={[
-              { label: "Status", value: data.structuredReview.status },
-              { label: "Findings", value: String(data.structuredReview.findings.length) },
-              { label: "Reviewed SHA", value: data.structuredReview.reviewedSha.slice(0, 12) },
-              {
-                label: "Preflight",
-                value: data.structuredReview.preflight
-                  ? `${data.structuredReview.preflight.estimatedReviewCalls} calls / $${data.structuredReview.preflight.costBudgetUsd.toFixed(2)} cap`
-                  : "External import",
-              },
-            ]}
+            title="Timeline"
+            subtitle="Recorded trace and durable events, shown as evidence rather than inference."
           >
             <NativeList
               density="compact"
-              items={data.structuredReview.findings.map((finding) => ({
-                title: `${finding.severity.toUpperCase()} · ${finding.title}`,
-                meta: `${finding.status} · confidence ${finding.confidence}% · ${finding.fixClass} · owner ${finding.ownerRole ?? "unassigned"}`,
-                body: [
-                  finding.whyItMatters,
-                  finding.suggestedFix ? `Suggested fix: ${finding.suggestedFix}` : undefined,
-                  finding.verificationEvidence?.length
-                    ? `Verification: ${finding.verificationEvidence.join(", ")}`
-                    : finding.requiresVerification
-                      ? "Verification evidence required before closure."
-                      : undefined,
-                  finding.followUpReviewRunId ? `Follow-up review: ${finding.followUpReviewRunId}` : undefined,
-                ]
-                  .filter(Boolean)
-                  .join(" "),
-              }))}
-              emptyLabel="The review completed without persisted findings."
-              maxHeight="min(52vh, 32rem)"
+              items={detail.timeline}
+              emptyLabel="No timeline events are attached to this trace yet."
+              maxHeight="min(46vh, 28rem)"
             />
           </NativeCard>
-        ) : null}
-        <NativeCard
-          title="Request"
-          subtitle="The requested work and runtime linkage when the trace projection includes it."
-          stats={[
-            { label: "Run", value: detail.runId },
-            { label: "Session", value: detail.sessionId ?? "Unknown" },
-          ]}
-        >
-          <RunSummary detail={detail} />
-        </NativeCard>
-
-        <NativeCard
-          title="Signed evidence receipt"
-          subtitle="Built and verified on demand through the Gateway's existing receipt endpoints."
-          className={
-            receiptInspection.verification && !receiptInspection.verification.valid
-              ? "mc-next-run-detail-attention"
-              : "mc-next-run-receipt-card"
-          }
-        >
-          {receiptInspection.receipt && receiptInspection.verification ? (
-            <div className="mc-next-run-receipt-inspector">
-              <div className="mc-next-run-receipt-verdict">
-                <div>
-                  <span>Verification</span>
-                  <strong>{receiptInspection.verification.valid ? "Signature valid" : "Verification failed"}</strong>
-                </div>
-                <StatusChip tone={receiptInspection.verification.valid ? "success" : "critical"}>
-                  {receiptInspection.verification.valid ? "Verified" : "Untrusted"}
-                </StatusChip>
-              </div>
-              <dl>
-                <div>
-                  <dt>Outcome</dt>
-                  <dd>{receiptInspection.receipt.manifest.lineage.outcome}</dd>
-                </div>
-                <div>
-                  <dt>Generated</dt>
-                  <dd>{formatDateTime(receiptInspection.receipt.manifest.generatedAt)}</dd>
-                </div>
-                <div>
-                  <dt>Approvals</dt>
-                  <dd>{receiptInspection.receipt.manifest.approvalEffects.length}</dd>
-                </div>
-                <div>
-                  <dt>Side effects</dt>
-                  <dd>{receiptInspection.receipt.manifest.sideEffects.length}</dd>
-                </div>
-                <div>
-                  <dt>Artifacts</dt>
-                  <dd>{receiptInspection.receipt.manifest.artifacts.length}</dd>
-                </div>
-                <div>
-                  <dt>Signature</dt>
-                  <dd>{receiptInspection.receipt.signatureAlgorithm}</dd>
-                </div>
-              </dl>
-              {receiptInspection.verification.reasons.length > 0 ? (
-                <ul className="mc-next-run-receipt-reasons">
-                  {receiptInspection.verification.reasons.map((reason, index) => (
-                    <li key={`${reason}-${index}`}>{reason}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p>The Gateway verified the posted receipt without reporting integrity failures.</p>
-              )}
-              <details className="mc-next-run-receipt-raw">
-                <summary>Expert receipt payload</summary>
-                <LibraryCodeBlock label="Signed receipt JSON">
-                  {JSON.stringify(receiptInspection.receipt, null, 2)}
-                </LibraryCodeBlock>
-              </details>
-            </div>
-          ) : (
-            <EmptyState
-              size="compact"
-              title="Receipt not loaded"
-              description="Inspect the signed receipt when you need integrity, lineage, approval, side-effect, and artifact proof."
-            />
-          )}
-        </NativeCard>
-
-        <NativeCard
-          title="Timeline"
-          subtitle="Recorded trace and durable events, shown as evidence rather than inference."
-        >
-          <NativeList
-            density="compact"
-            items={detail.timeline}
-            emptyLabel="No timeline events are attached to this trace yet."
-            maxHeight="min(46vh, 28rem)"
-          />
-        </NativeCard>
-
-        <NativeCard
-          title="Orchestration decisions"
-          subtitle="Decision trace events from the durable orchestration layer when this run has them."
-          stats={[
-            { label: "Decisions", value: String(detail.orchestrationDecisions.length) },
-            { label: "Policies", value: String(detail.orchestrationPolicies.length) },
-          ]}
-        >
-          <NativeList
-            density="compact"
-            items={detail.orchestrationDecisions}
-            emptyLabel="No orchestration decision trace is attached to this run."
-            maxHeight="min(46vh, 28rem)"
-          />
-        </NativeCard>
-
-        <NativeCard
-          title="Orchestration evidence"
-          subtitle="Prompt hashes, model choices, policy gates, lineage, waits, resumes, and failures."
-          className={detail.orchestrationFailures.length > 0 ? "mc-next-run-detail-attention" : undefined}
-        >
-          <NativeList
-            density="compact"
-            items={[
-              ...detail.orchestrationPrompts,
-              ...detail.orchestrationModels,
-              ...detail.orchestrationPolicies,
-              ...detail.orchestrationLineage,
-              ...detail.orchestrationWaits,
-              ...detail.orchestrationFailures,
-            ]}
-            emptyLabel="No orchestration evidence fields are attached to this run."
-            maxHeight="min(46vh, 28rem)"
-          />
-        </NativeCard>
-
-        <NativeCard title="Memory and context" subtitle="Memory use is shown only when the trace records it.">
-          {detail.memoryContext.length === 0 ? (
-            <EmptyState size="compact" title="No memory/context evidence is attached to this trace." />
-          ) : (
-            <NativeList
-              density="compact"
-              items={detail.memoryContext}
-              emptyLabel="No memory/context evidence is attached to this trace."
-              maxHeight="min(42vh, 26rem)"
-            />
-          )}
-          {detail.memoryWarning ? <ErrorState size="inline" tone="caution" description={detail.memoryWarning} /> : null}
-        </NativeCard>
-
-        <NativeCard title="Tools and approvals" subtitle="Tool calls and approval checkpoints recorded for this run.">
-          <NativeList
-            density="compact"
-            items={detail.tools}
-            emptyLabel="No tool calls are attached to this run."
-            maxHeight="min(42vh, 26rem)"
-          />
-          <NativeList
-            density="compact"
-            items={detail.approvals}
-            emptyLabel="No approval checkpoints are attached to this run."
-          />
-        </NativeCard>
-
-        <NativeCard
-          title="Evidence availability"
-          subtitle="Missing or unavailable trace groups stay visible without relying on raw JSON."
-        >
-          <NativeList
-            density="compact"
-            items={detail.evidenceStates}
-            emptyLabel="No missing, unknown, or error-qualified evidence groups need attention."
-            maxHeight="min(34vh, 20rem)"
-          />
-        </NativeCard>
-
-        <NativeCard
-          title="Trace and SIEM exports"
-          subtitle="Stable Gateway routes for raw trace, export bundle, trust report, and SIEM NDJSON handoff."
-        >
-          <NativeList
-            density="compact"
-            items={detail.exportLinks}
-            emptyLabel="No export links can be derived without a run id."
-            maxHeight="min(34vh, 20rem)"
-          />
-        </NativeCard>
-
-        <NativeCard title="Side effects" subtitle="External effects stay explicit, including audit-only effects.">
-          <NativeList
-            density="compact"
-            items={detail.sideEffects}
-            emptyLabel="No side effects are attached to this run."
-            maxHeight="min(42vh, 26rem)"
-          />
-        </NativeCard>
-
-        <NativeCard title="Artifacts" subtitle="Generated outputs linked to this run.">
-          <NativeList
-            density="compact"
-            items={detail.artifacts}
-            emptyLabel="No artifacts are attached to this run."
-            maxHeight="min(42vh, 26rem)"
-          />
-        </NativeCard>
-
-        <NativeCard
-          title="Errors"
-          subtitle="Failures and warnings are displayed without assuming a retry path."
-          className={detail.errors.length > 0 ? "mc-next-run-detail-attention" : undefined}
-        >
-          <NativeList
-            density="compact"
-            items={detail.errors}
-            emptyLabel="No errors are attached to this run."
-            maxHeight="min(38vh, 24rem)"
-          />
-        </NativeCard>
-
-        <NativeCard title="Cost and latency" subtitle="Provider usage and timing only when the trace reports it.">
-          <LibraryMetricGrid
-            items={[
-              { label: "Input", value: formatCount(detail.inputTokens), meta: "tokens" },
-              { label: "Output", value: formatCount(detail.outputTokens), meta: "tokens" },
-              { label: "Cost", value: formatCost(detail.costUsd), meta: detail.costSource ?? "source unknown" },
-              { label: "Latency", value: formatDuration(detail.latencyMs), meta: "overall" },
-            ]}
-          />
-        </NativeCard>
-
-        <NativeCard
-          title="Replay and resume posture"
-          subtitle="This panel reports available evidence; it does not start replay."
-        >
-          <div className="mc-next-approvals-chip-row">
-            <StatusChip tone={detail.replayAvailable ? "success" : "muted"}>
-              {detail.replayAvailable ? "Replay evidence recorded" : "Replay not exposed"}
-            </StatusChip>
-            <StatusChip tone={detail.resumeAvailable ? "warning" : "muted"}>
-              {detail.resumeAvailable ? "Resume available" : "No resume action exposed"}
-            </StatusChip>
-            {detail.recoveryState ? <StatusChip tone="warning">{detail.recoveryState}</StatusChip> : null}
-          </div>
-          <p className="mc-next-approvals-summary">{detail.replayReason}</p>
-          <p className="mc-next-approvals-summary">Replay audit checkpoints</p>
-          <NativeList
-            density="compact"
-            items={detail.replayAuditItems}
-            emptyLabel="No replay audit checkpoint evidence is attached to this run."
-            maxHeight="min(32vh, 18rem)"
-          />
-          {detail.sessionId && detail.turnId && isStableSurface(detail.sourceSurface) ? (
-            <NativeButton
-              variant="secondary"
-              onClick={() =>
-                navigate({
-                  area: detail.sourceSurface as "chat" | "cowork" | "code",
-                  sessionId: detail.sessionId,
-                  turnId: detail.turnId,
-                  runId: detail.runId,
-                  theme: route.theme,
-                })
-              }
+        ) : runView === "recovery" ? (
+          <>
+            <NativeCard
+              title="Replay and resume posture"
+              subtitle="This panel reports available evidence; it does not start replay."
             >
-              <GitBranch size={16} />
-              Open source thread
-            </NativeButton>
-          ) : null}
-        </NativeCard>
+              <div className="mc-next-approvals-chip-row">
+                <StatusChip tone={detail.replayAvailable ? "success" : "muted"}>
+                  {detail.replayAvailable ? "Replay evidence recorded" : "Replay not exposed"}
+                </StatusChip>
+                <StatusChip tone={detail.resumeAvailable ? "warning" : "muted"}>
+                  {detail.resumeAvailable ? "Resume available" : "No resume action exposed"}
+                </StatusChip>
+                {detail.recoveryState ? <StatusChip tone="warning">{detail.recoveryState}</StatusChip> : null}
+              </div>
+              <p className="mc-next-approvals-summary">{detail.replayReason}</p>
+              <p className="mc-next-approvals-summary">Replay audit checkpoints</p>
+              <NativeList
+                density="compact"
+                items={detail.replayAuditItems}
+                emptyLabel="No replay audit checkpoint evidence is attached to this run."
+                maxHeight="min(32vh, 18rem)"
+              />
+              {detail.sessionId && detail.turnId && isStableSurface(detail.sourceSurface) ? (
+                <NativeButton
+                  variant="secondary"
+                  onClick={() =>
+                    navigate({
+                      area: detail.sourceSurface as "chat" | "cowork" | "code",
+                      sessionId: detail.sessionId,
+                      turnId: detail.turnId,
+                      runId: detail.runId,
+                      theme: route.theme,
+                    })
+                  }
+                >
+                  <GitBranch size={16} />
+                  Open source thread
+                </NativeButton>
+              ) : null}
+            </NativeCard>
+            <NativeCard
+              title="Orchestration decisions"
+              subtitle="Decision trace events from the durable orchestration layer when this run has them."
+              stats={[
+                { label: "Decisions", value: String(detail.orchestrationDecisions.length) },
+                { label: "Policies", value: String(detail.orchestrationPolicies.length) },
+              ]}
+            >
+              <NativeList
+                density="compact"
+                items={detail.orchestrationDecisions}
+                emptyLabel="No orchestration decision trace is attached to this run."
+                maxHeight="min(46vh, 28rem)"
+              />
+            </NativeCard>
+          </>
+        ) : (
+          <>
+            <NativeCard
+              title="Evidence availability"
+              subtitle="Missing or unavailable trace groups stay visible without relying on raw JSON."
+            >
+              <NativeList
+                density="compact"
+                items={detail.evidenceStates}
+                emptyLabel="No missing, unknown, or error-qualified evidence groups need attention."
+                maxHeight="min(34vh, 20rem)"
+              />
+            </NativeCard>
+            <details>
+              <summary>Tools and approvals</summary>
+              <NativeCard
+                title="Tools and approvals"
+                subtitle="Tool calls and approval checkpoints recorded for this run."
+              >
+                <NativeList
+                  density="compact"
+                  items={detail.tools}
+                  emptyLabel="No tool calls are attached to this run."
+                  maxHeight="min(42vh, 26rem)"
+                />
+                <NativeList
+                  density="compact"
+                  items={detail.approvals}
+                  emptyLabel="No approval checkpoints are attached to this run."
+                />
+              </NativeCard>
+            </details>
+            <details>
+              <summary>Artifacts</summary>
+              <NativeCard title="Artifacts" subtitle="Generated outputs linked to this run.">
+                <NativeList
+                  density="compact"
+                  items={detail.artifacts}
+                  emptyLabel="No artifacts are attached to this run."
+                  maxHeight="min(42vh, 26rem)"
+                />
+              </NativeCard>
+            </details>
+            <details>
+              <summary>Side effects</summary>
+              <NativeCard title="Side effects" subtitle="External effects stay explicit, including audit-only effects.">
+                <NativeList
+                  density="compact"
+                  items={detail.sideEffects}
+                  emptyLabel="No side effects are attached to this run."
+                  maxHeight="min(42vh, 26rem)"
+                />
+              </NativeCard>
+            </details>
+            <details>
+              <summary>Memory and context</summary>
+              <NativeCard title="Memory and context" subtitle="Memory use is shown only when the trace records it.">
+                {detail.memoryContext.length === 0 ? (
+                  <EmptyState size="compact" title="No memory/context evidence is attached to this trace." />
+                ) : (
+                  <NativeList
+                    density="compact"
+                    items={detail.memoryContext}
+                    emptyLabel="No memory/context evidence is attached to this trace."
+                    maxHeight="min(42vh, 26rem)"
+                  />
+                )}
+                {detail.memoryWarning ? (
+                  <ErrorState size="inline" tone="caution" description={detail.memoryWarning} />
+                ) : null}
+              </NativeCard>
+            </details>
+            <details>
+              <summary>Orchestration evidence</summary>
+              <NativeCard
+                title="Orchestration evidence"
+                subtitle="Prompt hashes, model choices, policy gates, lineage, waits, resumes, and failures."
+                className={detail.orchestrationFailures.length > 0 ? "mc-next-run-detail-attention" : undefined}
+              >
+                <NativeList
+                  density="compact"
+                  items={[
+                    ...detail.orchestrationPrompts,
+                    ...detail.orchestrationModels,
+                    ...detail.orchestrationPolicies,
+                    ...detail.orchestrationLineage,
+                    ...detail.orchestrationWaits,
+                    ...detail.orchestrationFailures,
+                  ]}
+                  emptyLabel="No orchestration evidence fields are attached to this run."
+                  maxHeight="min(46vh, 28rem)"
+                />
+              </NativeCard>
+            </details>{" "}
+            <details className="mc-next-approvals-details">
+              <summary>
+                <FileText size={16} />
+                Expert raw trace (diagnostic)
+              </summary>
+              <p className="mc-next-approvals-summary">
+                This raw JSON is diagnostic and non-canonical. Raw IDs and refs are not trusted effect evidence; the
+                semantic panels and signed canonical owner receipts are authoritative.
+              </p>
+              <LibraryCodeBlock label="Trace JSON">{JSON.stringify(detail.raw, null, 2)}</LibraryCodeBlock>
+            </details>
+          </>
+        )}
       </NativeGrid>
-
-      <details className="mc-next-approvals-details">
-        <summary>
-          <FileText size={16} />
-          Expert raw trace (diagnostic)
-        </summary>
-        <p className="mc-next-approvals-summary">
-          This raw JSON is diagnostic and non-canonical. Raw IDs and refs are not trusted effect evidence; the semantic
-          panels and signed canonical owner receipts are authoritative.
-        </p>
-        <LibraryCodeBlock label="Trace JSON">{JSON.stringify(detail.raw, null, 2)}</LibraryCodeBlock>
-      </details>
+      <DetailInspector
+        open={supportPanel !== null}
+        title={supportPanel === "receipt" ? "Signed evidence receipt" : "Exports"}
+        onClose={() => setSupportPanel(null)}
+      >
+        {supportPanel === "receipt" ? (
+          <NativeCard
+            title="Signed evidence receipt"
+            subtitle="Built and verified on demand through the Gateway's existing receipt endpoints."
+            className={
+              receiptInspection.verification && !receiptInspection.verification.valid
+                ? "mc-next-run-detail-attention"
+                : "mc-next-run-receipt-card"
+            }
+          >
+            {receiptInspection.receipt && receiptInspection.verification ? (
+              <div className="mc-next-run-receipt-inspector">
+                <div className="mc-next-run-receipt-verdict">
+                  <div>
+                    <span>Verification</span>
+                    <strong>{receiptInspection.verification.valid ? "Signature valid" : "Verification failed"}</strong>
+                  </div>
+                  <StatusChip tone={receiptInspection.verification.valid ? "success" : "critical"}>
+                    {receiptInspection.verification.valid ? "Verified" : "Untrusted"}
+                  </StatusChip>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Outcome</dt>
+                    <dd>{receiptInspection.receipt.manifest.lineage.outcome}</dd>
+                  </div>
+                  <div>
+                    <dt>Generated</dt>
+                    <dd>{formatDateTime(receiptInspection.receipt.manifest.generatedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Approvals</dt>
+                    <dd>{receiptInspection.receipt.manifest.approvalEffects.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Side effects</dt>
+                    <dd>{receiptInspection.receipt.manifest.sideEffects.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Artifacts</dt>
+                    <dd>{receiptInspection.receipt.manifest.artifacts.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Signature</dt>
+                    <dd>{receiptInspection.receipt.signatureAlgorithm}</dd>
+                  </div>
+                </dl>
+                {receiptInspection.verification.reasons.length > 0 ? (
+                  <ul className="mc-next-run-receipt-reasons">
+                    {receiptInspection.verification.reasons.map((reason, index) => (
+                      <li key={`${reason}-${index}`}>{reason}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>The Gateway verified the posted receipt without reporting integrity failures.</p>
+                )}
+                <details className="mc-next-run-receipt-raw">
+                  <summary>Expert receipt payload</summary>
+                  <LibraryCodeBlock label="Signed receipt JSON">
+                    {JSON.stringify(receiptInspection.receipt, null, 2)}
+                  </LibraryCodeBlock>
+                </details>
+              </div>
+            ) : (
+              <EmptyState
+                size="compact"
+                title="Receipt not loaded"
+                description="Inspect the signed receipt when you need integrity, lineage, approval, side-effect, and artifact proof."
+              />
+            )}
+          </NativeCard>
+        ) : (
+          <>
+            <div className="mc-next-runtime-actions">
+              {" "}
+              <NativeButton
+                variant="secondary"
+                onClick={() => void downloadEvidenceReceipt()}
+                disabled={!runId || downloadingReceipt}
+              >
+                <ShieldCheck size={16} />
+                {downloadingReceipt ? "Preparing receipt..." : "Download evidence receipt"}
+              </NativeButton>
+              <NativeButton variant="secondary" onClick={() => void copyTraceExport()} disabled={!runId || exporting}>
+                <ClipboardCopy size={16} />
+                {exporting ? "Exporting..." : "Copy trace export"}
+              </NativeButton>
+            </div>
+            <NativeCard
+              title="Trace and SIEM exports"
+              subtitle="Stable Gateway routes for raw trace, export bundle, trust report, and SIEM NDJSON handoff."
+            >
+              <NativeList
+                density="compact"
+                items={detail.exportLinks}
+                emptyLabel="No export links can be derived without a run id."
+                maxHeight="min(34vh, 20rem)"
+              />
+            </NativeCard>
+          </>
+        )}
+      </DetailInspector>
     </NativePageFrame>
   );
 }

@@ -59,6 +59,7 @@ export function deriveToolCapabilityPolicy(
     toolName === "browser.context.configure";
   const isNetworkRead = toolName === "http.get" || isBrowserRead;
   const isNetworkWrite = toolName === "http.post" || toolName === "webhook.send";
+  const isMeshInvocation = toolName === "mesh.invoke";
   const mutatesFilesystem =
     toolName === "fs.write" ||
     toolName === "fs.move" ||
@@ -67,6 +68,7 @@ export function deriveToolCapabilityPolicy(
     toolName === "documents.create" ||
     toolName === "presentations.create";
   const mutatesRemoteState =
+    isMeshInvocation ||
     isNetworkWrite ||
     startsWith("gmail.send") ||
     startsWith("calendar.create_event") ||
@@ -85,6 +87,7 @@ export function deriveToolCapabilityPolicy(
     toolName.startsWith("git.") ||
     toolName === "mcp.invoke";
   const resolvesSecrets =
+    isMeshInvocation ||
     toolName === "mcp.invoke" ||
     startsWith("gmail.") ||
     startsWith("calendar.") ||
@@ -135,7 +138,7 @@ export function deriveToolCapabilityPolicy(
     toolName,
     family,
     usesNetwork:
-      isNetworkRead || isNetworkWrite || family === "mcp" || category === "comms" || toolName === "docs.ingest",
+      isNetworkRead || isNetworkWrite || isMeshInvocation || family === "mcp" || category === "comms" || toolName === "docs.ingest",
     readsFilesystem: family === "filesystem_read" || toolName === "docs.ingest",
     mutatesFilesystem,
     mutatesRemoteState,

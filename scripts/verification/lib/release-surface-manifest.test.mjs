@@ -20,10 +20,10 @@ test("desktop-narrow visual proof renders inside the less-than-1180 compact boun
   assert.ok(light.viewport.width < 1180);
 });
 
-test("memory visual proof waits for the operator-visible seeded item", () => {
+test("memory visual proof waits for the browsable item directory", () => {
   const memoryRoute = NEXT_RELEASE_SURFACE_MANIFEST.find((route) => route.slug === "library-memory");
 
-  assert.equal(memoryRoute?.readyText, "Mission Control Next shell posture");
+  assert.equal(memoryRoute?.readyText, "Memory items");
 });
 
 test("Ops Boards visual proof waits for the deterministic populated board", () => {
@@ -32,10 +32,10 @@ test("Ops Boards visual proof waits for the deterministic populated board", () =
   assert.equal(boardsRoute?.readyText, "Verification command board");
 });
 
-test("Ops Runtime visual proof waits for the seeded authority projection", () => {
+test("Ops Runtime visual proof waits for the Services directory", () => {
   const runtimeRoute = NEXT_RELEASE_SURFACE_MANIFEST.find((route) => route.slug === "ops-runtime");
 
-  assert.equal(runtimeRoute?.readyText, "Runtime authority map");
+  assert.equal(runtimeRoute?.readyText, "Services");
 });
 
 test("Projects and Approvals visual proof target populated fixture records", () => {
@@ -47,7 +47,7 @@ test("Projects and Approvals visual proof target populated fixture records", () 
     approvals: { primary: "approval?1" },
   };
 
-  assert.equal(projectsRoute?.readySelector, ".mc-next-project-card.is-selected");
+  assert.equal(projectsRoute?.readySelector, ".mc-next-project-thread-groups");
   assert.equal(projectsRoute?.fixtureProjectKey, "primary");
   assert.equal(
     resolveReleaseSurfaceHref(projectsRoute, { themeQuery: "theme=light" }, fixture),

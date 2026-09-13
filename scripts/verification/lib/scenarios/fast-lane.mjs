@@ -64,7 +64,9 @@ export const FAST_LANE_COMMANDS = Object.freeze([
       // unrelated 15-second tests into false failures under coverage.
       `--maxWorkers=${FAST_LANE_VITEST_MAX_WORKERS}`,
     ],
-    env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
+    // File-backed Gateway fixtures can reuse the same opt-in schema template
+    // as the storage lane. Every database still validates its migration ledger.
+    env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1", GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" },
   })),
   {
     id: "fast.test.gateway.node",

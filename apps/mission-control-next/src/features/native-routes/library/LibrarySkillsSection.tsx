@@ -1,3 +1,6 @@
+import { useSessionDraft, useSessionDraftVersion, hasSessionDraft } from "./session-drafts";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { useDraftLeave } from "./DraftLeaveDialog";
 /* eslint-disable max-lines -- LibrarySkillsSection coordinates the skill list, detail, evaluation workbench, and the HX-402 P2 approval-first state surface in one orchestrator (MemoryRoutePage precedent) until the Library surface is split. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText, Plus, RefreshCw, Save, Sparkles, Workflow } from "lucide-react";
@@ -64,6 +67,9 @@ import { describeSkillSourceDisposition, formatSkillImportPosture } from "./libr
 import { SkillHubOperatorPanel } from "./SkillHubOperatorPanel";
 
 export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
+  useSessionDraftVersion();
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailLeave = useDraftLeave();
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [skillQuery, setSkillQuery] = useState("");
   const [skillPostureFilter, setSkillPostureFilter] = useState<SkillPostureFilter>("all");
@@ -180,22 +186,10 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
   };
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
+    <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <NativeSectionIndex
-        items={[
-          { id: "skills-installed", label: "Installed" },
-          { id: "skills-detail", label: "Skill detail" },
-          { id: "skills-discovery", label: "Discovery" },
-          { id: "skills-related", label: "Related routes" },
-        ]}
-      />
-      <SkillHubOperatorPanel
-        workspaceId={activeWorkspaceId}
-        onOpenApproval={(approvalId) => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })}
-      />
-      <div className="mc-next-settings-grid">
+      <div className="mc-next-calm-directory">
         <NativeCard
           id="skills-installed"
           title="Installed skills"
@@ -233,12 +227,12 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
           <LibrarySelectableList
             items={filteredSkills.map((item) => ({
               id: item.skillId,
-              title: item.name,
+              title: `${item.name}${hasSessionDraft(`skill-evaluation:${activeWorkspaceId}:${item.skillId}`) ? " · Unsaved" : ""}`,
               meta: item.state,
               body: item.note ?? item.reviewWarning ?? item.capabilityCategory ?? item.source,
             }))}
             selectedId={selectedSkillId}
-            onSelect={setSelectedSkillId}
+            onSelect={(id) => detailLeave.request(() => { setSelectedSkillId(id); setDetailOpen(true); })}
             emptyLabel="No skills available yet."
           />
           <LibraryButtonRow>
@@ -249,11 +243,7 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
           </LibraryButtonRow>
         </NativeCard>
         <div className="mc-next-settings-stack">
-          <NativeCard
-            id="skills-detail"
-            title={selectedSkill?.name ?? "Skill detail"}
-            subtitle={selectedSkill?.source ?? "Select a skill to inspect its instruction, tools, and lifecycle."}
-          >
+          <DetailInspector open={detailOpen} title={selectedSkill?.name ?? "Skill unavailable"} subtitle={selectedSkill?.source} onClose={() => detailLeave.request(() => setDetailOpen(false))}>
             {selectedSkill ? (
               <>
                 <LibraryMetricGrid
@@ -318,7 +308,7 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
                   ]}
                 />
                 <LibraryCodeBlock label="Instruction body">
-                  {truncateText(selectedSkill.instructionBody, 1200)}
+                  {selectedSkill.instructionBody}
                 </LibraryCodeBlock>
                 <LibraryCodeBlock label="Declared tools">
                   {selectedSkill.declaredTools.length ? selectedSkill.declaredTools.join(", ") : "No declared tools"}
@@ -366,10 +356,10 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
             ) : (
               <LibraryEmptyState label="Select a skill to inspect it." />
             )}
-          </NativeCard>
+          </DetailInspector>
           <NativeDisclosureCard
             id="skills-discovery"
-            title="Discovery and import posture"
+            title="Find skills"
             subtitle="Sources and recent import history stay visible in Library."
           >
             <LibraryMetricGrid
@@ -439,7 +429,11 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
           </NativeDisclosureCard>
         </div>
       </div>
-    </LibrarySectionShell>
+    <NativeDisclosureCard id="skill-hub" title="Skill Hub" subtitle="Review retained snapshots, lifecycle requests, and approvals." lazy>      <SkillHubOperatorPanel
+        workspaceId={activeWorkspaceId}
+        onOpenApproval={(approvalId) => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })}
+      />
+</NativeDisclosureCard>{detailLeave.dialog}</LibrarySectionShell>
   );
 }
 
@@ -598,8 +592,14 @@ function SkillEvaluationWorkbench({
   const [activeRun, setActiveRun] = useState<SkillEvaluationRunRecord | null>(null);
   const [proposalDetail, setProposalDetail] = useState<CapabilityProposalDetailRecord | null>(null);
   const [curatorReview, setCuratorReview] = useState<CuratorReviewItem | null>(null);
-  const [scenarioDraft, setScenarioDraft] = useState("");
-  const [criteriaDraft, setCriteriaDraft] = useState("");
+  const evaluationDraft = useSessionDraft(`skill-evaluation:${workspaceId}:${skill.skillId}`, {
+    scenarios: activeRun ? serializeScenarioDrafts(activeRun.scenarios) : "",
+    criteria: activeRun ? serializeCriterionDrafts(activeRun.criteria) : "",
+  }, activeRun?.runId, { label: "Skill evaluation", available: Boolean(activeRun) });
+  const scenarioDraft = evaluationDraft.value.scenarios;
+  const criteriaDraft = evaluationDraft.value.criteria;
+  const setScenarioDraft = (scenarios: string) => evaluationDraft.setValue((current) => ({ ...current, scenarios }));
+  const setCriteriaDraft = (criteria: string) => evaluationDraft.setValue((current) => ({ ...current, criteria }));
   const [busy, setBusy] = useState(false);
   const [proposalBusyKey, setProposalBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -623,25 +623,19 @@ function SkillEvaluationWorkbench({
     setActiveRun(null);
     setProposalDetail(null);
     setCuratorReview(null);
-    setScenarioDraft("");
-    setCriteriaDraft("");
     setError(null);
     void loadRuns();
   }, [loadRuns]);
 
-  useEffect(() => {
-    if (!activeRun) {
-      return;
-    }
-    setScenarioDraft(serializeScenarioDrafts(activeRun.scenarios));
-    setCriteriaDraft(serializeCriterionDrafts(activeRun.criteria));
-  }, [activeRun]);
+
 
   const runAction = async (action: () => Promise<SkillEvaluationRunRecord>, successMessage: string) => {
     setBusy(true);
     setError(null);
+    const submitted = evaluationDraft.value;
     try {
       const run = await action();
+      evaluationDraft.acceptSaved({ scenarios: serializeScenarioDrafts(run.scenarios), criteria: serializeCriterionDrafts(run.criteria) }, run.runId, submitted);
       setActiveRun(run);
       await loadRuns();
       onNotice({ tone: "success", message: successMessage });

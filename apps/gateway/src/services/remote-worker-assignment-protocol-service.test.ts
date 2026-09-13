@@ -316,6 +316,7 @@ function createService(
     ) => RemoteWorkerAssignmentRuntimeCredentialAuthority;
     readonly assignments?: RemoteWorkerAssignmentProtocolStorePort;
     readonly meshAdmissions?: RemoteWorkerAssignmentMeshAuthorityPort;
+    readonly approvalWait?: ConstructorParameters<typeof RemoteWorkerAssignmentProtocolService>[0]["approvalWait"];
   } = {},
 ): RemoteWorkerAssignmentProtocolService {
   const currentAuthority: RemoteWorkerCurrentRuntimeCredentialAuthorityPort = {
@@ -326,6 +327,7 @@ function createService(
   };
   const credentialAuthority: RemoteWorkerAssignmentRuntimeCredentialAuthorityPort = currentAuthority;
   return new RemoteWorkerAssignmentProtocolService({
+    approvalWait: options.approvalWait,
     credentialAuthority,
     meshAdmissions: options.meshAdmissions ?? {
       resolveCurrentForRuntimeCredential: (input) => meshAuthorityFor(h, input),
@@ -516,6 +518,7 @@ function storeWithSettlementResponseLoss(
 ): RemoteWorkerAssignmentProtocolStorePort {
   let loseResponse = true;
   return {
+    resolveChatParentRecoveryByLeaseTokenHash: () => undefined,
     resolveActiveAuthorityByLeaseTokenHash: (hash) => assignments.resolveActiveAuthorityByLeaseTokenHash(hash),
     resolveControlReadAuthorityByLeaseTokenHash: (input) =>
       assignments.resolveControlReadAuthorityByLeaseTokenHash(input),
@@ -541,6 +544,7 @@ function storeWithSettlementResponseLoss(
  */
 function storeForProtocolUnit(assignments: RemoteWorkerAssignmentRepository): RemoteWorkerAssignmentProtocolStorePort {
   return {
+    resolveChatParentRecoveryByLeaseTokenHash: () => undefined,
     resolveActiveAuthorityByLeaseTokenHash: (hash) => assignments.resolveActiveAuthorityByLeaseTokenHash(hash),
     resolveControlReadAuthorityByLeaseTokenHash: (input) =>
       assignments.resolveControlReadAuthorityByLeaseTokenHash(input),
@@ -553,6 +557,70 @@ function storeForProtocolUnit(assignments: RemoteWorkerAssignmentRepository): Re
 }
 
 describe("RemoteWorkerAssignmentProtocolService", () => {
+  it("hashes the terminal renewal secret before passing it to the protected storage owner", async () => {
+    const h = createHarness("terminal-rotation");
+    const renewalLeaseToken = token("terminal-renewal-secret:proposed");
+    const settleAssignment = vi.fn(() => {
+      throw new Error("terminal-store-probe");
+    });
+    const service = createService(h, { assignments: { ...storeForProtocolUnit(h.assignments), settleAssignment } });
+    const payload = {
+      ...commonPayload(h, REMOTE_WORKER_ASSIGNMENT_WORKER_SETTLEMENT_SCHEMA_VERSION),
+      renewalLeaseToken,
+      outcome: "failed",
+      finalEventSequence: 0,
+      finalEventSha256: REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
+      failureSha256: D("terminal-renewal-secret:failure"),
+    };
+    await expect(service.execute(rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.settle, payload))).rejects.toThrow(
+      "Remote worker assignment RPC could not be completed.",
+    );
+    expect(settleAssignment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        renewalLeaseTokenSha256: D(renewalLeaseToken),
+        leaseTokenSha256: D(h.leaseToken),
+      }),
+      expect.objectContaining({ credentialAuthority: expect.any(Object), meshAdmission: expect.any(Object) }),
+    );
+    expect(JSON.stringify(settleAssignment.mock.calls)).not.toContain(renewalLeaseToken);
+    expect(JSON.stringify(settleAssignment.mock.calls)).not.toContain(h.leaseToken);
+    for (const [index, invalid] of [
+      { ...payload, renewalLeaseToken: "malformed" },
+      { ...payload, renewalLeaseTokenSha256: D(renewalLeaseToken) },
+    ].entries()) {
+      await expect(
+        service.execute(
+          rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.settle, invalid, {
+            nonce: token(`terminal-renewal-secret:invalid:${index}`),
+          }),
+        ),
+      ).rejects.toBeDefined();
+    }
+    expect(settleAssignment).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["waiting", "renew"] as const)("projects only the authenticated parent recovery binding for %s", async (phase) => {
+    const h = createHarness(`parent-recovery-${phase}`);
+    const authority = h.assignments.resolveActiveAuthorityByLeaseTokenHash(D(h.leaseToken))!;
+    const readRecovery = vi.fn(() => ({ ...authority, phase, recovery: { bindingSha256: D("retained-parent") } }));
+    const activeRead = vi.fn();
+    const approvalRead = vi.fn();
+    const service = createService(h, { assignments: { ...storeForProtocolUnit(h.assignments),
+      resolveChatParentRecoveryByLeaseTokenHash: readRecovery,
+      resolveActiveAuthorityByLeaseTokenHash: activeRead,
+    }, approvalWait: { read: approvalRead } });
+    const result = await service.execute(rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+      commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION)));
+    expect(result).toMatchObject({ disposition: phase === "renew" ? "parent_recovery_ready" : "parent_recovery_pending",
+      recovery: { bindingSha256: D("retained-parent") } });
+    expect(result).not.toHaveProperty("resume");
+    expect(readRecovery).toHaveBeenCalledWith(expect.objectContaining({ assignmentId: h.assignmentId,
+      expectedAssignmentGeneration: 1, expectedLeaseRevision: 1, leaseTokenSha256: D(h.leaseToken) }),
+      expect.objectContaining({ credentialAuthority: expect.any(Object), meshAdmission: expect.any(Object) }));
+    expect(activeRead).not.toHaveBeenCalled();
+    expect(approvalRead).not.toHaveBeenCalled();
+  });
+
   it("requires protected PoP-v2 and rejects the legacy proof before durable nonce consumption", async () => {
     const h = createHarness("protected-v2");
     const consume = vi.fn((input: Parameters<RemoteWorkerNonceRepository["consume"]>[0]) => h.nonces.consume(input));
@@ -647,6 +715,7 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
       fence: RemoteWorkerAssignmentProtectedCommitFence;
     }> = [];
     const store: RemoteWorkerAssignmentProtocolStorePort = {
+      resolveChatParentRecoveryByLeaseTokenHash: () => undefined,
       resolveActiveAuthorityByLeaseTokenHash: (hash, fence) => {
         observed.push({ operation: "sync", fence });
         return h.assignments.resolveActiveAuthorityByLeaseTokenHash(hash);
@@ -726,6 +795,77 @@ describe("RemoteWorkerAssignmentProtocolService", () => {
       expect(JSON.stringify(fence)).not.toContain(h.leaseToken);
     }
   });
+
+  it("authenticates a read-only approval sync before exposing the owner's wait and rejects nonce replay", async () => {
+    const h = createHarness("waiting-sync");
+    const aggregate = h.assignments.findAssignmentAggregate("default", h.assignmentId)!;
+    const read = vi.fn(async () => ({ assignment: aggregate.assignment,
+      generation: aggregate.generation!, lease: aggregate.lease!,
+      waiting: { approvalId: "approval-one", runtimeAuthoritySha256: D("sealed-wait") },
+    }));
+    const assignments = storeForProtocolUnit(h.assignments);
+    const active = vi.spyOn(assignments, "resolveActiveAuthorityByLeaseTokenHash");
+    const service = createService(h, { approvalWait: { read }, assignments });
+    const request = rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+      commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION));
+    const projected = await service.execute(request);
+    expect(projected).toMatchObject({ disposition: "waiting_approval", lease: { leaseRevision: 1 },
+      waiting: { approvalId: "approval-one", runtimeAuthoritySha256: D("sealed-wait") } });
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ assignmentId: h.assignmentId,
+      expectedAssignmentGeneration: 1, expectedLeaseRevision: 1, leaseTokenSha256: D(h.leaseToken) }),
+    expect.objectContaining({ credentialAuthority: expect.objectContaining({ credentialId: h.credentialId }),
+      meshAdmission: expect.objectContaining({ nodeId: h.nodeId }) }));
+    expect(active).not.toHaveBeenCalled();
+    expect(JSON.stringify(projected)).not.toContain(h.leaseToken);
+    expect(JSON.stringify(projected)).not.toContain(h.credentialSecret);
+    await expect(service.execute(request)).rejects.toThrow();
+    await expect(service.execute(rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+      commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION),
+      { credentialSecret: token("wrong-wait-credential") }))).rejects.toThrow();
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a waiting owner that changes assignment scope and never falls back to execution", async () => {
+    const h = createHarness("waiting-scope");
+    const aggregate = h.assignments.findAssignmentAggregate("default", h.assignmentId)!;
+    const assignments = storeForProtocolUnit(h.assignments);
+    const active = vi.spyOn(assignments, "resolveActiveAuthorityByLeaseTokenHash");
+    const service = createService(h, { assignments, approvalWait: { read: async () => ({
+      assignment: aggregate.assignment, generation: aggregate.generation!,
+      lease: { ...aggregate.lease!, assignmentGeneration: 2 },
+      waiting: { approvalId: "approval-one", runtimeAuthoritySha256: D("sealed-wait") },
+    }) } });
+    await expect(service.execute(rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+      commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION)))).rejects.toThrow();
+    expect(active).not.toHaveBeenCalled();
+  });
+
+  it.each([["waiting", "approval_resume_pending"], ["renew", "approval_resume_ready"]] as const)(
+    "authenticates the %s handoff and exposes only observation before lease rotation", async (phase, disposition) => {
+      const h = createHarness(`resume-sync-${phase}`);
+      const aggregate = h.assignments.findAssignmentAggregate("default", h.assignmentId)!;
+      const read = vi.fn(async () => ({ assignment: aggregate.assignment,
+        generation: aggregate.generation!, lease: aggregate.lease!, phase,
+        resume: { approvalId: "approval-one", runtimeAuthoritySha256: D("sealed-wait"), resumeSha256: D("handoff") },
+      }));
+      const assignments = storeForProtocolUnit(h.assignments);
+      const active = vi.spyOn(assignments, "resolveActiveAuthorityByLeaseTokenHash");
+      const service = createService(h, { approvalWait: { read }, assignments });
+      const request = rpcRequest(h, REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES.sync,
+        commonPayload(h, REMOTE_WORKER_ASSIGNMENT_SYNC_SCHEMA_VERSION));
+      const observed = await service.execute(request);
+      expect(observed).toMatchObject({ disposition, lease: { leaseRevision: 1 },
+        resume: { approvalId: "approval-one", runtimeAuthoritySha256: D("sealed-wait"), resumeSha256: D("handoff") } });
+      expect(read).toHaveBeenCalledWith(expect.objectContaining({ leaseTokenSha256: D(h.leaseToken) }),
+        expect.objectContaining({ credentialAuthority: expect.objectContaining({ credentialId: h.credentialId }) }));
+      expect(active).not.toHaveBeenCalled();
+      expect(JSON.stringify(observed)).not.toContain(h.leaseToken);
+      expect(JSON.stringify(observed)).not.toContain(h.credentialSecret);
+      await expect(service.execute(request)).rejects.toThrow();
+      expect(read).toHaveBeenCalledOnce();
+      expect(h.assignments.findAssignmentAggregate("default", h.assignmentId)!.lease!.leaseRevision).toBe(1);
+    },
+  );
 
   it("syncs an exact active authority and rejects nonce replay plus credential/workspace/capability/generation/token drift", async () => {
     const h = createHarness("sync");

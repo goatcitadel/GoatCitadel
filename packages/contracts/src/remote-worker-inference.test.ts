@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJsonString } from "./canonical-json.js";
+import { normalizeRemoteWorkerChatToolSubmission, normalizeRemoteWorkerInferenceToolCalls } from "./remote-worker-chat-tool-calls.js";
 import {
   REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
@@ -64,6 +65,14 @@ function authorized(overrides: Partial<RemoteWorkerInferenceRequestSubmission> =
 }
 
 describe("HX-503 remote worker inference submission", () => {
+  it("accepts only a bounded reference to a retained model tool call", () => {
+    const request = { kind: "chat.tool", inferenceRequestId: "request-1", attempt: 1, callIndex: 0 };
+    expect(normalizeRemoteWorkerChatToolSubmission(request)).toEqual(request);
+    for (const patch of [{ callIndex: -1 }, { callIndex: 32 }, { attempt: 0 }, { attempt: 1.5 },
+      { inferenceRequestId: "" }, { inferenceRequestId: "a\nb" }, { canonicalArgs: {} },
+      { effectSelector: "fs.write" }, { approvalGranted: true }])
+      expect(() => normalizeRemoteWorkerChatToolSubmission({ ...request, ...patch })).toThrow();
+  });
   it("normalizes and freezes the exact bounded submission", () => {
     const result = authorizeRemoteWorkerInferenceRequestSubmission(submission());
     const normalized = result.submission;
@@ -155,12 +164,14 @@ describe("HX-503 remote worker inference submission", () => {
       authorizeRemoteWorkerInferenceRequestSubmission(
         submission({ messages: [{ role: "user", text: "x".repeat(REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS + 1) }] }),
       ),
-    ).toThrow(/invalid/u);
+    ).toThrow(/content bound/u);
   });
 
   it("rejects unsupported roles, non-hex hashes, and out-of-range ceilings", () => {
     expect(() =>
-      authorizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [{ role: "tool" as never, text: "x" }] })),
+      authorizeRemoteWorkerInferenceRequestSubmission(
+        submission({ messages: [{ role: "administrator" as never, text: "x" }] }),
+      ),
     ).toThrow(/unsupported/u);
     expect(() => authorizeRemoteWorkerInferenceRequestSubmission(submission({ inputSha256: "NOTHEX" }))).toThrow(
       /digest/u,
@@ -198,6 +209,36 @@ describe("HX-503 remote worker inference submission", () => {
 });
 
 describe("HX-503 remote worker inference output frames", () => {
+  it("retains exact complete tool arguments in an accounted terminal frame", () => {
+    const toolCalls = [{ callId: "call-1", modelToolName: "fs_read", argumentsJson: ' {"path":"caf\u00e9.txt"} ' }];
+    const frame = {
+      schemaVersion: REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
+      kind: "terminal" as const,
+      terminalState: "completed" as const,
+      usageEventId: "usage-1",
+      toolCalls,
+    };
+    const retained = normalizeRemoteWorkerInferenceFramePayload(frame);
+    expect(retained).toEqual(frame);
+    expect(Object.isFrozen(retained)).toBe(true);
+    expect(normalizeRemoteWorkerInferenceToolCalls(toolCalls)[0]?.argumentsJson).toBe(toolCalls[0]!.argumentsJson);
+    expect(() => normalizeRemoteWorkerInferenceFramePayload({ ...frame, usageEventId: undefined })).toThrow(/accounted/);
+    expect(() => normalizeRemoteWorkerInferenceFramePayload({ ...frame, terminalState: "failed" })).toThrow(/accounted/);
+  });
+
+  it("rejects malformed, duplicated, oversized or authority-bearing tool requests", () => {
+    const call = { callId: "call-1", modelToolName: "fs_read", argumentsJson: "{}" };
+    for (const argumentsJson of ["", "{", "[]", "null", "42"]) {
+      expect(() => normalizeRemoteWorkerInferenceToolCalls([{ ...call, argumentsJson }])).toThrow();
+    }
+    expect(() => normalizeRemoteWorkerInferenceToolCalls([call, call])).toThrow(/repeat/);
+    expect(() => normalizeRemoteWorkerInferenceToolCalls([{ ...call, callId: "" }])).toThrow(/identity/);
+    expect(() => normalizeRemoteWorkerInferenceToolCalls([{ ...call, approvalGranted: true }])).toThrow(/unknown/);
+    expect(() => normalizeRemoteWorkerInferenceToolCalls([{ ...call, argumentsJson: JSON.stringify({ value: "\ud83e\udd84".repeat(20_000) }) }])).toThrow(/byte bound/);
+    expect(() => normalizeRemoteWorkerInferenceToolCalls(Array.from({ length: 33 }, (_, i) => ({ ...call, callId: `call-${i}` })))).toThrow(/count bound/);
+    expect(() => normalizeRemoteWorkerInferenceToolCalls(Array.from({ length: 20 }, (_, i) => ({ ...call, callId: `call-${i}`, argumentsJson: JSON.stringify({ value: "x".repeat(4_000) }) })))).toThrow(/byte bound/);
+  });
+
   it("normalizes an allowlisted output_text frame and rejects unknown fields", () => {
     const payload = normalizeRemoteWorkerInferenceFramePayload({
       schemaVersion: REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,

@@ -103,6 +103,7 @@ export function LibrarySelectableList({
   emptyLabel,
   maxHeight = "min(56vh, 34rem)",
   compact = true,
+  virtualized = false,
 }: {
   items: Array<{ id: string; title: string; meta?: string; body?: string }>;
   selectedId: string;
@@ -110,10 +111,12 @@ export function LibrarySelectableList({
   emptyLabel: string;
   maxHeight?: string;
   compact?: boolean;
+  virtualized?: boolean;
 }) {
   // Delegates to the canonical NativeSelectableList primitive.
   return (
     <NativeSelectableList
+      virtualized={virtualized}
       items={items}
       selectedId={selectedId}
       onSelect={onSelect}

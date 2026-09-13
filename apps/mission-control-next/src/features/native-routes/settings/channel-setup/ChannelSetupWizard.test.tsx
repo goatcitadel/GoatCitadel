@@ -1,3 +1,6 @@
+import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
+import { __resetSessionDraftsForTests } from "../../library/session-drafts";
+import { DraftLeaveDialog } from "../../library/DraftLeaveDialog";
 // @vitest-environment happy-dom
 import { useState, type ComponentProps } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
@@ -8,6 +11,8 @@ import { ChannelsSection } from "../sections/ChannelsSection";
 
 const channelApiMocks = vi.hoisted(() => ({
   createChannelSetupDraft: vi.fn(),
+  isApiRequestError: vi.fn(() => false),
+  submitChannelSetupDraftSecrets: vi.fn(),
   createChangePlan: vi.fn(),
   discoverTelegramTargets: vi.fn(),
   fetchChannelSetupDefinitions: vi.fn(),
@@ -53,9 +58,25 @@ vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
     ) : null,
 }));
 
+// Browser focus/portal behavior is covered by the browser lane; keep this renderer in one tree.
+vi.mock("@goatcitadel/mission-control-shared/components/ui/GCModal", () => ({
+  GCModal: ({ open, children, title }: { open: boolean; children: import("react").ReactNode; title: string }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        {children}
+      </div>
+    ) : null,
+}));
+
 vi.mock("../../SettingsNativePage", () => ({
   delay: async () => undefined,
   formatDateTime: (value: string | undefined) => value ?? "Never",
+  formatJson: (value: unknown) => JSON.stringify(value, null, 2),
+  parseJsonObject: (value: string) => {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Object required");
+    return parsed;
+  },
   preferredChannelDefinition: (definitions: ChannelSetupDefinition[]) =>
     definitions.find((definition) => definition.catalog.catalogId === "channel.discord") ?? definitions[0],
   readConnectionConfigString: (config: Record<string, unknown> | undefined, key: string) => {
@@ -399,6 +420,12 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return button;
 }
 
+function findDraftButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAllByType("button").find((node) => textOf(node).startsWith(label + " "));
+  if (!button) throw new Error("Draft row not found: " + label);
+  return button;
+}
+
 function findStepButton(root: ReactTestInstance, title: string): ReactTestInstance {
   const nav = root.findByProps({ "aria-label": "Setup steps" });
   const button = nav.findAllByType("button").find((candidate) => textOf(candidate).includes(title));
@@ -469,10 +496,13 @@ async function renderChannelsSection(): Promise<ReactTestRenderer> {
     await Promise.resolve();
   });
   await flushWork();
+  await click(findDraftButton(renderer.root, "Discord sandbox"));
   return renderer;
 }
 
 beforeEach(() => {
+  __resetSessionViewStateForTests();
+  __resetSessionDraftsForTests();
   vi.clearAllMocks();
   configureChannelApiMocks();
 });
@@ -708,6 +738,46 @@ describe("ChannelSetupWizard", () => {
 });
 
 describe("ChannelsSection Discord setup lifecycle", () => {
+  it("retains incomplete advanced JSON through close and reopen and failed saves", async () => {
+    const renderer = await renderChannelsSection();
+    await click(findButton(renderer.root, "Advanced JSON"));
+    await changeValue(renderer.root.findByType("textarea"), '{ "unfinished":');
+    await click(findButton(renderer.root, "Back to list"));
+    await act(async () => renderer.root.findByType(DraftLeaveDialog).props.onContinue());
+    expect(textOf(findDraftButton(renderer.root, "Discord sandbox"))).toContain("Unsaved");
+    await click(findDraftButton(renderer.root, "Discord sandbox"));
+    expect(renderer.root.findByType("textarea").props.value).toBe('{ "unfinished":');
+    await click(findButton(renderer.root, "Save draft"));
+    expect(channelApiMocks.updateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(renderer.root.findByType("textarea").props.value).toBe('{ "unfinished":');
+    await changeValue(
+      renderer.root.findByType("textarea"),
+      JSON.stringify({ ...discordDraft.draft, defaultChannelId: "retained-input" }),
+    );
+    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new Error("Save unavailable"));
+    await click(findButton(renderer.root, "Save draft"));
+    await flushWork();
+    expect(textOf(renderer.root)).toContain("Save unavailable");
+    expect(renderer.root.findByType("textarea").props.value).toContain("retained-input");
+    renderer.unmount();
+  });
+
+  it("requires a new live test when a refresh returns a newer revision", async () => {
+    channelApiMocks.testChannelSetupDraft.mockImplementation(async () => {
+      currentApiDraft = { ...currentApiDraft, revision: 2, label: "Changed elsewhere" };
+      return testResponse;
+    });
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Validate and test the connection"));
+    await click(findButton(renderer.root, "Run live test"));
+    await flushWork();
+    await click(findStepButton(renderer.root, "Finish setup"));
+    expect(findButton(renderer.root, "Finalize connection").props.disabled).toBe(true);
+    expect(textOf(renderer.root)).toContain("different draft revision");
+    expect(channelApiMocks.createChangePlan).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
   it("preserves unsaved setup edits until a draft switch is confirmed", async () => {
     const secondDraft: ChannelSetupDraft = {
       ...discordDraft,
@@ -720,23 +790,25 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     const labelInput = renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!;
     await changeValue(labelInput, "Unsaved primary");
 
-    const backupButton = renderer.root
-      .findAllByType("button")
-      .find((button) => textOf(button).includes("Discord backup"))!;
-    await click(backupButton);
-    expect(textOf(renderer.root)).toContain("Discard channel draft changes?");
-
-    await click(findButton(renderer.root, "Keep editing"));
+    await click(findButton(renderer.root, "Back to list"));
+    let dialog = renderer.root.findByType(DraftLeaveDialog);
+    expect(dialog.props.open).toBe(true);
+    await act(async () => dialog.props.onCancel());
     expect(
       renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value,
     ).toBe("Unsaved primary");
-
-    await click(backupButton);
-    await click(findButton(renderer.root, "Discard changes"));
-    await flushWork();
+    await click(findButton(renderer.root, "Back to list"));
+    dialog = renderer.root.findByType(DraftLeaveDialog);
+    await act(async () => dialog.props.onContinue());
+    await click(findDraftButton(renderer.root, "Discord backup"));
     expect(
       renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value,
     ).toBe("Discord backup");
+    await click(findButton(renderer.root, "Back to list"));
+    await click(findDraftButton(renderer.root, "Discord sandbox"));
+    expect(
+      renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value,
+    ).toBe("Unsaved primary");
 
     renderer.unmount();
   });

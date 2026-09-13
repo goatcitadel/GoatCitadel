@@ -71,9 +71,10 @@ describe("MemoryRoutePage loop 29 branch tails", () => {
     );
 
     expect(markup).toContain("Memory item truth is unavailable until backend settings truth reloads.");
-    expect(markup).toContain("Memory maintenance truth is unavailable until backend settings truth reloads.");
-    expect(markup).toContain("No maintenance recommendations.");
-    expect(markup).toContain("No memory file subspaces discovered.");
+    expect(markup).toContain("Memory results unavailable.");
+    expect(markup).not.toContain("No maintenance recommendations.");
+    const maintenance = renderToStaticMarkup(<MemoryRoutePage route={{ area: "library", section: "memory", view: "maintenance", theme: "library" } as never} activeWorkspaceId="default" activeWorkspaceName="Default" pendingApprovals={0} navigate={vi.fn()} setActiveWorkspaceId={vi.fn()} />);
+    expect(maintenance).toContain("Memory maintenance truth is unavailable until backend settings truth reloads.");
   });
 
   it("keeps memory metadata and write-gate decision readers defensive", () => {

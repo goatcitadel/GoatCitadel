@@ -340,21 +340,25 @@ describe("shared API wrapper tail coverage", () => {
       body: JSON.stringify({ expectedRevision: 17, budgetMode: "saver" }),
     });
     await expectCall(settings.fetchPersonalities(), "/api/v1/personalities");
-    await expectCall(settings.createPersonality({ label: "Calm" } as never), "/api/v1/personalities", {
+    await expectCall(settings.createPersonality({ expectedRevision: "a".repeat(64), label: "Calm" }), "/api/v1/personalities", {
       method: "POST",
+      body: JSON.stringify({ expectedRevision: "a".repeat(64), label: "Calm" }),
     });
     await expectCall(
-      settings.updatePersonality("personality/1", { label: "Sharp" } as never),
+      settings.updatePersonality("personality/1", { expectedRevision: "a".repeat(64), label: "Sharp" }),
       "/api/v1/personalities/personality%2F1",
       {
         method: "PATCH",
+        body: JSON.stringify({ expectedRevision: "a".repeat(64), label: "Sharp" }),
       },
     );
-    await expectCall(settings.deletePersonality("personality/1"), "/api/v1/personalities/personality%2F1", {
+    await expectCall(settings.deletePersonality("personality/1", "a".repeat(64)), "/api/v1/personalities/personality%2F1", {
       method: "DELETE",
+      body: JSON.stringify({ expectedRevision: "a".repeat(64) }),
     });
-    await expectCall(settings.setDefaultPersonality("personality/1"), "/api/v1/personalities/default", {
+    await expectCall(settings.setDefaultPersonality("personality/1", "a".repeat(64)), "/api/v1/personalities/default", {
       method: "PATCH",
+      body: JSON.stringify({ personalityId: "personality/1", expectedRevision: "a".repeat(64) }),
     });
 
     await expectCall(system.createMediaJob({ kind: "image" } as never), "/api/v1/media/jobs", { method: "POST" });

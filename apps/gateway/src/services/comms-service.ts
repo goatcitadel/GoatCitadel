@@ -73,7 +73,22 @@ function invokeCommsTool(
   request: ToolInvokeRequest,
   realtimeType: string,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(request, realtimeType);
+  // Native optional fields (including normalized attachments) must have the same
+  // shape before admission and after approval storage's JSON round trip.
+  return host.invokeAndUnwrap(
+    { ...request, args: omitAbsentCommsFields(request.args) as ToolInvokeRequest["args"] },
+    realtimeType,
+  );
+}
+
+function omitAbsentCommsFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitAbsentCommsFields);
+  if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, field]) => field !== undefined)
+      .map(([key, field]) => [key, omitAbsentCommsFields(field)]),
+  );
 }
 
 export async function commsSend(

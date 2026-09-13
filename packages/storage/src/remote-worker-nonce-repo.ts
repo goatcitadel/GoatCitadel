@@ -1,4 +1,12 @@
-import { normalizeRemoteWorkerNonceAuthority, type RemoteWorkerNonceAuthority } from "@goatcitadel/contracts";
+import {
+  REMOTE_WORKER_CONTACT_WINDOW_MS,
+  normalizeRemoteWorkerContactProjection,
+  normalizeRemoteWorkerContactReadKey,
+  normalizeRemoteWorkerNonceAuthority,
+  type RemoteWorkerContactProjection,
+  type RemoteWorkerContactReadKey,
+  type RemoteWorkerNonceAuthority,
+} from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
 
 /**
@@ -111,6 +119,24 @@ export class RemoteWorkerNonceRepository {
         LIMIT @limit
       )
     `);
+  }
+
+  /** Read only the database-stamped acceptance time of this worker generation's
+   * retained credential nonces. Absence after pruning is unknown, not offline.
+   * Request timestamps and nonce expiry never extend the contact window. */
+  public readContact(input: RemoteWorkerContactReadKey): RemoteWorkerContactProjection {
+    const key = normalizeRemoteWorkerContactReadKey(input);
+    const row = this.db.prepare(`SELECT MAX(consumed_at) AS last_authenticated_at, ${this.nowSql} AS evaluated_at
+      FROM remote_worker_credential_request_nonces
+      WHERE registry_workspace_id = @registryWorkspaceId AND worker_id = @workerId AND worker_generation = @workerGeneration`)
+      .get<{ last_authenticated_at: string | null; evaluated_at: string }>({ ...key });
+    if (!row) throw new Error("Remote worker contact observation is unavailable.");
+    const staleAfter = row.last_authenticated_at === null ? null : new Date(Date.parse(row.last_authenticated_at) + REMOTE_WORKER_CONTACT_WINDOW_MS).toISOString();
+    return normalizeRemoteWorkerContactProjection({
+      basis: "credential_request_nonce", retention: "replay_window", connectionStatus: "unavailable",
+      freshness: staleAfter === null ? "not_observed" : Date.parse(row.evaluated_at) < Date.parse(staleAfter) ? "recent" : "stale",
+      lastAuthenticatedAt: row.last_authenticated_at, evaluatedAt: row.evaluated_at, staleAfter, recentWindowMs: REMOTE_WORKER_CONTACT_WINDOW_MS,
+    });
   }
 
   /**

@@ -285,6 +285,15 @@ export interface McpServerRecord {
   connectionMode?: McpServerConnectionMode;
   /** Server-owned CAS revision. Required for requester-scoped servers. */
   configurationRevision?: number;
+  /** Opaque server-owned static configuration identity. Missing legacy identity is not invocation authority. */
+  configurationBindingId?: string;
+  /** Server-authored pack ownership. Ordinary configuration edits invalidate it. */
+  packChange?: {
+    planId: string;
+    revision: number;
+    phase: "apply" | "compensate";
+    created: boolean;
+  };
   requesterResolution?: McpRequesterResolutionConfig;
   command?: string;
   args?: string[];
@@ -558,6 +567,11 @@ export function mcpProfileDiscoveryAuthorityHashMaterial(
   };
 }
 
+/** Full SHA-256 aliases: compact base64url for providers; retained hex aliases remain readable. */
+export function isMcpRequesterProviderAlias(value: unknown): value is string {
+  return typeof value === "string" && /^mcp__(?:[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]|[a-f0-9]{64})$/u.test(value);
+}
+
 /** Domain-separated authority material for one exact post-profile tools/call. */
 export function mcpToolCallAuthorityHashMaterial(
   input: McpToolCallAuthorityHashInput,
@@ -617,7 +631,7 @@ export function mcpToolCallAuthorityHashMaterial(
   ] as const) {
     assertCanonicalMcpIdentifier(value, field, 256);
   }
-  if (!/^mcp__[a-f0-9]{64}$/u.test(input.providerAlias)) {
+  if (!isMcpRequesterProviderAlias(input.providerAlias)) {
     throw new TypeError("MCP providerAlias must be an opaque full-digest alias.");
   }
   assertCanonicalSemVer(input.resolverVersion, "resolverVersion");

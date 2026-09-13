@@ -48,8 +48,16 @@ vi.mock("./useRefreshSubscription", () => ({
 
 type HookValue = ReturnType<typeof useOpsRuntimeSnapshot>;
 
-function Harness({ onValue, section }: { onValue: (value: HookValue) => void; section?: string }) {
-  const value = useOpsRuntimeSnapshot(section);
+function Harness({
+  onValue,
+  section,
+  options,
+}: {
+  onValue: (value: HookValue) => void;
+  section?: string;
+  options?: Parameters<typeof useOpsRuntimeSnapshot>[1];
+}) {
+  const value = useOpsRuntimeSnapshot(section, options);
   onValue(value);
   return null;
 }
@@ -616,5 +624,46 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(apiMocks.stopDaemon).toHaveBeenCalledTimes(1);
     expect(latest?.notice).toEqual({ tone: "error", message: "Something went wrong." });
     expect(latest?.daemonBusy).toBeNull();
+  });
+  it("defers specialist sources until requested and keeps the subscribed core current", async () => {
+    await act(async () => {
+      renderer = create(
+        <Harness
+          section="activity"
+          options={{ requestedSources: ["timeline", "cost"] }}
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+    expect(apiMocks.fetchTimelineSummary).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchDashboardState).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchSessions).not.toHaveBeenCalled();
+    expect(apiMocks.fetchLlmRuntimeMeasurements).not.toHaveBeenCalled();
+    expect(latest?.data?.sourceStatus.runtimeMeasurements.status).toBe("not_requested");
+    const before = latest!.data!.timeline;
+    await act(async () => {
+      renderer!.update(
+        <Harness
+          section="runtime"
+          options={{ requestedSources: ["timeline", "cost", "runtimeMeasurements"] }}
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+    expect(apiMocks.fetchLlmRuntimeMeasurements).toHaveBeenCalledTimes(1);
+    expect(latest?.data?.sourceStatus.runtimeMeasurements.status).toBe("ok");
+    expect(latest?.loading).toBe(false);
+    expect(latest?.data?.timeline).toEqual(before);
+    await act(async () => {
+      await latest!.reload();
+    });
+    expect(apiMocks.fetchDashboardState).toHaveBeenCalledTimes(3);
+    expect(apiMocks.fetchSessions).not.toHaveBeenCalled();
   });
 });

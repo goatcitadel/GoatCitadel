@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import {
   REMOTE_WORKER_CELL_PLATFORM_SCHEMA_VERSION,
+  REMOTE_WORKER_CELL_PLATFORM_V2_SCHEMA_VERSION,
   normalizeRemoteWorkerCellPlatformIdentity,
   remoteWorkerCellPlatformIdentitySha256,
   type RemoteWorkerCellBackend,
   type RemoteWorkerCellPlatformIdentity,
+  type RemoteWorkerContainerPlatformIdentity,
+  type RemoteWorkerWindowsPlatformIdentity,
 } from "@goatcitadel/contracts";
 
 /**
@@ -34,18 +37,50 @@ export interface WorkerCellPlatformInput {
   readonly namePrefix?: string;
 }
 
-export interface WorkerCellBackendCapabilities {
-  readonly backend: RemoteWorkerCellBackend;
+export interface ContainerCellBackendCapabilities {
+  readonly backend: "container";
   readonly containerRuntimeReady: boolean;
   readonly internalNetworkReady: boolean;
   readonly quotaEnforcementReady: boolean;
 }
+
+export interface WindowsCellBackendCapabilities {
+  readonly backend: "windows_native";
+  readonly platform: "win32";
+  readonly architecture: "x64";
+  readonly buildNumber: number;
+  readonly signedHelperVerified: boolean;
+  readonly protectedVolumeReady: boolean;
+  readonly appContainerReady: boolean;
+  readonly jobLimitsReady: boolean;
+  readonly stdioHandleAllowlistReady: boolean;
+  readonly quotaEnforcementReady: boolean;
+}
+export type WorkerCellBackendCapabilities = ContainerCellBackendCapabilities | WindowsCellBackendCapabilities;
 
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const DEFAULT_PREFIX = "gc-cell";
 
 /** Assert the backend is fully supported; any partial adapter is unavailable (fail closed). */
 export function assertWorkerCellBackendSupported(capabilities: WorkerCellBackendCapabilities): void {
+  if (capabilities.backend === "windows_native") {
+    if (
+      capabilities.platform === "win32" &&
+      capabilities.architecture === "x64" &&
+      Number.isInteger(capabilities.buildNumber) &&
+      capabilities.buildNumber >= 22000 &&
+      capabilities.signedHelperVerified === true &&
+      capabilities.protectedVolumeReady === true &&
+      capabilities.appContainerReady === true &&
+      capabilities.jobLimitsReady === true &&
+      capabilities.stdioHandleAllowlistReady === true &&
+      capabilities.quotaEnforcementReady === true
+    )
+      return;
+    throw new WorkerCellBackendUnavailableError(
+      "Native Windows worker prerequisites or protected enforcement evidence are incomplete.",
+    );
+  }
   if (
     capabilities.backend !== "container" ||
     !capabilities.containerRuntimeReady ||
@@ -59,7 +94,9 @@ export function assertWorkerCellBackendSupported(capabilities: WorkerCellBackend
 }
 
 /** Derive the deterministic, server-owned platform identity persisted before launch. */
-export function planRemoteWorkerCellPlatformIdentity(input: WorkerCellPlatformInput): RemoteWorkerCellPlatformIdentity {
+export function planRemoteWorkerCellPlatformIdentity(
+  input: WorkerCellPlatformInput,
+): RemoteWorkerContainerPlatformIdentity {
   if (input.backend !== "container") {
     throw new WorkerCellBackendUnavailableError("Only the container backend is available in this tranche.");
   }
@@ -78,7 +115,50 @@ export function planRemoteWorkerCellPlatformIdentity(input: WorkerCellPlatformIn
     imageDigest: input.imageDigest,
     networkName: `${prefix}-net-${shortHash}`,
   };
-  return normalizeRemoteWorkerCellPlatformIdentity(identity);
+  return normalizeRemoteWorkerCellPlatformIdentity(identity) as RemoteWorkerContainerPlatformIdentity;
+}
+
+/** Server-owned v2 identity. No Docker/WSL requirement and no fallback to an unconfined process. */
+export function planNativeWindowsWorkerCellPlatform(
+  input: Omit<WorkerCellPlatformInput, "backend" | "imageDigest" | "namePrefix"> & {
+    volumeIdentitySha256: string;
+    runtimeBundleSha256: string;
+    launcherSha256: string;
+  },
+  capabilities: WindowsCellBackendCapabilities,
+): RemoteWorkerWindowsPlatformIdentity {
+  assertWorkerCellBackendSupported(capabilities);
+  if (
+    !Number.isSafeInteger(input.assignmentGeneration) ||
+    input.assignmentGeneration < 1 ||
+    [input.registryWorkspaceId, input.assignmentId, input.cellId].some(
+      (value) => typeof value !== "string" || !value.trim() || value.length > 256,
+    )
+  ) {
+    throw new WorkerCellBackendUnavailableError("Native Windows cell assignment identity is invalid.");
+  }
+  const shortHash = createHash("sha256")
+    .update(
+      JSON.stringify([
+        REMOTE_WORKER_CELL_PLATFORM_V2_SCHEMA_VERSION,
+        input.registryWorkspaceId,
+        input.assignmentId,
+        input.assignmentGeneration,
+        input.cellId,
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 32);
+  return normalizeRemoteWorkerCellPlatformIdentity({
+    schemaVersion: REMOTE_WORKER_CELL_PLATFORM_V2_SCHEMA_VERSION,
+    backend: "windows_native",
+    jobName: `gc-cell-${shortHash}`,
+    appContainerName: `GoatCitadel.Worker.${shortHash}`,
+    volumeIdentitySha256: input.volumeIdentitySha256,
+    runtimeBundleSha256: input.runtimeBundleSha256,
+    launcherSha256: input.launcherSha256,
+    networkPolicy: "deny_all",
+  }) as RemoteWorkerWindowsPlatformIdentity;
 }
 
 export function planRemoteWorkerCellPlatformIdentitySha256(input: WorkerCellPlatformInput): string {

@@ -27,6 +27,8 @@ function formatKind(kind: ChangePlanRecord["kind"]): string {
       return "Runtime repair";
     case "capability_candidate":
       return "Capability candidate";
+    case "capability_pack":
+      return "Capability pack";
     case "improvement_candidate":
       return "Improvement";
     case "managed_source_registration":
@@ -46,6 +48,7 @@ export interface ChatChangePlanCardProps {
   readonly plan: ChangePlanRecord;
   readonly onReview?: (plan: ChangePlanRecord) => void;
   readonly onCancel?: (plan: ChangePlanRecord) => void;
+  readonly onRollback?: (plan: ChangePlanRecord) => void;
   readonly onMakeDefault?: (plan: ChangePlanRecord) => void;
   /**
    * A presentation-only acknowledgement for terminal receipts. Callers may
@@ -75,6 +78,7 @@ function ChatChangePlanCardContents({
   plan,
   onReview,
   onCancel,
+  onRollback,
   onMakeDefault,
   onDismiss,
   onOpenDetails,
@@ -126,6 +130,11 @@ function ChatChangePlanCardContents({
             <span>{formatStatus(plan.status)}</span>
           </p>
           <div className="chat-change-plan-receipt-actions">
+            {onRollback && plan.rollbackRefs?.length > 0 && ["completed", "applied", "manual_required", "failed"].includes(plan.status) ? (
+              <button type="button" onClick={() => onRollback(plan)} disabled={pending}>
+                Review rollback
+              </button>
+            ) : null}
             <button type="button" aria-expanded={detailsOpen} aria-controls={detailId} onClick={toggleDetails}>
               Details
             </button>
@@ -230,6 +239,9 @@ function ChangePlanDetails({
       <p className="chat-change-plan-impact">Impact: {plan.impact}</p>
       {plan.result?.summary ? <p className="chat-change-plan-result">{plan.result.summary}</p> : null}
       {evidence ? <p className="chat-change-plan-evidence">Evidence: {evidence}</p> : null}
+      {plan.rollbackRefs?.length ? (
+        <p className="chat-change-plan-evidence">Rollback evidence: {plan.rollbackRefs.join(", ")}</p>
+      ) : null}
     </div>
   );
 }

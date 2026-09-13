@@ -1,4 +1,4 @@
-import { canonicalJsonString } from "@goatcitadel/contracts";
+import { canonicalJsonString, REMOTE_WORKER_MESH_CAPABILITY_RAW_PATH } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH } from "./remote-worker-admission-service.js";
 import { REMOTE_WORKER_ASSIGNMENT_RPC_ROUTES } from "./remote-worker-assignment-protocol-service.js";
@@ -45,7 +45,13 @@ describe("remote worker native handler composition", () => {
     const assignment = owned("assignment");
     const dispatch = owned("dispatch");
     const execution = owned("execution");
-    const mux = createRemoteWorkerNativeHandlerMux({ bootstrap, meshNodeAdmission, assignment, dispatch, execution });
+    const meshCapabilities = owned("mesh-capabilities");
+    const mux = createRemoteWorkerNativeHandlerMux({ bootstrap, meshNodeAdmission, assignment, dispatch, execution, meshCapabilities });
+
+    await expect(mux(request(REMOTE_WORKER_MESH_CAPABILITY_RAW_PATH))).resolves.toMatchObject({ body: "mesh-capabilities" });
+    expect(meshCapabilities).toHaveBeenCalledOnce();
+    const base = createRemoteWorkerNativeHandlerMux({ bootstrap, meshNodeAdmission, assignment, dispatch, execution });
+    await expect(base(request(REMOTE_WORKER_MESH_CAPABILITY_RAW_PATH))).resolves.toMatchObject({ statusCode: 404 });
 
     await expect(mux(request(REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH))).resolves.toMatchObject({ body: "bootstrap" });
     await expect(mux(request(REMOTE_WORKER_MESH_NODE_ADMISSION_RAW_PATH))).resolves.toMatchObject({

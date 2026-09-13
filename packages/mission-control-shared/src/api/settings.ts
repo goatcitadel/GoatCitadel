@@ -10,7 +10,7 @@ import type {
   OnboardingBootstrapResult,
   OnboardingState,
   PersonalityCatalogResponse,
-  PersonalityPresetMutationInput,
+  PersonalityCatalogMutationInput,
 } from "@goatcitadel/contracts";
 import type { OnboardingCompleteResponse, RuntimeSettingsResponse } from "./types.js";
 import { request } from "./client-core.js";
@@ -178,7 +178,7 @@ export async function fetchPersonalities(): Promise<PersonalityCatalogResponse> 
   return request<PersonalityCatalogResponse>("/api/v1/personalities");
 }
 
-export async function createPersonality(input: PersonalityPresetMutationInput): Promise<PersonalityCatalogResponse> {
+export async function createPersonality(input: PersonalityCatalogMutationInput): Promise<PersonalityCatalogResponse> {
   return request<PersonalityCatalogResponse>("/api/v1/personalities", {
     method: "POST",
     body: JSON.stringify(input),
@@ -187,7 +187,7 @@ export async function createPersonality(input: PersonalityPresetMutationInput): 
 
 export async function updatePersonality(
   personalityId: string,
-  input: PersonalityPresetMutationInput,
+  input: PersonalityCatalogMutationInput,
 ): Promise<PersonalityCatalogResponse> {
   return request<PersonalityCatalogResponse>(`/api/v1/personalities/${encodeURIComponent(personalityId)}`, {
     method: "PATCH",
@@ -195,15 +195,16 @@ export async function updatePersonality(
   });
 }
 
-export async function deletePersonality(personalityId: string): Promise<PersonalityCatalogResponse> {
+export async function deletePersonality(personalityId: string, expectedRevision: string): Promise<PersonalityCatalogResponse> {
   return request<PersonalityCatalogResponse>(`/api/v1/personalities/${encodeURIComponent(personalityId)}`, {
     method: "DELETE",
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function setDefaultPersonality(personalityId: string): Promise<PersonalityCatalogResponse> {
+export async function setDefaultPersonality(personalityId: string, expectedRevision: string): Promise<PersonalityCatalogResponse> {
   return request<PersonalityCatalogResponse>("/api/v1/personalities/default", {
     method: "PATCH",
-    body: JSON.stringify({ personalityId }),
+    body: JSON.stringify({ personalityId, expectedRevision }),
   });
 }

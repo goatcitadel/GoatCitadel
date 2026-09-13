@@ -17,12 +17,16 @@ import type {
   MemoryFeedbackStatus,
   MemoryFeedbackTargetKind,
   MemoryForgetRequest,
-  MemoryItemRecord,
+  MemoryItemListPage,
+  MemoryItemListQuery,
   MemoryLearningRecord,
   MemoryLifecyclePatch,
-  MemoryMaintenancePolicyPatchInput,
+  MemoryMaintenancePolicyUpdateInput,
   MemoryMaintenancePolicyRecord,
   MemoryMaintenanceProvenanceRecord,
+  MemoryMaintenanceRecommendationAcceptInput,
+  MemoryMaintenanceRecommendationAcceptance,
+  MemoryMaintenanceRecommendationDecisionInput,
   MemoryMaintenanceRecommendationRecord,
   MemoryMaintenanceRunNowInput,
   MemoryMaintenanceRunRecord,
@@ -305,20 +309,15 @@ export async function rejectTraceMemoryCandidate(candidateId: string): Promise<T
   );
 }
 
-export async function fetchMemoryItems(input?: {
-  namespace?: string;
-  workspaceId?: string;
-  status?: "active" | "forgotten" | "all";
-  query?: string;
-  limit?: number;
-}): Promise<{ items: MemoryItemRecord[] }> {
+export async function fetchMemoryItems(input?: MemoryItemListQuery): Promise<MemoryItemListPage> {
   const params = new URLSearchParams();
   if (input?.namespace) params.set("namespace", input.namespace);
   if (input?.workspaceId) params.set("workspaceId", input.workspaceId);
   if (input?.status) params.set("status", input.status);
   if (input?.query) params.set("query", input.query);
+  if (input?.cursor) params.set("cursor", input.cursor);
   params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 200, 500))));
-  return request<{ items: MemoryItemRecord[] }>(`/api/v1/memory/items?${params.toString()}`);
+  return request<MemoryItemListPage>(`/api/v1/memory/items?${params.toString()}`);
 }
 
 export async function patchMemoryItem(
@@ -360,12 +359,12 @@ export async function fetchMemoryMaintenancePolicy(workspaceId?: string): Promis
 
 export async function patchMemoryMaintenancePolicy(
   workspaceId: string | undefined,
-  patch: MemoryMaintenancePolicyPatchInput,
+  patch: MemoryMaintenancePolicyUpdateInput,
 ): Promise<MemoryMaintenancePolicyRecord> {
   const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
   return request<MemoryMaintenancePolicyRecord>(`/api/v1/memory/maintenance/policy${query}`, {
     method: "PATCH",
-    body: JSON.stringify(patch),
+    body: JSON.stringify({ ...patch, workspaceId }),
   });
 }
 
@@ -417,19 +416,21 @@ export async function fetchMemoryMaintenanceRecommendations(
 
 export async function acceptMemoryMaintenanceRecommendation(
   recommendationId: string,
-): Promise<MemoryMaintenanceRecommendationRecord> {
-  return request<MemoryMaintenanceRecommendationRecord>(
+  input: MemoryMaintenanceRecommendationAcceptInput,
+): Promise<MemoryMaintenanceRecommendationAcceptance> {
+  return request<MemoryMaintenanceRecommendationAcceptance>(
     `/api/v1/memory/maintenance/recommendations/${encodeURIComponent(recommendationId)}/accept`,
-    { method: "POST" },
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 
 export async function rejectMemoryMaintenanceRecommendation(
   recommendationId: string,
+  input: MemoryMaintenanceRecommendationDecisionInput,
 ): Promise<MemoryMaintenanceRecommendationRecord> {
   return request<MemoryMaintenanceRecommendationRecord>(
     `/api/v1/memory/maintenance/recommendations/${encodeURIComponent(recommendationId)}/reject`,
-    { method: "POST" },
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 

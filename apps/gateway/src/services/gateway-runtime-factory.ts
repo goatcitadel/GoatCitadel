@@ -2,6 +2,7 @@ import type { CompanionPrincipalPurpose, DatabaseCutoverRequest, LlmRuntimeConfi
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
+import type { McpRequesterResolverRegistryInput } from "./mcp-requester-resolution.js";
 import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import type { ReviewReadinessService } from "./review-readiness-service.js";
@@ -18,6 +19,7 @@ import {
 import type { RemoteWorkerNativeRequestHandler } from "./remote-worker-native-tls-listener.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
 import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
+import { RemoteWorkerChatApprovalWaitReadService } from "./remote-worker-chat-approval-wait-read-service.js";
 
 type GatewayLogger = {
   debug: (...args: unknown[]) => void;
@@ -96,6 +98,8 @@ export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidat
 
 export interface GatewayRuntimeFactoryOptions {
   sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
+  /** Trusted composition input only; the stock application registers no resolvers. */
+  mcpRequesterResolvers?: McpRequesterResolverRegistryInput;
 }
 
 export function createGatewayRuntime(
@@ -149,20 +153,21 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
       return gateway.routeServices;
     },
     createRemoteWorkerAdmissionNativeRequestHandler: async (config) => {
-      // The assignment RPC (routes 2-6), dispatch (routes 8-10), and execution
-      // (routes 11-12) owners are composed only when explicitly activated.
-      // Default production omits them, so the fail-closed composition returns
-      // undefined and the listener stays dark exactly as before. Activation
-      // alone is still not enough: production supplies no HX-503/HX-506 inner
-      // owners, so `assignmentExecution` is absent and the all-or-nothing
-      // composition keeps the listener dark — the connected-worker E2E injects
-      // the inner owners and composes the live mux.
-      const assignmentRuntime = remoteWorkerAssignmentRuntimeActivated()
+      // Explicit activation composes all native execution owners. Listener,
+      // protected admission, current capability and spending checks still apply.
+      const activated = remoteWorkerAssignmentRuntimeActivated();
+      const { meshCapabilityPublication: publication, meshCapabilityInvocation: invocation } = gateway.routeServices;
+      const meshCapabilities = publication && invocation ? { publication, invocation } : undefined;
+      if (activated && !meshCapabilities) throw new Error("Remote worker mesh capability owners are unavailable.");
+      const assignmentRuntime = activated
         ? createGatewayRemoteWorkerAssignmentRuntimeComposition({
             admissionStore: gateway.storage.remoteWorkerAdmissions,
             meshAdmissions: gateway.storage.remoteWorkerMeshNodeAdmissions,
             assignments: gateway.storage.remoteWorkerAssignments,
             nonceConsumer: gateway.storage.remoteWorkerNonces,
+            execution: gateway.createRemoteWorkerExecutionOwners(),
+            meshCapabilities,
+            approvalWait: new RemoteWorkerChatApprovalWaitReadService(gateway.storage),
           })
         : undefined;
       return await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
@@ -174,6 +179,7 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
           : {
               assignmentProtocol: assignmentRuntime.assignmentProtocol,
               assignmentDispatch: assignmentRuntime.assignmentDispatch,
+              meshCapabilities: assignmentRuntime.meshCapabilities,
               ...(assignmentRuntime.assignmentExecution === undefined
                 ? {}
                 : { assignmentExecution: assignmentRuntime.assignmentExecution }),

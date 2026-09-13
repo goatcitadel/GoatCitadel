@@ -230,7 +230,36 @@ export function createMcpRequesterProviderAlias(input: McpRequesterProviderAlias
   } catch {
     throw new McpRequesterResolutionError("capability_profile_invalid");
   }
-  return `mcp__${digest(material)}`;
+  // Full 256-bit identity in 48 provider-safe characters. A hex digest plus
+  // prefix was 69 characters, exceeding the 64-character function-name limit.
+  return `mcp__${Buffer.from(digest(material), "hex").toString("base64url")}`;
+}
+
+export function matchesMcpRequesterProviderAlias(input: McpRequesterProviderAliasInput, alias: string): boolean {
+  const compact = createMcpRequesterProviderAlias(input);
+  // Existing profiles keep their exact alias. Accept the prior full-hex
+  // encoding only when it represents the same complete, bound SHA-256 digest.
+  const retainedHex = `mcp__${Buffer.from(compact.slice(5), "base64url").toString("hex")}`;
+  return alias === compact || alias === retainedHex;
+}
+
+/** Check retained server authority before resolving any new credentials or endpoint. */
+export function assertMcpRequesterBindingServerCurrent(
+  binding: McpRequesterResolutionBinding,
+  server: McpRequesterScopedServerSnapshot,
+): void {
+  assertMcpRequesterResolutionBindingIntegrity(binding);
+  if (
+    binding.serverId !== server.serverId ||
+    binding.serverConfigRevision !== server.configurationRevision ||
+    binding.resolverId !== server.requesterResolution.resolverId ||
+    binding.resolverVersion !== server.requesterResolution.resolverVersion ||
+    binding.resolverConfigGeneration !== server.requesterResolution.configGeneration ||
+    binding.serverConfigSha256 !== mcpRequesterScopedServerConfigHash(server) ||
+    binding.transportPolicySha256 !== mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy)
+  ) {
+    throw new McpRequesterResolutionError("resolver_binding_drift");
+  }
 }
 
 function createMcpSealedToolCallProfile(input: McpSealedToolCallProfileInput): McpSealedToolCallProfile {
@@ -268,14 +297,14 @@ function createMcpSealedToolCallProfile(input: McpSealedToolCallProfileInput): M
     ]) {
       assertLowercaseSha256(hash);
     }
-    const expectedAlias = createMcpRequesterProviderAlias({
+    const aliasInput = {
       serverId: value.serverId,
       rawRemoteToolName: value.rawRemoteToolName,
       canonicalToolName: value.canonicalToolName,
       normalizedToolDefinitionSha256: value.normalizedToolDefinitionSha256,
       bindingSha256: value.bindingSha256,
-    });
-    if (expectedAlias !== value.providerAlias) throw new TypeError();
+    };
+    if (!matchesMcpRequesterProviderAlias(aliasInput, value.providerAlias)) throw new TypeError();
   } catch {
     throw new McpRequesterResolutionError("capability_profile_invalid");
   }

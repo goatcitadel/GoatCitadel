@@ -111,6 +111,11 @@ import {
 import { runApiCompatibilityLane as runApiCompatibilityLaneImpl } from "./scenarios/api-compatibility-lane.mjs";
 import { runVisualRegressionLane as runVisualRegressionLaneImpl } from "./scenarios/visual-regression-lane.mjs";
 import { runRuntimeTruthLane as runRuntimeTruthLaneImpl } from "./scenarios/runtime-truth-lane.mjs";
+import { runMemoryEnumerationScenario } from "./scenarios/memory-enumeration-scenario.mjs";
+import { runMemoryPolicyRevisionScenario } from "./scenarios/memory-policy-revision-scenario.mjs";
+import { runWorkbenchFileRevisionScenario } from "./scenarios/workbench-file-revision-scenario.mjs";
+import { runPermissionProfileRevisionsLane as runPermissionProfileRevisionsLaneImpl } from "./scenarios/permission-profile-revisions-lane.mjs";
+import { runPersonalityCatalogRevisionsLane as runPersonalityCatalogRevisionsLaneImpl } from "./scenarios/personality-catalog-revisions-lane.mjs";
 import { runAuthMatrixLane as runAuthMatrixLaneImpl } from "./scenarios/auth-matrix-lane.mjs";
 import { runArchitectureMetricsLane as runArchitectureMetricsLaneImpl } from "./scenarios/architecture-metrics-lane.mjs";
 import { runCatalogParityLane as runCatalogParityLaneImpl } from "./scenarios/catalog-parity-lane.mjs";
@@ -458,6 +463,15 @@ export async function runAgenticWorkbenchLoopLane(context) {
     title: "Code Workbench patch/test/apply/export/revert behavior",
     subsystem: "agentic",
   });
+  await runWorkbenchFileRevisionScenario(context, verificationLaneDeps());
+}
+
+export async function runPermissionProfileRevisionsLane(context) {
+  await runPermissionProfileRevisionsLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runPersonalityCatalogRevisionsLane(context) {
+  await runPersonalityCatalogRevisionsLaneImpl(context, verificationLaneDeps());
 }
 
 // Scope caveat (Phase 6 doc-truth): this lane proves the channel-AGNOSTIC durable
@@ -3423,7 +3437,8 @@ export async function runUiParityLane(context, _options = {}) {
               page: nextPage,
               baseUrl: nextUi.uiUrl,
               href: "/ops/runtime",
-              route: { expectedArea: "ops", expectedSection: "runtime", readyText: "Runtime posture" },
+              route: { expectedArea: "ops", expectedSection: "runtime", readyText: "Services" },
+              prepare: async (page) => { await page.getByRole("button", { name: "Gateway details", exact: true }).click(); },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3434,6 +3449,7 @@ export async function runUiParityLane(context, _options = {}) {
               baseUrl: nextUi.uiUrl,
               href: "/ops/diagnostics",
               route: { expectedArea: "ops", expectedSection: "diagnostics", readyText: "Diagnostics directory" },
+              prepare: async (page) => { await page.getByLabel("About Diagnostics directory", { exact: true }).click(); },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3465,6 +3481,7 @@ export async function runUiParityLane(context, _options = {}) {
               baseUrl: nextUi.uiUrl,
               href: "/settings/mcp",
               route: { expectedArea: "settings", expectedSection: "mcp", readyText: "MCP servers" },
+              prepare: async (page) => { await page.getByRole("button", { name: "MCP diagnostics", exact: true }).click(); },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3545,11 +3562,23 @@ export async function runUiParityLane(context, _options = {}) {
 
 export async function runMemoryTruthLane(context, _options = {}) {
   let stack;
+  let llmStub;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   try {
+    const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-memory-truth`);
+    llmStub = await startDeterministicLlmStub();
+    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
+    const configPath = path.join(runtimeRoot, "config", "goatcitadel.json");
+    const fixtureConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+    fixtureConfig.assistant.dataDir = "./data";
+    delete fixtureConfig.generation;
+    await fs.writeFile(configPath, `${JSON.stringify(fixtureConfig, null, 2)}\n`);
     stack = await startVerificationStack(context, {
       includeUi: true,
+      runtimeRoot,
       gatewayEnv: {
+        GOATCITADEL_VERIFY_STUB_LLM_KEY: "memory-truth-local-fixture",
+        GOATCITADEL_EMBEDDINGS_PROVIDER: "pseudo",
         GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
         GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
         GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
@@ -3749,14 +3778,15 @@ export async function runMemoryTruthLane(context, _options = {}) {
             NEXT_UI_PACKAGE,
           );
           await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
+          await page.getByRole("button", { name: `Memory item ${memoryTitle} in namespace memory-truth,`, exact: false }).click();
           await page.getByRole("heading", { name: memoryTitle, exact: false }).first().waitFor({ timeout: 15000 });
           if ((await page.getByText(foreignTitle, { exact: false }).count()) > 0) {
             throw new Error(`memory-truth Library exposed foreign workspace item ${foreignTitle}`);
           }
-          await page
-            .getByText(/Lifecycle expired/i, { exact: false })
-            .first()
-            .waitFor({ timeout: 15000 });
+          await page.getByRole("button", {
+            name: `Memory item ${memoryTitle} in namespace memory-truth, lifecycle expired,`, exact: false,
+          }).waitFor({ timeout: 15000 });
+          await page.getByText("expired · memory-truth", { exact: true }).waitFor({ timeout: 15000 });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "memory-truth-ttl-lifecycle-visibility",
@@ -3794,11 +3824,14 @@ export async function runMemoryTruthLane(context, _options = {}) {
         }
       },
     );
+    await runMemoryEnumerationScenario(context, stack, verificationLaneDeps());
+    await runMemoryPolicyRevisionScenario(context, stack, verificationLaneDeps());
   } finally {
-    if (stack) {
-      await stopVerificationStack(stack);
+    try {
+      if (stack) await stopVerificationStack(stack);
+    } finally {
+      try { await llmStub?.close(); } finally { restoreUiPackage(); }
     }
-    restoreUiPackage();
   }
 }
 
@@ -4372,7 +4405,7 @@ export async function performVerificationInteraction(page, interaction, packageN
     return;
   }
   if (interaction === "open-inspector" && packageName === NEXT_UI_PACKAGE) {
-    const inspector = page.locator(".mc-next-shell-inspector");
+    const inspector = page.locator(".mc-next-detail-inspector");
     const routeDetailsButton = page.getByRole("button", { name: /^(Open|Hide) Route details$/i }).first();
     if (!(await routeDetailsButton.isVisible().catch(() => false))) {
       const overflowButton = page.getByRole("button", { name: /^More controls$/i }).first();
@@ -4411,7 +4444,7 @@ export async function performVerificationInteraction(page, interaction, packageN
       await page.waitForTimeout(250);
     }
 
-    await page.waitForSelector(".mc-next-shell-inspector", { state: "visible", timeout: 1500 });
+    await page.waitForSelector(".mc-next-detail-inspector", { state: "visible", timeout: 1500 });
   }
 }
 
@@ -5775,6 +5808,7 @@ async function collectUiParitySurface({
   sessionId,
   needle,
   absentNeedle,
+  prepare,
 }) {
   let ready = false;
   let error = null;
@@ -5786,6 +5820,7 @@ async function collectUiParitySurface({
   try {
     await waitForVerificationRouteReady(page, route, packageName);
     ready = true;
+    await prepare?.(page);
     await setBrowserCorrelation(page, correlationId, sessionId);
     try {
       await page.waitForFunction(
@@ -6014,21 +6049,21 @@ async function runMissionControlNextMobileShellProof(context, input) {
             href: "/ops/runtime",
             expectedArea: "ops",
             expectedSection: "runtime",
-            readyText: "Runtime authority map",
+            readyText: "Services",
           },
           {
             slug: "projects",
             href: "/projects",
             expectedArea: "projects",
             expectedSection: "root",
-            readyText: "Project containers",
+            readyText: "Projects",
           },
           {
             slug: "library-memory",
             href: "/library/memory",
             expectedArea: "library",
             expectedSection: "memory",
-            readyText: "Mission Control Next shell posture",
+            readyText: "Memory items",
           },
         ];
         try {
@@ -6098,10 +6133,7 @@ export async function openMissionControlNextThreadedActivity(page) {
     throw new Error("mobile Chat exposed the generic Route details inspector instead of threaded Activity");
   }
 
-  const activityButton = page
-    .locator(".mc-next-threaded-mobile-bar .mc-next-threaded-menu-button")
-    .filter({ hasText: /^(Activity|Hide activity)$/i })
-    .first();
+  const activityButton = page.getByRole("button", { name: /^(Activity|Hide activity)$/i }).first();
   await activityButton.scrollIntoViewIfNeeded();
   await assertLocatorFullyVisible(page, activityButton, "mobile threaded Activity button");
   const activityPanel = page.locator('.mc-next-threaded-context-panel[aria-label="Thread utility drawer"]').first();
@@ -6123,7 +6155,7 @@ export async function exerciseMissionControlNextMobileRail(page) {
 
   const activeCitadel = page.getByRole("combobox", { name: "Active Citadel" }).first();
   const activeWorkspace = page.getByRole("combobox", { name: "Active Workspace" }).first();
-  const commandPaletteButton = page.getByRole("button", { name: "Open Command Palette" }).first();
+  const commandPaletteButton = rail.getByRole("button", { name: "Command Palette", exact: true }).first();
   await assertLocatorFullyVisible(page, activeCitadel, "mobile Active Citadel control");
   await assertLocatorFullyVisible(page, activeWorkspace, "mobile Active Workspace control");
   await assertLocatorFullyVisible(page, commandPaletteButton, "mobile Command Palette control");

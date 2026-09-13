@@ -3,6 +3,10 @@ import { createServer, type Server as HttpsServer } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { TLSSocket } from "node:tls";
+import {
+  REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS,
+  REMOTE_WORKER_POP_V2_ROUTE_BINDINGS,
+} from "@goatcitadel/contracts";
 import type { RemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
 import { REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES } from "./remote-worker-protocol.js";
 import {
@@ -50,6 +54,8 @@ const FORBIDDEN_HANDLER_RESPONSE_HEADERS = new Set([
 ]);
 
 export interface RemoteWorkerNativeHandlerRequest {
+  /** Server-owned lifetime: disconnect, listener shutdown or the absolute deadline aborts work. */
+  readonly signal?: AbortSignal;
   readonly method: "POST";
   readonly rawPath: string;
   readonly headers: Readonly<Record<string, string>>;
@@ -88,10 +94,17 @@ export interface RemoteWorkerNativeTlsListenerHandle {
   close(): Promise<void>;
 }
 
+type ListenerStartupStage = "trust_material" | "tls_server" | "bind";
+type ListenerStartupReason = "address_in_use" | "address_unavailable" | "permission_denied" | "unavailable";
+
 export class RemoteWorkerNativeTlsListenerError extends Error {
   readonly code = "REMOTE_WORKER_NATIVE_TLS_LISTENER_UNAVAILABLE";
 
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly startupStage?: ListenerStartupStage,
+    readonly startupReason?: ListenerStartupReason,
+  ) {
     super(message);
     this.name = "RemoteWorkerNativeTlsListenerError";
   }
@@ -110,6 +123,7 @@ export async function startRemoteWorkerNativeTlsListener(
   const secureStates = new Map<TLSSocket, SecureSocketState>();
   let closing = false;
   let closePromise: Promise<void> | undefined;
+  let startupStage: ListenerStartupStage = "trust_material";
 
   const revokeRequest = (request: IncomingMessage, state?: SecureSocketState): void => {
     state?.requests.delete(request);
@@ -133,6 +147,7 @@ export async function startRemoteWorkerNativeTlsListener(
 
   try {
     trust = await loadRemoteWorkerTrustMaterial(enabledConfig);
+    startupStage = "tls_server";
     const tlsMaterial = trust.tlsServerOptions();
     const clientCaDer = new X509Certificate(tlsMaterial.ca).raw;
     try {
@@ -177,7 +192,9 @@ export async function startRemoteWorkerNativeTlsListener(
         return;
       }
       rawSockets.add(rawSocket);
-      rawSocket.setTimeout(REMOTE_WORKER_NATIVE_TLS_LIMITS.handshakeTimeoutMs, () => rawSocket.destroy());
+      // The TLS server owns the handshake deadline. A timeout on the underlying
+      // net.Socket survives wrapping in TLSSocket and can kill an authenticated
+      // request even after socket.setTimeout(0) on the TLS socket.
       rawSocket.once("close", () => rawSockets.delete(rawSocket));
       rawSocket.once("error", () => rawSockets.delete(rawSocket));
     });
@@ -281,10 +298,12 @@ export async function startRemoteWorkerNativeTlsListener(
       state.requestDeadline = destroyAtDeadline(socket, REMOTE_WORKER_NATIVE_TLS_LIMITS.requestTimeoutMs);
       state.requestDeadlineAt = Date.now() + REMOTE_WORKER_NATIVE_TLS_LIMITS.requestTimeoutMs;
       state.requests.add(request);
+      const lifetime = new AbortController();
       let revoked = false;
       const revoke = (): void => {
         if (revoked) return;
         revoked = true;
+        lifetime.abort(new Error("Remote worker transport closed."));
         clearDeadline(state.requestDeadline);
         state.requestDeadline = undefined;
         state.requestDeadlineAt = undefined;
@@ -312,11 +331,27 @@ export async function startRemoteWorkerNativeTlsListener(
         });
         bodyBytes = await readExactBody(request, contentLength, socket);
         if (socket.destroyed || state.revoked || state.requestDeadlineAt === undefined) throw unavailable();
+        // Header/body receipt stays on the short deadline. Only a fully read,
+        // TLS-bound inference envelope receives a longer response window. The
+        // protocol owner still validates PoP and all execution authority.
+        if (request.url === REMOTE_WORKER_POP_V2_ROUTE_BINDINGS.find((route) => route.code === 11)!.rawPath) {
+          clearDeadline(state.requestDeadline);
+          clearDeadline(state.connectionDeadline);
+          state.requestDeadlineAt = Date.now() + REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS + 1_000;
+          state.requestDeadline = destroyAtDeadline(socket, REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS + 1_000);
+          state.connectionDeadline = destroyAtDeadline(socket, REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS + 2_000);
+        }
         requestReady = true;
         if (handler === undefined) {
           outgoing = fixedResponse(503, UNAVAILABLE_BODY, { "retry-after": "60" });
         } else {
-          const handlerRequest = createHandlerRequest(request.url ?? "", headers, bodyBytes, identity);
+          const handlerRequest = createHandlerRequest(
+            request.url ?? "",
+            headers,
+            bodyBytes,
+            identity,
+            AbortSignal.any([lifetime.signal, AbortSignal.timeout(Math.max(1, state.requestDeadlineAt - Date.now()))]),
+          );
           const handlerResult = await invokeHandlerBeforeDeadline(handler, handlerRequest, state.requestDeadlineAt);
           outgoing = normalizeHandlerResponse(handlerResult);
         }
@@ -344,6 +379,7 @@ export async function startRemoteWorkerNativeTlsListener(
       }
     }
 
+    startupStage = "bind";
     await listen(ownedServer, enabledConfig.host, enabledConfig.port);
     const boundAddress = renderAddress(ownedServer, enabledConfig.host, enabledConfig.port);
     const close = async (): Promise<void> => {
@@ -361,7 +397,7 @@ export async function startRemoteWorkerNativeTlsListener(
         close,
       }),
     ) as unknown as RemoteWorkerNativeTlsListenerHandle;
-  } catch {
+  } catch (error) {
     closing = true;
     for (const state of secureStates.values()) {
       revokeSocket(state);
@@ -372,7 +408,8 @@ export async function startRemoteWorkerNativeTlsListener(
       await closeOwnedServer(server, rawSockets, secureStates, revokeSocket).catch(() => undefined);
     }
     trust?.dispose();
-    throw unavailable();
+    if (error instanceof RemoteWorkerNativeTlsListenerError && error.startupStage !== undefined) throw error;
+    throw startupUnavailable(startupStage, error);
   }
 }
 
@@ -553,6 +590,7 @@ function createHandlerRequest(
   headers: Readonly<Record<string, string>>,
   bodyBytes: Buffer,
   transportIdentity: RemoteWorkerTransportIdentity,
+  signal: AbortSignal,
 ): RemoteWorkerNativeHandlerRequest {
   return Object.freeze(
     Object.assign(Object.create(null) as Record<string, unknown>, {
@@ -561,6 +599,7 @@ function createHandlerRequest(
       headers,
       bodyBytes,
       transportIdentity,
+      signal,
     }),
   ) as unknown as RemoteWorkerNativeHandlerRequest;
 }
@@ -691,9 +730,9 @@ async function writeBoundedResponse(
 
 async function listen(server: HttpsServer, host: string, port: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const onError = (): void => {
+    const onError = (error: Error): void => {
       server.off("listening", onListening);
-      reject(unavailable());
+      reject(startupUnavailable("bind", error));
     };
     const onListening = (): void => {
       server.off("error", onError);
@@ -763,4 +802,22 @@ function clearDeadline(deadline: ReturnType<typeof setTimeout> | undefined): voi
 
 function unavailable(): RemoteWorkerNativeTlsListenerError {
   return new RemoteWorkerNativeTlsListenerError("Remote worker native TLS listener is unavailable.");
+}
+
+/** Startup-only, fixed-vocabulary diagnostics. Never retain upstream error text or causes. */
+function startupUnavailable(stage: ListenerStartupStage, error: unknown): RemoteWorkerNativeTlsListenerError {
+  const code = stage === "bind" && error instanceof Error && "code" in error ? error.code : undefined;
+  const reason: ListenerStartupReason =
+    code === "EADDRINUSE"
+      ? "address_in_use"
+      : code === "EADDRNOTAVAIL"
+        ? "address_unavailable"
+        : code === "EACCES"
+          ? "permission_denied"
+          : "unavailable";
+  return new RemoteWorkerNativeTlsListenerError(
+    `Remote worker native TLS listener is unavailable (${stage}: ${reason}).`,
+    stage,
+    reason,
+  );
 }

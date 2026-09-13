@@ -249,6 +249,9 @@ export class CapabilityCandidateChangePlanAdapter implements EvolutionControlPla
       ? candidate.versions.find((item) => item.versionId === request.versionId)
       : candidate.latestVersion;
     if (!version) throw new SemanticValidationError("The capability candidate has no immutable version artifacts.");
+    if (version.workspaceId && version.workspaceId !== workspaceId) {
+      throw new SemanticValidationError("The capability version belongs to a different workspace.");
+    }
     return { proposal, candidate, version };
   }
 

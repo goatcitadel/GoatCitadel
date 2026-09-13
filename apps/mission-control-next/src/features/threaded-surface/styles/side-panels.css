@@ -312,6 +312,18 @@
   gap: 0.52rem;
 }
 
+.mc-next-code-file-action-review {
+  display: grid;
+  gap: 0.52rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-code-file-action-review ul {
+  max-height: 14rem;
+  overflow: auto;
+}
+
 .mc-next-code-source-picker {
   padding: 0.1rem 0;
 }

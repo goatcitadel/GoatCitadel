@@ -11,6 +11,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
+import { bindBundledPack } from "./capability-pack-bindings.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 
 export interface CapabilityPackInstallInput {
@@ -153,7 +154,7 @@ export class CapabilityPackService {
   public constructor(private readonly deps: CapabilityPackServiceDependencies) {}
 
   public listPacks(): CapabilityPackManifest[] {
-    return BUNDLED_PACKS.map((pack) => structuredClone(pack));
+    return BUNDLED_PACKS.map(bindBundledPack);
   }
 
   public previewPack(packId: string): CapabilityPackPreview {
@@ -363,7 +364,7 @@ export class CapabilityPackService {
     if (!pack) {
       throw new Error(`Unknown capability pack: ${packId}`);
     }
-    return structuredClone(pack);
+    return bindBundledPack(pack);
   }
 
   private async requireStagedEnvelope(sourceEvidenceEnvelopeId: string): Promise<EvidenceEnvelope> {

@@ -75,7 +75,7 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     return <CoworkNativePage {...props} />;
   }
   if (route.area === "library") {
-    return <LibraryNativePage {...props} />;
+    return <LibraryNativePage key={`${props.activeCitadelId}:${props.activeWorkspaceId}`} {...props} />;
   }
   if (route.area === "ops") {
     const section = route.section ?? "activity";

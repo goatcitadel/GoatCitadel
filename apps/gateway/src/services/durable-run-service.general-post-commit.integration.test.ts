@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
-import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
+import {
+  applyPostgresMigrationsSync,
+  createLocalAsyncStorage,
+  PostgresSyncDatabaseClient,
+  Storage,
+  type AsyncStorage,
+} from "@goatcitadel/storage";
 import {
   GENERAL_CHAT_POST_COMMIT_EFFECTS,
   type GeneralChatPostCommitEffectWorkflowPayload,
@@ -30,6 +36,9 @@ const roots: string[] = [];
 const services: DurableRunService[] = [];
 const storages: Storage[] = [];
 const asyncStorages = new WeakMap<Storage, AsyncStorage>();
+// Opt in only for this suite; the caller owns the isolated PostgreSQL cluster.
+const postgresUrl = process.env.GOATCITADEL_POST_COMMIT_TEST_POSTGRES_URL?.trim();
+const postgresSchemas: string[] = [];
 
 afterEach(() => {
   for (const service of services.splice(0)) {
@@ -42,12 +51,159 @@ afterEach(() => {
       // A restart test may already have closed this handle.
     }
   }
+  if (postgresUrl && postgresSchemas.length > 0) {
+    const admin = new PostgresSyncDatabaseClient(postgresConnection(postgresUrl));
+    try {
+      for (const schema of postgresSchemas.splice(0)) admin.exec(`DROP SCHEMA ${schema} CASCADE`);
+    } finally {
+      admin.close();
+    }
+  }
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
 describe("DurableRunService general Chat post-commit integration", () => {
+  it.each(["frozen_disabled", "disabled_before_dispatch", "blocked_at_counter"] as const)(
+    "releases the completed parent after %s post-commit stages and admits the next turn after restart",
+    async (scenario) => {
+      const harness = createStorageHarness();
+      const parent = seedParent(harness.storage, `generation-${scenario}`, "completed", scenario !== "frozen_disabled");
+      const onGeneral = async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
+        await reconcileGeneralEffects(progress);
+        return { status: "enqueued" };
+      };
+      const service = createService(harness.storage, onGeneral);
+      service.stopWorker();
+      expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(false);
+      for (const child of listPostCommitChildren(harness.storage)) {
+        const stage =
+          child.metadata?.effect === "commitments"
+            ? "commitments_write"
+            : child.metadata?.effect === "memory_maintenance"
+              ? "memory_maintenance_evaluation"
+              : scenario === "blocked_at_counter"
+                ? "background_counter"
+                : "background_evidence";
+        settlePostCommitChild(harness.storage, child, "completed", undefined, stage);
+        const payload = child.payload as unknown as GeneralChatPostCommitEffectWorkflowPayload;
+        expect(harness.storage.sessionMutationAdmissions.require(payload.childAdmission.admissionId).status).toBe(
+          "cancelled",
+        );
+        for (const assignment of [
+          "terminal_idempotency_key = 'unrelated'",
+          "terminal_authority_kind = 'synchronous'",
+        ]) {
+          expect(() =>
+            harness.storage.db
+              .prepare(`UPDATE chat_session_mutation_admissions SET ${assignment} WHERE admission_id = @admissionId`)
+              .run({ admissionId: payload.childAdmission.admissionId }),
+          ).toThrow(/immutable/);
+        }
+      }
+      harness.storage.close();
+      storages.splice(storages.indexOf(harness.storage), 1);
+      const storage = openStorage(harness);
+      const restarted = createService(storage, onGeneral);
+      restarted.stopWorker();
+      const release = {
+        runId: parent.runId,
+        sessionId: "session-post-commit",
+        turnId: "turn-post-commit",
+        timeoutMs: 2_000,
+      };
+      expect(await restarted.awaitTerminalChatAdmissionRelease(release)).toMatchObject({ recoveryOutcome: "released" });
+      expect(await restarted.awaitTerminalChatAdmissionRelease(release)).toMatchObject({
+        recoveryOutcome: "already_released",
+      });
+      const admission = storage.sessionMutationAdmissions.require(String(parent.payload.admissionId));
+      expect(admission.status).toBe("completed");
+      const request = { content: "Continue after the skipped background work." };
+      expect(
+        storage.sessionMutationAdmissions.admit({
+          workspaceId: admission.workspaceId,
+          sessionId: admission.sessionId,
+          expectedSessionIncarnationId: admission.sessionIncarnationId,
+          turnId: "turn-post-commit-next",
+          runtimeOwnerId: "integration:post-commit-next",
+          admissionKind: "turn_write",
+          aggregateRevision: storage.chatSessionMeta.get(admission.sessionId)!.revision,
+          controllerGeneration: admission.controllerGeneration,
+          actorKind: admission.actorKind,
+          actorId: admission.actorId,
+          operation: "chat_send",
+          materialSha256: computeFrozenChatTurnAdmissionMaterialSha256(request),
+          idempotencyKey: "admission:post-commit-next",
+          correlationId: "post-commit-next",
+        }),
+      ).toMatchObject({ disposition: "created", admission: { status: "active", turnId: "turn-post-commit-next" } });
+    },
+  );
+
+  it.each([
+    "missing_receipt",
+    "wrong_effect",
+    "wrong_stage",
+    "wrong_version",
+    "content_in_blocked_receipt",
+    "invalid_timestamp",
+  ])("retains parent authority when a completed blocked child has %s", async (corruption) => {
+    const harness = createStorageHarness();
+    const parent = seedParent(harness.storage, `generation-${corruption}`, "completed", false);
+    const reportError = vi.fn();
+    const service = createService(
+      harness.storage,
+      async (_run, progress) => {
+        await reconcileGeneralEffects(progress);
+        return { status: "enqueued" };
+      },
+      undefined,
+      reportError,
+    );
+    service.stopWorker();
+    expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(false);
+    for (const child of listPostCommitChildren(harness.storage)) {
+      const stage =
+        child.metadata?.effect === "commitments"
+          ? "commitments_write"
+          : child.metadata?.effect === "memory_maintenance"
+            ? "memory_maintenance_evaluation"
+            : "background_evidence";
+      settlePostCommitChild(harness.storage, child, "completed", undefined, stage);
+    }
+    const child = listPostCommitChildren(harness.storage).find((run) => run.metadata?.effect === "commitments")!;
+    const metadata = structuredClone(child.metadata!);
+    const receipt = metadata.generalChatPostCommitCanonical as {
+      version: number;
+      effect: string;
+      stages: Record<string, Record<string, unknown>>;
+    };
+    if (corruption === "missing_receipt") delete metadata.generalChatPostCommitCanonical;
+    if (corruption === "wrong_effect") receipt.effect = "background_review";
+    if (corruption === "wrong_stage") receipt.stages = { background_evidence: receipt.stages.commitments_write! };
+    if (corruption === "wrong_version") receipt.version = 2;
+    if (corruption === "content_in_blocked_receipt")
+      receipt.stages.commitments_write!.result = { status: "classified" };
+    if (corruption === "invalid_timestamp") receipt.stages.commitments_write!.completedAt = "invalid";
+    harness.storage.durableRuns.updateRun({
+      runId: child.runId,
+      status: child.status,
+      metadata,
+      expectedVersion: child.version,
+    });
+    expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(false);
+    const admission = harness.storage.sessionMutationAdmissions.require(String(parent.payload.admissionId));
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "Terminal durable turn child admission conflicts with its frozen payload identity.",
+      }),
+      expect.any(String),
+    );
+    expect(harness.storage.durableRuns.getRun(parent.runId).metadata).toHaveProperty("generalChatPostCommitPending");
+    expect(admission.status).toBe("active");
+  });
+
   it("preserves a dead local worker prefix and releases the exact durable admission before its lease TTL", async () => {
     const harness = createStorageHarness();
     const seeded = seedRunningRetainedPrefix(harness.storage);
@@ -502,6 +658,7 @@ function createStorageHarness(): {
   transcriptsDir: string;
   auditDir: string;
   storage: Storage;
+  postgresConnectionString?: string;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-general-post-commit-"));
   roots.push(root);
@@ -510,21 +667,49 @@ function createStorageHarness(): {
   const auditDir = path.join(root, "audit");
   fs.mkdirSync(transcriptsDir, { recursive: true });
   fs.mkdirSync(auditDir, { recursive: true });
-  const storage = new Storage({ dbPath, transcriptsDir, auditDir });
-  storages.push(storage);
-  return { root, dbPath, transcriptsDir, auditDir, storage };
+  let postgresConnectionString: string | undefined;
+  if (postgresUrl) {
+    const schema = `post_commit_handoff_${randomUUID().replaceAll("-", "")}`;
+    const scoped = new URL(postgresUrl);
+    scoped.searchParams.set("options", `-csearch_path=${schema}`);
+    const db = new PostgresSyncDatabaseClient(postgresConnection(scoped.toString()));
+    try {
+      db.exec(`CREATE SCHEMA ${schema}`);
+      postgresSchemas.push(schema);
+      applyPostgresMigrationsSync(db);
+    } finally {
+      db.close();
+    }
+    postgresConnectionString = scoped.toString();
+  }
+  const options = { root, dbPath, transcriptsDir, auditDir, postgresConnectionString };
+  return { ...options, storage: openStorage(options) };
 }
 
-function openStorage(harness: { dbPath: string; transcriptsDir: string; auditDir: string }): Storage {
-  const storage = new Storage(harness);
+function openStorage(harness: {
+  dbPath: string;
+  transcriptsDir: string;
+  auditDir: string;
+  postgresConnectionString?: string;
+}): Storage {
+  const storage = new Storage({
+    ...harness,
+    ...(harness.postgresConnectionString
+      ? { db: new PostgresSyncDatabaseClient(postgresConnection(harness.postgresConnectionString)) }
+      : {}),
+  });
   storages.push(storage);
   return storage;
+}
+
+function postgresConnection(connectionString: string) {
+  return { connectionString, database: decodeURIComponent(new URL(connectionString).pathname.slice(1)) || "postgres" };
 }
 
 function getAsyncStorage(storage: Storage): AsyncStorage {
   const existing = asyncStorages.get(storage);
   if (existing) return existing;
-  const asyncStorage = createSqliteAsyncStorage(storage);
+  const asyncStorage = createLocalAsyncStorage(storage);
   asyncStorages.set(storage, asyncStorage);
   return asyncStorage;
 }
@@ -533,6 +718,7 @@ function createService(
   storage: Storage,
   onGeneral?: (run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => Promise<Record<string, unknown>>,
   executeWorkflow = vi.fn(async () => undefined),
+  reportError: (...args: unknown[]) => void = () => undefined,
 ): DurableRunService {
   const service = new DurableRunService(
     {
@@ -543,7 +729,7 @@ function createService(
       publishRealtime: () => undefined,
       requireFeatureEnabled: () => undefined,
       isFeatureEnabled: () => true,
-      logger: { info: () => undefined, debug: () => undefined, warn: () => undefined, error: () => undefined },
+      logger: { info: () => undefined, debug: () => undefined, warn: () => undefined, error: reportError },
     } as unknown as ServiceContext,
     {
       backgroundTasks: new Set(),
@@ -737,6 +923,7 @@ function seedParent(
   storage: Storage,
   generationId: string,
   status: DurableRunRecord["status"] = "completed",
+  autonomyEnabledAtParentSettlement = true,
 ): DurableRunRecord {
   const runId = `parent-${generationId}`;
   const now = "2026-07-11T00:00:00.000Z";
@@ -791,7 +978,7 @@ function seedParent(
     threadEventType: "chat_thread_turn_appended",
     request,
   };
-  const transition = buildParentRuntimeTransition(runId, generationId, status);
+  const transition = buildParentRuntimeTransition(runId, generationId, status, autonomyEnabledAtParentSettlement);
   let run = storage.durableRuns.createRun({
     runId,
     workflowKey: "chat.turn.execute",
@@ -866,7 +1053,11 @@ function seedParent(
   return run;
 }
 
-function pendingMetadata(generationId: string, traceStatus: string): Record<string, unknown> {
+function pendingMetadata(
+  generationId: string,
+  traceStatus: string,
+  autonomyEnabledAtParentSettlement = true,
+): Record<string, unknown> {
   return {
     generalChatPostCommitPending: {
       version: 1,
@@ -875,7 +1066,7 @@ function pendingMetadata(generationId: string, traceStatus: string): Record<stri
       requestedAt: "2026-07-11T00:00:00.000Z",
       postCommitEligibility: {
         version: 1,
-        autonomyEnabledAtParentSettlement: true,
+        autonomyEnabledAtParentSettlement,
         evalIntegrityTurn: false,
         humanSession: true,
       },
@@ -889,10 +1080,11 @@ function buildParentRuntimeTransition(
   runId: string,
   generationId: string,
   status: DurableRunRecord["status"],
+  autonomyEnabledAtParentSettlement = true,
 ): { metadata: Record<string, unknown>; checkpointState: Record<string, unknown>; outputText?: string } {
   const waiting = status === "waiting";
   const traceStatus = waiting ? "waiting_for_approval" : "completed";
-  const pending = pendingMetadata(generationId, traceStatus);
+  const pending = pendingMetadata(generationId, traceStatus, autonomyEnabledAtParentSettlement);
   const marker = pending.generalChatPostCommitPending as Record<string, unknown>;
   const transitionAt = String(marker.requestedAt);
   const postCommitEligibility = marker.postCommitEligibility as never;
@@ -956,6 +1148,11 @@ function settlePostCommitChild(
   observed: DurableRunRecord,
   status: "completed" | "failed",
   lastError?: string,
+  lateBlockedStage?:
+    | "commitments_write"
+    | "background_counter"
+    | "background_evidence"
+    | "memory_maintenance_evaluation",
 ): DurableRunRecord {
   let claimed = storage.durableRuns.getRun(observed.runId);
   if (claimed.status === "queued") {
@@ -975,11 +1172,12 @@ function settlePostCommitChild(
   }
   const payload = claimed.payload as unknown as GeneralChatPostCommitEffectWorkflowPayload;
   const stage =
-    payload.effect === "commitments"
+    lateBlockedStage ??
+    (payload.effect === "commitments"
       ? "commitments_write"
       : payload.effect === "background_review"
         ? "background_evidence"
-        : "memory_maintenance_evaluation";
+        : "memory_maintenance_evaluation");
   storage.sessionMutationAdmissions.runPostCommitChildStage(
     {
       childAdmission: payload.childAdmission,
@@ -990,17 +1188,32 @@ function settlePostCommitChild(
       sourceTurnId: payload.input.turnId,
       postCommitEligibility: payload.postCommitEligibility,
       stage,
-      terminal: true,
+      terminal: stage !== "background_counter",
       durableClaim: {
         durableRunId: claimed.runId,
         leaseOwnerId: claimed.leaseOwnerId,
         attemptCount: claimed.attemptCount,
       },
     },
-    () => ({
-      disposition: status === "completed" ? "allowed" : "late_blocked",
-      value: undefined,
-    }),
+    () => {
+      if (lateBlockedStage) {
+        const current = storage.durableRuns.getRunForUpdate(claimed.runId);
+        storage.durableRuns.updateRun({
+          runId: current.runId,
+          status: current.status,
+          metadata: {
+            ...current.metadata,
+            generalChatPostCommitCanonical: {
+              version: 1,
+              effect: payload.effect,
+              stages: { [stage]: { completedAt: new Date().toISOString(), disposition: "late_blocked" } },
+            },
+          },
+          expectedVersion: current.version,
+        });
+      }
+      return { disposition: lateBlockedStage || status !== "completed" ? "late_blocked" : "allowed", value: undefined };
+    },
   );
   const now = new Date().toISOString();
   return storage.runImmediateTransaction(() => {

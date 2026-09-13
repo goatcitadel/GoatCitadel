@@ -26,9 +26,20 @@ constexpr std::size_t kGcpaMaximumResponseFrameBytes =
 constexpr std::uint16_t kGcpaVersion = 1U;
 constexpr std::uint32_t kGcpaRequestId = 1U;
 constexpr std::uint64_t kGcpaRecognizedOpcodeBitmap =
-    UINT64_C(0x00070007001F0002);
+    UINT64_C(0x00070007003F0002);
 constexpr std::uint64_t kGcpaCallableOpcodeBitmap =
-    UINT64_C(0x00000000001D0002);
+    UINT64_C(0x00000000003D0002);
+constexpr std::uint64_t kGcpaRuntimeWorkerCallableOpcodeBitmap =
+    UINT64_C(0x0000000000300002);
+
+// NT SERVICE\GoatCitadelRemoteWorker. This principal can inspect the signer
+// service and use runtime signing, but cannot control either service.
+constexpr std::array<std::uint32_t, 6U> kRuntimeWorkerSidParts = {
+    80U, UINT32_C(1804173726), UINT32_C(3601835665),
+    UINT32_C(1843708740), UINT32_C(3959121232), UINT32_C(3866049905),
+};
+constexpr DWORD kRuntimeWorkerSignerQueryMask =
+    SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL;
 
 constexpr wchar_t kProvisionerTransportServiceName[] =
     L"GoatCitadelRemoteWorkerProvisioner";
@@ -73,6 +84,25 @@ struct TokenProjection final {
   std::uint32_t administrators_sid_attributes = 0U;
   bool has_restricted_sids = false;
 };
+
+enum class ProtectedCallerRole : std::uint8_t {
+  Refused,
+  InteractiveOperator,
+  RuntimeWorker,
+};
+
+// Classification is applied to OS-collected facts only. It does not replace
+// process-image, token-type, group/privilege, pipe, or LSA logon authentication.
+ProtectedCallerRole ClassifyProtectedCaller(const TokenProjection& token) noexcept;
+std::uint64_t ProtectedCallerCallableOpcodes(ProtectedCallerRole role) noexcept;
+bool IsProtectedCallerOperationAllowed(ProtectedCallerRole role, std::uint8_t opcode) noexcept;
+
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+bool CaptureProtectedCallerForTest(HANDLE token, TokenProjection* output) noexcept;
+bool BuildProtectedPipeSecurityForTest(SECURITY_ATTRIBUTES* attributes,
+    SECURITY_DESCRIPTOR* descriptor, std::array<std::uint8_t, 512U>* acl_storage) noexcept;
+HANDLE OpenProtectedClientPipeForTest(const wchar_t* name, std::uint32_t wait_ms) noexcept;
+#endif
 
 struct AuthenticatedRequestBindingInput final {
   const ImageProjection* service_image = nullptr;
@@ -146,6 +176,16 @@ bool DeriveRuntimePopV2OperationId(
     const Byte32& expected_state_sha256,
     std::uint64_t expected_generation,
     const Byte32& expected_keyset_receipt_sha256,
+    const std::uint8_t* canonical_preimage,
+    std::size_t canonical_preimage_length,
+    Byte16* output) noexcept;
+bool DeriveTlsClientCertificateVerifyOperationId(
+    const std::uint8_t* authenticated_caller_sid,
+    std::uint16_t authenticated_caller_sid_length,
+    const Byte32& expected_state_sha256,
+    std::uint64_t expected_generation,
+    const Byte32& expected_keyset_receipt_sha256,
+    const Byte32& expected_worker_public_key_spki_sha256,
     const std::uint8_t* canonical_preimage,
     std::size_t canonical_preimage_length,
     Byte16* output) noexcept;

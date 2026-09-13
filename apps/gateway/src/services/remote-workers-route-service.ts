@@ -1,6 +1,10 @@
 import { createHash, createPublicKey, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   NotFoundError,
+  ConflictError,
+  normalizeRemoteWorkerAssignmentRuntime,
+  type RemoteWorkerAssignmentRuntime,
+  type RemoteWorkerRuntimeReadKey,
   REMOTE_WORKER_ASSIGNMENT_CURSOR_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_DEFAULT_LIMIT,
   REMOTE_WORKER_ASSIGNMENT_EVENT_DEFAULT_LIMIT,
@@ -62,6 +66,7 @@ import type {
   RemoteWorkerRegistryRecord,
 } from "@goatcitadel/storage";
 import type { RemoteWorkerManifestVerifierPort } from "./remote-worker-manifest-verifier.js";
+import { RemoteWorkerBudgetOperatorService, type RemoteWorkerBudgetOperatorStore } from "./remote-worker-budget-operator-service.js";
 import type {
   RemoteWorkerMeshNodeJoinAuthorityService,
   IssueRemoteWorkerMeshNodeJoinAuthorityInput,
@@ -137,6 +142,7 @@ export interface RemoteWorkerOperatorAuditPort {
 }
 
 export interface RemoteWorkerOperatorControlDependencies {
+  readonly budgets?: RemoteWorkerBudgetOperatorStore;
   readonly admissions: RemoteWorkerAdmissionMutationStore;
   readonly audit: RemoteWorkerOperatorAuditPort;
   readonly manifestVerifier: RemoteWorkerManifestVerifierPort;
@@ -244,13 +250,44 @@ export class RemoteWorkerOperatorControlUnavailableError extends Error {
   }
 }
 
+export interface RemoteWorkerRuntimeReadStore {
+  findAssignmentRuntime(key: RemoteWorkerRuntimeReadKey): Promise<RemoteWorkerAssignmentRuntime | undefined>;
+}
+
+export class RemoteWorkerRuntimeReadUnavailableError extends Error {
+  public constructor() {
+    super("Remote worker runtime reads are unavailable.");
+    this.name = "RemoteWorkerRuntimeReadUnavailableError";
+  }
+}
+
 export class RemoteWorkersRouteService {
   public constructor(
     private readonly registry: RemoteWorkerRegistryStore,
     private readonly assignments: RemoteWorkerAssignmentStore,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly operatorControl?: RemoteWorkerOperatorControlDependencies,
+    private readonly runtimeReads?: RemoteWorkerRuntimeReadStore,
   ) {}
+
+  public async getAssignmentRuntime(input: { workspaceId: string; assignmentId: string }): Promise<RemoteWorkerAssignmentRuntime> {
+    const registryWorkspaceId = inputIdentifier(input.workspaceId);
+    const assignmentId = inputIdentifier(input.assignmentId);
+    if (!this.runtimeReads) throw new RemoteWorkerRuntimeReadUnavailableError();
+    const record = await this.runtimeReads.findAssignmentRuntime({ registryWorkspaceId, assignmentId });
+    if (!record) throw new NotFoundError({ entity: "Remote worker assignment", id: assignmentId });
+    const projection = normalizeRemoteWorkerAssignmentRuntime(record);
+    if (projection.workspaceId !== registryWorkspaceId || projection.assignmentId !== assignmentId) {
+      throw new ConflictError({ message: "Remote worker runtime scope changed. Refresh the assignment." });
+    }
+    return projection;
+  }
+
+  public get budgetOperator(): RemoteWorkerBudgetOperatorService {
+    const control = this.requireOperatorControl();
+    if (!control.budgets) throw new RemoteWorkerOperatorControlUnavailableError();
+    return new RemoteWorkerBudgetOperatorService(control.budgets, this.registry, control.audit);
+  }
 
   public async issueBootstrap(input: IssueRemoteWorkerBootstrapInput): Promise<RemoteWorkerBootstrapIssuance> {
     const control = this.requireOperatorControl();

@@ -128,7 +128,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "projects",
     href: "/projects",
-    readySelector: ".mc-next-project-card.is-selected",
+    readySelector: ".mc-next-project-thread-groups",
     expectedArea: "projects",
     expectedSection: "root",
     fixtureProjectKey: "primary",
@@ -161,7 +161,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "library-memory",
     href: "/library/memory",
-    readyText: "Mission Control Next shell posture",
+    readyText: "Memory items",
     expectedArea: "library",
     expectedSection: "memory",
     interaction: "open-inspector",
@@ -233,7 +233,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "library-citadel",
     href: "/library/citadel",
-    readyText: "Setup questions",
+    readyText: "Citadel setup",
     expectedArea: "library",
     expectedSection: "citadel",
     interaction: "open-inspector",
@@ -354,7 +354,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "ops-runtime",
     href: "/ops/runtime",
-    readyText: "Runtime authority map",
+    readyText: "Services",
     expectedArea: "ops",
     expectedSection: "runtime",
     interaction: "open-inspector",
@@ -426,7 +426,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "settings-trust-policy",
     href: "/settings/trust-policy",
-    readyText: "Trust & Policy snapshot",
+    readyText: "Trust & Policy",
     expectedArea: "settings",
     expectedSection: "trust-policy",
     interaction: "open-inspector",
@@ -506,7 +506,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "settings-hooks",
     href: "/settings/hooks",
-    readyText: "Governed hooks",
+    readyText: "Hooks",
     expectedArea: "settings",
     expectedSection: "hooks",
     interaction: "open-inspector",

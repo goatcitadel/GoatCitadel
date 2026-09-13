@@ -63,6 +63,10 @@ export interface AppRoute {
   mode?: ChatMode; // unified-surface conversation mode (chat area only)
   section?: CoworkSection | LibrarySection | OpsSection | SettingsSection;
   view?: string;
+  category?: string;
+  evidence?: string;
+  includeGlobal?: string;
+  eventId?: string;
   sessionId?: string;
   turnId?: string;
   runId?: string;
@@ -287,14 +291,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   library: [
     {
       id: "library-citadel-overview",
-      label: "Overview",
+      label: "Citadel overview",
       description: "See the active Citadel Charter, Chambers, and Gatehouse posture.",
       area: "library",
       section: "citadel-overview",
     },
     {
       id: "library-citadel",
-      label: "Mason",
+      label: "Citadel setup",
       description: "Stage Personal or Company Citadels before connecting accounts or opening Gates.",
       area: "library",
       section: "citadel",
@@ -399,14 +403,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "library-prompt-packs",
-      label: "Prompt Packs",
+      label: "Prompt packs",
       description: "Author, export, benchmark, review prompt packs, and inspect model comparisons.",
       area: "library",
       section: "prompt-packs",
     },
     {
       id: "library-curator",
-      label: "Skill Curator",
+      label: "Skill curator",
       description: "Review ranked skill health, immunity flags, and archive proposals.",
       area: "library",
       section: "curator",
@@ -415,7 +419,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ops: [
     {
       id: "ops-boards",
-      label: "Boards",
+      label: "Saved boards",
       description: "Trusted saved layouts composed from canonical Ops summaries.",
       area: "ops",
       section: "boards",
@@ -443,7 +447,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "ops-workers",
-      label: "Workers",
+      label: "Remote workers",
       description: "Operator-visible remote-worker registry, assignments, events, and reconciliation.",
       area: "ops",
       section: "workers",
@@ -515,14 +519,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-onboarding",
-      label: "Start Here",
+      label: "Get started",
       description: "Try a safe demo or connect a model. Everything else is optional.",
       area: "settings",
       section: "onboarding",
     },
     {
       id: "settings-providers",
-      label: "Providers & Models",
+      label: "Providers & models",
       description: "Provider credentials, model catalogs, and active routing defaults.",
       area: "settings",
       section: "providers",
@@ -536,7 +540,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-access",
-      label: "Access",
+      label: "Access & devices",
       description: "Auth posture, secrets, and access boundaries.",
       area: "settings",
       section: "access",
@@ -550,14 +554,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-trust-policy",
-      label: "Trust & Policy",
+      label: "Trust & policy",
       description: "Unified dashboard for capability, tool, and source trust posture.",
       area: "settings",
       section: "trust-policy",
     },
     {
       id: "settings-runtime",
-      label: "Runtime",
+      label: "Runtime configuration",
       description: "Mesh, local runtimes, backups, and serving posture.",
       area: "settings",
       section: "runtime",
@@ -592,7 +596,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-mcp",
-      label: "MCP",
+      label: "MCP servers",
       description: "MCP server posture, templates, and transport configuration.",
       area: "settings",
       section: "mcp",
@@ -613,14 +617,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-addons",
-      label: "Add-ons",
+      label: "Add-ons & packs",
       description: "Installed extensions and workspace add-on posture.",
       area: "settings",
       section: "addons",
     },
     {
       id: "settings-budget",
-      label: "Budget",
+      label: "Budgets",
       description: "Set budget mode and review cost evidence.",
       area: "settings",
       section: "budget",
@@ -697,61 +701,35 @@ export interface RailGroup {
  * grouped so operators can find them without command search.
  */
 export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
-  settings: [
-    {
-      id: "settings-foundations",
-      label: "Foundations",
-      sections: ["general", "onboarding", "workspaces", "workspace-capabilities"],
-    },
-    {
-      id: "settings-identity",
-      label: "Identity",
-      sections: [
-        "access",
-        "permissions",
-        "personalities",
-        "providers",
-        "local-ai",
-        "trust-policy",
-        "citadel-capabilities",
-      ],
-    },
-    { id: "settings-surfaces", label: "Surfaces", sections: ["channels", "integrations", "mcp", "tools", "hooks"] },
-    { id: "settings-operations", label: "Operations", sections: ["runtime", "addons", "budget"] },
-  ],
-  library: [
-    {
-      id: "library-citadels",
-      label: "Citadels",
-      sections: [
-        "citadel-overview",
-        "citadel",
-        "citadel-wards",
-        "citadel-council",
-        "citadel-vault",
-        "citadel-blueprint",
-      ],
-    },
-    {
-      id: "library-knowledge",
-      label: "Knowledge",
-      sections: ["agents", "skills", "capabilities", "memory", "journey", "knowledge", "notes"],
-    },
-    {
-      id: "library-assets",
-      label: "Assets",
-      sections: ["files", "artifacts", "communications", "prompt-packs", "curator"],
-    },
-  ],
-  ops: [
-    { id: "ops-observe", label: "Observe", sections: ["boards", "activity", "sessions", "schedules", "workers"] },
-    {
-      id: "ops-control",
-      label: "Operate",
-      sections: ["improvement", "notifications", "approvals", "costs", "quality", "runtime", "diagnostics", "kanban"],
-    },
-  ],
+ settings: [
+ { id: "settings-preferences", label: "Preferences", sections: ["general", "personalities"] },
+ { id: "settings-connections", label: "Connections", sections: ["onboarding", "providers", "local-ai", "integrations", "channels", "mcp", "addons"] },
+ { id: "settings-security", label: "Security", sections: ["access", "permissions", "trust-policy", "tools", "budget"] },
+ { id: "settings-workspace", label: "Workspace & Citadel", sections: ["workspaces", "citadel-overview", "citadel", "citadel-wards", "citadel-council", "citadel-vault", "citadel-blueprint", "workspace-capabilities", "citadel-capabilities"] },
+ { id: "settings-advanced", label: "Advanced", sections: ["runtime", "hooks"] },
+ ],
+ library: [
+ { id: "library-agents", label: "Agents & skills", sections: ["agents", "skills", "capabilities", "prompt-packs", "curator"] },
+ { id: "library-knowledge", label: "Knowledge", sections: ["memory", "knowledge", "notes", "journey"] },
+ { id: "library-assets", label: "Files & outputs", sections: ["files", "artifacts", "communications"] },
+ ],
+ ops: [
+ { id: "ops-overview", label: "Overview", sections: ["boards"] },
+ { id: "ops-monitor", label: "Monitor", sections: ["activity", "sessions", "notifications", "costs", "runtime", "diagnostics", "workers"] },
+ { id: "ops-decisions", label: "Decisions", sections: ["approvals"] },
+ { id: "ops-automations", label: "Automations", sections: ["schedules", "kanban"] },
+ { id: "ops-quality", label: "Quality", sections: ["quality", "improvement"] },
+ ],
 };
+
+/** Navigation ownership can change while old public paths remain canonical. */
+export function navigationAreaForRoute(route: Pick<AppRoute, "area" | "section">): PrimaryArea {
+  return route.area === "library" && route.section?.startsWith("citadel") ? "settings" : route.area;
+}
+export function navigationRailItems(area: PrimaryArea): RailItem[] {
+  if (area === "settings") return [...RAIL_ITEMS.settings, ...RAIL_ITEMS.library.filter((item) => navigationAreaForRoute(item) === "settings")];
+  return RAIL_ITEMS[area].filter((item) => navigationAreaForRoute(item) === area);
+}
 
 /** The rail group a section belongs to, or undefined when ungrouped. */
 export function railGroupForSection(area: PrimaryArea, section: AppRoute["section"]): RailGroup | undefined {
@@ -769,7 +747,8 @@ export function railGroupForSection(area: PrimaryArea, section: AppRoute["sectio
  */
 export function routeKicker(route: AppRoute): string {
   const normalized = normalizeAppRoute(route);
-  const areaLabel = AREA_META[normalized.area].label;
+  const navigationArea = navigationAreaForRoute(normalized);
+  const areaLabel = AREA_META[navigationArea].label;
   const section = normalized.section;
   if (!section) {
     return areaLabel;
@@ -778,7 +757,7 @@ export function routeKicker(route: AppRoute): string {
   if (!sectionLabel) {
     return areaLabel;
   }
-  const group = railGroupForSection(normalized.area, section);
+  const group = railGroupForSection(navigationArea, section);
   // Collapse to "Area · Section" when the section's name equals its group's (e.g.
   // the Knowledge section inside the Knowledge group) to avoid a redundant
   // "Library · Knowledge · Knowledge".
@@ -1271,6 +1250,7 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
     projectId: route.projectId,
     theme: route.theme,
     view: route.view,
+    ...(route.area === "library" && route.section === "journey" ? { category: route.category, evidence: route.evidence, includeGlobal: route.includeGlobal, eventId: route.eventId } : {}),
   };
 
   if (route.area === "library") {
@@ -1330,6 +1310,10 @@ export function parseAppRoute(input: string | URL): AppRoute {
         : readParam(params, "projectId"),
     theme: readParam(params, "theme"),
     view: readParam(params, "view"),
+    category: readParam(params, "category"),
+    evidence: readParam(params, "evidence"),
+    includeGlobal: readParam(params, "includeGlobal"),
+    eventId: readParam(params, "eventId"),
   });
   return nextRoute;
 }
@@ -1346,6 +1330,12 @@ export function buildAppHref(route: AppRoute): string {
     writeParam(params, "projectId", next.projectId);
   }
   writeParam(params, "view", next.view);
+  if (next.area === "library" && next.section === "journey") {
+    writeParam(params, "category", next.category);
+    writeParam(params, "evidence", next.evidence);
+    writeParam(params, "includeGlobal", next.includeGlobal);
+    writeParam(params, "eventId", next.eventId);
+  }
   // theme is a global localStorage preference, not per-URL state (see 819ef761f); do not serialize it into hrefs.
   // Chat is the only operator conversation surface; legacy mode params are not serialized.
 

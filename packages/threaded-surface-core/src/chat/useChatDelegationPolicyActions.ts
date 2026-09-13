@@ -19,6 +19,7 @@ import type {
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
+import { WORKFLOW_SKILL_CAPTURE_MARKER } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   ApiRequestError,
@@ -75,6 +76,7 @@ const CODE_DELEGATION_PRESETS = {
 } as const;
 
 function shouldRecommendSubagents(objective: string, surfaceMode: ChatMode): boolean {
+  if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) return false;
   const normalized = objective.toLowerCase();
   const complexitySignals = [
     /\bimplement\b|\brefactor\b|\bfix\b|\bdebug\b|\btest\b|\breview\b/,
@@ -725,6 +727,10 @@ export function useChatDelegationPolicyActions(input: {
       "";
     if (!objective) {
       setError("Write a request first so I can suggest a delegation plan.");
+      return;
+    }
+    if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
+      setError("Skill capture drafts instructions in one Chat turn. Send the prepared request to continue.");
       return;
     }
     setSending(true);

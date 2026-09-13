@@ -30,6 +30,44 @@ function createRepo(): { db: DatabaseClient; repo: SystemSettingsRepository } {
 }
 
 describe("SystemSettingsRepository", () => {
+  it("compare-and-set rejects stale values, revisions, keys and competing initial creation", () => {
+    const { db, repo } = createRepo();
+    try {
+      const first = repo.compareAndSet("mcp", undefined, { binding: "first" }, "2026-09-11T00:00:00.000Z");
+      assert.ok(first);
+      assert.equal(repo.compareAndSet("mcp", undefined, { binding: "competing" }), undefined);
+      const second = repo.compareAndSet("mcp", first, { binding: "second" }, first.updatedAt);
+      assert.ok(second);
+      assert.equal(repo.compareAndSet("mcp", first, { binding: "stale" }), undefined);
+      assert.equal(repo.compareAndSet("mcp", { ...second, updatedAt: "stale" }, { binding: "stale" }), undefined);
+      assert.throws(() => repo.compareAndSet("other", second, {}), /different key/);
+      assert.equal(repo.get("other"), undefined);
+      assert.deepEqual(repo.get("mcp"), second);
+      assert.equal(repo.compareAndSet("missing", { ...second, key: "missing" }, {}), undefined);
+      assert.equal(repo.get("missing"), undefined);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("compare-and-set remains inside an enclosing transaction rollback", () => {
+    const { db, repo } = createRepo();
+    try {
+      const original = repo.set("mcp", ["original"]);
+      assert.throws(
+        () =>
+          db.transaction("immediate", () => {
+            assert.ok(repo.compareAndSet("mcp", original, ["replacement"]));
+            throw new Error("rollback fixture");
+          }),
+        /rollback fixture/,
+      );
+      assert.deepEqual(repo.get("mcp"), original);
+    } finally {
+      db.close();
+    }
+  });
+
   it("sets, updates, reads missing rows, and falls back for malformed JSON", () => {
     const { db, repo } = createRepo();
 
@@ -59,6 +97,7 @@ describe("SystemSettingsRepository", () => {
     const repo = new SystemSettingsRepository(new MissingReadbackDatabase());
 
     assert.throws(() => repo.set("provider.default", "openai", "2026-05-12T00:00:00.000Z"), /Failed to persist/);
+    assert.throws(() => repo.compareAndSet("provider.default", undefined, "openai"), /Failed to persist/);
   });
 
   it("atomically advances and resets a cyclic counter", () => {

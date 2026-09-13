@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash, createPrivateKey, generateKeyPairSync, sign, X509Certificate } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
-import { connect as netConnect } from "node:net";
+import { connect as netConnect, createServer as createNetServer } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -549,7 +549,15 @@ describe("remote worker native TLS listener", () => {
         expect(Object.getPrototypeOf(requestValue)).toBeNull();
         expect(Object.isFrozen(requestValue.headers)).toBe(true);
         expect(Object.getPrototypeOf(requestValue.headers)).toBeNull();
-        expect(Object.keys(requestValue)).toEqual(["method", "rawPath", "headers", "bodyBytes", "transportIdentity"]);
+        expect(Object.keys(requestValue)).toEqual([
+          "method",
+          "rawPath",
+          "headers",
+          "bodyBytes",
+          "transportIdentity",
+          "signal",
+        ]);
+        expect(requestValue.signal?.aborted).toBe(false);
         expect(requestValue.method).toBe("POST");
         expect(requestValue.rawPath).toBe("/remote-worker/live");
         expect(requestValue.headers["content-type"]).toBe("application/json");
@@ -980,6 +988,45 @@ describe("remote worker native TLS listener", () => {
   );
 
   it.runIf(process.platform === "win32")(
+    "allows an authenticated response beyond the handshake deadline",
+    async () => {
+      const handle = await startRemoteWorkerNativeTlsListener(await config(), async (incoming) => {
+        await new Promise((resolve) => setTimeout(resolve, 5_250));
+        expect(incoming.signal?.aborted).toBe(false);
+        return { statusCode: 200, body: Buffer.from('{"completed":true}') };
+      });
+      openHandles.push(handle);
+      const result = await request(portOf(handle.address));
+      expect(result).toMatchObject({ status: 200, body: '{"completed":true}' });
+    },
+    90_000,
+  );
+
+  it.runIf(process.platform === "win32")(
+    "closes a raw connection that never completes its TLS handshake",
+    async () => {
+      const handle = await startRemoteWorkerNativeTlsListener(await config());
+      openHandles.push(handle);
+      const started = performance.now();
+      await new Promise<void>((resolve, reject) => {
+        const socket = netConnect({ host: "127.0.0.1", port: portOf(handle.address) });
+        const guard = setTimeout(() => {
+          socket.destroy();
+          reject(new Error("TLS handshake deadline was not enforced."));
+        }, 8_000);
+        socket.resume();
+        socket.once("error", reject);
+        socket.once("close", () => {
+          clearTimeout(guard);
+          resolve();
+        });
+      });
+      expect(performance.now() - started).toBeLessThan(7_500);
+    },
+    90_000,
+  );
+
+  it.runIf(process.platform === "win32")(
     "enforces an absolute header deadline even while a mutually authenticated client trickles bytes",
     async () => {
       const handle = await startRemoteWorkerNativeTlsListener(await config());
@@ -1003,9 +1050,44 @@ describe("remote worker native TLS listener", () => {
       } catch (error) {
         caught = error;
       }
+      expect(caught).toMatchObject({ startupStage: "trust_material", startupReason: "unavailable" });
       expect(String(caught)).toContain("listener is unavailable");
       expect(String(caught)).not.toContain(secretPath);
       expect(JSON.stringify(caught)).not.toContain("PRIVATE KEY");
+    },
+    60_000,
+  );
+
+  it.runIf(process.platform === "win32")(
+    "identifies an occupied port without closing the existing listener or exposing its address",
+    async () => {
+      const occupied = createNetServer();
+      await new Promise<void>((resolve, reject) => {
+        occupied.once("error", reject);
+        occupied.listen({ host: "127.0.0.1", port: 0, exclusive: true }, resolve);
+      });
+      try {
+        const address = occupied.address();
+        if (address === null || typeof address === "string") throw new Error("Missing owned test port.");
+        const value = { ...(await config()), port: address.port };
+        let caught: unknown;
+        try {
+          await startRemoteWorkerNativeTlsListener(value);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toMatchObject({
+          code: "REMOTE_WORKER_NATIVE_TLS_LISTENER_UNAVAILABLE",
+          startupStage: "bind",
+          startupReason: "address_in_use",
+        });
+        expect(String(caught)).toContain("bind: address_in_use");
+        expect(JSON.stringify(caught)).not.toContain("127.0.0.1");
+        expect(JSON.stringify(caught)).not.toContain(String(address.port));
+        expect(occupied.listening).toBe(true);
+      } finally {
+        await new Promise<void>((resolve, reject) => occupied.close((error) => (error ? reject(error) : resolve())));
+      }
     },
     60_000,
   );

@@ -178,6 +178,14 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           attempts: 1,
           maxAttempts: 1,
         },
+        {
+          deliveryId: "delivery-5",
+          channelKey: "telegram",
+          target: "test-chat",
+          status: "waiting_approval",
+          attempts: 1,
+          maxAttempts: 3,
+        },
       ],
     });
   });
@@ -219,6 +227,7 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("Provider rejected message.");
     expect(rendered).toContain("webhook");
     expect(rendered).toContain("cancelled");
+    expect(rendered).toContain("waiting for approval");
   });
 
   it("renders empty loading groups and surfaces load failures", async () => {

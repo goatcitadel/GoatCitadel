@@ -278,10 +278,12 @@ export class ModelUsageDispatchReservation {
   }
 
   /** Remove an intent when fetch throws synchronously before accepting transport. */
-  public async abandon(): Promise<void> {
+  public async abandon(options: { retainNoDispatchEvidence?: boolean } = {}): Promise<void> {
     if (this.settled) return;
     try {
-      if (!(await this.repository.abandonTransportIntent(this.eventId, this.dispatchOwnerId))) {
+      if (options.retainNoDispatchEvidence) {
+        await this.repository.confirmTransportNotStarted(this.eventId, this.dispatchOwnerId, new Date().toISOString());
+      } else if (!(await this.repository.abandonTransportIntent(this.eventId, this.dispatchOwnerId))) {
         throw new Error("Model usage dispatch intent could not be abandoned");
       }
     } catch (cause) {

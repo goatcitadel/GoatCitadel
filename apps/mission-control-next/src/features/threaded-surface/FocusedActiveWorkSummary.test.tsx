@@ -4,6 +4,19 @@ import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { FocusedActiveWorkSummary, deriveFocusedActiveWorkState } from "./FocusedActiveWorkSummary";
 
 describe("FocusedActiveWorkSummary", () => {
+  it.each([undefined, "approval-focused"])("opens the approval without forwarding the click event (%s)", (approvalId) => {
+    const onOpenApprovals = vi.fn();
+    const state = deriveFocusedActiveWorkState({
+      turn: null, streamStatus: "idle", pendingApproval: { approvalId, reason: "Review this action." },
+    });
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<FocusedActiveWorkSummary state={state}
+      onFocusComposer={vi.fn()} onOpenActivity={vi.fn()} onOpenApprovals={onOpenApprovals}
+      onRetry={vi.fn()} onStop={vi.fn()} />); });
+    act(() => { findButton(renderer, "Review approval").props.onClick({ type: "click", currentTarget: {} }); });
+    expect(onOpenApprovals.mock.calls).toEqual([approvalId ? [approvalId] : []]);
+    act(() => renderer.unmount());
+  });
   it("turns a missing project folder into a human-first recovery path", () => {
     const state = deriveFocusedActiveWorkState({
       turn: failedFolderTurn(),

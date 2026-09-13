@@ -83,6 +83,8 @@ export class WorkerCellContainerSpecError extends Error {
 /** Build the hardened, deterministic container run-spec from the server-owned profile. */
 export function buildRemoteWorkerCellContainerSpec(input: WorkerCellContainerSpecInput): WorkerCellContainerSpec {
   const identity = input.platformIdentity;
+  if (identity.backend !== "container")
+    throw new WorkerCellContainerSpecError("Container execution requires a container identity.");
   const mounts: WorkerCellContainerMount[] = [
     {
       source: input.rootVolumeSource,

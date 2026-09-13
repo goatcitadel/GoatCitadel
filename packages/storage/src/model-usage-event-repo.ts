@@ -20,6 +20,12 @@ import type {
   ModelUsageTransportStatus,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import {
+  MODEL_USAGE_NO_DISPATCH_REASON,
+  isModelUsageProvenNotDispatched,
+  modelUsageNoDispatchEvidence,
+  normalizeRemoteWorkerRuntimeReadKey,
+} from "@goatcitadel/contracts";
 
 export interface BeginModelUsageAttemptInput {
   eventId: string;
@@ -528,6 +534,42 @@ export class ModelUsageEventRepository {
     );
   }
 
+  /** Called only by the provider owner before invoking fetch. Retains the intent
+   * and its exact no-dispatch evidence atomically; accepted transports cannot use it. */
+  public confirmTransportNotStarted(eventId: string, dispatchOwnerId: string, now: string): ModelUsageEventRecord {
+    const identity = {
+      eventId: requireBoundedText(eventId, "eventId"),
+      dispatchOwnerId: requireBoundedText(dispatchOwnerId, "dispatchOwnerId"),
+    };
+    const finishedAt = requireCanonicalIso(now, "now");
+    return this.db.transaction("immediate", () => {
+      const current = this.findByEventIdForUpdate(identity.eventId);
+      if (!current || current.dispatchOwnerId !== identity.dispatchOwnerId ||
+          (current.source !== "llm_service" && current.source !== "embedding_runtime"))
+        throw new Error("Model usage no-dispatch evidence has no matching owner.");
+      if (isModelUsageProvenNotDispatched(current)) return current;
+      const changed = this.db
+        .prepare(
+          `UPDATE model_usage_events
+        SET transport_status = 'dispatch_unknown', dispatch_uncertain_at = @finishedAt,
+          dispatch_uncertainty_reason = @reason, dispatch_reconciled_at = @finishedAt,
+          dispatch_reconciled_by = @dispatchOwnerId, dispatch_reconciliation = 'confirmed_not_dispatched',
+          dispatch_reconciliation_evidence = @evidence, terminal_outcome = 'failed_before_usage',
+          finished_at = @finishedAt
+        WHERE event_id = @eventId AND dispatch_owner_id = @dispatchOwnerId
+          AND source IN ('llm_service', 'embedding_runtime') AND transport_status = 'intent' AND terminal_outcome = 'in_flight'`,
+        )
+        .run({
+          ...identity,
+          finishedAt,
+          reason: MODEL_USAGE_NO_DISPATCH_REASON,
+          evidence: modelUsageNoDispatchEvidence(current),
+        }).changes;
+      if (changed !== 1) throw new Error("Model usage no-dispatch evidence lost transport ownership.");
+      return this.findByEventId(identity.eventId)!;
+    });
+  }
+
   public markDispatchUnknown(
     eventId: string,
     dispatchOwnerId: string,
@@ -686,6 +728,18 @@ export class ModelUsageEventRepository {
     return row ? mapRow(row) : undefined;
   }
 
+  /** Complete, bounded attempt inventory including undispatched intents and uncertain sends. */
+  public listOperationAttemptsForUpdate(operationId: string, dispatchGeneration: string): ModelUsageEventRecord[] {
+    return this.db
+      .prepare(
+        `SELECT ${SELECT_COLUMNS} FROM model_usage_events
+      WHERE operation_id = ? AND dispatch_generation = ?
+      ORDER BY transport_attempt_index, event_id LIMIT 65${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+      )
+      .all<ModelUsageEventRow>(operationId, dispatchGeneration)
+      .map(mapRow);
+  }
+
   public list(query: ModelUsageEventListQuery = {}): ModelUsageEventListResponse {
     const limit = Math.max(1, Math.min(200, Math.floor(query.limit ?? 50)));
     const cursor = parseCursor(query.cursor);
@@ -705,7 +759,44 @@ export class ModelUsageEventRepository {
       .all<ModelUsageEventRow>(params);
     const hasNext = rows.length > limit;
     const items = rows.slice(0, limit).map(mapRow);
-    const summaryRow = this.db
+    const summary = ModelUsageEventRepository.summarizeWhere(this.db, buildWhereClause({ includeCursor: false }), {
+      workspaceId: params.workspaceId,
+      sessionId: params.sessionId,
+      turnId: params.turnId,
+      durableRunId: params.durableRunId,
+      taskId: params.taskId,
+      assemblyRunId: params.assemblyRunId,
+      from: params.from,
+      to: params.to,
+      availability: params.availability,
+    });
+    const last = items.at(-1);
+    return { items, summary, ...(hasNext && last ? { nextCursor: encodeCursor(last.startedAt, last.eventId) } : {}) };
+  }
+
+  /** Read-only attribution through exact canonical request/dispatch references.
+   * UNION prevents counting the same network attempt through multiple owners. */
+  public static summarizeRemoteWorkerAssignment(db: DatabaseClient, registryWorkspaceId: string, assignmentId: string, assignmentGeneration: number): ModelUsageSummary {
+    const key = normalizeRemoteWorkerRuntimeReadKey({ registryWorkspaceId, assignmentId });
+    if (!Number.isSafeInteger(assignmentGeneration) || assignmentGeneration < 1) throw new TypeError("Remote worker assignment generation is invalid.");
+    const scope = "i.registry_workspace_id = @registryWorkspaceId AND i.assignment_id = @assignmentId AND i.assignment_generation = @assignmentGeneration";
+    return ModelUsageEventRepository.summarizeWhere(db, `event_id IN (
+      SELECT u.event_id FROM remote_worker_inference_requests i
+        JOIN model_usage_events u ON u.operation_id = i.operation_id AND u.dispatch_generation = i.dispatch_generation
+        WHERE ${scope}
+      UNION
+      SELECT d.usage_event_id FROM remote_worker_inference_requests i
+        JOIN remote_worker_budget_reservations r ON r.operation_id = i.operation_id AND r.dispatch_generation = i.dispatch_generation
+        JOIN remote_worker_budget_dispatches d ON d.parent_reservation_id = r.reservation_id
+        WHERE ${scope}
+      UNION
+      SELECT usage_event_id FROM remote_worker_tool_budget_dispatches
+        WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId AND assignment_generation = @assignmentGeneration
+    )`, { ...key, assignmentGeneration });
+  }
+
+  private static summarizeWhere(db: DatabaseClient, where: string, params: Record<string, unknown>): ModelUsageSummary {
+    const summaryRow = db
       .prepare(
         `
         SELECT
@@ -735,26 +826,11 @@ export class ModelUsageEventRepository {
                 AND (dispatch_reconciliation IS NULL OR dispatch_reconciliation <> 'confirmed_not_dispatched'))
             ) THEN 1 ELSE 0 END) AS cost_known_count
         FROM model_usage_events
-        WHERE ${buildWhereClause({ includeCursor: false })}
+        WHERE ${where}
       `,
       )
-      .get<Record<string, number | string | null>>({
-        workspaceId: params.workspaceId,
-        sessionId: params.sessionId,
-        turnId: params.turnId,
-        durableRunId: params.durableRunId,
-        taskId: params.taskId,
-        assemblyRunId: params.assemblyRunId,
-        from: params.from,
-        to: params.to,
-        availability: params.availability,
-      });
-    const last = items.at(-1);
-    return {
-      items,
-      summary: mapSummary(summaryRow),
-      ...(hasNext && last ? { nextCursor: encodeCursor(last.startedAt, last.eventId) } : {}),
-    };
+      .get<Record<string, number | string | null>>(params);
+    return mapSummary(summaryRow);
   }
 
   /**

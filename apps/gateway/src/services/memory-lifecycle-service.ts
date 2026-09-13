@@ -1,3 +1,4 @@
+import { detectNearDuplicateMemoryItems, detectRetrievalGaps, calculateLexicalOverlap, resolveBenchmarkRetrievalStrategy, buildMemoryBenchmarkCoverageNote } from "./memory-retrieval-quality.js";
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -33,6 +34,8 @@ import type {
   MemoryForgetRequest,
   MemoryForgetResponse,
   MemoryItemRecord,
+  MemoryItemListPage,
+  MemoryItemListQuery,
   MemoryLearningInput,
   MemoryLearningRecord,
   MemoryLearningStalenessIssue,
@@ -41,7 +44,9 @@ import type {
   MemoryLearningType,
   ModelUsageAttributionContext,
   MemoryLifecyclePatch,
-  MemoryMaintenancePolicyPatchInput,
+  MemoryMaintenancePolicyUpdateInput,
+  MemoryMaintenanceRecommendationAcceptInput,
+  MemoryMaintenanceRecommendationDecisionInput,
   MemoryMaintenancePolicyRecord,
   MemoryMaintenanceProvenanceRecord,
   MemoryMaintenanceRecommendationRecord,
@@ -101,9 +106,11 @@ import { buildMemoryWorkspaceScopeSql } from "@goatcitadel/storage";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
 import { MemoryContextService } from "./memory-context-service.js";
+import type { TrustedUtilityModelUsageLineage } from "./utility-model-usage-attribution.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
 import { withMemoryEmbeddingMetadata, type MemoryEmbeddingRuntimeOptions } from "./memory-embedding-metadata.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
+import { MemoryItemPaginationService } from "./memory-item-pagination-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { buildMemoryActionLedgerEntry } from "./memory-action-ledger.js";
@@ -227,6 +234,7 @@ interface MemoryForgetSelectionRow {
 interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
   gatewaySql: AsyncGatewaySqlRepository;
   memoryQualityIssues: Pick<AsyncStorage["memoryQualityIssues"], "list" | "upsertOpenIssue" | "patchStatus">;
+  memoryItemEnumeration?: Pick<AsyncStorage["memoryItemEnumeration"], "listPage">;
   requireFeatureEnabled(flag: string): void | Promise<void>;
   publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): Promise<unknown>;
 }
@@ -276,7 +284,15 @@ export class MemoryLifecycleService {
   private governedLifecycleRepository?: MemoryGovernedLifecycleRepository;
   private maintenanceSystemAuthority?: MemoryMaintenanceSystemAuthority;
 
-  public constructor(private readonly deps: MemoryLifecycleDependencies) {}
+  private readonly itemPagination: MemoryItemPaginationService;
+
+  public constructor(private readonly deps: MemoryLifecycleDependencies) {
+    this.itemPagination = new MemoryItemPaginationService({
+      repository: deps.admin.memoryItemEnumeration,
+      mapRow: (row) => mapMemoryItemRow(deps.admin, row),
+      requireEnabled: () => deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled"),
+    });
+  }
 
   private getGovernedLifecycleRepository(): MemoryGovernedLifecycleRepository {
     this.governedLifecycleRepository ??= createMemoryGovernedLifecycleRepository(this.deps.admin.gatewaySql);
@@ -1576,6 +1592,10 @@ export class MemoryLifecycleService {
     return files;
   }
 
+  public listMemoryItemsPage(input: MemoryItemListQuery = {}): Promise<MemoryItemListPage> {
+    return this.itemPagination.list(input);
+  }
+
   public async listMemoryItems(
     input: {
       namespace?: string;
@@ -2720,8 +2740,8 @@ export class MemoryLifecycleService {
     }));
   }
 
-  public composeContext(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
-    return this.deps.context.compose(input);
+  public composeContext(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
+    return usageLineage ? this.deps.context.compose(input, usageLineage) : this.deps.context.compose(input);
   }
 
   public async prewarmContext(input: MemoryContextComposeRequest): Promise<void> {
@@ -3640,7 +3660,7 @@ export class MemoryLifecycleService {
 
   public patchMaintenancePolicy(
     workspaceId: string | undefined,
-    patch: MemoryMaintenancePolicyPatchInput,
+    patch: MemoryMaintenancePolicyUpdateInput,
   ): Promise<MemoryMaintenancePolicyRecord> {
     return this.deps.maintenance.patchPolicy(workspaceId, patch);
   }
@@ -3668,17 +3688,18 @@ export class MemoryLifecycleService {
     return this.deps.maintenance.listRecommendations(workspaceId, limit);
   }
 
-  public async acceptMaintenanceRecommendation(recommendationId: string): Promise<{
+  public async acceptMaintenanceRecommendation(recommendationId: string, input: MemoryMaintenanceRecommendationAcceptInput): Promise<{
     recommendation: MemoryMaintenanceRecommendationRecord;
     policy: MemoryMaintenancePolicyRecord;
   }> {
-    return this.deps.maintenance.acceptRecommendation(recommendationId);
+    return this.deps.maintenance.acceptRecommendation(recommendationId, input);
   }
 
   public async rejectMaintenanceRecommendation(
     recommendationId: string,
+    input: MemoryMaintenanceRecommendationDecisionInput,
   ): Promise<MemoryMaintenanceRecommendationRecord> {
-    return this.deps.maintenance.rejectRecommendation(recommendationId);
+    return this.deps.maintenance.rejectRecommendation(recommendationId, input);
   }
 
   public runDueEvaluation(): Promise<void> {
@@ -5067,96 +5088,6 @@ function mapLearningStalenessToQualitySeverity(
   return "medium";
 }
 
-interface NearDuplicateMemoryItems {
-  primary: MemoryItemRecord;
-  related: MemoryItemRecord[];
-  score: number;
-}
-
-function detectNearDuplicateMemoryItems(items: MemoryItemRecord[]): NearDuplicateMemoryItems[] {
-  const activeItems = items.filter((item) => item.status === "active").slice(0, 125);
-  const groups = new Map<string, NearDuplicateMemoryItems>();
-  for (let leftIndex = 0; leftIndex < activeItems.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < activeItems.length; rightIndex += 1) {
-      const left = activeItems[leftIndex];
-      const right = activeItems[rightIndex];
-      if (!left || !right) {
-        continue;
-      }
-      const score = calculateMemoryDuplicateScore(left, right);
-      if (score < 0.82) {
-        continue;
-      }
-      const primary = Date.parse(left.updatedAt) >= Date.parse(right.updatedAt) ? left : right;
-      const related = primary.itemId === left.itemId ? right : left;
-      const group = groups.get(primary.itemId) ?? { primary, related: [] as MemoryItemRecord[], score };
-      if (!group.related.some((item) => item.itemId === related.itemId)) {
-        group.related.push(related);
-      }
-      group.score = Math.max(group.score, score);
-      groups.set(primary.itemId, group);
-    }
-  }
-  return [...groups.values()].filter((group) => group.related.length > 0).slice(0, 25);
-}
-
-function calculateMemoryDuplicateScore(left: MemoryItemRecord, right: MemoryItemRecord): number {
-  const leftTitle = normalizeQualityText(left.title);
-  const rightTitle = normalizeQualityText(right.title);
-  const titleMatch = leftTitle.length >= 6 && leftTitle === rightTitle;
-  const leftContent = normalizeQualityText(left.content);
-  const rightContent = normalizeQualityText(right.content);
-  if (leftContent.length >= 80 && leftContent.slice(0, 240) === rightContent.slice(0, 240)) {
-    return 0.94;
-  }
-  const leftTerms = significantTerms(`${left.title} ${left.content}`);
-  const rightTerms = significantTerms(`${right.title} ${right.content}`);
-  const overlap = calculateSetOverlap(leftTerms, rightTerms);
-  if (titleMatch && overlap >= 0.5) {
-    return Number(Math.max(0.86, overlap).toFixed(3));
-  }
-  return Number(overlap.toFixed(3));
-}
-
-function calculateSetOverlap(left: Set<string>, right: Set<string>): number {
-  if (left.size === 0 || right.size === 0) {
-    return 0;
-  }
-  let intersections = 0;
-  for (const term of left) {
-    if (right.has(term)) {
-      intersections += 1;
-    }
-  }
-  return intersections / Math.min(left.size, right.size);
-}
-
-interface RetrievalGapIssueGroup {
-  targetKind: MemoryFeedbackTargetKind;
-  targetRef: string;
-  feedback: MemoryFeedbackRecord[];
-}
-
-function detectRetrievalGaps(feedback: MemoryFeedbackRecord[]): RetrievalGapIssueGroup[] {
-  const groups = new Map<string, RetrievalGapIssueGroup>();
-  for (const item of feedback) {
-    if (item.kind !== "missing" || item.status !== "open") {
-      continue;
-    }
-    const targetRef = item.targetRef ?? item.contextId ?? item.citationId ?? item.feedbackId;
-    const noteKey = normalizeQualityText(item.note ?? "missing").slice(0, 80);
-    const key = `${item.targetKind}|${targetRef}|${noteKey}`;
-    const group = groups.get(key) ?? {
-      targetKind: item.targetKind,
-      targetRef,
-      feedback: [],
-    };
-    group.feedback.push(item);
-    groups.set(key, group);
-  }
-  return [...groups.values()].slice(0, 25);
-}
-
 function buildMemoryQualityDedupKey(
   workspaceId: string,
   kind: MemoryQualityIssueKind,
@@ -5198,14 +5129,6 @@ function dryRunQualityIssue(
     createdAt: generatedAt,
     updatedAt: generatedAt,
   };
-}
-
-function normalizeQualityText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
 }
 
 function shortMemoryRef(value: string): string {
@@ -5299,83 +5222,6 @@ function buildStructuredMemoryEmbeddingText(parts: Array<string | undefined>): s
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part))
     .join("\n");
-}
-
-function calculateLexicalOverlap(prompt: string, contextText: string): number {
-  const promptTerms = significantTerms(prompt);
-  if (promptTerms.size === 0) {
-    return 0;
-  }
-  const contextTerms = significantTerms(contextText);
-  let matches = 0;
-  for (const term of promptTerms) {
-    if (contextTerms.has(term)) {
-      matches += 1;
-    }
-  }
-  return Number((matches / promptTerms.size).toFixed(3));
-}
-
-function resolveBenchmarkRetrievalStrategy(pack: MemoryContextPack): MemoryRetrievalStrategy | undefined {
-  return pack.citations.find((citation) => citation.provenance?.retrievalStrategy)?.provenance?.retrievalStrategy;
-}
-
-function buildMemoryBenchmarkCoverageNote(pack: MemoryContextPack): string {
-  const strategies = new Set(
-    pack.citations
-      .map((citation) => citation.provenance?.retrievalStrategy)
-      .filter((strategy): strategy is MemoryRetrievalStrategy => Boolean(strategy)),
-  );
-  if (strategies.has("hybrid_rank")) {
-    return "Context used hybrid BM25, optional embedding, semantic hint, recency, and source-diversity scoring.";
-  }
-  if (strategies.has("semantic_vector")) {
-    return "Context used caller-supplied embedding similarity over active memory items plus lexical/recency provenance.";
-  }
-  if (strategies.has("semantic_hints")) {
-    return "Context used operator-visible semantic hints plus lexical/recency scoring; vector semantic search was not used.";
-  }
-  if (strategies.has("lexical_recency")) {
-    return "Context was selected with lexical/recency provenance; vector semantic search was not used.";
-  }
-  if (pack.citations.length === 0) {
-    return "No citations were selected, so retrieval strategy coverage is unavailable.";
-  }
-  return "Citation provenance did not record a retrieval strategy.";
-}
-
-function significantTerms(value: string): Set<string> {
-  const stopWords = new Set([
-    "about",
-    "after",
-    "again",
-    "also",
-    "and",
-    "are",
-    "but",
-    "for",
-    "from",
-    "has",
-    "have",
-    "how",
-    "into",
-    "that",
-    "the",
-    "this",
-    "was",
-    "what",
-    "when",
-    "where",
-    "with",
-    "you",
-  ]);
-  return new Set(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9._-]+/u)
-      .map((term) => term.trim())
-      .filter((term) => term.length >= 3 && !stopWords.has(term)),
-  );
 }
 
 function average(values: number[]): number {

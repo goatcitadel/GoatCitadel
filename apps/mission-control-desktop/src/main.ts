@@ -157,14 +157,16 @@ function renderStarting(): void {
   frame.classList.remove("is-ready");
   recoveryActions.classList.add("is-hidden");
   statusCopy.textContent = "Starting the local runtime...";
-  progressBar.style.width = "42%";
+  progressBar.style.width = "100%";
+  progressBar.classList.add("is-starting");
   runtimeMeta.textContent = "Gateway and Mission Control will stay warm while the desktop app is open.";
 }
 
 function renderRuntime(result: DesktopRuntimeStatus): void {
   statusCopy.textContent =
     result.status === "ready" ? "Runtime ready. Opening Mission Control..." : `Runtime status: ${result.status}`;
-  progressBar.style.width = result.status === "ready" ? "100%" : "64%";
+  progressBar.style.width = result.status === "ready" ? "100%" : "0%";
+  progressBar.classList.remove("is-starting");
   runtimeMeta.textContent = [
     `Gateway ${result.readiness.gateway ? "ready" : "not ready"}`,
     `UI ${result.readiness.ui ? "ready" : "not ready"}`,
@@ -177,7 +179,8 @@ function renderRecovery(message: string): void {
   frame.classList.remove("is-ready");
   recoveryActions.classList.remove("is-hidden");
   statusCopy.textContent = message;
-  progressBar.style.width = "18%";
+  progressBar.style.width = "0%";
+  progressBar.classList.remove("is-starting");
   runtimeMeta.textContent = lastRuntime
     ? `Logs: ${lastRuntime.logFiles.gatewayStderr}`
     : "Runtime did not return a status payload. Open logs for the captured launcher output.";
@@ -189,6 +192,7 @@ function renderStopped(): void {
   frame.classList.remove("is-ready");
   recoveryActions.classList.remove("is-hidden");
   statusCopy.textContent = "Runtime stopped.";
+  progressBar.classList.remove("is-starting");
   progressBar.style.width = "0%";
   runtimeMeta.textContent = lastRuntime
     ? `Gateway ${lastRuntime.readiness.gateway ? "ready" : "not ready"} / UI ${

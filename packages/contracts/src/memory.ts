@@ -651,6 +651,29 @@ export interface MemoryItemRecord {
   forgottenAt?: string;
 }
 
+export interface MemoryItemListQuery {
+  /** Exact namespace filter. Workspace reads retain canonical global-memory visibility. */
+  namespace?: string;
+  workspaceId?: string;
+  /** HTTP enumeration defaults to active, excluding forgotten and expired items. */
+  status?: "active" | "forgotten" | "all";
+  query?: string;
+  /** Page size, 1-500; defaults to 200. May change between pages. */
+  limit?: number;
+  /** Opaque continuation bound to these filters and this Gateway instance. */
+  cursor?: string;
+}
+
+export interface MemoryItemListPage {
+  items: MemoryItemRecord[];
+  /** Complete count for the same filters and enumeration generation. */
+  total: number;
+  /** Database clock at the first page; active-item expiry is evaluated against it. */
+  snapshotAt: string;
+  /** Absent when every matching item has been enumerated. Reload after a stale-cursor conflict. */
+  nextCursor?: string;
+}
+
 export interface MemoryLifecyclePatch {
   title?: string;
   content?: string;
@@ -804,6 +827,8 @@ export interface MemoryMaintenanceSchedule {
 
 export interface MemoryMaintenancePolicyRecord {
   workspaceId: string;
+  /** Opaque canonical state revision; send it back when changing this policy. */
+  revision: string;
   enabled: boolean;
   runMode: MemoryMaintenanceRunMode;
   timingStrategy: MemoryMaintenanceTimingStrategy;
@@ -875,6 +900,8 @@ export interface MemoryMaintenanceChangeRecord {
 export interface MemoryMaintenanceRecommendationRecord {
   recommendationId: string;
   workspaceId: string;
+  /** Revision of the exact proposal and decision state shown to the operator. */
+  revision: string;
   kind: MemoryMaintenanceRecommendationKind;
   status: MemoryMaintenanceRecommendationStatus;
   summary: string;
@@ -905,6 +932,25 @@ export interface MemoryMaintenancePolicyPatchInput {
   model?: string | null;
   executionTarget?: MemoryMaintenanceExecutionTarget;
   unavailableModelPolicy?: MemoryMaintenanceUnavailableModelPolicy;
+}
+
+export type MemoryMaintenancePolicyValues = Omit<MemoryMaintenancePolicyRecord, "revision">;
+
+export interface MemoryMaintenancePolicyUpdateInput extends MemoryMaintenancePolicyPatchInput {
+  expectedRevision: string;
+}
+
+export interface MemoryMaintenanceRecommendationDecisionInput {
+  expectedRevision: string;
+}
+
+export interface MemoryMaintenanceRecommendationAcceptInput extends MemoryMaintenanceRecommendationDecisionInput {
+  expectedPolicyRevision: string;
+}
+
+export interface MemoryMaintenanceRecommendationAcceptance {
+  recommendation: MemoryMaintenanceRecommendationRecord;
+  policy: MemoryMaintenancePolicyRecord;
 }
 
 export interface MemoryMaintenanceRunNowInput {

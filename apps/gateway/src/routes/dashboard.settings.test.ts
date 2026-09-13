@@ -666,6 +666,7 @@ describe("dashboard settings routes", () => {
 
   it("routes canonical personality catalog APIs to settings services", async () => {
     const catalog = {
+      revision: "a".repeat(64),
       defaultPersonalityId: "operator",
       items: [
         {
@@ -708,6 +709,7 @@ describe("dashboard settings routes", () => {
       method: "POST",
       url: "/api/v1/personalities",
       payload: {
+        expectedRevision: catalog.revision,
         id: "direct-custom",
         label: "Direct Custom",
         category: "execution",
@@ -717,6 +719,7 @@ describe("dashboard settings routes", () => {
     });
     expect(response.statusCode).toBe(201);
     expect(settings.createPersonality).toHaveBeenCalledWith({
+      expectedRevision: catalog.revision,
       id: "direct-custom",
       label: "Direct Custom",
       category: "execution",
@@ -727,10 +730,11 @@ describe("dashboard settings routes", () => {
     response = await app.inject({
       method: "PATCH",
       url: "/api/v1/personalities/operator",
-      payload: { label: "Operator Prime", style: "Compact" },
+      payload: { expectedRevision: catalog.revision, label: "Operator Prime", style: "Compact" },
     });
     expect(response.statusCode).toBe(200);
     expect(settings.updatePersonality).toHaveBeenCalledWith("operator", {
+      expectedRevision: catalog.revision,
       label: "Operator Prime",
       style: "Compact",
     });
@@ -738,13 +742,13 @@ describe("dashboard settings routes", () => {
     response = await app.inject({
       method: "PATCH",
       url: "/api/v1/personalities/default",
-      payload: { personalityId: "none" },
+      payload: { expectedRevision: catalog.revision, personalityId: "none" },
     });
     expect(response.statusCode).toBe(200);
-    expect(settings.setDefaultPersonality).toHaveBeenCalledWith("none");
+    expect(settings.setDefaultPersonality).toHaveBeenCalledWith("none", catalog.revision);
 
-    response = await app.inject({ method: "DELETE", url: "/api/v1/personalities/operator" });
+    response = await app.inject({ method: "DELETE", url: "/api/v1/personalities/operator", payload: { expectedRevision: catalog.revision } });
     expect(response.statusCode).toBe(200);
-    expect(settings.deletePersonality).toHaveBeenCalledWith("operator");
+    expect(settings.deletePersonality).toHaveBeenCalledWith("operator", catalog.revision);
   });
 });

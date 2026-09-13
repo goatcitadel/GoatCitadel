@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { FocusedDetail } from "../shared/FocusedDetail";
+import { useSessionDraft } from "../library/session-drafts";
+import { useDraftLeave } from "../library/DraftLeaveDialog";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import type {
   BrowserSessionEventRecord,
@@ -36,19 +40,47 @@ const GRANT_SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
 };
 const EMPTY_BROWSER_SESSIONS: BrowserSessionRecord[] = [];
 
-export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function BrowserSessionsRoutePage(props: NativeRoutePagesProps) {
+  return <BrowserSessionsWorkspacePage key={props.activeWorkspaceId} {...props} />;
+}
+function BrowserSessionsWorkspacePage({ route, activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+  const leave = useDraftLeave();
+  const [creating, setCreating] = useState(false);
+  const [grantEditing, setGrantEditing] = useState(false);
+  const [detailView, setDetailView] = useState<"session" | "state" | "events">("session");
+  const editorEpoch = useRef(0),
+    mutationBusy = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [filter, setFilter] = useState<BrowserSessionFilter>("active");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [sessionDraft, setSessionDraft] = useState({ label: "Shared browser session" });
-  const [grantDraft, setGrantDraft] = useState({
-    actorId: "operator",
-    scopes: ["read"] as BrowserSessionGrantScope[],
-    allowedHosts: "",
-    ttlSeconds: 900,
-  });
+  const sessionStore = useSessionDraft(
+    "browser:" + activeWorkspaceId + ":create",
+    { label: "Shared browser session" },
+    undefined,
+    { label: "Browser session", active: creating, onSave: () => createSession() },
+  );
+  const grantStore = useSessionDraft(
+    "browser:" + activeWorkspaceId + ":" + selectedSessionId + ":grant",
+    { actorId: "operator", scopes: ["read"] as BrowserSessionGrantScope[], allowedHosts: "", ttlSeconds: 900 },
+    undefined,
+    { label: "Browser grant", active: grantEditing && Boolean(selectedSessionId), onSave: () => createGrant() },
+  );
+  useEffect(() => {
+    editorEpoch.current++;
+  }, [selectedSessionId, creating, grantEditing, detailView]);
+  const sessionDraft = sessionStore.value,
+    setSessionDraft = sessionStore.setValue;
+  const grantDraft = grantStore.value,
+    setGrantDraft = grantStore.setValue;
 
   const load = useCallback(async () => {
     const sessions = await nativeLoad(
@@ -61,113 +93,156 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const sessions = data?.sessions ?? EMPTY_BROWSER_SESSIONS;
   const activeCount = sessions.filter((item) => item.status === "active").length;
-  const selectedSession = sessions.find((item) => item.sessionId === selectedSessionId) ?? sessions[0] ?? null;
+  const selectedSession = sessions.find((item) => item.sessionId === selectedSessionId) ?? null;
 
-  useEffect(() => {
-    setSelectedSessionId((current) =>
-      sessions.some((item) => item.sessionId === current) ? current : (sessions[0]?.sessionId ?? ""),
-    );
-  }, [sessions]);
-
-  const detail = useBrowserSessionDetail(selectedSession?.sessionId ?? "");
-  const posture = selectedSession ? buildBrowserSessionPosture(selectedSession, detail.grants, detail.events) : null;
+  const detail = useBrowserSessionDetail(selectedSession?.sessionId ?? "", detailView === "state");
+  const posture =
+    selectedSession && !detail.issues.some((issue) => /grants|events/i.test(issue.label))
+      ? buildBrowserSessionPosture(selectedSession, detail.grants, detail.events)
+      : null;
   const stateProjection = detail.stateProjection;
 
-  const createSession = async () => {
+  const createSession = async (): Promise<boolean> => {
+    if (mutationBusy.current) return false;
     const label = sessionDraft.label.trim();
     if (!label) {
       setActionError("Session label is required.");
-      return;
+      return false;
     }
+    const token = editorEpoch.current;
+    const submitted = sessionDraft;
+    mutationBusy.current = true;
     setBusyAction("create-session");
     setActionError(null);
     setNotice(null);
     try {
       const created = await createBrowserSession({ workspaceId: activeWorkspaceId, label });
+      if (!created.sessionId || created.workspaceId !== activeWorkspaceId)
+        throw new Error("The created browser session could not be confirmed.");
+      const cleared = sessionStore.acceptSaved({ label: "Shared browser session" }, undefined, submitted);
+      if (!mounted.current || editorEpoch.current !== token) return cleared;
+      if (cleared) setCreating(false);
       setFilter("active");
       setSelectedSessionId(created.sessionId);
       setNotice("Browser session created. Create a scoped grant before tools can use it.");
       if (filter === "active") {
         await reload();
       }
+      return cleared;
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && editorEpoch.current === token)
+        setActionError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
-      setBusyAction(null);
+      mutationBusy.current = false;
+      if (mounted.current) setBusyAction(null);
     }
   };
 
   const closeSelectedSession = async () => {
-    if (!selectedSession) {
+    if (!selectedSession || mutationBusy.current) {
       return;
     }
+    mutationBusy.current = true;
+    const token = editorEpoch.current;
     setBusyAction("close-session");
     setActionError(null);
     setNotice(null);
     try {
-      await closeBrowserSession(selectedSession.sessionId);
+      const closed = await closeBrowserSession(selectedSession.sessionId);
+      if (closed.sessionId !== selectedSession.sessionId || closed.status !== "closed")
+        throw new Error("Session closure was not confirmed.");
+      if (!mounted.current || token !== editorEpoch.current) return;
       setNotice("Browser session closed and active grants revoked.");
       await reload();
       await detail.reload();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && token === editorEpoch.current)
+        setActionError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusyAction(null);
+      mutationBusy.current = false;
+      if (mounted.current) setBusyAction(null);
     }
   };
 
-  const createGrant = async () => {
-    if (!selectedSession) {
-      return;
+  const createGrant = async (): Promise<boolean> => {
+    if (mutationBusy.current || !selectedSession) {
+      return false;
     }
     const actorId = grantDraft.actorId.trim();
     if (!actorId) {
       setActionError("Grant actor is required.");
-      return;
+      return false;
     }
     if (grantDraft.scopes.length === 0) {
       setActionError("Choose at least one grant scope.");
-      return;
+      return false;
     }
+    const token = editorEpoch.current;
+    const submitted = grantDraft;
+    mutationBusy.current = true;
     setBusyAction("create-grant");
     setActionError(null);
     setNotice(null);
     try {
-      await createBrowserSessionGrant(selectedSession.sessionId, {
+      const created = await createBrowserSessionGrant(selectedSession.sessionId, {
         actorId,
         scopes: grantDraft.scopes,
         allowedHosts: parseHostList(grantDraft.allowedHosts),
         ttlSeconds: grantDraft.ttlSeconds > 0 ? grantDraft.ttlSeconds : undefined,
       });
+      if (!created.grantId || created.sessionId !== selectedSession.sessionId)
+        throw new Error("The scoped grant could not be confirmed.");
+      const cleared = grantStore.acceptSaved(
+        { actorId: "operator", scopes: ["read"], allowedHosts: "", ttlSeconds: 900 },
+        undefined,
+        submitted,
+      );
+      if (!mounted.current || editorEpoch.current !== token) return cleared;
+      if (cleared) setGrantEditing(false);
       setNotice("Scoped browser-session grant created.");
       await detail.reload();
+      return cleared;
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && editorEpoch.current === token)
+        setActionError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
-      setBusyAction(null);
+      mutationBusy.current = false;
+      if (mounted.current) setBusyAction(null);
     }
   };
 
   const handleGrantAction = async (grant: BrowserSessionGrantRecord, action: "rotate" | "revoke") => {
-    if (!selectedSession) {
+    if (!selectedSession || mutationBusy.current) {
       return;
     }
+    mutationBusy.current = true;
+    const token = editorEpoch.current;
     setBusyAction(`${action}:${grant.grantId}`);
     setActionError(null);
     setNotice(null);
     try {
       if (action === "rotate") {
-        await rotateBrowserSessionGrant(selectedSession.sessionId, grant.grantId);
+        const rotated = await rotateBrowserSessionGrant(selectedSession.sessionId, grant.grantId);
+        if (!rotated.grantId || rotated.sessionId !== selectedSession.sessionId)
+          throw new Error("Grant rotation was not confirmed.");
+        if (!mounted.current || token !== editorEpoch.current) return;
         setNotice("Grant rotated with the same actor, scopes, and host posture.");
       } else {
-        await revokeBrowserSessionGrant(selectedSession.sessionId, grant.grantId);
+        const revoked = await revokeBrowserSessionGrant(selectedSession.sessionId, grant.grantId);
+        if (revoked.grantId !== grant.grantId || revoked.sessionId !== selectedSession.sessionId || !revoked.revokedAt)
+          throw new Error("Grant revocation was not confirmed.");
+        if (!mounted.current || token !== editorEpoch.current) return;
         setNotice("Grant revoked.");
       }
       await detail.reload();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      if (mounted.current && token === editorEpoch.current)
+        setActionError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusyAction(null);
+      mutationBusy.current = false;
+      if (mounted.current) setBusyAction(null);
     }
   };
 
@@ -178,7 +253,7 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
       kicker={routeKicker(route)}
       title="Browser Sessions"
       description={`Govern in-memory browser session state, grants, and events for ${activeWorkspaceName}.`}
-      loading={loading}
+      loading={loading && !data}
       // Only a failed load (error) is fatal and replaces the page (Finding 10). A failed
       // action (actionError) is non-fatal — the session board is still valid and stays
       // visible with an inline error banner below, so operators keep their draft/selection.
@@ -190,10 +265,23 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
         { label: "Events", value: String(detail.events.length) },
       ]}
       actions={
-        <NativeButton variant="secondary" onClick={() => void reload()}>
-          <RefreshCw size={16} />
-          Refresh
-        </NativeButton>
+        <>
+          <NativeButton
+            onClick={() =>
+              leave.request(() => {
+                editorEpoch.current++;
+                setSelectedSessionId("");
+                setCreating(true);
+              })
+            }
+          >
+            New session{sessionStore.isDirty ? " · Unsaved" : ""}
+          </NativeButton>
+          <NativeButton variant="ghost" onClick={() => void reload()}>
+            <RefreshCw size={16} />
+            Refresh
+          </NativeButton>
+        </>
       }
     >
       <LibraryLoadWarnings issues={[...(data?.issues ?? []), ...detail.issues]} onRetry={() => void reload()} />
@@ -203,268 +291,339 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
         </div>
       ) : null}
       {notice ? <NoticeBanner tone="success" message={notice} /> : null}
-      <NativeGrid>
-        <NativeCard
-          title="Sessions"
-          subtitle="Session IDs govern browser state and grants; they are not Chat session or durable run IDs."
-          stats={[
-            { label: "Workspace", value: activeWorkspaceId },
-            { label: "Filter", value: filter },
-          ]}
+      {creating ? (
+        <FocusedDetail
+          title="New browser session"
+          onClose={() =>
+            leave.request(() => {
+              editorEpoch.current++;
+              setCreating(false);
+            }, [sessionStore.key])
+          }
         >
-          <div className="mc-next-browser-session-controls">
-            <div className="mc-next-settings-filter-bar" role="radiogroup" aria-label="Browser session filter">
-              {(["active", "closed", "all"] as BrowserSessionFilter[]).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={`mc-next-settings-filter${filter === item ? " active" : ""}`}
-                  aria-pressed={filter === item}
-                  onClick={() => setFilter(item)}
-                >
-                  {labelForFilter(item)}
-                </button>
-              ))}
-            </div>
-            <label className="mc-next-settings-field">
-              <span>New session label</span>
-              <input
-                className="mc-next-settings-input"
-                value={sessionDraft.label}
-                onChange={(event) => setSessionDraft({ label: event.target.value })}
-                placeholder="Research browser"
-              />
-            </label>
-            <button
-              type="button"
-              className="mc-next-directory-action"
-              disabled={busyAction === "create-session"}
-              onClick={() => void createSession()}
-            >
-              <span>Create governed session</span>
-            </button>
-          </div>
-          {sessions.length > 0 ? (
-            <div className="mc-next-browser-session-list" data-native-scroll="true">
-              {sessions.map((session) => (
-                <button
-                  key={session.sessionId}
-                  type="button"
-                  className={`mc-next-browser-session-row${
-                    selectedSession?.sessionId === session.sessionId ? " active" : ""
-                  }`}
-                  onClick={() => setSelectedSessionId(session.sessionId)}
-                >
-                  <strong>{session.label}</strong>
-                  <span>
-                    {session.status} · {formatDateTime(session.updatedAt)}
-                  </span>
-                  <small>{shortId(session.sessionId)}</small>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <EmptyState size="compact" title="No browser sessions match this filter." />
-          )}
-        </NativeCard>
-
-        <NativeCard
-          title={selectedSession?.label ?? "Session detail"}
-          subtitle="Visible posture is limited to grants and events; cookie or storage values are not shown here."
-          stats={[
-            { label: "State", value: selectedSession?.status ?? "none" },
-            { label: "Actor", value: selectedSession?.createdBy ?? "unknown" },
-          ]}
-        >
-          {selectedSession ? (
-            <>
-              <div className="mc-next-approvals-chip-row">
-                <StatusChip tone={selectedSession.status === "active" ? "success" : "muted"}>
-                  {selectedSession.status}
-                </StatusChip>
-                <StatusChip tone="muted">{shortId(selectedSession.sessionId)}</StatusChip>
-              </div>
-              <LibraryMetricGrid
-                items={[
-                  {
-                    label: "Created",
-                    value: formatDateTime(selectedSession.createdAt),
-                    meta: selectedSession.createdBy,
-                  },
-                  { label: "Updated", value: formatDateTime(selectedSession.updatedAt), meta: "session record" },
-                  { label: "Closed", value: formatDateTime(selectedSession.closedAt), meta: "if closed" },
-                  { label: "Workspace", value: selectedSession.workspaceId ?? "Unscoped", meta: "session binding" },
-                ]}
-              />
-              <button
-                type="button"
-                className="mc-next-directory-action"
-                disabled={selectedSession.status !== "active" || busyAction === "close-session"}
-                onClick={() => void closeSelectedSession()}
-              >
-                <span>Close session and revoke grants</span>
-              </button>
-            </>
-          ) : (
-            <EmptyState size="compact" title="Select or create a browser session." />
-          )}
-        </NativeCard>
-
-        <NativeCard
-          title="State and tool posture"
-          subtitle="Derived from session records, scoped grants, and retained guard events; browser state values remain hidden."
-          stats={[
-            { label: "Callable", value: posture?.callableState ?? "none" },
-            { label: "State", value: stateProjection?.state.availability ?? "unknown" },
-          ]}
-        >
-          {posture ? (
-            <>
-              <div className="mc-next-approvals-chip-row">
-                <StatusChip tone={posture.callableTone}>{posture.callableState}</StatusChip>
-                <StatusChip tone={posture.guardBlockCount > 0 ? "warning" : "muted"}>
-                  {posture.guardBlockCount} guard blocks
-                </StatusChip>
-              </div>
-              <LibraryMetricGrid
-                items={[
-                  { label: "Active grants", value: String(posture.activeGrantCount), meta: posture.highestScope },
-                  { label: "Hosts", value: posture.hostPosture, meta: posture.hostSummary },
-                  { label: "Latest access", value: posture.latestToolEvidence, meta: "from retained events" },
-                  {
-                    label: "State values",
-                    value: "Hidden",
-                    meta: stateProjection
-                      ? `${stateProjection.state.retention} ${stateProjection.state.source}`
-                      : "cookies, storage, and page values are not exposed",
-                  },
-                ]}
-              />
-              <p className="mc-next-settings-field-note">{posture.summary}</p>
-            </>
-          ) : (
-            <EmptyState size="compact" title="Select a browser session to inspect posture." />
-          )}
-        </NativeCard>
-
-        <NativeCard
-          title="Read-only state projection"
-          subtitle="Counts and origins come from volatile browser-session memory; sensitive values stay hidden."
-          stats={[
-            { label: "Availability", value: stateProjection?.state.availability ?? "unknown" },
-            {
-              label: "Updated",
-              value: stateProjection?.state.updatedAt
-                ? formatDateTime(stateProjection.state.updatedAt)
-                : "Not retained",
-            },
-          ]}
-        >
-          {stateProjection ? (
-            <>
-              <div className="mc-next-approvals-chip-row">
-                <StatusChip tone={stateProjection.state.availability === "present" ? "success" : "muted"}>
-                  {formatStateAvailability(stateProjection.state.availability)}
-                </StatusChip>
-                <StatusChip tone="muted">values hidden</StatusChip>
-              </div>
-              <LibraryMetricGrid
-                items={[
-                  {
-                    label: "Cookies",
-                    value: String(stateProjection.state.cookies.count),
-                    meta: formatLimitedList(stateProjection.state.cookies.domains, "domains"),
-                  },
-                  {
-                    label: "Local storage",
-                    value: `${stateProjection.state.localStorage.originCount} origins`,
-                    meta: `${stateProjection.state.localStorage.keyCount} keys`,
-                  },
-                  {
-                    label: "Session storage",
-                    value: `${stateProjection.state.sessionStorage.originCount} origins`,
-                    meta: `${stateProjection.state.sessionStorage.keyCount} keys`,
-                  },
-                  {
-                    label: "Recent events",
-                    value: String(stateProjection.eventSummary.recentEventCount),
-                    meta: `${stateProjection.eventSummary.grantedAccessCount} granted · ${stateProjection.eventSummary.guardBlockCount} blocked`,
-                  },
-                ]}
-              />
-              <NativeList
-                density="compact"
-                items={[
-                  {
-                    title: "Local storage origins",
-                    meta: formatLimitedList(stateProjection.state.localStorage.origins, "origins"),
-                    body: "Keys are counted but values are not exposed.",
-                  },
-                  {
-                    title: "Session storage origins",
-                    meta: formatLimitedList(stateProjection.state.sessionStorage.origins, "origins"),
-                    body: "Session storage is volatile and may disappear after restart.",
-                  },
-                  {
-                    title: "Context",
-                    meta: formatBrowserContextSummary(stateProjection),
-                    body: "Locale and timezone are shown when configured; headers, credentials, and geolocation values remain hidden.",
-                  },
-                ]}
-                emptyLabel="No state projection detail is available."
-                ariaLabel="Browser session state projection"
-              />
-            </>
-          ) : (
-            <EmptyState size="compact" title="Select a browser session to inspect retained state." />
-          )}
-        </NativeCard>
-
-        <NativeCard
-          title="Scoped grants"
-          subtitle="Grants are actor-scoped and optionally host-scoped; they do not enable unrestricted browser control."
-          scrollBody
-          bodyMaxHeight="min(58vh, 34rem)"
-        >
-          {selectedSession?.status === "active" ? (
-            <BrowserGrantForm
-              draft={grantDraft}
-              busy={busyAction === "create-grant"}
-              onChange={(patch) => setGrantDraft((current) => ({ ...current, ...patch }))}
-              onSubmit={() => void createGrant()}
+          {" "}
+          <label className="mc-next-settings-field">
+            <span>New session label</span>
+            <input
+              className="mc-next-settings-input"
+              value={sessionDraft.label}
+              onChange={(event) => setSessionDraft({ label: event.target.value })}
+              placeholder="Research browser"
             />
-          ) : (
-            <p className="mc-next-settings-field-note">Closed sessions cannot receive new grants.</p>
-          )}
-          <BrowserGrantList grants={detail.grants} busyAction={busyAction} onGrantAction={handleGrantAction} />
-        </NativeCard>
-
-        <NativeCard
-          title="Event timeline"
-          subtitle="Retained session events show grant changes and policy blocks without exposing browser state values."
-        >
-          <NativeList
-            density="compact"
-            items={detail.events.map((event) => ({
-              title: event.eventType,
-              meta: [event.actorId, formatDateTime(event.createdAt)].filter(Boolean).join(" · "),
-              body: formatEventPayload(event),
-            }))}
-            emptyLabel="No browser session events are attached to this session."
-            ariaLabel="Browser session events"
-            maxHeight="min(58vh, 34rem)"
-            virtualized
-          />
-        </NativeCard>
-      </NativeGrid>
+          </label>
+          <button
+            type="button"
+            className="mc-next-directory-action"
+            disabled={busyAction === "create-session"}
+            onClick={() => void createSession()}
+          >
+            <span>Create governed session</span>
+          </button>
+        </FocusedDetail>
+      ) : (
+        <NativeGrid className="mc-next-browser-session-directory">
+          <NativeCard
+            title="Sessions"
+            subtitle="Session IDs govern browser state and grants; they are not Chat session or durable run IDs."
+            stats={[
+              { label: "Workspace", value: activeWorkspaceId },
+              { label: "Filter", value: filter },
+            ]}
+          >
+            <div className="mc-next-browser-session-controls">
+              <div className="mc-next-settings-filter-bar" role="group" aria-label="Browser session filter">
+                {(["active", "closed", "all"] as BrowserSessionFilter[]).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className={`mc-next-settings-filter${filter === item ? " active" : ""}`}
+                    aria-pressed={filter === item}
+                    onClick={() =>
+                      leave.request(() => {
+                        setFilter(item);
+                        setSelectedSessionId("");
+                        setGrantEditing(false);
+                      })
+                    }
+                  >
+                    {labelForFilter(item)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {sessions.length > 0 ? (
+              <div className="mc-next-browser-session-list" data-native-scroll="true">
+                {sessions.map((session) => (
+                  <button
+                    key={session.sessionId}
+                    type="button"
+                    className={`mc-next-browser-session-row${
+                      selectedSession?.sessionId === session.sessionId ? " active" : ""
+                    }`}
+                    onClick={() =>
+                      leave.request(() => {
+                        setSelectedSessionId(session.sessionId);
+                        setDetailView("session");
+                      })
+                    }
+                  >
+                    <strong>{session.label}</strong>
+                    <span>
+                      {session.status} · {formatDateTime(session.updatedAt)}
+                    </span>
+                    <small>{shortId(session.sessionId)}</small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <EmptyState size="compact" title="No browser sessions match this filter." />
+            )}
+          </NativeCard>
+        </NativeGrid>
+      )}
+      <DetailInspector
+        open={Boolean(selectedSessionId) && !creating}
+        title={selectedSession?.label ?? "Browser session unavailable"}
+        onClose={() =>
+          leave.request(() => {
+            setSelectedSessionId("");
+            setGrantEditing(false);
+            editorEpoch.current++;
+          })
+        }
+      >
+        <div className="mc-next-settings-filter-bar" role="group" aria-label="Browser session details">
+          {(["session", "state", "events"] as const).map((view) => (
+            <NativeButton
+              key={view}
+              variant="ghost"
+              aria-pressed={detailView === view}
+              onClick={() =>
+                leave.request(() => {
+                  setDetailView(view);
+                  setGrantEditing(false);
+                })
+              }
+            >
+              {view === "session" ? "Session" : view === "state" ? "State" : "Events"}
+            </NativeButton>
+          ))}
+        </div>
+        {!selectedSession ? (
+          <p>The selected session is unavailable in this filter. Close details and choose another record.</p>
+        ) : detailView === "session" ? (
+          <>
+            <NativeCard
+              title="Session posture"
+              subtitle="Visible posture is limited to grants and events; cookie or storage values are not shown here."
+              stats={[
+                { label: "State", value: selectedSession?.status ?? "none" },
+                { label: "Actor", value: selectedSession?.createdBy ?? "unknown" },
+              ]}
+            >
+              {selectedSession ? (
+                <>
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone={selectedSession.status === "active" ? "success" : "muted"}>
+                      {selectedSession.status}
+                    </StatusChip>
+                    <StatusChip tone="muted">{shortId(selectedSession.sessionId)}</StatusChip>
+                  </div>
+                  <LibraryMetricGrid
+                    items={[
+                      {
+                        label: "Created",
+                        value: formatDateTime(selectedSession.createdAt),
+                        meta: selectedSession.createdBy,
+                      },
+                      { label: "Updated", value: formatDateTime(selectedSession.updatedAt), meta: "session record" },
+                      { label: "Closed", value: formatDateTime(selectedSession.closedAt), meta: "if closed" },
+                      { label: "Workspace", value: selectedSession.workspaceId ?? "Unscoped", meta: "session binding" },
+                    ]}
+                  />
+                  <button
+                    type="button"
+                    className="mc-next-directory-action"
+                    disabled={selectedSession.status !== "active" || busyAction === "close-session"}
+                    onClick={() => void closeSelectedSession()}
+                  >
+                    <span>Close session and revoke grants</span>
+                  </button>
+                </>
+              ) : (
+                <EmptyState size="compact" title="Select or create a browser session." />
+              )}
+            </NativeCard>
+            <NativeCard
+              title="Scoped grants"
+              subtitle="Grants are actor-scoped and optionally host-scoped; they do not enable unrestricted browser control."
+            >
+              {selectedSession?.status === "active" && grantEditing ? (
+                <BrowserGrantForm
+                  draft={grantDraft}
+                  busy={busyAction === "create-grant"}
+                  onChange={(patch) => setGrantDraft((current) => ({ ...current, ...patch }))}
+                  onSubmit={() => void createGrant()}
+                />
+              ) : selectedSession?.status === "active" ? (
+                <NativeButton onClick={() => setGrantEditing(true)}>
+                  New grant{grantStore.isDirty ? " · Unsaved" : ""}
+                </NativeButton>
+              ) : (
+                <p className="mc-next-settings-field-note">Closed sessions cannot receive new grants.</p>
+              )}
+              {grantEditing ? (
+                <NativeButton
+                  variant="ghost"
+                  onClick={() => leave.request(() => setGrantEditing(false), [grantStore.key])}
+                >
+                  Close grant editor
+                </NativeButton>
+              ) : null}
+              <BrowserGrantList grants={detail.grants} busyAction={busyAction} onGrantAction={handleGrantAction} />
+            </NativeCard>
+          </>
+        ) : detailView === "state" ? (
+          <>
+            <NativeCard
+              title="State and tool posture"
+              subtitle="Derived from session records, scoped grants, and retained guard events; browser state values remain hidden."
+              stats={[
+                { label: "Callable", value: posture?.callableState ?? "none" },
+                { label: "State", value: stateProjection?.state.availability ?? "unknown" },
+              ]}
+            >
+              {posture ? (
+                <>
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone={posture.callableTone}>{posture.callableState}</StatusChip>
+                    <StatusChip tone={posture.guardBlockCount > 0 ? "warning" : "muted"}>
+                      {posture.guardBlockCount} guard blocks
+                    </StatusChip>
+                  </div>
+                  <LibraryMetricGrid
+                    items={[
+                      { label: "Active grants", value: String(posture.activeGrantCount), meta: posture.highestScope },
+                      { label: "Hosts", value: posture.hostPosture, meta: posture.hostSummary },
+                      { label: "Latest access", value: posture.latestToolEvidence, meta: "from retained events" },
+                      {
+                        label: "State values",
+                        value: "Hidden",
+                        meta: stateProjection
+                          ? `${stateProjection.state.retention} ${stateProjection.state.source}`
+                          : "cookies, storage, and page values are not exposed",
+                      },
+                    ]}
+                  />
+                  <p className="mc-next-settings-field-note">{posture.summary}</p>
+                </>
+              ) : (
+                <EmptyState size="compact" title="Select a browser session to inspect posture." />
+              )}
+            </NativeCard>
+            <NativeCard
+              title="Read-only state projection"
+              subtitle="Counts and origins come from volatile browser-session memory; sensitive values stay hidden."
+              stats={[
+                { label: "Availability", value: stateProjection?.state.availability ?? "unknown" },
+                {
+                  label: "Updated",
+                  value: stateProjection?.state.updatedAt
+                    ? formatDateTime(stateProjection.state.updatedAt)
+                    : "Not retained",
+                },
+              ]}
+            >
+              {stateProjection ? (
+                <>
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip tone={stateProjection.state.availability === "present" ? "success" : "muted"}>
+                      {formatStateAvailability(stateProjection.state.availability)}
+                    </StatusChip>
+                    <StatusChip tone="muted">values hidden</StatusChip>
+                  </div>
+                  <LibraryMetricGrid
+                    items={[
+                      {
+                        label: "Cookies",
+                        value: String(stateProjection.state.cookies.count),
+                        meta: formatLimitedList(stateProjection.state.cookies.domains, "domains"),
+                      },
+                      {
+                        label: "Local storage",
+                        value: `${stateProjection.state.localStorage.originCount} origins`,
+                        meta: `${stateProjection.state.localStorage.keyCount} keys`,
+                      },
+                      {
+                        label: "Session storage",
+                        value: `${stateProjection.state.sessionStorage.originCount} origins`,
+                        meta: `${stateProjection.state.sessionStorage.keyCount} keys`,
+                      },
+                      {
+                        label: "Recent events",
+                        value: String(stateProjection.eventSummary.recentEventCount),
+                        meta: `${stateProjection.eventSummary.grantedAccessCount} granted · ${stateProjection.eventSummary.guardBlockCount} blocked`,
+                      },
+                    ]}
+                  />
+                  <NativeList
+                    density="compact"
+                    items={[
+                      {
+                        title: "Local storage origins",
+                        meta: formatLimitedList(stateProjection.state.localStorage.origins, "origins"),
+                        body: "Keys are counted but values are not exposed.",
+                      },
+                      {
+                        title: "Session storage origins",
+                        meta: formatLimitedList(stateProjection.state.sessionStorage.origins, "origins"),
+                        body: "Session storage is volatile and may disappear after restart.",
+                      },
+                      {
+                        title: "Context",
+                        meta: formatBrowserContextSummary(stateProjection),
+                        body: "Locale and timezone are shown when configured; headers, credentials, and geolocation values remain hidden.",
+                      },
+                    ]}
+                    emptyLabel="No state projection detail is available."
+                    ariaLabel="Browser session state projection"
+                  />
+                </>
+              ) : (
+                <EmptyState size="compact" title="Select a browser session to inspect retained state." />
+              )}
+            </NativeCard>
+          </>
+        ) : (
+          <NativeCard
+            title="Event timeline"
+            subtitle="Retained session events show grant changes and policy blocks without exposing browser state values."
+          >
+            <NativeList
+              density="compact"
+              items={detail.events.map((event) => ({
+                title: event.eventType,
+                meta: [event.actorId, formatDateTime(event.createdAt)].filter(Boolean).join(" · "),
+                body: formatEventPayload(event),
+              }))}
+              emptyLabel="No browser session events are attached to this session."
+              ariaLabel="Browser session events"
+              maxHeight="min(58vh, 34rem)"
+              virtualized
+            />
+          </NativeCard>
+        )}
+      </DetailInspector>
+      {leave.dialog}
     </NativePageFrame>
   );
 }
 
-function useBrowserSessionDetail(sessionId: string) {
+function useBrowserSessionDetail(sessionId: string, includeState: boolean) {
   const load = useCallback(async () => {
     if (!sessionId) {
       return {
+        sessionId,
         issues: [],
         stateProjection: null as BrowserSessionStateProjection | null,
         grants: [] as BrowserSessionGrantRecord[],
@@ -473,7 +632,7 @@ function useBrowserSessionDetail(sessionId: string) {
     }
     const stateProjection = await nativeLoad(
       "Browser session state",
-      fetchBrowserSessionState(sessionId),
+      includeState ? fetchBrowserSessionState(sessionId) : Promise.resolve(null),
       null as BrowserSessionStateProjection | null,
     );
     const grants = await nativeLoad(
@@ -487,18 +646,20 @@ function useBrowserSessionDetail(sessionId: string) {
       [] as BrowserSessionEventRecord[],
     );
     return {
+      sessionId,
       issues: nativeLoadIssues([stateProjection, grants, events]),
       stateProjection: stateProjection.data,
       grants: grants.data,
       events: events.data,
     };
-  }, [sessionId]);
+  }, [sessionId, includeState]);
   const { data, reload } = useAsyncLoad(load, [load]);
+  const current = data?.sessionId === sessionId ? data : null;
   return {
-    issues: data?.issues ?? [],
-    stateProjection: data?.stateProjection ?? null,
-    grants: data?.grants ?? [],
-    events: data?.events ?? [],
+    issues: current?.issues ?? [],
+    stateProjection: current?.stateProjection ?? null,
+    grants: current?.grants ?? [],
+    events: current?.events ?? [],
     reload,
   };
 }

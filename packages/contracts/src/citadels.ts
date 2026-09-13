@@ -33,6 +33,8 @@ export type CitadelLifecycleStatus = "active" | "archived";
 
 export interface CitadelRecord {
   citadelId: string;
+  /** Opaque revision of the persisted profile and lifecycle state. */
+  revision: string;
   name: string;
   description?: string;
   slug: string;
@@ -55,6 +57,7 @@ export interface CitadelCreateInput {
 }
 
 export interface CitadelUpdateInput {
+  expectedRevision: string;
   name?: string;
   description?: string;
   slug?: string;

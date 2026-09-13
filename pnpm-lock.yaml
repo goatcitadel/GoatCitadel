@@ -377,6 +377,9 @@ importers:
       '@goatcitadel/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@goatcitadel/remote-worker-provisioner':
+        specifier: workspace:*
+        version: link:../remote-worker-provisioner
 
   apps/remote-worker-provisioner:
     dependencies:
@@ -389,6 +392,12 @@ importers:
       '@noble/hashes':
         specifier: 1.8.0
         version: 1.8.0
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
       zod:
         specifier: 3.25.76
         version: 3.25.76

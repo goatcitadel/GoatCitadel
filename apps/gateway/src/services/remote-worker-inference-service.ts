@@ -26,6 +26,7 @@ import {
   type RemoteWorkerInferenceReleaseReason,
 } from "@goatcitadel/contracts";
 import type {
+  RemoteWorkerAssignmentProtectedCommitFence,
   RemoteWorkerInferenceFrameRecord,
   RemoteWorkerInferenceRepository,
   RemoteWorkerInferenceRequestKey,
@@ -168,6 +169,9 @@ export interface RemoteWorkerInferenceServiceOptions {
 
 export interface RemoteWorkerInferencePerformInput {
   readonly submission: RemoteWorkerInferenceRequestSubmission;
+  /** Server-authored native transport fence; never parsed from worker JSON. */
+  readonly protectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence;
+  readonly signal?: AbortSignal;
 }
 
 export type RemoteWorkerInferencePerformDisposition =
@@ -679,6 +683,7 @@ export class RemoteWorkerInferenceService {
         dispatchClaimOwner: this.options.dispatchOwnerId,
         terminalState: outcome.terminalState,
         usageEventIds: outcome.usageEventIds,
+        ...(outcome.toolCalls === undefined ? {} : { toolCalls: outcome.toolCalls }),
         now: this.options.clock(),
       });
     } catch {
@@ -1038,7 +1043,7 @@ export class RemoteWorkerInferenceService {
   }
 }
 
-function routeReceiptFor(
+export function routeReceiptFor(
   resolution: RemoteWorkerInferenceProviderResolution,
 ): RemoteWorkerInferenceEffectiveRouteReceipt {
   return normalizeRemoteWorkerInferenceEffectiveRouteReceipt({

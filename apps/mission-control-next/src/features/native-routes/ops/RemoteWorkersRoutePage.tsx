@@ -1,3 +1,9 @@
+import { RecordEvidence as WorkerRecordEvidence } from "../shared/RecordEvidence";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { FocusedDetail } from "../shared/FocusedDetail";
+import { useDraftLeave } from "../library/DraftLeaveDialog";
+import { hasSessionDraft, useSessionDraftVersion } from "../library/session-drafts";
+import { RemoteWorkerAssignmentRuntimePanel } from "./RemoteWorkerAssignmentRuntimePanel";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   RemoteWorkerAssignmentEventPage,
@@ -26,6 +32,7 @@ import {
   subscribeRemoteWorkerRealtime,
 } from "../../../app/remote-worker-realtime";
 import "./remote-workers.css";
+import { RemoteWorkerBudgetPanel } from "./RemoteWorkerBudgetPanel";
 
 const AUTHORITY_LABEL: Record<string, string> = {
   canonical_record: "Canonical",
@@ -104,7 +111,7 @@ function WorkerRow({
         {admission ? <span>gen {admission.workerGeneration}</span> : null}
         {admission ? <span>{admission.capabilityClassCount} capabilities</span> : null}
         <span>Health unavailable</span>
-        <span>Usage unavailable</span>
+        <span>Inspect assignment usage</span>
       </span>
     </button>
   );
@@ -148,6 +155,10 @@ function IdentityCard({ item }: { item: RemoteWorkerRegistryItem }) {
           <DigestReveal label="runtime manifest" digest={admission.runtimeManifestSha256} />
         </dd>
       </dl>
+      <details>
+        <summary>Admission and provenance record</summary>
+        <WorkerRecordEvidence value={item} />
+      </details>
     </section>
   );
 }
@@ -184,12 +195,10 @@ function AssignmentCard({
   assignment,
   expanded,
   events,
-  onToggle,
 }: {
   assignment: RemoteWorkerAssignmentProjection;
   expanded: boolean;
   events: RemoteWorkerAssignmentEventPage | "error" | undefined;
-  onToggle: () => void;
 }) {
   const lease = assignment.lease.value;
   const freshness = assignment.leaseFreshness.value;
@@ -225,7 +234,7 @@ function AssignmentCard({
               sent {lease.workerSentThrough} · acked {lease.serverAcknowledgedThrough}
             </dd>
             <dt>Lease</dt>
-            <dd>{freshness?.fresh ? "fresh" : "expired"}</dd>
+            <dd>{freshness ? (freshness.fresh ? "fresh" : "expired") : "unavailable"}</dd>
           </>
         ) : null}
         {control ? (
@@ -254,9 +263,7 @@ function AssignmentCard({
           </>
         ) : null}
       </dl>
-      <NativeButton variant="outline" onClick={onToggle} aria-expanded={expanded}>
-        {expanded ? "Hide events" : "Show events"}
-      </NativeButton>
+      <h3>Retained event summaries</h3>
       {expanded ? (
         <div className="mc-next-remote-workers__events">
           {events === undefined ? (
@@ -316,11 +323,13 @@ function ReconciliationCard({ reconciliation }: { reconciliation: RemoteWorkerRe
       <ReconciliationRow label="Settlement & materialization" truth={reconciliation.settlementMaterialization} />
       <div className="mc-next-remote-workers__facts">
         <TruthTag authority={reconciliation.resourceCell.authorityClass} />
-        <span>Resource cell — HX-505 owner not composed in this tranche.</span>
+        <span>
+          Resource cell reconciliation is unavailable. Stored cell evidence is available from assignment details.
+        </span>
       </div>
       <div className="mc-next-remote-workers__facts">
         <TruthTag authority={reconciliation.cleanup.authorityClass} />
-        <span>Cleanup — HX-505 owner not composed in this tranche.</span>
+        <span>Cleanup reconciliation is unavailable. Inspect retained cleanup state from its assignment.</span>
       </div>
     </section>
   );
@@ -333,6 +342,14 @@ export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
 function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
   const workspaceId = props.activeWorkspaceId;
   const registry = useRemoteWorkerRegistry(workspaceId);
+  const leave = useDraftLeave();
+  const [workerPanel, setWorkerPanel] = useState<"identity" | "budget" | null>(null);
+  const openWorkerPanel = (panel: "identity" | "budget") =>
+    leave.request(() => {
+      setExpandedAssignment(null);
+      setWorkerPanel(panel);
+    });
+  useSessionDraftVersion();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [detailScope, setDetailScope] = useState<{ workspaceId: string; workerId: string } | null>(null);
   const [detail, setDetail] = useState<RemoteWorkerRegistryDetail | null>(null);
@@ -343,6 +360,31 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
   const [expandedAssignment, setExpandedAssignment] = useState<string | null>(null);
   const [eventPages, setEventPages] = useState<Record<string, RemoteWorkerAssignmentEventPage | "error">>({});
   const detailSequenceRef = useRef(0);
+  const eventSequence = useRef(0);
+  const eventBusy = useRef(false);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [eventError, setEventError] = useState<string | null>(null);
+  const assignmentPageCount = useRef(1);
+  const [moreAssignmentsBusy, setMoreAssignmentsBusy] = useState(false);
+  const [moreAssignmentsError, setMoreAssignmentsError] = useState<string | null>(null);
+  const moreAssignmentsLock = useRef(false);
+  const loadAssignmentPages = useCallback(
+    async (workerId: string) => {
+      let result = await fetchRemoteWorkerAssignments(workspaceId, { workerId, limit: 50 });
+      const rows = new Map(result.items.map((item) => [item.assignmentId, item]));
+      const seen = new Set<string>();
+      for (let page = 1; page < assignmentPageCount.current && result.nextCursor; page++) {
+        const cursor = result.nextCursor;
+        if (seen.has(cursor)) throw new Error("Assignment cursor repeated");
+        seen.add(cursor);
+        const next = await fetchRemoteWorkerAssignments(workspaceId, { workerId, limit: 50, cursor });
+        next.items.forEach((item) => rows.set(item.assignmentId, item));
+        result = { ...next, items: [...rows.values()] };
+      }
+      return result;
+    },
+    [workspaceId],
+  );
 
   const loadDetail = useCallback(
     async (workerId: string) => {
@@ -356,7 +398,7 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
       setDetailError(null);
       const [detailResult, assignmentResult, reconciliationResult] = await Promise.allSettled([
         fetchRemoteWorkerDetail(workspaceId, workerId),
-        fetchRemoteWorkerAssignments(workspaceId, { workerId, limit: 50 }),
+        loadAssignmentPages(workerId),
         fetchRemoteWorkerReconciliation(workspaceId, workerId),
       ]);
       if (detailSequenceRef.current !== loadId) return;
@@ -366,8 +408,36 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
       setDetailError(detailResult.status === "rejected" ? "This worker's detail is unavailable." : null);
       setDetailLoading(false);
     },
-    [workspaceId],
+    [workspaceId, loadAssignmentPages],
   );
+
+  const loadMoreAssignments = async () => {
+    if (!selectedWorkerId || !assignments?.nextCursor || moreAssignmentsLock.current || detailLoading) return;
+    const id = detailSequenceRef.current;
+    const current = assignments;
+    moreAssignmentsLock.current = true;
+    setMoreAssignmentsBusy(true);
+    setMoreAssignmentsError(null);
+    try {
+      const next = await fetchRemoteWorkerAssignments(workspaceId, {
+        workerId: selectedWorkerId,
+        limit: 50,
+        cursor: current.nextCursor,
+      });
+      if (id !== detailSequenceRef.current) return;
+      if (next.nextCursor === current.nextCursor) throw new Error("Assignment cursor repeated");
+      const rows = new Map(current.items.map((item) => [item.assignmentId, item]));
+      next.items.forEach((item) => rows.set(item.assignmentId, item));
+      assignmentPageCount.current++;
+      setAssignments({ ...next, items: [...rows.values()] });
+    } catch {
+      if (id === detailSequenceRef.current)
+        setMoreAssignmentsError("Additional assignments are unavailable. Retry to continue from the loaded records.");
+    } finally {
+      moreAssignmentsLock.current = false;
+      if (id === detailSequenceRef.current) setMoreAssignmentsBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedWorkerId) {
@@ -381,7 +451,11 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
       setEventPages({});
       return;
     }
+    assignmentPageCount.current = 1;
+    setMoreAssignmentsBusy(false);
+    setMoreAssignmentsError(null);
     setExpandedAssignment(null);
+    setWorkerPanel(null);
     setEventPages({});
     void loadDetail(selectedWorkerId);
     return () => {
@@ -431,12 +505,29 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
     };
   }, [workspaceId]);
 
+  const expandedIdentity = assignments?.items.find((item) => item.assignmentId === expandedAssignment)?.identity.value;
   useEffect(() => {
-    if (!expandedAssignment) return;
+    const lifecycle = eventSequence;
+    const sequence = ++lifecycle.current;
+    eventBusy.current = false;
+    setLoadingEvents(false);
+    setEventError(null);
+    if (!expandedAssignment || expandedIdentity?.assignmentGeneration === undefined) return;
+    setEventPages((prev) => {
+      const next = { ...prev };
+      delete next[expandedAssignment];
+      return next;
+    });
     let cancelled = false;
     void (async () => {
       try {
         const page = await fetchRemoteWorkerAssignmentEvents(workspaceId, expandedAssignment, { limit: 50 });
+        if (
+          page.workspaceId !== workspaceId ||
+          page.assignmentId !== expandedAssignment ||
+          page.assignmentGeneration !== expandedIdentity.assignmentGeneration
+        )
+          throw new Error("Event generation changed");
         if (!cancelled) setEventPages((prev) => ({ ...prev, [expandedAssignment]: page }));
       } catch {
         if (!cancelled) setEventPages((prev) => ({ ...prev, [expandedAssignment]: "error" }));
@@ -444,8 +535,44 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
     })();
     return () => {
       cancelled = true;
+      if (lifecycle.current === sequence) lifecycle.current++;
     };
-  }, [expandedAssignment, workspaceId]);
+  }, [expandedAssignment, expandedIdentity?.assignmentGeneration, assignments?.observedAt, workspaceId]);
+
+  const loadNewerEvents = async () => {
+    const current = expandedAssignment ? eventPages[expandedAssignment] : undefined;
+    if (
+      !expandedAssignment ||
+      !current ||
+      current === "error" ||
+      current.nextAfterSequence === undefined ||
+      eventBusy.current
+    )
+      return;
+    const sequence = eventSequence.current;
+    eventBusy.current = true;
+    setLoadingEvents(true);
+    setEventError(null);
+    try {
+      const next = await fetchRemoteWorkerAssignmentEvents(workspaceId, expandedAssignment, {
+        limit: 50,
+        afterSequence: current.nextAfterSequence,
+      });
+      if (sequence !== eventSequence.current) return;
+      if (next.assignmentGeneration !== current.assignmentGeneration) throw new Error("Event generation changed");
+      const rows = new Map(current.items.map((item) => [item.sequence, item]));
+      next.items.forEach((item) => rows.set(item.sequence, item));
+      setEventPages((prev) => ({ ...prev, [expandedAssignment]: { ...next, items: [...rows.values()] } }));
+    } catch {
+      if (sequence === eventSequence.current)
+        setEventError("Additional event summaries are unavailable. Loaded evidence remains available.");
+    } finally {
+      if (sequence === eventSequence.current) {
+        eventBusy.current = false;
+        setLoadingEvents(false);
+      }
+    }
+  };
 
   const toggleAssignment = useCallback((assignmentId: string) => {
     setExpandedAssignment((prev) => (prev === assignmentId ? null : assignmentId));
@@ -472,45 +599,93 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
       error={null}
     >
       <div className="mc-next-remote-workers" data-has-selection={selectedWorkerId ? "true" : "false"}>
-        <section
-          className="mc-next-remote-workers__registry"
-          aria-label="Remote worker registry"
-          aria-busy={registry.loading}
-        >
-          <h2>Registry</h2>
-          {registry.error ? (
-            <ErrorState title="Registry unavailable" description={registry.error} />
-          ) : items.length === 0 && !registry.loading ? (
-            <EmptyState title="No remote workers" description="No workers have been admitted to this workspace yet." />
-          ) : (
-            items.map((item) => (
-              <WorkerRow
-                key={item.workerId}
-                item={item}
-                selected={item.workerId === selectedWorkerId}
-                onSelect={() => setSelectedWorkerId(item.workerId)}
+        {!selectedWorkerId ? (
+          <section
+            className="mc-next-remote-workers__registry"
+            aria-label="Remote worker registry"
+            aria-busy={registry.loading}
+          >
+            <h2>Registry</h2>
+            {registry.error ? (
+              <ErrorState title="Registry unavailable" description={registry.error} />
+            ) : items.length === 0 && !registry.loading ? (
+              <EmptyState
+                title="No remote workers"
+                description="No workers have been admitted to this workspace yet."
               />
-            ))
-          )}
-        </section>
+            ) : (
+              items.map((item) => (
+                <WorkerRow
+                  key={item.workerId}
+                  item={item}
+                  selected={item.workerId === selectedWorkerId}
+                  onSelect={() => setSelectedWorkerId(item.workerId)}
+                />
+              ))
+            )}
+            {registry.moreError ? <p role="alert">{registry.moreError}</p> : null}
+            {registry.page?.nextCursor ? (
+              <NativeButton variant="outline" disabled={registry.loadingMore} onClick={() => void registry.loadMore()}>
+                {registry.loadingMore ? "Loading workers…" : "Load more workers"}
+              </NativeButton>
+            ) : null}
+          </section>
+        ) : null}
 
         <section className="mc-next-remote-workers__detail" aria-label="Remote worker detail" aria-busy={detailLoading}>
           {selectedWorkerId ? (
-            <>
-              <NativeButton
-                className="mc-next-remote-workers__back"
-                variant="ghost"
-                onClick={() => setSelectedWorkerId(null)}
-              >
-                ← Back to registry
-              </NativeButton>
-              <h2>{selectedItem?.admission.value?.workerLabel ?? shortId(selectedWorkerId)}</h2>
+            <FocusedDetail
+              title={selectedItem?.admission.value?.workerLabel ?? shortId(selectedWorkerId)}
+              onClose={() => leave.request(() => setSelectedWorkerId(null))}
+            >
+              <div className="mc-next-runtime-actions">
+                <StatusChip tone={postureTone(selectedItem?.posture.value ?? null)}>
+                  {selectedItem?.posture.value ?? "Unavailable"}
+                </StatusChip>
+                <NativeButton variant="outline" onClick={() => openWorkerPanel("identity")}>
+                  Worker details
+                </NativeButton>
+                <NativeButton variant="outline" onClick={() => openWorkerPanel("budget")}>
+                  Spending budgets
+                  {hasSessionDraft("worker:" + workspaceId + ":" + selectedWorkerId + ":budget") ? " · Unsaved" : ""}
+                </NativeButton>
+                <NativeButton variant="ghost" onClick={() => void loadDetail(selectedWorkerId)}>
+                  Refresh worker
+                </NativeButton>
+              </div>
               {visibleDetailError ? (
                 <ErrorState title="Detail unavailable" description={visibleDetailError} size="inline" />
               ) : null}
-              {selectedItem ? <IdentityCard item={selectedItem} /> : null}
-              {selectedItem ? <ControlsCard item={selectedItem} /> : null}
-
+              <DetailInspector
+                open={workerPanel === "identity"}
+                title="Worker details"
+                onClose={() => setWorkerPanel(null)}
+              >
+                {selectedItem ? (
+                  <>
+                    <IdentityCard item={selectedItem} />
+                    <ControlsCard item={selectedItem} />
+                  </>
+                ) : null}
+                {visibleReconciliation ? (
+                  <ReconciliationCard reconciliation={visibleReconciliation} />
+                ) : (
+                  <p>Reconciliation unavailable.</p>
+                )}
+              </DetailInspector>
+              <DetailInspector
+                open={workerPanel === "budget"}
+                title="Spending budgets"
+                onClose={() => leave.request(() => setWorkerPanel(null))}
+              >
+                {selectedItem ? (
+                  <RemoteWorkerBudgetPanel
+                    key={`${workspaceId}:${selectedItem.workerId}:${selectedItem.admission.value?.workerGeneration}`}
+                    workspaceId={workspaceId}
+                    worker={selectedItem}
+                  />
+                ) : null}
+              </DetailInspector>
               <section className="mc-next-remote-workers__section" aria-label="Assignments">
                 <h3>Assignments</h3>
                 {visibleAssignments === null ? (
@@ -519,35 +694,88 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
                   <p className="mc-next-remote-workers__unavailable">No assignments reference this worker.</p>
                 ) : (
                   visibleAssignments.items.map((assignment) => (
-                    <AssignmentCard
-                      key={assignment.assignmentId}
-                      assignment={assignment}
-                      expanded={expandedAssignment === assignment.assignmentId}
-                      events={eventPages[assignment.assignmentId]}
-                      onToggle={() => toggleAssignment(assignment.assignmentId)}
-                    />
+                    <article className="mc-next-remote-workers__assignment" key={assignment.assignmentId}>
+                      <div className="mc-next-remote-workers__assignment-head">
+                        <strong>{shortId(assignment.assignmentId)}</strong>
+                        <StatusChip tone={phaseTone(assignment.phase.value)}>
+                          {assignment.phase.value ?? "unknown"}
+                        </StatusChip>
+                      </div>
+                      <p>
+                        {assignment.lineage.value?.sessionId
+                          ? "Session " + shortId(assignment.lineage.value.sessionId)
+                          : "Session unavailable"}
+                        {assignment.settlement.value ? " · " + assignment.settlement.value.outcome : ""}
+                      </p>
+                      <NativeButton
+                        variant="outline"
+                        aria-label={"Inspect assignment " + assignment.assignmentId}
+                        onClick={() =>
+                          leave.request(() => {
+                            setWorkerPanel(null);
+                            toggleAssignment(assignment.assignmentId);
+                          })
+                        }
+                      >
+                        Assignment details
+                      </NativeButton>
+                    </article>
                   ))
                 )}
+                {moreAssignmentsError ? <p role="alert">{moreAssignmentsError}</p> : null}
+                {visibleAssignments?.nextCursor ? (
+                  <NativeButton
+                    variant="outline"
+                    disabled={moreAssignmentsBusy}
+                    onClick={() => void loadMoreAssignments()}
+                  >
+                    {moreAssignmentsBusy ? "Loading assignments…" : "Load more assignments"}
+                  </NativeButton>
+                ) : null}
               </section>
 
-              {visibleReconciliation ? <ReconciliationCard reconciliation={visibleReconciliation} /> : null}
-
-              <section className="mc-next-remote-workers__section" aria-label="Usage and diagnostics">
-                <h3>Usage & diagnostics</h3>
-                <p className="mc-next-remote-workers__unavailable">
-                  Usage and cost (HX-503) and bounded diagnostics are not composed in this visibility tranche. No cost
-                  or health is inferred from absent evidence.
-                </p>
-              </section>
-            </>
-          ) : (
-            <EmptyState
-              title="Select a worker"
-              description="Choose a remote worker to inspect its identity, assignments, and reconciliation."
-            />
-          )}
+              <DetailInspector
+                open={Boolean(expandedAssignment)}
+                title="Assignment details"
+                onClose={() => setExpandedAssignment(null)}
+              >
+                {visibleAssignments?.items
+                  .filter((assignment) => assignment.assignmentId === expandedAssignment)
+                  .map((assignment) => (
+                    <div key={assignment.assignmentId}>
+                      <RemoteWorkerAssignmentRuntimePanel
+                        workspaceId={workspaceId}
+                        assignment={assignment}
+                        refreshKey={visibleAssignments.observedAt}
+                      />
+                      <AssignmentCard assignment={assignment} expanded events={eventPages[assignment.assignmentId]} />
+                      {eventError ? <p role="alert">{eventError}</p> : null}
+                      <NativeButton
+                        variant="outline"
+                        disabled={
+                          loadingEvents ||
+                          !eventPages[assignment.assignmentId] ||
+                          eventPages[assignment.assignmentId] === "error"
+                        }
+                        onClick={() => void loadNewerEvents()}
+                      >
+                        {loadingEvents ? "Loading summaries…" : "Load newer event summaries"}
+                      </NativeButton>
+                      <details>
+                        <summary>Canonical assignment record</summary>
+                        <WorkerRecordEvidence value={assignment} />
+                      </details>
+                    </div>
+                  ))}
+                {!visibleAssignments?.items.some((assignment) => assignment.assignmentId === expandedAssignment) ? (
+                  <p>Assignment evidence is loading or unavailable.</p>
+                ) : null}
+              </DetailInspector>
+            </FocusedDetail>
+          ) : null}
         </section>
       </div>
+      {leave.dialog}
     </NativePageFrame>
   );
 }

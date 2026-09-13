@@ -508,7 +508,10 @@ describe("Postgres dynamic-bootstrap replacement locking", () => {
         `);
 
         const converged = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
-        assert.deepEqual(converged.appliedVersions, [140, 141, 142, 143, 144]);
+        assert.deepEqual(
+          converged.appliedVersions,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 140).map((migration) => migration.version),
+        );
       } finally {
         await migrationClient.close();
         await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);

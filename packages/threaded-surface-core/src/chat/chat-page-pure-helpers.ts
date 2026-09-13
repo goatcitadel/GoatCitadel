@@ -84,6 +84,8 @@ export interface FinalizedStreamMessageState {
 type SuggestionSyncItem = ChatCapabilityUpgradeSuggestion | ChatSpecialistCandidateSuggestionRecord;
 
 export interface RevealGeneratedArtifactInput {
+  isCurrent?: () => boolean;
+  onOpenArtifact?: () => void;
   artifact: ChatGeneratedArtifactRecord;
   compactSurfaceLayout: boolean;
   messageMode: ChatMode;
@@ -535,16 +537,24 @@ export function parseQueueCommand(draft: string): QueueCommand | null {
 }
 
 export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArtifactInput): Promise<void> {
+  if (input.isCurrent?.() === false) return;
   if (input.compactSurfaceLayout) {
     input.setSessionRailOpen(false);
     input.setDockOpen(false);
   }
   input.setActiveGeneratedArtifact(input.artifact);
   input.setSelectedTurnId(input.artifact.turnId);
+  input.onOpenArtifact?.();
+  input.handleNavigateSurface(input.messageMode, {
+    sessionId: input.artifact.sessionId,
+    turnId: input.artifact.turnId,
+    artifactId: input.artifact.artifactId,
+  });
   await input.loadSessionCoreState(input.artifact.sessionId, {
     background: true,
     includeThread: true,
   });
+  if (input.isCurrent?.() === false) return;
   input.setGeneratedArtifacts((current) =>
     current
       ? {
@@ -553,9 +563,5 @@ export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArt
         }
       : current,
   );
-  input.handleNavigateSurface(input.messageMode, {
-    sessionId: input.artifact.sessionId,
-    turnId: input.artifact.turnId,
-    artifactId: input.artifact.artifactId,
-  });
+
 }

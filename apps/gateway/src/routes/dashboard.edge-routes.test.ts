@@ -243,16 +243,16 @@ describe("dashboard route edge coverage", () => {
       settings: {
         getPersonalityCatalog: vi.fn(() => ({ items: [] })),
         createPersonality: vi.fn(() => {
-          throw new Error("create rejected");
+          throw new ValidationError({ message: "create rejected" });
         }),
         updatePersonality: vi.fn(() => {
-          throw new Error("update rejected");
+          throw new ValidationError({ message: "update rejected" });
         }),
         deletePersonality: vi.fn(() => {
-          throw new Error("delete rejected");
+          throw new ValidationError({ message: "delete rejected" });
         }),
         setDefaultPersonality: vi.fn(() => {
-          throw new Error("default rejected");
+          throw new ValidationError({ message: "default rejected" });
         }),
       },
     };
@@ -266,13 +266,13 @@ describe("dashboard route edge coverage", () => {
       (await app.inject({ method: "POST", url: "/api/v1/personalities", payload: { category: "bad" } })).statusCode,
     ).toBe(400);
     expect(
-      (await app.inject({ method: "POST", url: "/api/v1/personalities", payload: { label: "Custom" } })).statusCode,
+      (await app.inject({ method: "POST", url: "/api/v1/personalities", payload: { expectedRevision: "a".repeat(64), label: "Custom" } })).statusCode,
     ).toBe(400);
     expect((await app.inject({ method: "PATCH", url: "/api/v1/personalities/default", payload: {} })).statusCode).toBe(
       400,
     );
     expect(
-      (await app.inject({ method: "PATCH", url: "/api/v1/personalities/default", payload: { personalityId: "x" } }))
+      (await app.inject({ method: "PATCH", url: "/api/v1/personalities/default", payload: { expectedRevision: "a".repeat(64), personalityId: "x" } }))
         .statusCode,
     ).toBe(400);
     expect(
@@ -280,9 +280,12 @@ describe("dashboard route edge coverage", () => {
         .statusCode,
     ).toBe(400);
     expect(
-      (await app.inject({ method: "PATCH", url: "/api/v1/personalities/operator", payload: { label: "New" } }))
+      (await app.inject({ method: "PATCH", url: "/api/v1/personalities/operator", payload: { expectedRevision: "a".repeat(64), label: "New" } }))
         .statusCode,
     ).toBe(400);
-    expect((await app.inject({ method: "DELETE", url: "/api/v1/personalities/operator" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "DELETE", url: "/api/v1/personalities/operator", payload: { expectedRevision: "a".repeat(64) } })).statusCode).toBe(400);
+    for (const method of ["createPersonality", "updatePersonality", "deletePersonality", "setDefaultPersonality"] as const) {
+      expect(services.settings[method]).toHaveBeenCalledOnce();
+    }
   });
 });

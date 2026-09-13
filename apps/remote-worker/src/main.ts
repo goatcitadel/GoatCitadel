@@ -1,37 +1,60 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { runConnectedWorker } from "./connected-worker-runtime.js";
-import { parseConnectedWorkerConfig } from "./worker-runtime-config.js";
+import { parseConnectedWorkerStartup } from "./worker-runtime-config.js";
+import { runWorkerProcess, WorkerProcessRecoveryRequiredError } from "./worker-process-runtime.js";
+import { acquireWorkerStateOwnership } from "./worker-state-ownership.js";
+import { writeWorkerProcessReport } from "./worker-process-report.js";
+import { attachWorkerHostControl } from "./worker-host-control.js";
+import { loadWorkerMeshToolRegistry } from "./worker-mesh-tool-registry.js";
+import { WorkerMeshCapabilityRuntime } from "./worker-mesh-capability-runtime.js";
 
 /**
  * Connected-worker process entrypoint.
  *
  * This is the real second process the connected-worker end-to-end proof spawns:
  * it admits itself over native mTLS, polls and claims a dispatched offer, reads
- * its workload, exchanges inference through the Gateway, ships ordered
- * transcript events, renews its lease, settles artifacts and effects, and
- * settles the assignment — carrying nothing across a restart except its own
- * durable state.
+ * its workload, exchanges governed inference through the Gateway, and ships
+ * verified ordered output. It publishes a verified text artifact and recovers
+ * final settlement from retained state. The separate protocol_probe mode exercises
+ * transport recovery with controlled text and cannot certify useful work.
  *
  * It writes a single JSON report so the harness observes the run's outcome
  * without parsing logs, and it never prints secrets.
  */
 async function main(): Promise<void> {
-  const config = parseConnectedWorkerConfig();
-  let report: Readonly<Record<string, unknown>>;
+  const { config, protectedKeys } = parseConnectedWorkerStartup();
+  const shutdown = new AbortController();
+  const stop = () => shutdown.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  const detachHostControl = attachWorkerHostControl(process.env, process.stdin, stop);
+  let release: (() => Promise<void>) | undefined;
   let exitCode = 0;
+  const publishReport = (report: Readonly<Record<string, unknown>>) =>
+    writeWorkerProcessReport(config.reportFile, report);
   try {
-    report = await runConnectedWorker(config);
+    release = await acquireWorkerStateOwnership(config.stateDir);
+    const meshCapabilities = config.meshRegistry ? await loadWorkerMeshToolRegistry(config.meshRegistry, {
+      workspaceId: config.ticket.executionWorkspaceId, nodeId: config.ticket.nodeId,
+    }, shutdown.signal) : new WorkerMeshCapabilityRuntime([]);
+    await runWorkerProcess(config, { signal: shutdown.signal, publishReport, protectedKeys, meshCapabilities });
   } catch (error) {
     exitCode = 1;
-    report = Object.freeze({
-      runId: config.runId,
-      outcome: "failed",
-      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-    });
+    process.stderr.write("Connected worker stopped. Inspect its report and retained state ownership.\n");
+    // A competing process must not overwrite the current owner's report.
+    if (release)
+      await publishReport({
+        runId: config.runId,
+        outcome: "failed",
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        ...(error instanceof WorkerProcessRecoveryRequiredError
+          ? { lastReport: error.report, recoveryRequired: true }
+          : {}),
+      });
+  } finally {
+    detachHostControl();
+    await release?.();
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
   }
-  await mkdir(dirname(config.reportFile), { recursive: true });
-  await writeFile(config.reportFile, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   process.exitCode = exitCode;
 }
 

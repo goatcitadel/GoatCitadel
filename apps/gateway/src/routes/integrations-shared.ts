@@ -16,7 +16,7 @@ export const catalogQuerySchema = z.object({
   kind: kindEnum.optional(),
 });
 
-export async function resolveRoutePersonalityCatalog(services: unknown): Promise<PersonalityCatalogResponse> {
+export async function resolveRoutePersonalityCatalog(services: unknown): Promise<Omit<PersonalityCatalogResponse, "revision">> {
   const settings = (
     services as {
       settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse | Promise<PersonalityCatalogResponse> };

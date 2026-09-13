@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- Keep legacy and remote-worker publication authority decisions auditable in one owner. */
 /**
  * HX-408 M1: the authenticated mesh capability publication owner.
  *
@@ -45,6 +44,11 @@ import {
   type MeshCapabilityKind,
   type MeshCapabilityManifest,
   type MeshCapabilityManifestEntry,
+  type MeshCapabilityManifestEntrySubmission,
+  type MeshCapabilityManifestPublishSubmission,
+  type MeshCapabilityManifestPublishReceipt,
+  type MeshCapabilityPublicationManifestView,
+  type MeshCapabilityOwnPublicationList,
   type MeshCapabilityNodeAdmissionRecord,
   type MeshCapabilityPublisherGenerationRecord,
   type MeshCapabilityPublisherHealthRecord,
@@ -83,41 +87,13 @@ export interface MeshCapabilityNodeAuthFailure {
   message: string;
 }
 
-export interface MeshCapabilityManifestEntrySubmission {
-  localId: string;
-  kind: MeshCapabilityKind;
-  descriptor: Record<string, unknown>;
-  descriptorSha256: string;
-}
-
-export interface MeshCapabilityManifestPublishSubmission {
-  publicationKey: string;
-  supersedesManifestSha256?: string;
-  entries: MeshCapabilityManifestEntrySubmission[];
-}
-
-export interface MeshCapabilityManifestPublishReceipt {
-  replayed: boolean;
-  manifest: MeshCapabilityManifest;
-  entries: MeshCapabilityCatalogEntryProjection[];
-}
-
-export interface MeshCapabilityPublicationManifestView {
-  publicationKey: string;
-  manifestSha256: string;
-  admissionGeneration: number;
-  publisherGeneration: number;
-  createdAt: string;
-  supersedesManifestSha256?: string;
-  supersededByManifestSha256?: string;
-  entries: MeshCapabilityCatalogEntryProjection[];
-}
-
-export interface MeshCapabilityOwnPublicationList {
-  workspaceId: string;
-  nodeId: string;
-  manifests: MeshCapabilityPublicationManifestView[];
-}
+export type {
+  MeshCapabilityManifestEntrySubmission,
+  MeshCapabilityManifestPublishSubmission,
+  MeshCapabilityManifestPublishReceipt,
+  MeshCapabilityPublicationManifestView,
+  MeshCapabilityOwnPublicationList,
+} from "@goatcitadel/contracts";
 
 export interface MeshCapabilityPublicationInspection {
   workspaceId: string;
@@ -348,7 +324,7 @@ export class MeshCapabilityPublicationService {
     submission: MeshCapabilityManifestPublishSubmission,
   ): Promise<MeshCapabilityManifestPublishReceipt> {
     const entries = this.buildManifestEntries(identity.nodeId, submission.entries);
-    const authorityFence = remoteWorkerAuthorityFence(identity);
+    const authorityFence = resolveMeshCapabilityNodeAuthorityFence(identity);
     const replay =
       authorityFence === undefined
         ? await this.resolvePublicationKeyReplay(identity, submission, entries)
@@ -877,7 +853,7 @@ export class MeshCapabilityPublicationService {
   }> {
     const publications = this.storage.meshCapabilityPublications;
     const current = await publications.findCurrentPublisher(identity.workspaceId, identity.nodeId);
-    const authorityFence = remoteWorkerAuthorityFence(identity);
+    const authorityFence = resolveMeshCapabilityNodeAuthorityFence(identity);
     if (current && authorityFence === undefined) {
       const reused = await this.tryReuseCurrentGeneration(identity, current);
       if (reused) {
@@ -1077,7 +1053,7 @@ function fingerprintEquals(left: string | undefined, right: string | undefined):
   return timingSafeStringEqual(left, right);
 }
 
-function remoteWorkerAuthorityFence(
+export function resolveMeshCapabilityNodeAuthorityFence(
   identity: MeshCapabilityAuthenticatedNodeIdentity,
 ): RemoteWorkerMeshNodeAuthorityFence | undefined {
   if (identity.provenance === "legacy") {

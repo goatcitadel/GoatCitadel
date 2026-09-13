@@ -8,6 +8,7 @@ import type {
 import { CHAT_MODE_POLICY } from "./policies/chat-policy.js";
 import { hasLiveDataKeywords, shouldPreferToolBackedChatPath } from "./live-data-detect.js";
 import { selectOrchestrationModel } from "./model-selector.js";
+import { hasArtifactInspectionOnlyIntent } from "../services/chat-artifact-intent.js";
 import type {
   ModeOrchestrationPolicy,
   OrchestrationPlan,
@@ -499,6 +500,7 @@ function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: 
 }
 
 function detectPresentationArtifactIntent(content: string): boolean {
+  if (hasArtifactInspectionOnlyIntent(content)) return false;
   const normalized = content.toLowerCase();
   if (hasArtifactNegation(normalized)) {
     return false;
@@ -510,6 +512,7 @@ function detectPresentationArtifactIntent(content: string): boolean {
 }
 
 function detectDocumentArtifactIntent(content: string): boolean {
+  if (hasArtifactInspectionOnlyIntent(content)) return false;
   const normalized = content.toLowerCase();
   if (hasArtifactNegation(normalized)) {
     return false;

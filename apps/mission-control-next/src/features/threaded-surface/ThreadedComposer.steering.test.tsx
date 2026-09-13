@@ -1,3 +1,4 @@
+vi.mock("./ChatOptionsPopover", () => ({ ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 import React, { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";

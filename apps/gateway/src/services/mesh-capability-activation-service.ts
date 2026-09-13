@@ -360,29 +360,47 @@ export class MeshCapabilityActivationService {
     manifestSha256: string;
     publisherGeneration: number;
   }): Promise<ChatTurnCapabilityToolMeshPublicationBinding | undefined> {
-    const activation = (await this.storage.meshCapabilityPublications.listCallableActivations(input.workspaceId)).find(
-      (candidate) => candidate.capabilityId === input.capabilityId,
+    return (await this.resolveProfileBindings(input.workspaceId, [input])).get(input.capabilityId);
+  }
+
+  /** Read current authority once for a catalog batch; later dispatch still revalidates. */
+  public async resolveProfileBindings(
+    workspaceId: string,
+    inputs: readonly {
+      capabilityId: string;
+      entrySha256: string;
+      manifestSha256: string;
+      publisherGeneration: number;
+    }[],
+  ): Promise<Map<string, ChatTurnCapabilityToolMeshPublicationBinding>> {
+    const result = new Map<string, ChatTurnCapabilityToolMeshPublicationBinding>();
+    if (inputs.length === 0) return result;
+    const activations = new Map(
+      (await this.storage.meshCapabilityPublications.listCallableActivations(workspaceId))
+        .map((activation) => [activation.capabilityId, activation]),
     );
-    if (
-      !activation ||
-      activation.entrySha256 !== input.entrySha256 ||
-      activation.manifestSha256 !== input.manifestSha256 ||
-      activation.publisherGeneration !== input.publisherGeneration
-    ) {
-      return undefined;
+    const seen = new Set<string>();
+    for (const input of inputs) {
+      if (seen.has(input.capabilityId)) throw new Error("Duplicate mesh profile binding request");
+      seen.add(input.capabilityId);
+      const activation = activations.get(input.capabilityId);
+      if (!activation || activation.entrySha256 !== input.entrySha256 ||
+        activation.manifestSha256 !== input.manifestSha256 ||
+        activation.publisherGeneration !== input.publisherGeneration) continue;
+      result.set(input.capabilityId, Object.freeze({
+        nodeId: activation.nodeId,
+        publisherGeneration: activation.publisherGeneration,
+        manifestSha256: activation.manifestSha256,
+        entrySha256: activation.entrySha256,
+        activationId: activation.activationId,
+        activationRevision: activation.activationRevision,
+        publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+        permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
+        effectPosture: activation.effectPosture,
+        healthGeneration: activation.healthGeneration,
+      }));
     }
-    return Object.freeze({
-      nodeId: activation.nodeId,
-      publisherGeneration: activation.publisherGeneration,
-      manifestSha256: activation.manifestSha256,
-      entrySha256: activation.entrySha256,
-      activationId: activation.activationId,
-      activationRevision: activation.activationRevision,
-      publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
-      permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
-      effectPosture: activation.effectPosture,
-      healthGeneration: activation.healthGeneration,
-    });
+    return result;
   }
 
   /**

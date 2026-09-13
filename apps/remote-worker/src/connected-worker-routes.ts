@@ -10,6 +10,7 @@ import {
 import type { RetainedRuntimeCredential } from "./worker-credential-vault.js";
 import { callProtectedRoute } from "./worker-protected-route-client.js";
 import type { WorkerWireClient, WorkerWireResponse } from "./worker-wire-client.js";
+import type { WorkerProtectedKeyOwner } from "./worker-protected-key-owner.js";
 
 /**
  * Worker-side call sites for the credential-authority routes the connected
@@ -69,6 +70,7 @@ export const WORKER_ROUTES = Object.freeze({
 export interface RouteContext {
   readonly client: WorkerWireClient;
   readonly credential: RetainedRuntimeCredential;
+  readonly protectedKeys?: WorkerProtectedKeyOwner;
 }
 
 export interface LeaseBinding {
@@ -343,6 +345,7 @@ export async function settleAssignment(
     readonly finalEventSha256: string;
     readonly settlement: WorkerSettlementOutcome;
     readonly idempotencyKey: string;
+    readonly renewalLeaseToken?: string;
   },
 ): Promise<WorkerWireResponse> {
   return await callProtectedRoute({
@@ -357,6 +360,7 @@ export async function settleAssignment(
       assignmentGeneration: lease.assignmentGeneration,
       leaseRevision: lease.leaseRevision,
       leaseToken: lease.leaseToken,
+      ...(input.renewalLeaseToken === undefined ? {} : { renewalLeaseToken: input.renewalLeaseToken }),
       finalEventSequence: input.finalEventSequence,
       finalEventSha256: input.finalEventSha256,
       ...input.settlement,

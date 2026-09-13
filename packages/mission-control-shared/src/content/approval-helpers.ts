@@ -167,7 +167,7 @@ function collectApprovalEvidence(
     const record = current as Record<string, unknown>;
     for (const [key, value] of Object.entries(record)) {
       if (typeof value === "string") {
-        if (isFilesystemKey(key)) {
+        if (isFilesystemKey(key) || /^(candidateId|versionId|subjectId|subjectKind|scopeKind)$/.test(key)) {
           collector.targets.add(`${humanizeKey(key)}: ${value}`);
         } else if (isLikelyCommandKey(key) && value.trim()) {
           collector.commands.add(`${humanizeKey(key)}: ${truncateEvidence(value, 140)}`);

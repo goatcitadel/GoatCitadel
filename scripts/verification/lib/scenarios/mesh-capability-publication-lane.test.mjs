@@ -68,6 +68,11 @@ test("the lane check table is complete, uniquely named, and cites only test file
   const livePostgres = checks.find((check) => check.id === "mesh-publication.live-postgres");
   assert.equal(livePostgres.kind, "live-postgres");
   assert.equal(livePostgres.requireAllExecuted, true, "the live-PG suite may never self-skip inside the lane");
+  assert.deepEqual(livePostgres.args, [
+    "--filter", "@goatcitadel/storage", "exec", "tsx", "--test",
+    "src/mesh-capability-publication-repo.postgres.test.ts",
+    "src/mesh-capability-node-admission-repo.test.ts",
+  ], "the hermetic phase must execute the admission races that self-skip in the earlier storage phase");
   assert.ok(
     fs.existsSync(path.join(repoRoot, "packages/storage/src/mesh-capability-publication-repo.postgres.test.ts")),
     "the live-PG parity suite exists",

@@ -1,4 +1,6 @@
 import type { TurnRuntime, TurnRuntimeRequest, TurnRuntimeResult } from "@goatcitadel/orchestration";
+import type { NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
+import type { MeshChatToolSchema } from "./gateway/mesh-chat-catalog.js";
 import {
   ChatTurnAgentRunner,
   type ChatTurnAgentRunnerDeps,
@@ -21,7 +23,11 @@ export class GatewayTurnRuntime implements TurnRuntime {
     yield* this.orchestrator.runStream(input);
   }
 
-  public resolveCapabilityToolSchema(input: ChatTurnAgentRunnerInput): Promise<ResolvedChatTurnToolSchema> {
-    return this.orchestrator.resolveCapabilityToolSchema(input);
+  public resolveCapabilityToolSchema(
+    input: ChatTurnAgentRunnerInput,
+    nativeTools?: readonly NativeMcpChatToolSchema[],
+    meshTools?: readonly MeshChatToolSchema[],
+  ): Promise<ResolvedChatTurnToolSchema> {
+    return this.orchestrator.resolveCapabilityToolSchema(input, nativeTools, meshTools);
   }
 }

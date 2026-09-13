@@ -5,6 +5,14 @@ import { commitMutationIdempotencyAlongsideCanonicalWrite, markMutationCommitted
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 import { normalizeMemoryForgetCriteria } from "../services/security-utils.js";
+import {
+  maintenancePolicyPatchSchema,
+  maintenanceRecommendationAcceptSchema,
+  maintenanceRecommendationDecisionSchema,
+  maintenanceRecommendationParamsSchema,
+  maintenanceRunNowSchema,
+  maintenanceRunParamsSchema,
+} from "./memory-maintenance-schemas.js";
 
 const composeSchema = z.object({
   scope: z.enum(["chat", "orchestration"]),
@@ -61,56 +69,16 @@ const workspaceQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).optional(),
 });
 
-const maintenancePolicyPatchSchema = z.object({
-  workspaceId: z.string().trim().min(1).optional(),
-  enabled: z.boolean().optional(),
-  runMode: z.enum(["manual", "scheduled", "hybrid"]).optional(),
-  timingStrategy: z.enum(["fixed", "recommendation_first"]).optional(),
-  schedule: z
-    .object({
-      frequency: z.enum(["daily", "weekly"]),
-      hour: z.number().int().min(0).max(23),
-      minute: z.number().int().min(0).max(59),
-      weekday: z.number().int().min(0).max(6).optional(),
-    })
-    .nullable()
-    .optional(),
-  timeZone: z.string().trim().min(1).optional(),
-  minHoursSinceLastSuccess: z
-    .number()
-    .int()
-    .min(0)
-    .max(24 * 365)
-    .optional(),
-  minChangedSessions: z.number().int().min(1).max(10_000).optional(),
-  providerId: z.string().trim().min(1).nullable().optional(),
-  model: z.string().trim().min(1).nullable().optional(),
-  executionTarget: z.enum(["auto", "local", "cloud"]).optional(),
-  unavailableModelPolicy: z.enum(["skip", "error"]).optional(),
-});
-
-const maintenanceRunNowSchema = z.object({
-  workspaceId: z.string().trim().min(1),
-  triggerSource: z.enum(["manual", "recommendation"]).optional(),
-});
-
-const maintenanceRunParamsSchema = z.object({
-  runId: z.string().trim().min(1),
-});
-
-const maintenanceRecommendationParamsSchema = z.object({
-  recommendationId: z.string().trim().min(1),
-});
-
 const listItemsQuerySchema = z.object({
-  namespace: z.string().optional(),
-  workspaceId: z.string().trim().min(1).optional(),
+  namespace: z.string().max(2_000).optional(),
+  workspaceId: z.string().trim().min(1).max(2_000).optional(),
   // Finding (memory privacy): default to "active" so a request that omits `status`
   // does NOT return forgotten items' content. Callers must opt in explicitly with
   // `status=forgotten` or `status=all` to see forgotten records.
   status: z.enum(["active", "forgotten", "all"]).default("active"),
-  query: z.string().optional(),
+  query: z.string().max(2_000).optional(),
   limit: z.coerce.number().int().positive().max(500).default(200),
+  cursor: z.string().min(1).max(2_048).optional(),
 });
 
 const structuredScopeSchema = z.enum(["global", "workspace", "session", "run"]);
@@ -461,9 +429,16 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
+    if (parsed.data.workspaceId && query.data.workspaceId && parsed.data.workspaceId !== query.data.workspaceId) {
+      return reply.code(400).send({ error: "The workspace in the request body and query must match." });
+    }
     try {
       const { workspaceId, ...patch } = parsed.data;
-      return reply.send(await memory.patchMaintenancePolicy(workspaceId, patch));
+      const policy = await memory.patchMaintenancePolicy(workspaceId ?? query.data.workspaceId, patch);
+      await markMutationCommitted(request);
+      return reply.send(policy);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -550,8 +525,12 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       if (!parsed.success) {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
+      const input = maintenanceRecommendationAcceptSchema.safeParse(request.body ?? {});
+      if (!input.success) return reply.code(400).send({ error: input.error.flatten() });
       try {
-        return reply.send(await memory.acceptMaintenanceRecommendation(parsed.data.recommendationId));
+        const accepted = await memory.acceptMaintenanceRecommendation(parsed.data.recommendationId, input.data);
+        await markMutationCommitted(request);
+        return reply.send(accepted);
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
@@ -566,8 +545,12 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       if (!parsed.success) {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
+      const input = maintenanceRecommendationDecisionSchema.safeParse(request.body ?? {});
+      if (!input.success) return reply.code(400).send({ error: input.error.flatten() });
       try {
-        return reply.send(await memory.rejectMaintenanceRecommendation(parsed.data.recommendationId));
+        const rejected = await memory.rejectMaintenanceRecommendation(parsed.data.recommendationId, input.data);
+        await markMutationCommitted(request);
+        return reply.send(rejected);
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
@@ -738,9 +721,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({
-        items: await memory.listItems(parsed.data),
-      });
+      return reply.send(await memory.listItems(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

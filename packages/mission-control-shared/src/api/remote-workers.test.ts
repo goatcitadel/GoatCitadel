@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchRemoteWorkerAssignmentRuntime,
   fetchRemoteWorkerAssignmentEvents,
   fetchRemoteWorkerAssignments,
   fetchRemoteWorkerDetail,
@@ -96,5 +97,43 @@ describe("remote-worker Ops client URL construction", () => {
   it("throws when the server returns a smuggled or malformed envelope", async () => {
     apiMocks.request.mockResolvedValue({ schemaVersion: "wrong", items: [{ payload: { secret: "x" } }] });
     await expect(fetchRemoteWorkerAssignmentEvents("workspace-a", "assign-a")).rejects.toThrow();
+  });
+});
+
+describe("canonical assignment runtime client", () => {
+  const observedAt = "2026-09-12T12:00:00.000Z";
+  const truth = (owner: string, authorityClass: string) => ({ value: null, owner, authorityClass, observedAt });
+  const empty = () => ({
+    schemaVersion: "goatcitadel.remote-worker-assignment-runtime.v1",
+    readOnly: true,
+    mutationSemantics: "none",
+    workspaceId: "workspace-a",
+    assignmentId: "assign-a",
+    assignmentGeneration: null,
+    workerId: null,
+    workerGeneration: null,
+    observedAt,
+    usageAndCost: truth("storage.remoteWorkerRuntimeReads", "derived_projection"),
+    resourceCell: truth("storage.remoteWorkerCells", "canonical_record"),
+    artifactAndEffects: truth("storage.remoteWorkerRuntimeReads", "derived_projection"),
+    connectionHealth: truth("gateway.remoteWorkerListener", "unavailable"),
+  });
+  it("validates and binds the read-only response to the exact workspace and assignment", async () => {
+    apiMocks.request.mockResolvedValue(empty());
+    const result = await fetchRemoteWorkerAssignmentRuntime("workspace-a", "assign-a");
+    expect(capturedUrl()).toBe("/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime");
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(result.usageAndCost.value).toBeNull();
+    apiMocks.request.mockResolvedValue({ ...empty(), workspaceId: "workspace-b" });
+    await expect(fetchRemoteWorkerAssignmentRuntime("workspace-a", "assign-a")).rejects.toThrow("requested scope");
+    apiMocks.request.mockResolvedValue({ ...empty(), assignmentId: "assign-b" });
+    await expect(fetchRemoteWorkerAssignmentRuntime("workspace-a", "assign-a")).rejects.toThrow("requested scope");
+  });
+  it("rejects malformed and credential-bearing payloads without inventing runtime evidence", async () => {
+    apiMocks.request.mockResolvedValue({ ...empty(), secret: "synthetic-must-not-render" });
+    await expect(fetchRemoteWorkerAssignmentRuntime("workspace-a", "assign-a")).rejects.toThrow();
+    apiMocks.request.mockClear();
+    await expect(fetchRemoteWorkerAssignmentRuntime("workspace-a", "../invalid")).rejects.toThrow();
+    expect(apiMocks.request).not.toHaveBeenCalled();
   });
 });

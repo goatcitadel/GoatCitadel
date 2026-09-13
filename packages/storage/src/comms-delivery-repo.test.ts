@@ -29,6 +29,38 @@ function createRepo(): CommsDeliveryRepository {
 }
 
 describe("CommsDeliveryRepository", () => {
+  it("restores delivery diagnostics from the canonical persisted payload", () => {
+    const repo = createRepo();
+    const diagnostics = { chunking: { mode: "none", partCount: 1, originalCodePointLength: 5,
+      maxPartUtf16Length: 4096, parts: [{ partIndex: 0, codePointLength: 5, utf16Length: 5 }] } };
+    const queued = repo.createQueued({ connectionId: "conn", channelKey: "telegram", target: "-123456",
+      payload: { message: "hello", deliveryDiagnostics: diagnostics } });
+    repo.markSent(queued.deliveryId, "ack");
+    assert.deepEqual(repo.getById(queued.deliveryId)?.deliveryDiagnostics, diagnostics);
+    assert.deepEqual(repo.list()[0]?.deliveryDiagnostics, diagnostics);
+    const malformed = repo.createQueued({ connectionId: "conn", channelKey: "telegram", target: "-123456",
+      payload: { deliveryDiagnostics: ["invalid"] } });
+    assert.equal(repo.getById(malformed.deliveryId)?.deliveryDiagnostics, undefined);
+  });
+
+  it("reads the exact persisted delivery even outside the recent inventory", () => {
+    const repo = createRepo();
+    const input = { connectionId: "conn-1", channelKey: "telegram", target: "-123456", payload: { message: "hello" } };
+    const original = repo.createQueued(input, "2026-09-12T00:00:00.000Z");
+    for (let index = 0; index < 201; index += 1) {
+      repo.createQueued(input, "2026-09-12T00:01:00.000Z");
+    }
+    assert.equal(
+      repo.list().some((delivery) => delivery.deliveryId === original.deliveryId),
+      false,
+    );
+    assert.equal(repo.getById("missing-delivery"), undefined);
+    assert.equal(repo.getById(original.deliveryId)?.status, "queued");
+    repo.markSent(original.deliveryId, "provider-123", "2026-09-12T00:02:00.000Z");
+    assert.equal(repo.getById(original.deliveryId)?.status, "sent");
+    assert.equal(repo.getById(original.deliveryId)?.providerMessageId, "provider-123");
+  });
+
   it("casts nullable lease parameters in PostgreSQL CAS statements", () => {
     const preparedSql: string[] = [];
     const statement = {

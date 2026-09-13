@@ -46,6 +46,11 @@ export interface PermissionProfileRecord {
   archivedAt?: string;
 }
 
+/** Operator-facing snapshot; runtime-only synthetic profiles need not expose a save token. */
+export interface PermissionProfileSnapshotRecord extends PermissionProfileRecord {
+  revision: string;
+}
+
 // ---------------------------------------------------------------------------
 // Restricted autonomous-turn permission profiles (Phase 1: proactive/autonomous)
 // ---------------------------------------------------------------------------
@@ -192,6 +197,7 @@ export const AUTONOMOUS_RESTRICTED_PROFILES: readonly PermissionProfileRecord[] 
 ];
 
 export interface PermissionProfileCreateInput {
+  expectedSelectionRevision?: string;
   label: string;
   description?: string;
   scope?: PermissionProfileCreateScope;
@@ -207,6 +213,8 @@ export interface PermissionProfileCreateInput {
 }
 
 export interface PermissionProfileUpdateInput {
+  expectedRevision: string;
+  expectedSelectionRevision?: string;
   label?: string;
   description?: string;
   approvalMode?: ToolApprovalMode;
@@ -217,6 +225,10 @@ export interface PermissionProfileUpdateInput {
   readAccessMode?: FilesystemReadAccessMode;
   defaultForSurfaces?: PermissionSurface[];
   updatedBy: string;
+}
+
+export interface PermissionProfileArchiveInput {
+  expectedRevision: string;
 }
 
 export interface PermissionProfileActivationRecord {
@@ -239,6 +251,35 @@ export interface PermissionProfileActivationInput {
   sessionId?: string;
   surface?: PermissionSurface;
   createdBy: string;
+}
+
+export interface PermissionProfileReviewedActivationInput extends PermissionProfileActivationInput {
+  expectedProfileRevision: string;
+  expectedSelectionRevision: string;
+}
+
+export type PermissionProfileSelectionReviewRequest = {
+  operation: "activate";
+  profileId: string;
+  workspaceId?: string;
+  sessionId?: string;
+  surface?: PermissionSurface;
+} | {
+  operation: "defaults";
+  profileId?: string;
+  scope?: PermissionProfileCreateScope;
+  scopeRef?: string;
+  defaultForSurfaces: PermissionSurface[];
+};
+
+export type PermissionProfileSelectionReviewInput = PermissionProfileSelectionReviewRequest & { createdBy: string };
+
+export interface PermissionProfileSelectionReview {
+  revision: string;
+  input: PermissionProfileSelectionReviewRequest;
+  profile?: PermissionProfileSnapshotRecord;
+  target: { operatorId?: string; workspaceId?: string; sessionId?: string };
+  activeProfiles: Array<{ activation: PermissionProfileActivationRecord; profile: PermissionProfileSnapshotRecord }>;
 }
 
 export type LocalOperatorOverrideScope = "operator" | "workspace" | "session" | "run";

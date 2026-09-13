@@ -39,9 +39,18 @@ export type DeepAsyncRepository<Repository> = Repository extends (...args: infer
       }
     : Repository;
 
-type AsyncSystemSettingsRepository = Omit<DeepAsyncRepository<Storage["systemSettings"]>, "get" | "set"> & {
+type AsyncSystemSettingsRepository = Omit<
+  DeepAsyncRepository<Storage["systemSettings"]>,
+  "get" | "set" | "compareAndSet"
+> & {
   get<T = unknown>(key: string): Promise<SystemSettingRecord<T> | undefined>;
   set<T>(key: string, value: T, now?: string): Promise<SystemSettingRecord<T>>;
+  compareAndSet<T>(
+    key: string,
+    expected: SystemSettingRecord<unknown> | undefined,
+    value: T,
+    now?: string,
+  ): Promise<SystemSettingRecord<T> | undefined>;
 };
 
 type AsyncSessionMutationAdmissionRepository = Omit<

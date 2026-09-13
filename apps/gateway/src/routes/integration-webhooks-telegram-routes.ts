@@ -275,7 +275,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
   );
 }
 
-async function resolveRoutePersonalityCatalog(fastify: FastifyInstance): Promise<PersonalityCatalogResponse> {
+async function resolveRoutePersonalityCatalog(fastify: FastifyInstance): Promise<Omit<PersonalityCatalogResponse, "revision">> {
   const settings = (
     fastify.services as {
       settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse | Promise<PersonalityCatalogResponse> };

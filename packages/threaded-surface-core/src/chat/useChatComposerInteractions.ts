@@ -114,6 +114,9 @@ export function useChatComposerInteractions(input: {
 
   const handleComposerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      // IME owns confirmation and navigation keys until composition ends.
+      // keyCode 229 covers engines that clear isComposing on the confirmation key.
+      if (event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || event.keyCode === 229) return;
       if (isPlanningModeToggleShortcut(event)) {
         event.preventDefault();
         handleTogglePlanningMode();
@@ -246,7 +249,7 @@ export function useChatComposerInteractions(input: {
   const handleCancelEdit = useCallback(() => setEditingTurnId(null), [setEditingTurnId]);
   const handleToggleDock = useCallback(() => setDockOpen((current) => !current), [setDockOpen]);
   const handleCreateCurrentModeSession = useCallback(() => {
-    void handleCreateSession(messageMode);
+    return handleCreateSession(messageMode);
   }, [handleCreateSession, messageMode]);
   const handleArchiveWorkspace = useCallback(
     () => setArchiveWorkspaceConfirmOpen(true),

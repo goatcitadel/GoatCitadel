@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   LocalOperatorOverrideCreateInput,
   LocalOperatorOverrideRecord,
@@ -8,6 +8,11 @@ import type {
   PermissionProfileBuiltinId,
   PermissionProfileCreateInput,
   PermissionProfileRecord,
+  PermissionProfileSnapshotRecord,
+  PermissionProfileReviewedActivationInput,
+  PermissionProfileSelectionReview,
+  PermissionProfileSelectionReviewInput,
+  PermissionProfileSelectionReviewRequest,
   PermissionProfileScope,
   PermissionProfileUpdateInput,
   PermissionSurface,
@@ -158,11 +163,15 @@ export class PermissionProfileRepository {
   private readonly updateProfileStmt;
   private readonly archiveProfileStmt;
   private readonly getProfileStmt;
+  private readonly lockProfileStmt;
   private readonly listProfilesStmt;
   private readonly deactivateActivationStmt;
   private readonly deactivateProfileActivationStmt;
   private readonly createActivationStmt;
   private readonly listActiveActivationsStmt;
+  private readonly selectionStateStmt;
+  private readonly advanceSelectionStateStmt;
+  private readonly activeSelectionContextStmt;
   private readonly createOverrideStmt;
   private readonly getOverrideStmt;
   private readonly revokeOverrideStmt;
@@ -170,6 +179,15 @@ export class PermissionProfileRepository {
   private readonly listActiveOverridesStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.selectionStateStmt = db.prepare(`SELECT generation FROM permission_profile_selection_state WHERE singleton_id = 1${db.dialect === "postgres" ? " FOR UPDATE" : ""}`);
+    this.advanceSelectionStateStmt = db.prepare("UPDATE permission_profile_selection_state SET generation = ? WHERE singleton_id = 1");
+    this.activeSelectionContextStmt = db.prepare(`
+      SELECT * FROM permission_profile_activations WHERE active = 1
+        AND COALESCE(operator_id, '') = COALESCE(@operatorId, '')
+        AND COALESCE(workspace_id, '') = COALESCE(@workspaceId, '')
+        AND COALESCE(session_id, '') = COALESCE(@sessionId, '')
+      ORDER BY activation_id LIMIT 1001
+    `);
     const optionalSurface = db.dialect === "postgres" ? "CAST(@surface AS TEXT)" : "@surface";
     const overrideNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
     const overrideExpiryInstant =
@@ -209,16 +227,17 @@ export class PermissionProfileRepository {
           read_access_mode = @readAccessMode,
           default_for_surfaces_json = @defaultForSurfacesJson,
           updated_at = @updatedAt
-      WHERE profile_id = @profileId AND builtin = 0 AND status = 'active'
+      WHERE profile_id = @profileId AND builtin = 0 AND status = 'active' AND updated_at = @expectedUpdatedAt
     `);
     this.archiveProfileStmt = db.prepare(`
       UPDATE permission_profiles
       SET status = 'archived',
           archived_at = @archivedAt,
           updated_at = @archivedAt
-      WHERE profile_id = @profileId AND builtin = 0 AND status = 'active'
+      WHERE profile_id = @profileId AND builtin = 0 AND status = 'active' AND updated_at = @expectedUpdatedAt
     `);
     this.getProfileStmt = db.prepare("SELECT * FROM permission_profiles WHERE profile_id = ?");
+    this.lockProfileStmt = db.prepare(`SELECT * FROM permission_profiles WHERE profile_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`);
     this.listProfilesStmt = db.prepare(`
       SELECT * FROM permission_profiles
       ORDER BY builtin DESC, updated_at DESC, label ASC
@@ -292,17 +311,17 @@ export class PermissionProfileRepository {
     `);
   }
 
-  public listProfiles(includeArchived = false): PermissionProfileRecord[] {
+  public listProfiles(includeArchived = false): PermissionProfileSnapshotRecord[] {
     const rows = this.listProfilesStmt.all() as PermissionProfileRow[];
     const custom = rows.map(mapProfileRow).filter((profile) => !BUILTIN_PERMISSION_PROFILE_IDS.has(profile.profileId));
-    const profiles = [...BUILTIN_PERMISSION_PROFILES, ...custom];
+    const profiles = [...BUILTIN_PERMISSION_PROFILES.map(withProfileRevision), ...custom];
     return includeArchived ? profiles : profiles.filter((profile) => profile.status === "active");
   }
 
-  public getProfile(profileId: string): PermissionProfileRecord {
+  public getProfile(profileId: string): PermissionProfileSnapshotRecord {
     const builtin = BUILTIN_PERMISSION_PROFILES.find((profile) => profile.profileId === profileId);
     if (builtin) {
-      return builtin;
+      return withProfileRevision(builtin);
     }
     const row = this.getProfileStmt.get(profileId) as PermissionProfileRow | undefined;
     if (!row) {
@@ -311,7 +330,11 @@ export class PermissionProfileRepository {
     return mapProfileRow(row);
   }
 
-  public createProfile(input: PermissionProfileCreateInput, now = new Date().toISOString()): PermissionProfileRecord {
+  public createProfile(input: PermissionProfileCreateInput, now = new Date().toISOString()): PermissionProfileSnapshotRecord {
+    return this.withSelectionLock(() => this.createProfileLocked(input, now));
+  }
+
+  private createProfileLocked(input: PermissionProfileCreateInput, now: string): PermissionProfileSnapshotRecord {
     const label = input.label.trim();
     if (!label) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "label" });
@@ -323,46 +346,67 @@ export class PermissionProfileRepository {
       now,
     });
     this.createProfileStmt.run(toProfileParams(profile));
+    this.advanceSelectionState();
     return this.getProfile(profileId);
   }
 
-  public updateProfile(profileId: string, input: PermissionProfileUpdateInput): PermissionProfileRecord {
-    const existing = this.getProfile(profileId);
-    if (existing.builtin) {
-      throw new ConflictError({ message: "Built-in permission profiles cannot be edited." });
-    }
-    const updatedAt = new Date().toISOString();
-    const next: PermissionProfileRecord = {
-      ...existing,
-      label: input.label?.trim() || existing.label,
-      description: input.description ?? existing.description,
-      approvalMode: input.approvalMode ?? existing.approvalMode,
-      legacyToolProfile: input.legacyToolProfile ?? existing.legacyToolProfile,
-      toolPatterns: normalizeStringList(input.toolPatterns ?? existing.toolPatterns),
-      allow: normalizeStringList(input.allow ?? existing.allow),
-      deny: normalizeStringList(input.deny ?? existing.deny),
-      readAccessMode: input.readAccessMode ?? existing.readAccessMode,
-      defaultForSurfaces: normalizeSurfaces(input.defaultForSurfaces ?? existing.defaultForSurfaces),
-      updatedAt,
-    };
-    const result = this.updateProfileStmt.run(toProfileUpdateParams(next));
-    if (Number(result.changes ?? 0) === 0) {
-      throw new NotFoundError({ entity: "permission profile", id: profileId });
-    }
-    return this.getProfile(profileId);
+  public updateProfile(profileId: string, input: PermissionProfileUpdateInput, now = new Date().toISOString()): PermissionProfileSnapshotRecord {
+    return this.withSelectionLock(() => {
+      const existing = this.lockReviewedProfile(profileId, input.expectedRevision);
+      const updatedAt = nextProfileTimestamp(existing.updatedAt, now);
+      const next: PermissionProfileRecord = {
+        ...existing,
+        label: input.label?.trim() || existing.label,
+        description: input.description ?? existing.description,
+        approvalMode: input.approvalMode ?? existing.approvalMode,
+        legacyToolProfile: input.legacyToolProfile ?? existing.legacyToolProfile,
+        toolPatterns: normalizeStringList(input.toolPatterns ?? existing.toolPatterns),
+        allow: normalizeStringList(input.allow ?? existing.allow),
+        deny: normalizeStringList(input.deny ?? existing.deny),
+        readAccessMode: input.readAccessMode ?? existing.readAccessMode,
+        defaultForSurfaces: normalizeSurfaces(input.defaultForSurfaces ?? existing.defaultForSurfaces),
+        updatedAt,
+      };
+      const result = this.updateProfileStmt.run({ ...toProfileUpdateParams(next), expectedUpdatedAt: existing.updatedAt });
+      if (Number(result.changes ?? 0) !== 1) throw permissionProfileConflict();
+      this.advanceSelectionState();
+      return this.getProfile(profileId);
+    });
   }
 
-  public archiveProfile(profileId: string, archivedAt = new Date().toISOString()): boolean {
-    if (BUILTIN_PERMISSION_PROFILES.some((profile) => profile.profileId === profileId)) {
-      throw new ConflictError({ message: "Built-in permission profiles cannot be archived." });
+  public archiveProfile(profileId: string, expectedRevision: string, now = new Date().toISOString()): boolean {
+    return this.withSelectionLock(() => {
+      const existing = this.lockReviewedProfile(profileId, expectedRevision);
+      const archivedAt = nextProfileTimestamp(existing.updatedAt, now);
+      const result = this.archiveProfileStmt.run({ profileId, archivedAt, expectedUpdatedAt: existing.updatedAt });
+      if (Number(result.changes ?? 0) !== 1) throw permissionProfileConflict();
+      this.advanceSelectionState();
+      return true;
+    });
+  }
+
+  private lockReviewedProfile(profileId: string, expectedRevision: string): PermissionProfileSnapshotRecord {
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) {
+      throw new ValidationError({ message: "Review the permission profile before changing it. An expected revision is required." });
     }
-    return Number(this.archiveProfileStmt.run({ profileId, archivedAt }).changes ?? 0) > 0;
+    if (BUILTIN_PERMISSION_PROFILE_IDS.has(profileId)) {
+      throw new ConflictError({ message: "Built-in permission profiles cannot be edited or archived." });
+    }
+    const row = this.lockProfileStmt.get(profileId) as PermissionProfileRow | undefined;
+    if (!row) throw new NotFoundError({ entity: "permission profile", id: profileId });
+    const current = mapProfileRow(row);
+    if (current.status !== "active" || current.revision !== expectedRevision) throw permissionProfileConflict();
+    return current;
   }
 
   public activateProfile(
     input: PermissionProfileActivationInput,
     now = new Date().toISOString(),
   ): PermissionProfileActivationRecord {
+    return this.withSelectionLock(() => this.activateProfileLocked(input, now));
+  }
+
+  private activateProfileLocked(input: PermissionProfileActivationInput, now: string): PermissionProfileActivationRecord {
     const profile = this.getProfile(input.profileId);
     if (profile.status !== "active") {
       throw new ConflictError({ message: `Permission profile ${input.profileId} is not active.` });
@@ -399,6 +443,7 @@ export class PermissionProfileRepository {
       createdAt: now,
       updatedAt: now,
     });
+    this.advanceSelectionState();
     return {
       activationId,
       profileId: input.profileId,
@@ -423,7 +468,8 @@ export class PermissionProfileRepository {
     },
     now = new Date().toISOString(),
   ): number {
-    return Number(
+    return this.withSelectionLock(() => {
+      const changed = Number(
       this.deactivateProfileActivationStmt.run({
         profileId: input.profileId,
         operatorId: normalizeNullable(input.operatorId),
@@ -432,7 +478,129 @@ export class PermissionProfileRepository {
         surface: normalizeSurface(input.surface) ?? null,
         updatedAt: now,
       }).changes ?? 0,
-    );
+      );
+      if (changed) this.advanceSelectionState();
+      return changed;
+    });
+  }
+
+  public reviewSelection(input: PermissionProfileSelectionReviewInput): PermissionProfileSelectionReview {
+    return this.withSelectionLock(() => this.buildSelectionReview(input));
+  }
+
+  public activateReviewedProfile(input: PermissionProfileReviewedActivationInput): PermissionProfileActivationRecord {
+    return this.withSelectionLock(() => {
+      const review = this.requireSelectionReview({ operation: "activate", profileId: input.profileId,
+        workspaceId: input.workspaceId, sessionId: input.sessionId, surface: input.surface, createdBy: input.createdBy }, input.expectedSelectionRevision);
+      if (!review.profile || review.profile.revision !== input.expectedProfileRevision) throw permissionProfileConflict();
+      return this.activateProfile({ profileId: input.profileId, ...review.target,
+        surface: review.input.operation === "activate" ? review.input.surface : undefined, createdBy: input.createdBy });
+    });
+  }
+
+  public createProfileWithDefaults(input: PermissionProfileCreateInput): PermissionProfileSnapshotRecord {
+    return this.withSelectionLock(() => {
+      const scope = input.scope ?? "operator";
+      const scopeRef = scope === "operator" ? input.createdBy : input.scopeRef;
+      if (input.defaultForSurfaces?.length) {
+        this.requireSelectionReview({ operation: "defaults", scope, scopeRef,
+          defaultForSurfaces: input.defaultForSurfaces, createdBy: input.createdBy }, input.expectedSelectionRevision);
+      }
+      const profile = this.createProfile({ ...input, scope, scopeRef });
+      if (profile.defaultForSurfaces?.length) this.reconcileDefaults(profile);
+      return profile;
+    });
+  }
+
+  public updateProfileWithDefaults(profileId: string, input: PermissionProfileUpdateInput): PermissionProfileSnapshotRecord {
+    return this.withSelectionLock(() => {
+      const existing = this.lockReviewedProfile(profileId, input.expectedRevision);
+      const defaultsChanged = input.defaultForSurfaces !== undefined
+        && JSON.stringify([...(existing.defaultForSurfaces ?? [])].sort())
+          !== JSON.stringify([...(normalizeSurfaces(input.defaultForSurfaces) ?? [])].sort());
+      if (defaultsChanged) this.requireSelectionReview({ operation: "defaults", profileId,
+        defaultForSurfaces: input.defaultForSurfaces!, createdBy: input.updatedBy }, input.expectedSelectionRevision);
+      const profile = this.updateProfile(profileId, input);
+      if (defaultsChanged) this.reconcileDefaults(profile);
+      return profile;
+    });
+  }
+
+  private reconcileDefaults(profile: PermissionProfileRecord): void {
+    const target = { operatorId: profile.scope === "operator" ? profile.createdBy : undefined,
+      workspaceId: profile.scope === "workspace" ? profile.scopeRef : undefined };
+    this.deactivateProfileActivations({ profileId: profile.profileId, ...target });
+    for (const surface of profile.defaultForSurfaces ?? []) {
+      this.activateProfile({ profileId: profile.profileId, ...target, surface, createdBy: profile.createdBy });
+    }
+  }
+
+  private withSelectionLock<T>(action: () => T): T {
+    return this.db.transaction("immediate", () => {
+      // All profile/activation writers take this lock before any profile row lock.
+      // The persistent singleton also serializes competing inserts into an empty context.
+      if (!this.selectionStateStmt.get()) throw new ConflictError({ message: "Permission selection state is unavailable. Complete database migrations before changing profiles." });
+      return action();
+    });
+  }
+
+  private advanceSelectionState(): void {
+    if (Number(this.advanceSelectionStateStmt.run(randomUUID()).changes ?? 0) !== 1) {
+      throw new ConflictError({ message: "Permission selection state could not advance." });
+    }
+  }
+
+  private requireSelectionReview(input: PermissionProfileSelectionReviewInput, expectedRevision: string | undefined): PermissionProfileSelectionReview {
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) {
+      throw new ValidationError({ message: "Review the permission selection before applying it. An expected selection revision is required." });
+    }
+    const current = this.buildSelectionReview(input);
+    if (current.revision !== expectedRevision) {
+      throw new ConflictError({ code: "WRITE_CONFLICT", message: "Permission selections changed. Review the current profiles before applying this selection.",
+        details: { reason: "PERMISSION_SELECTION_REVISION_CONFLICT" } });
+    }
+    return current;
+  }
+
+  private buildSelectionReview(request: PermissionProfileSelectionReviewInput): PermissionProfileSelectionReview {
+    const actor = request.createdBy.trim();
+    if (!actor) throw new ValidationError({ code: "FIELD_REQUIRED", field: "createdBy" });
+    const profile = request.profileId ? this.getProfile(request.profileId) : undefined;
+    if (profile && profile.status !== "active") throw permissionProfileConflict();
+    let input: PermissionProfileSelectionReviewRequest;
+    let target: PermissionProfileSelectionReview["target"];
+    if (request.operation === "activate") {
+      if (!profile) throw new ValidationError({ code: "FIELD_REQUIRED", field: "profileId" });
+      target = { operatorId: profile.scope === "workspace" ? undefined : actor,
+        workspaceId: normalizeNullable(request.workspaceId) ?? undefined,
+        sessionId: normalizeNullable(request.sessionId) ?? undefined };
+      const surface = normalizeSurface(request.surface) ?? "all";
+      if (!profileMatchesContext(profile, { ...target, surface })) {
+        throw new ConflictError({ message: "Permission profile cannot be activated outside its owner scope." });
+      }
+      input = { operation: "activate", profileId: profile.profileId, workspaceId: target.workspaceId,
+        sessionId: target.sessionId, surface };
+    } else {
+      if (profile && (profile.builtin || profile.createdBy !== actor)) {
+        throw new ConflictError({ message: "Only the owner can change a custom profile's defaults." });
+      }
+      const scope = profile?.scope ?? request.scope ?? "operator";
+      if (scope !== "operator" && scope !== "workspace") throw new ValidationError({ code: "FIELD_INVALID", field: "scope" });
+      const scopeRef = scope === "operator" ? actor : normalizeNullable(profile?.scopeRef ?? request.scopeRef);
+      if (!scopeRef) throw new ValidationError({ code: "FIELD_REQUIRED", field: "scopeRef" });
+      target = { operatorId: scope === "operator" ? actor : undefined, workspaceId: scope === "workspace" ? scopeRef : undefined };
+      input = { operation: "defaults", profileId: profile?.profileId, scope, scopeRef,
+        defaultForSurfaces: normalizeSurfaces(request.defaultForSurfaces) ?? [] };
+    }
+    const rows = this.activeSelectionContextStmt.all({ operatorId: target.operatorId ?? null,
+      workspaceId: target.workspaceId ?? null, sessionId: target.sessionId ?? null }) as PermissionProfileActivationRow[];
+    if (rows.length > 1000) throw new ConflictError({ message: "This permission context has too many activation records to review completely." });
+    const activeProfiles = rows.map((row) => ({ activation: mapActivationRow(row), profile: this.getProfile(row.profile_id) }))
+      .filter((item) => item.profile.status === "active");
+    const state = this.selectionStateStmt.get() as { generation: string };
+    const revision = createHash("sha256").update(JSON.stringify({ purpose: "permission-selection-v1",
+      generation: state.generation, actor, input, target, profileRevision: profile?.revision })).digest("hex");
+    return { revision, input, target, profile, activeProfiles };
   }
 
   public resolveContext(input: PermissionProfileContextQuery): ResolvedPermissionProfileContext {
@@ -637,8 +805,8 @@ function toProfileUpdateParams(profile: PermissionProfileRecord): Record<string,
   };
 }
 
-function mapProfileRow(row: PermissionProfileRow): PermissionProfileRecord {
-  return {
+function mapProfileRow(row: PermissionProfileRow): PermissionProfileSnapshotRecord {
+  const profile: PermissionProfileRecord = {
     profileId: row.profile_id,
     label: row.label,
     description: row.description ?? undefined,
@@ -658,6 +826,7 @@ function mapProfileRow(row: PermissionProfileRow): PermissionProfileRecord {
     updatedAt: row.updated_at,
     archivedAt: row.archived_at ?? undefined,
   };
+  return withProfileRevision(profile);
 }
 
 function mapActivationRow(row: PermissionProfileActivationRow): PermissionProfileActivationRecord {
@@ -807,4 +976,22 @@ function normalizeNullable(value: string | undefined): string | null {
 
 export function listLocalOperatorOverrideBoundaries(): readonly string[] {
   return NON_OVERRIDABLE_BOUNDARIES;
+}
+
+function withProfileRevision(profile: PermissionProfileRecord): PermissionProfileSnapshotRecord {
+  return { ...profile, revision: createHash("sha256").update(JSON.stringify(profile)).digest("hex") };
+}
+
+function nextProfileTimestamp(previous: string, now: string): string {
+  const previousMs = Date.parse(previous);
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(previousMs) || !Number.isFinite(nowMs)) throw new ValidationError({ message: "Permission profile timestamps are invalid." });
+  return new Date(Math.max(previousMs + 1, nowMs)).toISOString();
+}
+
+function permissionProfileConflict(): ConflictError {
+  return new ConflictError({ code: "WRITE_CONFLICT",
+    message: "This permission profile changed. Review the latest profile before saving or archiving it.",
+    details: { reason: "PERMISSION_PROFILE_REVISION_CONFLICT" },
+  });
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { composeCitadelBrief } from "../services/citadel-brief.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const listCitadelsQuerySchema = z.object({
   view: z.enum(["active", "archived", "all"]).default("active"),
@@ -20,7 +21,8 @@ const citadelRecordSchema = z.object({
   defaultWorkspaceId: z.string().min(1).optional(),
 });
 
-const citadelRecordPatchSchema = citadelRecordSchema.partial();
+const citadelRevisionSchema = z.object({ expectedRevision: z.string().regex(/^[a-f0-9]{64}$/) });
+const citadelRecordPatchSchema = citadelRecordSchema.partial().merge(citadelRevisionSchema);
 
 const charterSchema = z.object({
   purpose: z.string().min(1),
@@ -171,8 +173,11 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await citadels.createRecord(parsed.data));
+      const record = await citadels.createRecord(parsed.data);
+      await markMutationCommitted(request);
+      return reply.code(201).send(record);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -275,8 +280,11 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(await citadels.updateRecord(params.data.citadelId, parsed.data));
+      const record = await citadels.updateRecord(params.data.citadelId, parsed.data);
+      await markMutationCommitted(request);
+      return reply.send(record);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -286,9 +294,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      return reply.send(await citadels.archiveRecord(params.data.citadelId));
+      const record = await citadels.archiveRecord(params.data.citadelId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(record);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -298,9 +311,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      return reply.send(await citadels.restoreRecord(params.data.citadelId));
+      const record = await citadels.restoreRecord(params.data.citadelId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(record);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });

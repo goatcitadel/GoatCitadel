@@ -1,16 +1,22 @@
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import type { WorkerDurableStatePort } from "./worker-durable-state.js";
+import {
+  normalizeWorkerProtectedKeyReference,
+  workerProtectedKeySpkiSha256,
+  type WorkerProtectedKeyReference,
+} from "./worker-protected-key-owner.js";
 
 /**
  * The reusable M2 runtime credential the worker retains after a one-time
  * bootstrap exchange. This is the ONLY authority the worker replays to
  * reconnect: the `authorizationCredential` bearer, the credential
  * id/generation, the worker generation, the transport digests, and the
- * Ed25519 signing key (the "protected PoP-v2 signing pin"). The one-time
+ * PEM signing key or public reference to the protected Ed25519 signing owner.
+ * Protected references contain no private key bytes. The one-time
  * bootstrap secret is deliberately absent — there is no field for it and no
  * API to store it, so a reconnect or restart can never replay it.
  */
-export interface RetainedRuntimeCredential {
+interface RetainedCredentialAuthority {
   readonly credentialId: string;
   readonly credentialGeneration: number;
   readonly workerGeneration: number;
@@ -19,9 +25,19 @@ export interface RetainedRuntimeCredential {
   readonly authorizationCredential: string;
   readonly clientCertificateSha256: string;
   readonly workerPublicKeySpkiSha256: string;
-  /** PEM-encoded Ed25519 private key — the signing pin for every protected PoP-v2 proof. */
-  readonly signingPrivateKeyPem: string;
 }
+
+export interface RetainedPemRuntimeCredential extends RetainedCredentialAuthority {
+  readonly signingPrivateKeyPem: string;
+  readonly protectedKey?: never;
+}
+
+export interface RetainedProtectedRuntimeCredential extends RetainedCredentialAuthority {
+  readonly protectedKey: WorkerProtectedKeyReference;
+  readonly signingPrivateKeyPem?: never;
+}
+
+export type RetainedRuntimeCredential = RetainedPemRuntimeCredential | RetainedProtectedRuntimeCredential;
 
 /** A per-assignment lease the worker holds while executing dispatched work. */
 export interface RetainedAssignmentLease {
@@ -56,11 +72,13 @@ export class WorkerCredentialVaultError extends Error {
 }
 
 /**
- * Durable custody of the worker's reusable credential, signing key, and active
- * leases. Every mutation is persisted so a restarted worker re-hydrates the
- * exact retained authority without re-running admission.
+ * Durable retention of reusable credentials, signing references, and active
+ * leases. Protected signing requires a separately supplied native owner after
+ * restart. Bearer and lease secrets still use the configured state port; this
+ * class does not encrypt them or provide native volume protection.
  */
 export class WorkerCredentialVault {
+  private mutationTail: Promise<void> = Promise.resolve();
   private constructor(
     private readonly state: WorkerDurableStatePort,
     private credential: RetainedRuntimeCredential | undefined,
@@ -101,8 +119,10 @@ export class WorkerCredentialVault {
    */
   async retainCredential(credential: RetainedRuntimeCredential): Promise<void> {
     const normalized = normalizeCredential(credential);
-    this.credential = normalized;
-    await this.state.write(CREDENTIAL_KEY, canonicalJsonString(normalized));
+    await this.mutate(async () => {
+      await this.state.write(CREDENTIAL_KEY, canonicalJsonString(normalized));
+      this.credential = normalized;
+    });
   }
 
   /**
@@ -131,33 +151,63 @@ export class WorkerCredentialVault {
 
   async retainLease(lease: RetainedAssignmentLease): Promise<void> {
     const normalized = normalizeLease(lease);
-    this.leases.set(normalized.assignmentId, normalized);
-    await this.persistLeases();
+    await this.mutate(async () => {
+      const current = this.leases.get(normalized.assignmentId);
+      if (
+        current &&
+        (normalized.assignmentGeneration < current.assignmentGeneration ||
+          (normalized.assignmentGeneration === current.assignmentGeneration &&
+            (normalized.leaseRevision < current.leaseRevision ||
+              (normalized.leaseRevision === current.leaseRevision &&
+                normalized.rawLeaseToken !== current.rawLeaseToken))))
+      )
+        throw new WorkerCredentialVaultError(
+          "Retained lease authority cannot move backwards or change at the same revision.",
+        );
+      const next = new Map(this.leases).set(normalized.assignmentId, normalized);
+      await this.persistLeases(next);
+    });
   }
 
   /** Rotate to a new lease revision (and optionally a rotated secret) after a renewal. */
   async advanceLease(assignmentId: string, leaseRevision: number, rawLeaseToken?: string): Promise<void> {
-    const current = this.getLease(assignmentId);
-    const rotated = normalizeLease({
-      ...current,
-      leaseRevision,
-      ...(rawLeaseToken === undefined ? {} : { rawLeaseToken }),
+    await this.mutate(async () => {
+      const current = this.getLease(assignmentId);
+      const rotated = normalizeLease({
+        ...current,
+        leaseRevision,
+        ...(rawLeaseToken === undefined ? {} : { rawLeaseToken }),
+      });
+      if (
+        rotated.leaseRevision < current.leaseRevision ||
+        (rotated.leaseRevision === current.leaseRevision && rotated.rawLeaseToken !== current.rawLeaseToken)
+      ) {
+        throw new WorkerCredentialVaultError("A lease revision may not move backwards or change its secret in place.");
+      }
+      await this.persistLeases(new Map(this.leases).set(assignmentId, rotated));
     });
-    if (rotated.leaseRevision < current.leaseRevision) {
-      throw new WorkerCredentialVaultError("A lease revision may not move backwards.");
-    }
-    this.leases.set(assignmentId, rotated);
-    await this.persistLeases();
   }
 
   async forgetLease(assignmentId: string): Promise<void> {
-    if (this.leases.delete(assertIdentifier(assignmentId, "assignmentId"))) {
-      await this.persistLeases();
-    }
+    await this.mutate(async () => {
+      const next = new Map(this.leases);
+      if (next.delete(assertIdentifier(assignmentId, "assignmentId"))) await this.persistLeases(next);
+    });
   }
 
-  private async persistLeases(): Promise<void> {
-    await this.state.write(LEASES_KEY, canonicalJsonString([...this.leases.values()]));
+  private async persistLeases(next: ReadonlyMap<string, RetainedAssignmentLease>): Promise<void> {
+    await this.state.write(LEASES_KEY, canonicalJsonString([...next.values()]));
+    this.leases.clear();
+    for (const [key, value] of next) this.leases.set(key, value);
+  }
+
+  private mutate(operation: () => Promise<void>): Promise<void> {
+    const pending = this.mutationTail.then(operation);
+    this.mutationTail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
 }
 
@@ -168,6 +218,17 @@ function normalizeCredential(value: unknown): RetainedRuntimeCredential {
       throw new WorkerCredentialVaultError("A runtime credential must not carry a one-time bootstrap secret.");
     }
   }
+  const hasPem = Object.prototype.hasOwnProperty.call(record, "signingPrivateKeyPem");
+  const hasProtectedKey = Object.prototype.hasOwnProperty.call(record, "protectedKey");
+  if (hasPem === hasProtectedKey)
+    throw new WorkerCredentialVaultError("Worker vault requires exactly one signing key source.");
+  const protectedKey = hasProtectedKey ? normalizeWorkerProtectedKeyReference(record.protectedKey) : undefined;
+  if (
+    protectedKey &&
+    (protectedKey.keysetGeneration !== record.workerGeneration ||
+      workerProtectedKeySpkiSha256(protectedKey) !== record.workerPublicKeySpkiSha256)
+  )
+    throw new WorkerCredentialVaultError("Worker vault protected key differs from credential authority.");
   return Object.freeze({
     credentialId: assertIdentifier(record.credentialId, "credentialId"),
     credentialGeneration: assertPositiveInteger(record.credentialGeneration, "credentialGeneration"),
@@ -176,7 +237,7 @@ function normalizeCredential(value: unknown): RetainedRuntimeCredential {
     authorizationCredential: assertBase64Url32(record.authorizationCredential, "authorizationCredential"),
     clientCertificateSha256: assertSha256(record.clientCertificateSha256, "clientCertificateSha256"),
     workerPublicKeySpkiSha256: assertSha256(record.workerPublicKeySpkiSha256, "workerPublicKeySpkiSha256"),
-    signingPrivateKeyPem: assertPrivateKeyPem(record.signingPrivateKeyPem),
+    ...(protectedKey ? { protectedKey } : { signingPrivateKeyPem: assertPrivateKeyPem(record.signingPrivateKeyPem) }),
   });
 }
 

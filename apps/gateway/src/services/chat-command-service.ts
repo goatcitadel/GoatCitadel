@@ -260,7 +260,7 @@ export interface ChatCommandDependencies {
     | { pendingApproval: { approvalId: string; status: string } }
     | { pendingApproval: null; noMutationRequired: true; skillState: { skillId: string; state: string } }
   >;
-  setDefaultPersonality(id: string): Promise<PersonalityCatalogResponse>;
+  setDefaultPersonality(id: string, expectedRevision: string): Promise<PersonalityCatalogResponse>;
   updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): Promise<ChatSessionPrefsRecord>;
   updateChatSessionProactivePolicy(
     sessionId: string,
@@ -708,7 +708,7 @@ export async function parseChatCommand(
         message: `Unknown personality "${requested}". Use /personality to list available presets.`,
       };
     }
-    const updated = await deps.setDefaultPersonality(normalized);
+    const updated = await deps.setDefaultPersonality(normalized, catalog.revision);
     const active = getPersonalityPreset(updated.defaultPersonalityId, updated.items);
     return {
       ok: true,

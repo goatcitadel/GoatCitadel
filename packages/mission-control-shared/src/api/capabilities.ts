@@ -1,5 +1,6 @@
 import type {
   CandidateSkillDetailRecord,
+  CandidateSkillArtifactReview,
   CapabilityAuditExportRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogDriftMetricsRecord,
@@ -115,6 +116,16 @@ export async function fetchCapabilityProposal(proposalId: string): Promise<Capab
 
 export async function fetchCapabilityCandidate(candidateId: string): Promise<CandidateSkillDetailRecord> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}`);
+}
+
+export async function fetchCandidateSkillArtifactReview(
+  candidateId: string,
+  versionId: string,
+  workspaceId: string,
+): Promise<CandidateSkillArtifactReview> {
+  return request(
+    `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/versions/${encodeURIComponent(versionId)}/review?${new URLSearchParams({ workspaceId })}`,
+  );
 }
 
 /**

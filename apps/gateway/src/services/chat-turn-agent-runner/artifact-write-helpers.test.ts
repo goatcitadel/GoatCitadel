@@ -7,6 +7,8 @@ import {
   getExecutedWorkspaceFileWriteReceipt,
   mergePresentationArtifactDeliveryContent,
   mergeWorkspaceFileDownloadContent,
+  detectDocumentArtifactIntent,
+  detectPresentationArtifactIntent,
 } from "./artifact-write-helpers.js";
 
 const research = `# Dating Across a Large Age Gap
@@ -27,6 +29,33 @@ const research = `# Dating Across a Large Age Gap
 
 ## Sources
 - American Psychological Association — https://www.apa.org/topics/relationships`;
+
+describe("artifact creation intent", () => {
+  it.each([
+    "Use fs.read to read the fixture file at C:\\workspace\\note.txt, then report its contents.",
+    "Review the PDF report and summarize it in chat.",
+    "Read ./workspace/create-report.pdf and explain its contents.",
+    'Inspect "C:\\write documents\\generate-guide.docx" for errors.',
+    "Compare these slides in the presentation file.",
+    "Open the PowerPoint deck and describe the last slide.",
+    "Parse the JSON file and check its schema.",
+  ])("does not infer output from an input format: %s", (content) => {
+    expect(detectDocumentArtifactIntent(content)).toBe(false);
+    expect(detectPresentationArtifactIntent(content)).toBe(false);
+  });
+
+  it.each([
+    "Read source.txt and create a PDF report.",
+    "Review the notes, then export a Markdown document.",
+    "Summarize the findings and save a text file.",
+  ])("retains an explicit document request: %s", (content) => {
+    expect(detectDocumentArtifactIntent(content)).toBe(true);
+  });
+
+  it("retains an explicit presentation request after reviewing source material", () => {
+    expect(detectPresentationArtifactIntent("Review these notes and create a PowerPoint deck.")).toBe(true);
+  });
+});
 
 describe("thread-grounded presentation artifacts", () => {
   it("blocks a missing title when the supplied slides cannot be safely promoted", () => {

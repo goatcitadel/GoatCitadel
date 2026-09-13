@@ -10,6 +10,7 @@
 #include <cstring>
 
 namespace gc = goatcitadel::remote_worker_provisioner;
+int RunSignerInspectionTests() noexcept;
 
 namespace {
 
@@ -91,6 +92,14 @@ gc::SidSnapshot ProhibitedSid(std::uint32_t rid) noexcept {
   return NtSid(&rid, 1U);
 }
 
+gc::SidSnapshot RuntimeWorkerSid() noexcept {
+  constexpr std::array<std::uint32_t, 6U> kParts = {
+      80U, UINT32_C(1804173726), UINT32_C(3601835665),
+      UINT32_C(1843708740), UINT32_C(3959121232), UINT32_C(3866049905),
+  };
+  return NtSid(kParts.data(), kParts.size());
+}
+
 gc::ServiceIdentitySnapshot Baseline(
     const gc::FixedWideString& expected_path) noexcept {
   gc::ServiceIdentitySnapshot snapshot{};
@@ -148,7 +157,7 @@ gc::ServiceIdentitySnapshot Baseline(
   snapshot.service_dacl_defaulted = false;
   snapshot.service_dacl_protected = true;
   snapshot.service_dacl_non_inheriting = true;
-  snapshot.service_ace_count = 2U;
+  snapshot.service_ace_count = 3U;
   snapshot.service_aces[0] = {
       ACCESS_ALLOWED_ACE_TYPE,
       0U,
@@ -161,6 +170,11 @@ gc::ServiceIdentitySnapshot Baseline(
       SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG |
           SERVICE_QUERY_STATUS | READ_CONTROL | SYNCHRONIZE,
       AdministratorsSid(),
+  };
+  snapshot.service_aces[2] = {
+      ACCESS_ALLOWED_ACE_TYPE, 0U,
+      SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL,
+      RuntimeWorkerSid(),
   };
   return snapshot;
 }
@@ -349,12 +363,21 @@ void TestIdentityNegativeMatrix() noexcept {
   EXPECT_FIELD_FAILURE(changed.service_dacl_protected = false, "unprotected service DACL");
   EXPECT_FIELD_FAILURE(changed.service_dacl_non_inheriting = false, "inheriting service DACL");
   EXPECT_FIELD_FAILURE(changed.service_ace_count = 1U, "missing service ACE");
-  EXPECT_FIELD_FAILURE(changed.service_ace_count = 3U, "extra service ACE");
+  EXPECT_FIELD_FAILURE(changed.service_ace_count = 2U, "missing worker query ACE");
+  EXPECT_FIELD_FAILURE(changed.service_ace_count = 4U, "extra service ACE");
   EXPECT_FIELD_FAILURE(changed.service_aces[0].type = ACCESS_DENIED_ACE_TYPE, "deny ACE");
   EXPECT_FIELD_FAILURE(changed.service_aces[0].flags = INHERITED_ACE, "inherited ACE");
   EXPECT_FIELD_FAILURE(changed.service_aces[0].mask ^= SERVICE_CHANGE_CONFIG, "wrong SYSTEM mask");
   EXPECT_FIELD_FAILURE(changed.service_aces[1].mask |= SERVICE_PAUSE_CONTINUE, "excess administrator authority");
   EXPECT_FIELD_FAILURE(changed.service_aces[0].sid = AdministratorsSid(), "wrong ACE order");
+  EXPECT_FIELD_FAILURE(changed.service_aces[2].sid = ProvisionerServiceSid(), "substituted worker query principal");
+  EXPECT_FIELD_FAILURE(changed.service_aces[2].type = ACCESS_DENIED_ACE_TYPE, "worker deny ACE");
+  EXPECT_FIELD_FAILURE(changed.service_aces[2].flags = INHERITED_ACE, "inherited worker query ACE");
+  for (unsigned bit = 0U; bit < 32U; ++bit) {
+    changed = baseline;
+    changed.service_aces[2].mask ^= UINT32_C(1) << bit;
+    ExpectIdentityFailure(changed, expected_path, "worker query mask must be exact");
+  }
 
   #undef EXPECT_FIELD_FAILURE
 }
@@ -675,5 +698,6 @@ int RunServiceRuntimeTests() noexcept {
   TestEmbeddedDigestShape();
   TestTokenHasRestrictionsContract();
   TestProtectedTransportResultLabels();
+  g_failures += RunSignerInspectionTests();
   return g_failures - initial_failures;
 }

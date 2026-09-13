@@ -40,6 +40,26 @@ export interface McpAuthStateRecord {
   lastRefreshedAt?: string;
   error?: string;
   lastCodePreview?: string;
+  tokenRequest?: McpOAuthTokenRequest;
+}
+
+export interface McpOAuthTokenRequest {
+  requestId: string;
+  kind: "authorization_code" | "refresh_token";
+  configurationBindingId: string;
+  reservedAt: string;
+}
+
+export interface McpOAuthRequestReservation {
+  server: McpServerRecord;
+  auth: McpAuthStateRecord & { tokenRequest: McpOAuthTokenRequest };
+}
+
+/** One server's auth publication, bound to the configuration and auth state that produced it. */
+export interface McpAuthStateUpdate {
+  server: McpServerRecord;
+  expected: McpAuthStateRecord | undefined;
+  next: McpAuthStateRecord | undefined;
 }
 
 export interface McpServerAdminHost {
@@ -47,7 +67,10 @@ export interface McpServerAdminHost {
     approvalInbox: Pick<Storage["approvalInbox"], "deleteByReceiver">;
   };
   readMcpServers(): Promise<McpServerRecord[]>;
-  writeMcpServers(servers: McpServerRecord[]): Promise<void>;
+  writeMcpServers(servers: McpServerRecord[], expectedServers: McpServerRecord[]): Promise<void>;
+  closeMcpServerSessions?(serverId: string): void;
+  prepareMcpStaticEnvironment?(server: McpServerRecord): Promise<McpServerRecord>;
+  resolveMcpOAuthClientId?(server: McpServerRecord): Promise<string | undefined>;
   patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>): Promise<McpServerRecord>;
   readMcpTools(): Promise<McpToolRecord[]>;
   writeMcpTools(tools: McpToolRecord[]): Promise<void>;
@@ -59,11 +82,16 @@ export interface McpServerAdminHost {
   ): Promise<McpAuthStateRecord>;
   requireMcpServer(serverId: string): Promise<McpServerRecord>;
   readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>>;
-  writeMcpAuthState(state: Record<string, McpAuthStateRecord>): Promise<void>;
+  writeMcpAuthState(update: McpAuthStateUpdate): Promise<void>;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
 }
 
-export async function createMcpServer(host: McpServerAdminHost, input: McpServerCreateInput): Promise<McpServerRecord> {
+export async function createMcpServer(
+  host: McpServerAdminHost,
+  input: McpServerCreateInput,
+  ownerServerId?: string,
+  ownerPlanId?: string,
+): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new Error(buildInternalMcpServerCreateBlockedMessage());
   }
@@ -71,8 +99,18 @@ export async function createMcpServer(host: McpServerAdminHost, input: McpServer
     throw new Error(buildUnsupportedMcpTransportMessage(input.transport));
   }
   const now = new Date().toISOString();
+  if (
+    ownerServerId &&
+    (!/^pack-[a-f0-9]{40}$/u.test(ownerServerId) ||
+      (await host.readMcpServers()).some((server) => server.serverId === ownerServerId))
+  ) {
+    throw new Error("Pack MCP identity is invalid or already registered.");
+  }
   const created: McpServerRecord = {
-    serverId: randomUUID(),
+    serverId: ownerServerId ?? randomUUID(),
+    ...(ownerServerId && ownerPlanId ? {
+      packChange: { planId: ownerPlanId, revision: 1, phase: "apply" as const, created: true },
+    } : {}),
     label: input.label.trim(),
     transport: input.transport,
     command: input.command?.trim() || undefined,
@@ -90,32 +128,41 @@ export async function createMcpServer(host: McpServerAdminHost, input: McpServer
     createdAt: now,
     updatedAt: now,
   };
-  const servers = [created, ...(await host.readMcpServers())];
-  await host.writeMcpServers(servers);
+  const previous = await host.readMcpServers();
+  const servers = [created, ...previous];
+  await host.writeMcpServers(servers, previous);
   await host.publishRealtime("system", "mcp", {
     type: "mcp_server_created",
     serverId: created.serverId,
     transport: created.transport,
   });
-  return created;
+  return await host.requireMcpServer(created.serverId);
 }
 
 export async function updateMcpServer(
   host: McpServerAdminHost,
   serverId: string,
   input: McpServerUpdateInput,
+  packOwner?: { planId: string; phase: "apply" | "compensate" },
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new Error(buildInternalMcpServerCreateBlockedMessage());
   }
   const now = new Date().toISOString();
   let updated: McpServerRecord | undefined;
-  const servers = (await host.readMcpServers()).map((item) => {
+  const previous = await host.readMcpServers();
+  const servers = previous.map((item) => {
     if (item.serverId !== serverId) {
       return item;
     }
     updated = {
       ...item,
+      packChange: packOwner ? {
+        planId: packOwner.planId,
+        revision: item.packChange?.planId === packOwner.planId ? item.packChange.revision + 1 : 1,
+        phase: packOwner.phase,
+        created: item.packChange?.planId === packOwner.planId && item.packChange.created,
+      } : undefined,
       label: input.label?.trim() || item.label,
       command: input.command === undefined ? item.command : input.command.trim() || undefined,
       args: input.args === undefined ? item.args : input.args.map((entry) => entry.trim()).filter(Boolean),
@@ -135,8 +182,9 @@ export async function updateMcpServer(
   if (!updated) {
     throw new Error(`Unknown MCP server: ${serverId}`);
   }
-  await host.writeMcpServers(servers);
-  return updated;
+  await host.writeMcpServers(servers, previous);
+  host.closeMcpServerSessions?.(serverId);
+  return await host.requireMcpServer(serverId);
 }
 
 export async function updateMcpServerPolicy(
@@ -161,6 +209,7 @@ export async function connectMcpServer(host: McpServerAdminHost, serverId: strin
   if (!isRuntimeSupportedMcpDefinition(server)) {
     throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
   }
+  if (host.prepareMcpStaticEnvironment) await host.prepareMcpStaticEnvironment(server);
   const connecting = await host.patchMcpServerState(serverId, {
     status: "connecting",
     lastError: undefined,
@@ -187,40 +236,56 @@ export async function connectMcpServer(host: McpServerAdminHost, serverId: strin
 }
 
 export async function disconnectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
-  return await host.patchMcpServerState(serverId, {
+  const server = await host.patchMcpServerState(serverId, {
     status: "disconnected",
   });
+  host.closeMcpServerSessions?.(serverId);
+  return server;
 }
 
 export async function startMcpOAuth(host: McpServerAdminHost, serverId: string): Promise<McpOAuthStartResponse> {
-  const server = await host.requireMcpServer(serverId);
+  let server = await host.requireMcpServer(serverId);
   if (server.authType !== "oauth2") {
     throw new Error("MCP OAuth can only be started for oauth2 servers.");
   }
   if (!server.oauth?.authorizationUrl?.trim() || !server.oauth.tokenUrl?.trim()) {
     throw new Error("MCP OAuth requires authorizationUrl and tokenUrl metadata.");
   }
+  if (host.prepareMcpStaticEnvironment) server = await host.prepareMcpStaticEnvironment(server);
   const state = randomUUID();
-  const callback = server.oauth.redirectUri?.trim() || "http://127.0.0.1:8787/api/v1/mcp/oauth/callback";
-  const authorizeUrl = new URL(server.oauth.authorizationUrl);
+  const oauth = server.oauth;
+  if (server.authType !== "oauth2" || !oauth?.authorizationUrl?.trim() || !oauth.tokenUrl?.trim()) {
+    throw new Error("MCP OAuth configuration changed while preparing its environment.");
+  }
+  const callback = oauth.redirectUri?.trim() || "http://127.0.0.1:8787/api/v1/mcp/oauth/callback";
+  const authorizeUrl = new URL(oauth.authorizationUrl);
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("redirect_uri", callback);
-  const clientId = resolveEnvValue(server.oauth.clientIdEnv);
+  const clientId = host.resolveMcpOAuthClientId ? await host.resolveMcpOAuthClientId(server) : resolveEnvValue(oauth.clientIdEnv);
   if (clientId) {
     authorizeUrl.searchParams.set("client_id", clientId);
   }
-  if (server.oauth.scopes?.length) {
-    authorizeUrl.searchParams.set("scope", server.oauth.scopes.join(" "));
+  if (oauth.scopes?.length) {
+    authorizeUrl.searchParams.set("scope", oauth.scopes.join(" "));
   }
-  const authRows = await host.readMcpAuthState();
-  authRows[serverId] = {
-    ...(authRows[serverId] ?? {}),
+  const expected = (await host.readMcpAuthState())[serverId];
+  const next = {
+    ...expected,
+    // Reconnect explicitly abandons the old grant, including an uncertain token request.
+    // A late request can no longer publish against this new handshake.
+    accessTokenRef: undefined,
+    refreshTokenRef: undefined,
+    tokenExpiresAt: undefined,
+    scopes: undefined,
+    resourceIndicator: undefined,
+    tokenRequest: undefined,
+    lastCodePreview: undefined,
     oauthState: state,
     error: undefined,
     updatedAt: new Date().toISOString(),
   };
-  await host.writeMcpAuthState(authRows);
+  await host.writeMcpAuthState({ server, expected, next });
   return { authorizeUrl: authorizeUrl.toString(), state };
 }
 
@@ -245,8 +310,8 @@ export async function completeMcpOAuth(
   if (!host.exchangeMcpOAuthCode) {
     throw new Error("MCP OAuth token exchange is not available in this Gateway runtime.");
   }
-  authRows[serverId] = await host.exchangeMcpOAuthCode(server, code, authRow);
-  await host.writeMcpAuthState(authRows);
+  // The OAuth owner publishes the returned credential refs before acknowledging success.
+  await host.exchangeMcpOAuthCode(server, code, authRow);
   return await connectMcpServer(host, serverId);
 }
 
@@ -255,13 +320,9 @@ export async function deleteMcpServer(host: McpServerAdminHost, serverId: string
   const next = previous.filter((item) => item.serverId !== serverId);
   const deleted = next.length !== previous.length;
   if (deleted) {
-    await host.writeMcpServers(next);
-    await host.writeMcpTools((await host.readMcpTools()).filter((tool) => tool.serverId !== serverId));
-    const authRows = await host.readMcpAuthState();
-    if (authRows[serverId]) {
-      delete authRows[serverId];
-      await host.writeMcpAuthState(authRows);
-    }
+    await host.writeMcpServers(next, previous);
+    host.closeMcpServerSessions?.(serverId);
+    // The registry removes credentials, tool inventory and first-use approvals in the delete transaction.
     await host.storage.approvalInbox.deleteByReceiver("mcp", serverId);
     await host.publishRealtime("system", "mcp", {
       type: "mcp_server_deleted",
@@ -296,8 +357,10 @@ function resolveEnvValue(envKey?: string): string | undefined {
 
 /** Deps for connected-tool discovery (B5b): sandbox network policy + per-server OAuth token minting. */
 export interface ResolveConnectedMcpToolsDeps {
+  packageRoot?: string;
   networkAllowlist: NonNullable<Parameters<typeof discoverMcpTools>[2]>["networkAllowlist"];
   resolveOAuthAccessToken: NonNullable<NonNullable<Parameters<typeof discoverMcpTools>[2]>["oauthAccessTokenResolver"]>;
+  staticEnvironmentResolver?: NonNullable<Parameters<typeof discoverMcpTools>[2]>["staticEnvironmentResolver"];
 }
 
 /**
@@ -326,12 +389,16 @@ export async function resolveConnectedMcpTools(
     return createInternalMcpDurableTasksTools(server.serverId);
   }
   if (server.transport === "stdio") {
-    return discoverMcpTools(server, undefined, { actorContext });
+    return discoverMcpTools(server, undefined, {
+      actorContext, packageRoot: deps.packageRoot, networkAllowlist: deps.networkAllowlist,
+      staticEnvironmentResolver: deps.staticEnvironmentResolver,
+    });
   }
   if (server.transport === "http" || server.transport === "sse") {
     return discoverMcpTools(server, undefined, {
       networkAllowlist: deps.networkAllowlist,
       oauthAccessTokenResolver: deps.resolveOAuthAccessToken,
+      staticEnvironmentResolver: deps.staticEnvironmentResolver,
       actorContext,
     });
   }

@@ -260,6 +260,80 @@ function appendTransition(
 }
 
 describe("HX-506 effect repository (SQLite)", () => {
+  it("retains verified nonterminal approval history across owner restart and scope isolation", () => {
+    const h = harness("approval-history");
+    try {
+      const intentId = recordIntent(h);
+      const read = () => new RemoteWorkerEffectRepository(h.db).readTransitionHistory(
+        h.ctx.registryWorkspaceId, h.ctx.assignmentId, h.ctx.assignmentGeneration, intentId,
+      );
+      assert.deepEqual(read(), []);
+      h.effects.appendTransition({ ...h.ctx, intentId, correlation: correlation("recorded"), idempotencyKey: "genesis" });
+      const waitCorrelation = correlation("approval_wait", { approvalRecordSha256: D("pending approval") });
+      const wait = h.effects.appendTransition({ ...h.ctx, intentId, correlation: waitCorrelation, idempotencyKey: "wait" });
+      assert.deepEqual(read().map((entry) => entry.record.transitionState), ["recorded", "approval_wait"]);
+      assert.deepEqual(read().at(-1), { record: wait, correlation: waitCorrelation });
+      assert.equal(h.effects.findSettlement(h.ctx.registryWorkspaceId, h.ctx.assignmentId, h.ctx.assignmentGeneration, intentId), undefined);
+      assert.throws(() => h.effects.readTransitionHistory("foreign", h.ctx.assignmentId, h.ctx.assignmentGeneration, intentId));
+      assert.throws(() => h.effects.readTransitionHistory(h.ctx.registryWorkspaceId, h.ctx.assignmentId, 2, intentId));
+    } finally { h.db.close(); }
+  });
+  it("allocates bounded intent positions while exact replay preserves its original index", () => {
+    const h = harness("allocation");
+    try {
+      const input = { ...h.ctx, effectSelector: "fs.read", canonicalArgs: { path: "note.txt" },
+        workerIdempotencyKey: "read-1", idempotencyKey: "read-1" };
+      const first = h.effects.recordNextIntent(input);
+      for (let index = 1; index < 64; index++) {
+        const next = h.effects.recordNextIntent({ ...input, workerIdempotencyKey: `read-${index + 1}`,
+          idempotencyKey: `read-${index + 1}` });
+        assert.equal(next.intentIndex, index);
+      }
+      assert.deepEqual(h.effects.recordNextIntent(input), first);
+      assert.throws(() => h.effects.recordNextIntent({ ...input, canonicalArgs: { path: "changed.txt" } }));
+      assert.throws(() => h.effects.recordNextIntent({ ...input, workerIdempotencyKey: "overflow", idempotencyKey: "overflow" }));
+      assert.equal(h.effects.listIntents(h.ctx.registryWorkspaceId, h.ctx.assignmentId, h.ctx.assignmentGeneration).length, 64);
+    } finally { h.db.close(); }
+  });
+  it("binds dispatch arguments to the exact retained scope, digest and worker key", () => {
+    const h = harness("dispatch-read");
+    try {
+      const intentId = recordIntent(h);
+      const input = {
+        ...h.ctx,
+        intentId,
+        effectSelector: "email.send",
+        canonicalArgsSha256: D(canonicalJsonString({ to: "user@example.com" })),
+        workerIdempotencyKey: "worker-key-1",
+      };
+      assert.deepEqual(h.effects.readIntentForDispatch(input).args, { to: "user@example.com" });
+      assert.equal("args" in h.effects.listIntents("default", h.ctx.assignmentId, 1)[0]!, false);
+      for (const patch of [
+        { registryWorkspaceId: "foreign" },
+        { assignmentGeneration: 2 },
+        { intentId: "foreign" },
+        { effectSelector: "calendar.create_event" },
+        { canonicalArgsSha256: D("different") },
+        { workerIdempotencyKey: "different" },
+      ])
+        assert.throws(() => h.effects.readIntentForDispatch({ ...input, ...patch }));
+      assert.throws(
+        () =>
+          h.effects.recordIntent({
+            ...h.ctx,
+            intentIndex: 1,
+            effectSelector: "email.send",
+            canonicalArgs: { text: "\u20ac".repeat(40_000) },
+            workerIdempotencyKey: "large",
+            idempotencyKey: "large",
+          }),
+        /bound/,
+      );
+    } finally {
+      h.db.close();
+    }
+  });
+
   it("records an immutable intent, chains transitions, and books a completed_with_effect receipt", () => {
     const h = harness("effect");
     const intentId = recordIntent(h);

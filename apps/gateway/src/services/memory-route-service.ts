@@ -26,7 +26,7 @@ type MemoryRoutePort = Pick<
   | "listMaintenanceRecommendations"
   | "listMaintenanceRuns"
   | "listMemoryItemHistory"
-  | "listMemoryItems"
+  | "listMemoryItemsPage"
   | "listMemoryLearnings"
   | "createMemoryLearning"
   | "listMemoryFeedback"
@@ -92,12 +92,12 @@ export class MemoryRouteService {
     return this.memory.listMaintenanceRecommendations(workspaceId, limit);
   }
 
-  public acceptMaintenanceRecommendation(recommendationId: string) {
-    return this.memory.acceptMaintenanceRecommendation(recommendationId);
+  public acceptMaintenanceRecommendation(recommendationId: string, input: Parameters<MemoryRoutePort["acceptMaintenanceRecommendation"]>[1]) {
+    return this.memory.acceptMaintenanceRecommendation(recommendationId, input);
   }
 
-  public rejectMaintenanceRecommendation(recommendationId: string) {
-    return this.memory.rejectMaintenanceRecommendation(recommendationId);
+  public rejectMaintenanceRecommendation(recommendationId: string, input: Parameters<MemoryRoutePort["rejectMaintenanceRecommendation"]>[1]) {
+    return this.memory.rejectMaintenanceRecommendation(recommendationId, input);
   }
 
   public getQmdStats(from: string, to: string) {
@@ -160,8 +160,8 @@ export class MemoryRouteService {
     return this.memory.rejectTraceMemoryCandidate(candidateId, actorId);
   }
 
-  public listItems(input: Parameters<MemoryRoutePort["listMemoryItems"]>[0]) {
-    return this.memory.listMemoryItems(input);
+  public listItems(input: Parameters<MemoryRoutePort["listMemoryItemsPage"]>[0]) {
+    return this.memory.listMemoryItemsPage(input);
   }
 
   /**

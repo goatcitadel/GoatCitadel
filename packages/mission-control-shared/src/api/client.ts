@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
+export { prepareWorkflowSkillCapture, stageWorkflowSkillCapture } from "./workflow-skill-capture.js";
 /* eslint-disable max-lines -- Client transport remains centralized so auth/bootstrap/request behavior stays consistent across surfaces. */
 import type {
   AddonActionResponse,
@@ -509,6 +510,7 @@ export {
   requestChangePlanRollback,
   removeThreadKnowledgeAttachment,
   respondToChangePlan,
+  verifyChangePlan,
   restoreChatProject,
   restoreChatSession,
   resumeChatTurnStream,
@@ -517,6 +519,7 @@ export {
   revertChatSessionWorkbenchFile,
   runChatDelegation,
   runChatSessionWorkbenchCommand,
+  previewChatSessionWorkbenchFileOperation,
   runChatSessionWorkbenchFileOperation,
   runChatResearch,
   selectChatBranchTurn,
@@ -634,6 +637,7 @@ export {
   evaluateAutonomousActivationGrant,
   createCodeModeRun,
   fetchCapabilityCandidate,
+  fetchCandidateSkillArtifactReview,
   fetchCapabilityCatalog,
   fetchCapabilityCatalogSnapshot,
   fetchCapabilityProposal,
@@ -799,6 +803,7 @@ export {
 export {
   createToolGrant,
   activatePermissionProfile,
+  reviewPermissionProfileSelection,
   archivePermissionProfile,
   createLocalOperatorOverride,
   createPermissionProfile,

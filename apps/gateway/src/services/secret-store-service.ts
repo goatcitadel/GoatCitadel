@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { GoatError } from "@goatcitadel/contracts";
+import { WINDOWS_CREDENTIAL_DELETE_SCRIPT } from "./windows-credential-delete.js";
+import { WINDOWS_CREDENTIAL_CUSTODY_READ_SCRIPT, WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT,
+  WINDOWS_CREDENTIAL_CUSTODY_DELETE_SCRIPT } from "./windows-credential-custody.js";
 
 const SECRET_SERVICE = "goatcitadel";
 const DISABLE_SECRET_STORE_ENV = "GOATCITADEL_DISABLE_SECRET_STORE";
@@ -20,8 +23,15 @@ export class SecretStoreUnavailableError extends GoatError {
   }
 }
 
+export class CredentialWriteUncertainError extends Error {
+  constructor(cause: unknown) {
+    super("Credential write custody changed or ownership was not acknowledged; retain its staged slots.", { cause });
+    this.name = "CredentialWriteUncertainError";
+  }
+}
+
 export function isSecretStoreUnavailableLikeError(error: unknown): boolean {
-  if (error instanceof SecretStoreUnavailableError) {
+  if (error instanceof SecretStoreUnavailableError || error instanceof CredentialWriteUncertainError) {
     return true;
   }
   if (!(error instanceof Error)) {
@@ -121,6 +131,53 @@ export class SecretStoreService {
     this.deleteLinuxCredential(account);
   }
 
+  /** Host/principal identity for the Windows PasswordVault helper. Other
+   * backends remain usable, but cannot authorize automatic MCP retirement. */
+  public getCredentialCustodyId(): string | undefined {
+    if (process.platform !== "win32") return undefined;
+    this.assertAvailable();
+    const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_READ_SCRIPT],
+      { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE }, { timeoutMs: 10000 });
+    const custodyId = result.stdout.trim();
+    if (!/^[a-f0-9]{64}$/u.test(custodyId)) throw new SecretStoreUnavailableError("Windows credential custody was not acknowledged.");
+    return custodyId;
+  }
+
+  /** Immutable MCP slots are written only by their captured OS custodian. */
+  public setSecretForCustody(account: string, secret: string, custodyId: string): void {
+    assertSecretAccount(account);
+    if (!secret.trim()) throw new Error("secret must not be empty");
+    try {
+      if (process.platform !== "win32" || !/^[a-f0-9]{64}$/u.test(custodyId))
+        throw new SecretStoreUnavailableError("Credential write requires its supported OS custodian.");
+      this.assertAvailable();
+      const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT],
+        { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
+        { stdin: secret, timeoutMs: 10000, allowExitCodes: [4] });
+      if (result.status !== 0 || result.stdout.trim() !== "ok")
+        throw new SecretStoreUnavailableError("Credential write custody changed or was not acknowledged.");
+    } catch (error) {
+      // An occupied slot or an interrupted helper does not prove ownership.
+      // The staging owner must preserve every potentially affected version.
+      throw new CredentialWriteUncertainError(error);
+    }
+  }
+
+  /** Absence in another keychain cannot acknowledge deletion in the owner. */
+  public deleteSecretForCustody(account: string, custodyId: string | null): boolean {
+    assertSecretAccount(account);
+    if (custodyId === null || process.platform !== "win32") return false;
+    if (!/^[a-f0-9]{64}$/u.test(custodyId)) throw new Error("Invalid credential custody binding.");
+    this.assertAvailable();
+    const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_DELETE_SCRIPT],
+      { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
+      { timeoutMs: 10000, allowExitCodes: [4] });
+    if (result.status === 4 && result.stdout.trim() === "custody_mismatch") return false;
+    if (result.status !== 0 || !["ok", "absent"].includes(result.stdout.trim()))
+      throw new Error("Credential deletion was not acknowledged by its OS custodian.");
+    return true;
+  }
+
   public status(providerId: string): ProviderSecretStatus {
     assertProviderId(providerId);
     try {
@@ -194,19 +251,11 @@ try {
   }
 
   private deleteWindowsCredential(account: string): void {
-    const script = `
-[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
-$vault = [Windows.Security.Credentials.PasswordVault]::new()
-try {
-  $credential = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT)
-  $vault.Remove($credential)
-} catch { Write-Output "credential_not_found" | Out-Null }
-Write-Output "ok"
-`;
-    runCommand("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_CREDENTIAL_DELETE_SCRIPT], {
       GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
       GOATCITADEL_SECRET_ACCOUNT: account,
-    });
+    }, { timeoutMs: 10000 });
+    if (!["ok", "absent"].includes(result.stdout.trim())) throw new Error("Windows credential deletion was not acknowledged.");
   }
 
   private setMacCredential(account: string, secret: string): void {
@@ -311,6 +360,7 @@ function hasCommand(command: string): boolean {
 }
 
 interface RunOptions {
+  timeoutMs?: number;
   allowExitCodes?: number[];
   stdin?: string;
 }
@@ -340,6 +390,7 @@ export function runCommand(
       ...(envOverrides ?? {}),
     },
     input: options.stdin,
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, maxBuffer: 64 * 1024 }),
   });
   const status = result.status ?? 1;
   const allowed = new Set([0, ...(options.allowExitCodes ?? [])]);

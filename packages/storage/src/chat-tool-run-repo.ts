@@ -440,7 +440,10 @@ function isCoherentToolEffectProjection(input: {
     case "planned_before_dispatch":
       return startedOpen && notReused && noApproval;
     case "pre_dispatch_blocked":
-      return (row.status === "blocked" || row.status === "failed") && settled && notReused && noApproval;
+      // Approval replay can fail current policy before dispatch. The runtime
+      // owner emits this evidence only after reading its durable boundary event.
+      return (row.status === "blocked" || row.status === "failed") && settled && notReused &&
+        (noApproval || terminalApprovalLinked);
     case "approval_wait_before_dispatch":
       return row.status === "approval_required" && settled && notReused && Boolean(row.approval_id);
     case "skipped_before_dispatch":
@@ -451,7 +454,7 @@ function isCoherentToolEffectProjection(input: {
       return (
         potential === "none" &&
         notReused &&
-        noApproval &&
+        (noApproval || terminalApprovalLinked) &&
         (startedOpen || ((row.status === "executed" || row.status === "failed") && settled))
       );
     default:

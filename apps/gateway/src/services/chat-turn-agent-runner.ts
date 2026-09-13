@@ -1,5 +1,11 @@
+import { projectToolResultForModel, projectHistoryMessagesForModel, projectToolRunsForModel, isSettledToolRunContinuationEvidence, buildPersistedToolContinuationCallId, buildPersistedToolContinuationResult, serializeToolResultForModel } from "./chat-tool-result-projection.js";
 /* eslint-disable max-lines -- Chat orchestration is still a centralized runtime coordinator pending a larger bounded-interface split. */
 import { createHash, randomUUID } from "node:crypto";
+import { isExplicitLocalMcpTask } from "./chat-local-mcp-intent.js";
+import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
+import { assertNativeMcpChatToolSchema, type NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
+import { assertMeshChatToolSchema, type MeshChatToolSchema } from "./gateway/mesh-chat-catalog.js";
+import { createMeshChatTurnContext, type MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
 import type {
   CapabilityCatalogEntry,
   ChatCitationRecord,
@@ -51,11 +57,11 @@ import {
   HEARTBEAT_PERMISSION_PROFILE_ID,
   NotFoundError,
   isToolEffectPotentialRecord,
-  redactStructuredSecrets,
   normalizeToolEffectEvidenceRefs,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
   TOOL_EFFECT_CLASSIFICATION_VERSION,
   TOOL_EFFECT_RECEIPT_VERSION,
+  WORKFLOW_SKILL_CAPTURE_MARKER,
 } from "@goatcitadel/contracts";
 import {
   isAuthoritativeModelUsageAccountingError,
@@ -65,14 +71,9 @@ import {
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import {
   HEARTBEAT_SYSTEM_ACTOR_ID,
-  verifyChatTurnCapabilityCatalogBinding,
-  verifyChatTurnCapabilityProfile,
-  verifyChatTurnCapabilitySkillBindings,
-  verifyCapabilityCatalogEntryUniqueness,
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { SystemHeartbeatTurnPrepPosture } from "./chat-turn-prep-service.js";
-import type { MeshCapabilityInvocationDispatchOutcome } from "./mesh-capability-invocation-service.js";
 import {
   EXPLICIT_WEB_PHRASES,
   extractExternalResearchSubject,
@@ -198,6 +199,9 @@ import {
   SUBAGENT_FANOUT_TOOL_NAME,
   SUBMIT_WORK_RESULT_TOOL_NAME,
   type RuntimeConfigurationTargetId,
+  type McpToolPolicyBinding,
+  type MeshToolPolicyBinding,
+  MESH_TOOL_POLICY_DEFINITION,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
@@ -244,7 +248,6 @@ import {
   readRuntimeConfigurationPromptAuthority,
   readRuntimeConfigurationPromptAuthorityId,
   sealRuntimeConfigurationPromptAuthority,
-  stripRuntimeConfigurationPromptAuthority,
 } from "./runtime-configuration-approval-binding.js";
 import {
   classifyProviderFailure,
@@ -655,12 +658,10 @@ async function toolSchemaFromCapabilityProfile(
   profile: ChatTurnCapabilityProfileRecord,
   storage: Pick<Storage, "capabilityCatalogSnapshots" | "skillLifecycle">,
   liveCallableEntries?: CapabilityCatalogEntry[],
+  revalidateRequesterTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>,
+  revalidateMeshTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>,
 ): Promise<ResolvedChatTurnToolSchema> {
-  verifyChatTurnCapabilityProfile(profile);
-  const persistedCatalog = await storage.capabilityCatalogSnapshots.get(profile.catalog.snapshotId);
-  verifyChatTurnCapabilityCatalogBinding(profile, persistedCatalog);
-  verifyChatTurnCapabilitySkillBindings(profile, await storage.skillLifecycle.list());
-  verifyCurrentCallableCatalogDoesNotNarrowProfile(profile, persistedCatalog, liveCallableEntries);
+  await assertChatCapabilityBindingsCurrent(profile, storage, liveCallableEntries, revalidateRequesterTool, revalidateMeshTool);
   if (profile.identity.sessionId !== input.sessionId || profile.identity.turnId !== input.turnId) {
     throw new Error("Capability profile identity does not match the executing Chat turn.");
   }
@@ -729,49 +730,6 @@ async function toolSchemaFromCapabilityProfile(
   };
 }
 
-function verifyCurrentCallableCatalogDoesNotNarrowProfile(
-  profile: ChatTurnCapabilityProfileRecord,
-  persistedCatalog: { callableEntries: CapabilityCatalogEntry[] },
-  liveCallableEntries: CapabilityCatalogEntry[] | undefined,
-): void {
-  if (profile.selection.tools.length === 0 && profile.selection.trustedSkills.length === 0) {
-    return;
-  }
-  if (!liveCallableEntries) {
-    throw new Error(`Capability profile ${profile.profileId} cannot verify the current callable catalog.`);
-  }
-  verifyCapabilityCatalogEntryUniqueness(liveCallableEntries, "current callable capability catalog");
-  const liveById = new Map(liveCallableEntries.map((entry) => [entry.capabilityId, entry]));
-  const persistedTools = new Map(
-    persistedCatalog.callableEntries
-      .filter((entry) => entry.kind === "tool" && entry.toolName)
-      .map((entry) => [entry.toolName as string, entry]),
-  );
-  const persistedSkills = new Map(
-    persistedCatalog.callableEntries
-      .filter((entry) => entry.kind === "skill" && entry.skillId)
-      .map((entry) => [entry.capabilityId, entry]),
-  );
-  const assertStillCallable = (entry: CapabilityCatalogEntry | undefined, label: string): void => {
-    const live = entry ? liveById.get(entry.capabilityId) : undefined;
-    if (!entry || !live || !live.callable || canonicalJsonString(live) !== canonicalJsonString(entry)) {
-      throw new Error(`Capability profile ${profile.profileId} ${label} is no longer in the current callable catalog.`);
-    }
-  };
-  for (const tool of profile.selection.tools) {
-    assertStillCallable(persistedTools.get(tool.canonicalName), `tool ${tool.canonicalName}`);
-  }
-  for (const skill of profile.selection.trustedSkills) {
-    const entry = persistedSkills.get(skill.capabilityId);
-    if (entry?.skillId !== skill.skillId) {
-      throw new Error(
-        `Capability profile ${profile.profileId} skill ${skill.skillId} has a malformed catalog binding.`,
-      );
-    }
-    assertStillCallable(entry, `skill ${skill.skillId}`);
-  }
-}
-
 export interface ChatTurnAgentRunnerResult {
   turnTrace: ChatTurnTraceRecord;
   assistantContent: string;
@@ -786,6 +744,14 @@ export interface ChatTurnAgentRunnerResult {
   };
 }
 
+export interface ChatToolAccessProbeOptions {
+  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+  meshTurnContext?: MeshChatTurnContextHandle;
+  /** Admission inspection only; never accepted by an invocation port or DTO. */
+  mcpCatalogPolicyBinding?: McpToolPolicyBinding;
+  meshCatalogPolicyBinding?: MeshToolPolicyBinding;
+}
+
 type ChatToolAccessProbe = (request: {
   toolName: string;
   sessionId: string;
@@ -797,7 +763,7 @@ type ChatToolAccessProbe = (request: {
   localOperatorOverrideId?: string;
   surface?: ToolPolicyActorContext["surface"];
   policyContext?: ToolPolicyActorContext;
-}) => Promise<{
+}, options?: ChatToolAccessProbeOptions) => Promise<{
   allowed: boolean;
   requiresApproval: boolean;
   reasonCodes: string[];
@@ -808,7 +774,9 @@ export interface ChatTurnAgentRunnerDeps {
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
   /** Live callable catalog used only to enforce stricter removals or drift. */
-  listCapabilityCatalog?: (scope: "callable") => Promise<CapabilityCatalogEntry[]>;
+  listCapabilityCatalog?: (scope: "callable", workspaceId?: string) => Promise<CapabilityCatalogEntry[]>;
+  revalidateRequesterTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>;
+  revalidateMeshTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>;
   createChatCompletion: (
     request: ChatCompletionRequest,
     attribution?: ModelUsageAttributionContext,
@@ -823,7 +791,7 @@ export interface ChatTurnAgentRunnerDeps {
   ) => Promise<ImageGenerationResponse>;
   invokeTool: (
     request: ToolInvokeRequest,
-    options?: { executionFence?: () => Promise<void> },
+    options?: { executionFence?: () => Promise<void>; mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle; meshTurnContext?: MeshChatTurnContextHandle },
   ) => Promise<ToolInvokeResult>;
   /**
    * Explicit capability seam for process-local effect correlation. Older
@@ -840,6 +808,8 @@ export interface ChatTurnAgentRunnerDeps {
       effectPotential: ToolEffectPotentialRecord;
       toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
       toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
+      mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+      meshTurnContext?: MeshChatTurnContextHandle;
       onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => Promise<void>;
       onEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
     },
@@ -925,28 +895,8 @@ export interface ChatTurnAgentRunnerDeps {
     workspaceId: string;
     binding: ChatTurnCapabilityToolMeshPublicationBinding;
   }) => Promise<"mesh_capability_binding_drift" | "mesh_capability_dispatch_unready">;
-  /**
-   * HX-408 M3: the generation-fenced mesh dispatch runtime. Composed by the
-   * gateway to `MeshCapabilityInvocationService.dispatch`. The runner routes
-   * a mesh-published callable here ONLY after the M2 pre-dispatch gate
-   * returned its still-valid verdict; drift always blocks first, and an
-   * absent composition keeps the M2 `mesh_capability_dispatch_unready`
-   * fail-closed terminal byte-identically.
-   */
-  dispatchMeshCapabilityInvocation?: (
-    input: {
-      workspaceId: string;
-      binding: ChatTurnCapabilityToolMeshPublicationBinding;
-      capabilityId: string;
-      args: Record<string, unknown>;
-      toolRunId: string;
-      sessionId: string;
-      turnId: string;
-      runId?: string;
-      executionProfileSha256: string;
-    },
-    options: { executionFence: () => Promise<void>; signal?: AbortSignal },
-  ) => Promise<MeshCapabilityInvocationDispatchOutcome>;
+  /** Host capability only; every call still enters the effect-aware coordinator. */
+  meshChatRuntimeAvailable?: boolean;
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
   /** Absolute root used to derive jailed workspace-file download links from verified tool results. */
@@ -1112,7 +1062,16 @@ export class ChatTurnAgentRunner {
    * final admission. Execution consumes the persisted result instead of
    * repeating this live catalog read.
    */
-  public async resolveCapabilityToolSchema(input: ChatTurnAgentRunnerInput): Promise<ResolvedChatTurnToolSchema> {
+  public async resolveCapabilityToolSchema(
+    input: ChatTurnAgentRunnerInput,
+    nativeTools: readonly NativeMcpChatToolSchema[] = [],
+    meshTools: readonly MeshChatToolSchema[] = [],
+  ): Promise<ResolvedChatTurnToolSchema> {
+    // This marker only narrows execution. Staging separately verifies the exact
+    // server-authored seed, completed source, actor, and reviewed draft hash.
+    if (input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
+      return { tools: [], modelToCanonical: new Map(), canonicalToModel: new Map(), policyDecisions: [] };
+    }
     const normalizationProfile = input.normalizationProfile ?? "live";
     const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
     const quickWebProfile = executionProfile === "quick_web";
@@ -1151,7 +1110,7 @@ export class ChatTurnAgentRunner {
         policyDecisions: [],
       };
     }
-    return await this.buildToolSchema(input, intents);
+    return await this.buildToolSchema(input, intents, nativeTools, meshTools);
   }
 
   private async filterSystemHeartbeatCapabilityToolSchema(
@@ -1302,6 +1261,11 @@ export class ChatTurnAgentRunner {
       onAuxiliaryEffectDispatch: () => Promise<void>;
     },
   ): Promise<ToolInvokeResult> {
+    const mcpRequesterTurnContext = request.toolName.startsWith("mcp.")
+      ? this.buildTurnMcpRequesterContext(turnInput)
+      : undefined;
+    const meshTurnContext = request.toolName.startsWith("mesh:") && turnInput.capabilityProfile
+      ? createMeshChatTurnContext(turnInput.capabilityProfile) : undefined;
     if (effectOptions && this.deps.invokeToolWithEffectTruth) {
       const executionFence = async (): Promise<void> => {
         await effectOptions.onExecutorDispatch();
@@ -1313,6 +1277,8 @@ export class ChatTurnAgentRunner {
         effectPotential: effectOptions.effectPotential,
         toolCallBeforeHookInterposition: effectOptions.toolCallBeforeHookInterposition,
         toolRuntimeOwner: effectOptions.toolRuntimeOwner,
+        ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+        ...(meshTurnContext ? { meshTurnContext } : {}),
         onEffectPotentialEscalated: effectOptions.onEffectPotentialEscalated,
         onEffectReceipt: effectOptions.onEffectReceipt,
       });
@@ -1331,12 +1297,18 @@ export class ChatTurnAgentRunner {
       await effectOptions.onExecutorDispatch();
     }
     if (!turnInput.canonicalWriteFence) {
-      return this.deps.invokeTool(request);
+      return mcpRequesterTurnContext || meshTurnContext
+        ? this.deps.invokeTool(request, {
+          ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+          ...(meshTurnContext ? { meshTurnContext } : {}),
+        })
+        : this.deps.invokeTool(request);
     }
     const executionFence = async (): Promise<void> => {
       await this.runCanonicalWrite(turnInput, () => undefined);
     };
-    return this.deps.invokeTool(request, { executionFence });
+    return this.deps.invokeTool(request, { executionFence,
+      ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}), ...(meshTurnContext ? { meshTurnContext } : {}) });
   }
 
   /**
@@ -1862,6 +1834,9 @@ export class ChatTurnAgentRunner {
 
   private async *runStreamInternal(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
+    const workflowSkillCapture = input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER);
+    // Quoted workflow evidence describes past work, not new execution intent.
+    const executionIntentContent = workflowSkillCapture ? "" : input.content;
     const readOnlyExplorerScopeRoot = await this.resolveReadOnlyExplorerScopeRoot(input);
     const listProjectedToolRuns = async (): Promise<ChatToolRunRecord[]> => {
       const rows = await this.deps.storage.chatToolRuns.listByTurn(input.turnId);
@@ -1876,38 +1851,41 @@ export class ChatTurnAgentRunner {
       executionProfile,
       normalizationProfile,
     });
-    const promptLabContract = parsePromptLabRunContract(input.content);
-    const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(input.content));
+    const promptLabContract = parsePromptLabRunContract(executionIntentContent);
+    const localBusinessResearchExpected = Boolean(buildLocalBusinessResearchPlan(executionIntentContent));
     const promptLabHarnessTurnForIntent =
-      normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+      normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(executionIntentContent);
     const suppressPromptLabCodeArtifactTools =
       input.mode === "code" &&
       promptLabHarnessTurnForIntent &&
       !promptLabContractRequiresArtifactTools(promptLabContract);
     const intentDetectionContent =
-      promptLabContract.userTask?.trim() || extractPrimaryUserTaskContent(input.content) || input.content;
+      promptLabContract.userTask?.trim() ||
+      extractPrimaryUserTaskContent(executionIntentContent) ||
+      executionIntentContent;
     const presentationArtifactIntent =
-      !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(input.content);
+      !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(executionIntentContent);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
-        (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false),
+        (intentDetectionContent !== executionIntentContent ? detectLiveDataIntent(executionIntentContent) : false),
       webLookup:
-        detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
-        (intentDetectionContent !== input.content
-          ? detectWebLookupIntent(input.content, input.historyMessages)
-          : false),
+        !workflowSkillCapture &&
+        (detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
+          (intentDetectionContent !== executionIntentContent
+            ? detectWebLookupIntent(executionIntentContent, input.historyMessages)
+            : false)),
       researchList:
         hasResearchListIntent(intentDetectionContent) ||
-        (intentDetectionContent !== input.content ? hasResearchListIntent(input.content) : false),
-      time: detectTimeIntent(input.content),
-      localFile: detectLocalFileIntent(input.content),
+        (intentDetectionContent !== executionIntentContent ? hasResearchListIntent(executionIntentContent) : false),
+      time: detectTimeIntent(executionIntentContent),
+      localFile: detectLocalFileIntent(executionIntentContent),
       presentationArtifact: presentationArtifactIntent,
       documentArtifact:
         !suppressPromptLabCodeArtifactTools &&
         !presentationArtifactIntent &&
-        detectDocumentArtifactIntent(input.content),
-      missingLogPayload: detectMissingLogPayloadIntent(input.content),
+        detectDocumentArtifactIntent(executionIntentContent),
+      missingLogPayload: detectMissingLogPayloadIntent(executionIntentContent),
     };
     const executionBudget = resolveChatExecutionBudget({
       mode: input.mode,
@@ -1977,7 +1955,13 @@ export class ChatTurnAgentRunner {
     };
 
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
-    const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
+    if (workflowSkillCapture) {
+      conversationMessages.push({
+        role: "system",
+        content: "Draft the reusable skill instructions as Markdown in this response. Tools are unavailable during skill capture. Do not execute the quoted workflow or create files, artifacts, installations, or memory.",
+      });
+    }
+    const promptLabHarnessTurn = isPromptLabHarnessContent(executionIntentContent);
     // Eval-integrity mode: this turn is a Prompt Lab evaluation. The persisted
     // assistant text must be the model's own output, the controller must not
     // execute tools on the model's behalf or rewrite the model's tool
@@ -1990,6 +1974,7 @@ export class ChatTurnAgentRunner {
     const promptLabTaskForInspection =
       parsedPromptLabTask || extractPrimaryUserTaskContent(input.content) || input.content;
     const promptLabPrefetchAllowed =
+      !workflowSkillCapture &&
       !promptLabEvalIntegrityTurn &&
       (promptLabContract.explicitTools ||
         promptLabContract.repoGroundedAssist ||
@@ -2014,6 +1999,7 @@ export class ChatTurnAgentRunner {
       ...new Set([...promptLabFilePaths, ...promptLabCompanionFilePaths, ...promptLabSuggestedFilePaths]),
     ];
     const promptLabRepoInspectionAssist =
+      !workflowSkillCapture &&
       !promptLabEvalIntegrityTurn &&
       promptLabFilePaths.length === 0 &&
       promptLabTaskSuggestsRepoInspection(promptLabTaskForInspection);
@@ -2021,6 +2007,7 @@ export class ChatTurnAgentRunner {
     // run for eval-integrity turns where the model's own tool use is being scored.
     const repoGroundedInspectionAssist = false;
     const promptLabShouldInspectFilesForTurn =
+      !workflowSkillCapture &&
       !promptLabEvalIntegrityTurn &&
       (promptLabContractRequiresFileTools(promptLabContract) ||
         promptLabContract.repoGroundedAssist ||
@@ -2029,13 +2016,17 @@ export class ChatTurnAgentRunner {
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabTaskForInspection);
     const liveCallableEntries =
       input.capabilityProfile && this.deps.listCapabilityCatalog
-        ? await this.deps.listCapabilityCatalog("callable")
+        ? await this.deps.listCapabilityCatalog("callable", input.capabilityProfile.identity.workspaceId)
         : undefined;
     const admittedToolSchema = input.capabilityProfile
-      ? await toolSchemaFromCapabilityProfile(input, input.capabilityProfile, this.deps.storage, liveCallableEntries)
+      ? await toolSchemaFromCapabilityProfile(input, input.capabilityProfile, this.deps.storage, liveCallableEntries,
+          this.deps.revalidateRequesterTool, this.deps.revalidateMeshTool)
       : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
-    const toolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
+    const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
+    const toolSchema: ResolvedChatTurnToolSchema = workflowSkillCapture
+      ? { tools: [], modelToCanonical: new Map(), canonicalToModel: new Map(), policyDecisions: [] }
+      : filteredToolSchema;
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
     const promptLabConcreteReadToolName = promptLabShouldInspectFilesForTurn
       ? resolvePromptLabConcreteReadToolName(toolSchema.canonicalToModel, catalogToolNames)
@@ -5631,8 +5622,41 @@ export class ChatTurnAgentRunner {
       presentationArtifact: boolean;
       documentArtifact: boolean;
     },
+    nativeTools: readonly NativeMcpChatToolSchema[] = [],
+    meshTools: readonly MeshChatToolSchema[] = [],
   ): Promise<ResolvedChatTurnToolSchema> {
-    const catalog = this.deps.listToolCatalog();
+    const catalog = [...this.deps.listToolCatalog()];
+    const mcpTemplate = catalog.find((tool) => tool.toolName === "mcp.invoke");
+    const nativeByName = new Map<string, NativeMcpChatToolSchema>();
+    for (const native of nativeTools) {
+      assertNativeMcpChatToolSchema(native);
+      if (!mcpTemplate) continue;
+      if (nativeByName.has(native.canonicalName) || catalog.some((tool) => tool.toolName === native.canonicalName)) {
+        throw new Error("Native MCP schema collides with a registered tool");
+      }
+      nativeByName.set(native.canonicalName, native);
+      catalog.push({ ...mcpTemplate, toolName: native.canonicalName,
+        description: native.candidate.tool.description ?? "Requester-scoped MCP tool.",
+        argSchema: native.candidate.tool.inputSchema, examples: [],
+        readOnly: false, deterministic: false, codeModeAllowed: false,
+        effectPotential: native.candidate.entry.effectPotential,
+      });
+    }
+    const meshByName = new Map<string, MeshChatToolSchema>();
+    for (const mesh of meshTools) {
+      assertMeshChatToolSchema(mesh);
+      if (meshByName.has(mesh.canonicalName) || catalog.some((tool) => tool.toolName === mesh.canonicalName)) {
+        throw new Error("Mesh schema collides with a registered tool");
+      }
+      meshByName.set(mesh.canonicalName, mesh);
+      const definition = mesh.providerDefinition.function as { description: string; parameters: Record<string, unknown> };
+      catalog.push({
+        toolName: mesh.canonicalName, category: MESH_TOOL_POLICY_DEFINITION.category,
+        riskLevel: MESH_TOOL_POLICY_DEFINITION.riskLevel, requiresApproval: true, pack: "core",
+        description: definition.description, argSchema: definition.parameters, examples: [],
+        readOnly: false, deterministic: false, codeModeAllowed: false, effectPotential: mesh.entry.effectPotential,
+      });
+    }
     const promptLabContract = parsePromptLabRunContract(input.content);
     const promptLabHarnessTurn =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
@@ -5831,7 +5855,8 @@ export class ChatTurnAgentRunner {
     const evaluateToolAccess = this.toolAccessProbe;
     if (!evaluateToolAccess) {
       if (!exactSystemHeartbeat) {
-        filteredCatalog.push(...staticallyEligibleCatalog);
+        filteredCatalog.push(...staticallyEligibleCatalog.filter((tool) =>
+          !nativeByName.has(tool.toolName) && !meshByName.has(tool.toolName)));
       }
     } else {
       const policyContext = buildTurnToolPolicyContext(input);
@@ -5840,20 +5865,22 @@ export class ChatTurnAgentRunner {
         TOOL_POLICY_PROBE_CONCURRENCY,
         async (tool) => {
           try {
+            const request = {
+              toolName: tool.toolName, sessionId: input.sessionId, agentId: "assistant",
+              taskId: input.policyTaskId, runId: input.policyRunId,
+              args: buildToolAccessProbeArgs(tool.toolName, this.deps.safeWriteFallbackDir),
+              permissionProfileId: input.permissionProfileId, localOperatorOverrideId: input.localOperatorOverrideId,
+              surface: input.mode, policyContext,
+            };
+            const native = nativeByName.get(tool.toolName);
+            const mesh = meshByName.get(tool.toolName);
             return {
               tool,
-              access: await evaluateToolAccess({
-                toolName: tool.toolName,
-                sessionId: input.sessionId,
-                agentId: "assistant",
-                taskId: input.policyTaskId,
-                runId: input.policyRunId,
-                args: buildToolAccessProbeArgs(tool.toolName, this.deps.safeWriteFallbackDir),
-                permissionProfileId: input.permissionProfileId,
-                localOperatorOverrideId: input.localOperatorOverrideId,
-                surface: input.mode,
-                policyContext,
-              }),
+              access: native
+                ? await evaluateToolAccess(request, { mcpCatalogPolicyBinding: native.policyBinding })
+                : mesh
+                  ? await evaluateToolAccess(request, { meshCatalogPolicyBinding: mesh.policyBinding })
+                  : await evaluateToolAccess(request),
             };
           } catch {
             return { tool, access: undefined };
@@ -5960,10 +5987,20 @@ export class ChatTurnAgentRunner {
       selectedNames.add(entry.tool.toolName);
       schemaTokenBudget -= estimated;
     }
+    // Reserve exact native aliases before normalizing builtin names. The
+    // native alias commits to the descriptor and requester binding hashes.
+    for (const tool of selectedCatalog) {
+      const native = nativeByName.get(tool.toolName) ?? meshByName.get(tool.toolName);
+      if (!native) continue;
+      if (modelToCanonical.has(native.modelName)) throw new Error("Remote tool provider alias collision");
+      modelToCanonical.set(native.modelName, tool.toolName);
+    }
     const tools = selectedCatalog.map((tool) => {
-      const modelName = toProviderToolFunctionName(tool.toolName, modelToCanonical);
+      const native = nativeByName.get(tool.toolName) ?? meshByName.get(tool.toolName);
+      const modelName = native?.modelName ?? toProviderToolFunctionName(tool.toolName, modelToCanonical);
       modelToCanonical.set(modelName, tool.toolName);
       canonicalToModel.set(tool.toolName, modelName);
+      if (native) return native.providerDefinition;
       return {
         type: "function",
         function: {
@@ -6021,7 +6058,7 @@ export class ChatTurnAgentRunner {
     }
     let current: Awaited<ReturnType<ChatToolAccessProbe>>;
     try {
-      current = await this.toolAccessProbe({
+      const probeRequest = {
         toolName: tool.toolName,
         sessionId: input.sessionId,
         agentId: "assistant",
@@ -6032,7 +6069,12 @@ export class ChatTurnAgentRunner {
         localOperatorOverrideId: input.localOperatorOverrideId,
         surface: input.mode,
         policyContext: buildTurnToolPolicyContext(input),
-      });
+      };
+      current = tool.toolName.startsWith("mcp.") && tool.toolName !== "mcp.invoke"
+        ? await this.toolAccessProbe(probeRequest, { mcpRequesterTurnContext: this.buildTurnMcpRequesterContext(input) })
+        : tool.toolName.startsWith("mesh:")
+          ? await this.toolAccessProbe(probeRequest, { meshTurnContext: createMeshChatTurnContext(input.capabilityProfile) })
+          : await this.toolAccessProbe(probeRequest);
     } catch {
       return {
         blockedReason: "Current tool policy evaluation failed after capability admission.",
@@ -6061,14 +6103,8 @@ export class ChatTurnAgentRunner {
         reasonCodes: [...current.reasonCodes, "frozen_approval_posture_broadened"],
       };
     }
-    // HX-408 M2/M3: a mesh-published callable re-verifies its frozen
-    // activation snapshot immediately before dispatch and stays fail-closed
-    // BEFORE any remote path — drift always blocks first with its
-    // content-free reason. On the still-valid verdict, M3 admits the real
-    // generation-fenced dispatch ONLY when the mesh dispatch runtime is
-    // composed AND no interactive approval gates the current posture AND the
-    // turn is not a server-only heartbeat; every other case keeps the exact
-    // M2 fail-closed terminal.
+    // Current publication authority narrows the frozen profile. Per-call
+    // approval is then owned by the same coordinator as every other tool.
     const meshPublication = input.capabilityProfile.selection.tools.find(
       (candidate) => candidate.canonicalName === tool.toolName,
     )?.meshPublication;
@@ -6083,7 +6119,7 @@ export class ChatTurnAgentRunner {
       if (
         block === "mesh_capability_binding_drift" ||
         !preDispatchGate ||
-        !this.deps.dispatchMeshCapabilityInvocation
+        !this.deps.meshChatRuntimeAvailable || !this.deps.invokeToolWithEffectTruth
       ) {
         return {
           blockedReason: `Mesh-published tool ${tool.toolName} is blocked because ${block}.`,
@@ -6096,15 +6132,6 @@ export class ChatTurnAgentRunner {
           reasonCodes: [...current.reasonCodes, "mesh_capability_heartbeat_dispatch_forbidden"],
         };
       }
-      if (current.requiresApproval) {
-        // The packet requires the approvals check to PASS before an intent is
-        // created; no mesh approval-replay surface exists in M3, so an
-        // approval-gated posture stays fail-closed instead of bypassing it.
-        return {
-          blockedReason: `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_approval_dispatch_deferred.`,
-          reasonCodes: [...current.reasonCodes, "mesh_capability_approval_dispatch_deferred"],
-        };
-      }
       return { reasonCodes: [...current.reasonCodes] };
     }
     return { reasonCodes: [...current.reasonCodes] };
@@ -6115,145 +6142,6 @@ export class ChatTurnAgentRunner {
     tool: { toolName: string; args: Record<string, unknown> },
   ): Promise<string | undefined> {
     return (await this.resolveCapabilityProfileInvocationDecision(input, tool)).blockedReason;
-  }
-
-  /**
-   * HX-408 M3: the frozen mesh binding for a tool this turn's
-   * `resolveCapabilityProfileInvocationBlock` gate already admitted for real
-   * dispatch (still-valid verdict, composed runtime, no approval gate,
-   * non-heartbeat posture). The caller runs the gate FIRST; this helper only
-   * routes the admitted invocation. Gate-to-write drift stays fail-closed in
-   * the invocation owner and the committed storage intent guard.
-   */
-  private resolveAdmittedMeshDispatchBinding(
-    input: ChatTurnAgentRunnerInput,
-    toolName: string,
-  ): { workspaceId: string; binding: ChatTurnCapabilityToolMeshPublicationBinding } | undefined {
-    if (!input.capabilityProfile || !this.deps.dispatchMeshCapabilityInvocation) {
-      return undefined;
-    }
-    const meshPublication = input.capabilityProfile.selection.tools.find(
-      (candidate) => candidate.canonicalName === toolName,
-    )?.meshPublication;
-    if (!meshPublication) {
-      return undefined;
-    }
-    return { workspaceId: input.capabilityProfile.identity.workspaceId, binding: meshPublication };
-  }
-
-  /**
-   * HX-408 M3: settle one admitted mesh dispatch into the canonical tool-run
-   * truth. The invocation owner fires the durable execution fence exactly
-   * once immediately before the envelope append; outcomes map to the
-   * existing HX-305 effect-truth conventions — succeeded completes,
-   * node-reported failures/timeouts/cancellations settle as failed with
-   * uncertain remote effect, and unknown delivery settles as failed with the
-   * manual-reconciliation guidance and NO automatic replay.
-   */
-  private async settleMeshCapabilityDispatch(input: {
-    turnInput: ChatTurnAgentRunnerInput;
-    turnId: string;
-    toolRunId: string;
-    toolName: string;
-    args: Record<string, unknown>;
-    workspaceId: string;
-    binding: ChatTurnCapabilityToolMeshPublicationBinding;
-    getEffectPotential: () => ToolEffectPotentialRecord;
-    hasExecutorDispatchStarted: () => boolean;
-    executionFence: () => Promise<void>;
-    priorToolRuns?: ChatToolRunRecord[];
-  }): Promise<{ record: ChatToolRunRecord; chunk?: ChatStreamChunkDraft }> {
-    const dispatch = this.deps.dispatchMeshCapabilityInvocation;
-    if (!dispatch) {
-      throw new Error(`Mesh dispatch runtime is not composed for ${input.toolName}.`);
-    }
-    const outcome = await dispatch(
-      {
-        workspaceId: input.workspaceId,
-        binding: input.binding,
-        capabilityId: input.toolName,
-        args: input.args,
-        toolRunId: input.toolRunId,
-        sessionId: input.turnInput.sessionId,
-        turnId: input.turnId,
-        ...(input.turnInput.policyRunId ? { runId: input.turnInput.policyRunId } : {}),
-        executionProfileSha256: input.turnInput.capabilityProfile?.preflightFingerprint ?? "",
-      },
-      {
-        executionFence: input.executionFence,
-        ...(input.turnInput.signal ? { signal: input.turnInput.signal } : {}),
-      },
-    );
-    const receipt = {
-      meshInvocation: {
-        invocationId: outcome.invocationId,
-        disposition: outcome.disposition,
-        settled: outcome.settled,
-        deliveryUncertain: outcome.deliveryUncertain,
-        manualReconciliationRequired: outcome.manualReconciliationRequired,
-        ...(outcome.errorCode === undefined ? {} : { errorCode: outcome.errorCode }),
-        receipt: outcome.receipt,
-      },
-    };
-    if (outcome.disposition === "succeeded") {
-      const persisted = await this.persistToolArtifactsIfNeeded({
-        turnInput: input.turnInput,
-        sessionId: input.turnInput.sessionId,
-        turnId: input.turnId,
-        toolRunId: input.toolRunId,
-        toolName: input.toolName,
-        result: { ...(outcome.output ?? {}), ...receipt },
-        normalizationProfile: input.turnInput.normalizationProfile,
-        priorToolRuns: input.priorToolRuns,
-      });
-      const updated = await this.patchToolRun(input.turnInput, input.toolRunId, {
-        status: "executed",
-        ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
-        result: persisted,
-        finishedAt: new Date().toISOString(),
-      });
-      return {
-        record: updated,
-        chunk: {
-          type: "tool_result",
-          sessionId: input.turnInput.sessionId,
-          turnId: input.turnId,
-          toolRun: updated,
-        },
-      };
-    }
-    const errorCode = outcome.errorCode ?? `mesh_capability_invocation_${outcome.disposition}`;
-    const error = `Mesh-published tool ${input.toolName} settled ${outcome.disposition} (${errorCode}).`;
-    const dispatched = input.hasExecutorDispatchStarted();
-    const updated = await this.patchToolRun(input.turnInput, input.toolRunId, {
-      status: "failed",
-      ...this.buildToolEffectPatch({
-        potential: input.getEffectPotential(),
-        phase: dispatched ? "dispatch_failed" : "pre_dispatch_blocked",
-      }),
-      result: receipt,
-      error,
-      failureGuidance: outcome.manualReconciliationRequired
-        ? "The remote delivery truth is unknown. An operator must reconcile the invocation manually; automatic replay is suppressed."
-        : outcome.deliveryUncertain
-          ? "The remote node may already have executed this invocation. Inspect remote state before retry; automatic replay is suppressed."
-          : buildToolFailureGuidance({
-              toolName: input.toolName,
-              status: "failed",
-              args: input.args,
-              error,
-            }),
-      finishedAt: new Date().toISOString(),
-    });
-    return {
-      record: updated,
-      chunk: {
-        type: "tool_result",
-        sessionId: input.turnInput.sessionId,
-        turnId: input.turnId,
-        toolRun: updated,
-      },
-    };
   }
 
   private async assertSystemHeartbeatToolInvocationAllowed(
@@ -6607,6 +6495,12 @@ export class ChatTurnAgentRunner {
       evalIntegrityTurn: input.input.normalizationProfile === "prompt_pack_harness",
       quickWebProfile: input.input.normalizationProfile === "quick_web",
     });
+    if (input.input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
+      preflight = {
+        ...preflight,
+        blockedReason: "Skill capture drafts instructions only; tool execution is unavailable.",
+      };
+    }
     // Heartbeat policy is re-evaluated before even creating a tool-run row.
     // This is deliberately independent from catalog filtering: policy can
     // narrow or gain an approval requirement after provider admission.
@@ -7002,27 +6896,6 @@ export class ChatTurnAgentRunner {
         toolName: preflight.toolName,
         args: preflight.args,
       });
-      // HX-408 M3: a mesh-published callable the pre-dispatch gate admitted
-      // executes ONLY through the generation-fenced mesh dispatch runtime.
-      // The invocation owner re-verifies callability and the committed
-      // storage intent guard re-verifies the full binding inside its own
-      // transaction, so gate-to-write drift still fails closed pre-fence.
-      const admittedMeshDispatch = this.resolveAdmittedMeshDispatchBinding(input.input, preflight.toolName);
-      if (admittedMeshDispatch) {
-        return await this.settleMeshCapabilityDispatch({
-          turnInput: input.input,
-          turnId: input.turnId,
-          toolRunId: created.toolRunId,
-          toolName: preflight.toolName,
-          args: preflight.args,
-          workspaceId: admittedMeshDispatch.workspaceId,
-          binding: admittedMeshDispatch.binding,
-          getEffectPotential: () => effectPotential,
-          hasExecutorDispatchStarted: () => executorDispatchStarted,
-          executionFence: markMainExecutorDispatchStarted,
-          priorToolRuns: input.priorToolRuns,
-        });
-      }
       const rawResult = await this.invokeTurnTool(
         input.input,
         {
@@ -7118,6 +6991,23 @@ export class ChatTurnAgentRunner {
               note: `Requested write path was outside the configured write jail; preserved the original payload and repaired only the destination to ${preDispatchPathRepair.fallbackPath}`,
             }
           : basePersistedToolResult;
+
+      if (result.outcome === "executed" && result.result?.externalOutcome === "unknown_after_send" &&
+        result.result.manualReconciliationRequired === true) {
+        const updated = await this.patchToolRun(input.input, created.toolRunId, {
+          status: "failed",
+          ...this.buildToolEffectPatch({
+            potential: classifyToolEffectPotential({ toolName: preflight.toolName, trustedBuiltin: false, sourceKind: "remote" }),
+            phase: "dispatch_failed",
+          }),
+          result: persistedToolResult,
+          error: typeof result.result.error === "string" ? result.result.error : "Remote execution outcome is unknown.",
+          failureGuidance: "The remote operation may already have executed. An operator must reconcile remote state before retry; automatic replay is suppressed.",
+          finishedAt: new Date().toISOString(),
+        });
+        return { record: updated, chunk: { type: "tool_result", sessionId: input.input.sessionId,
+          turnId: input.turnId, toolRun: updated } };
+      }
 
       if (result.outcome === "approval_required") {
         if (mainExecutorDispatchStarted) {
@@ -9221,10 +9111,12 @@ function detectTimeIntent(content: string): boolean {
 }
 
 function detectLiveDataIntent(content: string): boolean {
+  if (isExplicitLocalMcpTask(content)) return false;
   return hasLiveDataIntent(content) || Boolean(derivePromptSpecificWebQuery(content));
 }
 
 function detectExplicitWebLookupIntent(content: string): boolean {
+  if (isExplicitLocalMcpTask(content)) return false;
   // P1-8: Use only explicit web phrases, not all live-data keywords.
   const lower = content.toLowerCase();
   return EXPLICIT_WEB_PHRASES.some((phrase) => lower.includes(phrase));
@@ -9235,6 +9127,7 @@ function detectDirectUrlIntent(content: string): boolean {
 }
 
 function detectWebLookupIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
+  if (isExplicitLocalMcpTask(content)) return false;
   return (
     detectLiveDataIntent(content) ||
     hasExternalResearchIntent(content) ||
@@ -15727,43 +15620,6 @@ function isToolEffectReceiptCorrelated(
   );
 }
 
-function projectToolResultForModel<T>(value: T): T {
-  return redactStructuredSecrets(value).value;
-}
-
-function projectHistoryMessagesForModel(
-  messages: ChatCompletionRequest["messages"],
-): ChatCompletionRequest["messages"] {
-  return messages.map((message) => (message.role === "user" ? message : projectToolResultForModel(message)));
-}
-
-function projectToolRunsForModel(toolRuns: ChatToolRunRecord[]): ChatToolRunRecord[] {
-  return projectToolResultForModel(
-    toolRuns.map((run) => ({ ...run, result: stripRuntimeConfigurationPromptAuthority(run.result) })),
-  );
-}
-
-function isSettledToolRunContinuationEvidence(run: ChatToolRunRecord): boolean {
-  return run.status === "executed" || run.status === "failed" || run.status === "blocked";
-}
-
-function buildPersistedToolContinuationCallId(run: ChatToolRunRecord): string {
-  return `resume_${createHash("sha256").update(run.toolRunId).digest("hex").slice(0, 24)}`;
-}
-
-function buildPersistedToolContinuationResult(run: ChatToolRunRecord): Record<string, unknown> {
-  const projectedResult = stripRuntimeConfigurationPromptAuthority(run.result);
-  if (run.status === "executed") {
-    return projectedResult ?? { status: "executed" };
-  }
-  return {
-    ...(projectedResult ?? {}),
-    status: run.status,
-    error: run.error ?? (run.status === "blocked" ? "Tool execution was blocked." : "Tool execution failed."),
-    ...(run.failureGuidance ? { failureGuidance: run.failureGuidance } : {}),
-  };
-}
-
 function findReusableApprovedToolRun(
   toolRuns: readonly ChatToolRunRecord[],
   toolName: string,
@@ -15967,10 +15823,6 @@ function buildResearchArtifactSearchReuseResult(run: ChatToolRunRecord): Record<
         "This identical search is already settled. Use it now, or run only a materially different gap-closing search before creating the presentation.",
     },
   };
-}
-
-function serializeToolResultForModel(value: unknown): string {
-  return JSON.stringify(projectToolResultForModel(value));
 }
 
 function createAbortError(message: string): Error {

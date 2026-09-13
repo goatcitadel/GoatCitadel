@@ -5,7 +5,8 @@
   "goatcitadelOwner": "runtime",
   "type": "module",
   "dependencies": {
-    "@goatcitadel/contracts": "workspace:*"
+    "@goatcitadel/contracts": "workspace:*",
+    "@goatcitadel/remote-worker-provisioner": "workspace:*"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

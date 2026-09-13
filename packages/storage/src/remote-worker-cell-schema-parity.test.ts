@@ -98,7 +98,8 @@ describe("HX-505 remote worker cell schema parity", () => {
     );
     for (const [table, columns] of Object.entries(TABLE_COLUMNS)) {
       assert.match(postgresSql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
-      assert.deepEqual(tableColumns(db, table), [...columns], `${table} SQLite columns drifted`);
+      const headColumns = table === "remote_worker_cells" ? [...columns, "native_platform_json"] : [...columns];
+      assert.deepEqual(tableColumns(db, table), headColumns, `${table} SQLite columns drifted`);
       for (const column of columns) {
         assert.match(
           postgresSql,
@@ -108,6 +109,10 @@ describe("HX-505 remote worker cell schema parity", () => {
       }
       assert.equal(columns[0], "registry_workspace_id", `${table} must prefix identity with registry workspace`);
     }
+    assert.match(
+      POSTGRES_MIGRATIONS.find((migration) => migration.version === 151)?.sql ?? "",
+      /ALTER TABLE remote_worker_cells ADD COLUMN IF NOT EXISTS native_platform_json TEXT/u,
+    );
   });
 
   it("never stores a transcript, artifact payload, raw terminal output, or credential in either dialect", () => {

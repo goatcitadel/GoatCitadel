@@ -80,6 +80,7 @@ describe("tools permission profile routes", () => {
       method: "PATCH",
       url: "/api/v1/tools/permission-profiles/profile-1",
       payload: {
+        expectedRevision: "a".repeat(64),
         approvalMode: "bypass",
       },
     });
@@ -89,7 +90,7 @@ describe("tools permission profile routes", () => {
     const activateResponse = await app.inject({
       method: "POST",
       url: "/api/v1/tools/permission-profiles/activate",
-      payload: {
+      payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64),
         profileId: "profile-1",
         surface: "code",
       },
@@ -119,7 +120,7 @@ describe("tools permission profile routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/tools/permission-profiles/activate",
-      payload: {
+      payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64),
         profileId: "workspace-profile",
         workspaceId: "workspace-1",
         surface: "code",
@@ -435,7 +436,7 @@ describe("tools permission profile routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/tools/permission-profiles/activate",
-      payload: {
+      payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64),
         profileId: "missing-profile",
         surface: "code",
       },

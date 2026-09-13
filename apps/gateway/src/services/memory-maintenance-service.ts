@@ -8,9 +8,13 @@ import type {
   DurableRunRecord,
   LlmRuntimeConfig,
   MemoryItemRecord,
-  MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
+  MemoryMaintenancePolicyUpdateInput,
+  MemoryMaintenancePolicyValues,
   MemoryMaintenanceProvenanceRecord,
+  MemoryMaintenanceRecommendationAcceptInput,
+  MemoryMaintenanceRecommendationAcceptance,
+  MemoryMaintenanceRecommendationDecisionInput,
   MemoryMaintenanceRecommendationKind,
   MemoryMaintenanceRecommendationRecord,
   MemoryMaintenanceRunNowInput,
@@ -144,17 +148,16 @@ export class MemoryMaintenanceService {
 
   public async patchPolicy(
     workspaceId: string | undefined,
-    patch: MemoryMaintenancePolicyPatchInput,
+    input: MemoryMaintenancePolicyUpdateInput,
   ): Promise<MemoryMaintenancePolicyRecord> {
     await this.requireReady();
     const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
-    const policy = await this.ctx.storage.memoryMaintenance.patchPolicy(
+    const { expectedRevision, ...patch } = input;
+    return this.ctx.storage.memoryMaintenance.patchPolicy(
       normalizedWorkspaceId,
       patch,
-      this.defaultPolicy(normalizedWorkspaceId),
+      expectedRevision,
     );
-    await this.refreshState(normalizedWorkspaceId, { touchEligibility: false });
-    return policy;
   }
 
   public async getStatus(workspaceId?: string): Promise<MemoryMaintenanceStatusRecord> {
@@ -197,37 +200,20 @@ export class MemoryMaintenanceService {
     return await this.ctx.storage.memoryMaintenance.listRecommendations(normalizedWorkspaceId, limit);
   }
 
-  public async acceptRecommendation(recommendationId: string): Promise<{
-    recommendation: MemoryMaintenanceRecommendationRecord;
-    policy: MemoryMaintenancePolicyRecord;
-  }> {
+  public async acceptRecommendation(
+    recommendationId: string,
+    input: MemoryMaintenanceRecommendationAcceptInput,
+  ): Promise<MemoryMaintenanceRecommendationAcceptance> {
     await this.requireReady();
-    const recommendation = await this.ctx.storage.memoryMaintenance.getRecommendation(recommendationId);
-    const policy = await this.patchPolicy(
-      recommendation.workspaceId,
-      recommendation.proposedPatch as MemoryMaintenancePolicyPatchInput,
-    );
-    const now = new Date().toISOString();
-    const applied = await this.ctx.storage.memoryMaintenance.updateRecommendation({
-      ...recommendation,
-      status: "applied",
-      updatedAt: now,
-      appliedAt: now,
-    });
-    return {
-      recommendation: applied,
-      policy,
-    };
+    return this.ctx.storage.memoryMaintenance.acceptRecommendation(recommendationId, input);
   }
 
-  public async rejectRecommendation(recommendationId: string): Promise<MemoryMaintenanceRecommendationRecord> {
+  public async rejectRecommendation(
+    recommendationId: string,
+    input: MemoryMaintenanceRecommendationDecisionInput,
+  ): Promise<MemoryMaintenanceRecommendationRecord> {
     await this.requireReady();
-    const recommendation = await this.ctx.storage.memoryMaintenance.getRecommendation(recommendationId);
-    return await this.ctx.storage.memoryMaintenance.updateRecommendation({
-      ...recommendation,
-      status: "rejected",
-      updatedAt: new Date().toISOString(),
-    });
+    return this.ctx.storage.memoryMaintenance.rejectRecommendation(recommendationId, input);
   }
 
   public async runNow(input: MemoryMaintenanceRunNowInput): Promise<MemoryMaintenanceRunRecord> {
@@ -485,8 +471,7 @@ export class MemoryMaintenanceService {
   }
 
   private async ensurePolicy(workspaceId: string): Promise<MemoryMaintenancePolicyRecord> {
-    const existing = await this.ctx.storage.memoryMaintenance.findPolicy(workspaceId);
-    return existing ?? (await this.ctx.storage.memoryMaintenance.upsertPolicy(this.defaultPolicy(workspaceId)));
+    return this.ctx.storage.memoryMaintenance.ensurePolicy(this.defaultPolicy(workspaceId));
   }
 
   private async ensureState(workspaceId: string): Promise<MemoryMaintenanceStateRecord> {
@@ -494,7 +479,7 @@ export class MemoryMaintenanceService {
     return existing ?? (await this.ctx.storage.memoryMaintenance.upsertState(this.defaultState(workspaceId)));
   }
 
-  private defaultPolicy(workspaceId: string, now = new Date().toISOString()): MemoryMaintenancePolicyRecord {
+  private defaultPolicy(workspaceId: string, now = new Date().toISOString()): MemoryMaintenancePolicyValues {
     return {
       workspaceId,
       enabled: false,

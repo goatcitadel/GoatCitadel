@@ -8,6 +8,7 @@ import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../s
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
 import { sanitizeForAudit } from "../tool-security.js";
 import { assertNoRawRemoteApprovalBearer } from "../approval-action-secrets.js";
+import { createCommsProviderReceipt, markCommsProviderFailed, markCommsProviderSent } from "./channel-delivery-part-execution.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -18,14 +19,14 @@ const commsRequestBoundaryContext = new AsyncLocalStorage<{
   mutationRequestStarted: boolean;
   mutationResponseReceived: boolean;
   externalBoundaryReported: boolean;
-  beforeExternalSideEffect?: () => void;
+  beforeExternalSideEffect?: () => void | Promise<void>;
 }>();
 
 interface ApprovalActionSecretRuntime {
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
-  beforeExternalSideEffect?: () => void;
+  beforeExternalSideEffect?: () => void | Promise<void>;
 }
 
 export async function executeCommsTool(
@@ -62,7 +63,7 @@ async function executeCommsToolWithBoundaryTracking(
   const target =
     asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connectionConfig) ?? connection.key;
   const message = asString(args.message) ?? "";
-  const queued = await storage.commsDeliveries.createQueued({
+  const receipt = await createCommsProviderReceipt(storage, request, {
     connectionId,
     channelKey: connection.key,
     target,
@@ -70,18 +71,19 @@ async function executeCommsToolWithBoundaryTracking(
     // ledger must never retain bearer material embedded in interactive actions.
     payload: sanitizeForAudit({ toolName, args }),
   });
+  const queued = receipt.delivery;
   let providerMessageId: string | undefined;
   let protectedApprovalTokenRef: string | undefined;
   try {
     assertIntegrationConnectionAvailable(connection);
     if (toolName === "gmail.read") {
       const records = await gmailRead(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
-      await storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
+      await markCommsProviderSent(storage, receipt, "gmail-read");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", records };
     }
     if (toolName === "calendar.list") {
       const records = await calendarList(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
-      await storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
+      await markCommsProviderSent(storage, receipt, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
     const providerRequest = await hydrateProtectedApprovalActionAtProviderBoundary(
@@ -102,7 +104,7 @@ async function executeCommsToolWithBoundaryTracking(
       target,
       message,
     );
-    await storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
+    await markCommsProviderSent(storage, receipt, providerMessageId);
     deleteApprovalActionTokenBestEffort(approvalActionSecrets, protectedApprovalTokenRef);
     return {
       ...queued,
@@ -138,23 +140,7 @@ async function executeCommsToolWithBoundaryTracking(
       deleteApprovalActionTokenBestEffort(approvalActionSecrets, protectedApprovalTokenRef);
     }
     try {
-      if (providerMessageId) {
-        await storage.commsDeliveries.markFailed(
-          queued.deliveryId,
-          errorMessage,
-          new Date().toISOString(),
-          deliveryStatus,
-          undefined,
-          providerMessageId,
-        );
-      } else {
-        await storage.commsDeliveries.markFailed(
-          queued.deliveryId,
-          errorMessage,
-          new Date().toISOString(),
-          deliveryStatus,
-        );
-      }
+      await markCommsProviderFailed(storage, receipt, { error: errorMessage, deliveryStatus, providerMessageId });
     } catch (persistenceError) {
       const detail = persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
       errorMessage = `${errorMessage} Failed to persist the delivery failure state: ${detail}`;
@@ -4306,7 +4292,7 @@ async function fetchAllowlisted(
       const boundaryState = commsRequestBoundaryContext.getStore();
       if (boundaryState && crossesExternalSideEffect) {
         if (!boundaryState.externalBoundaryReported) {
-          boundaryState.beforeExternalSideEffect?.();
+          await boundaryState.beforeExternalSideEffect?.();
           boundaryState.externalBoundaryReported = true;
         }
         boundaryState.mutationRequestStarted = true;

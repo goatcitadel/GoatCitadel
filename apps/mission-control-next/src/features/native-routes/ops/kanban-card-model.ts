@@ -1,3 +1,4 @@
+import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import type { AgenticDiagnosticSignal, AgenticRunListItem, AgenticRunStatus, TaskStatus } from "@goatcitadel/contracts";
 
 const STALE_RUN_AFTER_MS = 30 * 60 * 1000;
@@ -182,4 +183,35 @@ function formatAge(timestamp: string, nowMs: number): string {
     return `${hours}h idle`;
   }
   return `${Math.round(hours / 24)}d idle`;
+}
+
+/** Standalone tasks have no run identity; their column follows canonical task status. */
+export function toTaskKanbanCard(task: TaskRecord): KanbanCardModel {
+  const context = task.agenticContext;
+  const card = toKanbanCard({
+    taskId: task.taskId,
+    taskRevision: task.revision,
+    runId: context?.runId ?? "",
+    title: task.title,
+    summary: task.description,
+    taskStatus: task.status,
+    status: readTaskRunStatus(context?.status),
+    updatedAt: task.updatedAt,
+  });
+  return context?.runId ? card : { ...card, surfaceLabel: "Task" };
+}
+
+function readTaskRunStatus(value: string | undefined): AgenticRunStatus | undefined {
+  const statuses: AgenticRunStatus[] = [
+    "queued",
+    "planning",
+    "running",
+    "approval_required",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+    "stopped_by_limit",
+  ];
+  return statuses.find((status) => status === value);
 }

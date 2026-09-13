@@ -1,5 +1,12 @@
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetSessionDraftsForTests } from "./library/session-drafts";
+import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
+import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
+const renderers: ReactTestRenderer[] = [];
+function create(...args: Parameters<typeof createRenderer>) { const renderer = createRenderer(...args); renderers.push(renderer); return renderer; }
+beforeEach(() => { __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests(); });
+afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
 
 vi.mock("./route-diagnostics", () => ({ recordRouteDiagnostic: vi.fn() }));
 
@@ -235,6 +242,39 @@ vi.mock("@goatcitadel/mission-control-shared/api/model-comparisons", () => ({
 }));
 
 describe("NativeRoutePages odysseus library sections", () => {
+  it("searches all returned notes and reminders and keeps dismissed details closed after refresh", async () => {
+    const note = (await mocks.listNotes()).items[0]!;
+    const reminder = (await mocks.listReminders()).items[0]!;
+    mocks.listNotes.mockResolvedValueOnce({ items: Array.from({ length: 55 }, (_, i) => ({ ...note, noteId: "note-" + i, title: "Access note " + i })) });
+    mocks.listReminders.mockResolvedValueOnce({ items: Array.from({ length: 25 }, (_, i) => ({ ...reminder, reminderId: "reminder-" + i, title: "Access reminder " + i })) });
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = renderLibrary("notes"); });
+    const search = (label: string) => renderer.root.findAllByType("label").find(node => collectText(node).includes(label))!.findByType("input");
+    await act(async () => { search("Search notes").props.onChange({ target: { value: "Access note 54" } }); search("Search reminders").props.onChange({ target: { value: "Access reminder 24" } }); });
+    expect(collectText(renderer.root)).toContain("Access note 54");
+    await act(async () => { findButton(renderer.root, "Access reminder 24").props.onClick(); });
+    expect(collectText(renderer.root)).toContain("Reminder ID");
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick(); });
+    await act(async () => { findButton(renderer.root, "Refresh").props.onClick(); });
+    expect(renderer.root.findAllByProps({ "aria-label": "Close details" })).toHaveLength(0);
+  });
+
+  it("does not claim reminder completion for a mismatched response and prevents duplicate requests", async () => {
+    let settle!: (value: any) => void;
+    mocks.completeReminder.mockClear();
+    mocks.completeReminder.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = renderLibrary("notes"); });
+    await act(async () => { findButton(renderer.root, "Send launch recap").props.onClick(); });
+    const complete = findButton(renderer.root, "Mark completed");
+    await act(async () => { complete.props.onClick(); complete.props.onClick(); });
+    expect(mocks.completeReminder).toHaveBeenCalledTimes(1);
+    await act(async () => { settle({ reminderId: "different", workspaceId: "default", status: "completed" }); });
+    expect(collectText(renderer.root)).toContain("Completion is not confirmed");
+    expect(collectText(renderer.root)).toContain("Mark completed");
+    expect(renderer.root.findAllByType("button").filter(node => node.props["aria-label"] === "Close details")).toHaveLength(1);
+  });
+
   it("renders notes and creates a scoped note", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
@@ -245,11 +285,12 @@ describe("NativeRoutePages odysseus library sections", () => {
     expect(collectText(renderer!.root)).toContain("Notes");
     expect(collectText(renderer!.root)).toContain("Launch checklist");
 
+    await act(async () => findButton(renderer!.root, "New note").props.onClick());
     await act(async () => {
-      findInputByPlaceholder(renderer!.root, "Client follow-up").props.onChange({
+      renderer!.root.findAllByType("input")[0]!.props.onChange({
         target: { value: "Operator recap" },
       });
-      findTextareaByPlaceholder(renderer!.root, "Details, decisions, links, or next steps").props.onChange({
+      renderer!.root.findByType("textarea").props.onChange({
         target: { value: "Follow up with the launch lead." },
       });
     });
@@ -261,6 +302,7 @@ describe("NativeRoutePages odysseus library sections", () => {
       expect.objectContaining({ workspaceId: "default", title: "Operator recap" }),
     );
 
+    await act(async () => findButton(renderer!.root, "Launch checklist").props.onClick());
     const editTitle = renderer!.root.findAll(
       (node) => node.type === "input" && node.props.value === "Launch checklist",
     )[0]!;
@@ -283,11 +325,13 @@ describe("NativeRoutePages odysseus library sections", () => {
         body: "Updated body",
       }),
     );
+    await act(async () => findButton(renderer!.root, "History and details").props.onClick());
     expect(mocks.listNoteRevisions).toHaveBeenCalledWith("note-1", "default");
 
     await act(async () => {
       await findButton(renderer!.root, "Archive note").props.onClick();
     });
+    await act(async () => findButton(renderer!.root, "Confirm archive").props.onClick());
     expect(mocks.archiveNote).toHaveBeenCalledWith("note-1", "default");
   });
 
@@ -301,6 +345,7 @@ describe("NativeRoutePages odysseus library sections", () => {
     expect(collectText(renderer!.root)).toContain("Communications");
     expect(collectText(renderer!.root)).toContain("Launch timing");
 
+    await act(async () => findButton(renderer!.root, "New draft").props.onClick());
     await act(async () => {
       findInputByPlaceholder(renderer!.root, "client@example.com").props.onChange({
         target: { value: "lead@example.test" },
@@ -327,6 +372,7 @@ describe("NativeRoutePages odysseus library sections", () => {
     expect(collectText(renderer!.root)).toContain("Prompt-pack review queue");
     expect(collectText(renderer!.root)).toContain("Launch pack comparison");
 
+    await act(async () => findButton(renderer!.root, "Launch pack comparison").props.onClick());
     await act(async () => {
       await findButton(renderer!.root, "Save judgment").props.onClick();
     });

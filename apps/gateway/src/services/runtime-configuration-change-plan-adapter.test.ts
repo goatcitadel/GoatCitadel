@@ -44,6 +44,42 @@ function settings(overrides: Record<string, unknown> = {}) {
 }
 
 describe("RuntimeConfigurationChangePlanAdapter", () => {
+  it("applies reviewed pack flags together at one revision and keeps protected flags dangerous", async () => {
+    let current = settings();
+    const updateSettings = vi.fn(async (input) => {
+      current = settings({ revision: 8, features: { ...current.features, ...input.features } });
+      return current;
+    });
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: async () => current,
+      updateSettings,
+    });
+    const request = {
+      kind: "runtime_configuration",
+      change: {
+        operation: "feature_flags",
+        flags: {
+          memoryLifecycleAdminV1Enabled: true,
+          memoryMaintenanceV1Enabled: true,
+        },
+      },
+    } as const;
+    const prepared = await adapter.prepare(context, request);
+    const plan = { request, target: prepared.target } as ChangePlanRecord;
+    await adapter.apply(context, plan);
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith({ expectedRevision: 7, features: request.change.flags });
+    expect((await adapter.verify(context, plan)).status).toBe("completed");
+    expect(
+      (
+        await adapter.prepare(context, {
+          kind: "runtime_configuration",
+          change: { operation: "feature_flags", flags: { productSourceEvolutionV1Enabled: true } },
+        })
+      ).risk,
+    ).toBe("danger");
+  });
   it("maps only registered typed operations to the settings owner", async () => {
     const updateSettings = vi.fn(async (input) => settings({ revision: 8, budgetMode: input.budgetMode }));
     const adapter = new RuntimeConfigurationChangePlanAdapter({

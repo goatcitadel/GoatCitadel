@@ -46,6 +46,7 @@ const OUTCOMES = new Set<WorkerSettlementReceipt["outcome"]>(["completed", "fail
  * not re-settle already-terminal work.
  */
 export class WorkerSettlementGuard {
+  private mutationTail: Promise<void> = Promise.resolve();
   private constructor(
     private readonly state: WorkerDurableStatePort,
     private readonly receipts: Map<string, WorkerSettlementReceipt>,
@@ -59,6 +60,9 @@ export class WorkerSettlementGuard {
       if (!Array.isArray(parsed)) throw new WorkerSettlementGuardError("Retained settlements are corrupt.");
       for (const entry of parsed) {
         const receipt = normalizeReceipt(entry);
+        if (receipts.has(receipt.assignmentId)) {
+          throw new WorkerSettlementGuardError("Retained settlements contain duplicate assignments.");
+        }
         receipts.set(receipt.assignmentId, receipt);
       }
     }
@@ -83,16 +87,26 @@ export class WorkerSettlementGuard {
     receipt: WorkerSettlementReceipt,
   ): Promise<Readonly<{ firstTime: boolean; receipt: WorkerSettlementReceipt }>> {
     const normalized = normalizeReceipt(receipt);
-    const existing = this.receipts.get(normalized.assignmentId);
-    if (existing !== undefined) {
-      if (canonicalJsonString(existing) !== canonicalJsonString(normalized)) {
-        throw new WorkerSettlementConflictError(normalized.assignmentId);
+    const operation = this.mutationTail.then(async () => {
+      const existing = this.receipts.get(normalized.assignmentId);
+      if (existing !== undefined) {
+        if (canonicalJsonString(existing) !== canonicalJsonString(normalized)) {
+          throw new WorkerSettlementConflictError(normalized.assignmentId);
+        }
+        return Object.freeze({ firstTime: false, receipt: existing });
       }
-      return Object.freeze({ firstTime: false, receipt: existing });
-    }
-    this.receipts.set(normalized.assignmentId, normalized);
-    await this.state.write(STATE_KEY, canonicalJsonString([...this.receipts.values()]));
-    return Object.freeze({ firstTime: true, receipt: normalized });
+      const next = new Map(this.receipts).set(normalized.assignmentId, normalized);
+      await this.state.write(STATE_KEY, canonicalJsonString([...next.values()]));
+      // Publication follows persistence. A failed write must remain retryable,
+      // and another settlement cannot persist a snapshot that omits this one.
+      this.receipts.set(normalized.assignmentId, normalized);
+      return Object.freeze({ firstTime: true, receipt: normalized });
+    });
+    this.mutationTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await operation;
   }
 }
 

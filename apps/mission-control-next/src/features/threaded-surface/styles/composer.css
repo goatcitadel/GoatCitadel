@@ -453,6 +453,14 @@
   visibility: visible;
 }
 
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn .mc-next-thread-actions:has(details[open]) {
+  max-height: none;
+  overflow: visible;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
 .mc-next-thread-turn:first-of-type .mc-next-thread-strip {
   border-top-color: transparent;
 }

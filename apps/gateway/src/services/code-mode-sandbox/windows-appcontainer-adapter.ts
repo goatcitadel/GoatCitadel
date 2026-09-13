@@ -159,10 +159,13 @@ using System.Security.Principal;
 
 public static class GoatCitadelAppContainerLauncher {
   private const int EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+  private const int CREATE_SUSPENDED = 0x00000004;
+  private const int PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
   private const int PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
   private const int STARTF_USESTDHANDLES = 0x00000100;
   private const int JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008;
   private const int JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+  private const int JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200;
   private const int JobObjectExtendedLimitInformation = 9;
   private const int STD_INPUT_HANDLE = -10;
   private const int STD_OUTPUT_HANDLE = -11;
@@ -181,8 +184,14 @@ public static class GoatCitadelAppContainerLauncher {
   [DllImport("advapi32.dll", SetLastError = true)]
   private static extern IntPtr FreeSid(IntPtr pSid);
 
-  [DllImport("kernel32.dll")]
+  [DllImport("kernel32.dll", SetLastError = true)]
   private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern uint ResumeThread(IntPtr hThread);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool TerminateProcess(IntPtr hProcess, uint exitCode);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
@@ -318,9 +327,9 @@ public static class GoatCitadelAppContainerLauncher {
       startupInfo.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
       startupInfo.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
       IntPtr attributeListSize = IntPtr.Zero;
-      InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
+      InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref attributeListSize);
       startupInfo.lpAttributeList = Marshal.AllocHGlobal(attributeListSize);
-      if (!InitializeProcThreadAttributeList(startupInfo.lpAttributeList, 1, 0, ref attributeListSize)) {
+      if (!InitializeProcThreadAttributeList(startupInfo.lpAttributeList, 2, 0, ref attributeListSize)) {
         throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
       }
 
@@ -330,33 +339,42 @@ public static class GoatCitadelAppContainerLauncher {
         throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
       }
 
-      PROCESS_INFORMATION processInfo;
-      string commandLine = BuildCommandLine(nodePath, arguments);
-      bool started = CreateProcessW(nodePath, commandLine, IntPtr.Zero, IntPtr.Zero, true, EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, workspace, ref startupInfo, out processInfo);
-      if (!started) {
-        int errorCode = Marshal.GetLastWin32Error();
-        throw new Win32Exception(errorCode, "CreateProcessW failed with error " + errorCode + ".");
-      }
-
-      IntPtr job = CreateJobObject(IntPtr.Zero, null);
-      if (job != IntPtr.Zero) {
+      IntPtr handlesPtr = Marshal.AllocHGlobal(IntPtr.Size * 3);
+      IntPtr job = IntPtr.Zero;
+      PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
+      bool exited = false;
+      try {
+        Marshal.Copy(new IntPtr[] { startupInfo.StartupInfo.hStdInput, startupInfo.StartupInfo.hStdOutput, startupInfo.StartupInfo.hStdError }, 0, handlesPtr, 3);
+        if (!UpdateProcThreadAttribute(startupInfo.lpAttributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_HANDLE_LIST), handlesPtr, new IntPtr(IntPtr.Size * 3), IntPtr.Zero, IntPtr.Zero)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error(), "Stdio handle allowlist failed.");
+        }
+        job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject failed.");
         ApplyJobLimits(job);
-        AssignProcessToJobObject(job, processInfo.hProcess);
+        string commandLine = BuildCommandLine(nodePath, arguments);
+        if (!CreateProcessW(nodePath, commandLine, IntPtr.Zero, IntPtr.Zero, true, EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED, IntPtr.Zero, workspace, ref startupInfo, out processInfo)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessW failed.");
+        }
+        if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+        }
+        // No workload instruction runs before the process is inside the bounded job.
+        if (ResumeThread(processInfo.hThread) == UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+        if (WaitForSingleObject(processInfo.hProcess, INFINITE) != 0) throw new Win32Exception(Marshal.GetLastWin32Error(), "Process wait failed.");
+        int exitCode;
+        if (!GetExitCodeProcess(processInfo.hProcess, out exitCode)) throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed.");
+        exited = true;
+        return exitCode;
+      } finally {
+        if (!exited && processInfo.hProcess != IntPtr.Zero) TerminateProcess(processInfo.hProcess, 1);
+        if (job != IntPtr.Zero) CloseHandle(job);
+        if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
+        if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
+        Marshal.FreeHGlobal(handlesPtr);
+        DeleteProcThreadAttributeList(startupInfo.lpAttributeList);
+        Marshal.FreeHGlobal(startupInfo.lpAttributeList);
+        Marshal.FreeHGlobal(capabilitiesPtr);
       }
-      WaitForSingleObject(processInfo.hProcess, INFINITE);
-      int exitCode;
-      if (!GetExitCodeProcess(processInfo.hProcess, out exitCode)) {
-        throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed.");
-      }
-      CloseHandle(processInfo.hThread);
-      CloseHandle(processInfo.hProcess);
-      if (job != IntPtr.Zero) {
-        CloseHandle(job);
-      }
-      DeleteProcThreadAttributeList(startupInfo.lpAttributeList);
-      Marshal.FreeHGlobal(startupInfo.lpAttributeList);
-      Marshal.FreeHGlobal(capabilitiesPtr);
-      return exitCode;
     } finally {
       if (sid != IntPtr.Zero) {
         FreeSid(sid);
@@ -381,12 +399,15 @@ public static class GoatCitadelAppContainerLauncher {
 
   private static void ApplyJobLimits(IntPtr job) {
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_JOB_MEMORY;
     limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    limits.JobMemoryLimit = new UIntPtr(${Math.max(256, input.heapMb + 128) * 1024 * 1024}UL);
     IntPtr limitsPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)));
     try {
       Marshal.StructureToPtr(limits, limitsPtr, false);
-      SetInformationJobObject(job, JobObjectExtendedLimitInformation, limitsPtr, (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)));
+      if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, limitsPtr, (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)))) {
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject failed.");
+      }
     } finally {
       Marshal.FreeHGlobal(limitsPtr);
     }

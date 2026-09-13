@@ -37,6 +37,7 @@ import {
   NotFoundError,
   readDurableChatTurnExecutionPayloadAuthority,
   ValidationError,
+  WORKFLOW_SKILL_CAPTURE_MARKER,
 } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
@@ -1064,6 +1065,9 @@ export class ChatDelegationService {
   ): Promise<ChatDelegateResponse> {
     const deps = this.deps;
     const objective = input.objective.trim();
+    if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
+      throw new ValidationError({ message: "Skill capture drafts instructions in one Chat turn; delegation is unavailable." });
+    }
     if (!objective) {
       throw new Error("objective is required");
     }
@@ -2646,6 +2650,9 @@ export class ChatDelegationService {
   ): Promise<ChatDelegateSuggestResponse> {
     await this.deps.getSession(sessionId);
     const objective = (input.objective?.trim() || (await this.inferLatestUserObjective(sessionId))).trim();
+    if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
+      throw new ValidationError({ message: "Skill capture drafts instructions in one Chat turn; delegation is unavailable." });
+    }
     if (!objective) {
       throw new Error("No objective provided and no recent user request was found.");
     }

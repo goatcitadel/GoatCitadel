@@ -37,6 +37,7 @@ export class CandidateSkillVersionRepository {
   private readonly insertStmt;
   private readonly getStmt;
   private readonly listStmt;
+  private readonly listApprovedInstructionsStmt;
   private readonly listByCandidateIdStmt;
   private readonly findLatestByCandidateIdStmt;
   private readonly updateLifecycleStateStmt;
@@ -60,6 +61,15 @@ export class CandidateSkillVersionRepository {
     this.getStmt = db.prepare("SELECT * FROM candidate_skill_versions WHERE version_id = ?");
     this.listStmt = db.prepare(`
       SELECT * FROM candidate_skill_versions
+      ORDER BY updated_at DESC, version_id DESC
+      LIMIT @limit
+    `);
+    this.listApprovedInstructionsStmt = db.prepare(`
+      SELECT * FROM candidate_skill_versions
+      WHERE workspace_id = @workspaceId
+        AND source_kind IN ('workflow_capture', 'capability_pack')
+        AND lifecycle_state IN ('approved', 'trusted')
+        AND program_artifact_json IS NULL AND schema_artifact_json IS NULL
       ORDER BY updated_at DESC, version_id DESC
       LIMIT @limit
     `);
@@ -148,6 +158,17 @@ export class CandidateSkillVersionRepository {
     return (this.listStmt.all({ limit: normalizeLimit(limit) }) as unknown as CandidateSkillVersionRow[]).map((row) =>
       this.mapAndValidateRow(row),
     );
+  }
+
+  /** Scope before limiting: unrelated drafts cannot crowd out approved workspace instructions. */
+  public listApprovedInstructions(workspaceId: string, limit = 200): CandidateSkillVersionRecord[] {
+    assertCanonicalIdentity(workspaceId, "workspace ID", 256);
+    return (
+      this.listApprovedInstructionsStmt.all({
+        workspaceId,
+        limit: normalizeLimit(limit),
+      }) as unknown as CandidateSkillVersionRow[]
+    ).map((row) => this.mapAndValidateRow(row));
   }
 
   public listByCandidateId(candidateId: string, limit = 100): CandidateSkillVersionRecord[] {
@@ -354,6 +375,8 @@ function validateCandidateRecord(input: CandidateSkillVersionRecord): void {
 }
 
 const CANDIDATE_SKILL_SOURCE_KINDS = new Set<CandidateSkillVersionRecord["sourceKind"]>([
+  "capability_pack",
+  "workflow_capture",
   "code_mode_generated",
   "manual",
   "learned_correction",
@@ -362,6 +385,8 @@ const CANDIDATE_SKILL_SOURCE_KINDS = new Set<CandidateSkillVersionRecord["source
 ]);
 
 const GOVERNED_CANDIDATE_SKILL_SOURCE_KINDS = new Set<CandidateSkillVersionRecord["sourceKind"]>([
+  "capability_pack",
+  "workflow_capture",
   "learned_correction",
   "history_workshop",
   "upstream_hub",

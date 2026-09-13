@@ -139,7 +139,7 @@ bool DecodeRemoteWorkerPopV2Preimage(
   const std::uint8_t route_code = bytes[fixed + 2U];
   const std::uint8_t authority_kind_code = bytes[fixed + 3U];
   const std::uint8_t expected_authority_kind =
-      route_code == 1U ? 1U : route_code >= 2U && route_code <= 12U ? 2U : 0U;
+      route_code == 1U ? 1U : route_code >= 2U && route_code <= 13U ? 2U : 0U;
   const std::uint64_t authority_generation = ReadU64Be(bytes + fixed + 4U);
   const std::uint64_t worker_generation = ReadU64Be(bytes + fixed + 12U);
   const std::uint64_t timestamp_epoch_ms = ReadU64Be(bytes + fixed + 20U);
@@ -352,6 +352,63 @@ bool DecodeSignRuntimePopV2CallerRequest(
   return DecodeSignRuntimePopV2RequestCore(bytes, length, true, request);
 }
 
+bool IsTlsClientCertificateVerifyPreimage(
+    const std::uint8_t* bytes, std::size_t length) noexcept {
+  if (bytes == nullptr ||
+      (length != kTlsClientCertificateVerifySha256Bytes &&
+       length != kTlsClientCertificateVerifySha384Bytes)) return false;
+  // RFC 8446 section 4.4.3. Include the terminating NUL in the purpose check.
+  constexpr char kClientContext[] = "TLS 1.3, client CertificateVerify";
+  static_assert(sizeof(kClientContext) == 34U);
+  for (std::size_t index = 0U; index < 64U; ++index) {
+    if (bytes[index] != 0x20U) return false;
+  }
+  for (std::size_t index = 0U; index < sizeof(kClientContext); ++index) {
+    if (bytes[64U + index] != static_cast<std::uint8_t>(kClientContext[index])) return false;
+  }
+  return true;
+}
+
+namespace {
+bool DecodeSignTlsClientCertificateVerifyCore(
+    const std::uint8_t* bytes, std::size_t length, bool caller_placeholder,
+    SignTlsClientCertificateVerifyRequest* request) noexcept {
+  if (request == nullptr) return false;
+  *request = SignTlsClientCertificateVerifyRequest{};
+  if (bytes == nullptr || length != kSignTlsClientCertificateVerifyRequestBytes ||
+      (caller_placeholder ? !AllZero(bytes, 16U) : AllZero(bytes, 16U)) ||
+      AllZero(bytes + 16U, 32U) || ReadU16(bytes + 48U) != 1U ||
+      bytes[50U] != 4U || bytes[51U] != 0U || ReadU64(bytes + 52U) == 0U ||
+      ReadU64(bytes + 52U) > kMaximumSafeInteger || AllZero(bytes + 60U, 32U) ||
+      AllZero(bytes + 96U, 32U)) return false;
+  const std::size_t preimage_length = ReadU32(bytes + 92U);
+  if (!IsTlsClientCertificateVerifyPreimage(bytes + 128U, preimage_length) ||
+      !AllZero(bytes + 128U + preimage_length, length - 128U - preimage_length)) return false;
+  for (std::size_t index = 0U; index < 16U; ++index) request->operation_id[index] = bytes[index];
+  for (std::size_t index = 0U; index < 32U; ++index) {
+    request->expected_state_sha256[index] = bytes[16U + index];
+    request->expected_keyset_receipt_sha256[index] = bytes[60U + index];
+    request->expected_worker_public_key_spki_sha256[index] = bytes[96U + index];
+  }
+  request->expected_generation = ReadU64(bytes + 52U);
+  request->preimage_length = preimage_length;
+  for (std::size_t index = 0U; index < preimage_length; ++index) request->preimage[index] = bytes[128U + index];
+  return true;
+}
+}  // namespace
+
+bool DecodeSignTlsClientCertificateVerifyRequest(
+    const std::uint8_t* bytes, std::size_t length,
+    SignTlsClientCertificateVerifyRequest* request) noexcept {
+  return DecodeSignTlsClientCertificateVerifyCore(bytes, length, false, request);
+}
+
+bool DecodeSignTlsClientCertificateVerifyCallerRequest(
+    const std::uint8_t* bytes, std::size_t length,
+    SignTlsClientCertificateVerifyRequest* request) noexcept {
+  return DecodeSignTlsClientCertificateVerifyCore(bytes, length, true, request);
+}
+
 bool EncodeProtectedInspectResult(
     std::uint16_t pe_machine,
     const std::uint8_t* custody_projection,
@@ -389,6 +446,7 @@ bool IsRecognizedOpcode(std::uint8_t opcode) noexcept {
     case Opcode::SignAdmissionEvidence:
     case Opcode::RevokeLocalKeyset:
     case Opcode::SignRuntimePopV2:
+    case Opcode::SignTlsClientCertificateVerify:
     case Opcode::BeginInstall:
     case Opcode::SealAndPublishInstall:
     case Opcode::AbandonToQuarantine:

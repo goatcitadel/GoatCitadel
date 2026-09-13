@@ -22,6 +22,7 @@ import { resetChatStreamingPreviewForTests } from "@goatcitadel/mission-control-
 function buildProps(overrides: Partial<any> = {}): any {
   return {
     mode: "cowork",
+    draft: "",
     loading: false,
     thread: {
       sessionId: "session-1",

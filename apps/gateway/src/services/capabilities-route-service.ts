@@ -7,6 +7,7 @@ export type CapabilitiesRoutePort = Pick<
   | "createCodeModeRun"
   | "createProposal"
   | "getCandidateDetail"
+  | "getCandidateArtifactReview"
   | "getCapabilityAuditExport"
   | "getCatalogDriftMetrics"
   | "getCatalogSnapshot"
@@ -104,6 +105,10 @@ export class CapabilitiesRouteService {
 
   public getCapabilityCandidateDetail(candidateId: string) {
     return this.capabilities.getCandidateDetail(candidateId);
+  }
+
+  public getCandidateArtifactReview(candidateId: string, versionId: string, workspaceId: string) {
+    return this.capabilities.getCandidateArtifactReview(candidateId, versionId, workspaceId);
   }
 
   /**

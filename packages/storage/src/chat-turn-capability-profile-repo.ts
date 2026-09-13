@@ -6,10 +6,14 @@ import {
   CHAT_WORKSPACE_SNAPSHOT_VERSION,
   assertWorkPassportRecord,
   assertMcpRequesterResolutionBinding,
+  assertMcpStaticToolBinding,
   canonicalJsonString,
+  deriveMeshCapabilityId,
   isToolEffectPotentialRecord,
   mcpRequesterResolutionBindingHashMaterial,
   mcpRequesterScopeHashMaterial,
+  mcpStaticToolBindingHashMaterial,
+  mcpStaticToolScopeHashMaterial,
   NotFoundError,
   type CapabilityCategory,
   type ChatTurnCapabilityProfileDraft,
@@ -274,9 +278,8 @@ export function verifyChatTurnCapabilityCatalogBinding(
     if (!entry.callable || !inspectable || canonicalJsonString(entry) !== canonicalJsonString(inspectable)) {
       throw new Error(`Capability profile ${profile.profileId} contains a non-canonical callable catalog entry.`);
     }
-    if (entry.kind === "tool" && entry.toolName) {
-      callableTools.set(entry.toolName, entry);
-    }
+    const toolName = resolveCapabilityCatalogToolName(entry);
+    if (toolName) callableTools.set(toolName, entry);
     if (entry.kind === "skill" && entry.skillId) {
       callableSkills.set(entry.capabilityId, entry.skillId);
     }
@@ -285,6 +288,24 @@ export function verifyChatTurnCapabilityCatalogBinding(
     const catalogTool = callableTools.get(tool.canonicalName);
     if (!catalogTool) {
       throw new Error(`Capability profile ${profile.profileId} selected a tool outside its callable snapshot.`);
+    }
+    const meshEntry = catalogTool.kind === "mesh_tool" || catalogTool.kind === "mesh_mcp_server";
+    if (meshEntry || tool.meshPublication) {
+      const projection = catalogTool.mesh;
+      const binding = tool.meshPublication;
+      if (!meshEntry || !projection || !binding || catalogTool.category !== "mesh_published" ||
+        catalogTool.toolName !== undefined || projection.status !== "active" ||
+        projection.capabilityKind !== (catalogTool.kind === "mesh_tool" ? "tool" : "mcp_server") ||
+        catalogTool.capabilityId !== deriveMeshCapabilityId(projection.nodeId, projection.capabilityKind, projection.localId) ||
+        binding.nodeId !== projection.nodeId || binding.publisherGeneration !== projection.publisherGeneration ||
+        binding.manifestSha256 !== projection.manifestSha256 || binding.entrySha256 !== projection.entrySha256 ||
+        binding.effectPosture !== projection.effectPosture ||
+        (projection.activation && (projection.activation.revoked ||
+          projection.activation.activationId !== binding.activationId ||
+          projection.activation.activationRevision !== binding.activationRevision)) ||
+        tool.effectPotential?.potential !== "unknown" || tool.effectPotential.sourceKind !== "remote") {
+        throw new Error(`Capability profile ${profile.profileId} mesh tool does not match its callable publication.`);
+      }
     }
     if (tool.effectPotential !== undefined) {
       const exactEffectBinding =
@@ -314,6 +335,12 @@ export function verifyChatTurnCapabilityCatalogBinding(
   }
 }
 
+/** Mesh callables are selected by their publication ID, never a local tool alias. */
+export function resolveCapabilityCatalogToolName(entry: CapabilityCatalogEntry): string | undefined {
+  if (entry.kind === "tool") return entry.toolName;
+  return entry.kind === "mesh_tool" || entry.kind === "mesh_mcp_server" ? entry.capabilityId : undefined;
+}
+
 /**
  * Reject ambiguous catalog identities before constructing lookup maps. Without
  * this guard, a duplicate appearing later in an array could silently win and
@@ -331,11 +358,12 @@ export function verifyCapabilityCatalogEntryUniqueness(
       throw new Error(`${label} contains a capability-id collision for ${entry.capabilityId}.`);
     }
     capabilityIds.add(entry.capabilityId);
-    if (entry.kind === "tool" && entry.toolName) {
-      if (toolNames.has(entry.toolName)) {
-        throw new Error(`${label} contains a tool-name collision for ${entry.toolName}.`);
+    const toolName = resolveCapabilityCatalogToolName(entry);
+    if (toolName) {
+      if (toolNames.has(toolName)) {
+        throw new Error(`${label} contains a tool-name collision for ${toolName}.`);
       }
-      toolNames.add(entry.toolName);
+      toolNames.add(toolName);
     }
     if (entry.kind === "skill" && entry.skillId) {
       if (skillIds.has(entry.skillId)) {
@@ -590,6 +618,62 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
         throw new Error(`Capability profile tool ${tool.canonicalName} has an invalid runtime owner kind.`);
       }
       assertHash(tool.runtimeOwner.bindingHash, `selection.tools.${tool.canonicalName}.runtimeOwner.bindingHash`);
+    }
+    if (tool.mcpStaticBinding !== undefined) {
+      const binding = tool.mcpStaticBinding;
+      assertMcpStaticToolBinding(binding);
+      if (tool.mcpRequesterResolution !== undefined || tool.meshPublication !== undefined) {
+        throw new Error(
+          `Capability profile tool ${tool.canonicalName} static binding cannot also be requester-scoped or mesh-published.`,
+        );
+      }
+      if (tool.runtimeOwner?.kind !== "builtin") {
+        throw new Error(`Capability profile tool ${tool.canonicalName} static binding is not Gateway-owned.`);
+      }
+      if (binding.toolName !== tool.canonicalName) {
+        throw new Error(`Capability profile tool ${tool.canonicalName} static binding names a different tool.`);
+      }
+      if (
+        binding.callableCatalogSnapshotId !== input.catalog.snapshotId ||
+        binding.callableCatalogSha256 !== input.catalog.callableHash
+      ) {
+        throw new Error(
+          `Capability profile tool ${tool.canonicalName} static binding does not match the callable catalog.`,
+        );
+      }
+      if (binding.toolDefinitionSha256 !== tool.definitionHash) {
+        throw new Error(
+          `Capability profile tool ${tool.canonicalName} static binding does not match its provider definition.`,
+        );
+      }
+      if (digest(mcpStaticToolBindingHashMaterial(binding)) !== binding.bindingSha256) {
+        throw new Error(`Capability profile tool ${tool.canonicalName} static binding hash is invalid.`);
+      }
+      if (
+        input.identity.authActorId === undefined ||
+        !(["token", "basic", "loopback", "device", "companion"] as const).includes(
+          input.identity.authActorSource as "token" | "basic" | "loopback" | "device" | "companion",
+        )
+      ) {
+        throw new Error(
+          `Capability profile tool ${tool.canonicalName} static binding lacks authenticated turn authority.`,
+        );
+      }
+      const scopeHash = digest(
+        mcpStaticToolScopeHashMaterial({
+          profileId: input.profileId,
+          turnId: input.identity.turnId,
+          sessionId: input.identity.sessionId,
+          workspaceId: input.identity.workspaceId,
+          authActorId: input.identity.authActorId,
+          authActorSource: input.identity.authActorSource as "token" | "basic" | "loopback" | "device" | "companion",
+        }),
+      );
+      if (binding.profileScopeSha256 !== scopeHash) {
+        throw new Error(
+          `Capability profile tool ${tool.canonicalName} static binding does not match its authenticated turn.`,
+        );
+      }
     }
     if (tool.mcpRequesterResolution !== undefined) {
       assertMcpRequesterResolutionBinding(tool.mcpRequesterResolution);

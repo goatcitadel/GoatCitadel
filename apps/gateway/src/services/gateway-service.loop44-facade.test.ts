@@ -153,12 +153,17 @@ describe("GatewayService loop44 facade behavior", () => {
     const systemSettings = {
       get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),
       set: vi.fn((key: string, value: unknown) => settings.set(key, value)),
+      compareAndSet: vi.fn((key: string, expected: { value: unknown } | undefined, value: unknown) => {
+        if (JSON.stringify(settings.get(key)) !== JSON.stringify(expected?.value)) return undefined;
+        settings.set(key, value);
+        return { key, value, updatedAt: "fixture" };
+      }),
     };
     const gateway = createGatewayHarness({
       storage: { systemSettings },
       // Real store over the map-backed settings (B5a): the normalization
       // behavior assertions below execute the moved code unchanged.
-      mcpServerStore: new McpServerStore({ systemSettings }),
+      mcpServerStore: new McpServerStore({ systemSettings, runImmediateTransaction: async (callback) => await callback() }),
     });
 
     expect(await GatewayService.prototype.listMcpServers.call(gateway)).toEqual(

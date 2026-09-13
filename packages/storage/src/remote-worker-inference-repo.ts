@@ -33,6 +33,7 @@ import {
   type RemoteWorkerInferenceReleaseReason,
   type RemoteWorkerInferenceState,
   type RemoteWorkerInferenceTerminalState,
+  type RemoteWorkerInferenceToolCall,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 
@@ -125,6 +126,7 @@ export interface RemoteWorkerInferenceFinalizeInput {
   readonly dispatchClaimOwner: string;
   readonly terminalState: RemoteWorkerInferenceTerminalState;
   readonly usageEventIds: readonly string[];
+  readonly toolCalls?: readonly RemoteWorkerInferenceToolCall[];
   readonly now: string;
 }
 
@@ -845,6 +847,7 @@ export class RemoteWorkerInferenceRepository {
         kind: "terminal",
         terminalState: input.terminalState,
         usageEventId: usageTerminalEventId,
+        ...(input.toolCalls === undefined ? {} : { toolCalls: input.toolCalls }),
       });
       const frame = this.insertFrame(current, "terminal", payload, 0, usageTerminalEventId, input.now);
       const usageEventIdsJson = canonicalJsonString(usageEventIds);
@@ -1019,6 +1022,15 @@ export class RemoteWorkerInferenceRepository {
   public getRequest(key: RemoteWorkerInferenceRequestKey): RemoteWorkerInferenceRequestRecord | undefined {
     const row = this.selectStmt().get({ ...key }) as RequestRow | undefined;
     return row ? mapRequest(row) : undefined;
+  }
+
+  /** Budget transactions lock the canonical operation before locking its grant. */
+  public findOperationForUpdate(operationId: string, dispatchGeneration: string): RemoteWorkerInferenceRequestRecord | undefined {
+    const rows = this.db.prepare(`SELECT * FROM remote_worker_inference_requests
+      WHERE operation_id = ? AND dispatch_generation = ? LIMIT 2${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`)
+      .all<RequestRow>(operationId, dispatchGeneration);
+    if (rows.length > 1) throw new RemoteWorkerInferenceConflictError("Remote worker inference operation identity is ambiguous.");
+    return rows[0] ? mapRequest(rows[0]) : undefined;
   }
 
   public getRequestByIdempotency(

@@ -1,6 +1,8 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const chatMessagesRouteMethods = [
+  "prepareWorkflowSkillCapture",
+  "stageWorkflowSkillCapture",
   "agentSendChatMessage",
   "agentSendChatMessageStream",
   "answerChatUserInputPrompt",

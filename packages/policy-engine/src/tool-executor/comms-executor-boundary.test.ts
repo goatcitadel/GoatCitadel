@@ -92,6 +92,63 @@ afterEach(() => {
 });
 
 describe("comms mutation boundary tracking", () => {
+  it.each(["complete", "fail"] as const)("awaits the durable boundary before a channel POST (%s)", async (mode) => {
+    const calls: FetchCall[] = [];
+    const { storage, markFailed } = createMattermostStorage("conn-async", "delivery-async");
+    let entered!: () => void;
+    let release!: () => void;
+    const markerEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const markerGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = recordFetchCall(calls, input, init);
+        if (url.endsWith("/users/me")) return mattermostBotResponse();
+        if (url.endsWith("/posts")) return new Response(JSON.stringify({ id: "post-async" }), { status: 201 });
+        throw new Error(`unexpected request ${url}`);
+      }),
+    );
+    const invocation = executeCommsTool(
+      channelSendRequest("conn-async", []),
+      policyConfig(["mattermost.example"]),
+      storage,
+      undefined,
+      {
+        beforeExternalSideEffect: async () => {
+          entered();
+          await markerGate;
+          if (mode === "fail") throw new Error("durable boundary unavailable");
+        },
+      },
+    );
+    try {
+      await markerEntered;
+      expect(calls).toEqual([{ method: "GET", url: "https://mattermost.example/api/v4/users/me" }]);
+      release();
+      const result = await invocation;
+      if (mode === "complete") {
+        expect(result).toMatchObject({ status: "sent", deliveryStatus: "sent" });
+        expect(calls.at(-1)).toEqual({ method: "POST", url: "https://mattermost.example/api/v4/posts" });
+      } else {
+        expect(result).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
+        expect(calls).toHaveLength(1);
+        expect(markFailed).toHaveBeenCalledWith(
+          "delivery-async",
+          expect.not.stringMatching(/unknown_after_send|manual reconciliation/i),
+          expect.any(String),
+          "not_available",
+        );
+      }
+    } finally {
+      release();
+      await invocation;
+    }
+  });
+
   it("does not report a BlueBubbles read-only POST lookup as the message-send boundary", async () => {
     const calls: FetchCall[] = [];
     vi.stubGlobal(

@@ -137,6 +137,21 @@ describe("useChatComposerInteractions", () => {
     uploadChatAttachmentMock.mockResolvedValue({ attachmentId: "uploaded", fileName: "notes.txt" });
   });
 
+  it.each(["Enter", "ArrowUp", "ArrowDown", "Tab", "Escape"])("leaves %s to the IME and retains the draft", async (key) => {
+    await act(async () => { create(React.createElement(ComposerHarness, { initialDraft: "日本語", initialDockOpen: true })); });
+    for (const nativeEvent of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
+      const event = makeKeyEvent(key, { nativeEvent } as any);
+      await act(async () => latest?.handleComposerKeyDown(event));
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(handleSendMock).not.toHaveBeenCalled();
+      expect(latestState?.draft).toBe("日本語");
+      expect(latestState?.commandIndex).toBe(0);
+      expect(latestState?.dockOpen).toBe(true);
+    }
+    await act(async () => latest?.handleComposerKeyDown(makeKeyEvent("Enter", { nativeEvent: { isComposing: false } } as any)));
+    expect(handleSendMock).toHaveBeenCalledOnce();
+  });
+
   it("uploads files and drives keyboard command interactions", async () => {
     await act(async () => {
       create(React.createElement(ComposerHarness));

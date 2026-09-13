@@ -12,6 +12,7 @@ import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/cont
 import { safeJsonParse } from "./safe-json.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
+import { synchronizeRemoteWorkerChatTaskStatus } from "./remote-worker-chat-task-repo.js";
 import {
   toCountRow,
   toDurableCheckpointRows,
@@ -672,37 +673,41 @@ export class DurableRunRepository {
     updatedAt?: string;
     expectedVersion?: number;
   }): DurableRunRecord {
-    const current = this.getRun(input.runId);
-    const next = this.buildNextRun(current, input);
-    const expectedVersion = input.expectedVersion ?? current.version;
-    const result = this.updateRunStmt.run({
-      runId: next.runId,
-      status: next.status,
-      attemptCount: next.attemptCount,
-      maxAttempts: next.maxAttempts,
-      payloadJson: JSON.stringify(next.payload),
-      metadataJson: next.metadata ? JSON.stringify(next.metadata) : null,
-      startedAt: next.startedAt ?? null,
-      finishedAt: next.finishedAt ?? null,
-      lastError: next.lastError ?? null,
-      leaseOwnerId: next.leaseOwnerId ?? null,
-      leaseExpiresAt: next.leaseExpiresAt ?? null,
-      leaseHeartbeatAt: next.leaseHeartbeatAt ?? null,
-      nextVersion: next.version,
-      expectedVersion,
-      updatedAt: next.updatedAt,
-    });
-    if ((result.changes ?? 0) < 1) {
-      throw new ConflictError({
-        code: "STATE_CONFLICT",
-        message: `Durable run ${input.runId} update conflict`,
-        details: {
-          runId: input.runId,
-          expectedVersion,
-        },
+    return this.db.transaction("immediate", () => {
+      const current = this.getRun(input.runId);
+      const next = this.buildNextRun(current, input);
+      const expectedVersion = input.expectedVersion ?? current.version;
+      const result = this.updateRunStmt.run({
+        runId: next.runId,
+        status: next.status,
+        attemptCount: next.attemptCount,
+        maxAttempts: next.maxAttempts,
+        payloadJson: JSON.stringify(next.payload),
+        metadataJson: next.metadata ? JSON.stringify(next.metadata) : null,
+        startedAt: next.startedAt ?? null,
+        finishedAt: next.finishedAt ?? null,
+        lastError: next.lastError ?? null,
+        leaseOwnerId: next.leaseOwnerId ?? null,
+        leaseExpiresAt: next.leaseExpiresAt ?? null,
+        leaseHeartbeatAt: next.leaseHeartbeatAt ?? null,
+        nextVersion: next.version,
+        expectedVersion,
+        updatedAt: next.updatedAt,
       });
-    }
-    return this.getRun(next.runId);
+      if ((result.changes ?? 0) < 1) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Durable run ${input.runId} update conflict`,
+          details: {
+            runId: input.runId,
+            expectedVersion,
+          },
+        });
+      }
+      if (next.workflowKey === "chat.turn.execute" && next.status !== current.status)
+        synchronizeRemoteWorkerChatTaskStatus(this.db, next);
+      return this.getRun(next.runId);
+    });
   }
 
   public tryClaimQueuedRun(input: {

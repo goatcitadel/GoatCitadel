@@ -1703,7 +1703,7 @@ describe("MissionThreadedControllerHost", () => {
       panel?.onDraftChange?.("export const blocked = true;");
       panel?.onDiscardDraft?.();
       panel?.onSaveFile?.();
-      await panel?.onFileOperation?.({ operation: "create_file", path: "src/blocked.ts" });
+      await panel?.onFileOperation?.({ operation: "create_file", path: "src/blocked.ts", expectedRevision: "a".repeat(64) });
       panel?.onRunValidationCommand?.({ command: "pnpm", args: ["test"] } as any);
       panel?.onApplyPatch?.("diff --git a/a b/a");
       panel?.onRevertFile?.("src/index.ts");
@@ -2111,6 +2111,19 @@ describe("MissionThreadedControllerHost", () => {
       "chat",
       expect.objectContaining({ artifactId: undefined, sessionId: "session-1", turnId: "turn-1" }),
     );
+  });
+
+  it("opens a returned plan in its owning Chat without waiting for realtime and ignores a departed owner", async () => {
+    await renderHost();
+    await selectDefaultSession();
+    const plan = await createChangePlanMock({workspaceId:"workspace-1",sessionId:"session-1",request:{kind:"session_model",providerId:"openai",model:"gpt-5.6"}});
+    await act(async()=> { latestSurfaceInput?.onReviewChangePlan?.(plan as any); await flushEffects(); });
+    expect(latestSurfaceInput?.changePlanReceipt?.plan.planId).toBe(plan.planId);
+    expect(latestSurfaceInput?.changePlans?.map(item=>item.planId)).toContain(plan.planId);
+    const previousOwner = latestSurfaceInput?.onReviewChangePlan;
+    await act(async()=>{ latestSurfaceInput?.sessionRail.onSelectSession("session-2",{turnId:"turn-2"}); await flushEffects(); });
+    await act(async()=>{ previousOwner?.(plan as any); await flushEffects(); });
+    expect(latestSurfaceInput?.changePlans?.map(item=>item.planId)).not.toContain(plan.planId);
   });
 
   it("does not promote older terminal receipts after dismissing the newest one", async () => {
@@ -2591,7 +2604,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(setDevDiagnosticsLatestTraceSummaryMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("handles compact drawers, canonical Chat dirty workbench confirms, and route acknowledgement guards", async () => {
+  it("handles compact drawers and preserves workbench drafts through host-guarded navigation", async () => {
     mockCompact = true;
     mockSurfaceMode = "chat";
     const navigateSurface = vi.fn();
@@ -2630,36 +2643,14 @@ describe("MissionThreadedControllerHost", () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onNavigateSurface("cowork", { sessionId: "session-2" });
       await flushEffects();
     });
-    expect(confirmModalProps.some((props) => props.open && props.title === "Discard unsaved workbench changes?")).toBe(
-      true,
-    );
-
-    await act(async () => {
-      for (const discardModal of confirmModalProps.filter(
-        (props) => props.open && props.title === "Discard unsaved workbench changes?",
-      )) {
-        discardModal.onConfirm();
-      }
-      await flushEffects();
-    });
-    expect(dirtyDock.discardWorkbenchDraft).toHaveBeenCalled();
-    const discardCallsBeforeRailNavigation = dirtyDock.discardWorkbenchDraft.mock.calls.length;
-
+    expect(confirmModalProps.some((props) => props.open && props.title === "Discard unsaved workbench changes?")).toBe(false);
+    expect(dirtyDock.discardWorkbenchDraft).not.toHaveBeenCalled();
+    expect(navigateSurface).toHaveBeenCalledWith("cowork", expect.objectContaining({ sessionId: "session-2" }));
     await act(async () => {
       latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
       await flushEffects();
     });
-    const railDiscardModal = confirmModalProps
-      .filter((props) => props.open && props.title === "Discard unsaved workbench changes?")
-      .at(-1);
-    expect(railDiscardModal).toBeDefined();
-    expect(dirtyDock.discardWorkbenchDraft).toHaveBeenCalledTimes(discardCallsBeforeRailNavigation);
-
-    await act(async () => {
-      railDiscardModal?.onConfirm();
-      await flushEffects();
-    });
-    expect(dirtyDock.discardWorkbenchDraft).toHaveBeenCalledTimes(discardCallsBeforeRailNavigation + 1);
+    expect(dirtyDock.discardWorkbenchDraft).not.toHaveBeenCalled();
 
     setupMocks();
     mockCompact = true;
@@ -2687,9 +2678,7 @@ describe("MissionThreadedControllerHost", () => {
       );
       await flushEffects(6);
     });
-    expect(confirmModalProps.some((props) => props.title === "Discard unsaved workbench changes?" && !props.open)).toBe(
-      true,
-    );
+    expect(confirmModalProps.some((props) => props.title === "Discard unsaved workbench changes?")).toBe(false);
   });
 
   it("prepares document attachments as thread knowledge before sending", async () => {

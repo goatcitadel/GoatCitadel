@@ -53,7 +53,10 @@ export async function startVerificationStack(context, options = {}) {
       ? await startProcess(
           context,
           buildVerificationProcessLogName("gateway", options.processLogPrefix),
-          [process.execPath, path.join(repoRoot, "apps", "gateway", "dist", "main.js")],
+          [
+            process.execPath,
+            options.builtGatewayEntryFile ?? path.join(repoRoot, "apps", "gateway", "dist", "main.js"),
+          ],
           gatewayEnv,
           { omitEnv: options.gatewayEnvOmit },
         )

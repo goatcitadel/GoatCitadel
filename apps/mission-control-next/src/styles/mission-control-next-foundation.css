@@ -108,3 +108,16 @@ samp {
 .gateway-access-shell.theme-citadel-light {
   color-scheme: light;
 }
+
+/* Honor the operator motion preference across token-based controls and portal sheets. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms !important;
+    --motion-base: 0ms !important;
+    --motion-slow: 0ms !important;
+  }
+  .mc-next-settings-selectable:hover,
+  .mc-next-settings-selectable:focus-visible,
+  .mc-next-project-recent-card:hover,
+  .mc-next-project-recent-card:focus-visible { transform: none; }
+}

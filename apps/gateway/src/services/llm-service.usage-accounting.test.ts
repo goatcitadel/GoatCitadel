@@ -12,6 +12,8 @@ import {
 import { Storage } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
 import type { SecretStoreService } from "./secret-store-service.js";
+import { RemoteWorkerToolModelBudgetRuntime } from "./remote-worker-tool-model-budget-runtime.js";
+import type { RemoteWorkerToolModelBudgetInput } from "./remote-worker-effect-runtime.js";
 
 const storages: Storage[] = [];
 const roots: string[] = [];
@@ -123,6 +125,52 @@ function failNextSettlement(storage: Storage) {
   });
 }
 
+describe("worker tool model dispatch lifetime", () => {
+  it.each(["budget_denied", "tool_returned", "execution_revoked"] as const)("blocks HTTP when %s", async (scenario) => {
+    const { service, storage } = createHarness(openAiResponsesConfig());
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    let executionActive = true;
+    const checkExecution = async () => { if (!executionActive) throw new Error("Execution revoked."); };
+    const reconcile = vi.fn(async () => {});
+    const authorize = vi.fn(async (input: { usageEventId: string }) => {
+      expect(storage.modelUsageEvents.findByEventId(input.usageEventId)?.transportStatus).toBe("intent");
+      throw new Error("Operator budget exhausted.");
+    });
+    const runtime = new RemoteWorkerToolModelBudgetRuntime({ llm: service,
+      storage: { remoteWorkerAssignments: { resolveActiveChatExecution: async () => ({
+        authority: { assignment: { manifest: { workspaceId: "unused", executionWorkspaceId: "workspace-usage-test",
+          sessionId: "session-usage-test", turnId: "turn-usage-test", durableRunId: "worker-run", taskId: "worker-task" } },
+          generation: { workerId: "worker-a" } }, workload: { contextSnapshotSha256: "a".repeat(64) },
+      }) }, remoteWorkerBudgets: { authorizeToolAttempt: authorize, reconcileToolAttempts: reconcile } } as unknown as
+        ConstructorParameters<typeof RemoteWorkerToolModelBudgetRuntime>[0]["storage"],
+    });
+    const input = { fence: { registryWorkspaceId: "default", assignmentId: "worker-assignment", assignmentGeneration: 1,
+      leaseTokenSha256: "b".repeat(64), protectedAuthority: {} }, intent: { intentId: "tool-intent", effectSelector: "fs.read",
+      canonicalArgsSha256: "c".repeat(64), workerIdempotencyKey: "tool-intent-key" }, checkExecution,
+    } as unknown as RemoteWorkerToolModelBudgetInput;
+    const request = { model: "gpt-5.4", max_tokens: 16, messages: [{ role: "user" as const, content: "Helper request" }] };
+    if (scenario === "budget_denied") {
+      await expect(runtime.run(input, () => service.chatCompletions(request))).rejects.toThrow("Operator budget exhausted.");
+      expect(authorize).toHaveBeenCalledOnce();
+    } else if (scenario === "tool_returned") {
+      const stream = await runtime.run(input, async () => service.chatCompletionsStream(request));
+      await expect(stream.next()).rejects.toThrow("Worker tool execution has ended.");
+      expect(authorize).not.toHaveBeenCalled();
+    } else {
+      await expect(runtime.run(input, async () => {
+        executionActive = false;
+        return service.chatCompletions(request);
+      })).rejects.toThrow("Execution revoked.");
+      expect(authorize).not.toHaveBeenCalled();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(onlyUsageRecord(storage)).toMatchObject({ parentOperationId: "worker-tool:tool-intent", workerId: "worker-a",
+      transportStatus: "dispatch_unknown", terminalOutcome: "failed_before_usage", dispatchReconciliation: "confirmed_not_dispatched" });
+  });
+});
+
 async function consume(stream: AsyncGenerator<Record<string, unknown>>): Promise<void> {
   for await (const _chunk of stream) {
     // Drain the provider stream through terminal settlement.
@@ -130,6 +178,171 @@ async function consume(stream: AsyncGenerator<Record<string, unknown>>): Promise
 }
 
 describe("LlmService canonical transport accounting", () => {
+  it.each([false, true])("persists governed tool lineage before transport (stream=%s)", async (stream) => {
+    const { service, storage } = createHarness(openAiChatConfig());
+    const lineage = { workspaceId: "workspace-tool", sessionId: "session-tool", turnId: "turn-tool",
+      durableRunId: "run-tool", taskId: "task-tool", workerId: "worker-tool", parentOperationId: "effect-tool",
+      contextIntentHash: "a".repeat(64) };
+    const completion = { id: "reply", model: "gpt-4.1", choices: [{ index: 0, finish_reason: "stop",
+      ...(stream ? { delta: { content: "done" } } : { message: { role: "assistant", content: "done" } }) }],
+      usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } };
+    const fetch = vi.fn(async () => new Response(stream ? `data: ${JSON.stringify(completion)}\n\ndata: [DONE]\n\n` : JSON.stringify(completion),
+      { headers: { "content-type": stream ? "text/event-stream" : "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const guard = vi.fn(async (attempt) => {
+      expect(storage.modelUsageEvents.findByEventId(attempt.usageEventId)).toMatchObject({ ...lineage,
+        operationId: "tool-utility", transportStatus: "intent" });
+      expect(attempt.attribution).toMatchObject(lineage);
+    });
+    const request = { providerId: "openai", model: "gpt-4.1", max_tokens: 128,
+      messages: [{ role: "user" as const, content: "Read the task context." }] };
+    await service.runWithDispatchAuthority(lineage, guard, async () => {
+      if (stream) await consume(service.chatCompletionsStream(request, { operationId: "tool-utility", callKind: "utility" }));
+      else await service.chatCompletions(request, { operationId: "tool-utility", callKind: "utility" });
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(guard).toHaveBeenCalledOnce();
+    const events = storage.modelUsageEvents.list({ workspaceId: lineage.workspaceId }).items;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ ...lineage, terminalOutcome: "succeeded", operationId: "tool-utility", callKind: "utility" });
+  });
+
+  it("rejects a tool model request that tries to charge another execution before creating an intent", async () => {
+    const { service, storage } = createHarness(openAiChatConfig());
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(service.runWithDispatchAuthority({ workerId: "owner" }, async () => {}, () =>
+      service.chatCompletions({ model: "gpt-4.1", messages: [{ role: "user", content: "hello" }] },
+        { operationId: "foreign", workerId: "other" }))).rejects.toThrow("governed execution lineage");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(storage.modelUsageEvents.list().items).toEqual([]);
+  });
+
+  it("checks a server-owned dispatch guard after persisting usage intent and before sending", async () => {
+    const { service, storage } = createHarness(openAiChatConfig());
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const guard = vi.fn(async (input) => {
+      expect(storage.modelUsageEvents.findByEventId(input.usageEventId)?.transportStatus).toBe("intent");
+      expect(input.route.providerId).toBe("openai");
+      expect(input.route).not.toHaveProperty("apiKey");
+      expect(input.effectiveOutputTokenCap).toBe(128);
+      throw new Error("budget revoked");
+    });
+    await expect(
+      service.chatCompletionsWithDispatchGuard(
+        {
+          providerId: "openai",
+          model: "gpt-4.1",
+          messages: [{ role: "user", content: "hello" }],
+          max_tokens: 128,
+        },
+        attribution("guard-denied"),
+        guard,
+      ),
+    ).rejects.toThrow("budget revoked");
+    expect(guard).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(
+      storage.modelUsageEvents.listOperationAttemptsForUpdate("guard-denied", "guard-denied:generation-1"),
+    ).toEqual([
+      expect.objectContaining({
+        transportStatus: "dispatch_unknown",
+        dispatchReconciliation: "confirmed_not_dispatched",
+        terminalOutcome: "failed_before_usage",
+        dispatchReconciledBy: expect.stringMatching(/^gateway-test-/),
+      }),
+    ]);
+  });
+
+  it("keeps dispatch guards separate across concurrent completions and retains a single usage owner", async () => {
+    const { service, storage } = createHarness(openAiChatConfig());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: "gpt-4.1",
+              choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 4, completion_tokens: 1 },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const request = {
+      providerId: "openai",
+      model: "gpt-4.1",
+      messages: [{ role: "user" as const, content: "hello" }],
+      max_tokens: 128,
+    };
+    const guards = ["guard-a", "guard-b"].map((operation) =>
+      vi.fn(async (input) => {
+        await Promise.resolve();
+        expect(input.attribution.operationId).toBe(operation);
+      }),
+    );
+    const results = await Promise.all(
+      guards.map((guard, index) =>
+        service.chatCompletionsWithDispatchGuard(request, attribution(index === 0 ? "guard-a" : "guard-b"), guard),
+      ),
+    );
+    for (let i = 0; i < results.length; i++) {
+      expect(guards[i]).toHaveBeenCalledOnce();
+      expect(results[i]?.modelUsageEventIds).toHaveLength(1);
+    }
+    expect(storage.modelUsageEvents.list({ workspaceId: "workspace-usage-test" }).items).toHaveLength(2);
+  });
+
+  it("guards every call in a multi-call workflow and records denial before HTTP dispatch", async () => {
+    const { service, storage } = createHarness(openAiChatConfig());
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      model: "gpt-4.1", choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 4, completion_tokens: 1 },
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const request = { providerId: "openai", model: "gpt-4.1", messages: [{ role: "user" as const, content: "hello" }], max_tokens: 128 };
+    const seen: string[] = [];
+    await expect(service.runWithDispatchGuard(async (attempt) => {
+      seen.push(attempt.attribution.operationId!);
+      if (seen.length > 2) throw new Error("combined request cap reached");
+    }, async () => {
+      await service.chatCompletions(request, { ...attribution("utility"), callKind: "memory_distillation" });
+      await service.chatCompletions(request, attribution("answer"));
+      await service.chatCompletions(request, attribution("tool-followup"));
+    })).rejects.toThrow("combined request cap reached");
+    expect(seen).toEqual(["utility", "answer", "tool-followup"]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(storage.modelUsageEvents.list({ workspaceId: "workspace-usage-test" }).items).toHaveLength(3);
+    expect(storage.modelUsageEvents.listOperationAttemptsForUpdate("tool-followup", "tool-followup:generation-1")).toEqual([
+      expect.objectContaining({ dispatchReconciliation: "confirmed_not_dispatched", terminalOutcome: "failed_before_usage" }),
+    ]);
+  });
+
+  it("rechecks lazy provider streams after the creating scope ends without leaking authority", async () => {
+    const { service, storage } = createHarness(openAiChatConfig());
+    const fetch = vi.fn(async () => new Response([
+      'data: {"model":"gpt-4.1","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1}}',
+      '', 'data: [DONE]', '', '',
+    ].join("\n"), { headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetch);
+    const request = { providerId: "openai", model: "gpt-4.1", messages: [{ role: "user" as const, content: "hello" }], max_tokens: 128 };
+    let revoked = false;
+    const parent = vi.fn(async () => { if (revoked) throw new Error("revoked before stream consumption"); });
+    const stream = await service.runWithDispatchGuard(parent, async () =>
+      service.streamWithDispatchGuard(async () => {}, () => service.chatCompletionsStream(request, attribution("deferred"))));
+    revoked = true;
+    await expect(stream.next()).rejects.toThrow("revoked before stream consumption");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(storage.modelUsageEvents.listOperationAttemptsForUpdate("deferred", "deferred:generation-1")).toEqual([
+      expect.objectContaining({ dispatchReconciliation: "confirmed_not_dispatched" }),
+    ]);
+    for await (const chunk of service.chatCompletionsStream(request, attribution("separate"))) void chunk;
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(parent).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       name: "chat JSON",

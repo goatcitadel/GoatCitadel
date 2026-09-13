@@ -129,6 +129,7 @@ export interface ChannelActivityResult {
 
 export type ChannelDeliveryStatus =
   | "sent"
+  | "waiting_approval"
   | "retrying"
   | "degraded"
   | "blocked"

@@ -15,7 +15,12 @@ import type {
   ToolPolicyActorContext,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { buildScrubbedSpawnEnv, coerceRetryAfterMs, isChangePlanRequest, splitUtf8HeadTail } from "@goatcitadel/contracts";
+import {
+  buildScrubbedSpawnEnv,
+  coerceRetryAfterMs,
+  isChangePlanRequest,
+  splitUtf8HeadTail,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -121,7 +126,7 @@ export interface ToolExecutorRuntimeHooks {
   /** Revalidate authenticated callback ingress immediately before a protected provider send. */
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   /** Called at the concrete provider or irreversible mutation boundary. */
-  beforeExternalSideEffect?: () => void;
+  beforeExternalSideEffect?: () => void | Promise<void>;
   /**
    * Final process-local precondition for the five cwd-bearing builtin process
    * tools. The executor awaits it after command/cwd resolution and immediately
@@ -577,8 +582,10 @@ async function httpPost(
       ? request.signal.reason
       : new Error("http.post aborted before dispatch");
   }
+  // A failed durable marker proves this HTTP transport never started. Keep it
+  // outside the post-dispatch uncertainty mapping below.
+  await runtimeHooks.beforeExternalSideEffect?.();
   try {
-    runtimeHooks.beforeExternalSideEffect?.();
     const res = await fetchAllowlisted(
       url,
       { method: "POST", headers: { "Content-Type": "application/json" }, body },
@@ -932,13 +939,21 @@ async function gitCommit(args: Record<string, unknown>, config: ToolPolicyConfig
 
 async function gitBranchCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["branch", branch], { timeout: 10000, windowsHide: true, env: buildModelSpawnEnv(config) });
+  await execFileAsync("git", ["branch", branch], {
+    timeout: 10000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(config),
+  });
   return { created: true, branch };
 }
 
 async function gitBranchSwitch(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const branch = required(args.branch, "branch");
-  await execFileAsync("git", ["switch", branch], { timeout: 15000, windowsHide: true, env: buildModelSpawnEnv(config) });
+  await execFileAsync("git", ["switch", branch], {
+    timeout: 15000,
+    windowsHide: true,
+    env: buildModelSpawnEnv(config),
+  });
   return { switched: true, branch };
 }
 

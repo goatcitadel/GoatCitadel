@@ -1,3 +1,10 @@
+import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { useDraftLeave } from "../library/DraftLeaveDialog";
+import { hasSessionDraft, useSessionDraftVersion } from "../library/session-drafts";
+import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
+import { KanbanNewTask } from "./KanbanNewTask";
+import { KanbanTaskInspector } from "./KanbanTaskInspector";
 import {
   forwardRef,
   memo,
@@ -9,7 +16,7 @@ import {
   type ComponentPropsWithoutRef,
   type Ref,
 } from "react";
-import { Activity, AlertTriangle, LayoutDashboard, RefreshCw, Users } from "lucide-react";
+import { Activity, AlertTriangle, LayoutDashboard, RefreshCw } from "lucide-react";
 import { Virtuoso, type Components } from "react-virtuoso";
 import {
   ApiRequestError,
@@ -23,7 +30,7 @@ import { NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
-import { toKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
+import { toKanbanCard, toTaskKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
 import "../native-routes.css";
 
 const COLUMNS: Array<{ id: KanbanColumnId; label: string }> = [
@@ -55,6 +62,22 @@ const KANBAN_STATUS_CHIP_TONE = {
 } as const;
 
 export function KanbanRoutePage(props: NativeRoutePagesProps) {
+  return <KanbanWorkspacePage key={(props.activeCitadelId ?? "") + ":" + props.activeWorkspaceId} {...props} />;
+}
+function KanbanWorkspacePage(props: NativeRoutePagesProps) {
+  const leave = useDraftLeave();
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
+  useSessionDraftVersion();
+  const [creating, setCreating] = useState(false);
+  const [inspected, setInspected] = useState<{ taskId: string; runId: string } | null>(null);
+  const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [runCursor, setRunCursor] = useState<string | undefined>();
+  const [taskCursor, setTaskCursor] = useState<string | undefined>();
+  const [moreBusy, setMoreBusy] = useState(false);
+  const moreLock = useRef(false),
+    bulkLock = useRef(false);
+  const pageCounts = useRef({ runs: 1, tasks: 1 });
   const [runs, setRuns] = useState<AgenticRunListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -70,28 +93,92 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const loadIdRef = useRef(0);
 
   const load = useCallback(async () => {
-    const loadId = loadIdRef.current + 1;
-    loadIdRef.current = loadId;
-    const isCurrentLoad = () => loadIdRef.current === loadId;
+    const loadId = ++loadIdRef.current;
     setLoading(true);
-    try {
-      const result = await fetchAgenticRuns({ workspaceId: props.activeWorkspaceId, limit: 200 });
-      if (!isCurrentLoad()) {
-        return;
+    const [runResult, taskResult] = await Promise.allSettled([
+      readKanbanPages(
+        (cursor) =>
+          fetchAgenticRuns({ workspaceId: props.activeWorkspaceId, limit: 200, ...(cursor ? { cursor } : {}) }),
+        pageCounts.current.runs,
+        (item) => item.runId + ":" + item.taskId,
+      ),
+      readKanbanPages(
+        (cursor) =>
+          fetchTasksByView("active", undefined, props.activeWorkspaceId, {
+            citadelId: props.activeCitadelId,
+            limit: 200,
+            ...(cursor ? { cursor } : {}),
+          }),
+        pageCounts.current.tasks,
+        (item) => item.taskId,
+      ),
+    ]);
+    if (loadId !== loadIdRef.current) return;
+    const issues: string[] = [];
+    if (runResult.status === "fulfilled") {
+      setRuns(runResult.value.items);
+      setRunCursor(runResult.value.nextCursor);
+    } else
+      issues.push(
+        "Run records unavailable: " +
+          String(runResult.reason instanceof Error ? runResult.reason.message : runResult.reason),
+      );
+    if (taskResult.status === "fulfilled") {
+      setTasks(taskResult.value.items);
+      setTaskCursor(taskResult.value.nextCursor);
+    } else
+      issues.push(
+        "Task records unavailable: " +
+          String(taskResult.reason instanceof Error ? taskResult.reason.message : taskResult.reason),
+      );
+    setError(issues.length ? issues.join(" · ") : null);
+    setLoading(false);
+    setMoreBusy(false);
+  }, [props.activeWorkspaceId, props.activeCitadelId]);
+  const loadMore = async () => {
+    if (moreLock.current || loading) return;
+    const generation = loadIdRef.current;
+    moreLock.current = true;
+    setMoreBusy(true);
+    const [moreRuns, moreTasks] = await Promise.allSettled([
+      runCursor
+        ? fetchAgenticRuns({ workspaceId: props.activeWorkspaceId, limit: 200, cursor: runCursor })
+        : Promise.resolve(null),
+      taskCursor
+        ? fetchTasksByView("active", undefined, props.activeWorkspaceId, {
+            citadelId: props.activeCitadelId,
+            limit: 200,
+            cursor: taskCursor,
+          })
+        : Promise.resolve(null),
+    ]);
+    if (generation === loadIdRef.current) {
+      if (moreRuns.status === "fulfilled" && moreRuns.value) {
+        if (moreRuns.value.nextCursor === runCursor)
+          setError("Run pagination did not advance. Refresh before continuing.");
+        else {
+          const page = moreRuns.value;
+          setRuns((current) => mergeKanbanRows(current ?? [], page.items, (item) => item.runId + ":" + item.taskId));
+          setRunCursor(page.nextCursor);
+          pageCounts.current.runs++;
+        }
       }
-      setRuns(result.items);
-      setError(null);
-      setActionError(null);
-    } catch (e) {
-      if (isCurrentLoad()) {
-        setError(e instanceof Error ? e.message : String(e));
+      if (moreTasks.status === "fulfilled" && moreTasks.value) {
+        if (moreTasks.value.nextCursor === taskCursor)
+          setError("Task pagination did not advance. Refresh before continuing.");
+        else {
+          const page = moreTasks.value;
+          setTasks((current) => mergeKanbanRows(current, page.items, (item) => item.taskId));
+          setTaskCursor(page.nextCursor);
+          pageCounts.current.tasks++;
+        }
       }
-    } finally {
-      if (isCurrentLoad()) {
-        setLoading(false);
-      }
+      if (moreRuns.status === "rejected" || moreTasks.status === "rejected")
+        setError("Additional records are unavailable. Loaded records remain available; retry to continue.");
+      setMoreBusy(false);
     }
-  }, [props.activeWorkspaceId]);
+    moreLock.current = false;
+  };
 
   useEffect(() => {
     void load();
@@ -101,7 +188,21 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
     };
   }, [load]);
 
-  const cards = useMemo<KanbanCardModel[]>(() => (runs ?? []).map((run) => toKanbanCard(run)), [runs]);
+  const cards = useMemo<KanbanCardModel[]>(
+    () => [
+      ...(runs ?? []).map((run) => toKanbanCard(run)),
+      ...tasks.filter((task) => !(runs ?? []).some((run) => run.taskId === task.taskId)).map(toTaskKanbanCard),
+    ],
+    [runs, tasks],
+  );
+  const inspectCard = useCallback(
+    (card: KanbanCardModel) =>
+      leaveRef.current.request(() => {
+        setCreating(false);
+        setInspected({ taskId: card.taskId, runId: card.runId });
+      }),
+    [],
+  );
 
   const cardsByColumn = useMemo(() => {
     const groups: Record<KanbanColumnId, KanbanCardModel[]> = {
@@ -131,7 +232,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const runBulk = useCallback(
     async (action: BulkAction) => {
       const ids = Array.from(selected);
-      if (ids.length === 0) {
+      if (ids.length === 0 || bulkLock.current) {
         return;
       }
       const cardsByTaskId = new Map(cards.map((card) => [card.taskId, card]));
@@ -158,11 +259,28 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
               workspaceId: props.activeWorkspaceId,
             }
           : { action, taskIds: ids, expectedRevisionsByTaskId, workspaceId: props.activeWorkspaceId };
+      bulkLock.current = true;
       setBulkBusy(true);
       setActionError(null);
       setNotice(null);
       try {
-        await bulkTaskAction(body);
+        const result = await bulkTaskAction(body);
+        if (
+          !Array.isArray(result.tasks) ||
+          ids.some(
+            (taskId) =>
+              !result.tasks.some(
+                (task) =>
+                  task.taskId === taskId &&
+                  task.workspaceId === props.activeWorkspaceId &&
+                  task.revision > expectedRevisionsByTaskId[taskId]!,
+              ),
+          )
+        ) {
+          throw new Error(
+            "The Gateway did not confirm every selected task update. Refresh to review their recorded state before retrying.",
+          );
+        }
         if (!isMounted()) {
           return;
         }
@@ -183,6 +301,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
           setActionError(err instanceof Error ? err.message : String(err));
         }
       } finally {
+        bulkLock.current = false;
         if (isMounted()) {
           setBulkBusy(false);
         }
@@ -198,59 +317,76 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       icon={LayoutDashboard}
       kicker={routeKicker(props.route)}
       title="Kanban"
-      description="Agentic run board with stale-run detection, diagnostics, and bulk operator controls."
-      loading={loading}
+      description="Tasks and runs, grouped by their latest recorded state."
+      loading={loading && runs === null && tasks.length === 0}
       // Only a failed run-list fetch (error) is fatal — it leaves the board null/stale,
       // so the frame replaces it (Finding 10). A failed bulk action (actionError) must
       // stay non-fatal: the board data is still valid and the operator's selection must
       // remain visible, so it renders as an inline banner below instead of nuking the board.
-      error={error}
+      error={error && runs === null && tasks.length === 0 ? error : null}
       onRetry={() => void load()}
       releaseStatus={getRouteReleaseScope(props.route).status}
       actions={
-        <NativeButton
-          variant="secondary"
-          className="mc-next-kanban-action"
-          onClick={() => props.navigate({ area: "ops", section: "kanban", theme: props.route.theme })}
-        >
-          <Users size={12} /> Run Board
-        </NativeButton>
+        <>
+          <NativeButton
+            onClick={() =>
+              leave.request(() => {
+                setInspected(null);
+                setCreating(true);
+              })
+            }
+          >
+            New task
+            {hasSessionDraft("kanban:" + (props.activeCitadelId ?? "") + ":" + props.activeWorkspaceId + ":create")
+              ? " · Unsaved"
+              : ""}
+          </NativeButton>
+          <NativeButton variant="ghost" disabled={bulkBusy || loading} onClick={() => void load()}>
+            <RefreshCw size={14} />
+            {error ? "Retry" : "Refresh"}
+          </NativeButton>
+        </>
       }
     >
-      <div className="mc-next-kanban-toolbar" role="toolbar" aria-label="Agentic run bulk actions">
-        <NativeButton
-          variant="default"
-          className="mc-next-kanban-action"
-          disabled={!hasSelection || bulkBusy}
-          onClick={() => void runBulk("unblock")}
-        >
-          Unblock
-        </NativeButton>
-        <NativeButton
-          variant="outline"
-          className="mc-next-kanban-action"
-          disabled={!hasSelection || bulkBusy}
-          onClick={() => void runBulk("retry")}
-        >
-          Retry
-        </NativeButton>
-        <NativeButton
-          variant="outline"
-          className="mc-next-kanban-action"
-          disabled={!hasSelection || bulkBusy}
-          onClick={() => void runBulk("close")}
-        >
-          Close
-        </NativeButton>
-        <NativeButton
-          variant="secondary"
-          className="mc-next-kanban-action"
-          disabled={bulkBusy}
-          onClick={() => void load()}
-        >
-          <RefreshCw size={12} /> Refresh
-        </NativeButton>
-      </div>
+      {hasSelection ? (
+        <div className="mc-next-kanban-toolbar" role="toolbar" aria-label="Agentic run bulk actions">
+          <NativeButton
+            variant="default"
+            className="mc-next-kanban-action"
+            disabled={!hasSelection || bulkBusy}
+            onClick={() => void runBulk("unblock")}
+          >
+            Unblock
+          </NativeButton>
+          <NativeButton
+            variant="outline"
+            className="mc-next-kanban-action"
+            disabled={!hasSelection || bulkBusy}
+            onClick={() => void runBulk("retry")}
+          >
+            Retry
+          </NativeButton>
+          <NativeButton
+            variant="outline"
+            className="mc-next-kanban-action"
+            disabled={!hasSelection || bulkBusy}
+            onClick={() => void runBulk("close")}
+          >
+            Close
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
+            className="mc-next-kanban-action"
+            disabled={bulkBusy}
+            onClick={() => void load()}
+          >
+            <RefreshCw size={12} /> Refresh
+          </NativeButton>
+        </div>
+      ) : null}
+      {error && (runs !== null || tasks.length > 0) ? (
+        <NoticeBanner tone="warning" message={error + " Previously loaded records may be stale."} />
+      ) : null}
       {actionError ? (
         <div data-testid="kanban-action-error">
           <NoticeBanner tone="error" message={actionError} />
@@ -281,9 +417,51 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
             cards={cardsByColumn[col.id]}
             selected={selected}
             onToggleSelect={toggleSelect}
+            onInspect={inspectCard}
           />
         ))}
       </div>
+      {runCursor || taskCursor ? (
+        <NativeButton variant="outline" disabled={moreBusy || loading} onClick={() => void loadMore()}>
+          {moreBusy ? "Loading records…" : "Load more tasks and runs"}
+        </NativeButton>
+      ) : null}
+      <DetailInspector
+        open={creating || inspected !== null}
+        title={
+          creating
+            ? "New task"
+            : (cards.find((card) => card.taskId === inspected?.taskId && card.runId === inspected?.runId)?.title ??
+              "Task details")
+        }
+        onClose={() =>
+          leave.request(() => {
+            setCreating(false);
+            setInspected(null);
+          })
+        }
+      >
+        {creating ? (
+          <KanbanNewTask
+            workspaceId={props.activeWorkspaceId}
+            citadelId={props.activeCitadelId}
+            onCreated={(task) => {
+              setTasks((current) => mergeKanbanRows(current, [task], (item) => item.taskId));
+              setCreating(false);
+              setInspected({ taskId: task.taskId, runId: "" });
+              void load();
+            }}
+          />
+        ) : inspected ? (
+          <KanbanTaskInspector
+            key={inspected.taskId + ":" + inspected.runId}
+            {...props}
+            task={tasks.find((task) => task.taskId === inspected.taskId)}
+            run={runs?.find((run) => run.taskId === inspected.taskId && run.runId === inspected.runId)}
+          />
+        ) : null}
+      </DetailInspector>
+      {leave.dialog}
     </NativePageFrame>
   );
 }
@@ -293,9 +471,10 @@ interface KanbanColumnProps {
   cards: KanbanCardModel[];
   selected: Set<string>;
   onToggleSelect: (taskId: string) => void;
+  onInspect?: (card: KanbanCardModel) => void;
 }
 
-function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnProps) {
+function KanbanColumn({ column, cards, selected, onToggleSelect, onInspect }: KanbanColumnProps) {
   // Window long columns. Each KanbanCard is memoized and receives a primitive
   // `checked` plus the stable `onToggleSelect`, so toggling one selection only
   // re-renders the cards whose membership actually changed.
@@ -305,10 +484,11 @@ function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnP
         card={card}
         checked={selected.has(card.taskId)}
         onToggleSelect={onToggleSelect}
+        onInspect={onInspect}
         containerElement="div"
       />
     ),
-    [selected, onToggleSelect],
+    [selected, onToggleSelect, onInspect],
   );
 
   return (
@@ -320,7 +500,7 @@ function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnP
       {cards.length === 0 ? (
         <ul>
           <li className="mc-next-kanban-empty">
-            <EmptyState size="compact" title="No runs in this lane." />
+            <EmptyState size="compact" title="No tasks or runs in this lane." />
           </li>
         </ul>
       ) : cards.length > KANBAN_VIRTUALIZE_THRESHOLD ? (
@@ -341,6 +521,7 @@ function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnP
               card={card}
               checked={selected.has(card.taskId)}
               onToggleSelect={onToggleSelect}
+              onInspect={onInspect}
             />
           ))}
         </ul>
@@ -362,6 +543,7 @@ const KANBAN_VIRTUOSO_COMPONENTS: Components<KanbanCardModel> = {
 };
 
 interface KanbanCardProps {
+  onInspect?: (card: KanbanCardModel) => void;
   card: KanbanCardModel;
   checked: boolean;
   onToggleSelect: (taskId: string) => void;
@@ -373,6 +555,7 @@ export const KanbanCard = memo(function KanbanCard({
   checked,
   onToggleSelect,
   containerElement = "li",
+  onInspect,
 }: KanbanCardProps) {
   const handleToggle = useCallback(() => onToggleSelect(card.taskId), [onToggleSelect, card.taskId]);
   const content = (
@@ -387,8 +570,10 @@ export const KanbanCard = memo(function KanbanCard({
           aria-label={`Select ${card.title}`}
           title={card.revision ? undefined : "Canonical task revision unavailable"}
         />
-        <span className="title">{card.title}</span>
       </label>
+      <NativeButton variant="ghost" className="mc-next-kanban-card-title" onClick={() => onInspect?.(card)}>
+        {card.title}
+      </NativeButton>
       <div className="mc-next-kanban-card-meta">
         <span>{card.surfaceLabel}</span>
         <span>{card.updatedDisplay}</span>
@@ -399,16 +584,6 @@ export const KanbanCard = memo(function KanbanCard({
         </StatusChip>
       </span>
       {card.attentionReason ? <small>{card.attentionReason}</small> : null}
-      {card.contextMode || card.profileId ? (
-        <small>
-          {[
-            card.contextMode ? `Context: ${card.contextMode}` : null,
-            card.profileId ? `Profile: ${card.profileId}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </small>
-      ) : null}
       {card.diagnosticSummary.critical > 0 ? (
         <span data-testid={`diagnostic-chip-${card.taskId}`} className="distress critical">
           <AlertTriangle size={12} /> {card.diagnosticSummary.critical} critical
@@ -418,9 +593,6 @@ export const KanbanCard = memo(function KanbanCard({
           <Activity size={12} /> {card.diagnosticSummary.warning} warning
         </span>
       ) : null}
-      <small className="run-id" title={`Run ${card.runId}`}>
-        Run {card.runId.slice(0, 8)}
-      </small>
     </>
   );
   return containerElement === "div" ? (
@@ -432,4 +604,26 @@ export const KanbanCard = memo(function KanbanCard({
 
 function formatBulkAction(action: BulkAction): string {
   return action.slice(0, 1).toUpperCase() + action.slice(1);
+}
+
+function mergeKanbanRows<T>(current: T[], next: T[], key: (value: T) => string): T[] {
+  const rows = new Map(current.map((value) => [key(value), value]));
+  next.forEach((value) => rows.set(key(value), value));
+  return [...rows.values()];
+}
+async function readKanbanPages<T>(
+  fetchPage: (cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>,
+  count: number,
+  key: (value: T) => string,
+) {
+  let page = await fetchPage();
+  const seen = new Set<string>();
+  let rows = page.items;
+  for (let index = 1; index < count && page.nextCursor; index++) {
+    if (seen.has(page.nextCursor)) throw new Error("Pagination cursor repeated");
+    seen.add(page.nextCursor);
+    page = await fetchPage(page.nextCursor);
+    rows = mergeKanbanRows(rows, page.items, key);
+  }
+  return { ...page, items: rows };
 }

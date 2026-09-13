@@ -10,6 +10,7 @@ import type {
   ChannelSetupStepDefinition,
 } from "@goatcitadel/contracts";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileJson2, Play, Save, ShieldCheck } from "lucide-react";
+import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { NativeButton } from "../../primitives";
 import { SettingsButtonRow } from "../SettingsShared";
 
@@ -24,6 +25,9 @@ export interface ChannelSetupWizardFeedback {
 }
 
 interface ChannelSetupWizardProps {
+  scopeId?: string;
+  advancedValue?: string;
+  onAdvancedValueChange?: (value: string) => void;
   definition: ChannelSetupDefinition;
   draft: ChannelSetupDraft;
   values: Record<string, unknown>;
@@ -44,6 +48,9 @@ interface ChannelSetupWizardProps {
 }
 
 export function ChannelSetupWizard({
+  scopeId = "global",
+  advancedValue,
+  onAdvancedValueChange,
   definition,
   draft,
   values,
@@ -66,11 +73,17 @@ export function ChannelSetupWizard({
     () => definition.wizard.steps.filter((step) => isStepVisible(step, values)),
     [definition.wizard.steps, values],
   );
-  const [activeStepId, setActiveStepId] = useState(visibleSteps[0]?.id ?? "");
-  const [visitedStepIds, setVisitedStepIds] = useState<Record<string, boolean>>({});
-  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
-  const [advancedMode, setAdvancedMode] = useState(false);
-  const [advancedJson, setAdvancedJson] = useState(() => formatJson(values));
+  const viewKey = "channel:" + scopeId + ":" + draft.draftId;
+  const [activeStepId, setActiveStepId] = useSessionViewState(viewKey + ":step", visibleSteps[0]?.id ?? "");
+  const [visitedStepIds, setVisitedStepIds] = useSessionViewState<Record<string, boolean>>(viewKey + ":visited", {});
+  const [checkedItems, setCheckedItems] = useSessionViewState<Record<string, boolean>>(viewKey + ":checklist", {});
+  const [advancedMode, setAdvancedMode] = useSessionViewState(viewKey + ":advanced-mode", false);
+  const [localAdvancedJson, setLocalAdvancedJson] = useState(() => formatJson(values));
+  const advancedJson = advancedValue ?? localAdvancedJson;
+  const setAdvancedJson = (value: string) => {
+    if (onAdvancedValueChange) onAdvancedValueChange(value);
+    else setLocalAdvancedJson(value);
+  };
   const [localError, setLocalError] = useState<string | null>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const shouldFocusStepRef = useRef(false);
@@ -83,21 +96,14 @@ export function ChannelSetupWizard({
   const anyBusy = busyAction !== null;
 
   useEffect(() => {
-    setActiveStepId(visibleSteps[0]?.id ?? "");
-    setVisitedStepIds({});
-    setCheckedItems({});
-    setAdvancedMode(false);
-    setAdvancedJson(formatJson(values));
     setLocalError(null);
-    // Reset transient progress only when the persisted draft changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.draftId]);
 
   useEffect(() => {
     if (!visibleSteps.some((step) => step.id === activeStepId)) {
       setActiveStepId(visibleSteps[0]?.id ?? "");
     }
-  }, [activeStepId, visibleSteps]);
+  }, [activeStepId, visibleSteps, setActiveStepId]);
 
   useEffect(() => {
     if (!shouldFocusStepRef.current) {
@@ -108,10 +114,10 @@ export function ChannelSetupWizard({
   }, [activeStepId]);
 
   useEffect(() => {
-    if (!advancedMode || !dirty) {
-      setAdvancedJson(formatJson(values));
+    if (advancedValue === undefined && (!advancedMode || !dirty)) {
+      setLocalAdvancedJson(formatJson(values));
     }
-  }, [advancedMode, dirty, values]);
+  }, [advancedValue, advancedMode, dirty, values]);
 
   useEffect(() => {
     const firstFieldIssue = feedback?.issues.find((issue) => issue.fieldKey)?.fieldKey;
@@ -123,7 +129,7 @@ export function ChannelSetupWizard({
       setAdvancedMode(false);
       setActiveStepId(targetStep.id);
     }
-  }, [feedback, visibleSteps]);
+  }, [feedback, visibleSteps, setActiveStepId, setAdvancedMode]);
 
   const selectStep = (stepId: string) => {
     if (activeStep) {

@@ -69,6 +69,40 @@ function setRawField(db: DatabaseClient, versionId: string, field: string, value
 }
 
 describe("CandidateSkillVersionRepository", () => {
+  it("filters approved instructions by workspace before applying the result limit", () => {
+    const { repo } = createStore();
+    for (const [id, workspaceId, approved] of [
+      ["first", "alpha", true],
+      ["second", "beta", true],
+      ["third", "alpha", false],
+    ] as const) {
+      repo.upsert(
+        version({
+          candidateId: id,
+          versionId: id,
+          sourceKind: "workflow_capture",
+          workspaceId,
+          sourceFingerprint: createHash("sha256").update(id).digest("hex"),
+          createdByActorId: "operator",
+          programArtifact: undefined,
+          schemaArtifact: undefined,
+          originatingRunId: undefined,
+          wrapperManifestHash: undefined,
+        }),
+      );
+      if (approved) repo.updateLifecycleState(id, "approved", "2026-03-26T00:02:00.000Z");
+    }
+    assert.deepEqual(
+      repo.listApprovedInstructions("alpha", 1).map((item) => item.versionId),
+      ["first"],
+    );
+    assert.deepEqual(
+      repo.listApprovedInstructions("beta", 1).map((item) => item.versionId),
+      ["second"],
+    );
+    repo.updateLifecycleState("first", "revoked", "2026-03-26T00:03:00.000Z");
+    assert.deepEqual(repo.listApprovedInstructions("alpha"), []);
+  });
   it("inserts, lists, and updates candidate skill lifecycle state", () => {
     const { repo } = createStore();
     const first = repo.upsert(version());

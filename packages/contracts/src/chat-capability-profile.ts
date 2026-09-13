@@ -11,6 +11,7 @@ import type { ToolGrantConstraints, ToolGrantDecision, ToolGrantScope, ToolGrant
 import type { ToolApprovalMode } from "./policy.js";
 import type { CapabilityCategory, SkillLifecycleState } from "./capabilities.js";
 import type { McpRequesterResolutionBinding } from "./mcp.js";
+import type { McpStaticToolBinding } from "./mcp-static-tool-binding.js";
 import type { WorkPassportRecord } from "./work-passport.js";
 import type { ChatWorkspaceSnapshotRecord } from "./chat-workspace-snapshot.js";
 
@@ -70,6 +71,8 @@ export interface ChatTurnCapabilityToolDefinition {
    * non-MCP tools omit this field; legacy omission can never imply scoped mode.
    */
   mcpRequesterResolution?: McpRequesterResolutionBinding;
+  /** Exact Gateway-owned static target. Mutually exclusive with requester/mesh bindings. */
+  mcpStaticBinding?: McpStaticToolBinding;
   /**
    * HX-408 M2: immutable snapshot of the governed mesh activation this tool
    * binds. Present exactly when the tool is a mesh-published callable; the

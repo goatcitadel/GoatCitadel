@@ -6,13 +6,17 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
   MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
+  MCP_STATIC_TOOL_BINDING_VERSION,
+  mcpStaticToolScopeHashMaterial,
   canonicalJsonString,
   mcpRequesterScopeHashMaterial,
   TOOL_EFFECT_CLASSIFICATION_VERSION,
+  type CapabilityCatalogEntry,
   type CapabilityCatalogSnapshotRecord,
   type ChatTurnCapabilityProfileDraft,
   type ChatTurnCapabilityProfileRecord,
   type McpRequesterResolutionBindingMaterial,
+  type McpStaticToolBindingMaterial,
   type ToolEffectPotentialRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -21,11 +25,15 @@ import {
   verifyChatTurnCapabilityProfile,
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilitySkillBindings,
+  verifyCapabilityCatalogEntryUniqueness,
 } from "./index.js";
+import { CapabilityCatalogSnapshotRepository } from "./capability-catalog-snapshot-repo.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { createDatabase } from "./sqlite.js";
+import { createRemoteWorkerPostgresTestScope } from "./remote-worker-test-fixtures.js";
+import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 
 const createdFiles: string[] = [];
 
@@ -41,7 +49,7 @@ function createStore() {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-capability-profile-${randomUUID()}.db`);
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
-  return { db, repo: new ChatTurnCapabilityProfileRepository(db) };
+  return { db, repo: new ChatTurnCapabilityProfileRepository(db), dbPath };
 }
 
 function buildDraft(): ChatTurnCapabilityProfileDraft {
@@ -312,6 +320,50 @@ function refreshRequesterBindingHash(draft: ChatTurnCapabilityProfileDraft): voi
   binding.bindingSha256 = createHash("sha256").update(canonicalJsonString(material)).digest("hex");
 }
 
+function addStaticMcpBinding(draft: ChatTurnCapabilityProfileDraft): void {
+  addRequesterMcpBinding(draft);
+  const tool = draft.selection.tools[0]!;
+  tool.modelName = (tool.providerDefinition.function as { name: string }).name;
+  draft.selection.modelNameAllowMap[0]!.modelName = tool.modelName;
+  delete tool.mcpRequesterResolution;
+  const material: McpStaticToolBindingMaterial = {
+    schemaVersion: MCP_STATIC_TOOL_BINDING_VERSION,
+    mode: "static",
+    serverId: "tenant-mcp",
+    nativeToolName: "search",
+    toolName: tool.canonicalName,
+    transport: "stdio",
+    configurationBindingId: "28a39400-9059-4bda-a1fa-23c2ae2b3bc3",
+    toolDefinitionSha256: tool.definitionHash,
+    profileScopeSha256: createHash("sha256")
+      .update(
+        canonicalJsonString(
+          mcpStaticToolScopeHashMaterial({
+            profileId: draft.profileId,
+            turnId: draft.identity.turnId,
+            sessionId: draft.identity.sessionId,
+            workspaceId: draft.identity.workspaceId,
+            authActorId: draft.identity.authActorId!,
+            authActorSource: "token",
+          }),
+        ),
+      )
+      .digest("hex"),
+    callableCatalogSnapshotId: draft.catalog.snapshotId,
+    callableCatalogSha256: draft.catalog.callableHash,
+  };
+  tool.mcpStaticBinding = {
+    ...material,
+    bindingSha256: createHash("sha256").update(canonicalJsonString(material)).digest("hex"),
+  };
+}
+
+function refreshStaticBindingHash(draft: ChatTurnCapabilityProfileDraft): void {
+  const binding = draft.selection.tools[0]!.mcpStaticBinding!;
+  const { bindingSha256: _prior, ...material } = binding;
+  binding.bindingSha256 = createHash("sha256").update(canonicalJsonString(material)).digest("hex");
+}
+
 type TestDatabase = ReturnType<typeof createDatabase>;
 
 function seedFrozenSessionIncarnation(db: TestDatabase, profile: ChatTurnCapabilityProfileRecord) {
@@ -371,7 +423,121 @@ function createWithFrozenIncarnation(
   });
 }
 
+function meshCatalogFixture(kind: "tool" | "mcp_server" = "tool") {
+  const canonicalName = `mesh:node-a:${kind}:project.status`;
+  const draft = buildDraftWithProviderDefinition({ type: "function", function: {
+    name: "mesh_status", description: "Read an activated publication.", parameters: { type: "object" },
+  } }, `mesh-${kind}`, { canonicalName, modelName: "mesh_status" });
+  draft.identity.sessionId = `session-mesh-${kind}`;
+  draft.identity.durableRunId = `run-mesh-${kind}`;
+  draft.selection.memory.sessionId = draft.identity.sessionId;
+  const tool = draft.selection.tools[0]!;
+  tool.runtimeOwner = { kind: "builtin", bindingHash: "1".repeat(64) };
+  tool.effectPotential = { version: TOOL_EFFECT_CLASSIFICATION_VERSION, potential: "unknown", sourceKind: "remote",
+    reason: "remote_runtime_may_cross_boundary" };
+  tool.meshPublication = { nodeId: "node-a", publisherGeneration: 3, manifestSha256: "d".repeat(64),
+    entrySha256: "e".repeat(64), activationId: "mesh-activation-fixture", activationRevision: 2,
+    publicationLeaseFencingToken: 5, permissionEnvelopeSha256: "a".repeat(64), effectPosture: "read_only", healthGeneration: 4 };
+  const entry: CapabilityCatalogEntry = { capabilityId: canonicalName, kind: kind === "tool" ? "mesh_tool" : "mesh_mcp_server",
+    category: "mesh_published", title: "Project status", summary: "Activated remote tool", callable: true,
+    mesh: { nodeId: "node-a", admissionGeneration: 1, publisherGeneration: 3, manifestSha256: "d".repeat(64),
+      entrySha256: "e".repeat(64), localId: "project.status", capabilityKind: kind, status: "active",
+      reasons: ["activation_live"], effectPosture: "read_only", activation: { activationId: "mesh-activation-fixture",
+        activationRevision: 2, approvalId: "fixture-activation-approval", revoked: false } } };
+  const snapshot: CapabilityCatalogSnapshotRecord = { snapshotId: `mesh-snapshot-${kind}`, inspectableEntries: [entry],
+    callableEntries: [entry], createdAt: draft.createdAt };
+  const seal = () => {
+    draft.catalog = { snapshotId: snapshot.snapshotId,
+      inspectableHash: createHash("sha256").update(canonicalJsonString(snapshot.inspectableEntries)).digest("hex"),
+      callableHash: createHash("sha256").update(canonicalJsonString(snapshot.callableEntries)).digest("hex"),
+      inspectableCount: snapshot.inspectableEntries.length, callableCount: snapshot.callableEntries.length };
+    return sealChatTurnCapabilityProfile(draft);
+  };
+  return { draft, tool, entry, snapshot, seal };
+}
+
 describe("ChatTurnCapabilityProfileRepository", () => {
+  for (const kind of ["tool", "mcp_server"] as const) {
+    it(`persists and reopens an exact ${kind} mesh catalog binding on SQLite`, () => {
+      const { db, repo, dbPath } = createStore();
+      const f = meshCatalogFixture(kind);
+      const profile = f.seal();
+      verifyChatTurnCapabilityCatalogBinding(profile, f.snapshot);
+      new CapabilityCatalogSnapshotRepository(db).create(f.snapshot);
+      createWithFrozenIncarnation(db, repo, profile);
+      db.close();
+      const reopened = createDatabase({ dbPath });
+      try {
+        const stored = new ChatTurnCapabilityProfileRepository(reopened).get(profile.profileId);
+        const catalog = new CapabilityCatalogSnapshotRepository(reopened).get(f.snapshot.snapshotId);
+        assert.deepEqual(stored, profile);
+        verifyChatTurnCapabilityCatalogBinding(stored, catalog);
+      } finally { reopened.close(); }
+    });
+  }
+
+  it("rejects mesh/local alias collisions and mismatched publication identity or effect posture", () => {
+    const mutations: Array<[string, (f: ReturnType<typeof meshCatalogFixture>) => void]> = [
+      ["binding removed", (f) => { delete f.tool.meshPublication; }],
+      ["node", (f) => { f.tool.meshPublication!.nodeId = "another-node"; }],
+      ["generation", (f) => { f.tool.meshPublication!.publisherGeneration += 1; }],
+      ["manifest", (f) => { f.tool.meshPublication!.manifestSha256 = "8".repeat(64); }],
+      ["entry", (f) => { f.tool.meshPublication!.entrySha256 = "8".repeat(64); }],
+      ["posture", (f) => { f.tool.meshPublication!.effectPosture = "write_local"; }],
+      ["activation", (f) => { f.tool.meshPublication!.activationId = "another-activation"; }],
+      ["activation revision", (f) => { f.tool.meshPublication!.activationRevision += 1; }],
+      ["revocation", (f) => { f.entry.mesh!.activation!.revoked = true; }],
+      ["inactive", (f) => { f.entry.mesh!.status = "review_required"; }],
+      ["local id", (f) => { f.entry.mesh!.localId = "different-tool"; }],
+      ["kind", (f) => { f.entry.mesh!.capabilityKind = "mcp_server"; }],
+      ["category", (f) => { f.entry.category = "built_in"; }],
+      ["alias", (f) => { f.entry.toolName = f.entry.capabilityId; }],
+      ["missing remote effect", (f) => { delete f.tool.effectPotential; }],
+      ["local catalog", (f) => { f.entry.kind = "tool"; f.entry.toolName = f.entry.capabilityId; }],
+    ];
+    for (const [label, mutate] of mutations) {
+      const f = meshCatalogFixture();
+      verifyChatTurnCapabilityCatalogBinding(f.seal(), f.snapshot);
+      mutate(f);
+      assert.throws(() => verifyChatTurnCapabilityCatalogBinding(f.seal(), f.snapshot), /mesh tool does not match/u, label);
+    }
+    const f = meshCatalogFixture();
+    const collision: CapabilityCatalogEntry = { capabilityId: "tool:local-alias", kind: "tool", category: "built_in",
+      toolName: f.entry.capabilityId, title: "Local alias", summary: "Collision", callable: true };
+    for (const entries of [[f.entry, collision], [collision, f.entry]]) {
+      assert.throws(() => verifyCapabilityCatalogEntryUniqueness(entries), /tool-name collision/u);
+    }
+  });
+
+  it("persists exact mesh catalogs and profiles across PostgreSQL reopen", {
+    skip: process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim() ? false : "Set GOATCITADEL_TEST_POSTGRES_URL for mesh profile proof.",
+    timeout: 60_000,
+  }, async () => {
+    const url = process.env.GOATCITADEL_TEST_POSTGRES_URL!.trim();
+    const scope = await createRemoteWorkerPostgresTestScope(url, "mesh_catalog_binding");
+    let reader: PostgresSyncDatabaseClient | undefined;
+    try {
+      const fixtures = [meshCatalogFixture("tool"), meshCatalogFixture("mcp_server")];
+      for (const f of fixtures) {
+        const profile = f.seal();
+        new CapabilityCatalogSnapshotRepository(scope.db).create(f.snapshot);
+        createWithFrozenIncarnation(scope.db, new ChatTurnCapabilityProfileRepository(scope.db), profile);
+      }
+      scope.db.close();
+      const scopedUrl = new URL(url);
+      scopedUrl.searchParams.set("options", `-csearch_path=${scope.schemaName}`);
+      reader = new PostgresSyncDatabaseClient({ connectionString: scopedUrl.toString(),
+        database: decodeURIComponent(scopedUrl.pathname.slice(1)) || "postgres", pool: { max: 1, connectionTimeoutMs: 10_000 } });
+      for (const f of fixtures) {
+        const stored = new ChatTurnCapabilityProfileRepository(reader).get(f.draft.profileId);
+        const catalog = new CapabilityCatalogSnapshotRepository(reader).get(f.snapshot.snapshotId);
+        assert.deepEqual(stored, f.seal());
+        verifyChatTurnCapabilityCatalogBinding(stored, catalog);
+        f.tool.meshPublication!.entrySha256 = "8".repeat(64);
+        assert.throws(() => verifyChatTurnCapabilityCatalogBinding(f.seal(), catalog), /mesh tool does not match/u);
+      }
+    } finally { reader?.close(); await scope.teardown(); }
+  });
   it("round-trips a sealed profile and exposes explicit legacy absence", () => {
     const { db, repo } = createStore();
     const profile = sealChatTurnCapabilityProfile(buildDraft());
@@ -528,6 +694,197 @@ describe("ChatTurnCapabilityProfileRepository", () => {
       /lacks authenticated requester authority/,
     );
     db.close();
+  });
+
+  it("round-trips an exact static MCP binding without endpoint or credential data", () => {
+    const { db, repo } = createStore();
+    try {
+      const draft = buildDraftWithProviderDefinition(
+        {
+          type: "function",
+          function: {
+            name: "configured_search",
+            description: "Search a configured MCP source.",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        },
+        "static-mcp",
+      );
+      addStaticMcpBinding(draft);
+      const profile = sealChatTurnCapabilityProfile(draft);
+      assert.deepEqual(createWithFrozenIncarnation(db, repo, profile), profile);
+      assert.deepEqual(
+        repo.get(profile.profileId).selection.tools[0]!.mcpStaticBinding,
+        draft.selection.tools[0]!.mcpStaticBinding,
+      );
+      assert.doesNotMatch(canonicalJsonString(repo.get(profile.profileId)), /https?:|authorization|never-store-this/u);
+    } finally {
+      db.close();
+    }
+  });
+
+  it(
+    "round-trips and reopens static MCP bindings on PostgreSQL",
+    {
+      skip: process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim()
+        ? false
+        : "Set GOATCITADEL_TEST_POSTGRES_URL for actual PostgreSQL binding proof.",
+      timeout: 60_000,
+    },
+    async () => {
+      const url = process.env.GOATCITADEL_TEST_POSTGRES_URL!.trim();
+      const scope = await createRemoteWorkerPostgresTestScope(url, "static_mcp_binding");
+      let reader: PostgresSyncDatabaseClient | undefined;
+      try {
+        const draft = buildDraftWithProviderDefinition(
+          {
+            type: "function",
+            function: {
+              name: "configured_search",
+              description: "Search a configured MCP source.",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          },
+          "static-mcp-postgres",
+        );
+        addStaticMcpBinding(draft);
+        const profile = sealChatTurnCapabilityProfile(draft);
+        const repo = new ChatTurnCapabilityProfileRepository(scope.db);
+        assert.deepEqual(createWithFrozenIncarnation(scope.db, repo, profile), profile);
+        scope.db.close();
+        const scopedUrl = new URL(url);
+        scopedUrl.searchParams.set("options", `-csearch_path=${scope.schemaName}`);
+        reader = new PostgresSyncDatabaseClient({
+          connectionString: scopedUrl.toString(),
+          database: decodeURIComponent(scopedUrl.pathname.slice(1)) || "postgres",
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        });
+        const reopened = new ChatTurnCapabilityProfileRepository(reader);
+        assert.deepEqual(reopened.get(profile.profileId), profile);
+        const forged = structuredClone(draft);
+        forged.identity.authActorId = "another-actor";
+        assert.throws(
+          () => reopened.create(sealChatTurnCapabilityProfile(forged)),
+          /static binding does not match its authenticated turn/u,
+        );
+        const smuggled = structuredClone(draft);
+        Object.assign(smuggled.selection.tools[0]!.mcpStaticBinding!, { command: "never-store-this" });
+        assert.throws(() => reopened.create(sealChatTurnCapabilityProfile(smuggled)), /unsupported fields/u);
+        assert.deepEqual(reopened.get(profile.profileId), profile);
+      } finally {
+        reader?.close();
+        await scope.teardown();
+      }
+    },
+  );
+
+  it("refuses static MCP bindings that redirect identity, schema, catalog, mode or runtime ownership", () => {
+    const base = buildDraftWithProviderDefinition(
+      {
+        type: "function",
+        function: {
+          name: "configured_search",
+          description: "Search a configured MCP source.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        },
+      },
+      "static-mcp-adversarial",
+    );
+    addStaticMcpBinding(base);
+    const cases: Array<[string, (draft: ChatTurnCapabilityProfileDraft) => void, RegExp]> = [
+      [
+        "actor",
+        (draft) => {
+          draft.identity.authActorId = "another-actor";
+        },
+        /static binding does not match its authenticated turn/u,
+      ],
+      [
+        "actor source",
+        (draft) => {
+          draft.identity.authActorSource = "companion";
+        },
+        /static binding does not match its authenticated turn/u,
+      ],
+      [
+        "unsupported actor",
+        (draft) => {
+          draft.identity.authActorSource = "sse";
+        },
+        /static binding lacks authenticated turn authority/u,
+      ],
+      [
+        "profile",
+        (draft) => {
+          draft.profileId = "another-profile";
+        },
+        /static binding does not match its authenticated turn/u,
+      ],
+      [
+        "target",
+        (draft) => {
+          draft.selection.tools[0]!.mcpStaticBinding!.toolName = "mcp.other.search";
+        },
+        /exact native tool/u,
+      ],
+      [
+        "catalog",
+        (draft) => {
+          draft.selection.tools[0]!.mcpStaticBinding!.callableCatalogSha256 = "8".repeat(64);
+        },
+        /static binding does not match the callable catalog/u,
+      ],
+      [
+        "schema",
+        (draft) => {
+          draft.selection.tools[0]!.mcpStaticBinding!.toolDefinitionSha256 = "8".repeat(64);
+        },
+        /static binding does not match its provider definition/u,
+      ],
+      [
+        "hash",
+        (draft) => {
+          draft.selection.tools[0]!.mcpStaticBinding!.bindingSha256 = "8".repeat(64);
+        },
+        /static binding hash is invalid/u,
+      ],
+      [
+        "plugin",
+        (draft) => {
+          draft.selection.tools[0]!.runtimeOwner = { kind: "plugin", bindingHash: "1".repeat(64) };
+        },
+        /static binding is not Gateway-owned/u,
+      ],
+      [
+        "missing owner",
+        (draft) => {
+          delete draft.selection.tools[0]!.runtimeOwner;
+        },
+        /static binding is not Gateway-owned/u,
+      ],
+      [
+        "requester",
+        (draft) => {
+          addRequesterMcpBinding(draft);
+        },
+        /static binding cannot also be requester-scoped or mesh-published/u,
+      ],
+      [
+        "endpoint",
+        (draft) => {
+          Object.assign(draft.selection.tools[0]!.mcpStaticBinding!, {
+            url: "https://secret.example.test/never-store-this",
+          });
+        },
+        /unsupported fields/u,
+      ],
+    ];
+    for (const [name, mutate, expected] of cases) {
+      const draft = structuredClone(base);
+      mutate(draft);
+      if (name !== "hash") refreshStaticBindingHash(draft);
+      assert.throws(() => verifyChatTurnCapabilityProfile(sealChatTurnCapabilityProfile(draft)), expected, name);
+    }
   });
 
   it("round-trips the exact mesh publication snapshot and rejects malformed or plugin-owned bindings", () => {

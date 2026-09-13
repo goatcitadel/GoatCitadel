@@ -2,13 +2,19 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 import { fetchWorkspaces, getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/shell-client";
-import { fetchRuntimeLifecycleExport, listCitadels } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  fetchOnboardingState,
+  fetchRuntimeLifecycleExport,
+  listCitadels,
+} from "@goatcitadel/mission-control-shared/api/client";
 import {
   buildThreadedGatewayStatusSummary,
   type ThreadedGatewayStatusSummary,
 } from "@goatcitadel/threaded-surface-core/work-trust";
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
-import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { DraftLeaveDialog, useDraftLeave } from "../features/native-routes/library/DraftLeaveDialog";
+import { useShellHistory } from "./use-shell-history";
+import { UnifiedSidebarProvider, UnifiedSidebarFrame } from "./UnifiedSidebar";
 import { NotificationStack } from "@goatcitadel/mission-control-shared/components/NotificationStack";
 import { CommandPalette, type CommandPaletteItem } from "@goatcitadel/mission-control-shared/components/CommandPalette";
 import {
@@ -38,7 +44,6 @@ import {
   type WorkspaceSelectionStatus,
 } from "./MissionControlShellChrome";
 import {
-  describeDirtySections,
   useAnySectionDirty,
   useBeforeUnloadGuard,
   useNavigateGuard,
@@ -58,6 +63,8 @@ import {
   normalizeAppRoute,
   type AppRoute,
   RAIL_GROUPS,
+  navigationAreaForRoute,
+  navigationRailItems,
   type PrimaryArea,
   type RailItem,
 } from "./route-model";
@@ -211,7 +218,7 @@ export function MissionControlNextApp() {
   // notifications) but no longer owns the underlying useState/useRef plumbing.
   const { gatewayAccess, gatewayBusy, autoRetryPending, retryGatewayAccess } = useGatewayAccess();
   const gatewayReady = gatewayAccess.status === "ready";
-  const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector();
+  const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector(detailPanelPinned);
   const shellInspectorAvailable = route.area !== "chat";
   const { notifications, pushNotification, dismissNotification, deliverRealtimeNotification, lastEnabledSoundModeRef } =
     useShellNotifications({ notificationPreferences });
@@ -221,16 +228,14 @@ export function MissionControlNextApp() {
   });
   const { status, refreshStatus } = useShellStatus({ gatewayReady });
 
-  const rawNavigate = useCallback((nextRoute: AppRoute, options?: { replace?: boolean }) => {
-    const normalized = normalizeAppRoute(nextRoute);
-    const href = buildAppHref(normalized);
-    const mutate = options?.replace ? window.history.replaceState : window.history.pushState;
-    mutate.call(window.history, {}, "", href);
+  const shellHistory = useShellHistory((normalized) => {
     startTransition(() => {
       setRoute(normalized);
     });
     setNavOpen(false);
-  }, []);
+  });
+  const rawNavigate = shellHistory.navigate;
+  const scopeLeave = useDraftLeave();
   const isSameShellRoute = useCallback(
     (target: AppRoute) => buildAppHref(normalizeAppRoute(target)) === buildAppHref(normalizeAppRoute(route)),
     [route],
@@ -250,9 +255,10 @@ export function MissionControlNextApp() {
     navigate,
     pending: pendingDirtyNavigation,
     confirmDiscard,
+    confirmKeep,
     cancelDiscard,
   } = useNavigateGuard<AppRoute>(rawNavigate, isSameShellRoute);
-  const dirtyKeys = useAnySectionDirty();
+  shellHistory.requestRef.current = navigate;
 
   /*
    * H-7 (ship punchlist): shell command palette + keyboard model.
@@ -375,18 +381,19 @@ export function MissionControlNextApp() {
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
   const effectiveChromeTheme = resolveEffectiveShellTheme(route.theme, theme);
-  const currentAreaMeta = AREA_META[route.area];
-  const currentRailItems = route.area === "chat" ? buildModeRail(route.mode) : RAIL_ITEMS[route.area];
+  const navigationArea = navigationAreaForRoute(route);
+  const currentAreaMeta = AREA_META[navigationArea];
+  const currentRailItems = route.area === "chat" ? buildModeRail(route.mode) : navigationRailItems(navigationArea);
   const groupedRailItems = useMemo(
     () =>
       buildRailSections(
-        route.area,
+        navigationArea,
         // NAV-02: release-aware rail visibility keeps most experimental surfaces
         // in the palette while exposing the personality catalog users need in
         // order to inspect available presets.
         currentRailItems.filter((item) => isPrimaryRailRoute(item)),
       ),
-    [route.area, currentRailItems],
+    [navigationArea, currentRailItems],
   );
   const currentRouteLabel = getRouteLabel(route);
   const currentRouteDescription = getRouteDescription(route);
@@ -406,14 +413,14 @@ export function MissionControlNextApp() {
   // drawer (areas live in the topbar on desktop, which is hidden here). Mirror
   // the `@media (max-width: 1023px)` CSS tier so the in-drawer area switcher
   // only renders on mobile and never duplicates the desktop topbar nav.
-  const isMobileNav = useMediaQuery("(max-width: 1023px)");
+  const isMobileNav = useMediaQuery("(max-width: 1179px)");
   const isWorkArea = route.area === "chat";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
   // Chat owns its own Working Context surface. Suppress the generic route
   // inspector there so two different "Context" controls cannot compete for the
   // same right-side workspace; retain the inspector on every non-Chat route.
-  const hasVisibleInspector = shellInspectorAvailable && (detailPanelPinned || inspectorOpen);
+  const hasVisibleInspector = shellInspectorAvailable && inspectorOpen;
   const activeWorkspaceName =
     workspaceSelectionStatus === "ready"
       ? (workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId)
@@ -713,7 +720,7 @@ export function MissionControlNextApp() {
     setTheme(effectiveChromeTheme === "dark" ? "light" : "dark");
     if (route.theme) {
       const unpinned = normalizeAppRoute({ ...route, theme: undefined });
-      window.history.replaceState({}, "", buildAppHref(unpinned));
+      window.history.replaceState(window.history.state, "", buildAppHref(unpinned));
       startTransition(() => {
         setRoute(unpinned);
       });
@@ -724,7 +731,7 @@ export function MissionControlNextApp() {
   useEffect(() => {
     const nextHref = coerceCompatibilityHrefToNext(window.location.href);
     if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
-      window.history.replaceState({}, "", nextHref);
+      window.history.replaceState(window.history.state, "", nextHref);
       setRoute(resolveRouteFromLocation(window.location.href));
       return;
     }
@@ -748,8 +755,25 @@ export function MissionControlNextApp() {
     ) {
       return;
     }
-    redirectedIncompleteOnboardingRef.current = true;
-    navigate({ area: "settings", section: "onboarding", theme: route.theme }, { replace: true });
+    let cancelled = false;
+    // Setup can finish after the access preflight. Re-read the owner before
+    // redirecting so entering Chat from a direct Settings visit remains possible.
+    void fetchOnboardingState()
+      .then((state) => {
+        if (cancelled) return;
+        redirectedIncompleteOnboardingRef.current = true;
+        if (!state.completed) {
+          navigate({ area: "settings", section: "onboarding", theme: route.theme }, { replace: true });
+        }
+      })
+      .catch(() => {
+        // An unavailable fresh snapshot cannot establish that setup is incomplete.
+        // Chat retains its ordinary readiness and error handling.
+        if (!cancelled) redirectedIncompleteOnboardingRef.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [gatewayAccess, navigate, route.area, route.theme]);
 
   useEffect(() => {
@@ -762,22 +786,6 @@ export function MissionControlNextApp() {
     setInspectorOpen(false);
     setDetailEntry(null);
   }, [route.area, setDetailEntry, setInspectorOpen]);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      const nextHref = coerceCompatibilityHrefToNext(window.location.href);
-      if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
-        window.history.replaceState({}, "", nextHref);
-      }
-      // Match `navigate`: keep the current surface mounted while a lazy route
-      // chunk loads instead of flashing the Suspense fallback on browser back.
-      startTransition(() => {
-        setRoute(resolveRouteFromLocation(window.location.href));
-      });
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
 
   useEffect(() => {
     document.documentElement.classList.add("wa-theme-default", "wa-palette-default", "wa-brand-blue");
@@ -865,10 +873,12 @@ export function MissionControlNextApp() {
     );
 
   return (
+    <UnifiedSidebarProvider mobile={isMobileNav} navOpen={navOpen} openNav={() => { setInspectorOpen(false); setNavOpen(true); }} closeNav={() => setNavOpen(false)}>
     <ShellDetailPanelProvider
       isOpen={hasVisibleInspector}
       onOpenPanel={() => {
         if (shellInspectorAvailable) {
+          setNavOpen(false);
           setInspectorOpen(true);
         }
       }}
@@ -898,7 +908,7 @@ export function MissionControlNextApp() {
         <a className="mc-next-skip-link" href="#main-content">
           Skip to content
         </a>
-        <div className="mc-next-app-frame">
+        <UnifiedSidebarFrame>
           <ShellTopbar
             activeCitadelId={activeCitadelId}
             activeCitadelName={activeCitadelName}
@@ -907,8 +917,8 @@ export function MissionControlNextApp() {
             buildPrimaryAreaRoute={buildPrimaryAreaRoute}
             citadelOptions={citadelOptions}
             handleOpenStartHere={handleOpenStartHere}
-            handleSelectCitadel={handleSelectCitadel}
-            handleSelectWorkspace={handleSelectWorkspace}
+            handleSelectCitadel={(id) => scopeLeave.request(() => handleSelectCitadel(id))}
+            handleSelectWorkspace={(id) => scopeLeave.request(() => handleSelectWorkspace(id))}
             handleToggleMode={handleToggleMode}
             handleToggleNotificationSound={handleToggleNotificationSound}
             handleToggleTheme={handleToggleTheme}
@@ -919,7 +929,7 @@ export function MissionControlNextApp() {
             navigate={navigate}
             onOpenPalette={openContextualPalette}
             onOpenNav={() => setNavOpen(true)}
-            onToggleInspector={() => setInspectorOpen((current) => !current)}
+            onToggleInspector={() => { setNavOpen(false); setInspectorOpen((current) => !current); }}
             operatorNotificationCount={operatorNotificationCount}
             pendingApprovals={pendingApprovals}
             preloadRouteChunk={preloadRouteChunk}
@@ -942,8 +952,8 @@ export function MissionControlNextApp() {
               citadelOptions={citadelOptions}
               currentAreaMeta={currentAreaMeta}
               groupedRailItems={groupedRailItems}
-              handleSelectCitadel={handleSelectCitadel}
-              handleSelectWorkspace={handleSelectWorkspace}
+              handleSelectCitadel={(id) => scopeLeave.request(() => handleSelectCitadel(id))}
+              handleSelectWorkspace={(id) => scopeLeave.request(() => handleSelectWorkspace(id))}
               isMobileNav={isMobileNav}
               navOpen={navOpen}
               navigate={navigate}
@@ -995,23 +1005,17 @@ export function MissionControlNextApp() {
             sessionsPill={sessionsPill}
             spendPill={spendPill}
           />
-        </div>
+        </UnifiedSidebarFrame>
 
         <NotificationStack items={notifications} onDismiss={dismissNotification} />
-        <ConfirmModal
+        <DraftLeaveDialog
           open={pendingDirtyNavigation !== null}
-          title="Discard unsaved changes?"
-          message={
-            dirtyKeys.length > 0
-              ? `You have unsaved changes in ${describeDirtySections(dirtyKeys)}.`
-              : "You have unsaved changes."
-          }
-          confirmLabel="Discard changes"
-          cancelLabel="Stay on this page"
-          danger
-          onConfirm={confirmDiscard}
-          onCancel={cancelDiscard}
+          keys={pendingDirtyNavigation?.keys ?? []}
+          onContinue={confirmKeep}
+          onDiscard={confirmDiscard}
+          onCancel={() => { shellHistory.cancel(); cancelDiscard(); }}
         />
+        {scopeLeave.dialog}
         {/* H-7: shell command palette. Cmd/Ctrl+K opens; Esc closes via the
             palette's own handler (priority over useShellKeyboardManager). */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
@@ -1022,6 +1026,7 @@ export function MissionControlNextApp() {
         />
       </div>
     </ShellDetailPanelProvider>
+    </UnifiedSidebarProvider>
   );
 }
 

@@ -30,6 +30,7 @@ import {
   encodeWindowsProtectedRevokeKeysetRequest,
   encodeWindowsProtectedSignAdmissionEvidenceRequest,
   encodeWindowsProtectedSignRuntimePopV2Request,
+  encodeWindowsProtectedSignTlsClientCertificateVerifyRequest,
 } from "./windows-helper-protocol.js";
 import {
   WINDOWS_SERVICE_CLIENT_ARGUMENT,
@@ -44,6 +45,8 @@ import {
   runWindowsServiceClientOneShot,
   signWindowsProtectedAdmissionEvidence,
   signWindowsProtectedRuntimePopV2,
+  signWindowsProtectedTlsClientCertificateVerify,
+  type WindowsServiceClientRunOptions,
 } from "./windows-service-client.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -262,7 +265,7 @@ function runtimePopSuccessPayload(): Buffer {
 
 function startOneShot(
   requestFrame: Uint8Array = encodeWindowsHelperInspectRequest(),
-  options: { timeoutMs?: number } = {},
+  options: WindowsServiceClientRunOptions = {},
 ): { fake: FakeChild; result: ReturnType<typeof runWindowsServiceClientOneShot> } {
   const fake = createFakeChild();
   spawnMock.mockReturnValueOnce(fake.child);
@@ -450,6 +453,87 @@ describe("protected Windows service-client runner", () => {
   });
 });
 
+describe("protected Windows service-client cancellation", () => {
+  it("rejects a cancelled request before starting a native process", async () => {
+    await expect(
+      runWindowsServiceClientOneShot(process.execPath, encodeWindowsHelperInspectRequest(), {
+        signal: AbortSignal.abort(),
+      }),
+    ).rejects.toMatchObject({ reason: "cancelled" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("kills its owned pending client and waits for close before reporting cancellation", async () => {
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const { fake, result } = startOneShot(encodeWindowsHelperInspectRequest(), { signal: controller.signal });
+    const outcome = result.catch((error: unknown) => error);
+    try {
+      controller.abort();
+      expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(fake.stdin.destroyed).toBe(true);
+      fake.emitClose(null, "SIGKILL");
+      await expect(outcome).resolves.toMatchObject({ reason: "cancelled" });
+      expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    } finally {
+      fake.emitClose(null, "SIGKILL");
+      await outcome;
+    }
+  });
+
+  it("closes a cancellation during spawn before writing any request bytes", async () => {
+    const controller = new AbortController();
+    const fake = createFakeChild();
+    spawnMock.mockImplementationOnce(() => {
+      controller.abort();
+      return fake.child;
+    });
+    const result = runWindowsServiceClientOneShot(process.execPath, encodeWindowsHelperInspectRequest(), {
+      signal: controller.signal,
+    });
+    const outcome = result.catch((error: unknown) => error);
+    try {
+      expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(fake.stdinChunks).toEqual([]);
+      fake.emitClose(null, "SIGKILL");
+      await expect(outcome).resolves.toMatchObject({ reason: "cancelled" });
+    } finally {
+      fake.emitClose(null, "SIGKILL");
+      await outcome;
+    }
+  });
+
+  it("removes cancellation ownership after the client has closed", async () => {
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const { fake, result } = startOneShot(encodeWindowsHelperInspectRequest(), { signal: controller.signal });
+    fake.emitClose(0);
+    await result;
+    controller.abort();
+    expect(fake.kill).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("reports uncertain termination after the bounded cancellation watchdog", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const { fake, result } = startOneShot(encodeWindowsHelperInspectRequest(), { signal: controller.signal });
+    const outcome = result.catch((error: unknown) => error);
+    try {
+      controller.abort();
+      expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+      await vi.advanceTimersByTimeAsync(WINDOWS_SERVICE_CLIENT_TERMINATION_GRACE_MS);
+      await expect(outcome).resolves.toMatchObject({ reason: "termination_failed" });
+      expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+      expect(fake.unref).toHaveBeenCalledTimes(1);
+    } finally {
+      fake.emitClose(null, "SIGKILL");
+      await outcome;
+    }
+  });
+});
+
 describe("protected Windows service-client GCPW disposition", () => {
   it("accepts exact INSPECT success bytes only with exit zero and no stderr", async () => {
     const { fake, result } = startValidated();
@@ -632,6 +716,42 @@ describe("typed protected service operations", () => {
     });
   });
 
+  it.each(["typed", "validated"])("uses the bounded native client for %s TLS signing", async (kind) => {
+    const preimage = Buffer.concat([
+      Buffer.alloc(64, 0x20),
+      Buffer.from("TLS 1.3, client CertificateVerify\0", "ascii"),
+      Buffer.alloc(32, 0x17),
+    ]);
+    const request = {
+      expectedStateSha256: mutationExpectedState,
+      expectedGeneration: 7n,
+      expectedKeysetReceiptSha256: mutationReceipt,
+      expectedWorkerPublicKeySpkiSha256: createHash("sha256").update(mutationSignSpki).digest(),
+      preimage,
+    };
+    const frame = encodeWindowsProtectedSignTlsClientCertificateVerifyRequest(request);
+    const fake = createFakeChild();
+    spawnMock.mockReturnValueOnce(fake.child);
+    const result =
+      kind === "typed"
+        ? signWindowsProtectedTlsClientCertificateVerify(process.execPath, request)
+        : runWindowsServiceClient(process.execPath, frame);
+    fake.emitSpawn();
+    expect(Buffer.concat(fake.stdinChunks)).toEqual(frame);
+    expect(spawnMock).toHaveBeenCalledWith(process.execPath, ["--service-stdio"], expect.objectContaining({ env: {} }));
+    const payload = runtimePopSuccessPayload();
+    sign(null, preimage, mutationSignPrivateKey).copy(payload, 116);
+    // A caller mutating its original buffers after dispatch cannot change the retained signing request.
+    preimage.fill(0);
+    fake.stdout.write(encodeWindowsHelperFrame(0x95, payload));
+    fake.emitClose(WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS);
+    await expect(result).resolves.toMatchObject(
+      kind === "typed"
+        ? { disposition: "signed", runtimeManifestSpki: mutationSignSpki }
+        : { kind: "success", requestOpcode: 0x15 },
+    );
+  });
+
   it("uses the same bounded process owner for typed INSPECT", async () => {
     const fake = createFakeChild();
     spawnMock.mockReturnValueOnce(fake.child);
@@ -663,7 +783,7 @@ const GCPA_MAGIC = "GCPA";
 const GCPA_VERSION = 1;
 const GCPA_REQUEST_ID = 1;
 const GCPA_HEADER_BYTES = 16;
-const GCPA_RECOGNIZED_BITMAP = 0x0007_0007_001f_0002n;
+const GCPA_RECOGNIZED_BITMAP = 0x0007_0007_003f_0002n;
 const GCPA_CALLABLE_BITMAP = WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP;
 const GCPA_KIND = Object.freeze({
   CLIENT_HELLO: 0x01,
@@ -931,7 +1051,7 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" +
         "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40" +
         "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60" +
-        "02001f000700070002001d0000000000",
+        "02003f000700070002003d0000000000",
     );
   });
 
@@ -1019,7 +1139,7 @@ describe("shared literal GCPW/GCPA and projection vectors", () => {
     const protectedInspect = encodeWindowsHelperFrame(0x81, inspectPayload());
     expect(protectedInspect.subarray(0, 16).toString("hex")).toBe("47435057010081000100000040010000");
     expect(protectedInspect.subarray(16, 48).toString("hex")).toBe(
-      "0100648600002000002000000000000002001f00070007000200000000000000",
+      "0100648600002000002000000000000002003f00070007000200000000000000",
     );
     expect(protectedInspect.readBigUInt64LE(56)).toBe(WINDOWS_PROTECTED_CALLABLE_OPCODE_BITMAP);
     expect(errorResponse(WINDOWS_HELPER_ERROR_CODE.PROTOCOL_INVALID).toString("hex")).toBe(

@@ -10,6 +10,7 @@ import {
   ModelUsageDispatchUncertainError,
   ModelUsageSettlementError,
   type ModelUsageAttemptHandle,
+  type BeginModelUsageDispatchInput,
 } from "@goatcitadel/gateway-core";
 import { assertExistingPathRealpathAllowed, assertHostAllowed } from "@goatcitadel/policy-engine";
 import {
@@ -18,6 +19,7 @@ import {
   readBoundedResponseText,
 } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { LlmDispatchGuardScope, LlmDispatchGuardRejectedError, type LlmDispatchGuard, type LlmDispatchLineage, type LlmDispatchRoute } from "./llm-dispatch-guard.js";
 import { extractProviderOwnedOutputCapErrorText, resolveOutputCapRecovery } from "./llm-output-cap-recovery.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
@@ -318,6 +320,7 @@ export class LlmService {
   private readonly modelCatalogCachePath: string | undefined;
   private readonly localServiceLeaseAcquirer: LlmLocalServiceLeaseAcquirer | undefined;
   private readonly modelUsageAccounting: ModelUsageAccountingService | undefined;
+  private readonly dispatchGuardScope = new LlmDispatchGuardScope();
 
   public constructor(
     config: LlmConfigFile,
@@ -1126,8 +1129,14 @@ export class LlmService {
       pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
     });
 
+    const guard = this.dispatchGuardScope.get();
     let pending: Promise<Response>;
     try {
+      if (guard) {
+        await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution,
+          this.dispatchRoute(input.resolved as ResolvedProvider, input.model), input.transportAttemptIndex, outputCapField?.value);
+        signal.throwIfAborted();
+      }
       pending = fetch(input.target.url, requestInit);
       // Usage acceptance is durably persisted before the response is consumed.
       // Observe the transport immediately so a fast rejection during that await
@@ -1135,7 +1144,7 @@ export class LlmService {
       // original promise below still preserves the authoritative failure.
       void pending.catch(() => undefined);
     } catch (error) {
-      await reservation?.abandon();
+      await reservation?.abandon({ retainNoDispatchEvidence: guard !== undefined });
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
@@ -1307,15 +1316,19 @@ export class LlmService {
       credential: this.resolveModelUsageCredentialLineage(input.resolved),
       pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
     });
+    const guard = this.dispatchGuardScope.get();
     let pending: Promise<Response>;
     try {
+      await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution,
+        this.dispatchRoute(input.resolved, input.model), input.transportAttemptIndex);
+      signal.throwIfAborted();
       pending = fetch(input.target.url, requestInit);
       // Keep the transport observed while durable usage acceptance is pending.
       // The original promise remains rejected and is handled below after the
       // accounting owner has accepted the attempt.
       void pending.catch(() => undefined);
     } catch (error) {
-      await reservation?.abandon();
+      await reservation?.abandon({ retainNoDispatchEvidence: guard !== undefined });
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
@@ -1387,7 +1400,7 @@ export class LlmService {
     if (!prompt) {
       throw new Error("images requires a non-empty prompt");
     }
-    const attribution = normalizeModelUsageAttribution(attributionInput, "image_generation");
+    const attribution = normalizeModelUsageAttribution(this.dispatchGuardScope.applyLineage(attributionInput), "image_generation");
 
     const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
@@ -1652,7 +1665,7 @@ export class LlmService {
     // never 400 on an orphan tool_result or a tool_use with no matching result.
     // This is the single chokepoint every provider style funnels through.
     const sanitizedRequest = withSanitizedMessages(request);
-    const attribution = normalizeModelUsageAttribution(attributionInput, "chat_initial");
+    const attribution = normalizeModelUsageAttribution(this.dispatchGuardScope.applyLineage(attributionInput), "chat_initial");
 
     const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
@@ -1695,7 +1708,107 @@ export class LlmService {
     }
   }
 
-  public async *chatCompletionsStream(
+  /** Server-owned authority is rechecked before every HTTP attempt, including compatible retries. */
+  public async chatCompletionsWithDispatchGuard(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+    guard: LlmDispatchGuard,
+  ): Promise<ChatCompletionResponse> {
+    return await this.runWithDispatchGuard(guard, () => this.chatCompletions(request, attribution));
+  }
+
+  /** Server-owned scope over the complete workflow, including utility model
+   * calls made by memory, hooks, planning and subsequent tool iterations. */
+  public async runWithDispatchGuard<T>(guard: LlmDispatchGuard, operation: () => Promise<T>): Promise<T> {
+    if (!this.modelUsageAccounting) throw new Error("Governed inference requires canonical model usage accounting.");
+    return await this.dispatchGuardScope.run(guard, operation);
+  }
+
+  public async runWithDispatchAuthority<T>(
+    lineage: LlmDispatchLineage,
+    guard: LlmDispatchGuard,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.modelUsageAccounting) throw new Error("Governed inference requires canonical model usage accounting.");
+    return await this.dispatchGuardScope.runWithLineage(lineage, guard, operation);
+  }
+
+  /** Embedding owners share canonical accounting and the current workflow
+   * authority. Missing model bounds fail in the guard before any HTTP request;
+   * they must never become an unmetered escape from a governed completion. */
+  public async prepareScopedModelUsageDispatch(input: BeginModelUsageDispatchInput) {
+    input = { ...input, attribution: this.dispatchGuardScope.applyLineage(input.attribution) };
+    const reservation = await this.modelUsageAccounting?.prepareDispatch(input);
+    try {
+      await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution, {
+        providerId: input.effectiveProviderId ?? "",
+        modelId: input.effectiveModelId ?? "",
+        apiStyle: input.effectiveApiStyle ?? "",
+        configuredContextWindowTokens: input.outputCap?.configuredContextWindowTokens,
+        credential: input.credential,
+        pricing: input.pricing,
+      }, input.transportAttemptIndex, input.outputCap?.effectiveOutputTokenCap);
+      return reservation;
+    } catch (error) {
+      await reservation?.abandon({ retainNoDispatchEvidence: true });
+      throw error;
+    }
+  }
+
+  private async authorizeModelUsageIntent(eventId: string | undefined, attribution: ModelUsageAttributionContext,
+    route: LlmDispatchRoute, transportAttemptIndex: number, effectiveOutputTokenCap?: number): Promise<void> {
+    const guard = this.dispatchGuardScope.get();
+    if (!guard) return;
+    try {
+      if (!eventId) throw new Error("Governed inference requires a canonical usage intent.");
+      await guard({ usageEventId: eventId, attribution, route, transportAttemptIndex, effectiveOutputTokenCap });
+    } catch (error) {
+      throw error instanceof LlmDispatchGuardRejectedError ? error : new LlmDispatchGuardRejectedError(error);
+    }
+  }
+
+  /** A lazy stream keeps its authority when next/return/throw run outside the
+   * scope that created it. Parent authority remains cumulative. */
+  public streamWithDispatchGuard<T, TReturn = void, TNext = unknown>(
+    guard: LlmDispatchGuard,
+    operation: () => AsyncGenerator<T, TReturn, TNext>,
+  ): AsyncGenerator<T, TReturn, TNext> {
+    if (!this.modelUsageAccounting) throw new Error("Governed inference requires canonical model usage accounting.");
+    return this.dispatchGuardScope.stream(guard, operation);
+  }
+
+  /** Resolves the existing provider owner and returns only secret-free transport/pricing lineage. */
+  public async resolveDispatchRoute(providerId: string, requestedModel: string): Promise<LlmDispatchRoute> {
+    const resolved = await this.resolveProvider(providerId, { requireAuth: true });
+    this.assertProviderHostAllowed(resolved.provider.baseUrl);
+    const model = this.resolveRequestModel(resolved.provider, requestedModel);
+    return this.dispatchRoute(resolved, model);
+  }
+
+  private dispatchRoute(resolved: ResolvedProvider, model: string): LlmDispatchRoute {
+    return {
+      providerId: resolved.provider.providerId,
+      modelId: model,
+      apiStyle: resolveProviderExecutionApiStyle(resolved.provider, model),
+      configuredContextWindowTokens: this.getModelContextWindow(resolved.provider.providerId, model),
+      credential: this.resolveModelUsageCredentialLineage(resolved),
+      pricing: resolveModelPricingLineage(resolved.provider.providerId, model),
+    };
+  }
+
+  public chatCompletionsStream(
+    input: ChatCompletionRequest,
+    attributionInput: ModelUsageAttributionContext = {},
+  ): AsyncGenerator<Record<string, unknown>> {
+    const operation = () => this.chatCompletionsStreamInternal(input, attributionInput);
+    // Async generator bodies start on next(), potentially after a tool returns.
+    // Capture any governed creation scope before handing out the iterator.
+    return this.dispatchGuardScope.get()
+      ? this.dispatchGuardScope.stream(async () => {}, operation)
+      : operation();
+  }
+
+  private async *chatCompletionsStreamInternal(
     request: ChatCompletionRequest,
     attributionInput: ModelUsageAttributionContext = {},
   ): AsyncGenerator<Record<string, unknown>> {
@@ -1706,7 +1819,7 @@ export class LlmService {
     // See chatCompletions: pair tool calls/results once at the shared chokepoint
     // so every provider style sends an API-valid message list.
     const sanitizedRequest = withSanitizedMessages(request);
-    const attribution = normalizeModelUsageAttribution(attributionInput, "chat_initial");
+    const attribution = normalizeModelUsageAttribution(this.dispatchGuardScope.applyLineage(attributionInput), "chat_initial");
 
     const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);

@@ -20,9 +20,11 @@ import { canonicalJsonString } from "./canonical-json.js";
  */
 
 export const REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-profile.v1" as const;
+export const REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-profile.v2" as const;
 export const REMOTE_WORKER_CELL_CAPACITY_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-capacity.v1" as const;
 export const REMOTE_WORKER_CELL_EVIDENCE_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-evidence.v1" as const;
 export const REMOTE_WORKER_CELL_PLATFORM_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-platform.v1" as const;
+export const REMOTE_WORKER_CELL_PLATFORM_V2_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-platform.v2" as const;
 
 export const REMOTE_WORKER_CELL_EVIDENCE_GENESIS_SHA256 = "0".repeat(64);
 export const REMOTE_WORKER_CELL_MAX_EVIDENCE_COUNT = 100_000;
@@ -37,7 +39,7 @@ export const REMOTE_WORKER_CELL_MAX_WALL_MS = 604_800_000;
 export const REMOTE_WORKER_CELL_MAX_MEMORY_BYTES = 1_099_511_627_776;
 export const REMOTE_WORKER_CELL_MAX_ENV_NAMES = 256;
 
-export const REMOTE_WORKER_CELL_BACKENDS = ["container"] as const;
+export const REMOTE_WORKER_CELL_BACKENDS = ["container", "windows_native"] as const;
 export type RemoteWorkerCellBackend = (typeof REMOTE_WORKER_CELL_BACKENDS)[number];
 
 export const REMOTE_WORKER_CELL_EGRESS_POSTURES = ["deny_all", "allowlisted"] as const;
@@ -262,7 +264,9 @@ export function normalizeRemoteWorkerCellCapacityReservation(
 // --- Immutable server-owned profile -----------------------------------------
 
 export interface RemoteWorkerCellProfile {
-  readonly schemaVersion: typeof REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION;
+  readonly schemaVersion:
+    | typeof REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION
+    | typeof REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION;
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
   readonly assignmentGeneration: number;
@@ -312,13 +316,22 @@ const PROFILE_KEYS = [
 export function normalizeRemoteWorkerCellProfile(input: RemoteWorkerCellProfile): RemoteWorkerCellProfile {
   assertRecord(input, "cell profile");
   assertExactKeys(input, [...PROFILE_KEYS], "cell profile");
-  if (input.schemaVersion !== REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION) {
+  if (
+    input.schemaVersion !== REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION &&
+    input.schemaVersion !== REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION
+  ) {
     throw new TypeError("Remote worker cell profile schema version is unsupported.");
   }
   enumValue(input.backend, REMOTE_WORKER_CELL_BACKENDS, "backend");
+  if (
+    input.backend === "windows_native" &&
+    (input.schemaVersion !== REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION || input.egressPosture !== "deny_all")
+  ) {
+    throw new TypeError("Native Windows cells require a v2 profile and deny-all workload egress.");
+  }
   enumValue(input.egressPosture, REMOTE_WORKER_CELL_EGRESS_POSTURES, "egressPosture");
   return Object.freeze({
-    schemaVersion: REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION,
+    schemaVersion: input.schemaVersion,
     registryWorkspaceId: identifier(input.registryWorkspaceId, "registryWorkspaceId"),
     assignmentId: identifier(input.assignmentId, "assignmentId"),
     assignmentGeneration: positiveInteger(input.assignmentGeneration, "assignmentGeneration"),
@@ -534,14 +547,28 @@ export function evaluateRemoteWorkerCellCapacityPressure(
 
 // --- Platform identity ------------------------------------------------------
 
-export interface RemoteWorkerCellPlatformIdentity {
+export interface RemoteWorkerContainerPlatformIdentity {
   readonly schemaVersion: typeof REMOTE_WORKER_CELL_PLATFORM_SCHEMA_VERSION;
-  readonly backend: RemoteWorkerCellBackend;
+  readonly backend: "container";
   readonly containerName: string;
   readonly containerLabelSha256: string;
   readonly imageDigest: string;
   readonly networkName: string;
 }
+
+export interface RemoteWorkerWindowsPlatformIdentity {
+  readonly schemaVersion: typeof REMOTE_WORKER_CELL_PLATFORM_V2_SCHEMA_VERSION;
+  readonly backend: "windows_native";
+  readonly jobName: string;
+  readonly appContainerName: string;
+  readonly volumeIdentitySha256: string;
+  readonly runtimeBundleSha256: string;
+  readonly launcherSha256: string;
+  readonly networkPolicy: "deny_all";
+}
+export type RemoteWorkerCellPlatformIdentity =
+  | RemoteWorkerContainerPlatformIdentity
+  | RemoteWorkerWindowsPlatformIdentity;
 
 const PLATFORM_KEYS = [
   "schemaVersion",
@@ -556,9 +583,48 @@ const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CONTAINER_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,127}$/u;
 
 export function normalizeRemoteWorkerCellPlatformIdentity(
+  input: RemoteWorkerContainerPlatformIdentity,
+): RemoteWorkerContainerPlatformIdentity;
+export function normalizeRemoteWorkerCellPlatformIdentity(
+  input: RemoteWorkerWindowsPlatformIdentity,
+): RemoteWorkerWindowsPlatformIdentity;
+export function normalizeRemoteWorkerCellPlatformIdentity(
+  input: RemoteWorkerCellPlatformIdentity,
+): RemoteWorkerCellPlatformIdentity;
+export function normalizeRemoteWorkerCellPlatformIdentity(
   input: RemoteWorkerCellPlatformIdentity,
 ): RemoteWorkerCellPlatformIdentity {
   assertRecord(input, "cell platform identity");
+  if (input.backend === "windows_native") {
+    assertExactKeys(
+      input,
+      [
+        "schemaVersion",
+        "backend",
+        "jobName",
+        "appContainerName",
+        "volumeIdentitySha256",
+        "runtimeBundleSha256",
+        "launcherSha256",
+        "networkPolicy",
+      ],
+      "Windows cell platform identity",
+    );
+    if (
+      input.schemaVersion !== REMOTE_WORKER_CELL_PLATFORM_V2_SCHEMA_VERSION ||
+      input.networkPolicy !== "deny_all" ||
+      !/^gc-cell-[a-f0-9]{32}$/.test(input.jobName) ||
+      !/^GoatCitadel\.Worker\.[a-f0-9]{32}$/.test(input.appContainerName)
+    ) {
+      throw new TypeError("Native Windows platform identity is invalid.");
+    }
+    return Object.freeze({
+      ...input,
+      volumeIdentitySha256: digest(input.volumeIdentitySha256, "volumeIdentitySha256"),
+      runtimeBundleSha256: digest(input.runtimeBundleSha256, "runtimeBundleSha256"),
+      launcherSha256: digest(input.launcherSha256, "launcherSha256"),
+    });
+  }
   assertExactKeys(input, [...PLATFORM_KEYS], "cell platform identity");
   if (input.schemaVersion !== REMOTE_WORKER_CELL_PLATFORM_SCHEMA_VERSION) {
     throw new TypeError("Remote worker cell platform identity schema version is unsupported.");

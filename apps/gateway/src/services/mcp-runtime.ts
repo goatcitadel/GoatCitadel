@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- MCP stdio, HTTP, SSE, auth, and normalization stay together so transport policy remains auditable. */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import type { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
@@ -26,6 +28,14 @@ import type {
   McpToolCallResolutionAttempt,
 } from "./mcp-requester-resolution-service.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
+import { isReviewedPlaywrightServer, resolveReviewedMcpLaunch } from "./reviewed-mcp-package.js";
+import {
+  assertMcpStaticEnvironmentCurrent,
+  buildMcpChildEnvironment,
+  readMcpStaticEnvironment,
+  type McpStaticEnvironmentHandle,
+} from "./mcp-static-environment-service.js";
+import { consumeStaticMcpCallAuthority, type StaticMcpCallAuthority } from "./mcp-static-call-authority.js";
 
 const log = logger.child("mcp-runtime");
 
@@ -54,10 +64,11 @@ interface JsonRpcEnvelope {
   };
 }
 
-interface StdioClient {
+export interface StdioClient {
   request(method: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcEnvelope>;
   notify(method: string, params?: Record<string, unknown>): void;
   close(): void;
+  isClosed(): boolean;
   readStderr(): string;
 }
 
@@ -68,8 +79,17 @@ interface HttpMcpClient {
 }
 
 export interface McpRuntimeTransportOptions {
+  /** Gateway-owned storage for byte-pinned tool packages. */
+  packageRoot?: string;
+  /** Gateway-only scope; absent for discovery and unscoped/direct invocations. */
+  stdioSession?: { pool: McpStdioSessionPool<StdioClient>; scopeKey: string };
   networkAllowlist?: string[];
   oauthAccessTokenResolver?: (server: McpServerRecord) => Promise<string | undefined> | string | undefined;
+  staticEnvironmentResolver?: (server: McpServerRecord) => Promise<McpStaticEnvironmentHandle>;
+  /** App-private captured authority, reused only inside this transport operation. */
+  staticEnvironment?: McpStaticEnvironmentHandle;
+  /** Named static tools require fresh tools/list verification before their effect boundary. */
+  staticToolCall?: StaticMcpCallAuthority;
   /** Caller context forwarded into `tools/list` so MCP servers can filter tools by who is asking (MCP v2 context-aware discovery). */
   actorContext?: ToolPolicyActorContext;
 }
@@ -144,7 +164,37 @@ export async function discoverMcpTools(
   return withStdioMcpClient(server, timeoutMs, async (client) => {
     const response = await client.request("tools/list", listParams);
     return normalizeDiscoveredTools(server, response);
-  });
+  }, undefined, undefined, options);
+}
+
+/** Bounded raw metadata for the canonical secret-scanning catalog owner. */
+export async function discoverStaticMcpToolsList(
+  server: McpServerRecord,
+  timeoutMs: number,
+  options: McpRuntimeTransportOptions,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  options = await prepareStaticEnvironment(server, options);
+  const read = async (client: StdioClient | HttpMcpClient) => {
+    const response = await client.request("tools/list", buildToolsListParams(options.actorContext), signal);
+    if (response.error || !response.result) throw new Error("Static MCP discovery did not return a valid catalog.");
+    if (options.staticEnvironment) await assertMcpStaticEnvironmentCurrent(options.staticEnvironment, server);
+    return response.result;
+  };
+  return server.transport === "stdio"
+    ? withStdioMcpClient(server, timeoutMs, read, signal, undefined, options)
+    : withHttpMcpClient(server, timeoutMs, options, read, signal);
+}
+
+async function authorizeStaticMcpToolCall(
+  client: StdioClient | HttpMcpClient,
+  options: McpRuntimeTransportOptions,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!options.staticToolCall) return;
+  const response = await client.request("tools/list", buildToolsListParams(options.actorContext), signal);
+  if (response.error || !response.result) throw new Error("Static MCP catalog revalidation failed before dispatch.");
+  await consumeStaticMcpCallAuthority(options.staticToolCall, response.result);
 }
 
 export async function invokeMcpRuntimeTool(
@@ -166,7 +216,7 @@ export async function invokeMcpRuntimeTool(
     }
     try {
       const first = await performHttpMcpRuntimeToolCall(server, input, timeoutMs, options);
-      if (!isExplicitlyRetrySafeMcpSessionFailure(first) || input.signal?.aborted) {
+      if (options.staticToolCall || !isExplicitlyRetrySafeMcpSessionFailure(first) || input.signal?.aborted) {
         return markAmbiguousMcpToolFailure(first);
       }
       const second = await performHttpMcpRuntimeToolCall(server, input, timeoutMs, options);
@@ -203,11 +253,12 @@ export async function invokeMcpRuntimeTool(
     };
   }
   try {
-    const first = await performMcpRuntimeToolCall(server, input, timeoutMs);
-    if (!isExplicitlyRetrySafeMcpSessionFailure(first) || input.signal?.aborted) {
+    const first = await performMcpRuntimeToolCall(server, input, timeoutMs, options);
+    if (options.staticToolCall || !isExplicitlyRetrySafeMcpSessionFailure(first) || input.signal?.aborted) {
       return markAmbiguousMcpToolFailure(first);
     }
-    const second = await performMcpRuntimeToolCall(server, input, timeoutMs);
+    options.stdioSession?.pool.closeSession(server.serverId, options.stdioSession.scopeKey);
+    const second = await performMcpRuntimeToolCall(server, input, timeoutMs, options);
     const normalizedSecond = markAmbiguousMcpToolFailure(second);
     return {
       ...normalizedSecond,
@@ -718,11 +769,15 @@ async function performMcpRuntimeToolCall(
   server: McpServerRecord,
   input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
   timeoutMs: number,
+  options: McpRuntimeTransportOptions = {},
 ): Promise<McpRuntimeInvocationResult> {
+  options = await prepareStaticEnvironment(server, options);
   return withStdioMcpClient(
     server,
     timeoutMs,
     async (client) => {
+      if (options.staticEnvironment) await assertMcpStaticEnvironmentCurrent(options.staticEnvironment, server);
+      await authorizeStaticMcpToolCall(client, options, input.signal);
       let response: JsonRpcEnvelope;
       try {
         response = await client.request(
@@ -775,6 +830,8 @@ async function performMcpRuntimeToolCall(
       };
     },
     input.signal,
+    options.stdioSession,
+    options,
   );
 }
 
@@ -784,11 +841,14 @@ async function performHttpMcpRuntimeToolCall(
   timeoutMs: number,
   options: McpRuntimeTransportOptions,
 ): Promise<McpRuntimeInvocationResult> {
+  options = await prepareStaticEnvironment(server, options);
   return withHttpMcpClient(
     server,
     timeoutMs,
     options,
     async (client) => {
+      if (options.staticEnvironment) await assertMcpStaticEnvironmentCurrent(options.staticEnvironment, server);
+      await authorizeStaticMcpToolCall(client, options, input.signal);
       let response: JsonRpcEnvelope;
       try {
         response = await client.request(
@@ -1054,45 +1114,21 @@ const MCP_STDERR_MAX_BYTES = 4096;
 /** Max bytes per single stdout line before it's discarded. */
 const MCP_STDOUT_LINE_MAX_BYTES = 512 * 1024;
 
-/** Safe system env keys always passed to MCP child processes. */
-const MCP_SAFE_ENV_KEYS = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LANG",
-  "TERM",
-  "SHELL",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "SYSTEMROOT",
-  "COMSPEC",
-  "WINDIR",
-  "NODE_ENV",
-  "NODE_PATH",
-  "XDG_DATA_HOME",
-  "XDG_CONFIG_HOME",
-  "XDG_CACHE_HOME",
-];
-
 /**
  * Build a restricted env for MCP child processes.
  * Passes through safe system variables plus any keys explicitly
  * declared in the server's policy.allowedEnvKeys.
  */
-function buildMcpChildEnv(server: McpServerRecord): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = {};
-  for (const key of MCP_SAFE_ENV_KEYS) {
-    if (process.env[key] !== undefined) {
-      env[key] = process.env[key];
-    }
-  }
-  for (const key of normalizeSafeEnvKeyNames(server.policy.allowedEnvKeys)) {
-    if (process.env[key] !== undefined) {
-      env[key] = process.env[key];
-    }
-  }
-  return env;
+function buildMcpChildEnv(server: McpServerRecord, options: McpRuntimeTransportOptions): NodeJS.ProcessEnv {
+  const environment = options.staticEnvironment ? readMcpStaticEnvironment(options.staticEnvironment, server) : process.env;
+  return buildMcpChildEnvironment(server, environment);
+}
+
+async function prepareStaticEnvironment(server: McpServerRecord, options: McpRuntimeTransportOptions): Promise<McpRuntimeTransportOptions> {
+  const environment = options.staticEnvironment ?? await options.staticEnvironmentResolver?.(server);
+  if (!environment) return options;
+  await assertMcpStaticEnvironmentCurrent(environment, server);
+  return { ...options, staticEnvironment: environment };
 }
 
 /**
@@ -1209,15 +1245,50 @@ async function withStdioMcpClient<T>(
   timeoutMs: number,
   run: (client: StdioClient) => Promise<T>,
   signal?: AbortSignal,
+  session?: McpRuntimeTransportOptions["stdioSession"],
+  options: McpRuntimeTransportOptions = {},
 ): Promise<T> {
+  options = await prepareStaticEnvironment(server, options);
+  if (session) {
+    // Hash effective spawn environment without retaining credentials in the key.
+    const binding = createHash("sha256").update(JSON.stringify({
+      command: server.command, args: server.args, env: buildMcpChildEnv(server, options),
+      policy: server.policy, trustTier: server.trustTier, cwd: process.cwd(), timeoutMs,
+      packageRoot: options.packageRoot, networkAllowlist: options.networkAllowlist,
+    })).digest("hex");
+    return session.pool.use(server.serverId, session.scopeKey, binding,
+      (creationSignal) => createStdioMcpClient(server, timeoutMs, creationSignal, true, options), run, signal);
+  }
+  const client = await createStdioMcpClient(server, timeoutMs, signal, false, options);
+  try {
+    return await run(client);
+  } catch (error) {
+    throw enrichStdioError(error, client);
+  } finally {
+    client.close();
+  }
+}
+
+async function createStdioMcpClient(
+  server: McpServerRecord,
+  timeoutMs: number,
+  signal?: AbortSignal,
+  retained = false,
+  options: McpRuntimeTransportOptions = {},
+): Promise<StdioClient> {
   const command = resolveSpawnCommand(server.command ?? "");
-  const spawnSpec = resolveSpawnSpec(command, server.args ?? []);
+  // Avoid adding an asynchronous boundary to ordinary stdio initialization.
+  const reviewed = isReviewedPlaywrightServer(server)
+    ? await resolveReviewedMcpLaunch(server, { ...options, signal }) : undefined;
+  if (options.staticEnvironment) await assertMcpStaticEnvironmentCurrent(options.staticEnvironment, server);
+  signal?.throwIfAborted();
+  const spawnSpec = reviewed ?? resolveSpawnSpec(command, server.args ?? []);
   const child = spawn(spawnSpec.command, spawnSpec.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: process.cwd(),
-    env: buildMcpChildEnv(server),
+    env: buildMcpChildEnv(server, options),
     windowsHide: true,
-    timeout: Math.ceil(timeoutMs * 1.5),
+    ...(retained ? {} : { timeout: Math.ceil(timeoutMs * 1.5) }),
   });
   const pending = new Map<
     number,
@@ -1387,9 +1458,12 @@ async function withStdioMcpClient<T>(
     notify,
     close: () => {
       if (!closed) {
+        closed = true;
+        rejectAll(new Error("MCP session closed."));
         terminateChild(child, server);
       }
     },
+    isClosed: () => closed,
     readStderr: () => stderrBuffer.trim(),
   };
 
@@ -1407,17 +1481,18 @@ async function withStdioMcpClient<T>(
       signal,
     );
     client.notify("notifications/initialized", {});
-    return await run(client);
+    return client;
   } catch (error) {
-    const baseMessage = (error as Error).message;
-    const suffix = client.readStderr().slice(0, 500);
-    // Exit- and timeout-triggered errors already embed the stderr tail inline;
-    // only append it for errors that do not carry it yet.
-    const message = suffix && !baseMessage.includes(suffix) ? `${baseMessage} [stderr: ${suffix}]`.trim() : baseMessage;
-    throw new Error(message, { cause: error });
-  } finally {
     client.close();
+    throw enrichStdioError(error, client);
   }
+}
+
+function enrichStdioError(error: unknown, client: StdioClient): Error {
+  const baseMessage = error instanceof Error ? error.message : String(error);
+  const suffix = client.readStderr().slice(0, 500);
+  const message = suffix && !baseMessage.includes(suffix) ? `${baseMessage} [stderr: ${suffix}]`.trim() : baseMessage;
+  return new Error(message, { cause: error });
 }
 
 async function withHttpMcpClient<T>(
@@ -1427,6 +1502,7 @@ async function withHttpMcpClient<T>(
   run: (client: HttpMcpClient) => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
+  options = await prepareStaticEnvironment(server, options);
   const endpoint = server.url?.trim();
   if (!endpoint) {
     throw new Error(`MCP ${server.transport.toUpperCase()} URL is missing.`);
@@ -1767,7 +1843,8 @@ async function buildMcpHttpAuthHeaders(
   }
   if (server.authType === "token") {
     const tokenEnvKey = normalizeSafeEnvKeyNames(server.policy.allowedEnvKeys)[0];
-    const token = tokenEnvKey ? process.env[tokenEnvKey] : undefined;
+    const environment = options.staticEnvironment ? readMcpStaticEnvironment(options.staticEnvironment, server) : process.env;
+    const token = tokenEnvKey ? environment[tokenEnvKey] : undefined;
     if (!token?.trim()) {
       throw new Error("MCP token auth requires a configured policy.allowedEnvKeys entry with a non-empty token.");
     }

@@ -1,97 +1,64 @@
-import { execFile, spawn } from "node:child_process";
-import { createHash, generateKeyPairSync, randomBytes, sign, X509Certificate } from "node:crypto";
+import { sha256, portOf, tlsConfig, seedBootstrap, runWorkerProcess } from "../../test/fixtures/remote-worker-native.js";
+import { createRequesterMcpWorkerFixture } from "../../test/fixtures/remote-worker-requester-mcp.js";
+import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { join } from "node:path";
 import {
-  REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
-  REMOTE_WORKER_PROTOCOL_VERSION,
-  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
-  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
-  buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
-  remoteWorkerAssignmentParentContextSha256,
-  type ChatTurnCapabilityProfileDraft,
-  type RemoteWorkerAssignmentManifest,
+  readDurableChatTurnExecutionPayloadAuthority,
+  type ChatSendMessageRequest,
+  type CapabilityCatalogEntry,
 } from "@goatcitadel/contracts";
 import {
-  ChatSessionLifecycleRepository,
-  ChatTurnCapabilityProfileRepository,
-  ChatTurnTraceRepository,
-  DurableRunRepository,
   RemoteWorkerAdmissionRepository,
   RemoteWorkerAssignmentRepository,
   RemoteWorkerMeshNodeAdmissionRepository,
   RemoteWorkerNonceRepository,
-  SessionMutationAdmissionRepository,
-  TaskRepository,
+  Storage,
+  createSqliteAsyncStorage,
   createDatabase,
-  sealChatTurnCapabilityProfile,
   type DatabaseClient,
 } from "@goatcitadel/storage";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ModelUsageAccountingService } from "@goatcitadel/gateway-core";
+import { LlmService } from "./llm-service.js";
+import type { GovernedLlmCompletionHost } from "./llm-completion-service.js";
+import { SecretStoreService } from "./secret-store-service.js";
+import { createRemoteWorkerExecutionOwners } from "./remote-worker-execution-owners.js";
+import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";
+import { RemoteWorkerChatPlacementService } from "./remote-worker-chat-placement-service.js";
+import type { RemoteWorkerChatExecution } from "./remote-worker-chat-execution-service.js";
+import { finalizeDurableChatRun, GENERAL_CHAT_POST_COMMIT_EFFECTS, type ChatDurableRunFinalizeDeps } from "./chat-durable-run-service.js";
+import { DurableRunService } from "./durable-run-service.js";
+import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
+import { executeApprovedExternalRuntimeSideEffect } from "./approved-external-runtime-side-effect-service.js";
+import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
+import { prepareRemoteWorkerChatApprovalHandoff, shouldDeferRemoteWorkerChatApprovalWake } from "./remote-worker-chat-approval-resume.js";
+import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
+import type { ApprovalEffectRecord } from "@goatcitadel/contracts";
+import type { ServiceContext } from "./service-context.js";
+import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { RemoteWorkerAssignmentExecutionOwnerDependencies } from "./remote-worker-assignment-runtime-composition.js";
+import {
+  CONNECTED_WORKER_CONTEXT_MESSAGES,
+  prepareChatOfferFixture,
+  seedAssignmentOffer,
+} from "../../../../packages/storage/src/remote-worker-chat-offer-fixture.js";
 import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
 import { createGatewayRemoteWorkerAssignmentRuntimeComposition } from "./remote-worker-assignment-runtime-composition.js";
+import { RemoteWorkerChatApprovalWaitReadService } from "./remote-worker-chat-approval-wait-read-service.js";
 import { startRemoteWorkerNativeTlsListener } from "./remote-worker-native-tls-listener.js";
 import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
-
-// Public, non-secret test fixtures generated solely for the HX-501 loopback proof.
-const CA_PEM = `-----BEGIN CERTIFICATE-----
-MIIBeDCCASqgAwIBAgIUZTNs1ByBlRL7pMZAVAYlyN0teqowBQYDK2VwMCgxJjAk
-BgNVBAMMHUdvYXRDaXRhZGVsIEhYNTAxIExpc3RlbmVyIENBMB4XDTI2MDcxNTA3
-MzYxNFoXDTM2MDcxMjA3MzYxNFowKDEmMCQGA1UEAwwdR29hdENpdGFkZWwgSFg1
-MDEgTGlzdGVuZXIgQ0EwKjAFBgMrZXADIQBSjxcD22J7+xt6LJu4UnOJKaXZhTtc
-DNUL0Sc17UIySqNmMGQwHQYDVR0OBBYEFKNuM5RciNLBA4yMy9gbSZJl/TMRMB8G
-A1UdIwQYMBaAFKNuM5RciNLBA4yMy9gbSZJl/TMRMBIGA1UdEwEB/wQIMAYBAf8C
-AQAwDgYDVR0PAQH/BAQDAgEGMAUGAytlcANBAMQ+p3my9NrSqOm0fF+C0va6qSbw
-k9WLzL7qJnU+N2nTjrbotBwiGwx8I9BlDhVNZSY/w3qSBm0+vxWL3+qrvw4=
------END CERTIFICATE-----
-`;
-const SERVER_CERT_PEM = `-----BEGIN CERTIFICATE-----
-MIIBkTCCAUOgAwIBAgIUMFqWz4nhKmOp4ZrcncR9oaEoiB4wBQYDK2VwMCgxJjAk
-BgNVBAMMHUdvYXRDaXRhZGVsIEhYNTAxIExpc3RlbmVyIENBMB4XDTI2MDcxNTA3
-MzYxNFoXDTM2MDcxMjA3MzYxNFowFDESMBAGA1UEAwwJbG9jYWxob3N0MCowBQYD
-K2VwAyEApw4nkG7WgBmO2bN73r98GKsDjA9bngBJLAI1WBISBXyjgZIwgY8wGgYD
-VR0RBBMwEYIJbG9jYWxob3N0hwR/AAABMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/
-BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBSZDRm2hCmy2yT3
-1vE/ppFeanKi0zAfBgNVHSMEGDAWgBSjbjOUXIjSwQOMjMvYG0mSZf0zETAFBgMr
-ZXADQQD1b9ZjFapMTW6dOndRfXTl6Md06NKtSLgQFmwCxc3UaAy1VWQESaosmrRO
-9Hf/jfKiVRt4jgexXOuD67sB0BoH
------END CERTIFICATE-----
-`;
-const SERVER_KEY_PEM = `-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIB81SweGGRtBMfQh+I7Wo37pzfi5OH82CMinGgKsCCWQ
------END PRIVATE KEY-----
-`;
-const CLIENT_CERT_PEM = `-----BEGIN CERTIFICATE-----
-MIIBdTCCASegAwIBAgIUMFqWz4nhKmOp4ZrcncR9oaEoiB8wBQYDK2VwMCgxJjAk
-BgNVBAMMHUdvYXRDaXRhZGVsIEhYNTAxIExpc3RlbmVyIENBMB4XDTI2MDcxNTA3
-MzYxNFoXDTM2MDcxMjA3MzYxNFowFjEUMBIGA1UEAwwLd29ya2VyLXRlc3QwKjAF
-BgMrZXADIQD2T1jzXgcwp1PO5oB4g11yGDpKYg0rJ9UJHurdPyLLA6N1MHMwDAYD
-VR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwIw
-HQYDVR0OBBYEFCu/5nk7wPmPf105JYKUIoPMY3NuMB8GA1UdIwQYMBaAFKNuM5Rc
-iNLBA4yMy9gbSZJl/TMRMAUGAytlcANBAPpVSsCZqAookqSqgB3fZnpH59824/M3
-4wkMWAKzgxgJIFP7uq0mJDI7UqXoQyjdWVcACP+8igEU/xboG1WNMQU=
------END CERTIFICATE-----
-`;
-const CLIENT_KEY_PEM = `-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIP7oQh0GClRqd2Tb5kfT1Cbdc78LOylrcLyeqYoBNyo1
------END PRIVATE KEY-----
-`;
-
-const execFileAsync = promisify(execFile);
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-const workerEntry = join(repoRoot, "apps", "remote-worker", "src", "main.ts");
-const tsxCli = join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 
 const cleanupRoots: string[] = [];
 const openHandles: Array<{ close(): Promise<void> }> = [];
 const openDatabases: DatabaseClient[] = [];
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await Promise.allSettled(openHandles.splice(0).map(async (handle) => handle.close()));
   for (const db of openDatabases.splice(0)) {
     try {
@@ -102,417 +69,6 @@ afterEach(async () => {
   }
   for (const root of cleanupRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-
-function sha256(value: string | Buffer | Uint8Array): string {
-  return createHash("sha256")
-    .update(typeof value === "string" ? Buffer.from(value, "utf8") : value)
-    .digest("hex");
-}
-
-function portOf(address: string | undefined): number {
-  const port = Number(address?.slice((address.lastIndexOf(":") ?? -1) + 1));
-  if (!Number.isInteger(port) || port < 1) throw new Error("Listener did not expose a bound port.");
-  return port;
-}
-
-function databaseClock(db: DatabaseClient): string {
-  const row = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now").get<{ now: string }>();
-  if (!row) throw new Error("database clock unavailable");
-  return row.now;
-}
-
-/**
- * Write the loopback trust material and lock the directory to this operator, as
- * the listener's own no-follow trust loader requires on Windows.
- */
-async function tlsConfig(root: string): Promise<{
-  readonly config: EnabledRemoteWorkerRuntimeConfig;
-  readonly manifestSignerKeyId: string;
-  readonly signManifestPayload: (payload: object) => string;
-  readonly paths: Readonly<Record<"cert" | "key" | "ca" | "signer" | "clientCert" | "clientKey", string>>;
-}> {
-  const systemRoot = process.env.SystemRoot as string;
-  const { stdout } = await execFileAsync(join(systemRoot, "System32", "whoami.exe"), ["/user", "/fo", "csv", "/nh"]);
-  const sid = /"(S-1-[0-9-]+)"/u.exec(stdout)?.[1];
-  if (sid === undefined) throw new Error("Unable to resolve the Windows test operator SID.");
-  await execFileAsync(join(systemRoot, "System32", "icacls.exe"), [
-    root,
-    "/inheritance:r",
-    "/grant:r",
-    `*${sid}:(OI)(CI)F`,
-    "*S-1-5-18:(OI)(CI)F",
-    "*S-1-5-32-544:(OI)(CI)F",
-  ]);
-  const paths = Object.freeze({
-    cert: join(root, "server.crt"),
-    key: join(root, "server.key"),
-    ca: join(root, "client-ca.crt"),
-    signer: join(root, "signer.pub"),
-    clientCert: join(root, "client.crt"),
-    clientKey: join(root, "client.key"),
-  });
-  const manifestSigner = generateKeyPairSync("ed25519");
-  const signerSpkiDer = manifestSigner.publicKey.export({ format: "der", type: "spki" });
-  const signerPublicPem = manifestSigner.publicKey.export({ format: "pem", type: "spki" });
-  if (!Buffer.isBuffer(signerSpkiDer) || typeof signerPublicPem !== "string") {
-    throw new Error("Unable to create the connected-worker manifest signer fixture.");
-  }
-  writeFileSync(paths.cert, SERVER_CERT_PEM, "utf8");
-  writeFileSync(paths.key, SERVER_KEY_PEM, "utf8");
-  writeFileSync(paths.ca, CA_PEM, "utf8");
-  writeFileSync(paths.signer, signerPublicPem, "utf8");
-  writeFileSync(paths.clientCert, CLIENT_CERT_PEM, "utf8");
-  writeFileSync(paths.clientKey, CLIENT_KEY_PEM, "utf8");
-  return {
-    paths,
-    manifestSignerKeyId: "connected-worker-e2e",
-    signManifestPayload: (payload) =>
-      sign(null, Buffer.from(canonicalJsonString(payload), "utf8"), manifestSigner.privateKey).toString("base64url"),
-    config: Object.freeze({
-      enabled: true,
-      host: "127.0.0.1",
-      port: 0,
-      tls: Object.freeze({
-        minVersion: "TLSv1.3",
-        maxVersion: "TLSv1.3",
-        requestCert: true,
-        rejectUnauthorized: true,
-        serverCertificateFile: paths.cert,
-        serverKeyFile: paths.key,
-        clientCaFile: paths.ca,
-        clientCaSha256: sha256(new X509Certificate(CA_PEM).raw),
-      }),
-      manifestSigner: Object.freeze({
-        keyId: "connected-worker-e2e",
-        publicKeyFile: paths.signer,
-        spkiSha256: sha256(signerSpkiDer),
-      }),
-      bootstrapTtlSeconds: 600,
-      credentialTtlSeconds: 900,
-    }),
-  };
-}
-
-function capabilityProfileDraft(input: {
-  profileId: string;
-  turnId: string;
-  sessionId: string;
-  durableRunId: string;
-  createdAt: string;
-}): ChatTurnCapabilityProfileDraft {
-  const emptyCatalogHash = sha256(canonicalJsonString([]));
-  return {
-    profileId: input.profileId,
-    schemaVersion: "chat.turn.capability-profile.v1",
-    identity: {
-      turnId: input.turnId,
-      sessionId: input.sessionId,
-      workspaceId: "default",
-      citadelId: "default",
-      durableRunId: input.durableRunId,
-      operatorId: "operator-a",
-      authActorId: "operator-a",
-      authActorSource: "token",
-    },
-    source: { channel: "chat", account: "default" },
-    catalog: {
-      snapshotId: "connected-worker-snapshot",
-      inspectableHash: emptyCatalogHash,
-      callableHash: emptyCatalogHash,
-      inspectableCount: 0,
-      callableCount: 0,
-    },
-    selection: {
-      contentHash: sha256("connected-worker-content"),
-      effectiveProviderId: "provider-a",
-      effectiveModel: "model-a",
-      allowedFallbacks: [],
-      mode: "chat",
-      webMode: "off",
-      memory: {
-        mode: "off",
-        retrievalMode: "standard",
-        workspaceId: "default",
-        sessionId: input.sessionId,
-        contextManifestRef: `chat-memory-scope:${sha256("connected-worker-memory-scope")}`,
-        writeApprovalRequired: true,
-      },
-      thinkingLevel: "standard",
-      speedMode: "standard",
-      subagentPolicy: "auto_when_useful",
-      toolAutonomy: "manual",
-      tools: [],
-      modelNameAllowMap: [],
-      trustedSkills: [],
-    },
-    governance: {
-      activeGrants: [],
-      permission: {
-        profileId: "safe",
-        approvalMode: "approve_all",
-        profileHash: sha256("connected-worker-permission"),
-      },
-      policyDecisions: [],
-      authReadiness: [
-        { kind: "provider", ref: "provider-a", status: "ready", reasonCodes: [] },
-        { kind: "channel", ref: "chat", status: "ready", reasonCodes: [] },
-      ],
-      approval: {
-        mode: "approve_all",
-        selectedToolCount: 0,
-        toolsRequiringApproval: [],
-        approvalGranted: false,
-      },
-    },
-    preflightFingerprint: sha256("connected-worker-preflight"),
-    createdAt: input.createdAt,
-  };
-}
-
-/**
- * Create the task-bound Chat assignment a scheduler would eventually dispatch,
- * through the canonical storage owners only. There is deliberately NO
- * production scheduler: this is the harness standing in for one, and it stops
- * at the offer — the worker starts the generation by claiming it.
- */
-function seedAssignmentOffer(db: DatabaseClient): { readonly assignmentId: string; readonly durableRunId: string } {
-  const now = databaseClock(db);
-  const taskId = "task-connected-worker";
-  const sessionId = "session-connected-worker";
-  const turnId = "turn-connected-worker";
-  const durableRunId = "run-connected-worker";
-  new TaskRepository(db).create({ title: "Connected worker assignment", workspaceId: "default" }, now, { taskId });
-  new ChatSessionLifecycleRepository(db).initialize({
-    workspaceId: "default",
-    sessionId,
-    actorId: "operator-a",
-    idempotencyKey: "lifecycle:connected-worker",
-    correlationId: "correlation:connected-worker",
-    metadataTimestamp: now,
-  });
-  new ChatTurnTraceRepository(db).create({
-    turnId,
-    sessionId,
-    userMessageId: "message-connected-worker",
-    mode: "chat",
-    webMode: "off",
-    memoryMode: "off",
-    thinkingLevel: "standard",
-    startedAt: now,
-  });
-  const profile = sealChatTurnCapabilityProfile(
-    capabilityProfileDraft({
-      profileId: "profile-connected-worker",
-      turnId,
-      sessionId,
-      durableRunId,
-      createdAt: now,
-    }),
-  );
-  const parentInput = { executionWorkspaceId: "default", durableRunId, taskId, sessionId, turnId } as const;
-  const parentContext = buildRemoteWorkerAssignmentParentContext(parentInput);
-  const parentContextSha256 = remoteWorkerAssignmentParentContextSha256(parentInput);
-  const durableRequest = { policyTaskId: taskId, content: "Execute the connected-worker assignment." } as const;
-  const admissionMaterialSha256 = sha256(canonicalJsonString({ version: 2, request: durableRequest }));
-  const mutationAdmissions = new SessionMutationAdmissionRepository(db);
-  const profileAdmission = mutationAdmissions.admit({
-    workspaceId: "default",
-    sessionId,
-    turnId,
-    runtimeOwnerId: "runtime-connected-worker",
-    admissionKind: "turn_write",
-    aggregateRevision: 1,
-    controllerGeneration: 1,
-    actorKind: "operator",
-    actorId: "operator-a",
-    operation: "chat.turn.execute",
-    materialSha256: admissionMaterialSha256,
-    idempotencyKey: "admission:connected-worker",
-    correlationId: "correlation:connected-worker",
-  }).admission;
-  db.transaction("immediate", () => {
-    mutationAdmissions.bindCapabilityProfile({
-      admissionId: profileAdmission.admissionId,
-      workspaceId: profileAdmission.workspaceId,
-      sessionId: profileAdmission.sessionId,
-      sessionIncarnationId: profileAdmission.sessionIncarnationId,
-      turnId: profileAdmission.turnId!,
-      profileId: profile.profileId,
-      profileHash: profile.hashes.profileHash,
-      createdAt: profile.createdAt,
-      requestRuntimeClaim: {
-        runtimeOwnerId: profileAdmission.runtimeOwnerId!,
-        leaseRevision: profileAdmission.runtimeLeaseRevision!,
-      },
-    });
-    new ChatTurnCapabilityProfileRepository(db).create(profile);
-  });
-  const durablePayload = {
-    version: "chat.turn.execute.v2",
-    admissionId: profileAdmission.admissionId,
-    sessionIncarnationId: profileAdmission.sessionIncarnationId,
-    admissionMaterialSha256,
-    workspaceId: "default",
-    admissionAggregateRevision: profileAdmission.aggregateRevision,
-    admissionControllerGeneration: profileAdmission.controllerGeneration,
-    effectiveRequestMaterialSha256: sha256(
-      canonicalJsonString({ version: 1, admissionMaterialSha256, request: durableRequest }),
-    ),
-    policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId: durableRunId },
-    requestActor: { actorKind: "operator", actorId: "operator-a" },
-    sessionId,
-    turnId,
-    userMessageId: "message-connected-worker",
-    assistantMessageId: "assistant-connected-worker",
-    capabilityProfileId: profile.profileId,
-    capabilityProfileHash: profile.hashes.profileHash,
-    branchKind: "append",
-    threadEventType: "chat_thread_turn_appended",
-    request: durableRequest,
-  } as const;
-  new DurableRunRepository(db).createRun({
-    runId: durableRunId,
-    workflowKey: "chat.turn.execute",
-    status: "running",
-    attemptCount: 1,
-    maxAttempts: 3,
-    leaseOwnerId: "gateway-connected-worker",
-    leaseHeartbeatAt: now,
-    leaseExpiresAt: "2099-01-01T00:00:00.000Z",
-    version: 3,
-    startedAt: now,
-    now,
-    payload: durablePayload,
-    metadata: {
-      remoteWorkerAssignmentParentContext: parentContext,
-      remoteWorkerAssignmentParentContextSha256: parentContextSha256,
-      capabilityProfileId: profile.profileId,
-      capabilityProfileHash: profile.hashes.profileHash,
-    },
-  });
-  mutationAdmissions.bindDurableRun({
-    admissionId: profileAdmission.admissionId,
-    workspaceId: profileAdmission.workspaceId,
-    sessionId: profileAdmission.sessionId,
-    sessionIncarnationId: profileAdmission.sessionIncarnationId,
-    turnId: profileAdmission.turnId!,
-    durableRunId,
-    requestRuntimeClaim: {
-      runtimeOwnerId: profileAdmission.runtimeOwnerId!,
-      leaseRevision: profileAdmission.runtimeLeaseRevision!,
-    },
-  });
-  const manifest: RemoteWorkerAssignmentManifest = {
-    schemaVersion: REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
-    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
-    registryWorkspaceId: "default",
-    ...parentInput,
-    capabilityProfileSha256: profile.hashes.profileHash,
-    contextSnapshotSha256: sha256("connected-worker-context-snapshot"),
-    toolEffectPostureSha256: sha256("connected-worker-tool-posture"),
-    pathJailSha256: sha256("connected-worker-path-jail"),
-    parentContextSha256,
-    requiredCapabilityClasses: ["durable_compute"],
-    deadlineAt: "2099-01-01T00:00:00.000Z",
-    leaseTtlSeconds: 300,
-    maxEventCount: 100,
-    maxEventBytes: 4_096,
-    eventLowWatermark: 2,
-    eventHighWatermark: 5,
-    maxOutputBytes: 65_536,
-    maxArtifactBytes: 1_048_576,
-  };
-  const assignment = new RemoteWorkerAssignmentRepository(db).createAssignment({
-    manifest,
-    createdByActorId: "gateway-connected-worker",
-    idempotencyKey: "assignment:connected-worker",
-  }).assignment;
-  return { assignmentId: assignment.assignmentId, durableRunId };
-}
-
-interface HarnessBootstrap {
-  readonly bootstrapSecret: string;
-  readonly ticket: Record<string, unknown>;
-}
-
-/**
- * Create the bootstrap record an operator would provision, pinned to a real
- * protected admission signer. The single-host harness holds that signer key as
- * a PEM (production keeps it in the platform's protected key store); everything
- * else — the manifest signature, the ceilings, the TLS identity — is real.
- */
-function seedBootstrap(
-  db: DatabaseClient,
-  tls: Awaited<ReturnType<typeof tlsConfig>>,
-  evidenceSignerSpkiDer: Buffer,
-  evidenceSignerPrivateKeyPem: string,
-): HarnessBootstrap {
-  const runtimePayload = {
-    schemaVersion: REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
-    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
-    bundleSha256: sha256("connected-worker-bundle"),
-    dependencyLockSha256: sha256("connected-worker-lock"),
-    vendorTreeSha256: sha256("connected-worker-vendor"),
-    launcherSha256: sha256("connected-worker-launcher"),
-    installedTreeManifestSha256: sha256("connected-worker-tree"),
-    installedTreeFileCount: 7,
-    platform: "windows",
-    architecture: "x64",
-  } as const;
-  const runtimeManifest = {
-    payload: runtimePayload,
-    payloadSha256: sha256(canonicalJsonString(runtimePayload)),
-    signatureAlgorithm: "ed25519",
-    signerKeyId: tls.manifestSignerKeyId,
-    signatureBase64Url: tls.signManifestPayload(runtimePayload),
-  } as const;
-  const keysetReceiptSha256 = sha256("connected-worker-keyset-receipt");
-  const bootstrapSecret = randomBytes(32).toString("base64url");
-  const bootstrap = new RemoteWorkerAdmissionRepository(db).createBootstrap({
-    registryWorkspaceId: "default",
-    workerLabel: "Connected worker",
-    platform: "windows",
-    architecture: "x64",
-    runtimeManifest,
-    allowedWorkspaceIds: ["default"],
-    capabilityClasses: ["durable_compute", "gateway_inference"],
-    protectedAdmissionSignerPin: {
-      schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
-      signatureAlgorithm: "ed25519",
-      keysetGeneration: 1,
-      keysetReceiptSha256,
-      signerSpkiSha256: sha256(evidenceSignerSpkiDer),
-      signerSpkiBase64Url: evidenceSignerSpkiDer.toString("base64url"),
-    },
-    expiresInSeconds: 600,
-    createdByActorId: "operator-a",
-    idempotencyKey: "bootstrap:connected-worker",
-    bootstrapSecretSha256: sha256(bootstrapSecret),
-  }).record;
-  return {
-    bootstrapSecret,
-    ticket: {
-      registryWorkspaceId: bootstrap.registryWorkspaceId,
-      executionWorkspaceId: "default",
-      bootstrapId: bootstrap.bootstrapId,
-      workerId: bootstrap.workerId,
-      nodeId: bootstrap.nodeId,
-      targetWorkerGeneration: bootstrap.targetWorkerGeneration,
-      platform: bootstrap.platform,
-      architecture: bootstrap.architecture,
-      runtimeManifestSha256: sha256(canonicalJsonString(bootstrap.runtimeManifest)),
-      runtimeManifestPayloadSha256: bootstrap.runtimeManifest.payloadSha256,
-      workspaceCeilingSha256: bootstrap.workspaceCeilingSha256,
-      capabilityCeilingSha256: bootstrap.capabilityCeilingSha256,
-      keysetReceiptSha256,
-      protectedSignerPrivateKeyPem: evidenceSignerPrivateKeyPem,
-      bootstrapSecret,
-      downloadVerificationReceiptSha256: sha256("connected-worker-download-receipt"),
-      installedTreeAttestationSha256: sha256("connected-worker-installed-tree"),
-      installedTreeVerificationReceiptSha256: sha256("connected-worker-installed-receipt"),
-    },
-  };
-}
 
 /**
  * Compose the exact production owners over the canonical repositories. Nothing
@@ -525,6 +81,8 @@ async function composeGatewayHandler(
   db: DatabaseClient,
   config: EnabledRemoteWorkerRuntimeConfig,
   ownerErrors: string[],
+  execution?: RemoteWorkerAssignmentExecutionOwnerDependencies,
+  approvalWait?: RemoteWorkerChatApprovalWaitReadService,
 ) {
   const admissions = new RemoteWorkerAdmissionRepository(db);
   const meshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(db);
@@ -535,6 +93,8 @@ async function composeGatewayHandler(
     meshAdmissions: meshNodeAdmissions,
     assignments,
     nonceConsumer: nonces,
+    execution,
+    approvalWait,
   });
   // The wire owners collapse every failure to an opaque 403 by design. Capture
   // the real cause here so a harness failure is diagnosable without weakening
@@ -576,15 +136,16 @@ async function composeGatewayHandler(
     meshNodeAdmissionStore: meshNodeAdmissions,
     assignmentProtocol: observed(runtime.assignmentProtocol, "assignment-rpc"),
     assignmentDispatch: observed(runtime.assignmentDispatch, "assignment-dispatch"),
-    // Routes 11-12 stay unavailable in this harness: the HX-503/HX-506 inner
-    // owners are not composed here, so the execution owner is a fail-closed
-    // stand-in that refuses every call rather than pretending to execute.
-    assignmentExecution: {
-      assertAvailable: async () => undefined,
-      execute: async () => {
-        throw new Error("Routes 11-12 are not composed by this harness.");
-      },
-    },
+    // The protocol probe has no execution owners. The separate text-execution
+    // scenario supplies the real inference and artifact owners below.
+    assignmentExecution: runtime.assignmentExecution
+      ? observed(runtime.assignmentExecution, "assignment-execution")
+      : {
+          assertAvailable: async () => undefined,
+          execute: async () => {
+            throw new Error("Routes 11-12 are not composed by this harness.");
+          },
+        },
     createEvidenceVerifier: () => {
       const verifier = new RemoteWorkerProtectedAdmissionEvidenceVerifier();
       return {
@@ -604,69 +165,86 @@ async function composeGatewayHandler(
   return { handler, admissions, meshNodeAdmissions, assignments };
 }
 
-interface WorkerRun {
-  readonly report: Record<string, unknown>;
-  readonly exitCode: number | null;
-  readonly stderr: string;
-}
-
-async function runWorkerProcess(input: {
-  readonly root: string;
-  readonly port: number;
-  readonly paths: Readonly<Record<string, string>>;
-  readonly ticketFile: string;
-  readonly stateDir: string;
-  readonly runId: string;
-  readonly stopAfter: string;
-}): Promise<WorkerRun> {
-  const reportFile = join(input.root, `report-${input.runId}.json`);
-  const child = spawn(process.execPath, [tsxCli, workerEntry], {
-    cwd: repoRoot,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      GOATCITADEL_CONNECTED_WORKER_HOST: "127.0.0.1",
-      GOATCITADEL_CONNECTED_WORKER_PORT: String(input.port),
-      GOATCITADEL_CONNECTED_WORKER_CLIENT_CERT_FILE: input.paths.clientCert!,
-      GOATCITADEL_CONNECTED_WORKER_CLIENT_KEY_FILE: input.paths.clientKey!,
-      GOATCITADEL_CONNECTED_WORKER_CA_FILE: input.paths.ca!,
-      GOATCITADEL_CONNECTED_WORKER_TICKET_FILE: input.ticketFile,
-      GOATCITADEL_CONNECTED_WORKER_STATE_DIR: input.stateDir,
-      GOATCITADEL_CONNECTED_WORKER_REPORT_FILE: reportFile,
-      GOATCITADEL_CONNECTED_WORKER_RUN_ID: input.runId,
-      GOATCITADEL_CONNECTED_WORKER_STOP_AFTER: input.stopAfter,
-    },
-  });
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-  child.stdout.on("data", () => undefined);
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`Connected worker run ${input.runId} exceeded its budget.`));
-    }, 120_000);
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      resolve(code);
-    });
-  });
-  let report: Record<string, unknown>;
-  try {
-    report = JSON.parse(readFileSync(reportFile, "utf8")) as Record<string, unknown>;
-  } catch {
-    report = { outcome: "missing_report" };
-  }
-  return { report, exitCode, stderr };
-}
-
 function countRows(db: DatabaseClient, sql: string, params: Record<string, unknown> = {}): number {
   const row = db.prepare(sql).get<{ count: number | bigint }>(params);
   return Number(row?.count ?? -1);
+}
+
+async function verifyCanonicalApprovalWait(storage: Storage, root: string, assignmentId: string): Promise<PreparedAgentChatTurn> {
+  const asyncStorage = createSqliteAsyncStorage(storage);
+  const aggregate = storage.remoteWorkerAssignments.findAssignmentAggregate("default", assignmentId)!;
+  const manifest = aggregate.assignment.manifest;
+  const run = storage.durableRuns.getRun(manifest.durableRunId);
+  const profile = storage.chatTurnCapabilityProfiles.findByRun(run.runId)!;
+  const payload = readDurableChatTurnExecutionPayloadAuthority({
+    workflowKey: run.workflowKey, durableRunId: run.runId, payload: run.payload,
+  })!;
+  const prepared = {
+    workspaceId: payload.workspaceId, session: { sessionId: payload.sessionId }, turnId: payload.turnId,
+    capabilityProfile: profile, assistantMessageId: payload.assistantMessageId, content: payload.request.content,
+    userMessage: { messageId: payload.userMessageId, sessionId: payload.sessionId },
+    turnAdmission: {
+      identity: {
+        admissionId: payload.admissionId, sessionIncarnationId: payload.sessionIncarnationId,
+        materialSha256: payload.admissionMaterialSha256, workspaceId: payload.workspaceId,
+        sessionId: payload.sessionId, turnId: payload.turnId, aggregateRevision: payload.admissionAggregateRevision,
+        controllerGeneration: payload.admissionControllerGeneration,
+      },
+      admittedRequest: payload.request as ChatSendMessageRequest, requestActor: payload.requestActor,
+    },
+  } as PreparedAgentChatTurn;
+  // Bind the controlled harness's existing admitted turn to the same trace and
+  // retry policy normally installed by the durable Chat execution owner.
+  await asyncStorage.chatTurnTraces.patch(payload.turnId, {
+    assistantMessageId: payload.assistantMessageId, durable: { runId: run.runId, status: "running" },
+  });
+  await asyncStorage.durableRuns.updateRun({ runId: run.runId, status: "running", expectedVersion: run.version,
+    metadata: { ...run.metadata, retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT } },
+  });
+  const handoff = new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas"));
+  const execution = (await handoff.resolve(run, prepared))!;
+  const chunks = [];
+  for await (const chunk of execution.stream({ signal: new AbortController().signal,
+    canonicalWriteFence: async (work) => await asyncStorage.runImmediateTransaction(async () => {
+      if (!await asyncStorage.durableRuns.lockFreshActiveLeaseForUpdate(run.runId, run.leaseOwnerId!))
+        throw new Error("Fixture lost its parent Chat lease.");
+      return await work();
+    }),
+  })) chunks.push(chunk);
+  expect(chunks).toHaveLength(1);
+  const waiting = chunks[0]!;
+  expect(waiting.type).toBe("approval_required");
+  if (waiting.type !== "approval_required") throw new Error("Expected the canonical worker approval.");
+  expect(storage.chatInlineApprovals.get(waiting.approval.approvalId)).toMatchObject({
+    status: "pending", sessionId: payload.sessionId, turnId: payload.turnId,
+  });
+  expect(storage.durableRuns.getRun(run.runId).status).toBe("running");
+  const deps: ChatDurableRunFinalizeDeps = {
+    runImmediateTransaction: (work) => asyncStorage.runImmediateTransaction(work),
+    durableRuns: asyncStorage.durableRuns, chatMessages: asyncStorage.chatMessages,
+    chatTurnTraces: asyncStorage.chatTurnTraces, chatToolRuns: asyncStorage.chatToolRuns,
+    chatToolArtifacts: asyncStorage.chatToolArtifacts,
+    resolvePostCommitEligibility: async () => ({ version: 1, autonomyEnabledAtParentSettlement: false,
+      evalIntegrityTurn: false, humanSession: true }),
+    recordDurableTimelineEvent: async (runId, eventType, payload) => {
+      await asyncStorage.durableRunEvents.append({ eventId: randomUUID(), runId, eventType,
+        payload: payload ?? {}, createdAt: new Date().toISOString() });
+    },
+  };
+  const trace = await asyncStorage.chatTurnTraces.get(payload.turnId);
+  await finalizeDurableChatRun(deps, run.runId, prepared, trace, run.leaseOwnerId);
+  const waitingRun = await asyncStorage.durableRuns.getRun(run.runId);
+  expect(waitingRun).toMatchObject({ status: "waiting", metadata: {
+    waitForEvent: { eventKey: "approval.resolved", correlationId: waiting.approval.approvalId },
+  } });
+  expect(waitingRun.leaseOwnerId).toBeUndefined();
+  expect(await asyncStorage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting")).toMatchObject({
+    state: { currentStep: "waiting_for_approval", waitForEvent: waitingRun.metadata!.waitForEvent },
+  });
+  await finalizeDurableChatRun(deps, run.runId, prepared, await asyncStorage.chatTurnTraces.get(payload.turnId));
+  expect(await asyncStorage.durableRuns.getRun(run.runId)).toEqual(waitingRun);
+  expect(storage.chatMessages.get(prepared.assistantMessageId)).toBeUndefined();
+  return prepared;
 }
 
 describe("connected worker end-to-end (scenario 12)", () => {
@@ -836,6 +414,941 @@ describe("connected worker end-to-end (scenario 12)", () => {
       // never reached an inference route, and no HX-306 row exists at all.
       expect(countRows(db, "SELECT COUNT(*) AS count FROM model_usage_events")).toBe(0);
       expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_inference_requests")).toBe(0);
+    },
+    300_000,
+  );
+
+  it
+    .runIf(process.platform === "win32")
+    .each(["heartbeat", "parent_takeover", "parent_expiry", "parent_recovery", "continuous", "continuous_budget_exhausted", "tool_calls", "tool_withdrawal", "tool_approval_wait", "tool_approval_approve", "tool_mcp", "tool_approval_mcp", "tool_mcp_revoked"] as const)(
+    "executes canonical inference with %s authority and prevents unauthorized publication",
+    async (authorityCase) => {
+      const toolsCase = authorityCase.startsWith("tool_");
+      const mcpCase = authorityCase.includes("_mcp");
+      const approvalCase = authorityCase.startsWith("tool_approval_");
+      const approvedCase = authorityCase === "tool_approval_approve" || authorityCase === "tool_approval_mcp";
+      const toolModelCase = !mcpCase && (authorityCase === "tool_calls" || approvedCase);
+      const root = mkdtempSync(join(tmpdir(), "goat-connected-execution-"));
+      cleanupRoots.push(root);
+      const storage = new Storage({
+        dbPath: join(root, "gateway.sqlite"),
+        transcriptsDir: join(root, "transcripts"),
+        auditDir: join(root, "audit"),
+      });
+      openHandles.push({ close: async () => storage.close() });
+      const asyncStorage = createSqliteAsyncStorage(storage);
+      const db = storage.db;
+      const tls = await tlsConfig(root);
+      const signer = generateKeyPairSync("ed25519");
+      const bootstrap = seedBootstrap(
+        db,
+        tls,
+        signer.publicKey.export({ format: "der", type: "spki" }),
+        String(signer.privateKey.export({ format: "pem", type: "pkcs8" })),
+        true,
+        toolsCase,
+      );
+      const callableEntries: CapabilityCatalogEntry[] = toolsCase ? [{
+        capabilityId: "tool:fs.read", kind: "tool", category: "built_in", title: "Read file",
+        summary: "Read an admitted file", callable: true, trustLabel: "Builtin", toolName: "fs.read",
+        effectPotential: { version: "goatcitadel.tool-effect.v1", potential: "none",
+          sourceKind: "builtin", reason: "trusted_builtin_safe_read" },
+      }] : [];
+      const providerDefinition = { type: "function", function: {
+        name: "fs_read", description: "Read a file",
+        parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      } };
+      const mcpFixture = mcpCase ? await createRequesterMcpWorkerFixture(asyncStorage, root, approvedCase) : undefined;
+      const profileOptions = mcpFixture?.profileOptions ?? {
+        callableEntries,
+        tools: callableEntries.length ? [{ canonicalName: "fs.read", modelName: "fs_read",
+          providerDefinition, definitionHash: sha256(canonicalJsonString(providerDefinition)),
+          runtimeOwner: { kind: "builtin" as const, bindingHash: sha256("fixture-fs-read-owner") },
+          effectPotential: callableEntries[0]!.effectPotential,
+        }] : [],
+      };
+      const canonicalToolName = mcpFixture?.canonicalName ?? "fs.read";
+      const modelToolName = mcpFixture?.modelName ?? "fs_read";
+      const profileAuthority = {
+        listCallableCapabilities: mcpFixture?.listCallableCapabilities ?? (async () => callableEntries),
+        resolvePolicyContext: mcpFixture?.resolvePolicyContext ?? (async () => ({ permissionProfileId: "safe" })),
+        ...(mcpFixture ? { revalidateRequesterTool: mcpFixture.revalidateRequesterTool,
+          createMcpRequesterTurnContext: mcpFixture.createMcpRequesterTurnContext } : {}),
+      };
+      const placementSeed = authorityCase === "heartbeat" || authorityCase === "parent_recovery" || toolsCase
+        ? prepareChatOfferFixture(db, true, "", { ...profileOptions, subagentPolicy: "off" }) : undefined;
+      const seededOffer = placementSeed ? undefined : seedAssignmentOffer(db, true, "", undefined, profileOptions);
+      const secondOffer = authorityCase.startsWith("continuous") ? seedAssignmentOffer(db, true, "-second") : undefined;
+      const llm = new LlmService(
+        {
+          activeProviderId: "openai",
+          activeModel: "gpt-5.4",
+          providers: [
+            {
+              providerId: "openai",
+              label: "Controlled fixture",
+              baseUrl: "https://api.openai.com/v1",
+              apiStyle: "openai-responses",
+              defaultModel: "gpt-5.4",
+              apiKey: "fixture-not-a-real-key",
+            },
+          ],
+        },
+        {},
+        {
+          secretStore: Object.assign(new SecretStoreService(), {
+            getSecret: () => undefined,
+            isAvailable: () => false,
+          }),
+          modelUsageAccounting: new ModelUsageAccountingService(
+            storage.modelUsageEvents,
+            "connected-execution",
+            60_000,
+            60_000,
+          ),
+        },
+      );
+      const completionHooks: string[] = [];
+      const completionHost = {
+        llmService: llm,
+        config: { assistant: { memory: { enabled: false, qmd: { enabled: false, applyToChat: false } } } },
+        memoryLifecycleService: { composeContext: vi.fn() },
+        hooksService: {
+          runInlineHooks: async ({ trigger }: { trigger: string }) => { completionHooks.push(trigger); return { runs: [] }; },
+          enqueueAfterHooks: vi.fn(), hasMutateHook: () => false,
+        },
+        resolveMemoryWorkspaceRelativeDir: async () => "workspace",
+        resolveChatCompletionHookWorkspaceId: async () => "default",
+        persistContextManifestForCompletionRequest: vi.fn(), resolveFallbackTargets: () => [],
+        recordDevDiagnostic: vi.fn(), publishRealtime: vi.fn(),
+      } as unknown as GovernedLlmCompletionHost;
+      let toolInvocations = 0;
+      let approvedToolInvocations = 0;
+      const toolProvider = vi.fn(async () => new Response(JSON.stringify({ id: "tool-helper-response", model: "gpt-5.4",
+        status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Helper completed." }] }],
+        usage: { input_tokens: 10, input_tokens_details: { cached_tokens: 0 }, output_tokens: 1, total_tokens: 11 },
+      }), { headers: { "content-type": "application/json" } }));
+      const callToolHelper = async () => {
+        await llm.chatCompletions({ providerId: "openai", model: "gpt-5.4", max_tokens: 16,
+          messages: [{ role: "user", content: "Governed tool helper request" }] }, { callKind: "utility" });
+      };
+      writeFileSync(join(root, "note.txt"), "The retained file result is Orion 7.", "utf8");
+      const executionOwners = createRemoteWorkerExecutionOwners({
+        storage: asyncStorage,
+        llm,
+        completionHost,
+        dispatchOwnerId: "connected-execution",
+        ...profileAuthority,
+        artifactRoot: join(root, "cas"),
+        executeApprovedAction: async (input) => {
+          expect(approvedCase).toBe(true);
+          if (mcpFixture) {
+            approvedToolInvocations++;
+            return await mcpFixture.executeApprovedAction(input);
+          }
+          expect(input.runtimeOwner).toEqual({ kind: "builtin", bindingHash: sha256("fixture-fs-read-owner") });
+          return await executeApprovedExternalRuntimeSideEffect({ storage: asyncStorage, approvalId: input.approvalId,
+            request: toToolInvokeRequest(input.pending.request, input.signal), execute: async () => {
+              await input.checkExecution();
+              if (toolModelCase) await callToolHelper();
+              approvedToolInvocations++;
+              return { outcome: "executed", policyReason: "Controlled approved read", auditEventId: "controlled-approved-read",
+                result: { text: readFileSync(join(root, "note.txt"), "utf8") } };
+            },
+          });
+        },
+        coordinator: {
+          invokeTool: async (request, options) => {
+            if (!toolsCase) throw new Error("Text-only fixture must not dispatch a tool.");
+            expect(request).toMatchObject({ toolName: canonicalToolName, args: { path: "note.txt" },
+              sessionId: "session-connected-worker", turnId: "turn-connected-worker" });
+            if (mcpFixture) {
+              toolInvocations++;
+              return await mcpFixture.coordinator.invokeTool(request, options);
+            }
+            await options!.executionFence!();
+            await expect(llm.runWithDispatchGuard(async () => {}, () => llm.chatCompletions({
+              providerId: "openai", model: "gpt-5.4", max_tokens: 16,
+              messages: [{ role: "user", content: "Foreign tool-side request" }],
+            }, { workerId: "foreign-worker" }))).rejects.toThrow("Model usage conflicts with its governed execution lineage.");
+            if (toolModelCase && !approvalCase) await callToolHelper();
+            toolInvocations++;
+            options!.externalSideEffect!.markNotRequired();
+            if (approvalCase) {
+              const approval = await asyncStorage.approvals.create({ kind: "tool.invoke", riskLevel: "caution",
+                payload: {}, preview: {}, linkage: { workspaceId: request.workspaceId, sessionId: request.sessionId,
+                  turnId: request.turnId, runId: request.runId, taskId: request.taskId, toolName: request.toolName },
+              });
+              await asyncStorage.pendingApprovalActions.upsertPending({
+                approvalId: approval.approvalId, actionType: "tool.invoke", request: { ...request },
+              });
+              return { outcome: "approval_required", approvalId: approval.approvalId,
+                policyReason: "Controlled approval required", auditEventId: "controlled-approval" };
+            }
+            return { outcome: "executed", policyReason: "Controlled read permission", auditEventId: "controlled-read",
+              result: { text: readFileSync(join(root, "note.txt"), "utf8") },
+            };
+          },
+        },
+      });
+      const ownerErrors: string[] = [];
+      const composed = await composeGatewayHandler(db, tls.config, ownerErrors, executionOwners,
+        new RemoteWorkerChatApprovalWaitReadService(asyncStorage));
+      const timings: Array<{ path: string; elapsedMs?: number; phase: string }> = [];
+      const listener = await startRemoteWorkerNativeTlsListener(tls.config, async (request) => {
+        const started = performance.now();
+        timings.push({ path: request.rawPath, phase: "start" });
+        try {
+          return await composed.handler(request);
+        } finally {
+          timings.push({ path: request.rawPath, phase: "finish", elapsedMs: Math.round(performance.now() - started) });
+        }
+      });
+      openHandles.push(listener);
+      const ticketFile = join(root, "ticket.json"),
+        stateDir = join(root, "worker-state");
+      writeFileSync(ticketFile, JSON.stringify(bootstrap.ticket), "utf8");
+      const common = {
+        root,
+        port: portOf(listener.address),
+        paths: tls.paths,
+        ticketFile,
+        stateDir,
+        executionMode: "gateway_inference" as const,
+      };
+      const admit = await runWorkerProcess({ ...common, runId: "admit", stopAfter: "admit" });
+      expect({ exit: admit.exitCode, report: admit.report.error, ownerErrors }).toEqual({
+        exit: 0,
+        report: undefined,
+        ownerErrors: [],
+      });
+      const generation = composed.admissions.findCurrentGeneration("default", String(bootstrap.ticket.workerId))!;
+      const evidence = composed.admissions.findProtectedAdmissionEvidenceRecord(
+        "default",
+        generation.workerId,
+        generation.workerGeneration,
+      )!;
+      const meshJoinCredential = randomBytes(32).toString("base64url");
+      composed.meshNodeAdmissions.issueJoinAuthority({
+        registryWorkspaceId: generation.registryWorkspaceId,
+        bootstrapId: generation.bootstrapId,
+        workerId: generation.workerId,
+        workerGeneration: generation.workerGeneration,
+        nodeId: generation.nodeId,
+        clientCertificateSha256: generation.clientCertificateSha256,
+        protectedAdmissionEnvelopeSha256: evidence.envelopeSha256,
+        protectedAdmissionContextSha256: evidence.contextSha256,
+        workspaceId: "default",
+        expiresInSeconds: 300,
+        issuedByActorId: "operator-a",
+        idempotencyKey: "join-execution",
+        rawMeshNodeCredential: meshJoinCredential,
+      });
+      writeFileSync(ticketFile, JSON.stringify({ ...bootstrap.ticket, meshJoinCredential }), "utf8");
+      storage.remoteWorkerBudgets.createGrant(
+        {
+          grantId: "connected-execution-grant",
+          registryWorkspaceId: "default",
+          executionWorkspaceId: "default",
+          workerId: generation.workerId,
+          workerGeneration: generation.workerGeneration,
+          // Reserve primary + recovery before each task. After one settled
+          // request, a three-request grant can admit the second task safely.
+          maxRequests: toolModelCase ? 4 : authorityCase === "continuous" || toolsCase ? 3 : 2,
+          maxCostMicrousd: 50_000_000,
+          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        },
+        "operator-a",
+      );
+      let placedExecution: RemoteWorkerChatExecution | undefined;
+      const offer = seededOffer ?? await (async () => {
+        // A real idle worker joins the mesh before ordinary Chat chooses its
+        // execution location. No pre-seeded assignment exists in this scenario.
+        const ready = await runWorkerProcess({ ...common, runId: "placement-ready", stopAfter: "workload" });
+        expect(ready.exitCode, ready.stderr).toBe(0);
+        expect(ready.report).toMatchObject({ outcome: "stopped", awaiting: "assignment_offer" });
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignments")).toBe(0);
+        const run = storage.durableRuns.getRun(placementSeed!.durableRunId);
+        const profile = storage.chatTurnCapabilityProfiles.findByRun(run.runId)!;
+        const placement = new RemoteWorkerChatPlacementService({
+          storage: asyncStorage, enabled: true, registryWorkspaceId: "default",
+          artifactRoot: join(root, "cas"), pathJailSha256: placementSeed!.offerInput.pathJailSha256,
+          ...profileAuthority,
+        });
+        placedExecution = await placement.resolve(run, {
+          workspaceId: profile.identity.workspaceId, session: { sessionId: profile.identity.sessionId },
+          turnId: profile.identity.turnId, capabilityProfile: profile, assistantMessageId: run.payload!.assistantMessageId,
+        } as PreparedAgentChatTurn);
+        expect(placedExecution).toBeDefined();
+        const selected = storage.chatExecutionPlacements.get(run.runId)!;
+        expect(selected.executionKind).toBe("remote_worker");
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignments")).toBe(1);
+        return { assignmentId: selected.assignmentId!, durableRunId: run.runId, offerInput: placementSeed!.offerInput };
+      })();
+      const providerSignals: boolean[] = [];
+      const provider = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        expect(completionHooks).toContain("gateway.dispatch.before");
+        expect(completionHooks).toContain("llm.request.before");
+        timings.push({ path: "controlled-provider", phase: "start" });
+        const providerBody = JSON.parse(String(init?.body));
+        if (toolsCase)
+          expect(providerBody.tools).toEqual([expect.objectContaining({ type: "function", name: modelToolName })]);
+        if (toolsCase && provider.mock.calls.length === 2) {
+          expect(providerBody.input).toContainEqual(expect.objectContaining({
+            type: "function_call", call_id: "call-read", name: modelToolName, arguments: ' {"path":"note.txt"} ',
+          }));
+          expect(providerBody.input).toContainEqual(expect.objectContaining({
+            type: "function_call_output", call_id: "call-read",
+            output: expect.stringContaining("The retained file result is Orion 7."),
+          }));
+        }
+        const providerInput = canonicalJsonString({
+          input: providerBody.input ?? providerBody.messages,
+          instructions: providerBody.instructions,
+        });
+        for (const message of CONNECTED_WORKER_CONTEXT_MESSAGES) {
+          expect(providerInput).toContain(String(message.content));
+        }
+        const currentOffer = secondOffer && provider.mock.calls.length === 2 ? secondOffer : offer;
+        const currentParent = storage.durableRuns.getRun(currentOffer.durableRunId);
+        const renewed = storage.durableRuns.renewLeaseWithDatabaseClock({
+          runId: currentOffer.durableRunId,
+          workerId: currentParent.leaseOwnerId!,
+          leaseDurationMs: 300_000,
+        });
+        expect(renewed?.version).toBe(currentParent.version + 1);
+        if (authorityCase === "parent_takeover") {
+          db.prepare("UPDATE durable_runs SET lease_owner_id = 'different-owner' WHERE run_id = ?").run(
+            offer.durableRunId,
+          );
+        } else if (authorityCase === "parent_expiry") {
+          db.prepare("UPDATE durable_runs SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE run_id = ?").run(
+            offer.durableRunId,
+          );
+        }
+        // Span the former handler and client socket deadlines while the parent
+        // advances an ordinary heartbeat. Continuous ownership keeps the call alive.
+        await new Promise((resolve) => setTimeout(resolve, authorityCase === "heartbeat" ? 32_500 : 1_250));
+        timings.push({ path: "controlled-provider", phase: "finish" });
+        providerSignals.push(init?.signal?.aborted === true);
+        expect(init?.signal?.aborted).toBe(authorityCase === "parent_takeover" || authorityCase === "parent_expiry");
+        return new Response(
+          JSON.stringify({
+            id: "controlled-response",
+            model: "gpt-5.4",
+            status: "completed",
+            output: toolsCase && provider.mock.calls.length === 1 ? [{
+              type: "function_call", id: "fc-read", call_id: "call-read", name: modelToolName,
+              arguments: ' {"path":"note.txt"} ',
+            }] : [
+              {
+                type: "message",
+                role: "assistant",
+                content: [
+                  { type: "output_text", text: toolsCase ? "The file says Orion 7." : `The connected worker completed ${currentOffer.assignmentId}.` },
+                ],
+              },
+            ],
+            usage: {
+              input_tokens: 10,
+              input_tokens_details: { cached_tokens: 0 },
+              output_tokens: 10,
+              total_tokens: 20,
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", (url: string | URL | Request, init?: RequestInit) =>
+        mcpFixture?.isMcpRequest(url) ? mcpFixture.fetchMcp(url, init)
+          : String(init?.body).includes("Governed tool helper request") ? toolProvider() : provider(url, init));
+      if (authorityCase.startsWith("continuous")) {
+        const continuous = await runWorkerProcess({
+          ...common,
+          runId: "continuous",
+          stopAfter: "complete",
+          runMode: "continuous",
+          stopWhenReport: (report) => report.awaiting === "assignment_offer",
+        });
+        if (authorityCase === "continuous_budget_exhausted") {
+          expect(continuous.exitCode).toBe(1);
+          expect(continuous.report, JSON.stringify({ report: continuous.report, ownerErrors })).toMatchObject({
+            outcome: "failed",
+            recoveryRequired: true,
+            lastReport: {
+              outcome: "stopped",
+              inferenceStatus: "blocked",
+              stagesCompleted: ["admit", "claim", "workload", "inference"],
+            },
+          });
+          expect(provider).toHaveBeenCalledOnce();
+          expect(ownerErrors).toEqual([]);
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(1);
+          expect(
+            countRows(
+              db,
+              "SELECT COUNT(*) AS count FROM remote_worker_inference_requests WHERE block_reason = 'budget_denied'",
+            ),
+          ).toBe(1);
+          expect(storage.remoteWorkerBudgets.listGrants("default", "default")[0]).toMatchObject({
+            heldRequests: 0,
+            settledRequests: 1,
+            availableRequests: 1,
+          });
+          return;
+        }
+        expect(
+          { error: continuous.report.error, ownerErrors },
+          JSON.stringify({
+            report: continuous.report,
+            timings,
+            operations: db
+              .prepare("SELECT assignment_id, state, block_reason FROM remote_worker_inference_requests")
+              .all(),
+            usage: db.prepare("SELECT transport_status, terminal_outcome FROM model_usage_events").all(),
+          }),
+        ).toEqual({ error: undefined, ownerErrors: [] });
+        expect(continuous.report).toMatchObject({ outcome: "stopped", awaiting: "assignment_offer" });
+        expect(provider).toHaveBeenCalledTimes(2);
+        expect(providerSignals).toEqual([false, false]);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(2);
+        expect(
+          countRows(db, "SELECT COUNT(DISTINCT result_sha256) AS count FROM remote_worker_assignment_settlements"),
+        ).toBe(2);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM model_usage_events")).toBe(2);
+        expect(storage.remoteWorkerBudgets.listGrants("default", "default")[0]).toMatchObject({
+          heldRequests: 0,
+          settledRequests: 2,
+        });
+        const receipts = JSON.parse(readFileSync(join(stateDir, "settlement-receipts.json"), "utf8")) as Array<{
+          assignmentId: string;
+        }>;
+        expect(receipts.map((receipt) => receipt.assignmentId).sort()).toEqual(
+          [offer.assignmentId, secondOffer!.assignmentId].sort(),
+        );
+        // Killing an idle continuous owner must release process ownership; a
+        // restart polls for new work without replaying either terminal assignment.
+        const restarted = await runWorkerProcess({ ...common, runId: "continuous-restart", stopAfter: "complete" });
+        expect(restarted.exitCode, restarted.stderr).toBe(0);
+        expect(restarted.report).toMatchObject({ outcome: "stopped", awaiting: "assignment_offer" });
+        expect(provider).toHaveBeenCalledTimes(2);
+        return;
+      }
+      if (authorityCase === "parent_recovery") {
+        const initial = await runWorkerProcess({ ...common, runId: "before-parent-recovery", stopAfter: "inference" });
+        expect(initial.exitCode, JSON.stringify({ report: initial.report, ownerErrors })).toBe(0);
+        expect(initial.report).toMatchObject({ outcome: "stopped", inferenceStatus: "completed" });
+        expect(provider).toHaveBeenCalledOnce();
+        const before = storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!;
+        const previous = storage.durableRuns.getRun(offer.durableRunId);
+        storage.durableRuns.updateRun({ runId: previous.runId, status: "running", expectedVersion: previous.version,
+          leaseExpiresAt: "2000-01-01T00:00:00.000Z" });
+        const ctx = { storage: asyncStorage, requireFeatureEnabled: vi.fn(), publishRealtime: vi.fn() } as unknown as ServiceContext;
+        const durable = new DurableRunService(ctx, { backgroundTasks: new Set(), workflowRegistry: {
+          executeWorkflow: vi.fn(), isWorkflowRecoverable: () => ({ recoverable: true }), markWorkflowUnrecoverable: vi.fn(),
+        } });
+        expect(await (durable as unknown as { reconcileRecoverableRuns(): Promise<number> }).reconcileRecoverableRuns()).toBe(1);
+        const parked = await runWorkerProcess({ ...common, runId: "parent-recovery-pending", stopAfter: "inference" });
+        expect(parked.exitCode, JSON.stringify({ report: parked.report, ownerErrors })).toBe(0);
+        expect(parked.report).toMatchObject({ reconnectSync: "parent_recovery_pending", awaiting: "parent_recovery" });
+        expect(storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!.lease).toEqual(before.lease);
+        const replacement = storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({ runId: previous.runId,
+          workerId: "gateway-parent-recovery", leaseDurationMs: 300_000 })!;
+        expect(replacement.attemptCount).toBe(previous.attemptCount);
+        const profile = storage.chatTurnCapabilityProfiles.findByRun(replacement.runId)!;
+        const prepared = { workspaceId: profile.identity.workspaceId, session: { sessionId: profile.identity.sessionId },
+          turnId: profile.identity.turnId, capabilityProfile: profile,
+          assistantMessageId: replacement.payload!.assistantMessageId } as PreparedAgentChatTurn;
+        const parentService = new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas"));
+        const parent = (await parentService.resolve(replacement, prepared))!;
+        const parentAbort = new AbortController();
+        let parentSettled = false;
+        let parentError: unknown;
+        const parentResult = parent.stream({ signal: parentAbort.signal,
+          canonicalWriteFence: work => asyncStorage.runImmediateTransaction(async () => {
+            if (!await asyncStorage.durableRuns.lockFreshActiveLeaseForUpdate(replacement.runId, replacement.leaseOwnerId!))
+              throw new Error("Recovered native parent claim lost.");
+            return await work();
+          }),
+        }).next().then(value => { parentSettled = true; return { value }; }, error => {
+          parentSettled = true; parentError = error; return { error };
+        });
+        try {
+          const ref = { registryWorkspaceId: "default", assignmentId: offer.assignmentId,
+            assignmentGeneration: before.generation!.assignmentGeneration };
+          await vi.waitFor(() => {
+            if (parentError) throw parentError;
+            expect(storage.remoteWorkerAssignments.findChatParentRecovery(ref)?.material)
+              .toMatchObject({ recoveryRevision: 1, priorLeaseRevision: before.lease!.leaseRevision,
+                dispatchAuthority: { dispatchOwnerId: replacement.leaseOwnerId } });
+          });
+          expect(() => storage.remoteWorkerAssignments.bindChatParentRecoveryDispatch({ ...ref,
+            durableRunId: previous.runId, leaseOwnerId: previous.leaseOwnerId!, attemptCount: previous.attemptCount })).toThrow();
+          const resumed = await runWorkerProcess({ ...common, runId: "parent-recovery-resumed", stopAfter: "inference" });
+          expect(resumed.exitCode, JSON.stringify({ report: resumed.report, ownerErrors })).toBe(0);
+          expect(resumed.report).toMatchObject({ reconnectSync: "parent_recovery_ready", inferenceStatus: "completed" });
+          const after = storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!;
+          expect(after.generation).toEqual(before.generation);
+          expect(after.lease!.leaseRevision).toBeGreaterThan(before.lease!.leaseRevision);
+          expect(after.lease!.parentDispatchAuthority.dispatchOwnerId).toBe(replacement.leaseOwnerId);
+          expect(provider).toHaveBeenCalledOnce();
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_artifact_manifests")).toBe(0);
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(0);
+          expect(parentSettled, "Recovered parent must await the worker artifact and settlement.").toBe(false);
+        } finally { parentAbort.abort(); await parentResult; }
+        placedExecution = (await parentService.resolve(replacement, prepared))!;
+      }
+      if (toolsCase) {
+        const pending = await runWorkerProcess({ ...common, runId: "pending-tool", stopAfter: "inference" });
+        expect(pending.exitCode, JSON.stringify({ report: pending.report, ownerErrors })).toBe(0);
+        expect(pending.report).toMatchObject({ inferenceStatus: "requires_tools", pendingToolCallCount: 1 });
+        expect(toolInvocations).toBe(0);
+        mcpFixture?.restartRequester();
+        const mcpMethodsBefore = mcpFixture?.readEvidence().methods;
+        if (authorityCase === "tool_mcp_revoked") mcpFixture!.revokeRequester();
+        const toolsRun = await runWorkerProcess({ ...common, runId: "tools", stopAfter: "tools" });
+        if (authorityCase === "tool_mcp_revoked") {
+          expect(toolsRun.report.toolStatus).not.toBe("completed");
+          expect(toolsRun.report.outcome).not.toBe("completed");
+          expect(mcpFixture!.readEvidence().revokedAuthReads).toBeGreaterThan(0);
+          expect(mcpFixture!.readEvidence().methods).toEqual(mcpMethodsBefore);
+          expect(mcpFixture!.calls()).toBe(0);
+          expect(toolInvocations).toBe(0);
+          expect(provider).toHaveBeenCalledOnce();
+          expect(storage.remoteWorkerEffects.listIntents("default", offer.assignmentId, 1)).toEqual([]);
+          expect(storage.chatToolRuns.listByTurn("turn-connected-worker")).toEqual([]);
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_artifact_manifests")).toBe(0);
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(0);
+          expect(storage.remoteWorkerBudgets.listGrants("default", "default")[0]).toMatchObject({ heldRequests: 0, settledRequests: 1 });
+          return;
+        }
+        expect(toolsRun.exitCode, JSON.stringify({ report: toolsRun.report, ownerErrors })).toBe(0);
+        if (approvalCase) {
+          expect(toolsRun.report).toMatchObject({ outcome: "stopped", toolStatus: "waiting_approval",
+            awaiting: "approval_resolution", pendingToolCallCount: 1 });
+          const recovered = await runWorkerProcess({ ...common, runId: "approval-recovered", stopAfter: "tools" });
+          expect(recovered.exitCode, JSON.stringify({ report: recovered.report, ownerErrors })).toBe(0);
+          expect(recovered.report).toMatchObject({ toolStatus: "waiting_approval", awaiting: "approval_resolution" });
+          expect(toolInvocations).toBe(1);
+          expect(provider).toHaveBeenCalledOnce();
+          const intents = storage.remoteWorkerEffects.listIntents("default", offer.assignmentId, 1);
+          expect(intents).toHaveLength(1);
+          expect(storage.remoteWorkerEffects.findSettlement("default", offer.assignmentId, 1, intents[0]!.intentId)).toBeUndefined();
+          const prepared = await verifyCanonicalApprovalWait(storage, root, offer.assignmentId);
+          const parked = storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!;
+          const parkedRun = storage.durableRuns.getRun(parked.assignment.manifest.durableRunId);
+          const waitingRestart = await runWorkerProcess({ ...common, runId: "parked-restart", stopAfter: "complete" });
+          expect(waitingRestart.exitCode, JSON.stringify({ report: waitingRestart.report, ownerErrors })).toBe(0);
+          expect(waitingRestart.report).toMatchObject({ outcome: "stopped", reconnectSync: "waiting_approval",
+            awaiting: "approval_resolution", stagesCompleted: ["admit"] });
+          expect(storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)).toEqual(parked);
+          expect(storage.durableRuns.getRun(parkedRun.runId)).toEqual(parkedRun);
+          expect(toolInvocations).toBe(1);
+          expect(provider).toHaveBeenCalledOnce();
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_artifact_manifests")).toBe(0);
+          expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(0);
+          const tool = storage.chatToolRuns.get(`remote-tool:${intents[0]!.intentId}`);
+          const approvalId = tool.approvalId!;
+          mcpFixture?.restartRequester();
+          storage.approvals.resolve(approvalId, { decision: approvedCase ? "approve" : "reject", resolvedBy: "controlled-operator" });
+          if (!approvedCase) storage.pendingApprovalActions.markResolved(approvalId, "rejected", { decision: "reject" });
+          storage.chatInlineApprovals.upsert({ ...storage.chatInlineApprovals.get(approvalId)!, status: approvedCase ? "approved" : "denied" });
+          const ctx = { storage: asyncStorage, requireFeatureEnabled: vi.fn(), publishRealtime: vi.fn() } as unknown as ServiceContext;
+          const durable = new DurableRunService(ctx, {
+            backgroundTasks: new Set(), workflowRegistry: { executeWorkflow: vi.fn(),
+              isWorkflowRecoverable: () => ({ recoverable: true }), markWorkflowUnrecoverable: vi.fn() },
+            // Notification/post-commit callbacks are controlled; the actual
+            // durable owner records and verifies their waiting-generation ledger.
+            onGeneralChatPostCommit: async (_run, progress) => {
+              for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) await progress.runEffect(effect, async () => {});
+            },
+          });
+          expect(await durable.reconcileGeneralChatPostCommit(parkedRun.runId)).toBe(true);
+          const approvalProcessor = new ApprovalEffectsService(ctx, {
+            backgroundTasks: new Set(), wakeDurableRun: (id, event) => durable.wakeDurableRun(id, event), requestRunProcessing: vi.fn(),
+            executeApprovedPendingAction: async () => {
+              if (approvedCase) throw new RemoteWorkerApprovalResumeRequiredError();
+              throw new Error("Rejected action must not execute.");
+            },
+            prepareRemoteWorkerApprovalHandoff: id => prepareRemoteWorkerChatApprovalHandoff(asyncStorage, id),
+            shouldDeferRemoteWorkerApprovalWake: (id, approval) => shouldDeferRemoteWorkerChatApprovalWake(asyncStorage, id, approval),
+            findProactiveDurableRunIdsForApproval: async () => [], executeCodeModePendingApproval: vi.fn(), enqueueAfterHooks: vi.fn(),
+            resolveApprovalHookWorkspaceId: () => "default", resolvePostCommitEligibility: () => ({ version: 1,
+              autonomyEnabledAtParentSettlement: false, evalIntegrityTurn: false, humanSession: true }),
+            recordApprovalResolutionSignals: vi.fn(),
+          }) as unknown as { workerId: string; handleLinkedChatTurnWake(effect: ApprovalEffectRecord): Promise<void>;
+            handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void> };
+          if (approvedCase) {
+            const action = storage.approvalEffects.upsert({ approvalId, effectKind: "pending_action_execute", targetKind: "pending_action",
+              targetId: approvalId, payload: {} });
+            const actionAt = storage.durableRuns.readDatabaseNow();
+            const actionClaim = storage.approvalEffects.claimNextPendingEffect(approvalProcessor.workerId, actionAt,
+              new Date(Date.parse(actionAt) + 60_000).toISOString())!;
+            expect(actionClaim.effectId).toBe(action.effectId);
+            await approvalProcessor.handlePendingActionExecute(actionClaim);
+            expect(storage.approvalEffects.get(action.effectId)).toMatchObject({ status: "skipped" });
+            expect(approvedToolInvocations).toBe(0);
+          }
+          storage.approvalEffects.upsert({ approvalId, effectKind: "linked_chat_turn_wake", targetKind: "chat_turn",
+            targetId: prepared.turnId, payload: { runId: parkedRun.runId, correlationId: approvalId } });
+          const claimAt = storage.durableRuns.readDatabaseNow();
+          const wakeClaim = storage.approvalEffects.claimNextPendingEffect(approvalProcessor.workerId, claimAt,
+            new Date(Date.parse(claimAt) + 60_000).toISOString())!;
+          await approvalProcessor.handleLinkedChatTurnWake(wakeClaim);
+          expect(storage.approvalEffects.get(wakeClaim.effectId)).toMatchObject({ status: "completed", result: { outcome: "woke" } });
+          const claimed = storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({ runId: parkedRun.runId,
+            workerId: "gateway-approval-continuation", leaseDurationMs: 300_000 })!;
+          const parent = (await new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas")).resolve(claimed, prepared))!;
+          const parentAbort = new AbortController();
+          let parentSettled = false;
+          const parentResult = parent.stream({ signal: parentAbort.signal,
+            canonicalWriteFence: work => asyncStorage.runImmediateTransaction(async () => {
+              if (!await asyncStorage.durableRuns.lockFreshActiveLeaseForUpdate(claimed.runId, claimed.leaseOwnerId!))
+                throw new Error("Native fixture parent claim lost.");
+              return await work();
+            }),
+          }).next().then(value => { parentSettled = true; return { value }; }, error => { parentSettled = true; return { error }; });
+          try {
+            await vi.waitFor(() => expect(storage.remoteWorkerAssignments.findChatApprovalResume({ registryWorkspaceId: "default",
+              assignmentId: offer.assignmentId, assignmentGeneration: parked.generation!.assignmentGeneration })?.binding?.dispatchOwnerId)
+              .toBe(claimed.leaseOwnerId));
+            const resumed = await runWorkerProcess({ ...common, runId: "approval-resume", stopAfter: approvedCase ? "workload" : "tools" });
+            expect(resumed.exitCode, JSON.stringify({ report: resumed.report, ownerErrors })).toBe(0);
+            expect(resumed.report).toMatchObject(approvedCase ? { outcome: "stopped", reconnectSync: "approval_resume_ready" }
+              : { outcome: "stopped", toolStatus: "completed", pendingToolCallCount: 0, awaiting: "model_continuation" });
+            const rotated = storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!;
+            expect(rotated.generation?.assignmentGeneration).toBe(parked.generation!.assignmentGeneration);
+            expect(rotated.lease!.leaseRevision).toBeGreaterThan(parked.lease!.leaseRevision);
+            if (approvedCase) {
+              // Lose the parent again before the approved read. The next native
+              // process must execute under the additional recovery binding.
+              expect(approvedToolInvocations).toBe(0);
+              expect(storage.remoteWorkerEffects.findSettlement("default", offer.assignmentId, 1, intents[0]!.intentId)).toBeUndefined();
+            } else {
+              expect(storage.remoteWorkerEffects.findSettlement("default", offer.assignmentId, 1, intents[0]!.intentId)?.receipt.receiptState)
+                .toBe("blocked_before_dispatch");
+              const replayed = await runWorkerProcess({ ...common, runId: "declined-replay", stopAfter: "tools" });
+              expect(replayed.exitCode, JSON.stringify({ report: replayed.report, ownerErrors })).toBe(0);
+              expect(replayed.report).toMatchObject({ toolStatus: "completed", awaiting: "model_continuation" });
+            }
+            expect(toolInvocations).toBe(1);
+            expect(provider).toHaveBeenCalledOnce();
+            expect(storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe(approvedCase ? "pending" : "rejected");
+            expect(parentSettled, "The Chat dispatcher must not emit the resolved approval again.").toBe(false);
+            expect(storage.chatTurnTraces.get(prepared.turnId).status).toBe("running");
+          } finally {
+            parentAbort.abort();
+            await parentResult;
+          }
+          const beforeRecovery = storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!;
+          const previousParent = storage.durableRuns.getRun(parkedRun.runId);
+          storage.durableRuns.updateRun({ runId: previousParent.runId, status: "running", expectedVersion: previousParent.version,
+            leaseExpiresAt: "2000-01-01T00:00:00.000Z" });
+          const recovery = durable as unknown as { reconcileRecoverableRuns(): Promise<number> };
+          expect(await recovery.reconcileRecoverableRuns()).toBe(1);
+          const awaitingParent = await runWorkerProcess({ ...common, runId: "declined-parent-pending", stopAfter: "tools" });
+          expect(awaitingParent.exitCode, JSON.stringify({ report: awaitingParent.report, ownerErrors })).toBe(0);
+          expect(awaitingParent.report).toMatchObject({ reconnectSync: "approval_resume_pending", awaiting: "approval_resolution" });
+          expect(storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!.lease)
+            .toEqual(beforeRecovery.lease);
+          const replacement = storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({ runId: previousParent.runId,
+            workerId: "gateway-after-another-restart", leaseDurationMs: 300_000 })!;
+          expect(replacement.attemptCount).toBe(previousParent.attemptCount);
+          const nextParent = (await new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas")).resolve(replacement, prepared))!;
+          const nextAbort = new AbortController();
+          let nextSettled = false;
+          const nextResult = nextParent.stream({ signal: nextAbort.signal,
+            canonicalWriteFence: work => asyncStorage.runImmediateTransaction(async () => {
+              if (!await asyncStorage.durableRuns.lockFreshActiveLeaseForUpdate(replacement.runId, replacement.leaseOwnerId!))
+                throw new Error("Recovered native fixture parent claim lost.");
+              return await work();
+            }),
+          }).next().then(value => { nextSettled = true; return { value }; }, error => { nextSettled = true; return { error }; });
+          try {
+            const ref = { registryWorkspaceId: "default", assignmentId: offer.assignmentId,
+              assignmentGeneration: parked.generation!.assignmentGeneration };
+            await vi.waitFor(() => expect(storage.remoteWorkerAssignments.findChatApprovalResume(ref)?.recovery?.material)
+              .toMatchObject({ recoveryRevision: 1, priorLeaseRevision: beforeRecovery.lease!.leaseRevision,
+                dispatchAuthority: { dispatchOwnerId: replacement.leaseOwnerId } }));
+            expect(() => storage.remoteWorkerAssignments.bindChatApprovalResumeDispatch({ ...ref,
+              durableRunId: previousParent.runId, leaseOwnerId: previousParent.leaseOwnerId!, attemptCount: previousParent.attemptCount }))
+              .toThrow();
+            const recoveredWorker = await runWorkerProcess({ ...common, runId: "approval-parent-recovered", stopAfter: "tools" });
+            expect(recoveredWorker.exitCode, JSON.stringify({ report: recoveredWorker.report, ownerErrors })).toBe(0);
+            expect(recoveredWorker.report).toMatchObject({ toolStatus: "completed", awaiting: "model_continuation" });
+            const afterRecovery = storage.remoteWorkerAssignments.findAssignmentAggregate("default", offer.assignmentId)!;
+            expect(afterRecovery.generation).toEqual(beforeRecovery.generation);
+            expect(afterRecovery.lease!.leaseRevision).toBeGreaterThan(beforeRecovery.lease!.leaseRevision);
+            expect(storage.remoteWorkerEffects.findSettlement("default", offer.assignmentId, 1, intents[0]!.intentId)?.receipt.receiptState)
+              .toBe(approvedCase ? mcpCase ? "completed_with_effect" : "completed_no_effect" : "blocked_before_dispatch");
+            expect(approvedToolInvocations).toBe(approvedCase ? 1 : 0);
+            expect(storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe(approvedCase ? "executed" : "rejected");
+            expect(toolInvocations).toBe(1);
+            expect(provider).toHaveBeenCalledOnce();
+            expect(nextSettled, "Recovered Chat must keep waiting for the next model result.").toBe(false);
+          } finally {
+            nextAbort.abort();
+            await nextResult;
+          }
+          if (!approvedCase) return;
+        }
+        if (!approvedCase) expect(toolsRun.report, JSON.stringify({ report: toolsRun.report, ownerErrors })).toMatchObject({
+          outcome: "stopped", inferenceStatus: "requires_tools", pendingToolCallCount: 0,
+          toolStatus: "completed", awaiting: "model_continuation",
+        });
+        const recovered = await runWorkerProcess({ ...common, runId: "tools-recovered", stopAfter: "tools" });
+        expect(recovered.exitCode, JSON.stringify({ report: recovered.report, ownerErrors })).toBe(0);
+        expect(recovered.report).toMatchObject({
+          outcome: "stopped", inferenceStatus: "requires_tools", pendingToolCallCount: 0,
+          toolStatus: "completed", awaiting: "model_continuation",
+        });
+        expect(provider).toHaveBeenCalledOnce();
+        expect(toolInvocations).toBe(1);
+        const intents = storage.remoteWorkerEffects.listIntents("default", offer.assignmentId, 1);
+        expect(intents).toHaveLength(1);
+        expect(storage.remoteWorkerEffects.findSettlement("default", offer.assignmentId, 1, intents[0]!.intentId)?.receipt.receiptState)
+          .toBe(mcpCase ? "completed_with_effect" : "completed_no_effect");
+        const completedTool = storage.chatToolRuns.get(`remote-tool:${intents[0]!.intentId}`);
+        expect(completedTool).toMatchObject({
+          status: "executed", toolName: canonicalToolName,
+          ...(!mcpCase ? { result: { text: "The retained file result is Orion 7." } } : {}),
+        });
+        expect(JSON.stringify(completedTool.result)).toContain("The retained file result is Orion 7.");
+        if (mcpFixture) expect(mcpFixture.calls()).toBe(1);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM model_usage_events WHERE transport_status = 'accepted'")).toBe(toolModelCase ? 2 : 1);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM model_usage_events WHERE dispatch_reconciliation = 'confirmed_not_dispatched'")).toBe(0);
+        const toolUsage = storage.remoteWorkerBudgets.listToolAttempts({ registryWorkspaceId: "default",
+          assignmentId: offer.assignmentId, assignmentGeneration: 1, intentId: intents[0]!.intentId });
+        expect(toolUsage).toHaveLength(toolModelCase ? 1 : 0);
+        if (toolModelCase) {
+          expect(toolProvider).toHaveBeenCalledOnce();
+          expect(toolUsage[0]).toMatchObject({ workerId: generation.workerId, durableRunId: offer.durableRunId,
+            callKind: "utility", terminalOutcome: "succeeded", transportStatus: "accepted",
+            parentOperationId: `worker-tool:${intents[0]!.intentId}` });
+        }
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_artifact_manifests")).toBe(0);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(0);
+        const request = storage.remoteWorkerInference.getRequestByIdempotency(
+          "default", `inference:${offer.assignmentId}:1`,
+        )!;
+        const terminal = storage.remoteWorkerInference.listFramesAfter({
+          registryWorkspaceId: request.registryWorkspaceId, assignmentId: request.assignmentId,
+          assignmentGeneration: request.assignmentGeneration, inferenceRequestId: request.inferenceRequestId,
+          attempt: request.attempt,
+        }, 0).at(-1)!;
+        expect(JSON.parse(terminal.payloadJson)).toMatchObject({
+          kind: "terminal", terminalState: "completed",
+          toolCalls: [{ callId: "call-read", modelToolName, argumentsJson: ' {"path":"note.txt"} ' }],
+        });
+        if (authorityCase === "tool_withdrawal") {
+          callableEntries.splice(0);
+          const withdrawn = await runWorkerProcess({ ...common, runId: "tool-withdrawn", stopAfter: "complete" });
+          expect(withdrawn.report.toolStatus).not.toBe("completed");
+          expect(withdrawn.report.outcome).not.toBe("completed");
+          expect(toolInvocations).toBe(1);
+          expect(provider).toHaveBeenCalledOnce();
+          return;
+        }
+      }
+      const artifactRun = await runWorkerProcess({ ...common, runId: "artifact", stopAfter: "artifact" });
+      if (authorityCase === "parent_takeover" || authorityCase === "parent_expiry") {
+        expect(providerSignals).toEqual([true]);
+        expect(provider).toHaveBeenCalledOnce();
+        expect(artifactRun.report.outcome).not.toBe("completed");
+        expect(artifactRun.report.outputManifestSha256).toBeUndefined();
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_artifact_manifests")).toBe(0);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(0);
+        expect(timings).toContainEqual({ path: "controlled-provider", phase: "finish" });
+        expect(
+          countRows(db, "SELECT COUNT(*) AS count FROM model_usage_events WHERE transport_status = 'accepted'"),
+        ).toBe(1);
+        return;
+      }
+      expect(
+        artifactRun.exitCode,
+        JSON.stringify({
+          timings,
+          error: artifactRun.report.error,
+          ownerErrors,
+          operation: db
+            .prepare("SELECT state, block_reason, budget_authority_state FROM remote_worker_inference_requests")
+            .all(),
+          usage: db.prepare("SELECT transport_status, terminal_outcome FROM model_usage_events").all(),
+        }),
+      ).toBe(0);
+      expect({
+        exit: artifactRun.exitCode,
+        error: artifactRun.report.error ?? artifactRun.stderr.slice(-800),
+        ownerErrors,
+      }).toEqual({ exit: 0, error: "", ownerErrors: [] });
+      expect(artifactRun.report).toMatchObject({
+        outcome: "stopped",
+        inferenceStatus: "completed",
+        outputManifestSha256: expect.any(String),
+      });
+      const expectedProviderCalls = toolsCase ? 2 : 1;
+      expect(provider).toHaveBeenCalledTimes(expectedProviderCalls);
+      const settledRun = await runWorkerProcess({ ...common, runId: "settled", stopAfter: "settle" });
+      expect({
+        exit: settledRun.exitCode,
+        error: settledRun.report.error ?? settledRun.stderr.slice(-800),
+        ownerErrors,
+      }).toEqual({ exit: 0, error: "", ownerErrors: [] });
+      expect(settledRun.report).toMatchObject({ outcome: "stopped", settlementOutcome: "completed" });
+      const recovered = await runWorkerProcess({ ...common, runId: "recovered", stopAfter: "complete" });
+      expect({
+        exit: recovered.exitCode,
+        error: recovered.report.error ?? recovered.stderr.slice(-800),
+        ownerErrors,
+      }).toEqual({ exit: 0, error: "", ownerErrors: [] });
+      expect(recovered.report).toMatchObject({
+        outcome: "completed",
+        settlement: "recovered",
+        settlementOutcome: "completed",
+      });
+      expect(recovered.report.stagesCompleted).toEqual(["admit", "settle", "complete"]);
+      expect(provider).toHaveBeenCalledTimes(expectedProviderCalls);
+      expect(toolInvocations).toBe(toolsCase ? 1 : 0);
+      expect(approvedToolInvocations).toBe(approvedCase ? 1 : 0);
+      expect(countRows(db, "SELECT COUNT(*) AS count FROM model_usage_events")).toBe(expectedProviderCalls + (toolModelCase ? 1 : 0));
+      if (mcpFixture) {
+        expect(mcpFixture.calls()).toBe(1);
+        expect(mcpFixture.readEvidence().arguments).toEqual([{ path: "note.txt" }]);
+        expect(JSON.stringify({ report: recovered.report, ownerErrors, toolRuns: storage.chatToolRuns.listByTurn("turn-connected-worker") }))
+          .not.toContain("controlled-worker-mcp-secret");
+      }
+      expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements")).toBe(1);
+      expect(storage.remoteWorkerBudgets.listGrants("default", "default")[0]).toMatchObject({
+        heldRequests: 0,
+        settledRequests: expectedProviderCalls + (toolModelCase ? 1 : 0),
+      });
+      const operation = storage.remoteWorkerInference.getRequestByIdempotency(
+        "default",
+        `inference:${offer.assignmentId}:1`,
+      )!;
+      expect(operation).toMatchObject({ state: "completed", budgetAuthorityState: "settled" });
+      const chatRun = storage.durableRuns.getRun(operation.durableRunId!);
+      const chatProfile = storage.chatTurnCapabilityProfiles.findByRun(chatRun.runId)!;
+      const chatPayload = readDurableChatTurnExecutionPayloadAuthority({
+        workflowKey: chatRun.workflowKey, durableRunId: chatRun.runId, payload: chatRun.payload,
+      })!;
+      const preparedChat = {
+        workspaceId: chatProfile.identity.workspaceId,
+        session: { sessionId: chatProfile.identity.sessionId }, turnId: chatProfile.identity.turnId,
+        capabilityProfile: chatProfile, assistantMessageId: chatPayload.assistantMessageId,
+        content: chatPayload.request.content,
+        userMessage: { messageId: chatPayload.userMessageId, sessionId: chatPayload.sessionId },
+        turnAdmission: {
+          identity: {
+            admissionId: chatPayload.admissionId, sessionIncarnationId: chatPayload.sessionIncarnationId,
+            materialSha256: chatPayload.admissionMaterialSha256, workspaceId: chatPayload.workspaceId,
+            sessionId: chatPayload.sessionId, turnId: chatPayload.turnId,
+            aggregateRevision: chatPayload.admissionAggregateRevision,
+            controllerGeneration: chatPayload.admissionControllerGeneration,
+          },
+          admittedRequest: chatPayload.request as ChatSendMessageRequest, requestActor: chatPayload.requestActor,
+        },
+      } as PreparedAgentChatTurn;
+      const handoff = new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas"));
+      const execution = placedExecution ?? (await handoff.resolve(chatRun, preparedChat))!;
+      const chatChunks = [];
+      for await (const chunk of execution.stream({ signal: new AbortController().signal,
+        canonicalWriteFence: async (work) => await asyncStorage.runImmediateTransaction(work),
+      })) chatChunks.push(chunk);
+      const completed = chatChunks.find((chunk) => chunk.type === "message_done")!;
+      if (toolsCase) {
+        expect(completed.content).toBe("The file says Orion 7.");
+        expect(chatChunks).toContainEqual(expect.objectContaining({ type: "usage", usage: expect.objectContaining({
+          inputTokens: toolModelCase ? 30 : 20, outputTokens: toolModelCase ? 21 : 20,
+        }) }));
+      }
+      expect(completed).toMatchObject({ sessionId: preparedChat.session.sessionId,
+        turnId: preparedChat.turnId, messageId: preparedChat.assistantMessageId });
+      const commitChat = async () => {
+        await asyncStorage.chatMessages.upsert({ messageId: preparedChat.assistantMessageId,
+          sessionId: preparedChat.session.sessionId, role: "assistant", actorType: "agent", actorId: "assistant",
+          content: completed.content, sourceAuthority: "unknown", timestamp: new Date().toISOString() });
+        await asyncStorage.chatTurnTraces.patch(preparedChat.turnId, {
+          status: "completed", assistantMessageId: preparedChat.assistantMessageId,
+        });
+        await execution.recordAssistantCommit(preparedChat.assistantMessageId, completed.content);
+        await execution.recordAssistantCommit(preparedChat.assistantMessageId, completed.content);
+      };
+      await expect(execution.recordAssistantCommit(preparedChat.assistantMessageId, completed.content))
+        .rejects.toThrow("canonical assistant message");
+      await expect(asyncStorage.runImmediateTransaction(async () => {
+        await commitChat();
+        throw new Error("test rollback after materialization");
+      })).rejects.toThrow("test rollback after materialization");
+      expect(storage.chatMessages.get(preparedChat.assistantMessageId)).toBeUndefined();
+      expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_materializations")).toBe(0);
+      await asyncStorage.runImmediateTransaction(commitChat);
+      expect(storage.chatMessages.get(preparedChat.assistantMessageId)).toMatchObject({
+        content: completed.content, role: "assistant", sessionId: preparedChat.session.sessionId,
+      });
+      expect(storage.remoteWorkerAssignments.findTaskBoundChatAssignment({
+        executionWorkspaceId: preparedChat.workspaceId, sessionId: preparedChat.session.sessionId,
+        turnId: preparedChat.turnId, durableRunId: chatRun.runId,
+      })!.materialization).toMatchObject({ chatTranscriptCount: 1, count: 1 });
+      // The fixture previously stopped at worker settlement. Bind its existing
+      // run to canonical retry policy before exercising the real Chat finalizer.
+      await asyncStorage.durableRuns.updateRun({ runId: chatRun.runId, status: chatRun.status,
+        metadata: { ...chatRun.metadata, retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT } },
+        expectedVersion: chatRun.version });
+      const finalizer: ChatDurableRunFinalizeDeps = {
+        runImmediateTransaction: async (work) => await asyncStorage.runImmediateTransaction(work),
+        durableRuns: asyncStorage.durableRuns, chatMessages: asyncStorage.chatMessages,
+        chatTurnTraces: asyncStorage.chatTurnTraces, chatToolRuns: asyncStorage.chatToolRuns,
+        chatToolArtifacts: asyncStorage.chatToolArtifacts,
+        resolvePostCommitEligibility: async () => ({ version: 1, autonomyEnabledAtParentSettlement: false,
+          evalIntegrityTurn: false, humanSession: true }),
+        recordDurableTimelineEvent: async (runId, eventType, payload) => {
+          await asyncStorage.durableRunEvents.append({ eventId: randomUUID(), runId, eventType,
+            payload: payload ?? {}, createdAt: new Date().toISOString() });
+        },
+        recordTerminalResultMaterialization: async (runId, prepared) =>
+          await handoff.recordDurableCommit(runId, prepared),
+      };
+      const completedTrace = await asyncStorage.chatTurnTraces.get(preparedChat.turnId);
+      await expect(asyncStorage.runImmediateTransaction(async () => {
+        await finalizeDurableChatRun(finalizer, chatRun.runId, preparedChat, completedTrace, chatRun.leaseOwnerId);
+        expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_materializations")).toBe(2);
+        throw new Error("test rollback after durable result");
+      })).rejects.toThrow("test rollback after durable result");
+      expect(storage.durableRuns.getRun(chatRun.runId).status).toBe("running");
+      expect(storage.durableRuns.getLatestCheckpointByKind(chatRun.runId, "run_completed")).toBeUndefined();
+      expect(countRows(db, "SELECT COUNT(*) AS count FROM remote_worker_assignment_materializations")).toBe(1);
+      await finalizeDurableChatRun(finalizer, chatRun.runId, preparedChat, completedTrace, chatRun.leaseOwnerId);
+      const completedRun = storage.durableRuns.getRun(chatRun.runId);
+      expect(completedRun).toMatchObject({ status: "completed", metadata: { outputText: completed.content } });
+      finalizer.recordTerminalResultMaterialization = async (runId, prepared) =>
+        await new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas")).recordDurableCommit(runId, prepared);
+      await finalizeDurableChatRun(finalizer, chatRun.runId, preparedChat, completedTrace);
+      expect(storage.durableRuns.getRun(chatRun.runId)).toEqual(completedRun);
+      expect(storage.remoteWorkerAssignments.findTaskBoundChatAssignment({
+        executionWorkspaceId: preparedChat.workspaceId, sessionId: preparedChat.session.sessionId,
+        turnId: preparedChat.turnId, durableRunId: chatRun.runId,
+      })!.materialization).toMatchObject({ chatTranscriptCount: 1, durableRunResultCount: 1, count: 2 });
+      await expect(asyncStorage.runImmediateTransaction(async () => {
+        await asyncStorage.durableRuns.updateRun({ runId: chatRun.runId, status: completedRun.status,
+          metadata: { ...completedRun.metadata, finalOutput: "changed terminal output" },
+          expectedVersion: completedRun.version });
+        await handoff.recordDurableCommit(chatRun.runId, preparedChat);
+      })).rejects.toThrow("canonical Chat terminal authority");
+      expect(storage.durableRuns.getRun(chatRun.runId)).toEqual(completedRun);
+      // A new Gateway service replays canonical output without another model call.
+      const replay = (await new RemoteWorkerChatExecutionService(asyncStorage, join(root, "cas"))
+        .resolve(chatRun, preparedChat))!;
+      const replayChunks = [];
+      for await (const chunk of replay.stream({ signal: new AbortController().signal,
+        canonicalWriteFence: async (work) => await asyncStorage.runImmediateTransaction(work),
+      })) replayChunks.push(chunk);
+      expect(replayChunks).toEqual(chatChunks);
+      await expect(execution.recordAssistantCommit(preparedChat.assistantMessageId, "changed output"))
+        .rejects.toThrow("verified settlement binding");
+      const idle = await runWorkerProcess({ ...common, runId: "idle", stopAfter: "complete" });
+      expect(idle.report).toMatchObject({ outcome: "stopped", awaiting: "assignment_offer" });
+      expect(provider).toHaveBeenCalledTimes(expectedProviderCalls);
     },
     300_000,
   );

@@ -317,6 +317,7 @@ export async function executePreparedAgentChatTurnBackground(
     abortSignal?: AbortSignal;
     durableLeaseOwnerId?: string;
     mutationLifecycle?: ChatStreamMutationLifecycle;
+    remoteWorkerExecution?: import("./remote-worker-chat-execution-service.js").RemoteWorkerChatExecution;
   },
 ): Promise<void> {
   let preserveForDurableRecovery = false;

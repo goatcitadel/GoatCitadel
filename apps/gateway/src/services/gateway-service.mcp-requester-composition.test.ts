@@ -6,9 +6,22 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalJsonString,
+  type CapabilityCatalogEntry,
   type ChatTurnCapabilityProfileRecord,
   type McpServerRecord,
+  type ToolInvokeRequest,
+  type ToolInvokeResult,
+  type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
+import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
+import {
+  ToolInvocationCoordinatorService,
+  type ToolInvocationCoordinatorHost,
+} from "./tool-invocation-coordinator-service.js";
+import { resolveNativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
+import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
+import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
 import {
   createMcpEphemeralResolvedConnectionCandidate,
   type McpEphemeralResolvedConnectionInput,
@@ -28,6 +41,14 @@ import {
   type McpRequesterScopedCompositionHost,
 } from "./gateway-service.js";
 import { loadGatewayConfig } from "../config.js";
+import { seedRemoteWorkerInferenceAuthority } from "../../../../packages/storage/src/remote-worker-inference-fixture.js";
+import {
+  RemoteWorkerEffectRuntime,
+  type RemoteWorkerApprovedActionInput,
+  type RemoteWorkerEffectRuntimeDependencies,
+} from "./remote-worker-effect-runtime.js";
+import type { DispatchRemoteWorkerEffectInput } from "./remote-worker-effect-settlement-service.js";
+import { buildToolCallBeforeHookInterpositionBinding } from "./tool-runtime-interposition.js";
 
 const profileServiceCapture = vi.hoisted(() => ({ deps: [] as unknown[] }));
 
@@ -185,7 +206,7 @@ const DISCOVERED_TOOLS = [
   },
 ];
 
-function stubFetch(): void {
+function stubFetch(options: { toolDescription?: string } = {}): void {
   global.fetch = vi.fn(async (url: string, init?: RequestInit & { dispatcher?: unknown }) => {
     const body = JSON.parse(String((init as RequestInit).body)) as { id?: number; method?: string };
     const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -207,7 +228,11 @@ function stubFetch(): void {
       return new Response(null, { status: 202 });
     }
     if (body.method === "tools/list") {
-      return respond({ tools: DISCOVERED_TOOLS });
+      return respond({
+        tools: options.toolDescription
+          ? [{ ...DISCOVERED_TOOLS[0], description: options.toolDescription }]
+          : DISCOVERED_TOOLS,
+      });
     }
     if (body.method === "tools/call") {
       return respond({ content: [{ type: "text", text: "done" }] });
@@ -218,6 +243,7 @@ function stubFetch(): void {
 
 interface Harness {
   runtime: McpRequesterScopedComposedRuntime;
+  restart(): McpRequesterScopedComposedRuntime;
   servers: McpServerRecord[];
   profiles: Map<string, ChatTurnCapabilityProfileRecord>;
   revokedActors: Set<string>;
@@ -227,7 +253,9 @@ interface Harness {
   contextFor(profile: ChatTurnCapabilityProfileRecord): McpRequesterScopedTurnContextHandle;
 }
 
-function buildHarness(options: { resolvers?: boolean; onAuthRead?: () => void } = {}): Harness {
+function buildHarness(
+  options: { resolvers?: boolean; onAuthRead?: () => void; scopePort?: boolean; scopeAllowed?: boolean } = {},
+): Harness {
   const servers: McpServerRecord[] = [requesterScopedServerRecord(), staticServerRecord()];
   const profiles = new Map<string, ChatTurnCapabilityProfileRecord>();
   const revokedActors = new Set<string>();
@@ -258,6 +286,13 @@ function buildHarness(options: { resolvers?: boolean; onAuthRead?: () => void } 
   };
   const host: McpRequesterScopedCompositionHost = {
     ...(options.resolvers === false ? {} : { resolvers }),
+    ...(options.scopePort === false
+      ? {}
+      : {
+          assertMcpServerInScope: async () => {
+            if (options.scopeAllowed === false) throw new Error("MCP server is outside this workspace");
+          },
+        }),
     listMcpServers: async () => servers.map((server) => ({ ...server })),
     getChatTurnCapabilityProfile: async (profileId) => profiles.get(profileId),
     readAuthConnectionState: async (actor) => {
@@ -275,6 +310,7 @@ function buildHarness(options: { resolvers?: boolean; onAuthRead?: () => void } 
   };
   return {
     runtime: composeMcpRequesterScopedRuntime(host),
+    restart: () => composeMcpRequesterScopedRuntime(host),
     servers,
     profiles,
     revokedActors,
@@ -300,6 +336,468 @@ afterEach(() => {
 });
 
 describe("composeMcpRequesterScopedRuntime (HX-415 slice 7d composed E2E)", () => {
+  it.each(["chat", "worker", "approved worker"] as const)(
+    "discovers, freezes, persists and dispatches native MCP through %s and the composed requester runtime",
+    async (executionKind) => {
+      const harness = buildHarness();
+      const profile = profileRecordFor("operator-a");
+      harness.profiles.set(profile.profileId, profile);
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-composed-native-mcp-"));
+      const storage = new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      });
+      const workerSeed =
+        executionKind === "chat" ? undefined : seedRemoteWorkerInferenceAuthority(storage.db, "composed-mcp");
+      const executionWorkspaceId = workerSeed ? "default" : "workspace-1";
+      if (workerSeed)
+        Object.assign(profile.identity, {
+          workspaceId: executionWorkspaceId,
+          sessionId: workerSeed.sessionId,
+          turnId: workerSeed.turnId,
+          durableRunId: workerSeed.durableRunId,
+        });
+      try {
+        const config: ToolPolicyConfig = {
+          profiles: { danger: ["*"] },
+          tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+          agents: {},
+          sandbox: {
+            writeJailRoots: [root],
+            readOnlyRoots: [root],
+            networkAllowlist: [],
+            riskyShellPatterns: [],
+            requireApprovalForRiskyShell: true,
+          },
+        };
+        const policyEngine = new ToolPolicyEngine(config, createSqliteAsyncStorage(storage));
+        const asyncStorage = createSqliteAsyncStorage(storage);
+        const wrapper: CapabilityCatalogEntry = {
+          capabilityId: "tool:mcp.invoke",
+          kind: "tool",
+          category: "built_in",
+          title: "MCP",
+          summary: "Governed MCP invocation",
+          callable: true,
+          toolName: "mcp.invoke",
+        };
+        const schemaRunner = new ChatTurnAgentRunner({
+          storage: asyncStorage,
+          listToolCatalog: () => policyEngine.listCatalog().filter((tool) => tool.toolName === "mcp.invoke"),
+          createChatCompletion: vi.fn(),
+          invokeTool: vi.fn(),
+          inspectToolAccess: (request, options) =>
+            policyEngine.inspectAccess(
+              request,
+              options?.mcpCatalogPolicyBinding ? { mcpToolBinding: options.mcpCatalogPolicyBinding } : undefined,
+            ),
+        });
+        const actualProfileService = await vi.importActual<typeof import("./chat-turn-capability-profile-service.js")>(
+          "./chat-turn-capability-profile-service.js",
+        );
+        const frozen = await actualProfileService.resolveChatTurnCapabilityProfile(
+          {
+            storage: asyncStorage,
+            listCapabilityCatalog: async () => [wrapper],
+            resolveToolSchema: (input, native) => schemaRunner.resolveCapabilityToolSchema(input, native),
+            resolveToolPolicyContext: async () => ({
+              authActorId: "operator-a",
+              authActorSource: "token",
+              workspaceId: executionWorkspaceId,
+              sessionId: profile.identity.sessionId,
+            }),
+            getProviderReadiness: () => ({ configured: true, local: false }),
+            discoverMcpRequesterCatalogs: harness.runtime.discoverMcpRequesterCatalogs,
+            resolveMcpRequesterCatalogBindings: harness.runtime.resolveMcpRequesterCatalogBindings,
+          },
+          {
+            sessionId: profile.identity.sessionId,
+            turnId: profile.identity.turnId,
+            workspaceId: executionWorkspaceId,
+            ...(workerSeed ? { durableRunId: workerSeed.durableRunId } : {}),
+            citadelId: "citadel-1",
+            route: { channel: "chat", account: "default" },
+            content: "Use mcp.tenant-mcp.search to find records.",
+            mode: "chat",
+            webMode: "off",
+            memoryMode: "off",
+            retrievalMode: "standard",
+            thinkingLevel: "standard",
+            speedMode: "standard",
+            subagentPolicy: "off",
+            toolAutonomy: "safe_auto",
+            historyMessages: [],
+            routeResolution: {
+              effectiveProviderId: "controlled",
+              effectiveModel: "controlled-model",
+              fallbackPolicy: "off",
+              runtimeClass: "cloud",
+            },
+            authActorId: "operator-a",
+            authActorSource: "token",
+          },
+        );
+        Object.assign(profile, frozen.profile);
+        harness.profiles.set(profile.profileId, profile);
+        const native = profile.selection.tools.find((tool) => tool.canonicalName === "mcp.tenant-mcp.search")!;
+        expect(native).toBeDefined();
+        expect(native.modelName).toMatch(/^mcp__[A-Za-z0-9_-]{43}$/);
+        expect((native.providerDefinition.function as Record<string, unknown>).parameters).toEqual(
+          DISCOVERED_TOOLS[0]!.inputSchema,
+        );
+        expect(harness.discoveryResolver).toHaveBeenCalledTimes(2);
+        expect(captured.filter((call) => call.method === "tools/list")).toHaveLength(2);
+        const { workspaceId, sessionId, turnId } = profile.identity;
+        if (!workerSeed)
+          storage.chatSessionLifecycles.initialize({
+            workspaceId,
+            sessionId,
+            actorId: "operator-a",
+            idempotencyKey: "native:init",
+            correlationId: "native:init",
+          });
+        const admitted = storage.sessionMutationAdmissions.admit({
+          workspaceId,
+          sessionId,
+          turnId,
+          runtimeOwnerId: "native-runtime",
+          admissionKind: "turn_write",
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          actorKind: "system",
+          actorId: "system:test",
+          operation: "chat.turn.execute",
+          materialSha256: digest({ turnId }),
+          idempotencyKey: "native:admit",
+          correlationId: "native:admit",
+        }).admission;
+        storage.db.transaction("immediate", () => {
+          storage.capabilityCatalogSnapshots.create(frozen.catalogSnapshot);
+          storage.sessionMutationAdmissions.bindCapabilityProfile({
+            admissionId: admitted.admissionId,
+            workspaceId,
+            sessionId,
+            sessionIncarnationId: admitted.sessionIncarnationId,
+            turnId,
+            profileId: profile.profileId,
+            profileHash: profile.hashes.profileHash,
+            createdAt: profile.createdAt,
+            requestRuntimeClaim: {
+              runtimeOwnerId: admitted.runtimeOwnerId!,
+              leaseRevision: admitted.runtimeLeaseRevision!,
+            },
+          });
+          storage.chatTurnCapabilityProfiles.create(profile);
+        });
+        expect(storage.chatTurnCapabilityProfiles.get(profile.profileId)).toEqual(profile);
+        await expect(
+          assertChatCapabilityBindingsCurrent(
+            profile,
+            asyncStorage,
+            [wrapper],
+            harness.runtime.revalidateRequesterTool,
+          ),
+        ).resolves.toBeUndefined();
+        await expect(assertChatCapabilityBindingsCurrent(profile, asyncStorage, [wrapper])).rejects.toThrow(
+          "cannot verify its native MCP catalog",
+        );
+        await expect(
+          assertChatCapabilityBindingsCurrent(profile, asyncStorage, [], harness.runtime.revalidateRequesterTool),
+        ).rejects.toThrow("shared MCP capability");
+        const restarted = harness.restart();
+        const staticTransport = vi.fn();
+        const host = {
+          policyEngine,
+          normalizeToolInvokeRequest: async (request: ToolInvokeRequest) => request,
+          resolveNativeMcpChatToolBinding: (request, context) =>
+            resolveNativeMcpChatToolBinding(asyncStorage, request, context),
+          hooksService: { runInlineHooks: async () => ({ runs: [] }), enqueueAfterHooks: async () => undefined },
+          isValidToolName: () => true,
+          evaluateToolDeploymentGuard: () => undefined,
+          resolveToolHookWorkspaceId: async () => executionWorkspaceId,
+          resolveToolCallBeforeHookInterposition: async () => buildToolCallBeforeHookInterpositionBinding([]),
+          primeToolApprovalLifecycle: async (approvalId, request) =>
+            asyncStorage.approvals.mergeLinkage(approvalId, {
+              workspaceId: request.workspaceId,
+              sessionId: request.sessionId,
+              turnId: request.turnId,
+              runId: request.runId,
+              taskId: request.taskId,
+              toolName: request.toolName,
+              actionType: "tool.invoke",
+            }),
+          scheduleApprovalExplanationById: async () => undefined,
+          publishRealtime: async () => undefined,
+          requireMcpServer: async () => harness.servers[0]!,
+          assertMcpServerInScope: async (request) => {
+            expect(request.workspaceId).toBe(executionWorkspaceId);
+          },
+          requesterScopedMcpDispatch: restarted.requesterScopedMcpDispatch,
+          invokeMcpRuntimeTool: staticTransport,
+          matchesWildcard: (value, pattern) => value === pattern,
+          applyMcpRedaction: (output) => output,
+        } as ToolInvocationCoordinatorHost;
+        const coordinator = new ToolInvocationCoordinatorService(host);
+        const invoke = vi.spyOn(coordinator, "invokeTool");
+        const request: ToolInvokeRequest = {
+          toolName: "mcp.tenant-mcp.search",
+          args: { query: "native invocation" },
+          agentId: "assistant",
+          sessionId: profile.identity.sessionId,
+          turnId: profile.identity.turnId,
+          toolRunId: "native-tool-run",
+          workspaceId: profile.identity.workspaceId,
+          citadelId: profile.identity.citadelId,
+          policyContext: { authActorId: "operator-a", authActorSource: "token" },
+        };
+        const executionFence = vi.fn();
+        const markStarted = vi.fn();
+        const options = {
+          mcpRequesterTurnContext: harness.contextFor(profile),
+          executionFence,
+          externalSideEffect: { markStarted, markNotRequired: vi.fn() },
+        };
+        captured = [];
+        if (!workerSeed) {
+          const result = await coordinator.invokeTool(request, options);
+          expect(result).toMatchObject({ outcome: "executed", result: { toolName: request.toolName, ok: true } });
+          expect(JSON.stringify(result)).not.toMatch(/secret-operator-a|example\.test/u);
+        } else {
+          const assignment = storage.remoteWorkerAssignments.getAssignment("default", workerSeed.assignmentId);
+          const resolveResume = vi.fn<
+            RemoteWorkerEffectRuntimeDependencies["storage"]["remoteWorkerAssignments"]["resolveActiveChatApprovalResume"]
+          >(async () => undefined);
+          // Protected admission and approval handoff are controlled fixtures;
+          // tool, policy, pending-action, requester and effect owners are real.
+          const workerStorage = {
+            remoteWorkerEffects: asyncStorage.remoteWorkerEffects,
+            chatToolRuns: asyncStorage.chatToolRuns,
+            approvals: asyncStorage.approvals,
+            pendingApprovalActions: asyncStorage.pendingApprovalActions,
+            mutationIdempotency: asyncStorage.mutationIdempotency,
+            externalSideEffectRuns: asyncStorage.externalSideEffectRuns,
+            runImmediateTransaction: (work) => asyncStorage.runImmediateTransaction(work),
+            chatTurnCapabilityProfiles: asyncStorage.chatTurnCapabilityProfiles,
+            capabilityCatalogSnapshots: asyncStorage.capabilityCatalogSnapshots,
+            skillLifecycle: asyncStorage.skillLifecycle,
+            remoteWorkerAssignments: {
+              resolveActiveChatExecution: async () => ({
+                authority: {
+                  assignment: {
+                    ...assignment,
+                    manifest: {
+                      ...assignment.manifest,
+                      capabilityProfileSha256: profile.hashes.profileHash,
+                      requiredCapabilityClasses: ["durable_compute", "governed_tool"],
+                    },
+                  },
+                },
+                workload: { capabilityProfileId: profile.profileId },
+              }),
+              resolveActiveChatApprovalResume: resolveResume,
+            } as unknown as RemoteWorkerEffectRuntimeDependencies["storage"]["remoteWorkerAssignments"],
+          } satisfies RemoteWorkerEffectRuntimeDependencies["storage"];
+          const gateway = Object.assign(Object.create(GatewayService.prototype), {
+            storage: asyncStorage,
+            policyEngine,
+            toolInvocationCoordinator: coordinator,
+            enrichMcpInvokePolicyContext: async (input: unknown) => input,
+          }) as {
+            executeApprovedRemoteWorkerAction(input: RemoteWorkerApprovedActionInput): Promise<ToolInvokeResult>;
+          };
+          const workerDependencies: RemoteWorkerEffectRuntimeDependencies = {
+            storage: workerStorage,
+            coordinator,
+            listCallableCapabilities: async () => [wrapper],
+            revalidateRequesterTool: restarted.revalidateRequesterTool,
+            resolvePolicyContext: async () => ({
+              permissionProfileId: profile.governance.permission.profileId,
+              authActorId: "operator-a",
+              authActorSource: "token",
+            }),
+            createMcpRequesterTurnContext: buildMcpRequesterScopedTurnContextFromCapabilityProfile,
+            withToolModelBudget: async (_input, operation) => operation(),
+            executeApprovedAction: (input) => gateway.executeApprovedRemoteWorkerAction(input),
+          };
+          const workerInput: DispatchRemoteWorkerEffectInput = {
+            fence: {
+              registryWorkspaceId: "default",
+              assignmentId: workerSeed.assignmentId,
+              assignmentGeneration: 1,
+              sessionControlGeneration: null,
+              leaseTokenSha256: digest("controlled-lease"),
+              protectedAuthority: { controlled: true } as NonNullable<
+                DispatchRemoteWorkerEffectInput["fence"]["protectedAuthority"]
+              >,
+            },
+            intentIndex: 0,
+            effectSelector: request.toolName,
+            canonicalArgs: request.args,
+            workerIdempotencyKey: "composed-native-call",
+            intentIdempotencyKey: "composed-native-intent",
+          };
+          if (executionKind === "approved worker") config.tools.approvalMode = "approve_all";
+          const initial = await new RemoteWorkerEffectRuntime(workerDependencies).dispatchEffect(workerInput);
+          expect(initial.receipt?.receiptState, JSON.stringify(await invoke.mock.results[0]!.value)).not.toBe(
+            "blocked_before_dispatch",
+          );
+          if (executionKind === "approved worker") {
+            expect(initial.receipt).toBeUndefined();
+            expect(captured).toEqual([]);
+            const waitingTool = await asyncStorage.chatToolRuns.get(`remote-tool:${initial.intentId}`);
+            expect(waitingTool).toMatchObject({
+              status: "approval_required",
+              toolName: request.toolName,
+              args: request.args,
+            });
+            const approval = await asyncStorage.approvals.resolve(waitingTool.approvalId!, {
+              decision: "approve",
+              resolvedBy: "operator-a",
+            });
+            const pending = (await asyncStorage.pendingApprovalActions.find(approval.approvalId))!;
+            expect(pending.request).toMatchObject({ toolName: request.toolName, args: request.args });
+            resolveResume.mockResolvedValue({
+              material: {
+                approvalId: approval.approvalId,
+                intentId: initial.intentId,
+                approvalSha256: digest(approval),
+                pendingActionSha256: digest(pending),
+              },
+              materialSha256: digest("controlled-resume"),
+            } as NonNullable<Awaited<ReturnType<typeof resolveResume>>>);
+            host.requesterScopedMcpDispatch = harness.restart().requesterScopedMcpDispatch;
+          }
+          const completed = await new RemoteWorkerEffectRuntime(workerDependencies).dispatchEffect(workerInput);
+          expect(completed.receipt?.receiptState).toBe("completed_with_effect");
+          const tool = await asyncStorage.chatToolRuns.get(`remote-tool:${completed.intentId}`);
+          expect(tool).toMatchObject({
+            status: "executed",
+            toolName: request.toolName,
+            args: request.args,
+            effectOutcomeKind: "concrete",
+            result: { toolName: request.toolName, ok: true },
+          });
+          const effects = await asyncStorage.externalSideEffectRuns.listByWorkspace(executionWorkspaceId, 10);
+          expect(effects.filter((effect) => effect.externalCallStartedAt)).toHaveLength(1);
+          expect(JSON.stringify({ completed, tool, effects })).not.toMatch(
+            /secret-operator-a|example\.test|mcpRequesterTurnContext/u,
+          );
+          const wireCount = captured.length;
+          expect(await new RemoteWorkerEffectRuntime(workerDependencies).dispatchEffect(workerInput)).toEqual(
+            completed,
+          );
+          expect(captured).toHaveLength(wireCount);
+          config.tools.approvalMode = "bypass";
+        }
+        expect(captured.map((call) => call.method)).toEqual([
+          "initialize",
+          "notifications/initialized",
+          "tools/list",
+          "initialize",
+          "notifications/initialized",
+          "tools/list",
+          "tools/call",
+        ]);
+        const callBody = JSON.parse(String(vi.mocked(global.fetch).mock.calls.at(-1)?.[1]?.body));
+        expect(callBody.params).toMatchObject({ name: "search", arguments: request.args });
+        expect(executionFence).toHaveBeenCalledTimes(workerSeed ? 0 : 1);
+        expect(markStarted).toHaveBeenCalledTimes(workerSeed ? 0 : 1);
+        expect(harness.discoveryResolver).toHaveBeenCalledTimes(3);
+        expect(staticTransport).not.toHaveBeenCalled();
+        expect(storage.toolAccessDecisions.countToolCallsInLastHour("mcp.invoke", "assistant", request.sessionId)).toBe(
+          1,
+        );
+        expect(
+          storage.toolAccessDecisions.countToolCallsInLastHour(request.toolName, "assistant", request.sessionId),
+        ).toBe(1);
+
+        // A second fresh runtime must check pinned server state BEFORE resolving
+        // credentials. It can never adopt a changed endpoint/configuration.
+        const serverBefore = { ...harness.servers[0]! };
+        harness.servers[0]!.configurationRevision! += 1;
+        captured = [];
+        const beforeResolvers = harness.discoveryResolver.mock.calls.length;
+        const blockedFence = vi.fn();
+        const retry = {
+          server: harness.servers[0]!,
+          toolName: "search",
+          arguments: request.args,
+          mcpRequesterTurnContext: options.mcpRequesterTurnContext,
+        };
+        const changedServer = await harness
+          .restart()
+          .requesterScopedMcpDispatch.invoke(retry, { effectDispatch: blockedFence });
+        expect(changedServer).toMatchObject({ ok: false, failurePhase: "pre_dispatch" });
+        expect(harness.discoveryResolver).toHaveBeenCalledTimes(beforeResolvers);
+        expect(captured).toEqual([]);
+        harness.servers[0] = serverBefore;
+
+        // Fresh schema discovery cannot replace the retained provider alias.
+        stubFetch({ toolDescription: "Changed after the profile was frozen" });
+        const schemaDrift = await harness
+          .restart()
+          .requesterScopedMcpDispatch.invoke({ ...retry, server: serverBefore }, { effectDispatch: blockedFence });
+        expect(schemaDrift.ok).toBe(false);
+        expect(captured.filter((call) => call.method === "tools/call")).toEqual([]);
+        expect(blockedFence).not.toHaveBeenCalled();
+        expect(JSON.stringify(schemaDrift)).toContain("schema_revalidation_drift");
+        stubFetch();
+
+        // The retained profile hash is re-read before recovery can use credentials.
+        harness.profiles.set(profile.profileId, {
+          ...profile,
+          hashes: { ...profile.hashes, profileHash: "f".repeat(64) },
+        });
+        captured = [];
+        expect(
+          (
+            await harness
+              .restart()
+              .requesterScopedMcpDispatch.invoke({ ...retry, server: serverBefore }, { effectDispatch: blockedFence })
+          ).ok,
+        ).toBe(false);
+        expect(captured).toEqual([]);
+        expect(blockedFence).not.toHaveBeenCalled();
+        harness.profiles.set(profile.profileId, profile);
+
+        // The saved handle and mapping never outrank current requester revocation.
+        harness.revokedActors.add("operator-a");
+        await expect(
+          assertChatCapabilityBindingsCurrent(
+            profile,
+            asyncStorage,
+            [wrapper],
+            harness.runtime.revalidateRequesterTool,
+          ),
+        ).rejects.toThrow("no longer current");
+        captured = [];
+        expect((await coordinator.invokeTool(request, options)).outcome).toBe("blocked");
+        expect(captured).toEqual([]);
+        expect(executionFence).toHaveBeenCalledTimes(workerSeed ? 0 : 1);
+        expect(markStarted).toHaveBeenCalledTimes(workerSeed ? 0 : 1);
+      } finally {
+        storage.close();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["missing_scope", "denied_scope", "missing_resolver"])(
+    "omits discovery without authority: %s",
+    async (caseName) => {
+      const harness = buildHarness({
+        scopePort: caseName !== "missing_scope",
+        scopeAllowed: caseName !== "denied_scope",
+        resolvers: caseName !== "missing_resolver",
+      });
+      const hook = freezeHookFor(profileRecordFor("operator-a"));
+      expect(await harness.runtime.discoverMcpRequesterCatalogs(hook)).toEqual([]);
+      expect(harness.discoveryResolver).not.toHaveBeenCalled();
+      expect(captured).toEqual([]);
+    },
+  );
+
   it("runs profile freeze -> discovery outcome -> revalidated tools/call end to end with one effect dispatch", async () => {
     const harness = buildHarness();
     const profile = profileRecordFor("operator-a");

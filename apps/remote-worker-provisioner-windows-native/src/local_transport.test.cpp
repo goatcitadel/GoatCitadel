@@ -12,6 +12,7 @@
 namespace gc = goatcitadel::remote_worker_provisioner;
 
 int RunEd25519RuntimeTests() noexcept;
+int RunProtectedCallerAuthorityTests() noexcept;
 
 namespace {
 
@@ -238,14 +239,14 @@ void TestLiteralMessages() {
             (UINT64_C(1) << static_cast<std::uint8_t>(opcode))) != 0U;
   };
   Expect(
-      gc::kGcpaCallableOpcodeBitmap == UINT64_C(0x00000000001D0002) &&
+      gc::kGcpaCallableOpcodeBitmap == UINT64_C(0x00000000003D0002) &&
           callable(gc::Opcode::Inspect) &&
           callable(gc::Opcode::CreateKeyset) &&
           callable(gc::Opcode::RevokeLocalKeyset) &&
           !callable(gc::Opcode::AcquireKeyForSigning) &&
           callable(gc::Opcode::SignAdmissionEvidence) &&
-          callable(gc::Opcode::SignRuntimePopV2),
-      "GCPA exposes INSPECT/CREATE/REVOKE/SIGN_ADMISSION_EVIDENCE/SIGN_RUNTIME_POP_V2 only");
+          callable(gc::Opcode::SignRuntimePopV2) && callable(gc::Opcode::SignTlsClientCertificateVerify),
+      "GCPA exposes only inspect, custody lifecycle, and purpose-bound signing operations");
   const Fixture fixture = MakeFixture();
   const auto expected_client_hello = Hex(
       "47435041010001000100000020000000"
@@ -255,7 +256,7 @@ void TestLiteralMessages() {
       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
       "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
       "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"
-      "02001f000700070002001d0000000000");
+      "02003f000700070002003d0000000000");
   const auto expected_request = Hex(
       "474350410100020001000000b8000000"
       "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -670,6 +671,7 @@ void TestRuntimePopV2OperationAuthority() {
 int RunLocalTransportTests() noexcept {
   const int initial_failures = g_failures;
   g_failures += RunEd25519RuntimeTests();
+  g_failures += RunProtectedCallerAuthorityTests();
   TestBindingFixture();
   TestLiteralMessages();
   TestFrozenMessageBoundaries();

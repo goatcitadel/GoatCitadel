@@ -41,6 +41,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS = Object.freez
   "apps/remote-worker-provisioner-windows-native/src/availability_broker.test.cpp",
   "apps/remote-worker-provisioner-windows-native/src/availability_broker_main.cpp",
   "apps/remote-worker-provisioner-windows-native/src/availability_broker_runtime.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/caller_authority.test.cpp",
   "apps/remote-worker-provisioner-windows-native/src/client_main.cpp",
   "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.cpp",
   "apps/remote-worker-provisioner-windows-native/src/ed25519_runtime.hpp",
@@ -66,14 +67,20 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS = Object.freez
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.cpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.hpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.test.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/signer_inspection.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/signer_inspection.hpp",
+  "apps/remote-worker-provisioner-windows-native/src/signer_inspection.test.cpp",
   "apps/remote-worker-provisioner/src/protected-admission-evidence.test.ts",
   "apps/remote-worker-provisioner/src/protected-admission-evidence.ts",
   "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.test.ts",
   "apps/remote-worker-provisioner/src/protected-runtime-pop-v2.ts",
+  "apps/remote-worker-provisioner/src/protected-tls-client-certificate-verify.test.ts",
   "apps/remote-worker-provisioner/src/windows-helper-protocol.test.ts",
   "apps/remote-worker-provisioner/src/windows-helper-protocol.ts",
   "apps/remote-worker-provisioner/src/windows-service-client.test.ts",
   "apps/remote-worker-provisioner/src/windows-service-client.ts",
+  "apps/remote-worker-windows-host-native/src/service_inspection.cpp",
+  "apps/remote-worker-windows-host-native/src/service_inspection.hpp",
   "packages/contracts/src/remote-worker-protocol.test.ts",
   "packages/contracts/src/remote-worker-protocol.ts",
   "scripts/packaging/build-remote-worker-provisioner-windows-native.mjs",
@@ -121,9 +128,11 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
         dll: "ADVAPI32.dll",
         functions: Object.freeze([
           "AddAccessAllowedAceEx",
+          "AddAce",
           "CloseServiceHandle",
           "EqualSid",
           "GetAce",
+          "GetKernelObjectSecurity",
           "GetLengthSid",
           "GetSecurityDescriptorControl",
           "GetSecurityDescriptorDacl",
@@ -151,6 +160,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
           "QueryServiceStatusEx",
           "RegisterServiceCtrlHandlerExW",
           "RevertToSelf",
+          "SetKernelObjectSecurity",
           "SetSecurityDescriptorControl",
           "SetSecurityDescriptorDacl",
           "SetSecurityDescriptorGroup",
@@ -240,9 +250,11 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
         dll: "ADVAPI32.dll",
         functions: Object.freeze([
           "AddAccessAllowedAceEx",
+          "AddAce",
           "CloseServiceHandle",
           "EqualSid",
           "GetAce",
+          "GetKernelObjectSecurity",
           "GetLengthSid",
           "GetSecurityDescriptorControl",
           "GetSecurityDescriptorDacl",
@@ -270,6 +282,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
           "QueryServiceStatusEx",
           "RegisterServiceCtrlHandlerExW",
           "RevertToSelf",
+          "SetKernelObjectSecurity",
           "SetSecurityDescriptorControl",
           "SetSecurityDescriptorDacl",
           "SetSecurityDescriptorGroup",
@@ -369,6 +382,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
           "IsValidAcl",
           "IsValidSecurityDescriptor",
           "IsValidSid",
+          "LookupPrivilegeValueW",
           "OpenProcessToken",
           "OpenSCManagerW",
           "OpenServiceW",
@@ -458,6 +472,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
           "IsValidAcl",
           "IsValidSecurityDescriptor",
           "IsValidSid",
+          "LookupPrivilegeValueW",
           "OpenProcessToken",
           "OpenSCManagerW",
           "OpenServiceW",
@@ -560,6 +575,8 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
       Object.freeze({
         dll: "KERNEL32.dll",
         functions: Object.freeze([
+          "AcquireSRWLockExclusive",
+          "AcquireSRWLockShared",
           "CloseHandle",
           "CompareStringOrdinal",
           "CreateEventW",
@@ -584,6 +601,8 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
           "QueryFullProcessImageNameW",
           "QueryPerformanceCounter",
           "ReadFile",
+          "ReleaseSRWLockExclusive",
+          "ReleaseSRWLockShared",
           "RtlCaptureContext",
           "RtlLookupFunctionEntry",
           "RtlVirtualUnwind",
@@ -644,6 +663,8 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
       Object.freeze({
         dll: "KERNEL32.dll",
         functions: Object.freeze([
+          "AcquireSRWLockExclusive",
+          "AcquireSRWLockShared",
           "CloseHandle",
           "CompareStringOrdinal",
           "CreateEventW",
@@ -664,6 +685,8 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS = Object.freeze({
           "OpenProcess",
           "QueryFullProcessImageNameW",
           "ReadFile",
+          "ReleaseSRWLockExclusive",
+          "ReleaseSRWLockShared",
           "RtlCaptureContext",
           "SetEvent",
           "SetFilePointerEx",
@@ -716,6 +739,8 @@ const w1b1aServiceAuthorityImports = Object.freeze([
   "GetSecurityDescriptorGroup",
   "GetVolumeInformationByHandleW",
   "SetFileInformationByHandle",
+  // signer_inspection.cpp targets only the validated signer's process/token.
+  "SetKernelObjectSecurity",
   "SetSecurityDescriptorGroup",
 ]);
 const availabilityAuthorityImports = Object.freeze(["StartServiceW"]);
@@ -911,8 +936,8 @@ function sameFileIdentity(left, right) {
 }
 
 export function computeW1B1aCanonicalSourceManifest(sourceRoot = repoRoot) {
-  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 47) {
-    throw new Error("The W1B1A canonical source fence must contain exactly 47 paths.");
+  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 54) {
+    throw new Error("The W1B1A canonical source fence must contain exactly 54 paths.");
   }
   const sortedPaths = [...REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS].sort();
   if (!sortedPaths.every((value, index) => value === REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS[index])) {
@@ -1349,6 +1374,7 @@ export function buildRemoteWorkerWindowsProvisioner({ target, outDir }) {
       service: Object.freeze({
         path: serviceDestination,
         sha256: serviceSha256,
+        targetClientSha256: clientSha256,
         byteLength: serviceBytesA.length,
         imports: servicePe.imports,
       }),
@@ -2179,6 +2205,7 @@ function inspectNativeCryptographyEvidence({ toolchain, first, second, target })
     "ParseCanonicalPkcs8ForTest",
     "RunFixedInteropForTest",
     "WasLastSha512ContextWipedForTest",
+    "CheckTlsClientCertificateVerifyForTest",
   ]);
   for (const forbidden of forbiddenSymbols) {
     if (mapContainsNamedSymbol(firstMap, forbidden) || mapContainsNamedSymbol(secondMap, forbidden)) {

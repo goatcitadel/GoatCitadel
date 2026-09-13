@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import type {
   PersonalityCatalogResponse,
+  PersonalityCatalogMutationInput,
   PersonalityPreset,
   PersonalityPresetCategory,
   PersonalityPresetMutationInput,
 } from "@goatcitadel/contracts";
-import type { AsyncStorage } from "@goatcitadel/storage";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import type { AsyncStorage, SystemSettingRecord } from "@goatcitadel/storage";
 
 type PersonalityDefinition = Omit<PersonalityPreset, "visibility" | "builtin" | "soulFile" | "safetyNotes"> & {
   safetyNotes?: string[];
@@ -468,6 +471,12 @@ interface StoredPersonalityCatalog {
   customPresets?: StoredPersonality[];
 }
 
+interface PersonalityCatalogSnapshot {
+  setting: SystemSettingRecord<unknown> | undefined;
+  stored: StoredPersonalityCatalog;
+  catalog: PersonalityCatalogResponse;
+}
+
 export function listPersonalityPresets(): PersonalityPreset[] {
   return BUILTIN_PERSONALITY_PRESETS;
 }
@@ -509,10 +518,14 @@ export function buildPersonalityOverlay(
 }
 
 export class PersonalityCatalogService {
-  public constructor(private readonly systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "set">) {}
+  public constructor(private readonly systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "compareAndSet">) {}
 
   public async getCatalog(): Promise<PersonalityCatalogResponse> {
-    const stored = await this.readStoredCatalog();
+    return (await this.readSnapshot()).catalog;
+  }
+
+  private projectSnapshot(setting: SystemSettingRecord<unknown> | undefined): PersonalityCatalogSnapshot {
+    const stored = this.normalizeStoredCatalog(setting?.value);
     const customPresets = this.normalizeCustomPresets(stored.customPresets);
     const items = [
       ...BUILTIN_PERSONALITY_PRESETS.map((preset) => this.applyBuiltinOverride(preset, stored.builtinOverrides)),
@@ -521,7 +534,9 @@ export class PersonalityCatalogService {
     const defaultPersonalityId = items.some((item) => item.id === normalizePersonalityId(stored.defaultPersonalityId))
       ? normalizePersonalityId(stored.defaultPersonalityId)
       : "default";
-    return { items, defaultPersonalityId };
+    const revision = createHash("sha256").update(JSON.stringify({ purpose: "personality-catalog-review-v1",
+      setting: setting ?? null, items, defaultPersonalityId })).digest("hex");
+    return { setting, stored, catalog: { revision, items, defaultPersonalityId } };
   }
 
   public async getDefaultPersonalityId(): Promise<string> {
@@ -533,56 +548,54 @@ export class PersonalityCatalogService {
     return buildPersonalityOverlay(catalog.defaultPersonalityId, catalog.items);
   }
 
-  public async setDefaultPersonality(id: string | undefined): Promise<PersonalityCatalogResponse> {
+  public async setDefaultPersonality(id: string | undefined, expectedRevision: string): Promise<PersonalityCatalogResponse> {
     const nextDefault = normalizePersonalityId(id);
-    const current = await this.getCatalog();
-    if (!current.items.some((item) => item.id === nextDefault)) {
-      throw new Error(`Unknown personality: ${id ?? ""}`);
+    const snapshot = await this.readReviewedSnapshot(expectedRevision);
+    if (!snapshot.catalog.items.some((item) => item.id === nextDefault)) {
+      throw new ValidationError({ message: `Unknown personality: ${id ?? ""}` });
     }
-    const stored = await this.readStoredCatalog();
-    await this.writeStoredCatalog({
-      ...stored,
+    return this.writeStoredCatalog(snapshot, {
+      ...snapshot.stored,
       defaultPersonalityId: nextDefault,
     });
-    return await this.getCatalog();
   }
 
-  public async createPersonality(input: PersonalityPresetMutationInput): Promise<PersonalityCatalogResponse> {
+  public async createPersonality(input: PersonalityCatalogMutationInput): Promise<PersonalityCatalogResponse> {
     const now = new Date().toISOString();
-    const stored = await this.readStoredCatalog();
-    const catalog = await this.getCatalog();
+    const snapshot = await this.readReviewedSnapshot(input.expectedRevision);
+    const { stored, catalog } = snapshot;
     const id = normalizePersonalityId(input.id ?? input.label);
     if (id === "default") {
-      throw new Error("Custom personality id cannot be default.");
+      throw new ValidationError({ message: "Custom personality id cannot be default." });
     }
     if (catalog.items.some((item) => item.id === id)) {
-      throw new Error(`Personality ${id} already exists.`);
+      throw new ValidationError({ message: `Personality ${id} already exists.` });
     }
     const custom = this.normalizeStoredPersonality({
       ...input,
       id,
       updatedAt: now,
     });
-    await this.writeStoredCatalog({
+    return this.writeStoredCatalog(snapshot, {
       ...stored,
       customPresets: [...this.normalizeStoredCustomList(stored.customPresets), custom],
     });
-    return await this.getCatalog();
   }
 
   public async updatePersonality(
     id: string,
-    input: PersonalityPresetMutationInput,
+    input: PersonalityCatalogMutationInput,
   ): Promise<PersonalityCatalogResponse> {
     const normalizedId = normalizePersonalityId(id);
     if (normalizedId === "default") {
-      throw new Error("The default no-overlay personality cannot be edited.");
+      throw new ValidationError({ message: "The default no-overlay personality cannot be edited." });
     }
     const now = new Date().toISOString();
-    const stored = await this.readStoredCatalog();
+    const snapshot = await this.readReviewedSnapshot(input.expectedRevision);
+    const { stored } = snapshot;
     const builtin = PRESETS_BY_ID.get(normalizedId);
     if (builtin) {
-      await this.writeStoredCatalog({
+      return this.writeStoredCatalog(snapshot, {
         ...stored,
         builtinOverrides: {
           ...(stored.builtinOverrides ?? {}),
@@ -595,18 +608,17 @@ export class PersonalityCatalogService {
           }),
         },
       });
-      return await this.getCatalog();
     }
 
     const customPresets = this.normalizeStoredCustomList(stored.customPresets);
     const index = customPresets.findIndex((item) => item.id === normalizedId);
     if (index === -1) {
-      throw new Error(`Unknown personality: ${id}`);
+      throw new ValidationError({ message: `Unknown personality: ${id}` });
     }
     const nextId = input.id !== undefined ? normalizePersonalityId(input.id) : normalizedId;
     if (nextId !== normalizedId) {
       if (nextId === "default" || PRESETS_BY_ID.has(nextId) || customPresets.some((item) => item.id === nextId)) {
-        throw new Error(`Personality ${nextId} already exists.`);
+        throw new ValidationError({ message: `Personality ${nextId} already exists.` });
       }
     }
     customPresets[index] = this.normalizeStoredPersonality({
@@ -615,39 +627,37 @@ export class PersonalityCatalogService {
       id: nextId,
       updatedAt: now,
     });
-    await this.writeStoredCatalog({
+    return this.writeStoredCatalog(snapshot, {
       ...stored,
       customPresets,
       defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? nextId : stored.defaultPersonalityId,
     });
-    return await this.getCatalog();
   }
 
-  public async deletePersonality(id: string): Promise<PersonalityCatalogResponse> {
+  public async deletePersonality(id: string, expectedRevision: string): Promise<PersonalityCatalogResponse> {
     const normalizedId = normalizePersonalityId(id);
     if (normalizedId === "default") {
-      throw new Error("The default no-overlay personality cannot be removed.");
+      throw new ValidationError({ message: "The default no-overlay personality cannot be removed." });
     }
-    const stored = await this.readStoredCatalog();
+    const snapshot = await this.readReviewedSnapshot(expectedRevision);
+    const { stored } = snapshot;
     if (PRESETS_BY_ID.has(normalizedId)) {
       const { [normalizedId]: _removed, ...builtinOverrides } = stored.builtinOverrides ?? {};
-      await this.writeStoredCatalog({
+      return this.writeStoredCatalog(snapshot, {
         ...stored,
         builtinOverrides,
         defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? "default" : stored.defaultPersonalityId,
       });
-      return await this.getCatalog();
     }
     const customPresets = this.normalizeStoredCustomList(stored.customPresets);
     if (!customPresets.some((item) => item.id === normalizedId)) {
-      throw new Error(`Unknown personality: ${id}`);
+      throw new ValidationError({ message: `Unknown personality: ${id}` });
     }
-    await this.writeStoredCatalog({
+    return this.writeStoredCatalog(snapshot, {
       ...stored,
       customPresets: customPresets.filter((item) => item.id !== normalizedId),
       defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? "default" : stored.defaultPersonalityId,
     });
-    return await this.getCatalog();
   }
 
   private applyBuiltinOverride(
@@ -726,8 +736,7 @@ export class PersonalityCatalogService {
     };
   }
 
-  private async readStoredCatalog(): Promise<StoredPersonalityCatalog> {
-    const raw = (await this.systemSettings.get<StoredPersonalityCatalog>(PERSONALITY_CATALOG_SETTINGS_KEY))?.value;
+  private normalizeStoredCatalog(raw: unknown): StoredPersonalityCatalog {
     if (!isRecord(raw)) {
       return {};
     }
@@ -747,9 +756,32 @@ export class PersonalityCatalogService {
     };
   }
 
-  private async writeStoredCatalog(next: StoredPersonalityCatalog): Promise<void> {
-    await this.systemSettings.set(PERSONALITY_CATALOG_SETTINGS_KEY, next);
+  private async readSnapshot(): Promise<PersonalityCatalogSnapshot> {
+    return this.projectSnapshot(await this.systemSettings.get(PERSONALITY_CATALOG_SETTINGS_KEY));
   }
+
+  private async readReviewedSnapshot(expectedRevision: string): Promise<PersonalityCatalogSnapshot> {
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) {
+      throw new ValidationError({ message: "Review the personality catalog before changing it. An expected revision is required." });
+    }
+    const snapshot = await this.readSnapshot();
+    if (snapshot.catalog.revision !== expectedRevision) throw personalityRevisionConflict();
+    return snapshot;
+  }
+
+  private async writeStoredCatalog(snapshot: PersonalityCatalogSnapshot, next: StoredPersonalityCatalog): Promise<PersonalityCatalogResponse> {
+    const previous = Date.parse(snapshot.setting?.updatedAt ?? "");
+    const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+    const saved = await this.systemSettings.compareAndSet(PERSONALITY_CATALOG_SETTINGS_KEY, snapshot.setting, next, updatedAt);
+    if (!saved) throw personalityRevisionConflict();
+    // Return the committed snapshot; a later read could acknowledge another writer.
+    return this.projectSnapshot(saved).catalog;
+  }
+}
+
+function personalityRevisionConflict(): ConflictError {
+  return new ConflictError({ code: "WRITE_CONFLICT", message: "The personality catalog changed. Review the current catalog before applying your change.",
+    details: { reason: "PERSONALITY_CATALOG_REVISION_CONFLICT" } });
 }
 
 function normalizeCategory(category: unknown): PersonalityPresetCategory {

@@ -1,5 +1,6 @@
+import { __resetSessionDraftsForTests } from "../native-routes/library/session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/ChatTraceCard";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
@@ -129,6 +130,8 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     ...overrides,
   } as any;
 }
+
+afterEach(() => { __resetSessionDraftsForTests(); });
 
 describe("ThreadedContextDrawer", () => {
   it("keeps informational context disclosures closed with explicit ARIA targets", async () => {
@@ -301,6 +304,163 @@ describe("ThreadedContextDrawer", () => {
     expect(root.findAllByType("textarea")).toHaveLength(0);
     expect(collectText(root)).toContain("is read-only");
   });
+it("retains edited documents through refresh, failed save and reopening with their original revision", async () => {
+  const onSaveNote = vi.fn().mockRejectedValue(new Error("revision conflict"));
+  const onCreateProposal = vi
+    .fn()
+    .mockResolvedValue({ proposalId: "proposal-draft" });
+  const note = {
+    noteId: "draft-note",
+    title: "Draft note",
+    body: "original",
+    revision: 3,
+  };
+  const documents = {
+    enabled: true,
+    loading: false,
+    notes: [note],
+    artifacts: [],
+    proposals: [],
+    includedRefs: [],
+    onSaveNote,
+    onCreateProposal,
+    onRefresh: vi.fn(),
+    onToggleInclude: vi.fn(),
+  };
+  const props = baseProps({ selectedSessionId: "draft-session", documents });
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      <ThreadedContextDrawer
+        surface="chat"
+        props={props}
+        focusedTab="documents"
+      />,
+    );
+  });
+  await act(async () =>
+    findButton(renderer.root, "Draft note").props.onClick(),
+  );
+  await act(async () =>
+    renderer.root
+      .findByType("textarea")
+      .props.onChange({ target: { value: "my unsaved input" } }),
+  );
+  const refreshed = {
+    ...props,
+    documents: {
+      ...documents,
+      notes: [{ ...note, body: "remote change", revision: 4 }],
+    },
+  };
+  await act(async () =>
+    renderer.update(
+      <ThreadedContextDrawer
+        surface="chat"
+        props={refreshed}
+        focusedTab="documents"
+      />,
+    ),
+  );
+  expect(renderer.root.findByType("textarea").props.value).toBe(
+    "my unsaved input",
+  );
+  expect(collectText(renderer.root)).toContain("changed since editing began");
+  await act(async () =>
+    findButton(renderer.root, "Save directly").props.onClick(),
+  );
+  expect(onSaveNote).toHaveBeenCalledWith(
+    expect.objectContaining({ revision: 3 }),
+    "my unsaved input",
+  );
+  expect(collectText(renderer.root)).toContain("revision conflict");
+  await act(async () =>
+    findButton(renderer.root, "Create review proposal").props.onClick(),
+  );
+  expect(onCreateProposal).toHaveBeenCalledWith(
+    expect.objectContaining({
+      baseRevision: 3,
+      proposedContent: "my unsaved input",
+    }),
+  );
+  await act(async () => renderer.unmount());
+  await act(async () => {
+    renderer = create(
+      <ThreadedContextDrawer
+        surface="chat"
+        props={refreshed}
+        focusedTab="documents"
+      />,
+    );
+  });
+  expect(collectText(renderer.root)).toContain("Unsaved");
+  await act(async () =>
+    findButton(renderer.root, "Draft note").props.onClick(),
+  );
+  expect(renderer.root.findByType("textarea").props.value).toBe(
+    "my unsaved input",
+  );
+  await act(async () => renderer.unmount());
+});
+it("keeps text entered during an acknowledged document save", async () => {
+  let resolve!: (value: unknown) => void;
+  const onSaveNote = vi.fn(
+    () =>
+      new Promise((resolveSave) => {
+        resolve = resolveSave;
+      }),
+  );
+  const note = {
+    noteId: "save-note",
+    title: "Saving note",
+    body: "original",
+    revision: 1,
+  };
+  const documents = {
+    enabled: true,
+    loading: false,
+    notes: [note],
+    artifacts: [],
+    proposals: [],
+    includedRefs: [],
+    onSaveNote,
+    onRefresh: vi.fn(),
+    onToggleInclude: vi.fn(),
+  };
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      <ThreadedContextDrawer
+        surface="chat"
+        props={baseProps({ selectedSessionId: "save-session", documents })}
+        focusedTab="documents"
+      />,
+    );
+  });
+  await act(async () =>
+    findButton(renderer.root, "Saving note").props.onClick(),
+  );
+  await act(async () =>
+    renderer.root
+      .findByType("textarea")
+      .props.onChange({ target: { value: "submitted" } }),
+  );
+  await act(async () =>
+    findButton(renderer.root, "Save directly").props.onClick(),
+  );
+  await act(async () =>
+    renderer.root
+      .findByType("textarea")
+      .props.onChange({ target: { value: "newer input" } }),
+  );
+  await act(async () => {
+    resolve({ ...note, body: "submitted", revision: 2 });
+    await Promise.resolve();
+  });
+  expect(renderer.root.findByType("textarea").props.value).toBe("newer input");
+  expect(collectText(renderer.root)).toContain("Unsaved");
+  await act(async () => renderer.unmount());
+});
   it("shows canonical preference truth separately from a retryable conflict draft", async () => {
     const onRetryPreferenceConflictDraft = vi.fn(async () => undefined);
     const onDiscardPreferenceConflictDraft = vi.fn();

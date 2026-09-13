@@ -10,11 +10,12 @@ export type FocusedActiveWorkState = {
   title: string;
   detail: string;
   turnId?: string;
+  approvalId?: string;
   canRetry: boolean;
   canStop: boolean;
 };
 
-type PendingApprovalSummary = { reason?: string; toolName?: string } | null | undefined;
+type PendingApprovalSummary = { approvalId?: string; reason?: string; toolName?: string } | null | undefined;
 type PendingInputSummary = { question?: string; title?: string } | null | undefined;
 
 export function deriveFocusedActiveWorkState({
@@ -36,6 +37,7 @@ export function deriveFocusedActiveWorkState({
       title: "Waiting for your approval",
       detail: pendingApproval.reason?.trim() || "Review the requested action to continue.",
       turnId: turn?.turnId,
+      ...(pendingApproval.approvalId ? { approvalId: pendingApproval.approvalId } : {}),
       canRetry: false,
       canStop: false,
     };
@@ -225,7 +227,7 @@ type FocusedActiveWorkSummaryProps = {
   state: FocusedActiveWorkState | null;
   onFocusComposer: () => void;
   onOpenActivity: () => void;
-  onOpenApprovals: () => void;
+  onOpenApprovals: (approvalId?: string) => void;
   onRetry: (turnId: string) => void;
   onStop: () => void;
 };
@@ -254,7 +256,7 @@ function FocusedActiveWorkSummaryContents({
       <button
         type="button"
         className="mc-next-thread-inline-button mc-next-active-work-primary"
-        onClick={onOpenApprovals}
+        onClick={() => state.approvalId ? onOpenApprovals(state.approvalId) : onOpenApprovals()}
       >
         Review approval
       </button>

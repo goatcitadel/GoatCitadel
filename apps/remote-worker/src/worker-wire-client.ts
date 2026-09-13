@@ -1,6 +1,6 @@
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
-import { connect as tlsConnect, type TLSSocket } from "node:tls";
-import { canonicalJsonString } from "@goatcitadel/contracts";
+import { connect as tlsConnect, type SecureContext, type TLSSocket } from "node:tls";
+import { canonicalJsonString, REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS } from "@goatcitadel/contracts";
 
 /**
  * The connected worker's native mTLS transport.
@@ -31,13 +31,26 @@ export const WORKER_PROTOCOL_HEADERS = Object.freeze({
   idempotencyKey: "idempotency-key",
 } as const);
 
-export interface WorkerTransportMaterial {
+interface WorkerPublicTransportMaterial {
   readonly host: string;
   readonly port: number;
   readonly clientCertificatePem: string;
-  readonly clientPrivateKeyPem: string;
   readonly trustAnchorPem: string;
 }
+
+/** Existing file-backed transport used by the PEM launch configuration. */
+export interface WorkerTransportMaterial extends WorkerPublicTransportMaterial {
+  readonly clientPrivateKeyPem: string;
+  readonly clientTlsContext?: never;
+}
+
+/** An admitted owner supplies the context; the transport receives no private key bytes. */
+export interface WorkerContextTransportMaterial extends WorkerPublicTransportMaterial {
+  readonly clientTlsContext: SecureContext;
+  readonly clientPrivateKeyPem?: never;
+}
+
+export type WorkerTlsTransportMaterial = WorkerTransportMaterial | WorkerContextTransportMaterial;
 
 /** Channel-bound material handed to the signer once the TLS handshake completes. */
 export interface WorkerRequestSigningMaterial {
@@ -48,6 +61,8 @@ export interface WorkerRequestSigningMaterial {
   readonly nonce: string;
   readonly timestamp: string;
   readonly idempotencyKey: string;
+  /** Aborted when this exact connection closes, is cancelled, or reaches its deadline. */
+  readonly signal: AbortSignal;
 }
 
 export interface WorkerWireRequest {
@@ -64,9 +79,10 @@ export interface WorkerWireRequest {
     readonly tlsExporterSha256: string;
     readonly nonce: string;
     readonly timestamp: string;
-  }) => Readonly<Record<string, unknown>>;
+    readonly signal: AbortSignal;
+  }) => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>;
   /** Returns the base64url Ed25519 proof over the channel-bound preimage. */
-  readonly sign: (material: WorkerRequestSigningMaterial) => string;
+  readonly sign: (material: WorkerRequestSigningMaterial) => string | Promise<string>;
   /**
    * Additional transport headers the route requires (route 7 carries the raw
    * mesh join credential out of band so it never enters the signed body). Names
@@ -75,6 +91,7 @@ export interface WorkerWireRequest {
   readonly extraHeaders?: Readonly<Record<string, string>>;
   readonly nonce?: string;
   readonly timestamp?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface WorkerWireResponse {
@@ -99,7 +116,7 @@ export interface WorkerTransportIdentityDigests {
 }
 
 /** Digests of the worker's own transport identity, derived from its PEM material. */
-export function workerTransportIdentityDigests(material: WorkerTransportMaterial): WorkerTransportIdentityDigests {
+export function workerTransportIdentityDigests(material: WorkerTlsTransportMaterial): WorkerTransportIdentityDigests {
   const certificate = new X509Certificate(material.clientCertificatePem);
   const spkiDer = certificate.publicKey.export({ format: "der", type: "spki" });
   if (!Buffer.isBuffer(spkiDer)) throw new WorkerWireClientError("Worker client key is not exportable as DER SPKI.");
@@ -112,23 +129,51 @@ export function workerTransportIdentityDigests(material: WorkerTransportMaterial
 }
 
 export class WorkerWireClient {
-  public constructor(private readonly material: WorkerTransportMaterial) {}
+  private readonly material: WorkerTlsTransportMaterial;
+
+  public constructor(
+    material: WorkerTlsTransportMaterial,
+    private readonly processSignal?: AbortSignal,
+  ) {
+    this.material = Object.freeze({ ...material });
+    const hasPem = typeof this.material.clientPrivateKeyPem === "string";
+    const hasContext = this.material.clientTlsContext !== undefined && this.material.clientTlsContext !== null;
+    if (hasPem === hasContext) throw new WorkerWireClientError("Worker transport requires exactly one TLS key source.");
+  }
 
   public identity(): WorkerTransportIdentityDigests {
     return workerTransportIdentityDigests(this.material);
   }
 
   public async post(request: WorkerWireRequest): Promise<WorkerWireResponse> {
+    // Awaited evidence/signature providers must not observe a later authority or
+    // header mutation from the caller while retaining this connection's proof.
+    request = {
+      ...request,
+      ...(request.extraHeaders === undefined ? {} : { extraHeaders: Object.freeze({ ...request.extraHeaders }) }),
+    };
+    if (this.processSignal) {
+      request = {
+        ...request,
+        signal: request.signal ? AbortSignal.any([this.processSignal, request.signal]) : this.processSignal,
+      };
+    }
+    if (request.signal?.aborted) throw new WorkerWireClientError("Worker request was cancelled before dispatch.");
     return await new Promise<WorkerWireResponse>((resolve, reject) => {
       const chunks: Buffer[] = [];
       let responseBytes = 0;
       let settled = false;
+      const preparation = new AbortController();
       const socket: TLSSocket = tlsConnect({
         host: this.material.host,
         port: this.material.port,
-        cert: this.material.clientCertificatePem,
-        key: this.material.clientPrivateKeyPem,
-        ca: this.material.trustAnchorPem,
+        ...(this.material.clientTlsContext
+          ? { secureContext: this.material.clientTlsContext }
+          : {
+              cert: this.material.clientCertificatePem,
+              key: this.material.clientPrivateKeyPem,
+              ca: this.material.trustAnchorPem,
+            }),
         minVersion: "TLSv1.3",
         maxVersion: "TLSv1.3",
         rejectUnauthorized: true,
@@ -136,7 +181,9 @@ export class WorkerWireClient {
       const finish = (error?: Error): void => {
         if (settled) return;
         settled = true;
+        preparation.abort(error ?? new WorkerWireClientError("Worker connection has completed."));
         if (absoluteTimeout) clearTimeout(absoluteTimeout);
+        request.signal?.removeEventListener("abort", abort);
         socket.destroy();
         if (error !== undefined) {
           reject(error);
@@ -150,8 +197,17 @@ export class WorkerWireClient {
       };
       const absoluteTimeout = setTimeout(
         () => finish(new WorkerWireClientError("Worker request exceeded its absolute deadline.")),
-        WORKER_WIRE_ABSOLUTE_TIMEOUT_MS,
+        request.operation === "assignment.inference.exchange" &&
+          request.rawPath === "/api/v1/remote-workers/assignment-inference-exchanges"
+          ? REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS + WORKER_WIRE_ABSOLUTE_TIMEOUT_MS
+          : WORKER_WIRE_ABSOLUTE_TIMEOUT_MS,
       );
+      const abort = (): void =>
+        finish(
+          new WorkerWireClientError("Worker request was cancelled; its remote outcome may require reconciliation."),
+        );
+      request.signal?.addEventListener("abort", abort, { once: true });
+      if (request.signal?.aborted) abort();
       socket.setTimeout(30_000, () => finish(new WorkerWireClientError("Worker request timed out.")));
       socket.on("data", (chunk: Buffer) => {
         try {
@@ -164,26 +220,51 @@ export class WorkerWireClient {
       socket.once("close", () => finish());
       socket.once("error", (error) => finish(error));
       socket.once("secureConnect", () => {
+        void prepareAndSend().catch((error) =>
+          finish(error instanceof Error ? error : new WorkerWireClientError(String(error))),
+        );
+      });
+      const prepareAndSend = async (): Promise<void> => {
+        if (settled) return;
+        if (socket.getProtocol() !== "TLSv1.3") {
+          throw new WorkerWireClientError("Worker transport requires TLS 1.3.");
+        }
+        if (
+          request.operation === "assignment.inference.exchange" &&
+          request.rawPath === "/api/v1/remote-workers/assignment-inference-exchanges"
+        ) {
+          socket.setTimeout(REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS + 5_000);
+        }
         let exporter: Buffer | undefined;
         try {
           exporter = socket.exportKeyingMaterial(WORKER_TLS_EXPORTER_BYTES, WORKER_TLS_EXPORTER_LABEL, Buffer.alloc(0));
           const tlsExporterSha256 = sha256(exporter);
+          exporter.fill(0);
+          exporter = undefined;
           const timestamp = request.timestamp ?? new Date().toISOString();
           const nonce = request.nonce ?? randomNonce();
-          const encodedBody = Buffer.from(
-            canonicalJsonString(request.buildBody({ tlsExporterSha256, nonce, timestamp })),
-            "utf8",
+          const body = await request.buildBody(
+            Object.freeze({ tlsExporterSha256, nonce, timestamp, signal: preparation.signal }),
           );
+          if (settled) return;
+          const encodedBody = Buffer.from(canonicalJsonString(body), "utf8");
           const bodySha256 = sha256(encodedBody);
-          const proof = request.sign({
-            rawPath: request.rawPath,
-            operation: request.operation,
-            bodySha256,
-            tlsExporterSha256,
-            nonce,
-            timestamp,
-            idempotencyKey: request.idempotencyKey,
-          });
+          const proof = await request.sign(
+            Object.freeze({
+              rawPath: request.rawPath,
+              operation: request.operation,
+              bodySha256,
+              tlsExporterSha256,
+              nonce,
+              timestamp,
+              idempotencyKey: request.idempotencyKey,
+              signal: preparation.signal,
+            }),
+          );
+          if (settled) return;
+          if (typeof proof !== "string" || proof.length === 0) {
+            throw new WorkerWireClientError("Worker signer did not return a signature.");
+          }
           socket.write(
             Buffer.concat([
               Buffer.from(
@@ -209,7 +290,7 @@ export class WorkerWireClient {
         } finally {
           exporter?.fill(0);
         }
-      });
+      };
     });
   }
 }

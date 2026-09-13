@@ -14,6 +14,12 @@
 // separately, and only for the cross-check, so a missing UI-served environment
 // can no longer hard-throw inside `startVerificationStack({ includeUi: true })`
 // and mask the backend truth.
+import {
+  prepareRuntimeTruthApproval,
+  requestRuntimeTruthApproval,
+  assertRuntimeTruthToolCompletion,
+} from "./runtime-truth-approval.mjs";
+
 export async function runRuntimeTruthLane(context, _options = {}, deps) {
   const {
     NEXT_UI_PACKAGE,
@@ -48,6 +54,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   let stack;
   let runtimeRoot;
   let llmStub;
+  let activeChatTransport;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   // Identifiers recovered by the backend-truth scenario and consumed by the
   // (conditional) shell cross-check scenario, which asserts against the SAME
@@ -58,8 +65,10 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     llmStub = await startDeterministicLlmStub({
       replyText: "Verification restart reply.",
       expectedAuthorization: `Bearer ${VERIFICATION_STUB_LLM_KEY}`,
+      dispatchPlanRequiredTool: "fs_read",
     });
     await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
+    const approvalFixture = await prepareRuntimeTruthApproval(runtimeRoot);
     stack = await startVerificationStack(context, {
       includeUi: false,
       runtimeRoot,
@@ -94,14 +103,26 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         });
         assertOk(seeded, "seed runtime-truth workspace");
 
-        const approvalSeed = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
-          method: "POST",
-          body: {
+        const approvalRequest = await requestRuntimeTruthApproval(
+          stack.gatewayUrl,
+          {
             sessionId: seeded.body?.sessionId,
             workspaceId: seeded.body?.workspaceId,
+            notePath: approvalFixture.notePath,
+            llmStub,
           },
-        });
-        assertOk(approvalSeed, "seed runtime-truth approval");
+          {
+            requestJson,
+            assertOk,
+            captureFailure: (failure) =>
+              writeJson(
+                path.join(context.artifactRoot, "diagnostics", "runtime-truth-approval-request-failure.json"),
+                failure,
+              ),
+          },
+        );
+        activeChatTransport = approvalRequest.transport;
+        const approvalSeed = { body: approvalRequest.approval };
 
         const approvalId = approvalSeed.body?.approvalId;
         const sessionId = approvalSeed.body?.sessionId;
@@ -112,10 +133,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           );
         }
 
-        const beforeRestart = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}`,
-        );
+        const beforeRestart = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["waiting"]);
         assertOk(beforeRestart, "read runtime-truth durable run before restart");
 
         const providerDispatchesBeforeRestart = llmStub.completionDispatches();
@@ -153,23 +171,17 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           const [observedRun, observedThread, observedLifecycle] = await Promise.all([
             requestJson(stack.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}`),
             requestJson(stack.gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`),
-            requestJson(
-              stack.gatewayUrl,
-              `/api/v1/runtime/lifecycle?approvalId=${encodeURIComponent(approvalId)}`,
-            ),
+            requestJson(stack.gatewayUrl, `/api/v1/runtime/lifecycle?approvalId=${encodeURIComponent(approvalId)}`),
           ]);
-          await writeJson(
-            path.join(context.artifactRoot, "diagnostics", "runtime-truth-resume-failure.json"),
-            {
-              approvalSeed: approvalSeed.body,
-              approved: approved.body,
-              durableRun: observedRun.body,
-              thread: observedThread.body,
-              lifecycle: observedLifecycle.body,
-              providerRequests: llmStub.requestSummaries(),
-              error: errorMessage(error),
-            },
-          );
+          await writeJson(path.join(context.artifactRoot, "diagnostics", "runtime-truth-resume-failure.json"), {
+            approvalSeed: approvalSeed.body,
+            approved: approved.body,
+            durableRun: observedRun.body,
+            thread: observedThread.body,
+            lifecycle: observedLifecycle.body,
+            providerRequests: llmStub.requestSummaries(),
+            error: errorMessage(error),
+          });
           throw error;
         }
         const providerDispatchesAfterResume = llmStub.completionDispatches();
@@ -184,6 +196,17 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           `/api/v1/runtime/lifecycle?approvalId=${encodeURIComponent(approvalId)}`,
         );
         assertOk(lifecycle, "read runtime-truth lifecycle");
+        const approvalRecoveryRunId = assertRuntimeTruthApprovalLifecycle(lifecycle.body, approvalId, durableRunId);
+        const recoveredThread = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`,
+        );
+        assertOk(recoveredThread, "read completed runtime-truth thread");
+        const toolCompletion = assertRuntimeTruthToolCompletion(
+          recoveredThread.body,
+          approvalSeed.body,
+          approvalFixture.notePath,
+        );
 
         const outPath = path.join(
           context.artifactRoot,
@@ -202,6 +225,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           approved: approved.body,
           durableRun: durableRun.body,
           lifecycle: lifecycle.body,
+          toolCompletion,
           deterministicProvider: {
             providerId: llmStub.providerId,
             model: llmStub.model,
@@ -220,6 +244,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           sessionId,
           approvalId,
           durableRunId,
+          approvalRecoveryRunId,
           acceptableStatuses: ["completed"],
         };
 
@@ -335,10 +360,15 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           // Shell is ready — the cross-check assertions below are real pass/fail.
           await setBrowserCorrelation(page, correlationId, durableTruth.sessionId);
           await page.getByRole("tab", { name: /History/i }).click();
-          await page.getByRole("button", { name: /Load durable status/i }).click();
-          await page.getByText("Status:", { exact: false }).first().waitFor({ timeout: 15000 });
-          await page.getByText("Updated:", { exact: false }).first().waitFor({ timeout: 15000 });
-          const runtimePreview = await page.evaluate(() => document.body?.innerText ?? "");
+          const recovery = page.locator("details").filter({
+            has: page.locator("summary").filter({ hasText: /^Recovery$/ }),
+          });
+          await recovery.locator("summary").click();
+          await recovery.getByRole("button", { name: /Load durable status/i }).click();
+          await recovery.getByText(`Run: ${durableTruth.approvalRecoveryRunId}`, { exact: true }).waitFor({ timeout: 15000 });
+          await recovery.getByText("Status:", { exact: false }).waitFor({ timeout: 15000 });
+          await recovery.getByText("Updated:", { exact: false }).waitFor({ timeout: 15000 });
+          const runtimePreview = await recovery.innerText();
           if (!durableTruth.acceptableStatuses.some((status) => runtimePreview.includes(`Status: ${status}`))) {
             throw new Error(
               `runtime-truth expected one of ${durableTruth.acceptableStatuses.join(", ")} in the approvals recovery panel`,
@@ -368,6 +398,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
       },
     );
   } finally {
+    await activeChatTransport?.close();
     if (stack) {
       await stopVerificationStack(stack);
     } else if (runtimeRoot) {
@@ -402,6 +433,19 @@ export function assertOwnedGatewayRestart(before, after) {
       `runtime-truth Gateway restart changed endpoint from ${before?.gatewayUrl ?? "unknown"} to ${after?.gatewayUrl ?? "unknown"}`,
     );
   }
+}
+
+export function assertRuntimeTruthApprovalLifecycle(lifecycle, approvalId, chatRunId) {
+  const runId = lifecycle?.canonical?.runId;
+  const approval = lifecycle?.approval;
+  // The approval's wait workflow and the resumed Chat workflow have separate
+  // canonical identities. Recovery displays the former, linked to the latter.
+  if (!runId || approval?.approvalId !== approvalId || approval.status !== "approved" ||
+      approval.linkage?.runId !== chatRunId || approval.linkage?.durableRunId !== runId ||
+      lifecycle.durableRun?.runId !== runId || lifecycle.durableRun.status !== "completed") {
+    throw new Error("runtime-truth approval recovery does not match the exact approval and resumed Chat run");
+  }
+  return runId;
 }
 
 function errorMessage(error) {

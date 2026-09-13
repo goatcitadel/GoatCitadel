@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCompletionResponse,
   DurableRunCreateRequest,
@@ -12,6 +12,9 @@ import type {
   MemoryMaintenanceChangeRecord,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
+  MemoryMaintenancePolicyValues,
+  MemoryMaintenanceRecommendationAcceptInput,
+  MemoryMaintenanceRecommendationDecisionInput,
   MemoryMaintenanceRecommendationRecord,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceRunSourceRecord,
@@ -28,6 +31,8 @@ type EligibleSession = {
 };
 
 class FakeMemoryMaintenanceRepo {
+  private generation = 0;
+  private nextRevision(): string { return (++this.generation).toString(16).padStart(64, "0"); }
   public readonly policies = new Map<string, MemoryMaintenancePolicyRecord>();
   public readonly states = new Map<string, MemoryMaintenanceStateRecord>();
   public readonly runs = new Map<string, MemoryMaintenanceRunRecord>();
@@ -57,18 +62,23 @@ class FakeMemoryMaintenanceRepo {
     return this.policies.get(workspaceId);
   }
 
-  public upsertPolicy(record: MemoryMaintenancePolicyRecord): MemoryMaintenancePolicyRecord {
-    this.policies.set(record.workspaceId, { ...record });
+  public upsertPolicy(record: MemoryMaintenancePolicyValues): MemoryMaintenancePolicyRecord {
+    this.policies.set(record.workspaceId, { ...record, revision: this.nextRevision() });
     return this.requirePolicy(record.workspaceId);
+  }
+
+  public ensurePolicy(record: MemoryMaintenancePolicyValues): MemoryMaintenancePolicyRecord {
+    return this.findPolicy(record.workspaceId) ?? this.upsertPolicy(record);
   }
 
   public patchPolicy(
     workspaceId: string,
     patch: MemoryMaintenancePolicyPatchInput,
-    defaults: MemoryMaintenancePolicyRecord,
+    expectedRevision: string,
     now = new Date().toISOString(),
   ): MemoryMaintenancePolicyRecord {
-    const current = this.findPolicy(workspaceId) ?? defaults;
+    const current = this.requirePolicy(workspaceId);
+    if (current.revision !== expectedRevision) throw new ConflictError({ message: "Policy changed" });
     return this.upsertPolicy({
       ...current,
       enabled: patch.enabled ?? current.enabled,
@@ -169,12 +179,13 @@ class FakeMemoryMaintenanceRepo {
   }
 
   public createRecommendation(
-    record: Omit<MemoryMaintenanceRecommendationRecord, "recommendationId"> & { recommendationId?: string },
+    record: Omit<MemoryMaintenanceRecommendationRecord, "recommendationId" | "revision"> & { recommendationId?: string },
   ): MemoryMaintenanceRecommendationRecord {
     const recommendationId = record.recommendationId ?? `mmrec_${this.recommendations.size + 1}`;
     const created = {
       ...record,
       recommendationId,
+      revision: this.nextRevision(),
     };
     this.recommendations.set(recommendationId, created);
     return created;
@@ -189,8 +200,22 @@ class FakeMemoryMaintenanceRepo {
   }
 
   public updateRecommendation(record: MemoryMaintenanceRecommendationRecord): MemoryMaintenanceRecommendationRecord {
-    this.recommendations.set(record.recommendationId, { ...record });
+    this.recommendations.set(record.recommendationId, { ...record, revision: this.nextRevision() });
     return this.getRecommendation(record.recommendationId);
+  }
+
+  public acceptRecommendation(recommendationId: string, input: MemoryMaintenanceRecommendationAcceptInput) {
+    const recommendation = this.getRecommendation(recommendationId);
+    if (recommendation.revision !== input.expectedRevision || recommendation.status !== "queued") throw new ConflictError({ message: "Recommendation changed" });
+    const policy = this.patchPolicy(recommendation.workspaceId, recommendation.proposedPatch, input.expectedPolicyRevision);
+    const now = new Date().toISOString();
+    return { policy, recommendation: this.updateRecommendation({ ...recommendation, status: "applied", updatedAt: now, appliedAt: now }) };
+  }
+
+  public rejectRecommendation(recommendationId: string, input: MemoryMaintenanceRecommendationDecisionInput) {
+    const recommendation = this.getRecommendation(recommendationId);
+    if (recommendation.revision !== input.expectedRevision || recommendation.status !== "queued") throw new ConflictError({ message: "Recommendation changed" });
+    return this.updateRecommendation({ ...recommendation, status: "rejected", updatedAt: new Date().toISOString() });
   }
 
   public listRecommendations(workspaceId: string, limit = 100): MemoryMaintenanceRecommendationRecord[] {
@@ -481,6 +506,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     harness.changedSessionCounts.set("default", 3);
 
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "scheduled",
       timingStrategy: "fixed",
@@ -496,7 +522,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       model: "qwen3",
     });
     harness.memoryMaintenance.upsertState({
-      ...harness.memoryMaintenance.requireState("default"),
+      ...(await harness.service.getStatus("default")).state,
       lastSuccessfulRunAt: "2026-04-01T00:00:00.000Z",
       updatedAt: "2026-04-01T00:00:00.000Z",
     });
@@ -542,6 +568,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     });
 
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "hybrid",
       timingStrategy: "recommendation_first",
@@ -555,7 +582,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       minChangedSessions: 2,
     });
     harness.memoryMaintenance.upsertState({
-      ...harness.memoryMaintenance.requireState("default"),
+      ...(await harness.service.getStatus("default")).state,
       lastSuccessfulRunAt: "2026-04-01T00:00:00.000Z",
       updatedAt: "2026-04-01T00:00:00.000Z",
     });
@@ -589,6 +616,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     });
 
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "scheduled",
       timingStrategy: "fixed",
@@ -602,7 +630,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       minChangedSessions: 2,
     });
     harness.memoryMaintenance.upsertState({
-      ...harness.memoryMaintenance.requireState("default"),
+      ...(await harness.service.getStatus("default")).state,
       lastSuccessfulRunAt: "2026-04-01T00:00:00.000Z",
       updatedAt: "2026-04-01T00:00:00.000Z",
     });
@@ -662,6 +690,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     harness.changedSessionCounts.set("default", 2);
 
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "scheduled",
       timingStrategy: "fixed",
@@ -676,7 +705,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
       minChangedSessions: 2,
     });
     harness.memoryMaintenance.upsertState({
-      ...harness.memoryMaintenance.requireState("default"),
+      ...(await harness.service.getStatus("default")).state,
       lastSuccessfulRunAt: "2026-04-01T00:00:00.000Z",
       updatedAt: "2026-04-01T00:00:00.000Z",
     });
@@ -749,6 +778,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       );
 
       await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
         enabled: true,
         runMode: "manual",
         timingStrategy: "recommendation_first",
@@ -866,6 +896,7 @@ describe("MemoryMaintenanceService durable execution", () => {
         }),
       );
       await harness.service.patchPolicy("workspace-a", {
+        expectedRevision: (await harness.service.getPolicy("workspace-a")).revision,
         enabled: true,
         runMode: "manual",
         timingStrategy: "recommendation_first",
@@ -912,6 +943,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       const harness = createHarness();
       harness.chatCompletions.mockResolvedValueOnce(completionWithContent(""));
       await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
         enabled: true,
         runMode: "manual",
         timingStrategy: "recommendation_first",
@@ -954,6 +986,7 @@ describe("MemoryMaintenanceService durable execution", () => {
     const harness = createHarness();
     harness.listModels.mockResolvedValueOnce([{ id: "other-model", name: "other-model" }]);
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "manual",
       timingStrategy: "recommendation_first",
@@ -1001,6 +1034,7 @@ describe("MemoryMaintenanceService durable execution", () => {
   it("marks current durable-backed runs as failed for non-abort execution errors", async () => {
     const harness = createHarness();
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "manual",
       timingStrategy: "recommendation_first",
@@ -1032,6 +1066,7 @@ describe("MemoryMaintenanceService durable execution", () => {
   it("does not finalize a durable-backed run as failed when execution aborts", async () => {
     const harness = createHarness();
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "manual",
       timingStrategy: "recommendation_first",
@@ -1221,6 +1256,7 @@ describe("MemoryMaintenanceService recommendations", () => {
     try {
       const harness = createHarness();
       await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
         enabled: true,
         runMode: "hybrid",
         timingStrategy: "recommendation_first",
@@ -1241,7 +1277,10 @@ describe("MemoryMaintenanceService recommendations", () => {
         updatedAt: "2026-04-02T11:00:00.000Z",
       });
 
-      const result = await harness.service.acceptRecommendation(recommendation.recommendationId);
+      const result = await harness.service.acceptRecommendation(recommendation.recommendationId, {
+        expectedRevision: recommendation.revision,
+        expectedPolicyRevision: (await harness.service.getPolicy("default")).revision,
+      });
 
       expect(result.policy.minChangedSessions).toBe(3);
       expect(result.recommendation).toMatchObject({
@@ -1257,6 +1296,7 @@ describe("MemoryMaintenanceService recommendations", () => {
   it("rejects a queued recommendation without mutating the policy", async () => {
     const harness = createHarness();
     await harness.service.patchPolicy("default", {
+      expectedRevision: (await harness.service.getPolicy("default")).revision,
       enabled: true,
       runMode: "hybrid",
       timingStrategy: "recommendation_first",
@@ -1276,7 +1316,7 @@ describe("MemoryMaintenanceService recommendations", () => {
       updatedAt: "2026-04-02T11:00:00.000Z",
     });
 
-    const rejected = await harness.service.rejectRecommendation(recommendation.recommendationId);
+    const rejected = await harness.service.rejectRecommendation(recommendation.recommendationId, { expectedRevision: recommendation.revision });
 
     expect(rejected).toMatchObject({
       recommendationId: recommendation.recommendationId,

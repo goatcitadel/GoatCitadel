@@ -42,6 +42,8 @@ import type {
   ChatSessionWorkbenchCommandRunResponse,
   ChatSessionWorkbenchFileDiffResponse,
   ChatSessionWorkbenchFileOperationRequest,
+  ChatSessionWorkbenchFileOperationPreviewRequest,
+  ChatSessionWorkbenchFileOperationPreviewResponse,
   ChatSessionWorkbenchFileOperationResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
@@ -584,6 +586,16 @@ export async function saveChatSessionWorkbenchFile(
       method: "PUT",
       body: JSON.stringify(input),
     },
+  );
+}
+
+export async function previewChatSessionWorkbenchFileOperation(
+  sessionId: string,
+  input: ChatSessionWorkbenchFileOperationPreviewRequest,
+): Promise<ChatSessionWorkbenchFileOperationPreviewResponse> {
+  return request<ChatSessionWorkbenchFileOperationPreviewResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-operation/preview`,
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 
@@ -1492,6 +1504,17 @@ export async function fetchChangePlan(planId: string, context: ChangePlanClientC
   if (context.sessionId) query.set("sessionId", context.sessionId);
   if (context.turnId) query.set("turnId", context.turnId);
   return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}?${query.toString()}`);
+}
+
+export async function verifyChangePlan(
+  planId: string,
+  context: ChangePlanClientContext,
+  expectedRevision: number,
+): Promise<ChangePlanRecord> {
+  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/verifications`, {
+    method: "POST",
+    body: JSON.stringify({ ...changePlanActorBody(context), expectedRevision }),
+  });
 }
 
 export async function respondToChangePlan(

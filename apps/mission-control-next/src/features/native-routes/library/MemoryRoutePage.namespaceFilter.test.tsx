@@ -1,3 +1,4 @@
+import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 // @vitest-environment happy-dom
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -141,7 +142,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot", () => ({
-  useMemoryOperatorSnapshot: () => memorySnapshot,
+  useMemoryOperatorSnapshot: (_workspace: string, options: { query?: string }) => ({ ...memorySnapshot, data: { ...memorySnapshot.data, memoryItems: memorySnapshot.data.memoryItems.filter((item) => !options.query || [item.title, item.content, item.namespace].join(" ").toLowerCase().includes(options.query.toLowerCase())) } }),
 }));
 
 function collectText(node: ReactTestInstance): string {
@@ -172,6 +173,7 @@ function pillLabel(pill: ReactTestInstance): string {
 describe("MemoryRoutePage namespace filter pills", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionViewStateForTests();
     memorySnapshot.selectedItemId = null;
     memorySnapshot.selectedItem = null;
     evidenceApiMocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
@@ -327,6 +329,7 @@ describe("MemoryRoutePage namespace filter pills", () => {
       search.props.onChange({ target: { value: "approval" } });
     });
 
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
     const bodyText = collectText(renderer!.root);
     expect(bodyText).toContain("Approval verdict policy v3");
     expect(bodyText).not.toContain("Haiku fallback heuristic");
@@ -360,6 +363,6 @@ describe("MemoryRoutePage namespace filter pills", () => {
 
     const bodyText = collectText(renderer!.root);
     expect(bodyText).not.toContain("Quick scratch");
-    expect(bodyText).toContain("Select a memory item to inspect lifecycle state");
+    expect(renderer!.root.findAll((node) => node.props.role === "dialog" || node.props.role === "region")).toHaveLength(0);
   });
 });

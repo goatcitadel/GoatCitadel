@@ -1,3 +1,5 @@
+import { __resetSessionDraftsForTests } from "./session-drafts";
+import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +9,7 @@ import type { NativeRoutePagesProps } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
   getMasonSetupQuestions: vi.fn(),
+  getMasonSession: vi.fn(),
   createMasonSession: vi.fn(),
   sendMasonMessage: vi.fn(),
   draftBlueprintFromMasonSession: vi.fn(),
@@ -15,6 +18,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   getMasonSetupQuestions: apiMocks.getMasonSetupQuestions,
+  getMasonSession: apiMocks.getMasonSession,
   createMasonSession: apiMocks.createMasonSession,
   sendMasonMessage: apiMocks.sendMasonMessage,
   draftBlueprintFromMasonSession: apiMocks.draftBlueprintFromMasonSession,
@@ -54,6 +58,7 @@ function findButtonByLabel(renderer: ReactTestRenderer, label: string): ReactTes
 describe("CitadelMasonRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSessionDraftsForTests(); __resetSessionViewStateForTests();
     apiMocks.getMasonSetupQuestions.mockResolvedValue(["What is this Citadel for?", "What must stay sealed?"]);
     apiMocks.createMasonSession.mockResolvedValue({
       sessionId: "s1",
@@ -83,7 +88,7 @@ describe("CitadelMasonRoutePage", () => {
 
   it("renders the Mason header even while questions load", () => {
     const markup = renderToStaticMarkup(<CitadelMasonRoutePage {...baseProps} />);
-    expect(markup).toContain("The Mason");
+    expect(markup).toContain("Citadel setup");
   });
 
   it("loads the setup questions after mount", async () => {

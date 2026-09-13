@@ -567,7 +567,7 @@ describe("Loop 21 route facade coverage", () => {
         await app.inject({
           method: "PATCH",
           url: "/api/v1/tools/permission-profiles/profile-owned",
-          payload: { description: "owned update" },
+          payload: { description: "owned update", expectedRevision: "a".repeat(64) },
         })
       ).statusCode,
     ).toBe(200);
@@ -579,29 +579,29 @@ describe("Loop 21 route facade coverage", () => {
       app.inject({
         method: "PATCH",
         url: "/api/v1/tools/permission-profiles/profile-other",
-        payload: { description: "blocked update" },
+        payload: { description: "blocked update", expectedRevision: "a".repeat(64) },
       }),
     ).resolves.toMatchObject({ statusCode: 403 });
     await expect(
       app.inject({
         method: "PATCH",
         url: "/api/v1/tools/permission-profiles/safe",
-        payload: { description: "blocked builtin update" },
+        payload: { description: "blocked builtin update", expectedRevision: "a".repeat(64) },
       }),
     ).resolves.toMatchObject({ statusCode: 403 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/safe/archive" }),
+      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/safe/archive", payload: { expectedRevision: "a".repeat(64) } }),
     ).resolves.toMatchObject({ statusCode: 403 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-other/archive" }),
+      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-other/archive", payload: { expectedRevision: "a".repeat(64) } }),
     ).resolves.toMatchObject({ statusCode: 403 });
     expect(
-      (await app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-owned/archive" })).json(),
+      (await app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-owned/archive", payload: { expectedRevision: "a".repeat(64) } })).json(),
     ).toEqual({
       archived: true,
       profileId: "profile-owned",
     });
-    expect(tools.archivePermissionProfile).toHaveBeenCalledWith("profile-owned", "operator-test");
+    expect(tools.archivePermissionProfile).toHaveBeenCalledWith("profile-owned", "operator-test", "a".repeat(64));
     await expect(
       app.inject({
         method: "POST",
@@ -612,7 +612,7 @@ describe("Loop 21 route facade coverage", () => {
     await app.inject({
       method: "POST",
       url: "/api/v1/tools/permission-profiles/activate",
-      payload: { profileId: "safe", operatorId: "spoofed", workspaceId: "workspace-1", surface: "code" },
+      payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64), profileId: "safe", operatorId: "spoofed", workspaceId: "workspace-1", surface: "code" },
     });
     expect(tools.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", operatorId: "operator-test", createdBy: "operator-test" }),

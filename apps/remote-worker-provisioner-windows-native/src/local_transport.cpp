@@ -458,7 +458,9 @@ bool ComputeSha256(
   return hash.Open() && hash.Update(bytes, length) && hash.Finish(output);
 }
 
-bool DeriveRuntimePopV2OperationId(
+namespace {
+bool DeriveRuntimeSignatureOperationId(
+    bool tls_client,
     const std::uint8_t* authenticated_caller_sid,
     std::uint16_t authenticated_caller_sid_length,
     const Byte32& expected_state_sha256,
@@ -466,7 +468,8 @@ bool DeriveRuntimePopV2OperationId(
     const Byte32& expected_keyset_receipt_sha256,
     const std::uint8_t* canonical_preimage,
     std::size_t canonical_preimage_length,
-    Byte16* output) noexcept {
+    Byte16* output,
+    const Byte32* expected_worker_public_key_spki_sha256) noexcept {
   if (output == nullptr) return false;
   output->fill(0U);
   if (authenticated_caller_sid == nullptr ||
@@ -479,7 +482,11 @@ bool DeriveRuntimePopV2OperationId(
           expected_keyset_receipt_sha256.data(),
           expected_keyset_receipt_sha256.size()) ||
       canonical_preimage == nullptr ||
-      canonical_preimage_length != kRemoteWorkerPopV2PreimageBytes) {
+      (tls_client
+          ? (expected_worker_public_key_spki_sha256 == nullptr ||
+             IsAllZero(expected_worker_public_key_spki_sha256->data(), 32U) ||
+             !IsTlsClientCertificateVerifyPreimage(canonical_preimage, canonical_preimage_length))
+          : canonical_preimage_length != kRemoteWorkerPopV2PreimageBytes)) {
     return false;
   }
   std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> caller_sid{};
@@ -497,10 +504,12 @@ bool DeriveRuntimePopV2OperationId(
   };
   Byte32 digest{};
   Sha256Hasher hash;
+  constexpr char kTlsOperationDomain[] = "goatcitadel.remote-worker-tls-client.operation.v1";
+  const char* domain = tls_client ? kTlsOperationDomain : kRuntimePopV2OperationDomain;
+  const std::size_t domain_length = tls_client ? sizeof(kTlsOperationDomain) : sizeof(kRuntimePopV2OperationDomain);
   const bool valid = hash.Open() &&
       hash.Update(
-          reinterpret_cast<const std::uint8_t*>(kRuntimePopV2OperationDomain),
-          sizeof(kRuntimePopV2OperationDomain)) &&
+          reinterpret_cast<const std::uint8_t*>(domain), domain_length) &&
       hash.Update(sid_length.data(), sid_length.size()) &&
       hash.Update(caller_sid.data(), authenticated_caller_sid_length) &&
       hash.Update(expected_state_sha256.data(), expected_state_sha256.size()) &&
@@ -508,6 +517,7 @@ bool DeriveRuntimePopV2OperationId(
       hash.Update(
           expected_keyset_receipt_sha256.data(),
           expected_keyset_receipt_sha256.size()) &&
+      (!tls_client || hash.Update(expected_worker_public_key_spki_sha256->data(), 32U)) &&
       hash.Update(canonical_preimage, canonical_preimage_length) &&
       hash.Finish(&digest) && !IsAllZero(digest.data(), output->size());
   if (valid) {
@@ -515,6 +525,33 @@ bool DeriveRuntimePopV2OperationId(
   }
   SecureZeroMemory(digest.data(), digest.size());
   return valid;
+}
+}  // namespace
+
+bool DeriveRuntimePopV2OperationId(
+    const std::uint8_t* authenticated_caller_sid,
+    std::uint16_t authenticated_caller_sid_length,
+    const Byte32& expected_state_sha256, std::uint64_t expected_generation,
+    const Byte32& expected_keyset_receipt_sha256,
+    const std::uint8_t* canonical_preimage, std::size_t canonical_preimage_length,
+    Byte16* output) noexcept {
+  return DeriveRuntimeSignatureOperationId(false, authenticated_caller_sid,
+      authenticated_caller_sid_length, expected_state_sha256, expected_generation,
+      expected_keyset_receipt_sha256, canonical_preimage, canonical_preimage_length, output, nullptr);
+}
+
+bool DeriveTlsClientCertificateVerifyOperationId(
+    const std::uint8_t* authenticated_caller_sid,
+    std::uint16_t authenticated_caller_sid_length,
+    const Byte32& expected_state_sha256, std::uint64_t expected_generation,
+    const Byte32& expected_keyset_receipt_sha256,
+    const Byte32& expected_worker_public_key_spki_sha256,
+    const std::uint8_t* canonical_preimage, std::size_t canonical_preimage_length,
+    Byte16* output) noexcept {
+  return DeriveRuntimeSignatureOperationId(true, authenticated_caller_sid,
+      authenticated_caller_sid_length, expected_state_sha256, expected_generation,
+      expected_keyset_receipt_sha256, canonical_preimage, canonical_preimage_length,
+      output, &expected_worker_public_key_spki_sha256);
 }
 
 bool ComputeAuthenticatedRequestBinding(
@@ -638,7 +675,8 @@ bool EncodeGcpaServerHello(
       IsAllZero(fields.connection_nonce.data(), fields.connection_nonce.size()) ||
       IsAllZero(fields.client_nonce.data(), fields.client_nonce.size()) ||
       fields.recognized_operation_bitmap != kGcpaRecognizedOpcodeBitmap ||
-      fields.callable_operation_bitmap != kGcpaCallableOpcodeBitmap ||
+      (fields.callable_operation_bitmap != kGcpaCallableOpcodeBitmap &&
+       fields.callable_operation_bitmap != kGcpaRuntimeWorkerCallableOpcodeBitmap) ||
       !WriteGcpaHeader(
           GcpaKind::ServerHello,
           static_cast<std::uint32_t>(kGcpaServerHelloPayloadBytes),
@@ -679,7 +717,8 @@ bool DecodeGcpaServerHello(
          !IsAllZero(fields->connection_nonce.data(), 32U) &&
          !IsAllZero(fields->client_nonce.data(), 32U) &&
          fields->recognized_operation_bitmap == kGcpaRecognizedOpcodeBitmap &&
-         fields->callable_operation_bitmap == kGcpaCallableOpcodeBitmap;
+         (fields->callable_operation_bitmap == kGcpaCallableOpcodeBitmap ||
+          fields->callable_operation_bitmap == kGcpaRuntimeWorkerCallableOpcodeBitmap);
 }
 
 bool EncodeGcpaClientRequest(
@@ -1074,6 +1113,16 @@ bool MakeProvisionerServiceSid(SidBuffer* output) noexcept {
   return MakeNtSid(kParts.data(), kParts.size(), output);
 }
 
+bool MakeRuntimeWorkerSid(SidBuffer* output) noexcept {
+  return MakeNtSid(kRuntimeWorkerSidParts.data(), kRuntimeWorkerSidParts.size(), output);
+}
+
+bool IsSimpleNtSid(PSID sid, std::uint32_t rid) noexcept {
+  SidBuffer expected{};
+  return MakeNtSid(&rid, 1U, &expected) && sid != nullptr &&
+      IsValidSid(sid) != FALSE && EqualSid(sid, expected.bytes.data()) != FALSE;
+}
+
 bool MakeTrustedInstallerSid(SidBuffer* output) noexcept {
   constexpr std::array<std::uint32_t, 6U> kParts = {
       80U,
@@ -1229,24 +1278,25 @@ bool ValidateExactProtectedDacl(HANDLE handle) noexcept {
   SidBuffer system{};
   SidBuffer service{};
   SidBuffer administrators{};
+  SidBuffer worker{};
   PSID owner = nullptr;
   PACL dacl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   SECURITY_DESCRIPTOR_CONTROL control = 0U;
   bool defaulted = true;
   if (!MakeLocalSystemSid(&system) || !MakeProvisionerServiceSid(&service) ||
-      !MakeAdministratorsSid(&administrators) ||
+      !MakeAdministratorsSid(&administrators) || !MakeRuntimeWorkerSid(&worker) ||
       !QuerySecurity(
           handle, &owner, &dacl, &descriptor, &control, &defaulted)) {
     return false;
   }
   bool valid = !defaulted && EqualSidBytes(owner, system.bytes.data()) &&
-               (control & SE_DACL_PROTECTED) != 0U && dacl->AceCount == 3U;
-  const std::array<PSID, 3U> expected_sids = {
-      system.bytes.data(), service.bytes.data(), administrators.bytes.data()};
-  const std::array<DWORD, 3U> expected_masks = {
-      kProtectedFullMask, kProtectedReadMask, kProtectedReadMask};
-  for (DWORD index = 0U; valid && index < 3U; ++index) {
+               (control & SE_DACL_PROTECTED) != 0U && dacl->AceCount == 4U;
+  const std::array<PSID, 4U> expected_sids = {
+      system.bytes.data(), service.bytes.data(), administrators.bytes.data(), worker.bytes.data()};
+  const std::array<DWORD, 4U> expected_masks = {
+      kProtectedFullMask, kProtectedReadMask, kProtectedReadMask, kProtectedReadMask};
+  for (DWORD index = 0U; valid && index < expected_sids.size(); ++index) {
     void* raw_ace = nullptr;
     if (GetAce(dacl, index, &raw_ace) == FALSE || raw_ace == nullptr) {
       valid = false;
@@ -1856,6 +1906,9 @@ bool CaptureClientTokenProjection(
   if (!CopySidProjection(token_user->User.Sid, &projection.user)) {
     return false;
   }
+  SidBuffer worker_sid{};
+  if (!MakeRuntimeWorkerSid(&worker_sid)) return false;
+  const bool runtime_worker = EqualSidBytes(projection.user.bytes.data(), worker_sid.bytes.data());
 
   if (!QueryTokenInformationFixed(
           token,
@@ -1878,6 +1931,7 @@ bool CaptureClientTokenProjection(
   }
   std::size_t logon_count = 0U;
   std::size_t administrators_count = 0U;
+  std::size_t service_count = 0U;
   for (DWORD index = 0U; index < groups->GroupCount; ++index) {
     const SID_AND_ATTRIBUTES& group = groups->Groups[index];
     if (!IsSidPointerInside(group.Sid, buffer.data(), returned)) {
@@ -1894,14 +1948,28 @@ bool CaptureClientTokenProjection(
     }
     if (EqualSidBytes(group.Sid, administrators.bytes.data())) {
       ++administrators_count;
-      if ((group.Attributes & SE_GROUP_ENABLED) == 0U ||
+      if (runtime_worker || (group.Attributes & SE_GROUP_ENABLED) == 0U ||
           (group.Attributes & SE_GROUP_USE_FOR_DENY_ONLY) != 0U) {
         return false;
       }
       projection.administrators_sid_attributes = group.Attributes;
     }
+    if (runtime_worker) {
+      const bool enabled = (group.Attributes & SE_GROUP_ENABLED) != 0U &&
+          (group.Attributes & SE_GROUP_USE_FOR_DENY_ONLY) == 0U;
+      if (IsSimpleNtSid(group.Sid, SECURITY_LOCAL_SYSTEM_RID)) return false;
+      if (IsSimpleNtSid(group.Sid, SECURITY_SERVICE_RID)) {
+        if (!enabled) return false;
+        ++service_count;
+      }
+      if (enabled && (IsSimpleNtSid(group.Sid, SECURITY_NETWORK_RID) ||
+          IsSimpleNtSid(group.Sid, SECURITY_BATCH_RID) ||
+          IsSimpleNtSid(group.Sid, SECURITY_INTERACTIVE_RID) ||
+          IsSimpleNtSid(group.Sid, SECURITY_REMOTE_LOGON_RID))) return false;
+    }
   }
-  if (logon_count != 1U || administrators_count != 1U) {
+  if (logon_count != 1U ||
+      (runtime_worker ? (administrators_count != 0U || service_count != 1U) : administrators_count != 1U)) {
     return false;
   }
 
@@ -1913,7 +1981,7 @@ bool CaptureClientTokenProjection(
       !QueryTokenScalar(token, TokenSessionId, &session_id, sizeof(session_id)) ||
       !QueryTokenScalar(
           token, TokenElevationType, &elevation, sizeof(elevation)) ||
-      elevation != TokenElevationTypeFull) {
+      elevation != (runtime_worker ? TokenElevationTypeDefault : TokenElevationTypeFull)) {
     return false;
   }
   projection.authentication_id_low = statistics.AuthenticationId.LowPart;
@@ -1941,7 +2009,8 @@ bool CaptureClientTokenProjection(
   }
   projection.integrity_rid =
       *GetSidSubAuthority(integrity->Label.Sid, subauthority_count - 1U);
-  if (projection.integrity_rid != SECURITY_MANDATORY_HIGH_RID) {
+  if (projection.integrity_rid != SECURITY_MANDATORY_HIGH_RID &&
+      !(runtime_worker && projection.integrity_rid == SECURITY_MANDATORY_SYSTEM_RID)) {
     return false;
   }
 
@@ -1959,6 +2028,19 @@ bool CaptureClientTokenProjection(
     return false;
   }
   projection.has_restricted_sids = false;
+  if (runtime_worker) {
+    if (!QueryTokenInformationFixed(token, TokenPrivileges, buffer.data(), buffer.size(),
+            sizeof(TOKEN_PRIVILEGES), &returned)) return false;
+    const auto* privileges = reinterpret_cast<const TOKEN_PRIVILEGES*>(buffer.data());
+    LUID change_notify{};
+    if (privileges->PrivilegeCount != 1U ||
+        !LookupPrivilegeValueW(nullptr, SE_CHANGE_NOTIFY_NAME, &change_notify)) return false;
+    const auto& privilege = privileges->Privileges[0];
+    constexpr DWORD allowed = SE_PRIVILEGE_ENABLED | SE_PRIVILEGE_ENABLED_BY_DEFAULT | SE_PRIVILEGE_USED_FOR_ACCESS;
+    if (privilege.Luid.LowPart != change_notify.LowPart || privilege.Luid.HighPart != change_notify.HighPart ||
+        (privilege.Attributes & SE_PRIVILEGE_ENABLED) == 0U || (privilege.Attributes & ~allowed) != 0U) return false;
+  }
+  if (ClassifyProtectedCaller(projection) == ProtectedCallerRole::Refused) return false;
   *output = projection;
   return true;
 }
@@ -2352,8 +2434,10 @@ bool RevertAndProveNoThreadToken() noexcept {
   return GetLastError() == ERROR_NO_TOKEN;
 }
 
-bool ValidateInteractiveLogon(const TokenProjection& projection) noexcept {
+bool ValidateCallerLogon(const TokenProjection& projection) noexcept {
 #if defined(GOATCITADEL_EXPECTED_CLIENT_SHA256_HEX)
+  const auto role = ClassifyProtectedCaller(projection);
+  if (role == ProtectedCallerRole::Refused) return false;
   LUID authentication_id{};
   authentication_id.LowPart = projection.authentication_id_low;
   authentication_id.HighPart = projection.authentication_id_high;
@@ -2375,10 +2459,11 @@ bool ValidateInteractiveLogon(const TokenProjection& projection) noexcept {
                      EqualSidBytes(
                          data->Sid,
                          const_cast<std::uint8_t*>(projection.user.bytes.data())) &&
-                     active_console_session != UINT32_MAX &&
                      data->Session == projection.session_id &&
-                     data->Session == active_console_session &&
-                     data->LogonType == Interactive;
+                     (role == ProtectedCallerRole::RuntimeWorker
+                         ? (data->Session == 0U && data->LogonType == Service)
+                         : (active_console_session != UINT32_MAX &&
+                            data->Session == active_console_session && data->LogonType == Interactive));
   const NTSTATUS free_status = LsaFreeReturnBuffer(data);
   return valid && free_status >= 0;
 #else
@@ -2444,7 +2529,7 @@ CallerAuthenticationResult AuthenticateClientAfterHello(
     return CallerAuthenticationResult::ReversionFailure;
   }
   if (!captured || !TokenProjectionsEqual(evidence.token_projection, pipe_projection) ||
-      !ValidateInteractiveLogon(pipe_projection) ||
+      !ValidateCallerLogon(pipe_projection) ||
       !RevalidateHeldLayout(state->layout) || !IsProcessAlive(evidence.process)) {
     CloseProcessEvidence(&evidence);
     return CallerAuthenticationResult::AuthenticationFailure;
@@ -2455,6 +2540,50 @@ CallerAuthenticationResult AuthenticateClientAfterHello(
 }
 
 }  // namespace
+
+ProtectedCallerRole ClassifyProtectedCaller(const TokenProjection& token) noexcept {
+  const auto valid_sid = [](const SidProjection& sid) noexcept {
+    return sid.length >= 8U && sid.length <= sid.bytes.size() && sid.bytes[1] <= SID_MAX_SUB_AUTHORITIES &&
+        sid.length == 8U + 4U * sid.bytes[1] && IsValidSid(const_cast<std::uint8_t*>(sid.bytes.data())) != FALSE;
+  };
+  if (!valid_sid(token.user) || !valid_sid(token.logon) || token.has_restricted_sids ||
+      (!token.authentication_id_low && !token.authentication_id_high) ||
+      token.logon.length != 20U || token.logon.bytes[7] != 5U || ReadU32(token.logon.bytes.data() + 8U) != 5U ||
+      (token.logon_sid_attributes & SE_GROUP_LOGON_ID) != SE_GROUP_LOGON_ID ||
+      (token.logon_sid_attributes & SE_GROUP_ENABLED) == 0U ||
+      (token.logon_sid_attributes & SE_GROUP_USE_FOR_DENY_ONLY) != 0U) return ProtectedCallerRole::Refused;
+  for (std::size_t index = 2U; index < 7U; ++index)
+    if (token.logon.bytes[index] != 0U) return ProtectedCallerRole::Refused;
+  SidBuffer worker{};
+  if (!MakeRuntimeWorkerSid(&worker)) return ProtectedCallerRole::Refused;
+  if (EqualSidBytes(const_cast<std::uint8_t*>(token.user.bytes.data()), worker.bytes.data())) {
+    return token.session_id == 0U && token.elevation_type == TokenElevationTypeDefault &&
+        token.administrators_sid_attributes == 0U &&
+        (token.integrity_rid == SECURITY_MANDATORY_HIGH_RID || token.integrity_rid == SECURITY_MANDATORY_SYSTEM_RID)
+        ? ProtectedCallerRole::RuntimeWorker : ProtectedCallerRole::Refused;
+  }
+  return token.session_id != 0U && token.session_id != UINT32_MAX &&
+      token.elevation_type == TokenElevationTypeFull && token.integrity_rid == SECURITY_MANDATORY_HIGH_RID &&
+      (token.administrators_sid_attributes & SE_GROUP_ENABLED) != 0U &&
+      (token.administrators_sid_attributes & SE_GROUP_USE_FOR_DENY_ONLY) == 0U
+      ? ProtectedCallerRole::InteractiveOperator : ProtectedCallerRole::Refused;
+}
+
+std::uint64_t ProtectedCallerCallableOpcodes(ProtectedCallerRole role) noexcept {
+  if (role == ProtectedCallerRole::InteractiveOperator) return kGcpaCallableOpcodeBitmap;
+  if (role == ProtectedCallerRole::RuntimeWorker) return kGcpaRuntimeWorkerCallableOpcodeBitmap;
+  return 0U;
+}
+
+bool IsProtectedCallerOperationAllowed(ProtectedCallerRole role, std::uint8_t opcode) noexcept {
+  return opcode < 64U && (ProtectedCallerCallableOpcodes(role) & (UINT64_C(1) << opcode)) != 0U;
+}
+
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+bool CaptureProtectedCallerForTest(HANDLE token, TokenProjection* output) noexcept {
+  return CaptureClientTokenProjection(token, TokenPrimary, SecurityAnonymous, true, output);
+}
+#endif
 
 ServiceTransportResult ValidateServiceTransportImages(
     const ServiceTransportContext& context,
@@ -2571,19 +2700,21 @@ bool BuildPipeSecurityAttributes(
   SidBuffer system{};
   SidBuffer service{};
   SidBuffer administrators{};
+  SidBuffer worker{};
   if (!MakeLocalSystemSid(&system) || !MakeProvisionerServiceSid(&service) ||
-      !MakeAdministratorsSid(&administrators)) {
+      !MakeAdministratorsSid(&administrators) || !MakeRuntimeWorkerSid(&worker)) {
     return false;
   }
   const DWORD acl_bytes = static_cast<DWORD>(
       sizeof(ACL) +
-      3U * (sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD)) + system.length +
-      service.length + administrators.length);
+      4U * (sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD)) + system.length +
+      service.length + administrators.length + worker.length);
   if (acl_bytes > acl_storage->size()) {
     return false;
   }
   acl_storage->fill(0U);
   PACL acl = reinterpret_cast<PACL>(acl_storage->data());
+  void* system_ace = nullptr;
   if (InitializeAcl(acl, acl_bytes, ACL_REVISION) == FALSE ||
       AddAccessAllowedAceEx(
           acl, ACL_REVISION, 0U, kPipeGrantedMask, system.bytes.data()) == FALSE ||
@@ -2595,9 +2726,15 @@ bool BuildPipeSecurityAttributes(
           0U,
           kPipeGrantedMask,
           administrators.bytes.data()) == FALSE ||
-      acl->AceCount != 3U ||
+      AddAccessAllowedAceEx(
+          acl, ACL_REVISION, 0U, kPipeGrantedMask, worker.bytes.data()) == FALSE ||
+      acl->AceCount != 4U ||
+      GetAce(acl, 0U, &system_ace) == FALSE || system_ace == nullptr ||
       InitializeSecurityDescriptor(descriptor, SECURITY_DESCRIPTOR_REVISION) == FALSE ||
-      SetSecurityDescriptorOwner(descriptor, system.bytes.data(), FALSE) == FALSE ||
+      // SetSecurityDescriptorOwner retains its pointer. The ACL owns a SID copy
+      // that outlives this function; the local SidBuffer does not.
+      SetSecurityDescriptorOwner(descriptor,
+          &static_cast<ACCESS_ALLOWED_ACE*>(system_ace)->SidStart, FALSE) == FALSE ||
       SetSecurityDescriptorDacl(descriptor, TRUE, acl, FALSE) == FALSE ||
       SetSecurityDescriptorControl(
           descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED) == FALSE ||
@@ -3261,7 +3398,8 @@ ServiceTransportResult RunServiceTransport(
   hello.connection_nonce = internal->connection_nonce;
   hello.client_nonce = internal->client_nonce;
   hello.recognized_operation_bitmap = kGcpaRecognizedOpcodeBitmap;
-  hello.callable_operation_bitmap = kGcpaCallableOpcodeBitmap;
+  hello.callable_operation_bitmap = ProtectedCallerCallableOpcodes(
+      ClassifyProtectedCaller(internal->client.token_projection));
   if (!EncodeGcpaServerHello(
           hello,
           internal->frame.data(),
@@ -3311,9 +3449,13 @@ ServiceTransportResult RunServiceTransport(
       request.schema != 1U) {
     return ServiceTransportResult::ProtocolInvalid;
   }
+  if (!IsProtectedCallerOperationAllowed(ClassifyProtectedCaller(internal->client.token_projection), request.opcode)) {
+    return ServiceTransportResult::CallerAuthentication;
+  }
   CreateKeysetRequest create_request{};
   SignAdmissionEvidenceRequest sign_request{};
   SignRuntimePopV2Request pop_v2_request{};
+  SignTlsClientCertificateVerifyRequest tls_request{};
   RevokeKeysetRequest revoke_request{};
   const bool exact_callable_request =
       (request.opcode == static_cast<std::uint8_t>(Opcode::Inspect) &&
@@ -3350,6 +3492,10 @@ ServiceTransportResult RunServiceTransport(
            request.expected_state_sha256.data(),
            pop_v2_request.expected_state_sha256.data(),
            32U)) ||
+      (request.opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify) &&
+       DecodeSignTlsClientCertificateVerifyRequest(request.body, request.body_length, &tls_request) &&
+       request.operation_id == tls_request.operation_id &&
+       request.expected_state_sha256 == tls_request.expected_state_sha256) ||
       (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset) &&
        DecodeRevokeKeysetRequest(
            request.body, request.body_length, &revoke_request) &&
@@ -3366,6 +3512,7 @@ ServiceTransportResult RunServiceTransport(
             static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
         request.opcode ==
             static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
+        request.opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify) ||
         request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset))) {
     return ServiceTransportResult::ProtocolInvalid;
   }
@@ -3400,6 +3547,12 @@ ServiceTransportResult RunServiceTransport(
   bool send_result = false;
   std::array<std::uint8_t, kCreateKeysetResultBytes> operation_result{};
   std::uint32_t operation_result_length = 0U;
+  // Recheck OS authority before any custody read or protected mutation, not only
+  // when sending the response after an operation has already taken place.
+  if (!RefreshClientEvidenceMatches(internal->client, internal->layout.client_path_dos) ||
+      !ValidateCallerLogon(internal->client.token_projection) || !RevalidateHeldLayout(internal->layout)) {
+    return ServiceTransportResult::CallerAuthentication;
+  }
 #if defined(GOATCITADEL_PROVISIONER_CUSTODY)
   if (request.opcode == static_cast<std::uint8_t>(Opcode::Inspect) &&
       request.body_length == 0U) {
@@ -3416,6 +3569,7 @@ ServiceTransportResult RunServiceTransport(
                   static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
              request.opcode ==
                   static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
+             request.opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify) ||
              request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     const std::uint64_t operation_budget_ms =
         request.opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset)
@@ -3609,31 +3763,45 @@ class ClientExchangeScope final {
   ScopedHandle pipe_{};
 };
 
-bool OpenProtectedClientPipe(ScopedHandle* output) noexcept {
-  if (output == nullptr) {
+bool OpenClientPipeAtName(ScopedHandle* output, const wchar_t* name, std::uint32_t maximum_wait_ms) noexcept {
+  if (output == nullptr || name == nullptr || maximum_wait_ms == 0U || maximum_wait_ms > kClientPipeWaitMilliseconds) {
     return false;
   }
   const std::uint64_t deadline =
-      AddDeadline(GetTickCount64(), kClientPipeWaitMilliseconds);
-  const DWORD wait_ms = DeadlineWaitMilliseconds(deadline);
-  if (wait_ms == 0U ||
-      WaitNamedPipeW(kProvisionerPipeName, wait_ms) == FALSE) {
-    return false;
+      AddDeadline(GetTickCount64(), maximum_wait_ms);
+  ScopedHandle delay(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (delay.get() == nullptr) return false;
+  for (;;) {
+    const DWORD remaining = DeadlineWaitMilliseconds(deadline);
+    if (remaining == 0U) return false;
+    const DWORD slice = remaining < 250U ? remaining : 250U;
+    DWORD error = NO_ERROR;
+    if (WaitNamedPipeW(name, slice) != FALSE) {
+      ScopedHandle pipe(CreateFileW(
+          name, static_cast<DWORD>(GENERIC_READ | FILE_WRITE_DATA), 0U, nullptr, OPEN_EXISTING,
+          FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION |
+              SECURITY_EFFECTIVE_ONLY, nullptr));
+      if (pipe.get() != INVALID_HANDLE_VALUE) {
+        // Nothing is transmitted until mutual authentication after this return.
+        output->Reset(pipe.Release());
+        return true;
+      }
+      error = GetLastError();
+    } else {
+      error = GetLastError();
+    }
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PIPE_BUSY && error != ERROR_SEM_TIMEOUT)
+      return false;
+    // WaitNamedPipe returns immediately while no instance exists, including
+    // between one-exchange signer processes. All retries share one deadline.
+    const DWORD pause = DeadlineWaitMilliseconds(deadline);
+    if (pause == 0U || WaitForSingleObject(delay.get(), pause < 25U ? pause : 25U) != WAIT_TIMEOUT)
+      return false;
   }
-  ScopedHandle pipe(CreateFileW(
-      kProvisionerPipeName,
-      static_cast<DWORD>(GENERIC_READ | FILE_WRITE_DATA),
-      0U,
-      nullptr,
-      OPEN_EXISTING,
-      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION |
-          SECURITY_EFFECTIVE_ONLY,
-      nullptr));
-  if (pipe.get() == INVALID_HANDLE_VALUE) {
-    return false;
-  }
-  output->Reset(pipe.Release());
-  return true;
+}
+
+bool OpenProtectedClientPipe(ScopedHandle* output) noexcept {
+  return OpenClientPipeAtName(output, kProvisionerPipeName, static_cast<std::uint32_t>(kClientPipeWaitMilliseconds));
 }
 
 bool ExpectedInspectResult(
@@ -3693,6 +3861,12 @@ bool IsExactProtectedRequest(const ClientExchangeRequest& request) noexcept {
                request.expected_state_sha256.data(),
                32U);
   }
+  if (request.opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify)) {
+    SignTlsClientCertificateVerifyRequest decoded{};
+    return DecodeSignTlsClientCertificateVerifyCallerRequest(request.body, request.body_length, &decoded) &&
+        IsAllZero(request.operation_id.data(), request.operation_id.size()) &&
+        decoded.expected_state_sha256 == request.expected_state_sha256;
+  }
   if (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     RevokeKeysetRequest decoded{};
     return DecodeRevokeKeysetRequest(request.body, request.body_length, &decoded) &&
@@ -3717,6 +3891,7 @@ bool IsConsistentBoundError(
   if (opcode == static_cast<std::uint8_t>(Opcode::CreateKeyset) ||
       opcode == static_cast<std::uint8_t>(Opcode::SignAdmissionEvidence) ||
       opcode == static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) ||
+      opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify) ||
       opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset)) {
     return false;
   }
@@ -3748,10 +3923,15 @@ ClientExchangeDisposition RunProtectedClientExchange(
           &scope.client_)) {
     return ClientExchangeDisposition::TransportFailure;
   }
+  const auto caller_role = ClassifyProtectedCaller(scope.client_.token_projection);
+  if (!IsProtectedCallerOperationAllowed(caller_role, request.opcode)) {
+    return ClientExchangeDisposition::OperationUnavailable;
+  }
 
   Byte32 client_nonce{};
   Byte16 operation_id{};
   std::array<std::uint8_t, kSignRuntimePopV2RequestBytes> bound_pop_v2_body{};
+  std::array<std::uint8_t, kSignTlsClientCertificateVerifyRequestBytes> bound_tls_body{};
   const std::uint8_t* bound_body = request.body;
   if (!GenerateRandom32(&client_nonce)) {
     return ClientExchangeDisposition::TransportFailure;
@@ -3791,6 +3971,23 @@ ClientExchangeDisposition RunProtectedClientExchange(
       return ClientExchangeDisposition::TransportFailure;
     }
     bound_body = bound_pop_v2_body.data();
+  } else if (request.opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify)) {
+    std::memcpy(bound_tls_body.data(), request.body, bound_tls_body.size());
+    SignTlsClientCertificateVerifyRequest caller_request{};
+    if (!DecodeSignTlsClientCertificateVerifyCallerRequest(
+            bound_tls_body.data(), bound_tls_body.size(), &caller_request) ||
+        !DeriveTlsClientCertificateVerifyOperationId(
+            scope.client_.token_projection.user.bytes.data(), scope.client_.token_projection.user.length,
+            caller_request.expected_state_sha256, caller_request.expected_generation,
+            caller_request.expected_keyset_receipt_sha256, caller_request.expected_worker_public_key_spki_sha256,
+            caller_request.preimage.data(), caller_request.preimage_length, &operation_id)) {
+      return ClientExchangeDisposition::TransportFailure;
+    }
+    std::memcpy(bound_tls_body.data(), operation_id.data(), operation_id.size());
+    SignTlsClientCertificateVerifyRequest normalized{};
+    if (!DecodeSignTlsClientCertificateVerifyRequest(bound_tls_body.data(), bound_tls_body.size(), &normalized) ||
+        normalized.operation_id != operation_id) return ClientExchangeDisposition::TransportFailure;
+    bound_body = bound_tls_body.data();
   } else {
     operation_id = request.operation_id;
   }
@@ -3826,6 +4023,7 @@ ClientExchangeDisposition RunProtectedClientExchange(
   GcpaServerHelloFields server_hello{};
   if (!DecodeGcpaServerHello(
           hello_frame.data(), frame_length, &server_hello) ||
+      server_hello.callable_operation_bitmap != ProtectedCallerCallableOpcodes(caller_role) ||
       !BytesEqual(
           server_hello.client_nonce.data(),
           client_nonce.data(),
@@ -3935,6 +4133,8 @@ ClientExchangeDisposition RunProtectedClientExchange(
         (request.opcode ==
              static_cast<std::uint8_t>(Opcode::SignRuntimePopV2) &&
          server_response.result_length == kSignRuntimePopV2ResultBytes) ||
+        (request.opcode == static_cast<std::uint8_t>(Opcode::SignTlsClientCertificateVerify) &&
+         server_response.result_length == kSignTlsClientCertificateVerifyResultBytes) ||
         (request.opcode == static_cast<std::uint8_t>(Opcode::RevokeLocalKeyset) &&
          server_response.result_length == kRevokeKeysetResultBytes);
     if (!exact_result) {
@@ -3965,5 +4165,17 @@ ClientExchangeDisposition RunProtectedClientExchange(
   }
   return response->disposition;
 }
+
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+HANDLE OpenProtectedClientPipeForTest(const wchar_t* name, std::uint32_t wait_ms) noexcept {
+  ScopedHandle pipe;
+  return OpenClientPipeAtName(&pipe, name, wait_ms) ? pipe.Release() : nullptr;
+}
+
+bool BuildProtectedPipeSecurityForTest(SECURITY_ATTRIBUTES* attributes,
+    SECURITY_DESCRIPTOR* descriptor, std::array<std::uint8_t, 512U>* acl_storage) noexcept {
+  return BuildPipeSecurityAttributes(attributes, descriptor, acl_storage);
+}
+#endif
 
 }  // namespace goatcitadel::remote_worker_provisioner

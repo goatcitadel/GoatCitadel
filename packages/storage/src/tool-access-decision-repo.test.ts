@@ -50,6 +50,7 @@ function recordDecision(
   return repo.record(
     {
       toolName: input.toolName ?? "fs.write",
+      policyToolName: input.policyToolName,
       agentId: input.agentId ?? "agent-1",
       sessionId: input.sessionId ?? "session-1",
       workspaceId: input.workspaceId,
@@ -374,6 +375,7 @@ describe("ToolAccessDecisionRepository", () => {
         decisionId: "decision-1",
         timestamp: "2026-03-24T10:00:00.000Z",
         toolName: "shell.exec",
+        policyToolName: undefined,
         agentId: "agent-1",
         sessionId: "session-1",
         workspaceId: undefined,

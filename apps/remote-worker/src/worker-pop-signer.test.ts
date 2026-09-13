@@ -80,7 +80,7 @@ describe("worker PoP v2 signer", () => {
     expect(a.proofBase64Url).not.toBe(b.proofBase64Url);
   });
 
-  it("signs the inference-exchange and settlement-submission routes (codes 11-12)", () => {
+  it("signs the inference, settlement and mesh exchange routes (codes 11-13)", () => {
     const { context, publicKeyPem } = keyed();
     for (const route of [
       {
@@ -90,6 +90,10 @@ describe("worker PoP v2 signer", () => {
       {
         rawPath: "/api/v1/remote-workers/assignment-settlement-submissions",
         operation: "assignment.settlement.submit",
+      },
+      {
+        rawPath: "/api/v1/remote-workers/mesh-capability-exchanges",
+        operation: "mesh.capability.exchange",
       },
     ] as const) {
       const signed = signWorkerCredentialPop({

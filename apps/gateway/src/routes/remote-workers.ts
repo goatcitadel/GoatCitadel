@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
+import { RemoteWorkerBudgetConflictError } from "@goatcitadel/storage";
 import {
   REMOTE_WORKER_CAPABILITY_CLASSES,
   REMOTE_WORKER_MAX_ALLOWED_WORKSPACES,
@@ -19,6 +20,7 @@ import { RemoteWorkerMeshNodeJoinAuthorityError } from "../services/remote-worke
 import {
   RemoteWorkerOperatorControlUnavailableError,
   RemoteWorkerRegistryInputError,
+  RemoteWorkerRuntimeReadUnavailableError,
   type RemoteWorkersRouteService,
 } from "../services/remote-workers-route-service.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -137,6 +139,17 @@ const joinAuthorityRevokeBodySchema = generationControlBodySchema
   .extend({ targetWorkspaceId: identifierSchema })
   .strict();
 
+const budgetBodySchema = z.object({
+  grantId: identifierSchema,
+  executionWorkspaceId: identifierSchema,
+  workerId: identifierSchema,
+  workerGeneration: z.number().int().safe().positive(),
+  maxRequests: z.number().int().min(1).max(100_000),
+  maxCostMicrousd: z.number().int().min(0).max(1_000_000_000_000),
+  expiresAt: z.string().datetime(),
+}).strict();
+const budgetRevokeSchema = z.object({ expectedRevision: z.number().int().safe().positive() }).strict();
+
 const RATE_LIMIT_MAX = 120;
 const MUTATION_RATE_LIMIT_MAX = 30;
 const BOOTSTRAP_RATE_LIMIT_MAX = 5;
@@ -196,6 +209,54 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
       setNoStoreHeaders(reply);
       return payload;
     },
+  });
+
+  fastify.get("/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets", operatorRead, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const query = z.object({ executionWorkspaceId: identifierSchema }).strict().safeParse(request.query);
+    if (!params.success || !query.success) return invalidRequest(reply);
+    const service = resolveService(fastify.services);
+    if (!service) return unavailable(reply);
+    try {
+      return reply.send({ items: await service.budgetOperator.list(params.data.workspaceId, query.data.executionWorkspaceId) });
+    } catch (error) { return sendMutationError(reply, request.log, error); }
+  });
+
+  fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets", operatorMutation, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const query = emptyQuerySchema.safeParse(request.query);
+    const body = budgetBodySchema.safeParse(request.body);
+    const identity = mutationIdentity(request);
+    if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
+    const service = resolveService(fastify.services);
+    if (!service) return unavailable(reply);
+    try {
+      const grant = await service.budgetOperator.create({ ...body.data, registryWorkspaceId: params.data.workspaceId }, identity.actorId);
+      await markMutationCommitted(request);
+      return reply.send(grant);
+    } catch (error) {
+      if (error instanceof TypeError) return invalidRequest(reply);
+      return sendMutationError(reply, request.log, error);
+    }
+  });
+
+  fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets/:grantId/revoke", operatorMutation, async (request, reply) => {
+    const params = paramsSchema.extend({ grantId: identifierSchema }).strict().safeParse(request.params);
+    const query = emptyQuerySchema.safeParse(request.query);
+    const body = budgetRevokeSchema.safeParse(request.body);
+    const identity = mutationIdentity(request);
+    if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
+    const service = resolveService(fastify.services);
+    if (!service) return unavailable(reply);
+    try {
+      const grant = await service.budgetOperator.revoke({ registryWorkspaceId: params.data.workspaceId,
+        grantId: params.data.grantId, expectedRevision: body.data.expectedRevision, actorId: identity.actorId });
+      await markMutationCommitted(request);
+      return reply.send(grant);
+    } catch (error) {
+      if (error instanceof TypeError) return invalidRequest(reply);
+      return sendMutationError(reply, request.log, error);
+    }
   });
 
   fastify.post(
@@ -409,6 +470,25 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/runtime",
+    operatorRead,
+    async (request, reply) => {
+      const params = assignmentParamsSchema.safeParse(request.params);
+      const query = emptyQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return reply.code(503).send({ error: "Remote worker runtime reads are unavailable." });
+      try {
+        return reply.send(await service.getAssignmentRuntime(params.data));
+      } catch (error) {
+        if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
+        if (error instanceof RemoteWorkerRuntimeReadUnavailableError) return reply.code(503).send({ error: error.message });
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.get(
     "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/events",
     operatorRead,
     async (request, reply) => {
@@ -467,7 +547,10 @@ function sendMutationError(
   if (
     error instanceof RemoteWorkerOperatorControlUnavailableError ||
     error instanceof RemoteWorkerManifestVerifierUnavailableError
-  ) {
+) {
+  if (error instanceof RemoteWorkerBudgetConflictError) {
+    return reply.code(409).send({ error: "Worker budget changed or expired. Refresh its status before retrying." });
+  }
     return unavailable(reply);
   }
   return sendRouteError(reply, error, log);

@@ -42,7 +42,7 @@ type Notice = {
   message: string;
 };
 
-type RuntimeSnapshotSourceKey =
+export type RuntimeSnapshotSourceKey =
   | "dashboard"
   | "timeline"
   | "health"
@@ -58,6 +58,7 @@ type RuntimeSnapshotSourceKey =
 
 export type RuntimeSnapshotSourceStatus =
   | { status: "ok" }
+  | { status: "not_requested"; message: string }
   | {
       status: "error";
       message: string;
@@ -67,7 +68,11 @@ export type RuntimeSnapshotSourceStatusMap = Record<RuntimeSnapshotSourceKey, Ru
 
 type RuntimeSnapshotReloadMode = "full" | "poll";
 
-export function useOpsRuntimeSnapshot(activeSection = "activity") {
+export function useOpsRuntimeSnapshot(
+  activeSection = "activity",
+  options?: { requestedSources: readonly RuntimeSnapshotSourceKey[] },
+) {
+  const requestedSourceKey = options ? [...new Set(options.requestedSources)].sort().join(",") : undefined;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -100,7 +105,15 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
 
   const load = useCallback(
     async (mode: RuntimeSnapshotReloadMode = "full") => {
-      const sourceSet = mode === "poll" ? buildOpsPollSourceSet(activeSection) : undefined;
+      const sourceSet =
+        requestedSourceKey !== undefined
+          ? new Set<RuntimeSnapshotSourceKey>([
+              ...BASE_OPS_POLL_SOURCES,
+              ...(requestedSourceKey.split(",").filter(Boolean) as RuntimeSnapshotSourceKey[]),
+            ])
+          : mode === "poll"
+            ? buildOpsPollSourceSet(activeSection)
+            : undefined;
       const current = dataRef.current;
       const [
         dashboard,
@@ -177,7 +190,7 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
         },
       } satisfies RuntimeSnapshotData;
     },
-    [activeSection],
+    [activeSection, requestedSourceKey],
   );
 
   const reload = useCallback(
@@ -206,7 +219,7 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
   useEffect(() => {
     const loadId = loadSequenceRef.current + 1;
     loadSequenceRef.current = loadId;
-    setLoading(true);
+    setLoading(dataRef.current === null);
     setError(null);
     void load()
       .then((next) => {
@@ -365,7 +378,10 @@ async function loadRuntimeSnapshotSource<K extends RuntimeSnapshotSourceKey>(
   if (sourceSet && !sourceSet.has(key)) {
     return {
       data: current?.[key] ?? fallback,
-      status: current?.sourceStatus[key] ?? { status: "ok" },
+      status: current?.sourceStatus[key] ?? {
+        status: "not_requested",
+        message: "This evidence has not been requested.",
+      },
     };
   }
   const source = await captureRuntimeSource(load);

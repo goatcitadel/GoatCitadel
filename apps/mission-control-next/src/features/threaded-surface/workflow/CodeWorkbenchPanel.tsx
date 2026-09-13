@@ -1,3 +1,7 @@
+import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { useDraftLeave } from "../../native-routes/library/DraftLeaveDialog";
+import { useFormDirty } from "../../native-routes/library/use-form-dirty";
 /* eslint-disable max-lines */
 import { ChevronDown, ChevronRight, PanelRightOpen, X } from "lucide-react";
 import {
@@ -38,7 +42,6 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
 import { StatusChip } from "../../native-routes/primitives";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
-import { useModalDialogBehavior } from "../useModalDialogBehavior";
 import { useOptionalStableHandler, useStableHandler } from "../useStableHandler";
 import { WorkbenchFileActionForm } from "./WorkbenchFileActionForm";
 import { WorkbenchFilePicker } from "./WorkbenchFilePicker";
@@ -804,6 +807,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     onExpandedPathsChange,
     onRefresh,
     onSaveFile,
+    onFileOperationPreview,
     onFileOperation,
     onDiscardDraft,
     onRunValidationCommand,
@@ -820,6 +824,8 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     [selectedTurn?.assistantMessage?.content],
   );
   const readyForRepoOps = workbenchState?.worktreeStatus === "ready";
+  const compactWorkbench = useMediaQuery("(max-width: 767px)");
+  const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? EMPTY_CHANGED_FILES;
   const validationPresets = useMemo(
     () => getValidationCommandPresets(workbenchState?.packageManager),
@@ -890,7 +896,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     validationCommandRef.current = commandLine;
   }, []);
   const [filePanePercent, setFilePanePercent] = useState(readStoredFilePanePercent);
-  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
+  const fileLeave = useDraftLeave();
+  const editorDraftKey = "chat-workbench:" + JSON.stringify([workbenchState?.sessionId, selectedFile?.path]);
+  useFormDirty(editorDraftKey, hasDirtyDraft, { label: selectedFile?.path ?? "Build editor", keepDraft: true, onSave: panel.props.onSaveDraftForLeave, onDiscard: onDiscardDraft });
   const [confirmRevertFilePath, setConfirmRevertFilePath] = useState<string | null>(null);
   const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -929,17 +937,12 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runLogCleared, setRunLogCleared] = useState(false);
   const [runLogCopyNotice, setRunLogCopyNotice] = useState<string | null>(null);
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
-  const inspectorSheetRef = useRef<HTMLDivElement | null>(null);
   const closeInspectorDrawer = useCallback(() => {
     setInspectorDrawerOpen(false);
   }, []);
-  useModalDialogBehavior({
-    open: inspectorDrawerOpen,
-    onClose: closeInspectorDrawer,
-    containerRef: inspectorSheetRef,
-  });
   const [expandedInspectorSections, setExpandedInspectorSections] = useState(readStoredInspectorSections);
   const isMounted = useIsMounted();
+  const stableOnFileOperationPreview = useOptionalStableHandler(onFileOperationPreview);
   const stableOnFileOperation = useOptionalStableHandler(onFileOperation);
   const hasPatchDiff = Boolean(diff?.diff.trim());
   const activeBlock = codeBlocks[activeBlockIndex] ?? null;
@@ -1755,11 +1758,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     if (!relativePath || relativePath === selectedFile?.path) {
       return;
     }
-    if (hasDirtyDraft) {
-      setPendingFilePath(relativePath);
-      return;
-    }
-    onSelectFile(relativePath);
+    fileLeave.request(() => onSelectFile(relativePath), [editorDraftKey]);
   };
 
   const runValidationCommandLine = (commandLine: string) => {
@@ -1855,13 +1854,13 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       <header className="mc-next-workbench-head">
         <div>
           <p className="mc-next-panel-kicker">Code</p>
-          <h4>Workbench</h4>
+          <h4>Build editor</h4>
           <p>
             {needsProjectBinding
-              ? "Bind a project before this session can open a repo-backed workbench."
+              ? "Choose a project to edit its files."
               : readyForRepoOps
-                ? `Repo-first implementation surface for ${projectName ?? "bound project"}.`
-                : `Project-bound workbench for ${projectName ?? "bound project"}. Create a worktree to begin repo operations.`}
+                ? projectName ?? "Current project"
+                : `${projectName ?? "Current project"} · Create a worktree to begin editing.`}
           </p>
         </div>
         <div className="mc-next-workbench-toolbar">
@@ -1888,30 +1887,15 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         </div>
       </header>
 
-      <div className="mc-next-code-phase-strip" aria-label="Code workflow posture">
-        <span data-active={activePane === "snippets" ? "true" : "false"}>Plan</span>
-        <span data-active={activePane === "files" || activePane === "snippets" ? "true" : "false"}>Implement</span>
-        <span
-          data-active={
-            activePane === "selected-diff" ||
-            activePane === "repo-diff" ||
-            activePane === "review-packet" ||
-            activePane === "output"
-              ? "true"
-              : "false"
-          }
-        >
-          Review
-        </span>
-      </div>
-
+      {panel.props.retainedDraftPaths?.length ? <details className="mc-next-chat-evidence"><summary>Unsaved files ({panel.props.retainedDraftPaths.length})</summary>{panel.props.retainedDraftPaths.map((path) => <button type="button" className="mc-next-panel-button" key={path} onClick={() => requestFileSelection(path)}>{path} · Unsaved</button>)}</details> : null}
+      {panel.props.hasRemoteChanges ? <section><p role="alert">This file changed since editing began. Your draft is preserved.</p><details className="mc-next-chat-evidence"><summary>Review latest file</summary><pre>{selectedFile?.content}</pre><button type="button" className="mc-next-panel-button" onClick={panel.props.onRebaseDraft} disabled={busy || saving}>Use this version and keep my draft</button></details></section> : null}
       <div className="mc-next-workbench-action-row">
         <div className="mc-next-workbench-action-cluster" data-cluster="draft">
           <button
             type="button"
             className="mc-next-panel-button"
             onClick={onSaveFile}
-            disabled={!selectedFile || !hasDirtyDraft || busy || saving}
+            disabled={!selectedFile || !hasDirtyDraft || busy || saving || panel.props.hasRemoteChanges}
           >
             {saving ? "Saving…" : "Save file"}
           </button>
@@ -1920,7 +1904,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           </button>
         </div>
         <span aria-hidden="true" className="mc-next-workbench-action-divider" />
-        <div className="mc-next-workbench-action-cluster" data-cluster="repo">
+        <details className="mc-next-workbench-tools"><summary className="mc-next-panel-button">Repo actions and checks</summary><div className="mc-next-workbench-action-cluster" data-cluster="repo">
           <button type="button" className="mc-next-panel-button" onClick={onRefresh} disabled={loading || busy}>
             Refresh
           </button>
@@ -1966,7 +1950,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             onCommandChange={handleValidationCommandChange}
             onRunCommandLine={stableRunValidationCommandLine}
           />
-        </div>
+        </div></details>
         <span aria-hidden="true" className="mc-next-workbench-action-divider" />
         <div className="mc-next-workbench-action-cluster" data-cluster="destructive" ref={moreMenuRef}>
           <button
@@ -2023,7 +2007,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           )}
         </div>
         <span aria-hidden="true" className="mc-next-workbench-action-divider" />
-        <label className="mc-next-workbench-layout-control">
+        <details className="mc-next-workbench-layout-options"><summary className="mc-next-panel-button">Layout</summary><label className="mc-next-workbench-layout-control">
           <span>Files pane</span>
           <input
             type="range"
@@ -2032,13 +2016,15 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             value={filePanePercent}
             onChange={(event) => setFilePanePercent(Number(event.target.value))}
           />
-        </label>
+        </label></details>
       </div>
 
       {error ? <div className="mc-next-panel-banner warning">{error}</div> : null}
 
       <div className="mc-next-workbench-body" style={workbenchBodyStyle}>
         <aside className="mc-next-workbench-sidebar">
+          <button type="button" className="mc-next-panel-button mc-next-workbench-files-toggle" aria-expanded={!compactWorkbench || fileBrowserOpen} onClick={() => setFileBrowserOpen(open => !open)}>Browse files</button>
+          <div className="mc-next-workbench-file-browser" hidden={compactWorkbench && !fileBrowserOpen}>
           <div className="mc-next-panel-list-head">
             <strong>Files</strong>
             <span>{changedFiles.length} changed</span>
@@ -2055,12 +2041,14 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             <p className="mc-next-workbench-empty">No worktree is active yet. Create one to unlock the repo view.</p>
           ) : workbenchTree ? (
             <>
-              <WorkbenchFileActionForm
+              <details className="mc-next-chat-evidence"><summary>File actions</summary><WorkbenchFileActionForm
+                key={[workbenchState?.sessionId, workbenchState?.projectId, workbenchState?.worktreePath].join(":")}
                 busy={busy}
                 repoBlockedReason={worktreeBlockedReason ?? draftConflictReason}
                 selectedFilePath={selectedFile?.path}
+                onFileOperationPreview={stableOnFileOperationPreview}
                 onFileOperation={stableOnFileOperation}
-              />
+              /></details>
               {workbenchTree.items.length ? (
                 <WorkbenchFileTree
                   storageScopeKey={workbenchState?.sessionId ?? "workbench"}
@@ -2077,10 +2065,11 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           ) : (
             <p className="mc-next-workbench-empty">No repo files are ready to inspect yet.</p>
           )}
+          </div>
         </aside>
 
         <section className="mc-next-workbench-main">
-          <div className="mc-next-workbench-review-strip">
+          <details className="mc-next-workbench-change-summary"><summary>Change summary</summary><div className="mc-next-workbench-review-strip">
             <span>
               {changedFiles.length} changed ·{" "}
               {diff?.summary ? `+${diff.summary.additions} / -${diff.summary.deletions}` : "diff pending"}
@@ -2096,7 +2085,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                 Run log
               </button>
             </div>
-          </div>
+          </div></details>
           <div className="mc-next-panel-tab-row" role="tablist" aria-label="Workbench panes">
             {workbenchPaneDefs.map((pane, index) => {
               const selected = activePane === pane.id;
@@ -2155,7 +2144,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                 <button
                   type="button"
                   className="mc-next-panel-button"
-                  disabled={!selectedFile || !hasDirtyDraft || busy || saving}
+                  disabled={!selectedFile || !hasDirtyDraft || busy || saving || panel.props.hasRemoteChanges}
                   onClick={() => {
                     onSaveFile();
                     setCommandPaletteOpen(false);
@@ -2969,62 +2958,13 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
         </section>
-        <aside className="mc-next-code-session-inspector-slot">
-          <CodeSessionInspector
-            expandedSections={expandedInspectorSections}
-            onToggleSection={handleToggleInspectorSection}
-            sections={inspectorSections}
-            variant="inline"
-          />
-        </aside>
       </div>
-      {inspectorDrawerOpen ? (
-        <div
-          ref={inspectorSheetRef}
-          id={inspectorDrawerId}
-          className="mc-next-code-inspector-sheet"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Code session inspector"
-        >
-          <button
-            type="button"
-            className="mc-next-code-inspector-scrim"
-            aria-label="Close inspector"
-            onClick={closeInspectorDrawer}
-          />
-          <div className="mc-next-code-inspector-sheet-body">
-            <CodeSessionInspector
-              expandedSections={expandedInspectorSections}
-              onClose={closeInspectorDrawer}
-              onToggleSection={handleToggleInspectorSection}
-              sections={inspectorSections}
-              variant="drawer"
-            />
-          </div>
-        </div>
-      ) : (
-        <div id={inspectorDrawerId} hidden aria-hidden="true" />
-      )}
-      <ConfirmModal
-        open={Boolean(pendingFilePath)}
-        title="Discard unsaved file changes?"
-        message="Switching files will discard the unsaved editor changes in the current workbench file."
-        confirmLabel="Discard and switch"
-        danger
-        pending={saving}
-        cancelDisabled={saving}
-        disableDismiss={saving}
-        onCancel={() => setPendingFilePath(null)}
-        onConfirm={() => {
-          if (!pendingFilePath) {
-            return;
-          }
-          onDiscardDraft();
-          onSelectFile(pendingFilePath);
-          setPendingFilePath(null);
-        }}
-      />
+      <div id={inspectorDrawerId}>
+        <DetailInspector open={inspectorDrawerOpen} title="Code context" onClose={closeInspectorDrawer}>
+          <CodeSessionInspector expandedSections={expandedInspectorSections} onToggleSection={handleToggleInspectorSection} sections={inspectorSections} variant="inline" />
+        </DetailInspector>
+      </div>
+      {fileLeave.dialog}
       <ConfirmModal
         open={confirmRevertAllOpen}
         title="Revert all worktree changes?"

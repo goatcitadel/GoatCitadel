@@ -81,6 +81,19 @@ function toHeaderRecord(headers: HeadersInit | undefined): Record<string, string
 const CHAT_API_TEST_TIMEOUT_MS = 30_000;
 
 describe("chat API origin surface headers", () => {
+  it("reviews a scoped file action separately and forwards its unchanged revision on apply", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ revision: "a".repeat(64) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const chat = await import("./chat");
+    const action = { operation: "rename" as const, path: "src/file.ts", targetPath: "src/new.ts" };
+    const review = await chat.previewChatSessionWorkbenchFileOperation("session/one", action);
+    await chat.runChatSessionWorkbenchFileOperation("session/one", { ...action, expectedRevision: review.revision });
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/sessions/session%2Fone/workbench/file-operation/preview");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify(action) });
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/sessions/session%2Fone/workbench/file-operation");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ ...action, expectedRevision: "a".repeat(64) }) });
+  });
+
   beforeEach(() => {
     vi.resetModules();
     installMockWindow();
@@ -431,10 +444,12 @@ describe("chat API origin surface headers", () => {
       await chat.fetchChatSessionWorkbenchTree(sessionId);
       await chat.fetchChatSessionWorkbenchFile(sessionId, "src/index.ts");
       await chat.saveChatSessionWorkbenchFile(sessionId, {
-        relativePath: "src/index.ts",
+        path: "src/index.ts",
         content: "export {};",
-      } as never);
+        expectedRevision: "a".repeat(64),
+      });
       await chat.runChatSessionWorkbenchFileOperation(sessionId, {
+        expectedRevision: "a".repeat(64),
         operation: "create_file",
         path: "src/new.ts",
       });

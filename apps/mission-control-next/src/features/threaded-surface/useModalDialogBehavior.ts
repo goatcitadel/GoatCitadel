@@ -15,6 +15,7 @@ const FOCUSABLE_SELECTOR = [
   "input:not([disabled])",
   "select:not([disabled])",
   "textarea:not([disabled])",
+  "summary",
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
@@ -41,18 +42,28 @@ export function useModalDialogBehavior({ open, onClose, containerRef }: ModalDia
     const previouslyFocused = asFocusable(document.activeElement);
     const listFocusable = (): HTMLElement[] => {
       const container = containerRef.current;
-      return container ? Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [];
+      return container ? Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
+        if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        const style = getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        const closed = element.closest("details:not([open])");
+        return !closed || (element.tagName === "SUMMARY" && element.parentElement === closed);
+      }) : [];
     };
 
     listFocusable()[0]?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A confirmation or picker opened above this sheet owns its own keys.
+      const activeDialog = document.activeElement?.closest('[role="dialog"][aria-modal="true"]');
+      if (activeDialog && activeDialog !== containerRef.current && !containerRef.current?.contains(activeDialog)) return;
       if (event.key === "Escape") {
         /*
          * Capture-phase stopPropagation scopes Escape to this modal layer:
          * bubble-phase listeners (more-menu, panel-switcher dropdowns) must
          * not also close while the modal sits on top. Next press reaches them.
          */
+        event.preventDefault();
         event.stopPropagation();
         onCloseRef.current();
         return;
@@ -83,13 +94,26 @@ export function useModalDialogBehavior({ open, onClose, containerRef }: ModalDia
     document.addEventListener("keydown", handleKeyDown, true);
 
     const { body } = document;
+    const inertSiblings: Array<{ element: HTMLElement; inert: boolean }> = [];
+    let branch: HTMLElement | null = containerRef.current;
+    while (branch && branch !== body) {
+      const parent: HTMLElement | null = branch.parentElement;
+      if (!parent) break;
+      for (const sibling of Array.from(parent.children)) {
+        if (sibling === branch || !(sibling instanceof HTMLElement) || sibling.tagName === "SCRIPT" || sibling.tagName === "STYLE") continue;
+        inertSiblings.push({ element: sibling, inert: sibling.inert });
+        sibling.inert = true;
+      }
+      branch = parent;
+    }
     const previousOverflow = body.style.overflow;
     body.style.overflow = "hidden";
 
     return () => {
       document.removeEventListener("keydown", handleKeyDown, true);
       body.style.overflow = previousOverflow;
-      previouslyFocused?.focus();
+      for (const { element, inert } of inertSiblings) element.inert = inert;
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
   }, [containerRef, open]);
 }

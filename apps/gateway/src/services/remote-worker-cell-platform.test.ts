@@ -5,6 +5,8 @@ import {
   assertWorkerCellBackendSupported,
   planRemoteWorkerCellPlatformIdentity,
   planRemoteWorkerCellPlatformIdentitySha256,
+  planNativeWindowsWorkerCellPlatform,
+  type WindowsCellBackendCapabilities,
   type WorkerCellPlatformInput,
 } from "./remote-worker-cell-platform.js";
 
@@ -21,6 +23,55 @@ function input(overrides: Partial<WorkerCellPlatformInput> = {}): WorkerCellPlat
 }
 
 describe("HX-505 cell platform identity", () => {
+  it("requires all native Windows controls and derives a distinct pinned v2 identity", () => {
+    const capabilities: WindowsCellBackendCapabilities = {
+      backend: "windows_native",
+      platform: "win32",
+      architecture: "x64",
+      buildNumber: 22631,
+      signedHelperVerified: true,
+      protectedVolumeReady: true,
+      appContainerReady: true,
+      jobLimitsReady: true,
+      stdioHandleAllowlistReady: true,
+      quotaEnforcementReady: true,
+    };
+    const request = {
+      registryWorkspaceId: "default",
+      assignmentId: "a1",
+      assignmentGeneration: 1,
+      cellId: "c1",
+      volumeIdentitySha256: "a".repeat(64),
+      runtimeBundleSha256: "b".repeat(64),
+      launcherSha256: "c".repeat(64),
+    };
+    const platform = planNativeWindowsWorkerCellPlatform(request, capabilities);
+    expect(platform).toMatchObject({
+      backend: "windows_native",
+      networkPolicy: "deny_all",
+      jobName: expect.stringMatching(/^gc-cell-[a-f0-9]{32}$/),
+    });
+    expect(planNativeWindowsWorkerCellPlatform(request, capabilities)).toEqual(platform);
+    expect(planNativeWindowsWorkerCellPlatform({ ...request, assignmentGeneration: 2 }, capabilities).jobName).not.toBe(
+      platform.jobName,
+    );
+    for (const control of [
+      "signedHelperVerified",
+      "protectedVolumeReady",
+      "appContainerReady",
+      "jobLimitsReady",
+      "stdioHandleAllowlistReady",
+      "quotaEnforcementReady",
+    ] as const) {
+      expect(() => planNativeWindowsWorkerCellPlatform(request, { ...capabilities, [control]: false })).toThrow(
+        WorkerCellBackendUnavailableError,
+      );
+    }
+    expect(() => planNativeWindowsWorkerCellPlatform(request, { ...capabilities, buildNumber: 19045 })).toThrow();
+    expect(() =>
+      normalizeRemoteWorkerCellPlatformIdentity({ ...platform, networkPolicy: "allowlisted" } as never),
+    ).toThrow();
+  });
   it("derives a deterministic identity the worker cannot choose", () => {
     const first = planRemoteWorkerCellPlatformIdentity(input());
     const second = planRemoteWorkerCellPlatformIdentity(input());

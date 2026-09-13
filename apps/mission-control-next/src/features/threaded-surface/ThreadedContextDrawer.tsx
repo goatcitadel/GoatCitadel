@@ -1,4 +1,6 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useSessionDraft, hasSessionDraft, useSessionDraftVersion } from "../native-routes/library/session-drafts";
+import { useDraftLeave } from "../native-routes/library/DraftLeaveDialog";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import type {
   ChatMode,
@@ -141,7 +143,11 @@ function formatPreferenceDraftFields(patch: ChatSessionPrefsPatch): string {
 function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockProps }) {
   const documents = props.documents;
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  const leave=useDraftLeave();
+  useSessionDraftVersion();
+  const lock=useRef(false), mounted=useRef(true), currentKey=useRef(selectedKey);
+  currentKey.current=selectedKey;
+  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedNote = documents?.notes.find((note) => `personal_note:${note.noteId}` === selectedKey);
@@ -158,30 +164,59 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
     ? documents?.includedRefs.some((ref) => ref.kind === selectedRef.kind && ref.ref === selectedRef.ref) === true
     : false;
 
-  useEffect(() => {
-    setDraft(selectedNote?.body ?? selectedArtifact?.content ?? "");
-    setError(null);
-  }, [selectedArtifact?.artifactId, selectedArtifact?.content, selectedNote?.body, selectedNote?.noteId]);
+  const scope=props.selectedSession?.workspaceId ?? props.selectedSessionId ?? "unselected";
+  const draftKey=(key:string|null)=>"chat-document:"+scope+":"+(key??"none");
+  const documentDraft=useSessionDraft(draftKey(selectedKey),selectedNote?.body ?? selectedArtifact?.content ?? "",selectedNote?.revision ?? selectedArtifact?.contentHash,{label:selectedRef?.label??"Chat document",active:editable,available:Boolean(selectedRef),onSave:()=>saveDirect()});
+  const draft=documentDraft.value,setDraft=documentDraft.setValue;
+  useEffect(()=>setError(null),[selectedKey]);
+  async function saveDirect():Promise<boolean> {
+    if(lock.current || !documents || !selectedRef)return false;
+    lock.current=true;setBusy(true);setError(null);const submitted=draft, key=selectedKey;
+    try {
+      if(selectedNote){
+        if(typeof documentDraft.baseRevision!=="number")throw new Error("The note's base revision is unavailable.");
+        const saved=await documents.onSaveNote({...selectedNote,revision:documentDraft.baseRevision},submitted);
+        if(saved.noteId!==selectedNote.noteId || saved.body!==submitted || saved.revision<=documentDraft.baseRevision)throw new Error("The Gateway did not confirm this note update. The draft is retained.");
+        return documentDraft.acceptSaved(saved.body,saved.revision,submitted);
+      }
+      if(selectedArtifact){
+        if(typeof documentDraft.baseRevision!=="string")throw new Error("The artifact's base content hash is unavailable.");
+        const saved=await documents.onSaveArtifact({...selectedArtifact,contentHash:documentDraft.baseRevision},submitted);
+        if(!saved.artifactId || !saved.contentHash || saved.content!==submitted)throw new Error("The artifact version could not be confirmed. The draft is retained.");
+        const nextKey="generated_artifact:"+saved.artifactId;
+        const cleared=documentDraft.acceptSavedAs(draftKey(nextKey),saved.content,saved.contentHash,submitted);
+        if(mounted.current&&currentKey.current===key)setSelectedKey(nextKey);
+        return cleared;
+      }
+      return false;
+    }catch(cause){if(mounted.current&&currentKey.current===key)setError(cause instanceof Error?cause.message:"Could not save the document.");return false;}
+    finally{lock.current=false;if(mounted.current)setBusy(false);}
+  }
 
   if (!documents?.enabled) {
     return <p className="mc-next-context-empty">Document editing is unavailable in this runtime.</p>;
   }
 
   const run = async (action: () => Promise<unknown>) => {
+    if(lock.current)return;
+    lock.current=true;const key=selectedKey;
     setBusy(true);
     setError(null);
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The document action failed.");
+      if(mounted.current&&currentKey.current===key)setError(cause instanceof Error ? cause.message : "The document action failed.");
       await documents.onRefresh().catch(() => undefined);
     } finally {
-      setBusy(false);
+      lock.current=false;
+      if(mounted.current)setBusy(false);
     }
   };
 
   return (
     <div className="mc-next-context-section-stack">
+      {leave.dialog}
+      {documentDraft.hasRemoteChanges ? <section className="mc-next-document-conflict"><p role="alert">This document changed since editing began. Your draft keeps its original revision.</p><details className="mc-next-chat-evidence"><summary>Review latest version</summary><p>Compare this version with your draft before choosing the revision for your next save.</p><pre>{selectedNote?.body ?? selectedArtifact?.content}</pre><button type="button" className="mc-next-panel-button" disabled={busy} onClick={documentDraft.rebaseToCurrent}>Use this revision and keep my draft</button></details></section> : null}
       <section className="mc-next-context-card">
         <div className="mc-next-context-card-title-row">
           <div>
@@ -205,9 +240,9 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
               type="button"
               className="mc-next-panel-button"
               aria-pressed={selectedKey === `personal_note:${note.noteId}`}
-              onClick={() => setSelectedKey(`personal_note:${note.noteId}`)}
+              onClick={() => leave.request(()=>setSelectedKey(`personal_note:${note.noteId}`),[documentDraft.key])}
             >
-              Note · {note.title} · r{note.revision}
+              Note · {note.title} · r{note.revision}{hasSessionDraft(draftKey(`personal_note:${note.noteId}`))?" · Unsaved":""}
             </button>
           ))}
           {documents.artifacts.map((artifact) => (
@@ -216,9 +251,9 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
               type="button"
               className="mc-next-panel-button"
               aria-pressed={selectedKey === `generated_artifact:${artifact.artifactId}`}
-              onClick={() => setSelectedKey(`generated_artifact:${artifact.artifactId}`)}
+              onClick={() => leave.request(()=>setSelectedKey(`generated_artifact:${artifact.artifactId}`),[documentDraft.key])}
             >
-              Artifact · {artifact.title} · {artifact.kind} v{artifact.version}
+              Artifact · {artifact.title} · {artifact.kind} v{artifact.version}{hasSessionDraft(draftKey(`generated_artifact:${artifact.artifactId}`))?" · Unsaved":""}
             </button>
           ))}
         </div>
@@ -255,15 +290,7 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
                   type="button"
                   className="mc-next-panel-button"
                   disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      if (selectedNote) await documents.onSaveNote(selectedNote, draft);
-                      else if (selectedArtifact) {
-                        const saved = await documents.onSaveArtifact(selectedArtifact, draft);
-                        setSelectedKey(`generated_artifact:${saved.artifactId}`);
-                      }
-                    })
-                  }
+                  onClick={()=>void saveDirect()}
                 >
                   Save directly
                 </button>
@@ -273,11 +300,13 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
+                      if (selectedNote && (typeof documentDraft.baseRevision !== "number" || !Number.isFinite(documentDraft.baseRevision))) throw new Error("The note's base revision is unavailable.");
+                      if (selectedArtifact && (typeof documentDraft.baseRevision !== "string" || !documentDraft.baseRevision)) throw new Error("The artifact's base content hash is unavailable.");
                       await documents.onCreateProposal({
                         targetKind: selectedNote ? "personal_note" : "generated_artifact",
                         targetId: selectedRef.ref,
-                        baseRevision: selectedNote?.revision,
-                        baseContentHash: selectedArtifact?.contentHash,
+                        baseRevision: selectedNote ? Number(documentDraft.baseRevision) : undefined,
+                        baseContentHash: selectedArtifact ? String(documentDraft.baseRevision ?? "") : undefined,
                         proposedContent: draft,
                       });
                     })
@@ -360,14 +389,18 @@ export function ThreadedContextDrawer({
   permissionSummary,
   permissionOverrideActive,
   onCopyTrustReport,
+  focusedTab,
 }: {
   surface: ChatMode;
+  focusedTab?: DrawerTab;
   props: MissionThreadedContextDockProps;
   permissionSummary?: string;
   permissionOverrideActive?: boolean;
   onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<DrawerTab>("context");
+  const [tab, setActiveTab] = useState<DrawerTab>("context");
+  const activeTab=focusedTab??tab;
+  const leave=useDraftLeave();
   const projectOptions = useMemo(() => props.projectOptions ?? [], [props.projectOptions]);
   const [pendingSubagentAuto, setPendingSubagentAuto] = useState<ChatSubagentPolicy | null>(null);
   const thinkingLevel: ChatThinkingLevel = props.prefs?.thinkingLevel ?? "standard";
@@ -401,7 +434,8 @@ export function ThreadedContextDrawer({
 
   return (
     <div className="mc-next-context-drawer" data-mode={surface}>
-      <div className="mc-next-context-drawer-head">
+      {leave.dialog}
+      {!focusedTab ? <><div className="mc-next-context-drawer-head">
         <p className="mc-next-panel-kicker">Working Context</p>
         <h3>Thread grounding</h3>
       </div>
@@ -418,7 +452,7 @@ export function ThreadedContextDrawer({
             role="tab"
             aria-selected={activeTab === tab}
             className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => leave.request(()=>setActiveTab(tab))}
           >
             {tab === "context"
               ? "Context"
@@ -431,7 +465,7 @@ export function ThreadedContextDrawer({
                     : "Session"}
           </button>
         ))}
-      </div>
+      </div></> : null}
 
       {props.preferenceConflictDraft ? (
         <div className="mc-next-context-card" role="status" aria-live="polite">

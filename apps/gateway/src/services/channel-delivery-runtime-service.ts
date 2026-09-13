@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- Delivery claims, reconciliation, retry, hydration, and diagnostics remain one auditable runtime owner. */
 import { createHash, randomUUID } from "node:crypto";
+import type { AsyncStorage } from "@goatcitadel/storage";
+import { ChannelDeliveryApprovalPendingError } from "./channel-delivery-approval-pending.js";
 import type {
   ChannelAttachmentInput,
   ChannelDeliveryDiagnostics,
@@ -18,6 +20,7 @@ export type ChannelDeliveryRuntimeStatus =
   | "queued"
   | "running"
   | "retrying"
+  | "waiting_approval"
   | "sent"
   | "failed"
   | "stale"
@@ -214,6 +217,7 @@ interface QueuedRuntimeDelivery {
   maxBackoffMs: number;
   staleAfterMs: number;
   recoveryQuarantineOnDue: boolean;
+  resumeAttempt: boolean;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -228,6 +232,7 @@ export class ChannelDeliveryRuntimeService {
   public constructor(
     private readonly deps: {
       repository: ChannelDeliveryRuntimeRepository;
+      parts?: Pick<AsyncStorage["channelDeliveryParts"], "list" | "park">;
       send: (input: ChannelDeliveryRuntimeSendInput) => Promise<ChannelDeliveryRuntimeSendResult>;
       onDeliverySent?: (record: ChannelDeliveryRuntimeRecord) => void;
       onDeliveryFailed?: (record: ChannelDeliveryRuntimeRecord) => void;
@@ -313,6 +318,7 @@ export class ChannelDeliveryRuntimeService {
       maxBackoffMs: Math.max(1, input.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS),
       staleAfterMs: Math.max(1, input.staleAfterMs ?? DEFAULT_STALE_AFTER_MS),
       recoveryQuarantineOnDue: false,
+      resumeAttempt: false,
     });
     if (idempotencyKey) {
       this.idempotencyIndex.set(idempotencyKey, record.deliveryId);
@@ -343,7 +349,7 @@ export class ChannelDeliveryRuntimeService {
         }
         continue;
       }
-      if (!isActiveStatus(delivery.record.status) || !isStale(delivery, now)) {
+      if (delivery.resumeAttempt || !isActiveStatus(delivery.record.status) || !isStale(delivery, now)) {
         continue;
       }
       if (await this.markStaleIfCurrent(delivery, now)) {
@@ -440,7 +446,9 @@ export class ChannelDeliveryRuntimeService {
       updatedAt: persisted.updatedAt,
     };
     const hydratedAt = this.now();
-    const recoveryQuarantineOnDue = isActiveStatus(record.status) && record.attempts > 0;
+    const parts = record.attempts > 0 ? (await this.deps.parts?.list(record.deliveryId, record.attempts)) ?? [] : [];
+    const resumeAttempt = parts.length > 0 && parts.every((part, index) => part.partIndex === index && part.status !== "prepared");
+    const recoveryQuarantineOnDue = isActiveStatus(record.status) && record.attempts > 0 && !resumeAttempt;
     const delivery = {
       record,
       payload,
@@ -449,6 +457,7 @@ export class ChannelDeliveryRuntimeService {
       maxBackoffMs: Math.max(1, persisted.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS),
       staleAfterMs: Math.max(1, persisted.staleAfterMs ?? DEFAULT_STALE_AFTER_MS),
       recoveryQuarantineOnDue,
+      resumeAttempt,
     };
     if (recoveryQuarantineOnDue && isDue(record.nextAttemptAt, hydratedAt)) {
       if (!(await this.quarantineRecoveredDelivery(delivery, hydratedAt, "before restart"))) {
@@ -471,7 +480,7 @@ export class ChannelDeliveryRuntimeService {
       }
       return copyRecord(delivery.record);
     }
-    if (isStale(delivery, startedAt)) {
+    if (!delivery.resumeAttempt && isStale(delivery, startedAt)) {
       if (!(await this.markStaleIfCurrent(delivery, startedAt))) {
         this.evictDelivery(delivery);
         return undefined;
@@ -479,7 +488,7 @@ export class ChannelDeliveryRuntimeService {
       return copyRecord(delivery.record);
     }
     const expectedAttempts = delivery.record.attempts;
-    const nextAttempts = expectedAttempts + 1;
+    const nextAttempts = delivery.resumeAttempt ? expectedAttempts : expectedAttempts + 1;
     const claimExpiresAt = new Date(Date.parse(startedAt) + delivery.staleAfterMs).toISOString();
     const claimed = this.deps.repository.claimAttempt
       ? await this.deps.repository.claimAttempt(
@@ -508,6 +517,22 @@ export class ChannelDeliveryRuntimeService {
     try {
       result = await this.deps.send({ ...copyRecord(delivery.record), payload: delivery.payload });
     } catch (error) {
+      if (error instanceof ChannelDeliveryApprovalPendingError && this.deps.parts) {
+        const now = this.now();
+        const nextAttemptAt = new Date(Date.parse(now) + Math.max(1_000, delivery.baseBackoffMs)).toISOString();
+        if (!(await this.deps.parts.park(error.partId, claimExpiresAt, nextAttemptAt, now))) {
+          this.evictDelivery(delivery);
+          return undefined;
+        }
+        delivery.record.status = "waiting_approval";
+        delivery.record.deliveryStatus = "waiting_approval";
+        delivery.record.nextAttemptAt = nextAttemptAt;
+        delivery.record.updatedAt = now;
+        delivery.record.error = undefined;
+        delivery.record.fallbackReason = undefined;
+        delivery.resumeAttempt = true;
+        return copyRecord(delivery.record);
+      }
       return (await this.handleDeliveryFailure(delivery, error)) ? copyRecord(delivery.record) : undefined;
     }
 
@@ -736,6 +761,7 @@ export class ChannelDeliveryRuntimeService {
       }
     }
     delivery.record.status = "retrying";
+    delivery.resumeAttempt = false;
     delivery.record.deliveryStatus = "retrying";
     delivery.record.error = message;
     delivery.record.fallbackReason = message;
@@ -874,11 +900,11 @@ function readStructuredProviderMessageId(error: unknown): string | undefined {
 }
 
 function isActiveStatus(status: ChannelDeliveryRuntimeStatus): boolean {
-  return status === "queued" || status === "retrying" || status === "running";
+  return status === "queued" || status === "retrying" || status === "running" || status === "waiting_approval";
 }
 
 function isDrainEligibleStatus(status: ChannelDeliveryRuntimeStatus): boolean {
-  return status === "queued" || status === "retrying";
+  return status === "queued" || status === "retrying" || status === "waiting_approval";
 }
 
 function isDue(nextAttemptAt: string | undefined, now: string): boolean {
@@ -907,7 +933,7 @@ function mapPersistedStatus(
     }
     return "failed";
   }
-  return deliveryStatus === "retrying" ? "retrying" : "queued";
+  return deliveryStatus === "waiting_approval" ? "waiting_approval" : deliveryStatus === "retrying" ? "retrying" : "queued";
 }
 
 function applyChannelDeliveryPlan(channelKey: string, payload: Record<string, unknown>): Record<string, unknown> {

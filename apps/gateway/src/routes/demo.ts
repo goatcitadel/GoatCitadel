@@ -160,7 +160,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
       status: "active",
       limit: 10,
     });
-    if (existingMemory.length === 0) {
+    if (existingMemory.items.length === 0) {
       await fastify.services.knowledge.knowledgeMemoryWrite({
         namespace: memorySeed.namespace,
         title: memorySeed.title,

@@ -52,6 +52,26 @@ describe("RemoteWorkerEffectRepository live PostgreSQL (skips without GOATCITADE
           workerIdempotencyKey: "worker-key-1",
           idempotencyKey: "intent-1",
         });
+        const dispatchRead = {
+          ...key,
+          intentId: intent.intentId,
+          effectSelector: intent.effectSelector,
+          canonicalArgsSha256: intent.canonicalArgsSha256,
+          workerIdempotencyKey: intent.workerIdempotencyKey,
+        };
+        const nextInput = { ...key, effectSelector: "fs.read", canonicalArgs: { path: "note.txt" },
+          workerIdempotencyKey: "next-read", idempotencyKey: "next-read" };
+        const allocated = effects.recordNextIntent(nextInput);
+        assert.equal(allocated.intentIndex, 1);
+        assert.deepEqual(new RemoteWorkerEffectRepository(scope.db).recordNextIntent(nextInput), allocated);
+        assert.throws(() => effects.recordNextIntent({ ...nextInput, canonicalArgs: { path: "changed.txt" } }));
+        assert.deepEqual(effects.readIntentForDispatch(dispatchRead).args, { to: "user@example.com" });
+        for (const patch of [
+          { registryWorkspaceId: "foreign" },
+          { canonicalArgsSha256: D("wrong") },
+          { workerIdempotencyKey: "wrong" },
+        ])
+          assert.throws(() => effects.readIntentForDispatch({ ...dispatchRead, ...patch }));
         const append = (state: RemoteWorkerEffectTransitionState, k: string) =>
           effects.appendTransition({
             ...key,
@@ -73,6 +93,18 @@ describe("RemoteWorkerEffectRepository live PostgreSQL (skips without GOATCITADE
           idempotencyKey: "receipt-1",
         });
         assert.equal(receipt.receiptState, "completed_with_effect");
+        assert.deepEqual(effects.readTransitionHistory(key.registryWorkspaceId, key.assignmentId, key.assignmentGeneration, intent.intentId)
+          .map((entry) => entry.record.transitionState), ["recorded", "dispatch_claimed", "external_boundary_started", "completed_with_effect"]);
+        effects.appendTransition({ ...key, intentId: allocated.intentId,
+          correlation: correlation("recorded"), idempotencyKey: "wait-recorded" });
+        const waitingCorrelation = { ...correlation("approval_wait"), approvalRecordSha256: D("pending approval") };
+        const waiting = effects.appendTransition({ ...key, intentId: allocated.intentId,
+          correlation: waitingCorrelation, idempotencyKey: "wait-pending" });
+        assert.deepEqual(new RemoteWorkerEffectRepository(scope.db).readTransitionHistory(
+          key.registryWorkspaceId, key.assignmentId, key.assignmentGeneration, allocated.intentId,
+        ).at(-1), { record: waiting, correlation: waitingCorrelation });
+        assert.equal(effects.findSettlement(key.registryWorkspaceId, key.assignmentId, key.assignmentGeneration, allocated.intentId), undefined);
+        assert.throws(() => effects.readTransitionHistory("foreign", key.assignmentId, key.assignmentGeneration, allocated.intentId));
 
         // Insert-only enforcement and composite-FK isolation on the live cluster.
         assert.throws(

@@ -6,6 +6,7 @@ import {
   type RemoteWorkerSettlementIdentity,
 } from "@goatcitadel/contracts";
 import type {
+  RemoteWorkerAssignmentProtectedCommitFence,
   RemoteWorkerArtifactRepository,
   RemoteWorkerArtifactUploadRecord,
   RemoteWorkerBlobInput,
@@ -31,6 +32,7 @@ export interface RemoteWorkerAssignmentAuthorityFence {
     assignmentId: string;
     assignmentGeneration: number;
     leaseTokenSha256: string;
+    protectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence;
   }): Awaitable<void>;
 }
 
@@ -48,6 +50,7 @@ export interface RemoteWorkerArtifactSettlementDependencies {
 }
 
 export interface OpenUploadInput {
+  protectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence;
   registryWorkspaceId: string;
   assignmentId: string;
   assignmentGeneration: number;
@@ -61,6 +64,7 @@ export interface OpenUploadInput {
 }
 
 export interface AppendPartInput {
+  protectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence;
   registryWorkspaceId: string;
   assignmentId: string;
   assignmentGeneration: number;
@@ -78,6 +82,7 @@ export interface CommitFileInput {
 }
 
 export interface CommitArtifactInput {
+  protectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence;
   registryWorkspaceId: string;
   assignmentId: string;
   assignmentGeneration: number;

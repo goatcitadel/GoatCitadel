@@ -107,9 +107,9 @@ describe("CitadelBriefPanel", () => {
 
     expect(api.fetchCitadelBrief).toHaveBeenCalledWith("personal");
     expect(text).toContain("Daily brief");
-    expect(text).toContain("2 Pending approvals");
-    expect(text).toContain("2 Ward hits");
-    expect(text).toContain("$1.75 (partial) Spend");
+    expect(text).toContain("Pending approvals 2");
+    expect(text).toContain("Ward hits 2");
+    expect(text).toContain("Spend $1.75 (partial)");
     expect(text).toContain("Tool invoke");
     expect(text).toContain("waiting 14h 0m");
     expect(text).toContain("3 memory recommendations pending review.");

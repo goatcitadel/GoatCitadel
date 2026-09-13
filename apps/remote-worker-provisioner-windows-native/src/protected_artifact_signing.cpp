@@ -10,10 +10,22 @@
 #include <utility>
 
 #include "ed25519_runtime.hpp"
+#include "protocol.hpp"
 
 namespace goatcitadel::remote_worker_provisioner {
 
 namespace {
+
+bool ValidProtectedArtifactLength(ProtectedArtifactPurpose purpose, std::uint64_t length) noexcept {
+  switch (purpose) {
+    case ProtectedArtifactPurpose::RuntimeManifest: return length <= kRuntimeManifestArtifactCeiling;
+    case ProtectedArtifactPurpose::AdmissionEvidence: return length <= kAdmissionEvidenceArtifactCeiling;
+    case ProtectedArtifactPurpose::RemoteWorkerPopV2: return length == kRemoteWorkerPopV2ArtifactBytes;
+    case ProtectedArtifactPurpose::TlsClientCertificateVerify:
+      return length == kTlsClientCertificateVerifySha256Bytes || length == kTlsClientCertificateVerifySha384Bytes;
+  }
+  return false;
+}
 
 constexpr std::size_t kHashObjectMaximumBytes = 1024U;
 constexpr std::size_t kPkcs8Bytes = 48U;
@@ -549,7 +561,8 @@ bool UpdateSignatureDomain(
     StreamingHash* hash) noexcept {
   if (hash == nullptr) return false;
   if (purpose == ProtectedArtifactPurpose::RuntimeManifest ||
-      purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2) {
+      purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2 ||
+      purpose == ProtectedArtifactPurpose::TlsClientCertificateVerify) {
     return true;
   }
   if (purpose != ProtectedArtifactPurpose::AdmissionEvidence) return false;
@@ -708,21 +721,10 @@ ProtectedSigningLease::ProtectedSigningLease() noexcept = default;
 bool CreateProtectedSigningLease(
     const ProtectedSigningFactoryInput& input,
     ProtectedSigningLease* output) noexcept {
-  const std::uint64_t ceiling =
-      input.purpose == ProtectedArtifactPurpose::RuntimeManifest
-          ? kRuntimeManifestArtifactCeiling
-          : input.purpose == ProtectedArtifactPurpose::AdmissionEvidence
-              ? kAdmissionEvidenceArtifactCeiling
-              : kRemoteWorkerPopV2ArtifactBytes;
   if (output == nullptr || output->occupied_ ||
-      (input.purpose != ProtectedArtifactPurpose::RuntimeManifest &&
-       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence &&
-       input.purpose != ProtectedArtifactPurpose::RemoteWorkerPopV2) ||
+      !ValidProtectedArtifactLength(input.purpose, input.artifact_length) ||
       !ValidHandle(input.parent) || !ValidHandle(input.artifact) ||
       !ValidHandle(input.key_file) || !ValidHandle(input.stop_event) ||
-      input.artifact_length > ceiling ||
-      (input.purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2 &&
-       input.artifact_length != kRemoteWorkerPopV2ArtifactBytes) ||
       input.generation == 0U ||
       input.deadline_ms <= GetTickCount64() ||
       AllZero(input.artifact_sha256.data(), input.artifact_sha256.size()) ||
@@ -966,20 +968,8 @@ void ProtectedSigningLease::MoveFrom(ProtectedSigningLease* other) noexcept {
 }
 
 bool ProtectedSigningLease::StateIsCurrent() const noexcept {
-  const bool purpose_valid =
-      authority_.purpose_ == ProtectedArtifactPurpose::RuntimeManifest ||
-      authority_.purpose_ == ProtectedArtifactPurpose::AdmissionEvidence ||
-      authority_.purpose_ == ProtectedArtifactPurpose::RemoteWorkerPopV2;
-  const std::uint64_t ceiling =
-      authority_.purpose_ == ProtectedArtifactPurpose::RuntimeManifest
-          ? kRuntimeManifestArtifactCeiling
-          : authority_.purpose_ == ProtectedArtifactPurpose::AdmissionEvidence
-              ? kAdmissionEvidenceArtifactCeiling
-              : kRemoteWorkerPopV2ArtifactBytes;
   if (!occupied_ || !authority_.occupied_ || !authority_.consumed_ ||
-      !purpose_valid || authority_.length_ > ceiling ||
-      (authority_.purpose_ == ProtectedArtifactPurpose::RemoteWorkerPopV2 &&
-       authority_.length_ != kRemoteWorkerPopV2ArtifactBytes) ||
+      !ValidProtectedArtifactLength(authority_.purpose_, authority_.length_) ||
       authority_.generation_ == 0U || current_generation_ == 0U ||
       AllZero(authority_.incarnation_.data(), authority_.incarnation_.size()) ||
       !ControlSnapshotValid(authority_.control_) ||
@@ -1066,6 +1056,18 @@ bool SignProtectedArtifact(
 
   bool success = false;
   do {
+    // Check the TLS purpose again on the retained file handle before reading a key.
+    // The normal two-pass hash/identity checks still bind the subsequent signature.
+    if (lease->authority_.purpose_ == ProtectedArtifactPurpose::TlsClientCertificateVerify) {
+      std::array<std::uint8_t, kTlsClientCertificateVerifySha384Bytes> tls_bytes{};
+      DWORD read = 0U;
+      if (!Rewind(lease->authority_.artifact_) ||
+          ReadFile(lease->authority_.artifact_, tls_bytes.data(),
+              static_cast<DWORD>(lease->authority_.length_), &read, nullptr) == FALSE ||
+          read != lease->authority_.length_ ||
+          !IsTlsClientCertificateVerifyPreimage(tls_bytes.data(), read) ||
+          !Rewind(lease->authority_.artifact_)) break;
+    }
     if (!ReadExactKey(
             lease->key_file_, lease->key_identity_,
             lease->key_file_sha256_, &pkcs8) ||
@@ -1282,21 +1284,9 @@ bool CreateProtectedSigningLeaseForTest(
       AllZero(
           input.custody_state_sha256.data(),
           input.custody_state_sha256.size()) ||
-      (input.purpose != ProtectedArtifactPurpose::RuntimeManifest &&
-       input.purpose != ProtectedArtifactPurpose::AdmissionEvidence &&
-       input.purpose != ProtectedArtifactPurpose::RemoteWorkerPopV2)) {
+      !ValidProtectedArtifactLength(input.purpose, input.artifact_length)) {
     return false;
   }
-  const std::uint64_t ceiling =
-      input.purpose == ProtectedArtifactPurpose::RuntimeManifest
-          ? kRuntimeManifestArtifactCeiling
-          : input.purpose == ProtectedArtifactPurpose::AdmissionEvidence
-              ? kAdmissionEvidenceArtifactCeiling
-              : kRemoteWorkerPopV2ArtifactBytes;
-  if (input.artifact_length > ceiling ||
-      (input.purpose == ProtectedArtifactPurpose::RemoteWorkerPopV2 &&
-       input.artifact_length != kRemoteWorkerPopV2ArtifactBytes)) return false;
-
   ProtectedArtifactControlSnapshot control{};
   control.custody_state_sha256 = input.custody_state_sha256;
   if (!ControlSnapshotValid(control)) return false;

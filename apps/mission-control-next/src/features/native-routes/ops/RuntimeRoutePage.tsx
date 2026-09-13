@@ -1,5 +1,13 @@
+import { ImprovementReportDetails } from "./ImprovementReportDetails";
+import { RecordEvidence } from "../shared/RecordEvidence";
+import { ScheduleTimingFields } from "./ScheduleTimingFields";
 /* eslint-disable max-lines -- RuntimeRoutePage co-locates Ops route panels while native route extraction continues. */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { DetailInspector } from "../../../components/DetailInspector";
+import { FocusedDetail } from "../shared/FocusedDetail";
+import { useSessionDraft } from "../library/session-drafts";
+import { useDraftLeave } from "../library/DraftLeaveDialog";
+import { useSessionViewState } from "@next/hooks/use-session-view-state";
 import { RefreshCw } from "lucide-react";
 import type {
   AutomationRecipeDraftResponse,
@@ -30,7 +38,6 @@ import {
   NativeMetricGrid as MetricGrid,
   NativeTable,
   NoticeBanner,
-  ResultCount,
   StatusChip,
   ThreePartChip,
   type ChipTone,
@@ -60,7 +67,6 @@ import {
   NativeGrid,
   NativeList,
   NativePageFrame,
-  NativeSectionIndex,
   type NativePageMetric,
   QuickJumpCard,
 } from "../NativeRoutePageLayout";
@@ -113,30 +119,116 @@ export function RuntimeRoutePage({
   navigate,
 }: NativeRoutePagesProps) {
   const section = (route.section ?? "activity") as NonNullable<AppRoute["section"]>;
-  const runtime = useOpsRuntimeSnapshot(section);
+  const [runtimeTab, setRuntimeTab] = useState<"services" | "efficiency" | "backups">("services");
+  const [supportPanel, setSupportPanel] = useState<string | null>(null);
+  const runtime = useOpsRuntimeSnapshot(section, {
+    requestedSources: [
+      "timeline",
+      "cost",
+      ...(section === "sessions" ? ["sessions" as const] : []),
+      ...(section === "runtime" ? ["llamaCpp" as const] : []),
+      ...(section === "runtime" && runtimeTab === "efficiency"
+        ? ["runtimeMeasurements" as const, "localEngines" as const, "evalProofRuns" as const]
+        : []),
+      ...(section === "runtime" && runtimeTab === "backups" ? ["backups" as const] : []),
+      ...(section === "runtime" && supportPanel === "integrations" ? ["mcpServers" as const] : []),
+    ],
+  });
   const data = runtime.data;
   const [activityFilter, setActivityFilter] = useState<"all" | "errors" | "approvals" | "runtime">("all");
   const [costProviderFilter, setCostProviderFilter] = useState("all");
+  const [costWindow, setCostWindow] = useState(7);
+  const [diagnosticQuery, setDiagnosticQuery] = useState("");
+  const [notificationFilter, setNotificationFilter] = useState<"all" | "unread" | "read">("all");
+  const [readNotifications, setReadNotifications] = useSessionViewState<string[]>(
+    "ops:" + activeWorkspaceId + ":read-notifications",
+    [],
+  );
   const [diagnosticsNotice, setDiagnosticsNotice] = useState<string | null>(null);
-  const [scheduleDraft, setScheduleDraft] = useState({
-    name: "",
-    schedule: "0 9 * * *",
-    action: "task" as CronActionOption,
-  });
+  const [scheduleEditor, setScheduleEditor] = useState<"create" | "designer" | null>(null);
+  const leave = useDraftLeave();
+  const scheduleEditorEpoch = useRef(0);
+  const operationScope = useRef(activeWorkspaceId);
+  operationScope.current = activeWorkspaceId;
+  const scheduleCreateLock = useRef(false);
+  const scheduleActionLock = useRef(false);
+  const automationLock = useRef(false);
+  const scheduleForm = useSessionDraft(
+    "ops:" + activeWorkspaceId + ":schedule:create",
+    {
+      name: "",
+      schedule: "0 9 * * *",
+      action: "task" as CronActionOption,
+    },
+    undefined,
+    {
+      label: "New schedule",
+      active: section === "schedules" && scheduleEditor === "create",
+      onSave: (): Promise<boolean> => handleCreateSchedule(),
+    },
+  );
+  const scheduleDraft = scheduleForm.value,
+    setScheduleDraft = scheduleForm.setValue;
+  const [inspection, setInspection] = useState<{
+    scope: string;
+    kind: "session" | "event" | "schedule" | "report" | "replay";
+    id: string;
+  } | null>(null);
+  const openInspection = useCallback(
+    (kind: "session" | "event" | "schedule" | "report" | "replay", id: string) => {
+      setSupportPanel(null);
+      setInspection({ scope: activeWorkspaceId, kind, id });
+    },
+    [activeWorkspaceId],
+  );
+  useEffect(() => {
+    scheduleEditorEpoch.current += 1;
+    setScheduleEditor(null);
+    setSupportPanel(null);
+    setInspection(
+      section === "sessions" && route.sessionId
+        ? { scope: activeWorkspaceId, kind: "session", id: route.sessionId }
+        : null,
+    );
+  }, [activeWorkspaceId, section, route.sessionId]);
   const [scheduleCreating, setScheduleCreating] = useState(false);
   const [scheduleBusy, setScheduleBusy] = useState<{ jobId: string; action: "run" | "cancel" } | null>(null);
   const [schedulePendingCancelId, setSchedulePendingCancelId] = useState<string | null>(null);
   const [scheduleNotice, setScheduleNotice] = useState<{ tone: "info" | "success" | "error"; message: string } | null>(
     null,
   );
-  const [automationDraft, setAutomationDraft] = useState({
-    taskDescription: "",
-    trigger: "",
-    frequency: "",
-    successCriteria: "",
-    constraints: "",
-  });
-  const [automationPreview, setAutomationPreview] = useState<AutomationRecipeDraftResponse | null>(null);
+  const automationForm = useSessionDraft(
+    "ops:" + activeWorkspaceId + ":automation:designer",
+    {
+      taskDescription: "",
+      trigger: "",
+      frequency: "",
+      successCriteria: "",
+      constraints: "",
+    },
+    undefined,
+    { label: "Automation Designer", active: section === "schedules" && scheduleEditor === "designer" },
+  );
+  const automationDraft = automationForm.value,
+    setAutomationDraft = automationForm.setValue;
+  const closeScheduleEditor = useCallback(
+    () =>
+      leave.request(() => {
+        scheduleEditorEpoch.current += 1;
+        setScheduleEditor(null);
+      }, [scheduleEditor === "designer" ? automationForm.key : scheduleForm.key]),
+    [leave, scheduleEditor, automationForm.key, scheduleForm.key],
+  );
+
+  const [automationResult, setAutomationResult] = useSessionViewState<{
+    input: string;
+    preview: AutomationRecipeDraftResponse;
+  } | null>("ops:" + activeWorkspaceId + ":automation:preview", null);
+  const automationInputRef = useRef("");
+  automationInputRef.current = JSON.stringify(automationDraft);
+  const automationExportLock = useRef(false);
+  const automationPreview =
+    automationResult?.input === JSON.stringify(automationDraft) ? automationResult.preview : null;
   const [automationTemplateExport, setAutomationTemplateExport] =
     useState<WorkflowRecipeActivepiecesTemplateExportResponse | null>(null);
   const [automationN8nTemplateExport, setAutomationN8nTemplateExport] =
@@ -202,18 +294,23 @@ export function RuntimeRoutePage({
   }, [activeWorkspaceId, data]);
 
   useEffect(() => {
-    if (section === "diagnostics") {
+    if (section === "diagnostics" && (supportPanel === "release" || supportPanel === "readiness")) {
       void loadReviewReadiness();
     }
-  }, [loadReviewReadiness, section]);
+  }, [loadReviewReadiness, section, supportPanel]);
 
-  const handleCreateSchedule = useCallback(async () => {
+  const handleCreateSchedule = useCallback(async (): Promise<boolean> => {
+    if (scheduleCreateLock.current) return false;
     const name = scheduleDraft.name.trim();
     const schedule = scheduleDraft.schedule.trim();
     if (!name || !schedule) {
       setScheduleNotice({ tone: "error", message: "Name and schedule are required." });
-      return;
+      return false;
     }
+    scheduleCreateLock.current = true;
+    const submitted = scheduleDraft,
+      epoch = scheduleEditorEpoch.current,
+      scope = activeWorkspaceId;
     setScheduleCreating(true);
     setScheduleNotice(null);
     try {
@@ -224,85 +321,111 @@ export function RuntimeRoutePage({
         action: scheduleDraft.action,
         enabled: true,
       });
-      if (!isMounted()) {
-        return;
-      }
+      if (!job?.jobId) throw new Error("The Gateway did not confirm the created schedule. Your draft is retained.");
+      const cleared = scheduleForm.acceptSaved(
+        { name: "", schedule: "0 9 * * *", action: "task" },
+        undefined,
+        submitted,
+      );
+      if (!isMounted() || operationScope.current !== scope) return cleared;
       recordRouteAction("ops/schedules", "schedule.created", {
         jobId: job.jobId,
         action: scheduleDraft.action,
       });
-      setScheduleDraft({ name: "", schedule: "0 9 * * *", action: "task" });
+      if (cleared && scheduleEditorEpoch.current === epoch) setScheduleEditor(null);
       setScheduleNotice({ tone: "success", message: "Schedule created." });
       await runtime.reload();
+      return cleared;
     } catch (error) {
-      if (isMounted()) {
+      if (isMounted() && operationScope.current === scope) {
         setScheduleNotice({
           tone: "error",
           message: error instanceof Error ? error.message : "Could not create schedule.",
         });
       }
+      return false;
     } finally {
+      scheduleCreateLock.current = false;
       if (isMounted()) {
         setScheduleCreating(false);
       }
     }
-  }, [isMounted, runtime, scheduleDraft.action, scheduleDraft.name, scheduleDraft.schedule]);
+  }, [activeWorkspaceId, isMounted, runtime, scheduleDraft, scheduleForm]);
 
   const handleRunSchedule = useCallback(
     async (jobId: string) => {
+      if (scheduleActionLock.current) return;
+      scheduleActionLock.current = true;
+      const scope = activeWorkspaceId;
       setScheduleBusy({ jobId, action: "run" });
       setScheduleNotice(null);
       try {
         const run = await runCronJobNow(jobId);
-        if (!isMounted()) return;
+        if (!isMounted() || operationScope.current !== scope) return;
         recordRouteAction("ops/schedules", "schedule.run_now", { jobId, runId: run.runId, status: run.status });
         setScheduleNotice({ tone: "success", message: `${jobId} queued as run ${run.runId}.` });
         await runtime.reload();
       } catch (error) {
-        if (isMounted()) {
+        if (isMounted() && operationScope.current === scope) {
           setScheduleNotice({
             tone: "error",
             message: error instanceof Error ? error.message : "Could not run schedule.",
           });
         }
       } finally {
+        scheduleActionLock.current = false;
         if (isMounted()) setScheduleBusy(null);
       }
     },
-    [isMounted, runtime],
+    [activeWorkspaceId, isMounted, runtime],
   );
 
   const handleCancelSchedule = useCallback(
     async (jobId: string, revision: number) => {
+      if (scheduleActionLock.current) return;
+      scheduleActionLock.current = true;
+      const scope = activeWorkspaceId;
       setScheduleBusy({ jobId, action: "cancel" });
       setScheduleNotice(null);
       try {
         await deleteCronJob(jobId, revision);
-        if (!isMounted()) return;
+        if (!isMounted() || operationScope.current !== scope) return;
         recordRouteAction("ops/schedules", "schedule.cancelled", { jobId, revision });
         setSchedulePendingCancelId(null);
         setScheduleNotice({ tone: "success", message: `${jobId} cancelled.` });
         await runtime.reload();
       } catch (error) {
-        if (isMounted()) {
+        if (isMounted() && operationScope.current === scope) {
           setScheduleNotice({
             tone: "error",
             message: error instanceof Error ? error.message : "Could not cancel schedule.",
           });
         }
       } finally {
+        scheduleActionLock.current = false;
         if (isMounted()) setScheduleBusy(null);
       }
     },
-    [isMounted, runtime],
+    [activeWorkspaceId, isMounted, runtime],
   );
 
+  useEffect(() => {
+    setAutomationTemplateExport(null);
+    setAutomationN8nTemplateExport(null);
+    setAutomationTemplateExporting(false);
+    setAutomationN8nTemplateExporting(false);
+  }, [automationDraft, activeWorkspaceId]);
+
   const handleDraftAutomation = useCallback(async () => {
+    if (automationLock.current) return;
+    const input = JSON.stringify(automationDraft),
+      scope = activeWorkspaceId;
     const taskDescription = automationDraft.taskDescription.trim();
     if (!taskDescription) {
       setAutomationNotice("Task description is required.");
       return;
     }
+    automationLock.current = true;
     setAutomationBusy(true);
     setAutomationNotice(null);
     try {
@@ -317,7 +440,8 @@ export function RuntimeRoutePage({
       if (!isMounted()) {
         return;
       }
-      setAutomationPreview(preview);
+      if (operationScope.current !== scope) return;
+      setAutomationResult({ input, preview });
       setAutomationTemplateExport(null);
       setAutomationN8nTemplateExport(null);
       setAutomationNotice("Automation recipe drafted. No cron job was created.");
@@ -326,21 +450,23 @@ export function RuntimeRoutePage({
         setAutomationNotice(error instanceof Error ? error.message : "Could not draft automation recipe.");
       }
     } finally {
+      automationLock.current = false;
       if (isMounted()) {
         setAutomationBusy(false);
       }
     }
-  }, [
-    activeWorkspaceId,
-    automationDraft.constraints,
-    automationDraft.frequency,
-    automationDraft.successCriteria,
-    automationDraft.taskDescription,
-    automationDraft.trigger,
-    isMounted,
-  ]);
+  }, [activeWorkspaceId, isMounted, automationDraft, setAutomationResult]);
 
   const handleExportActivepiecesTemplate = useCallback(async () => {
+    if (automationExportLock.current) return;
+    const scope = activeWorkspaceId,
+      input = automationInputRef.current,
+      epoch = scheduleEditorEpoch.current;
+    const stillCurrent = () =>
+      isMounted() &&
+      operationScope.current === scope &&
+      automationInputRef.current === input &&
+      scheduleEditorEpoch.current === epoch;
     if (!automationPreview) {
       setAutomationNotice("Draft a recipe before exporting an Activepieces template.");
       return;
@@ -350,29 +476,41 @@ export function RuntimeRoutePage({
       return;
     }
     setAutomationTemplateExporting(true);
+    automationExportLock.current = true;
     setAutomationNotice(null);
     try {
       const exported = await exportActivepiecesWorkflowTemplate({
         recipe: automationPreview.recipe,
       });
+      if (!stillCurrent()) return;
       await navigator.clipboard.writeText(exported.content);
-      if (!isMounted()) {
+      if (!stillCurrent()) {
         return;
       }
       setAutomationTemplateExport(exported);
       setAutomationNotice(`Copied Activepieces template export ${exported.filename}.`);
     } catch (error) {
-      if (isMounted()) {
+      if (stillCurrent()) {
         setAutomationNotice(error instanceof Error ? error.message : "Could not export Activepieces template.");
       }
     } finally {
-      if (isMounted()) {
+      automationExportLock.current = false;
+      if (stillCurrent()) {
         setAutomationTemplateExporting(false);
       }
     }
-  }, [automationPreview, isMounted]);
+  }, [activeWorkspaceId, automationPreview, isMounted]);
 
   const handleExportN8nTemplate = useCallback(async () => {
+    if (automationExportLock.current) return;
+    const scope = activeWorkspaceId,
+      input = automationInputRef.current,
+      epoch = scheduleEditorEpoch.current;
+    const stillCurrent = () =>
+      isMounted() &&
+      operationScope.current === scope &&
+      automationInputRef.current === input &&
+      scheduleEditorEpoch.current === epoch;
     if (!automationPreview) {
       setAutomationNotice("Draft a recipe before exporting an n8n template.");
       return;
@@ -382,27 +520,61 @@ export function RuntimeRoutePage({
       return;
     }
     setAutomationN8nTemplateExporting(true);
+    automationExportLock.current = true;
     setAutomationNotice(null);
     try {
       const exported = await exportN8nWorkflowTemplate({
         recipe: automationPreview.recipe,
       });
+      if (!stillCurrent()) return;
       await navigator.clipboard.writeText(exported.content);
-      if (!isMounted()) {
+      if (!stillCurrent()) {
         return;
       }
       setAutomationN8nTemplateExport(exported);
       setAutomationNotice(`Copied n8n template export ${exported.filename}.`);
     } catch (error) {
-      if (isMounted()) {
+      if (stillCurrent()) {
         setAutomationNotice(error instanceof Error ? error.message : "Could not export n8n template.");
       }
     } finally {
-      if (isMounted()) {
+      automationExportLock.current = false;
+      if (stillCurrent()) {
         setAutomationN8nTemplateExporting(false);
       }
     }
-  }, [automationPreview, isMounted]);
+  }, [activeWorkspaceId, automationPreview, isMounted]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const openHash = () => {
+      const id = window.location.hash.slice(1);
+      const runtimeTargets: Record<string, string> = {
+        "ops-runtime-posture": "daemon",
+        "ops-runtime-recovery": "daemon",
+        "ops-runtime-handoff": "daemon",
+        "ops-runtime-integrations": "integrations",
+      };
+      if (section === "runtime") {
+        if (runtimeTargets[id]) {
+          setRuntimeTab("services");
+          setSupportPanel(runtimeTargets[id]);
+        } else if (
+          [
+            "ops-runtime-efficiency",
+            "ops-runtime-engine-fit",
+            "ops-runtime-evidence",
+            "ops-runtime-browser-proof",
+          ].includes(id)
+        )
+          setRuntimeTab("efficiency");
+        else if (id === "ops-runtime-backups") setRuntimeTab("backups");
+      }
+    };
+    openHash();
+    window.addEventListener("hashchange", openHash);
+    return () => window.removeEventListener("hashchange", openHash);
+  }, [section]);
 
   const content = useMemo(() => {
     if (!data) {
@@ -431,10 +603,10 @@ export function RuntimeRoutePage({
       : (data.daemon?.state ?? data.health?.daemonStatus?.state ?? "unknown");
     const daemonPid = daemonRuntimeUnavailable
       ? "unavailable"
-      : String(data.daemon?.pid ?? data.health?.daemonStatus?.pid ?? 0);
+      : String(data.daemon?.pid ?? data.health?.daemonStatus?.pid ?? "unavailable");
     const daemonUptime = daemonRuntimeUnavailable
       ? "unavailable"
-      : formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus?.uptimeSeconds ?? 0);
+      : formatOptionalDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus?.uptimeSeconds);
     const daemonDiagnostics = readDaemonRuntimeDiagnostics(data);
     const daemonRepairActions = readDaemonRepairActions(data);
     const latestBackup = data.health?.backups?.latest;
@@ -442,26 +614,26 @@ export function RuntimeRoutePage({
     const storageWait = data.health?.database?.storageWait;
     const memoryUsed = healthSourceUnavailable
       ? "unavailable"
-      : formatBytes(data.health?.systemVitals?.memoryUsedBytes ?? 0);
+      : formatOptionalBytes(data.health?.systemVitals?.memoryUsedBytes);
     const processRss = healthSourceUnavailable
       ? "process unavailable"
-      : `process ${formatBytes(data.health?.systemVitals?.processRssBytes ?? 0)}`;
+      : `process ${formatOptionalBytes(data.health?.systemVitals?.processRssBytes)}`;
     const systemHostname = healthSourceUnavailable ? "unavailable" : (data.health?.systemVitals?.hostname ?? "Unknown");
     const systemPlatform = healthSourceUnavailable
       ? "platform unavailable"
       : (data.health?.systemVitals?.platform ?? "Unknown platform");
     const systemUptime = healthSourceUnavailable
       ? "unavailable"
-      : formatDuration(data.health?.systemVitals?.uptimeSeconds ?? 0);
+      : formatOptionalDuration(data.health?.systemVitals?.uptimeSeconds);
     const systemRelease = healthSourceUnavailable
       ? "release unavailable"
       : (data.health?.systemVitals?.release ?? "Unknown release");
     const heapUsed = healthSourceUnavailable
       ? "unavailable"
-      : formatBytes(data.health?.systemVitals?.processHeapUsedBytes ?? 0);
+      : formatOptionalBytes(data.health?.systemVitals?.processHeapUsedBytes);
     const memoryFree = healthSourceUnavailable
       ? "Free unavailable"
-      : `Free ${formatBytes(data.health?.systemVitals?.memoryFreeBytes ?? 0)}`;
+      : `Free ${formatOptionalBytes(data.health?.systemVitals?.memoryFreeBytes)}`;
     const filteredActivityEvents = (data.timeline?.events?.items ?? []).filter((item) => {
       if (activityFilter === "errors") {
         return /error|failed|failure|degraded/i.test(`${item.eventType} ${item.eventClass ?? ""}`);
@@ -510,6 +682,22 @@ export function RuntimeRoutePage({
                   title: formatHumanSessionTitle(item),
                   meta: item.channel,
                   body: `${formatDateTime(item.lastActivityAt)} · ${formatShortSessionId(item.sessionId)}`,
+                  actions: (
+                    <>
+                      <NativeButton
+                        onClick={() => navigate({ area: "chat", sessionId: item.sessionId, theme: route.theme })}
+                      >
+                        Open Chat
+                      </NativeButton>
+                      <NativeButton
+                        variant="outline"
+                        aria-label={`Inspect ${formatHumanSessionTitle(item)}`}
+                        onClick={() => openInspection("session", item.sessionId)}
+                      >
+                        Details
+                      </NativeButton>
+                    </>
+                  ),
                 }))}
                 emptyLabel="No recent sessions."
                 density="compact"
@@ -517,26 +705,26 @@ export function RuntimeRoutePage({
                 ariaLabel="Session evidence"
               />
             </NativeCard>
-            <NativeCard
+            {
+              <button
+                type="button"
+                className="mc-next-settings-filter"
+                onClick={() =>
+                  navigate({
+                    area: "ops",
+                    section: "sessions",
+                    view: "browser-sessions",
+                    theme: route.theme,
+                  })
+                }
+              >
+                Browser Sessions
+              </button>
+            }
+            <NativeDisclosureCard
+              id={"session-posture"}
               title="Session posture"
               subtitle="Keep session truth next to approvals and activity in one operator view."
-              density="compact"
-              actions={
-                <button
-                  type="button"
-                  className="mc-next-settings-filter"
-                  onClick={() =>
-                    navigate({
-                      area: "ops",
-                      section: "sessions",
-                      view: "browser-sessions",
-                      theme: route.theme,
-                    })
-                  }
-                >
-                  Browser Sessions
-                </button>
-              }
             >
               <MetricGrid
                 items={[
@@ -557,339 +745,348 @@ export function RuntimeRoutePage({
                   },
                 ]}
               />
-            </NativeCard>
+            </NativeDisclosureCard>
           </NativeGrid>
         );
       case "schedules":
         return (
           <NativeGrid className="mc-next-ops-schedules-grid">
-            <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
-            <NativeCard
-              title="Scheduled jobs"
-              subtitle="Current cadence and next-run posture for scheduled operator work."
-              density="compact"
-              stats={[
-                { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
-                { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
-              ]}
-            >
-              <NativeList
-                items={(data.timeline?.scheduler?.jobs ?? []).map((item) => ({
-                  title: item.name,
-                  meta: item.enabled ? "enabled" : "disabled",
-                  body: [
-                    item.action,
-                    item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run",
-                    item.lastRunStatus ? `last run ${item.lastRunStatus}` : undefined,
-                    item.lastRunEvidenceEnvelopeId
-                      ? `evidence ${item.lastRunEvidenceEnvelopeId.slice(0, 8)}`
-                      : undefined,
-                  ]
-                    .filter(Boolean)
-                    .join(" · "),
-                  actions: (
-                    <>
-                      <NativeButton
-                        variant="outline"
-                        onClick={() => void handleRunSchedule(item.jobId)}
-                        disabled={scheduleBusy !== null}
-                        aria-label={`Run ${item.name} now`}
-                      >
-                        {scheduleBusy?.jobId === item.jobId && scheduleBusy.action === "run" ? "Running..." : "Run now"}
-                      </NativeButton>
-                      {schedulePendingCancelId === item.jobId ? (
-                        <>
-                          <NativeButton
-                            variant="destructive"
-                            onClick={() => void handleCancelSchedule(item.jobId, item.revision)}
-                            disabled={scheduleBusy !== null || !Number.isInteger(item.revision)}
-                            aria-label={`Confirm cancel ${item.name}`}
-                          >
-                            {scheduleBusy?.jobId === item.jobId && scheduleBusy.action === "cancel"
-                              ? "Cancelling..."
-                              : "Confirm cancel"}
-                          </NativeButton>
-                          <NativeButton
-                            variant="ghost"
-                            onClick={() => setSchedulePendingCancelId(null)}
-                            disabled={scheduleBusy !== null}
-                          >
-                            Keep schedule
-                          </NativeButton>
-                        </>
-                      ) : (
+            {scheduleEditor === null ? (
+              <>
+                <div className="mc-next-runtime-actions">
+                  <NativeButton
+                    onClick={() => {
+                      scheduleEditorEpoch.current += 1;
+                      setScheduleEditor("create");
+                    }}
+                  >
+                    New schedule{scheduleForm.isDirty ? " · Unsaved" : ""}
+                  </NativeButton>
+                  <NativeButton
+                    variant="outline"
+                    onClick={() => {
+                      scheduleEditorEpoch.current += 1;
+                      setScheduleEditor("designer");
+                    }}
+                  >
+                    Automation Designer{automationForm.isDirty ? " · Unsaved" : ""}
+                  </NativeButton>
+                </div>
+                {scheduleNotice ? <NoticeBanner tone={scheduleNotice.tone} message={scheduleNotice.message} /> : null}
+                <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
+                <NativeCard
+                  title="Scheduled jobs"
+                  subtitle="Current cadence and next-run posture for scheduled operator work."
+                  density="compact"
+                  stats={[
+                    { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
+                    { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
+                  ]}
+                >
+                  <NativeList
+                    items={(data.timeline?.scheduler?.jobs ?? []).map((item) => ({
+                      title: item.name,
+                      meta: item.enabled ? "enabled" : "disabled",
+                      body: [
+                        item.action,
+                        item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run",
+                        item.lastRunStatus ? `last run ${item.lastRunStatus}` : undefined,
+                        item.lastRunEvidenceEnvelopeId
+                          ? `evidence ${item.lastRunEvidenceEnvelopeId.slice(0, 8)}`
+                          : undefined,
+                      ]
+                        .filter(Boolean)
+                        .join(" · "),
+                      actions: (
                         <NativeButton
                           variant="outline"
-                          onClick={() => setSchedulePendingCancelId(item.jobId)}
-                          disabled={scheduleBusy !== null || !Number.isInteger(item.revision)}
-                          title={
-                            Number.isInteger(item.revision) ? undefined : "Canonical schedule revision unavailable"
-                          }
-                          aria-label={`Cancel ${item.name}`}
+                          aria-label={`Inspect schedule ${item.name}`}
+                          onClick={() => openInspection("schedule", item.jobId)}
                         >
-                          Cancel schedule
+                          Details
                         </NativeButton>
-                      )}
-                    </>
-                  ),
-                }))}
-                emptyLabel="No scheduled jobs."
-                density="compact"
-                maxHeight="min(46vh, 26rem)"
-                ariaLabel="Scheduled jobs"
-              />
-            </NativeCard>
-            <NativeCard
-              title="Add schedule"
-              subtitle="Create a cron-backed job without leaving the schedules route."
-              density="compact"
-            >
-              {scheduleNotice ? <NoticeBanner tone={scheduleNotice.tone} message={scheduleNotice.message} /> : null}
-              <div className="mc-next-settings-field-grid">
-                <label className="mc-next-settings-field">
-                  <span>Name</span>
-                  <input
-                    className="mc-next-settings-input"
-                    value={scheduleDraft.name}
-                    onChange={(event) => setScheduleDraft((current) => ({ ...current, name: event.target.value }))}
-                    placeholder="Daily workspace review"
+                      ),
+                    }))}
+                    emptyLabel="No scheduled jobs."
+                    density="compact"
+                    maxHeight="min(46vh, 26rem)"
+                    ariaLabel="Scheduled jobs"
                   />
-                </label>
-                <label className="mc-next-settings-field">
-                  <span>Schedule</span>
-                  <input
-                    className="mc-next-settings-input"
-                    value={scheduleDraft.schedule}
-                    onChange={(event) => setScheduleDraft((current) => ({ ...current, schedule: event.target.value }))}
-                    placeholder="0 9 * * *"
-                  />
-                </label>
-                <label className="mc-next-settings-field span-2">
-                  <span>Action</span>
-                  <select
-                    className="mc-next-settings-input"
-                    value={scheduleDraft.action}
-                    onChange={(event) =>
-                      setScheduleDraft((current) => ({
-                        ...current,
-                        action: event.target.value as CronActionOption,
-                      }))
-                    }
-                  >
-                    {CRON_ACTION_OPTIONS.map((item) => (
-                      <option key={item} value={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="mc-next-runtime-actions">
-                <NativeButton variant="outline" onClick={() => void handleCreateSchedule()} disabled={scheduleCreating}>
-                  {scheduleCreating ? "Creating..." : "Create schedule"}
-                </NativeButton>
-              </div>
-            </NativeCard>
-            <NativeCard
-              title="Automation Designer"
-              subtitle="Draft a reviewable recipe from intent. Schedule intent is previewed, not activated."
-              density="compact"
-              scrollBody
-              bodyMaxHeight="min(58vh, 32rem)"
-              stats={[
-                { label: "Mode", value: "Advisory" },
-                { label: "Cron created", value: "No" },
-              ]}
-            >
-              {automationNotice ? <NoticeBanner tone="info" message={automationNotice} /> : null}
-              <div className="mc-next-settings-field-grid">
-                <label className="mc-next-settings-field span-2">
-                  <span>Task description</span>
-                  <textarea
-                    className="mc-next-settings-textarea"
-                    value={automationDraft.taskDescription}
-                    onChange={(event) =>
-                      setAutomationDraft((current) => ({ ...current, taskDescription: event.target.value }))
-                    }
-                    placeholder="Review new provider spend every weekday and prepare a concise operator note."
-                  />
-                </label>
-                <label className="mc-next-settings-field">
-                  <span>Trigger</span>
-                  <input
-                    className="mc-next-settings-input"
-                    value={automationDraft.trigger}
-                    onChange={(event) => setAutomationDraft((current) => ({ ...current, trigger: event.target.value }))}
-                    placeholder="manual review"
-                  />
-                </label>
-                <label className="mc-next-settings-field">
-                  <span>Frequency</span>
-                  <input
-                    className="mc-next-settings-input"
-                    value={automationDraft.frequency}
-                    onChange={(event) =>
-                      setAutomationDraft((current) => ({ ...current, frequency: event.target.value }))
-                    }
-                    placeholder="weekdays at 9"
-                  />
-                </label>
-                <label className="mc-next-settings-field span-2">
-                  <span>Success criteria</span>
-                  <input
-                    className="mc-next-settings-input"
-                    value={automationDraft.successCriteria}
-                    onChange={(event) =>
-                      setAutomationDraft((current) => ({ ...current, successCriteria: event.target.value }))
-                    }
-                    placeholder="comma-separated criteria"
-                  />
-                </label>
-                <label className="mc-next-settings-field span-2">
-                  <span>Constraints</span>
-                  <input
-                    className="mc-next-settings-input"
-                    value={automationDraft.constraints}
-                    onChange={(event) =>
-                      setAutomationDraft((current) => ({ ...current, constraints: event.target.value }))
-                    }
-                    placeholder="comma-separated constraints"
-                  />
-                </label>
-              </div>
-              <div className="mc-next-runtime-actions">
-                <NativeButton variant="outline" onClick={() => void handleDraftAutomation()} disabled={automationBusy}>
-                  {automationBusy ? "Drafting..." : "Preview recipe"}
-                </NativeButton>
-              </div>
-              {automationPreview ? (
-                <div className="mc-next-settings-code-block">
-                  <span>{automationPreview.recipe.name}</span>
-                  <p>{automationPreview.recipe.goal}</p>
-                  <ul className="mc-next-approvals-compact-list">
-                    {automationPreview.proofChecklist.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                  <MetricGrid
-                    items={[
-                      {
-                        label: "Plan",
-                        value: formatShortRunId(automationPreview.plan.planId),
-                        meta: "Reviewable orchestration plan",
-                      },
-                      {
-                        label: "Schedule intent",
-                        value: automationPreview.recipe.scheduleIntent ?? "none",
-                        meta: "Preview only; no cron job created",
-                      },
-                      {
-                        label: "Limits",
-                        value: `${automationPreview.estimatedLimits.maxRuntimeMinutes}m`,
-                        meta: `${automationPreview.estimatedLimits.maxIterations} iterations · ${formatOptionalUsd(
-                          automationPreview.estimatedLimits.maxCostUsd,
-                        )}`,
-                      },
-                    ]}
-                  />
-                  <div className="mc-next-runtime-actions">
-                    <button
-                      type="button"
-                      className="mc-next-directory-action"
-                      onClick={() => void handleExportActivepiecesTemplate()}
-                      disabled={automationTemplateExporting}
-                    >
-                      <span>{automationTemplateExporting ? "Exporting..." : "Copy Activepieces template"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="mc-next-directory-action"
-                      onClick={() => void handleExportN8nTemplate()}
-                      disabled={automationN8nTemplateExporting}
-                    >
-                      <span>{automationN8nTemplateExporting ? "Exporting..." : "Copy n8n template"}</span>
-                    </button>
+                </NativeCard>
+              </>
+            ) : null}
+            {scheduleEditor === "create" ? (
+              <FocusedDetail title="New schedule" onClose={closeScheduleEditor}>
+                <NativeCard
+                  title="Add schedule"
+                  subtitle="Create a cron-backed job without leaving the schedules route."
+                  density="compact"
+                >
+                  {scheduleNotice ? <NoticeBanner tone={scheduleNotice.tone} message={scheduleNotice.message} /> : null}
+                  <div className="mc-next-settings-field-grid">
+                    <label className="mc-next-settings-field">
+                      <span>Name</span>
+                      <input
+                        className="mc-next-settings-input"
+                        value={scheduleDraft.name}
+                        onChange={(event) => setScheduleDraft((current) => ({ ...current, name: event.target.value }))}
+                        placeholder="Daily workspace review"
+                      />
+                    </label>
+                    <ScheduleTimingFields
+                      value={scheduleDraft.schedule}
+                      onChange={(schedule) => setScheduleDraft((current) => ({ ...current, schedule }))}
+                    />
+                    <label className="mc-next-settings-field span-2">
+                      <span>Action</span>
+                      <select
+                        className="mc-next-settings-input"
+                        aria-label="Schedule action"
+                        value={scheduleDraft.action}
+                        onChange={(event) =>
+                          setScheduleDraft((current) => ({
+                            ...current,
+                            action: event.target.value as CronActionOption,
+                          }))
+                        }
+                      >
+                        {CRON_ACTION_OPTIONS.map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
-                  {automationTemplateExport || automationN8nTemplateExport ? (
-                    <div className="mc-next-approvals-chip-row">
-                      <StatusChip tone="success">Read-only export</StatusChip>
-                      {automationTemplateExport ? (
-                        <StatusChip
-                          tone={
-                            automationTemplateExport.validation.status === "blocked"
-                              ? "critical"
-                              : automationTemplateExport.validation.checks.some((check) => check.status === "warning")
-                                ? "warning"
-                                : "success"
-                          }
+                  <div className="mc-next-runtime-actions">
+                    <NativeButton
+                      variant="outline"
+                      onClick={() => void handleCreateSchedule()}
+                      disabled={scheduleCreating}
+                    >
+                      {scheduleCreating ? "Creating..." : "Create schedule"}
+                    </NativeButton>
+                  </div>
+                </NativeCard>
+              </FocusedDetail>
+            ) : null}
+            {scheduleEditor === "designer" ? (
+              <FocusedDetail title="Automation Designer" onClose={closeScheduleEditor}>
+                <NativeCard
+                  title="Automation Designer"
+                  subtitle="Draft a reviewable recipe from intent. Schedule intent is previewed, not activated."
+                  density="compact"
+                  stats={[
+                    { label: "Mode", value: "Advisory" },
+                    { label: "Cron created", value: "No" },
+                  ]}
+                >
+                  {automationNotice ? <NoticeBanner tone="info" message={automationNotice} /> : null}
+                  <div className="mc-next-settings-field-grid">
+                    <label className="mc-next-settings-field span-2">
+                      <span>Task description</span>
+                      <textarea
+                        className="mc-next-settings-textarea"
+                        value={automationDraft.taskDescription}
+                        onChange={(event) =>
+                          setAutomationDraft((current) => ({ ...current, taskDescription: event.target.value }))
+                        }
+                        placeholder="Review new provider spend every weekday and prepare a concise operator note."
+                      />
+                    </label>
+                    <label className="mc-next-settings-field">
+                      <span>Trigger</span>
+                      <input
+                        className="mc-next-settings-input"
+                        value={automationDraft.trigger}
+                        onChange={(event) =>
+                          setAutomationDraft((current) => ({ ...current, trigger: event.target.value }))
+                        }
+                        placeholder="manual review"
+                      />
+                    </label>
+                    <label className="mc-next-settings-field">
+                      <span>Frequency</span>
+                      <input
+                        className="mc-next-settings-input"
+                        value={automationDraft.frequency}
+                        onChange={(event) =>
+                          setAutomationDraft((current) => ({ ...current, frequency: event.target.value }))
+                        }
+                        placeholder="weekdays at 9"
+                      />
+                    </label>
+                    <label className="mc-next-settings-field span-2">
+                      <span>Success criteria</span>
+                      <input
+                        className="mc-next-settings-input"
+                        value={automationDraft.successCriteria}
+                        onChange={(event) =>
+                          setAutomationDraft((current) => ({ ...current, successCriteria: event.target.value }))
+                        }
+                        placeholder="comma-separated criteria"
+                      />
+                    </label>
+                    <label className="mc-next-settings-field span-2">
+                      <span>Constraints</span>
+                      <input
+                        className="mc-next-settings-input"
+                        value={automationDraft.constraints}
+                        onChange={(event) =>
+                          setAutomationDraft((current) => ({ ...current, constraints: event.target.value }))
+                        }
+                        placeholder="comma-separated constraints"
+                      />
+                    </label>
+                  </div>
+                  <div className="mc-next-runtime-actions">
+                    <NativeButton
+                      variant="outline"
+                      onClick={() => void handleDraftAutomation()}
+                      disabled={automationBusy}
+                    >
+                      {automationBusy ? "Drafting..." : "Preview recipe"}
+                    </NativeButton>
+                  </div>
+                  {automationPreview ? (
+                    <div className="mc-next-settings-code-block">
+                      <span>{automationPreview.recipe.name}</span>
+                      <p>{automationPreview.recipe.goal}</p>
+                      <ul className="mc-next-approvals-compact-list">
+                        {automationPreview.proofChecklist.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                      <MetricGrid
+                        items={[
+                          {
+                            label: "Plan",
+                            value: formatShortRunId(automationPreview.plan.planId),
+                            meta: "Reviewable orchestration plan",
+                          },
+                          {
+                            label: "Schedule intent",
+                            value: automationPreview.recipe.scheduleIntent ?? "none",
+                            meta: "Preview only; no cron job created",
+                          },
+                          {
+                            label: "Limits",
+                            value: `${automationPreview.estimatedLimits.maxRuntimeMinutes}m`,
+                            meta: `${automationPreview.estimatedLimits.maxIterations} iterations · ${formatOptionalUsd(
+                              automationPreview.estimatedLimits.maxCostUsd,
+                            )}`,
+                          },
+                        ]}
+                      />
+                      <div className="mc-next-runtime-actions">
+                        <button
+                          type="button"
+                          className="mc-next-directory-action"
+                          onClick={() => void handleExportActivepiecesTemplate()}
+                          disabled={automationTemplateExporting}
                         >
-                          Activepieces {automationTemplateExport.validation.status}
-                        </StatusChip>
-                      ) : null}
-                      {automationN8nTemplateExport ? (
-                        <StatusChip
-                          tone={
-                            automationN8nTemplateExport.validation.status === "blocked"
-                              ? "critical"
-                              : automationN8nTemplateExport.validation.checks.some(
-                                    (check) => check.status === "warning",
-                                  )
-                                ? "warning"
-                                : "success"
-                          }
+                          <span>{automationTemplateExporting ? "Exporting..." : "Copy Activepieces template"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="mc-next-directory-action"
+                          onClick={() => void handleExportN8nTemplate()}
+                          disabled={automationN8nTemplateExporting}
                         >
-                          n8n {automationN8nTemplateExport.validation.status}
-                        </StatusChip>
+                          <span>{automationN8nTemplateExporting ? "Exporting..." : "Copy n8n template"}</span>
+                        </button>
+                      </div>
+                      {automationTemplateExport || automationN8nTemplateExport ? (
+                        <div className="mc-next-approvals-chip-row">
+                          <StatusChip tone="success">Read-only export</StatusChip>
+                          {automationTemplateExport ? (
+                            <StatusChip
+                              tone={
+                                automationTemplateExport.validation.status === "blocked"
+                                  ? "critical"
+                                  : automationTemplateExport.validation.checks.some(
+                                        (check) => check.status === "warning",
+                                      )
+                                    ? "warning"
+                                    : "success"
+                              }
+                            >
+                              Activepieces {automationTemplateExport.validation.status}
+                            </StatusChip>
+                          ) : null}
+                          {automationN8nTemplateExport ? (
+                            <StatusChip
+                              tone={
+                                automationN8nTemplateExport.validation.status === "blocked"
+                                  ? "critical"
+                                  : automationN8nTemplateExport.validation.checks.some(
+                                        (check) => check.status === "warning",
+                                      )
+                                    ? "warning"
+                                    : "success"
+                              }
+                            >
+                              n8n {automationN8nTemplateExport.validation.status}
+                            </StatusChip>
+                          ) : null}
+                          <StatusChip tone="muted">No webhook trigger</StatusChip>
+                          <StatusChip tone="warning">Operator import required</StatusChip>
+                          {automationTemplateExport ? (
+                            <StatusChip tone="warning">
+                              Activepieces native import{" "}
+                              {automationTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
+                            </StatusChip>
+                          ) : null}
+                          {automationN8nTemplateExport ? (
+                            <StatusChip tone="warning">
+                              n8n native import{" "}
+                              {automationN8nTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
+                            </StatusChip>
+                          ) : null}
+                        </div>
                       ) : null}
-                      <StatusChip tone="muted">No webhook trigger</StatusChip>
-                      <StatusChip tone="warning">Operator import required</StatusChip>
-                      {automationTemplateExport ? (
-                        <StatusChip tone="warning">
-                          Activepieces native import{" "}
-                          {automationTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
-                        </StatusChip>
-                      ) : null}
-                      {automationN8nTemplateExport ? (
-                        <StatusChip tone="warning">
-                          n8n native import{" "}
-                          {automationN8nTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
-                        </StatusChip>
+                      {automationTemplateExport || automationN8nTemplateExport ? (
+                        <NativeList
+                          density="compact"
+                          items={[
+                            ...formatWorkflowTemplateExportProofItems("Activepieces", automationTemplateExport),
+                            ...formatWorkflowTemplateExportProofItems("n8n", automationN8nTemplateExport),
+                          ]}
+                          emptyLabel="No template export proof has been copied yet."
+                          ariaLabel="Automation template export proof"
+                        />
                       ) : null}
                     </div>
                   ) : null}
-                  {automationTemplateExport || automationN8nTemplateExport ? (
-                    <NativeList
-                      density="compact"
-                      items={[
-                        ...formatWorkflowTemplateExportProofItems("Activepieces", automationTemplateExport),
-                        ...formatWorkflowTemplateExportProofItems("n8n", automationN8nTemplateExport),
-                      ]}
-                      emptyLabel="No template export proof has been copied yet."
-                      ariaLabel="Automation template export proof"
-                    />
-                  ) : null}
-                </div>
-              ) : null}
-            </NativeCard>
-            <NativeCard
-              title="Scheduler review"
-              subtitle="Review items waiting on schedule, approvals, or follow-on operator attention."
-              density="compact"
-            >
-              <NativeList
-                items={(data.timeline?.scheduler?.reviewQueue ?? []).map(formatSchedulerReviewItem)}
-                emptyLabel="No scheduler review items."
+                </NativeCard>
+              </FocusedDetail>
+            ) : null}
+            {scheduleEditor === null ? (
+              <NativeCard
+                title="Scheduler review"
+                subtitle="Review items waiting on schedule, approvals, or follow-on operator attention."
                 density="compact"
-                maxHeight="min(38vh, 22rem)"
-                ariaLabel="Scheduler review"
-              />
-            </NativeCard>
+              >
+                <NativeList
+                  items={(data.timeline?.scheduler?.reviewQueue ?? []).map(formatSchedulerReviewItem)}
+                  emptyLabel="No scheduler review items."
+                  density="compact"
+                  maxHeight="min(38vh, 22rem)"
+                  ariaLabel="Scheduler review"
+                />
+              </NativeCard>
+            ) : null}
           </NativeGrid>
         );
       case "improvement":
         return (
           <NativeGrid>
-            <ImprovementInboxPanel workspaceId={activeWorkspaceId} routeTheme={route.theme} navigate={navigate} />
+            <ImprovementInboxPanel
+              key={activeWorkspaceId}
+              workspaceId={activeWorkspaceId}
+              routeTheme={route.theme}
+              navigate={navigate}
+            />
             <NativeCard
               title="Improvement reports"
               subtitle="Recent improvement outputs and replay-linked evidence."
@@ -899,32 +1096,44 @@ export function RuntimeRoutePage({
               ]}
             >
               <NativeList
-                items={(data.timeline?.improvement?.reports ?? []).slice(0, 12).map((item) => ({
+                items={(data.timeline?.improvement?.reports ?? []).map((item) => ({
                   title: item.title || item.reportId,
                   meta: item.runId ?? "report",
                   body: item.createdAt ? formatDateTime(item.createdAt) : "No timestamp",
+                  actions: (
+                    <NativeButton variant="outline" onClick={() => openInspection("report", item.reportId)}>
+                      Review report
+                    </NativeButton>
+                  ),
                 }))}
                 emptyLabel="No improvement reports yet."
               />
             </NativeCard>
-            <NativeCard
+            <NativeDisclosureCard
+              id={"replay-posture"}
               title="Replay posture"
               subtitle="Replay-linked runs should stay explicit, not disappear into a generic activity feed."
             >
               <NativeList
-                items={(data.timeline?.improvement?.replayRuns ?? []).slice(0, 12).map((item) => ({
+                items={(data.timeline?.improvement?.replayRuns ?? []).map((item) => ({
                   title: item.runId,
                   meta: item.status ?? "unknown",
                   body: item.updatedAt ? formatDateTime(item.updatedAt) : formatDateTime(item.createdAt),
+                  actions: (
+                    <NativeButton variant="outline" onClick={() => openInspection("replay", item.runId)}>
+                      Inspect replay
+                    </NativeButton>
+                  ),
                 }))}
                 emptyLabel="No replay runs yet."
               />
-            </NativeCard>
+            </NativeDisclosureCard>
           </NativeGrid>
         );
       case "costs": {
-        const spendDays = readSpendDays(data);
-        const providerSpendRows = readProviderSpendRows(data);
+        const spendDays = readSpendDays(data).slice(-costWindow);
+        const shownDates = new Set(spendDays.map((day) => day.isoDate));
+        const providerSpendRows = readProviderSpendRows(data, shownDates);
         const visibleProviderSpendRows =
           costProviderFilter === "all"
             ? providerSpendRows
@@ -935,16 +1144,31 @@ export function RuntimeRoutePage({
         return (
           <NativeGrid>
             <NativeCard
-              title="Spend — last 7 days"
-              subtitle="Stacked daily spend by provider with anomaly highlight."
+              title={`Spend — ${costWindow === 1 ? "latest day" : `last ${costWindow} days`}`}
+              subtitle="Available provider spend, grouped by recorded day."
               className="mc-next-spend-history-card"
               stats={[
                 { label: "Scope", value: data.cost?.scope ?? "day" },
                 { label: "Days", value: String(spendDays.length) },
               ]}
             >
+              <label className="mc-next-settings-field">
+                Time range
+                <select value={costWindow} onChange={(event) => setCostWindow(Number(event.target.value))}>
+                  <option value={7}>Last 7 available days</option>
+                  <option value={3}>Last 3 available days</option>
+                  <option value={1}>Latest available day</option>
+                </select>
+              </label>
               <RuntimeSpendChart
-                days={spendDays}
+                days={
+                  costProviderFilter === "all"
+                    ? spendDays
+                    : spendDays.map((day) => ({
+                        ...day,
+                        segments: day.segments.filter((segment) => segment.providerKey === costProviderFilter),
+                      }))
+                }
                 ariaLabelOverride={costProjectionIncomplete ? describeIncompleteSpendChart(costCoverage) : undefined}
                 emptyTitle={costProjectionIncomplete ? "Spend total unavailable" : undefined}
                 emptyDescription={
@@ -988,6 +1212,56 @@ export function RuntimeRoutePage({
                   </button>
                 ))}
               </div>
+              <p>{describeCostCoverage(costCoverage)}</p>
+              <NativeButton variant="outline" onClick={() => setSupportPanel("cost-coverage")}>
+                Coverage
+              </NativeButton>
+              <NativeTable
+                ariaLabel="Provider spend breakdown"
+                rows={visibleProviderSpendRows}
+                getRowKey={(item) => item.providerKey}
+                emptyLabel="No spend breakdown available."
+                columns={[
+                  {
+                    key: "provider",
+                    header: "Provider",
+                    render: (item) => (
+                      <NativeButton
+                        variant="ghost"
+                        onClick={() => setSupportPanel("cost-provider:" + item.providerKey)}
+                      >
+                        {item.label}
+                      </NativeButton>
+                    ),
+                  },
+                  {
+                    key: "tokens",
+                    header: "Tokens",
+                    numeric: true,
+                    cell: (item) => item.tokenTotal.toLocaleString(),
+                  },
+                  {
+                    key: "cost",
+                    header: "Cost",
+                    numeric: true,
+                    cell: (item) => formatCostMetric(item.costUsd, item.costUsdComplete),
+                  },
+                ]}
+              />
+              <div className="mc-next-runtime-actions">
+                <NativeButton
+                  variant="outline"
+                  onClick={() => navigate({ area: "settings", section: "budget", theme: route.theme })}
+                >
+                  Open budget controls
+                </NativeButton>
+              </div>
+            </NativeCard>
+            <DetailInspector
+              open={supportPanel === "cost-coverage"}
+              title="Coverage"
+              onClose={() => setSupportPanel(null)}
+            >
               <MetricGrid
                 items={[
                   {
@@ -1012,392 +1286,583 @@ export function RuntimeRoutePage({
                   },
                 ]}
               />
-              <NativeTable
-                ariaLabel="Provider spend breakdown"
-                rows={visibleProviderSpendRows.slice(0, 10)}
-                getRowKey={(item) => item.providerKey}
-                emptyLabel="No spend breakdown available."
-                columns={[
-                  { key: "provider", header: "Provider", cell: (item) => item.label },
-                  {
-                    key: "tokens",
-                    header: "Tokens",
-                    numeric: true,
-                    cell: (item) => item.tokenTotal.toLocaleString(),
-                  },
-                  {
-                    key: "cost",
-                    header: "Cost",
-                    numeric: true,
-                    cell: (item) => formatCostMetric(item.costUsd, item.costUsdComplete),
-                  },
-                ]}
-              />
-              {providerSpendRows.length > 10 ? (
-                <ResultCount shown={10} total={providerSpendRows.length} noun="providers" />
-              ) : null}
-              <div className="mc-next-runtime-actions">
-                <NativeButton
-                  variant="outline"
-                  onClick={() => navigate({ area: "settings", section: "budget", theme: route.theme })}
-                >
-                  Open budget controls
-                </NativeButton>
-              </div>
-            </NativeCard>
-            <NativeCard
-              title="Quality and QMD signal"
-              subtitle="Spend only means something when paired with quality and context efficiency."
+
+              <NativeDisclosureCard
+                id={"quality-and-qmd-signal"}
+                title="Quality and QMD signal"
+                subtitle="Spend only means something when paired with quality and context efficiency."
+              >
+                <MetricGrid
+                  items={[
+                    {
+                      label: "QMD posture",
+                      value: describeQmdImpact(data.health?.costs?.qmd?.efficiencyLabel),
+                      meta:
+                        data.health?.costs?.qmd?.netTokenDelta === undefined
+                          ? "Unavailable"
+                          : formatTokenDelta(data.health.costs.qmd.netTokenDelta),
+                    },
+                    {
+                      label: "Compression",
+                      value:
+                        data.health?.costs?.qmd?.compressionPercent === undefined
+                          ? "Unavailable"
+                          : `${data.health.costs.qmd.compressionPercent.toFixed(1)}%`,
+                      meta: "Context reduction",
+                    },
+                    {
+                      label: "Expansion",
+                      value:
+                        data.health?.costs?.qmd?.expansionPercent === undefined
+                          ? "Unavailable"
+                          : `${data.health.costs.qmd.expansionPercent.toFixed(1)}%`,
+                      meta: "Context growth",
+                    },
+                  ]}
+                />
+              </NativeDisclosureCard>
+              <details>
+                <summary>Accounting fields</summary>
+                <pre>
+                  {JSON.stringify(
+                    {
+                      from: data.cost?.from,
+                      to: data.cost?.to,
+                      availability: data.cost?.usageAvailability,
+                      items: data.cost?.items,
+                    },
+                    null,
+                    2,
+                  )}
+                </pre>
+              </details>
+            </DetailInspector>
+            <DetailInspector
+              open={Boolean(supportPanel?.startsWith("cost-provider:"))}
+              title="Provider usage and attribution"
+              onClose={() => setSupportPanel(null)}
             >
-              <MetricGrid
-                items={[
-                  {
-                    label: "QMD posture",
-                    value: describeQmdImpact(data.health?.costs?.qmd?.efficiencyLabel),
-                    meta: formatTokenDelta(data.health?.costs?.qmd?.netTokenDelta ?? 0),
-                  },
-                  {
-                    label: "Compression",
-                    value: `${(data.health?.costs?.qmd?.compressionPercent ?? 0).toFixed(1)}%`,
-                    meta: "Context reduction",
-                  },
-                  {
-                    label: "Expansion",
-                    value: `${(data.health?.costs?.qmd?.expansionPercent ?? 0).toFixed(1)}%`,
-                    meta: "Context growth",
-                  },
-                ]}
-              />
-            </NativeCard>
+              {(() => {
+                const providerKey = supportPanel?.slice("cost-provider:".length);
+                const days = (data.cost?.dailySeries ?? []).filter((day) => shownDates.has(day.isoDate));
+                return (
+                  <>
+                    <p>
+                      Provider {providerKey} · selected recorded days. Coverage is reported separately for each metric.
+                    </p>
+                    {days.map((day) => (
+                      <details key={day.isoDate} open>
+                        <summary>{day.isoDate}</summary>
+                        {day.segments
+                          .filter((item) => item.providerKey === providerKey)
+                          .map((item) => (
+                            <div key={item.providerKey}>
+                              <dl>
+                                <dt>Input tokens</dt>
+                                <dd>
+                                  {formatAvailabilityCount(item.tokenInput)}
+                                  {item.metricAvailability?.inputTokensComplete === false ? " · partial" : ""}
+                                </dd>
+                                <dt>Output tokens</dt>
+                                <dd>
+                                  {formatAvailabilityCount(item.tokenOutput)}
+                                  {item.metricAvailability?.outputTokensComplete === false ? " · partial" : ""}
+                                </dd>
+                                <dt>Cached input tokens</dt>
+                                <dd>
+                                  {formatAvailabilityCount(item.tokenCachedInput)}
+                                  {item.metricAvailability?.cachedInputTokensComplete === false ? " · partial" : ""}
+                                </dd>
+                                <dt>Cost (USD)</dt>
+                                <dd>{formatCostMetric(item.costUsd, item.metricAvailability?.costUsdComplete)}</dd>
+                              </dl>
+                              <details>
+                                <summary>Attribution and accounting fields</summary>
+                                <pre>{JSON.stringify(item, null, 2)}</pre>
+                              </details>
+                            </div>
+                          ))}
+                      </details>
+                    ))}
+                  </>
+                );
+              })()}
+            </DetailInspector>
           </NativeGrid>
         );
       }
       case "runtime":
         return (
           <NativeGrid>
-            <NativeSectionIndex
-              items={[
-                { id: "ops-runtime-posture", label: "Runtime posture" },
-                { id: "ops-runtime-efficiency", label: "Efficiency" },
-                { id: "ops-runtime-evidence", label: "Eval evidence" },
-                { id: "ops-runtime-recovery", label: "Recovery" },
-              ]}
-            />
-            <RuntimeAuthorityPanel workspaceId={activeWorkspaceId} theme={route.theme} navigate={navigate} />
-            <SessionControlPanel sessionId={route.sessionId} />
-            <MeshCapabilityPanel workspaceId={activeWorkspaceId} />
-            <NativeCard
-              id="ops-runtime-posture"
-              title="Runtime posture"
-              subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."
-              density="compact"
-              className="mc-next-runtime-posture-card"
-              stats={[
-                { label: "Approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
-                { label: "MCP", value: String(data.mcpServers.length) },
-              ]}
+            <div className="mc-next-runtime-tabs" role="group" aria-label="Runtime views">
+              {(["services", "efficiency", "backups"] as const).map((tab) => (
+                <NativeButton
+                  key={tab}
+                  variant={runtimeTab === tab ? "default" : "outline"}
+                  aria-pressed={runtimeTab === tab}
+                  onClick={() => {
+                    setRuntimeTab(tab);
+                    setSupportPanel(null);
+                  }}
+                >
+                  {capitalize(tab)}
+                </NativeButton>
+              ))}
+            </div>
+            {runtimeTab === "services" ? (
+              <NativeCard title="Services" subtitle="Current service state and the controls that own it.">
+                <NativeList
+                  items={[
+                    {
+                      title: "Gateway",
+                      meta: daemonState,
+                      body:
+                        daemonDiagnostics[0]?.title ??
+                        (daemonRunning === null ? "Status unavailable" : daemonRunning ? "Running" : "Stopped"),
+                      actions: (
+                        <NativeButton variant="outline" onClick={() => setSupportPanel("daemon")}>
+                          Gateway details
+                        </NativeButton>
+                      ),
+                    },
+                    {
+                      title: "Local model runtime",
+                      meta: data.llamaCpp?.processState ?? "Unavailable",
+                      body: data.llamaCpp?.lastError ?? "llama.cpp readiness and recorded health",
+                      actions: (
+                        <NativeButton variant="outline" onClick={() => setSupportPanel("llama")}>
+                          Local runtime details
+                        </NativeButton>
+                      ),
+                    },
+                    {
+                      title: "Backups",
+                      meta: !data.health?.backups
+                        ? "Unavailable"
+                        : latestBackupVerified
+                          ? "Verified"
+                          : latestBackup
+                            ? "Present"
+                            : "No backup",
+                      body: "Recovery evidence and stored backup records",
+                      actions: (
+                        <NativeButton variant="outline" onClick={() => setRuntimeTab("backups")}>
+                          Backup details
+                        </NativeButton>
+                      ),
+                    },
+                    {
+                      title: "Runtime authority",
+                      body: "Canonical state, freshness, and uncertain evidence",
+                      actions: (
+                        <NativeButton variant="outline" onClick={() => setSupportPanel("authority")}>
+                          Authority details
+                        </NativeButton>
+                      ),
+                    },
+                    {
+                      title: "Mesh capabilities",
+                      body: "Publication, activation approvals, and retained invocation results",
+                      actions: (
+                        <NativeButton variant="outline" onClick={() => setSupportPanel("mesh")}>
+                          Mesh details
+                        </NativeButton>
+                      ),
+                    },
+                    {
+                      title: "Integration runtime",
+                      body: "Configured MCP servers",
+                      actions: (
+                        <NativeButton variant="outline" onClick={() => setSupportPanel("integrations")}>
+                          Integration details
+                        </NativeButton>
+                      ),
+                    },
+                  ]}
+                  emptyLabel="No services returned."
+                />
+                {route.sessionId ? (
+                  <NativeButton variant="outline" onClick={() => setSupportPanel("session")}>
+                    Session control
+                  </NativeButton>
+                ) : null}
+              </NativeCard>
+            ) : null}
+            <DetailInspector
+              open={supportPanel === "authority"}
+              title="Runtime authority"
+              onClose={() => setSupportPanel(null)}
             >
-              {runtime.notice ? <NoticeBanner tone={runtime.notice.tone} message={runtime.notice.message} /> : null}
-              <div className="mc-next-runtime-chip-row">
-                <StatusChip tone={daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning"}>
-                  {daemonRuntimeUnavailable
-                    ? "Daemon unavailable"
-                    : daemonRunning
-                      ? "Daemon running"
-                      : "Daemon stopped"}
-                </StatusChip>
-                <StatusChip
-                  tone={
-                    sourceFailed(data, "health")
-                      ? "critical"
+              <RuntimeAuthorityPanel workspaceId={activeWorkspaceId} theme={route.theme} navigate={navigate} />
+            </DetailInspector>
+            <DetailInspector
+              open={supportPanel === "session"}
+              title="Session control"
+              onClose={() => setSupportPanel(null)}
+            >
+              <SessionControlPanel sessionId={route.sessionId} />
+            </DetailInspector>
+            <DetailInspector
+              open={supportPanel === "mesh"}
+              title="Mesh capabilities"
+              onClose={() => setSupportPanel(null)}
+            >
+              <MeshCapabilityPanel workspaceId={activeWorkspaceId} />
+            </DetailInspector>
+            <DetailInspector
+              open={supportPanel === "daemon"}
+              title="Gateway details"
+              onClose={() => setSupportPanel(null)}
+            >
+              <NativeCard
+                id="ops-runtime-posture"
+                title="Runtime posture"
+                subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."
+                density="compact"
+                className="mc-next-runtime-posture-card"
+                stats={[
+                  { label: "Approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
+                  {
+                    label: "MCP",
+                    value:
+                      data.sourceStatus.mcpServers.status === "not_requested"
+                        ? "Not loaded"
+                        : String(data.mcpServers.length),
+                  },
+                ]}
+              >
+                {runtime.notice ? <NoticeBanner tone={runtime.notice.tone} message={runtime.notice.message} /> : null}
+                <div className="mc-next-runtime-chip-row">
+                  <StatusChip tone={daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning"}>
+                    {daemonRuntimeUnavailable
+                      ? "Daemon unavailable"
+                      : daemonRunning
+                        ? "Daemon running"
+                        : "Daemon stopped"}
+                  </StatusChip>
+                  <StatusChip
+                    tone={
+                      sourceFailed(data, "health")
+                        ? "critical"
+                        : latestBackupVerified
+                          ? "success"
+                          : latestBackup
+                            ? "muted"
+                            : "warning"
+                    }
+                  >
+                    {sourceFailed(data, "health")
+                      ? "Backup status unavailable"
                       : latestBackupVerified
-                        ? "success"
+                        ? "Backup verified"
                         : latestBackup
-                          ? "muted"
-                          : "warning"
-                  }
-                >
-                  {sourceFailed(data, "health")
-                    ? "Backup status unavailable"
-                    : latestBackupVerified
-                      ? "Backup verified"
-                      : latestBackup
-                        ? "Backup present"
-                        : "No backup"}
-                </StatusChip>
-                <StatusChip tone={daemonControllable ? "default" : "muted"}>
-                  {sourceFailed(data, "daemon")
-                    ? "Control status unavailable"
-                    : daemonControllable
-                      ? "Controllable"
-                      : "Read only"}
-                </StatusChip>
-              </div>
-              <MetricGrid
-                items={[
-                  {
-                    label: "Host",
-                    value: daemonHost,
-                    meta: daemonState,
-                  },
-                  {
-                    label: "PID",
-                    value: daemonPid,
-                    meta: daemonRuntimeUnavailable ? "uptime unavailable" : `uptime ${daemonUptime}`,
-                  },
-                  {
-                    label: "Memory used",
-                    value: memoryUsed,
-                    meta: processRss,
-                  },
-                  ...(storageWait
-                    ? [
-                        {
-                          label: "DB wait p95",
-                          value: formatMilliseconds(storageWait.p95Ms),
-                          meta: `${storageWait.count} waits / 5m`,
-                        },
-                        {
-                          label: "DB wait max",
-                          value: formatMilliseconds(storageWait.maxMs),
-                          meta: `${storageWait.criticalCount} critical / 5m`,
-                        },
-                      ]
-                    : []),
-                ]}
-              />
-              {!daemonControllable && daemonHandoff ? (
-                <NativeDisclosureCard
-                  id="ops-runtime-handoff"
-                  title="Service-manager handoff"
-                  subtitle="Operator steps for a runtime that cannot be controlled from this process."
-                >
-                  <DaemonControlHandoffPanel handoff={daemonHandoff} />
-                </NativeDisclosureCard>
-              ) : !daemonControllable && data.daemon?.controlMessage ? (
-                <EmptyState size="compact" title={data.daemon.controlMessage} />
-              ) : null}
-              {daemonDiagnostics.length > 0 || daemonRepairActions.length > 0 ? (
-                <NativeDisclosureCard
-                  id="ops-runtime-recovery"
-                  title="Recovery and diagnostics"
-                  subtitle="Repair actions and retained diagnostic evidence."
-                >
-                  <DaemonRecoveryPanel diagnostics={daemonDiagnostics} repairActions={daemonRepairActions} />
-                </NativeDisclosureCard>
-              ) : null}
-              <div className="mc-next-runtime-actions">
-                <NativeButton
-                  variant="outline"
-                  onClick={() => void runtime.runDaemonAction("start")}
-                  disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
-                >
-                  {runtime.daemonBusy === "start" ? "Starting..." : "Start daemon"}
-                </NativeButton>
-                <NativeButton
-                  variant="outline"
-                  onClick={() => void runtime.runDaemonAction("restart")}
-                  disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
-                >
-                  {runtime.daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
-                </NativeButton>
-                <NativeButton
-                  variant="outline"
-                  className="danger"
-                  onClick={() => void runtime.runDaemonAction("stop")}
-                  disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
-                >
-                  {runtime.daemonBusy === "stop" ? "Stopping..." : "Stop daemon"}
-                </NativeButton>
-                <NativeButton variant="outline" className="subtle" onClick={() => void runtime.reload()}>
-                  <RefreshCw size={16} />
-                  Refresh
-                </NativeButton>
-              </div>
-            </NativeCard>
-            <LlamaCppRuntimeTruthCard status={data.llamaCpp} sourceStatus={data.sourceStatus.llamaCpp} />
-            <NativeDisclosureCard
-              id="ops-runtime-efficiency"
-              title="LLM runtime efficiency"
-              subtitle="Live and cached model-call measurements from gateway runtime paths."
-              stats={[
-                { label: "Measurements", value: String(runtimeMeasurements.length) },
-                {
-                  label: "Source",
-                  value: sourceFailed(data, "runtimeMeasurements") ? "unavailable" : "measured/cached",
-                },
-              ]}
+                          ? "Backup present"
+                          : "No backup"}
+                  </StatusChip>
+                  <StatusChip tone={daemonControllable ? "default" : "muted"}>
+                    {sourceFailed(data, "daemon")
+                      ? "Control status unavailable"
+                      : daemonControllable
+                        ? "Controllable"
+                        : "Read only"}
+                  </StatusChip>
+                </div>
+                <MetricGrid
+                  items={[
+                    {
+                      label: "Host",
+                      value: daemonHost,
+                      meta: daemonState,
+                    },
+                    {
+                      label: "PID",
+                      value: daemonPid,
+                      meta: daemonRuntimeUnavailable ? "uptime unavailable" : `uptime ${daemonUptime}`,
+                    },
+                    {
+                      label: "Memory used",
+                      value: memoryUsed,
+                      meta: processRss,
+                    },
+                    ...(storageWait
+                      ? [
+                          {
+                            label: "DB wait p95",
+                            value: formatMilliseconds(storageWait.p95Ms),
+                            meta: `${storageWait.count} waits / 5m`,
+                          },
+                          {
+                            label: "DB wait max",
+                            value: formatMilliseconds(storageWait.maxMs),
+                            meta: `${storageWait.criticalCount} critical / 5m`,
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
+                {!daemonControllable && daemonHandoff ? (
+                  <NativeDisclosureCard
+                    id="ops-runtime-handoff"
+                    title="Service-manager handoff"
+                    subtitle="Operator steps for a runtime that cannot be controlled from this process."
+                  >
+                    <DaemonControlHandoffPanel handoff={daemonHandoff} />
+                  </NativeDisclosureCard>
+                ) : !daemonControllable && data.daemon?.controlMessage ? (
+                  <EmptyState size="compact" title={data.daemon.controlMessage} />
+                ) : null}
+                {daemonDiagnostics.length > 0 || daemonRepairActions.length > 0 ? (
+                  <NativeDisclosureCard
+                    id="ops-runtime-recovery"
+                    title="Recovery and diagnostics"
+                    subtitle="Repair actions and retained diagnostic evidence."
+                  >
+                    <DaemonRecoveryPanel diagnostics={daemonDiagnostics} repairActions={daemonRepairActions} />
+                  </NativeDisclosureCard>
+                ) : null}
+                <div className="mc-next-runtime-actions">
+                  <NativeButton
+                    variant="outline"
+                    onClick={() => void runtime.runDaemonAction("start")}
+                    disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
+                  >
+                    {runtime.daemonBusy === "start" ? "Starting..." : "Start daemon"}
+                  </NativeButton>
+                  <NativeButton
+                    variant="outline"
+                    onClick={() => void runtime.runDaemonAction("restart")}
+                    disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
+                  >
+                    {runtime.daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
+                  </NativeButton>
+                  <NativeButton
+                    variant="outline"
+                    className="danger"
+                    onClick={() => void runtime.runDaemonAction("stop")}
+                    disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
+                  >
+                    {runtime.daemonBusy === "stop" ? "Stopping..." : "Stop daemon"}
+                  </NativeButton>
+                  <NativeButton variant="outline" className="subtle" onClick={() => void runtime.reload()}>
+                    <RefreshCw size={16} />
+                    Refresh
+                  </NativeButton>
+                </div>
+              </NativeCard>
+            </DetailInspector>
+            <DetailInspector
+              open={supportPanel === "llama"}
+              title="Local runtime"
+              onClose={() => setSupportPanel(null)}
             >
-              <MetricGrid
-                items={[
+              <LlamaCppRuntimeTruthCard status={data.llamaCpp} sourceStatus={data.sourceStatus.llamaCpp} />
+            </DetailInspector>
+            {runtimeTab === "efficiency" ? (
+              <NativeDisclosureCard
+                id="ops-runtime-efficiency"
+                title="LLM runtime efficiency"
+                subtitle="Live and cached model-call measurements from gateway runtime paths."
+                stats={[
+                  { label: "Measurements", value: String(runtimeMeasurements.length) },
                   {
-                    label: "Avg latency",
-                    value: formatMilliseconds(averageRuntimeLatencyMs),
-                    meta: "Completed samples",
-                  },
-                  {
-                    label: "Latest TPS",
-                    value: formatOptionalNumber(latestRuntimeMeasurement?.metrics.outputTokensPerSecond, "/s"),
-                    meta: latestRuntimeMeasurement?.source ?? "unavailable",
-                  },
-                  {
-                    label: "Latest cost",
-                    value: formatOptionalUsd(latestRuntimeMeasurement?.metrics.estimatedCostUsd),
-                    meta: latestRuntimeMeasurement?.engineKind ?? "engine unknown",
+                    label: "Source",
+                    value: sourceFailed(data, "runtimeMeasurements") ? "unavailable" : "measured/cached",
                   },
                 ]}
-              />
-              <NativeList
-                items={runtimeMeasurements.slice(0, 5).map((item) => ({
-                  title: `${item.providerId} · ${item.model}`,
-                  meta: `${item.source} · ${item.status}`,
-                  body: `${formatMilliseconds(item.metrics.latencyMs)} · ${formatOptionalUsd(
-                    item.metrics.estimatedCostUsd,
-                  )} · ${formatDateTime(item.collectedAt)}`,
-                }))}
-                emptyLabel="No LLM runtime measurements have been recorded yet."
-                density="compact"
-                maxHeight="min(30vh, 16rem)"
-                ariaLabel="LLM runtime measurements"
-              />
-            </NativeDisclosureCard>
-            <NativeDisclosureCard
-              id="ops-runtime-engine-fit"
-              title="Local engine fit"
-              subtitle="Configured local and OpenAI-compatible engines with measured, cached, or unavailable proof labels."
-              stats={[
-                { label: "Configured", value: String(configuredLocalEngines.length) },
-                { label: "Fit", value: `${fittedLocalEngines.length}/${localEngines.length}` },
-              ]}
-            >
-              <NativeList
-                items={localEngines.map((item) => ({
-                  title: item.label,
-                  meta: `${item.fit} · ${item.measurementSource}`,
-                  body: `${item.invocation} · ${
-                    item.providerIds.length ? item.providerIds.join(", ") : "no providers"
-                  } · ${item.notes[0] ?? "No measurement note."}`,
-                }))}
-                emptyLabel="No local engine catalog entries are available."
-                density="compact"
-                maxHeight="min(34vh, 18rem)"
-                ariaLabel="Local engine fit"
-              />
-            </NativeDisclosureCard>
-            <NativeDisclosureCard
-              id="ops-runtime-evidence"
-              title="Eval evidence"
-              subtitle="Pareto proof records compare model candidates without pretending to invoke unsupported engines."
-              stats={[
-                { label: "Runs", value: String(evalProofRuns.length) },
-                { label: "Latest", value: latestEvalRun?.status ?? "none" },
-              ]}
-            >
-              <MetricGrid
-                items={[
-                  {
-                    label: "Latest run",
-                    value: formatShortRunId(latestEvalRun?.runId),
-                    meta: latestEvalRun ? formatDateTime(latestEvalRun.createdAt) : "No proof run",
-                  },
-                  {
-                    label: "Pareto providers",
-                    value: formatParetoProviders(latestEvalRun?.results),
-                    meta: "Latency/cost/quality frontier",
-                  },
-                  {
-                    label: "Warnings",
-                    value: String(latestEvalRun?.warnings.length ?? 0),
-                    meta: "Measurement gaps remain visible",
-                  },
+              >
+                <MetricGrid
+                  items={[
+                    {
+                      label: "Avg latency",
+                      value: formatMilliseconds(averageRuntimeLatencyMs),
+                      meta: "Completed samples",
+                    },
+                    {
+                      label: "Latest TPS",
+                      value: formatOptionalNumber(latestRuntimeMeasurement?.metrics.outputTokensPerSecond, "/s"),
+                      meta: latestRuntimeMeasurement?.source ?? "unavailable",
+                    },
+                    {
+                      label: "Latest cost",
+                      value: formatOptionalUsd(latestRuntimeMeasurement?.metrics.estimatedCostUsd),
+                      meta: latestRuntimeMeasurement?.engineKind ?? "engine unknown",
+                    },
+                  ]}
+                />
+                <NativeList
+                  items={runtimeMeasurements.map((item) => ({
+                    title: `${item.providerId} · ${item.model}`,
+                    meta: `${item.source} · ${item.status}`,
+                    body: `${formatMilliseconds(item.metrics.latencyMs)} · ${formatOptionalUsd(
+                      item.metrics.estimatedCostUsd,
+                    )} · ${formatDateTime(item.collectedAt)}`,
+                  }))}
+                  emptyLabel="No LLM runtime measurements have been recorded yet."
+                  density="compact"
+                  maxHeight="min(30vh, 16rem)"
+                  ariaLabel="LLM runtime measurements"
+                />
+              </NativeDisclosureCard>
+            ) : null}
+            {runtimeTab === "efficiency" ? (
+              <NativeDisclosureCard
+                id="ops-runtime-engine-fit"
+                title="Local engine fit"
+                subtitle="Configured local and OpenAI-compatible engines with measured, cached, or unavailable proof labels."
+                stats={[
+                  { label: "Configured", value: String(configuredLocalEngines.length) },
+                  { label: "Fit", value: `${fittedLocalEngines.length}/${localEngines.length}` },
                 ]}
-              />
-              <NativeList
-                items={evalProofRuns.slice(0, 5).map((item) => ({
-                  title: formatShortRunId(item.runId),
-                  meta: `${item.status} · ${item.results.length} candidates`,
-                  body: `${formatParetoProviders(item.results)} · ${formatDateTime(item.createdAt)}`,
-                }))}
-                emptyLabel="No eval proof records have been produced yet."
-                density="compact"
-                maxHeight="min(30vh, 16rem)"
-                ariaLabel="Eval evidence"
-              />
-            </NativeDisclosureCard>
-            <NativeDisclosureCard
-              id="ops-runtime-browser-proof"
-              title="Browser proof abstraction"
-              subtitle="Governed browser evidence records for observe, extract, and act steps; no autonomous browser control plane."
-              stats={[
-                { label: "Kinds", value: "observe / extract / act" },
-                { label: "Policy", value: "governed evidence" },
-              ]}
-            >
-              <MetricGrid
-                items={[
-                  { label: "Target", value: "selector + semantic", meta: "Operator-readable" },
-                  { label: "Artifacts", value: "screenshot/hash refs", meta: "When available" },
-                  { label: "Guards", value: "network + private host", meta: "Policy decision recorded" },
-                  { label: "Redaction", value: "summary required", meta: "No raw secret display" },
+              >
+                <NativeList
+                  items={localEngines.map((item) => ({
+                    title: item.label,
+                    meta: `${item.fit} · ${item.measurementSource}`,
+                    body: `${item.invocation} · ${
+                      item.providerIds.length ? item.providerIds.join(", ") : "no providers"
+                    } · ${item.notes[0] ?? "No measurement note."}`,
+                  }))}
+                  emptyLabel="No local engine catalog entries are available."
+                  density="compact"
+                  maxHeight="min(34vh, 18rem)"
+                  ariaLabel="Local engine fit"
+                />
+              </NativeDisclosureCard>
+            ) : null}
+            {runtimeTab === "efficiency" ? (
+              <NativeDisclosureCard
+                id="ops-runtime-evidence"
+                title="Eval evidence"
+                subtitle="Pareto proof records compare model candidates without pretending to invoke unsupported engines."
+                stats={[
+                  { label: "Runs", value: String(evalProofRuns.length) },
+                  { label: "Latest", value: latestEvalRun?.status ?? "none" },
                 ]}
-              />
-              <NativeList
-                items={[
-                  {
-                    title: "Evidence metadata only",
-                    meta: "BrowserProofRecord",
-                    body: "Records capture target description, selector or semantic target, action result, policy decision, guard status, artifact hashes, and redaction summary.",
-                  },
-                  {
-                    title: "Governed action boundary",
-                    meta: "No Stagehand dependency",
-                    body: "Browser actions remain policy-governed and do not create autonomous browser runtime takeover.",
-                  },
+              >
+                <MetricGrid
+                  items={[
+                    {
+                      label: "Latest run",
+                      value: formatShortRunId(latestEvalRun?.runId),
+                      meta: latestEvalRun ? formatDateTime(latestEvalRun.createdAt) : "No proof run",
+                    },
+                    {
+                      label: "Pareto providers",
+                      value: formatParetoProviders(latestEvalRun?.results),
+                      meta: "Latency/cost/quality frontier",
+                    },
+                    {
+                      label: "Warnings",
+                      value: String(latestEvalRun?.warnings.length ?? 0),
+                      meta: "Measurement gaps remain visible",
+                    },
+                  ]}
+                />
+                <NativeList
+                  items={evalProofRuns.map((item) => ({
+                    title: formatShortRunId(item.runId),
+                    meta: `${item.status} · ${item.results.length} candidates`,
+                    body: `${formatParetoProviders(item.results)} · ${formatDateTime(item.createdAt)}`,
+                  }))}
+                  emptyLabel="No eval proof records have been produced yet."
+                  density="compact"
+                  maxHeight="min(30vh, 16rem)"
+                  ariaLabel="Eval evidence"
+                />
+              </NativeDisclosureCard>
+            ) : null}
+            {runtimeTab === "efficiency" ? (
+              <NativeDisclosureCard
+                id="ops-runtime-browser-proof"
+                title="Browser proof abstraction"
+                subtitle="Governed browser evidence records for observe, extract, and act steps; no autonomous browser control plane."
+                stats={[
+                  { label: "Kinds", value: "observe / extract / act" },
+                  { label: "Policy", value: "governed evidence" },
                 ]}
-                emptyLabel="Browser proof abstraction is not configured."
-                density="compact"
-                ariaLabel="Browser proof abstraction"
-              />
-            </NativeDisclosureCard>
-            <NativeDisclosureCard
-              id="ops-runtime-backups"
-              title="Backup posture"
-              subtitle="Recovery state should be inspectable without sharing a connector card."
-            >
-              <NativeList
-                items={data.backups.map((backup) => ({
-                  title: backup.backupId,
-                  meta: "backup",
-                  body: `${formatDateTime(backup.createdAt)} · ${backup.files.length} files`,
-                }))}
-                emptyLabel="No backup posture available."
-                density="compact"
-                maxHeight="min(34vh, 18rem)"
-                ariaLabel="Backup posture"
-              />
-            </NativeDisclosureCard>
-            <NativeDisclosureCard
-              id="ops-runtime-integrations"
+              >
+                <MetricGrid
+                  items={[
+                    { label: "Target", value: "selector + semantic", meta: "Operator-readable" },
+                    { label: "Artifacts", value: "screenshot/hash refs", meta: "When available" },
+                    { label: "Guards", value: "network + private host", meta: "Policy decision recorded" },
+                    { label: "Redaction", value: "summary required", meta: "No raw secret display" },
+                  ]}
+                />
+                <NativeList
+                  items={[
+                    {
+                      title: "Evidence metadata only",
+                      meta: "BrowserProofRecord",
+                      body: "Records capture target description, selector or semantic target, action result, policy decision, guard status, artifact hashes, and redaction summary.",
+                    },
+                    {
+                      title: "Governed action boundary",
+                      meta: "No Stagehand dependency",
+                      body: "Browser actions remain policy-governed and do not create autonomous browser runtime takeover.",
+                    },
+                  ]}
+                  emptyLabel="Browser proof abstraction is not configured."
+                  density="compact"
+                  ariaLabel="Browser proof abstraction"
+                />
+              </NativeDisclosureCard>
+            ) : null}
+            {runtimeTab === "backups" ? (
+              <NativeDisclosureCard
+                id="ops-runtime-backups"
+                title="Backup posture"
+                subtitle="Recovery state should be inspectable without sharing a connector card."
+              >
+                <NativeList
+                  items={data.backups.map((backup) => ({
+                    title: backup.backupId,
+                    meta: "backup",
+                    body: `${formatDateTime(backup.createdAt)} · ${backup.files.length} files`,
+                  }))}
+                  emptyLabel="No backup posture available."
+                  density="compact"
+                  maxHeight="min(34vh, 18rem)"
+                  ariaLabel="Backup posture"
+                />
+              </NativeDisclosureCard>
+            ) : null}
+            <DetailInspector
+              open={supportPanel === "integrations"}
               title="Integration runtime"
-              subtitle="MCP and connector runtime posture stays separate from backups."
+              onClose={() => setSupportPanel(null)}
             >
-              <NativeList
-                items={data.mcpServers.map((item) => ({
-                  title: item.label,
-                  meta: item.enabled ? "enabled" : "disabled",
-                  body: `${item.transport} · ${item.category ?? "general"}`,
-                }))}
-                emptyLabel="No connector posture available."
-                density="compact"
-                maxHeight="min(34vh, 18rem)"
-                ariaLabel="Integration runtime"
-              />
-            </NativeDisclosureCard>
+              <NativeCard
+                id="ops-runtime-integrations"
+                title="Integration runtime"
+                subtitle="MCP and connector runtime posture stays separate from backups."
+              >
+                <NativeList
+                  items={data.mcpServers.map((item) => ({
+                    title: item.label,
+                    meta: item.enabled ? "enabled" : "disabled",
+                    body: `${item.transport} · ${item.category ?? "general"}`,
+                  }))}
+                  emptyLabel="No connector posture available."
+                  density="compact"
+                  maxHeight="min(34vh, 18rem)"
+                  ariaLabel="Integration runtime"
+                />
+              </NativeCard>
+            </DetailInspector>
           </NativeGrid>
         );
       case "diagnostics":
         return (
           <NativeGrid className="mc-next-ops-diagnostics-grid">
+            <div className="mc-next-runtime-actions">
+              <NativeButton variant="outline" onClick={() => setSupportPanel("release")}>
+                Release proof
+              </NativeButton>
+              <NativeButton variant="outline" onClick={() => setSupportPanel("readiness")}>
+                Review readiness
+              </NativeButton>
+            </div>
             <NativeCard
               className="mc-next-ops-diagnostics-primary"
               title="Diagnostics directory"
@@ -1408,7 +1873,7 @@ export function RuntimeRoutePage({
                 </NativeButton>
               }
               stats={[
-                { label: "CPU", value: String(data.health?.systemVitals?.cpuCount ?? 0) },
+                { label: "CPU", value: formatAvailabilityCount(data.health?.systemVitals?.cpuCount) },
                 { label: "Load", value: formatLoadAverage(data.health?.systemVitals?.loadAverage ?? []) },
               ]}
             >
@@ -1432,41 +1897,75 @@ export function RuntimeRoutePage({
                   },
                 ]}
               />
+              <label className="mc-next-settings-field">
+                Search diagnostics
+                <input
+                  type="search"
+                  value={diagnosticQuery}
+                  onChange={(event) => setDiagnosticQuery(event.target.value)}
+                />
+              </label>
               <NativeList
-                items={(data.health?.daemonLogs?.items ?? []).slice(0, 8).map((item) => ({
-                  title: item.level.toUpperCase(),
-                  meta: formatDateTime(item.timestamp),
-                  body: item.message,
-                }))}
+                virtualized
+                items={(data.health?.daemonLogs?.items ?? [])
+                  .filter((item) =>
+                    `${item.level} ${item.message} ${item.timestamp}`
+                      .toLowerCase()
+                      .includes(diagnosticQuery.toLowerCase()),
+                  )
+                  .map((item) => ({
+                    title: item.level.toUpperCase(),
+                    meta: formatDateTime(item.timestamp),
+                    body: item.message,
+                  }))}
                 emptyLabel="No daemon logs available."
               />
               <div className="mc-next-runtime-diagnostic-details" aria-label="Runtime source diagnostics">
-                {Object.entries(data.sourceStatus).map(([source, status]) => (
-                  <details key={source}>
-                    <summary role="button" aria-label={`Inspect diagnostic ${source}`}>
-                      {source}
-                    </summary>
-                    <p>
-                      <strong>Diagnostic detail:</strong>{" "}
-                      {status.status === "ok" ? "Source loaded successfully." : status.message}
-                    </p>
-                  </details>
-                ))}
+                {Object.entries(data.sourceStatus)
+                  .filter(([source, status]) =>
+                    `${source} ${status.status} ${"message" in status ? status.message : ""}`
+                      .toLowerCase()
+                      .includes(diagnosticQuery.toLowerCase()),
+                  )
+                  .map(([source, status]) => (
+                    <details key={source}>
+                      <summary role="button" aria-label={`Inspect diagnostic ${source}`}>
+                        {source}
+                      </summary>
+                      <p>
+                        <strong>Diagnostic detail:</strong>{" "}
+                        {status.status === "ok" ? "Source loaded successfully." : status.message}
+                      </p>
+                    </details>
+                  ))}
               </div>
             </NativeCard>
-            <ReleaseProofDashboardPanel
-              summary={reviewReadiness}
-              loading={reviewReadinessLoading}
-              error={reviewReadinessError}
-              onRefresh={refreshReleaseProof}
-            />
-            <ReviewReadinessPanel
-              summary={reviewReadiness}
-              loading={reviewReadinessLoading}
-              error={reviewReadinessError}
-              onRefresh={loadReviewReadiness}
-            />
-            <NativeCard
+            <DetailInspector
+              open={supportPanel === "release"}
+              title="Release proof"
+              onClose={() => setSupportPanel(null)}
+            >
+              <ReleaseProofDashboardPanel
+                summary={reviewReadiness}
+                loading={reviewReadinessLoading}
+                error={reviewReadinessError}
+                onRefresh={refreshReleaseProof}
+              />
+            </DetailInspector>
+            <DetailInspector
+              open={supportPanel === "readiness"}
+              title="Review readiness"
+              onClose={() => setSupportPanel(null)}
+            >
+              <ReviewReadinessPanel
+                summary={reviewReadiness}
+                loading={reviewReadinessLoading}
+                error={reviewReadinessError}
+                onRefresh={loadReviewReadiness}
+              />
+            </DetailInspector>
+            <NativeDisclosureCard
+              id="diagnostics-recovery"
               title="Backup and recovery"
               subtitle="Backup posture is visible in Ops; restore remains an offline, operator-run procedure."
             >
@@ -1480,7 +1979,7 @@ export function RuntimeRoutePage({
               >
                 Open backup posture
               </NativeButton>
-            </NativeCard>
+            </NativeDisclosureCard>
             <QuickJumpCard
               title="Diagnostics routes"
               subtitle="Jump between diagnostics and related operator routes."
@@ -1494,39 +1993,99 @@ export function RuntimeRoutePage({
           </NativeGrid>
         );
       case "notifications": {
-        const notificationSignals = [
-          ...(data.sourceStatus.health.status === "ok" && !data.health?.daemonStatus?.running
-            ? [
-                {
-                  title: "Daemon needs intervention",
-                  meta: data.health?.daemonStatus?.state ?? "unknown",
-                  body: "Self-repair can propose a recovery plan, but service changes remain approval-gated.",
-                },
-              ]
-            : []),
-          ...(data.timeline?.events?.items ?? [])
-            .filter((item) => /error|failed|repair|runtime/i.test(item.eventType) && !/approval/i.test(item.eventType))
-            .slice(0, 10)
-            .map((item) => ({
-              title: item.eventType,
-              meta: item.eventClass ?? "event",
-              body: item.timestamp ? formatDateTime(item.timestamp) : "No timestamp",
-            })),
-        ];
+        const signalEvents = (data.timeline?.events?.items ?? []).filter(
+          (item) => /error|failed|repair|runtime/i.test(item.eventType) && !/approval/i.test(item.eventType),
+        );
+        const notificationSignals = signalEvents
+          .filter(
+            (item) =>
+              notificationFilter === "all" ||
+              readNotifications.includes(runtimeEventKey(item)) === (notificationFilter === "read"),
+          )
+          .map((item) => ({
+            title: humanizeEventLabel(item.eventType),
+            meta: [
+              item.source,
+              formatDateTime(item.timestamp),
+              readNotifications.includes(runtimeEventKey(item)) ? "Read" : "Unread",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            actions: (
+              <NativeButton
+                variant="outline"
+                onClick={() => {
+                  const id = runtimeEventKey(item);
+                  setReadNotifications((current) => (current.includes(id) ? current : [...current, id]));
+                  openInspection("event", id);
+                }}
+              >
+                Review notification
+              </NativeButton>
+            ),
+          }));
         return (
           <NativeGrid>
             <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
+            {data.sourceStatus.health.status === "ok" && data.health?.daemonStatus?.running === false ? (
+              <NoticeBanner
+                tone="warning"
+                message="Daemon needs intervention. Review Runtime for recovery actions; reading notifications does not repair the service."
+              />
+            ) : null}
+            {data.health?.daemonStatus?.running === undefined ? (
+              <NoticeBanner
+                tone="warning"
+                message="Daemon status unavailable. Review Runtime for current service evidence."
+              />
+            ) : null}
             <NativeCard
               title="Notification signals"
-              subtitle="Raw runtime issue and repair signals folded under the same exception inbox model."
+              subtitle="Retained runtime issues and repair signals. Read status applies to this app session."
               stats={[
                 { label: "Signals", value: String(notificationSignals.length) },
                 { label: "Self-repair", value: "Approval-gated" },
               ]}
             >
-              <NativeList items={notificationSignals} emptyLabel="No operator notification signals." />
+              <div className="mc-next-settings-filter-bar" role="group" aria-label="Notification read filter">
+                {(["all", "unread", "read"] as const).map((filter) => (
+                  <NativeButton
+                    key={filter}
+                    variant="ghost"
+                    aria-pressed={notificationFilter === filter}
+                    onClick={() => setNotificationFilter(filter)}
+                  >
+                    {capitalize(filter)}
+                  </NativeButton>
+                ))}
+              </div>
+              <NativeList
+                virtualized
+                items={notificationSignals}
+                emptyLabel={
+                  sourceFailed(data, "timeline")
+                    ? "Notification signals unavailable."
+                    : notificationFilter === "all"
+                      ? "No operator notification signals."
+                      : `No ${notificationFilter} signals in the returned records.`
+                }
+              />
+              <p className="mc-next-help-text">Reading a notice does not resolve its underlying failure or approval.</p>
             </NativeCard>
-            <NotificationRoutingPanel workspaceId={activeWorkspaceId} channels={[]} defaultTargetKind="https_webhook" />
+            <NativeButton variant="outline" onClick={() => setSupportPanel("routing")}>
+              Notification routing
+            </NativeButton>
+            <DetailInspector
+              open={supportPanel === "routing"}
+              title="Notification routing"
+              onClose={() => setSupportPanel(null)}
+            >
+              <NotificationRoutingPanel
+                workspaceId={activeWorkspaceId}
+                channels={[]}
+                defaultTargetKind="https_webhook"
+              />
+            </DetailInspector>
             <QuickJumpCard
               title="Act on exception"
               subtitle="Review the canonical surface before approving repair, schedule, or runtime mutation."
@@ -1549,8 +2108,6 @@ export function RuntimeRoutePage({
               title="Activity feed"
               subtitle="Recent events, scheduler pressure, and approval signal in one explicit operator view."
               density="compact"
-              scrollBody
-              bodyMaxHeight="min(66vh, 38rem)"
               stats={[
                 { label: "Recent events", value: String(filteredActivityEvents.length) },
                 { label: "Pending approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
@@ -1581,45 +2138,40 @@ export function RuntimeRoutePage({
                 <ul
                   className="mc-next-activity-feed"
                   data-native-scroll="true"
-                  style={{ maxHeight: "min(52vh, 30rem)" }}
                   aria-label="Activity feed"
                   role="log"
                   aria-live="polite"
                   aria-relevant="additions"
                   aria-atomic="false"
                 >
-                  {filteredActivityEvents.map((item, index) => (
-                    <li
-                      key={item.eventId ?? `${item.eventType}-${item.timestamp ?? "no-ts"}-${index}`}
-                      className="mc-next-activity-feed-row"
-                    >
-                      <details>
-                        <summary role="button" aria-label={`Inspect activity event ${item.eventType}`}>
-                          <ThreePartChip
-                            tone={toneForActivityEvent(item.eventType, item.eventClass)}
-                            state={humanizeEventLabel(item.eventType)}
-                            mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
-                            age={formatActivityAge(item.timestamp)}
-                          />
-                          <span className="mc-next-activity-feed-source">
-                            {item.eventType}
-                            {item.source ? ` / ${item.source}` : ""}
-                          </span>
-                        </summary>
-                        <p>
-                          <strong>Activity event detail:</strong> source {item.source || "unknown"}; class{" "}
-                          {item.eventClass || "unspecified"}; timestamp {formatDateTime(item.timestamp)}.
-                        </p>
-                      </details>
+                  {filteredActivityEvents.map((item) => (
+                    <li key={runtimeEventKey(item)} className="mc-next-activity-feed-row">
+                      <button
+                        type="button"
+                        className="mc-next-activity-record"
+                        aria-label={`Inspect activity event ${item.eventType}`}
+                        onClick={() => openInspection("event", runtimeEventKey(item))}
+                      >
+                        <ThreePartChip
+                          tone={toneForActivityEvent(item.eventType, item.eventClass)}
+                          state={humanizeEventLabel(item.eventType)}
+                          mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
+                          age={formatActivityAge(item.timestamp)}
+                        />
+                        <span className="mc-next-activity-feed-source">
+                          {item.eventType}
+                          {item.source ? ` / ${item.source}` : ""}
+                        </span>
+                      </button>
                     </li>
                   ))}
                 </ul>
               )}
             </NativeCard>
-            <NativeCard
+            <NativeDisclosureCard
+              id={"operator-posture"}
               title="Operator posture"
               subtitle="Keep the highest-signal runtime facts close to the activity stream."
-              density="compact"
             >
               <MetricGrid
                 items={[
@@ -1640,11 +2192,16 @@ export function RuntimeRoutePage({
                   },
                 ]}
               />
-            </NativeCard>
+            </NativeDisclosureCard>
           </NativeGrid>
         );
     }
   }, [
+    costWindow,
+    diagnosticQuery,
+    notificationFilter,
+    readNotifications,
+    setReadNotifications,
     activeWorkspaceId,
     activeWorkspaceName,
     activityFilter,
@@ -1659,13 +2216,11 @@ export function RuntimeRoutePage({
     costProviderFilter,
     data,
     diagnosticsNotice,
-    handleCancelSchedule,
     handleCreateSchedule,
     handleDraftAutomation,
     handleExportActivepiecesTemplate,
     handleExportDiagnostics,
     handleExportN8nTemplate,
-    handleRunSchedule,
     navigate,
     pendingApprovals,
     route.theme,
@@ -1676,11 +2231,18 @@ export function RuntimeRoutePage({
     loadReviewReadiness,
     refreshReleaseProof,
     runtime,
-    scheduleBusy,
     scheduleCreating,
     scheduleDraft,
     scheduleNotice,
-    schedulePendingCancelId,
+    runtimeTab,
+    supportPanel,
+    scheduleEditor,
+    scheduleForm.isDirty,
+    automationForm.isDirty,
+    closeScheduleEditor,
+    openInspection,
+    setScheduleDraft,
+    setAutomationDraft,
     section,
   ]);
 
@@ -1706,9 +2268,28 @@ export function RuntimeRoutePage({
     if (!data || runtime.error || degradedSources.length > 0) {
       return undefined;
     }
-    return <RuntimeHeroLead data={data} pendingApprovals={pendingApprovals} compact={section !== "runtime"} />;
+    return (
+      <details className="mc-next-ops-posture-summary">
+        <summary>Runtime summary</summary>
+        <RuntimeHeroLead data={data} pendingApprovals={pendingApprovals} compact={section !== "runtime"} />
+      </details>
+    );
   }, [data, degradedSources.length, pendingApprovals, runtime.error, section]);
 
+  const inspectedSession =
+    inspection?.kind === "session"
+      ? (data?.sessions.length ? data.sessions : (data?.dashboard?.sessions ?? [])).find(
+          (item) => item.sessionId === inspection.id,
+        )
+      : null;
+  const inspectedEvent =
+    inspection?.kind === "event"
+      ? data?.timeline?.events?.items?.find((item) => runtimeEventKey(item) === inspection.id)
+      : null;
+  const inspectedJob =
+    inspection?.kind === "schedule"
+      ? data?.timeline?.scheduler?.jobs?.find((item) => item.jobId === inspection.id)
+      : null;
   return (
     <NativePageFrame
       className={`mc-next-ops-runtime-page mc-next-ops-runtime-page-${section}`}
@@ -1745,6 +2326,153 @@ export function RuntimeRoutePage({
         retrying={runtime.loading}
       />
       {content}
+      <DetailInspector
+        open={Boolean(inspection && inspection.scope === activeWorkspaceId)}
+        title={
+          inspectedSession
+            ? formatHumanSessionTitle(inspectedSession)
+            : inspectedEvent
+              ? humanizeEventLabel(inspectedEvent.eventType)
+              : (inspectedJob?.name ?? "Record details")
+        }
+        onClose={() => setInspection(null)}
+      >
+        {runtime.isStale ? (
+          <NoticeBanner tone="warning" message="This evidence is stale. Refresh to check the current state." />
+        ) : null}
+        {inspectedSession ? (
+          <>
+            <dl>
+              <dt>Session</dt>
+              <dd>{inspectedSession.sessionId}</dd>
+              <dt>Channel</dt>
+              <dd>{inspectedSession.channel}</dd>
+              <dt>Last activity</dt>
+              <dd>{formatDateTime(inspectedSession.lastActivityAt)}</dd>
+            </dl>
+            <NativeButton
+              onClick={() => navigate({ area: "chat", sessionId: inspectedSession.sessionId, theme: route.theme })}
+            >
+              Open Chat
+            </NativeButton>
+            <details>
+              <summary>Retained session fields</summary>
+              <pre>{JSON.stringify(inspectedSession, null, 2)}</pre>
+            </details>
+          </>
+        ) : null}
+        {inspectedEvent ? (
+          <>
+            <p>Activity event detail: retained signal; this feed is not the complete historical record.</p>
+            <dl>
+              <dt>Event</dt>
+              <dd>{inspectedEvent.eventId ?? "Unavailable"}</dd>
+              <dt>Source</dt>
+              <dd>{inspectedEvent.source || "unknown"}</dd>
+              <dt>Class</dt>
+              <dd>{inspectedEvent.eventClass || "unspecified"}</dd>
+              <dt>Timestamp</dt>
+              <dd>{formatDateTime(inspectedEvent.timestamp)}</dd>
+            </dl>
+            {section === "notifications" ? (
+              <NativeButton
+                variant="outline"
+                onClick={() =>
+                  setReadNotifications((current) => current.filter((id) => id !== runtimeEventKey(inspectedEvent)))
+                }
+              >
+                Mark unread
+              </NativeButton>
+            ) : null}
+            <details>
+              <summary>Retained event fields</summary>
+              <pre>{JSON.stringify(inspectedEvent, null, 2)}</pre>
+            </details>
+          </>
+        ) : null}
+        {inspectedJob ? (
+          <>
+            <dl>
+              <dt>Schedule</dt>
+              <dd>{inspectedJob.schedule}</dd>
+              <dt>Action</dt>
+              <dd>{inspectedJob.action}</dd>
+              <dt>State</dt>
+              <dd>{inspectedJob.enabled ? "Enabled" : "Disabled"}</dd>
+              <dt>Next run</dt>
+              <dd>{inspectedJob.nextRunAt ? formatDateTime(inspectedJob.nextRunAt) : "Not scheduled"}</dd>
+              <dt>Last run</dt>
+              <dd>{inspectedJob.lastRunStatus ?? "Unavailable"}</dd>
+              <dt>Revision</dt>
+              <dd>{inspectedJob.revision ?? "Unavailable"}</dd>
+            </dl>
+            {((item) => (
+              <>
+                <NativeButton
+                  variant="outline"
+                  onClick={() => void handleRunSchedule(item.jobId)}
+                  disabled={scheduleBusy !== null}
+                  aria-label={`Run ${item.name} now`}
+                >
+                  {scheduleBusy?.jobId === item.jobId && scheduleBusy.action === "run" ? "Running..." : "Run now"}
+                </NativeButton>
+                {schedulePendingCancelId === item.jobId ? (
+                  <>
+                    <NativeButton
+                      variant="destructive"
+                      onClick={() => void handleCancelSchedule(item.jobId, item.revision)}
+                      disabled={scheduleBusy !== null || !Number.isInteger(item.revision)}
+                      aria-label={`Confirm cancel ${item.name}`}
+                    >
+                      {scheduleBusy?.jobId === item.jobId && scheduleBusy.action === "cancel"
+                        ? "Cancelling..."
+                        : "Confirm cancel"}
+                    </NativeButton>
+                    <NativeButton
+                      variant="ghost"
+                      onClick={() => setSchedulePendingCancelId(null)}
+                      disabled={scheduleBusy !== null}
+                    >
+                      Keep schedule
+                    </NativeButton>
+                  </>
+                ) : (
+                  <NativeButton
+                    variant="outline"
+                    onClick={() => setSchedulePendingCancelId(item.jobId)}
+                    disabled={scheduleBusy !== null || !Number.isInteger(item.revision)}
+                    title={Number.isInteger(item.revision) ? undefined : "Canonical schedule revision unavailable"}
+                    aria-label={`Cancel ${item.name}`}
+                  >
+                    Cancel schedule
+                  </NativeButton>
+                )}
+              </>
+            ))(inspectedJob)}
+            {scheduleNotice ? <NoticeBanner tone={scheduleNotice.tone} message={scheduleNotice.message} /> : null}
+            <details>
+              <summary>Schedule evidence</summary>
+              <pre>{JSON.stringify(inspectedJob, null, 2)}</pre>
+            </details>
+          </>
+        ) : null}
+        {inspection?.kind === "report" ? (
+          <ImprovementReportDetails key={inspection.id} reportId={inspection.id} />
+        ) : null}
+        {inspection?.kind === "replay" ? (
+          <RecordEvidence
+            value={data?.timeline?.improvement?.replayRuns?.find((item) => item.runId === inspection.id)}
+          />
+        ) : null}
+        {!inspectedSession &&
+        !inspectedEvent &&
+        !inspectedJob &&
+        inspection?.kind !== "report" &&
+        inspection?.kind !== "replay" ? (
+          <EmptyState title="This record is unavailable in the current response." />
+        ) : null}
+      </DetailInspector>
+      {leave.dialog}
     </NativePageFrame>
   );
 }
@@ -1809,7 +2537,7 @@ function ImprovementInboxPanel({
       ) : null}
       {suggestions.length > 0 ? (
         <div className="mc-next-stack mc-next-stack--compact" aria-label="Improvement suggestions">
-          {suggestions.slice(0, 12).map((item) => {
+          {suggestions.map((item) => {
             const ready = item.actionStatuses.activate === "ready";
             return (
               <div className="mc-next-inline-card" key={item.candidate.candidateId}>
@@ -1881,14 +2609,14 @@ function RuntimeHeroLead({
   const daemonState = daemonRuntimeUnavailable
     ? "unavailable"
     : (data.daemon?.state ?? data.health?.daemonStatus?.state ?? "unknown");
-  const mcpCount = data.mcpServers.length;
+  const mcpCount = data.sourceStatus.mcpServers.status === "ok" ? data.mcpServers.length : null;
   const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
   const daySpend = formatCostMetric(data.dashboard?.dailyCostUsd, readCurrentDayCostCompleteness(data));
 
   const readinessLine = daemonRuntimeUnavailable
     ? "Runtime control truth is unavailable — inspect the daemon and health sources."
     : daemonRunning
-      ? "Gateway runtime is serving and under operator control."
+      ? "The runtime reports a running daemon."
       : "Gateway runtime is reachable, but the daemon is stopped.";
   const readinessTone: StatusChipTone = daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning";
 
@@ -1905,7 +2633,7 @@ function RuntimeHeroLead({
     },
     {
       label: "Connectors",
-      value: String(mcpCount),
+      value: mcpCount === null ? "unavailable" : String(mcpCount),
       meta: "MCP runtime servers",
     },
   ];
@@ -1916,7 +2644,9 @@ function RuntimeHeroLead({
         <StatusChip tone={readinessTone}>
           {daemonRuntimeUnavailable ? "Runtime unavailable" : daemonRunning ? "Runtime ready" : "Daemon stopped"}
         </StatusChip>
-        <StatusChip tone={mcpCount > 0 ? "default" : "muted"}>{mcpCount} MCP connected</StatusChip>
+        <StatusChip tone={mcpCount !== null && mcpCount > 0 ? "default" : "muted"}>
+          {mcpCount === null ? "MCP evidence not loaded" : `${mcpCount} MCP configured`}
+        </StatusChip>
         <StatusChip tone={pendingApprovalCount > 0 ? "warning" : "muted"}>
           {pendingApprovalCount} pending {pendingApprovalCount === 1 ? "approval" : "approvals"}
         </StatusChip>
@@ -2096,7 +2826,7 @@ function ReleaseProofDashboardPanel({
         ariaLabel="Accepted release failures"
       />
       <NativeList
-        items={ROUTE_RELEASE_SCOPE.slice(0, 8).map((scope) => ({
+        items={ROUTE_RELEASE_SCOPE.map((scope) => ({
           title: `${scope.area}/${scope.section}`,
           meta: scope.status,
           body: `${scope.verification} · ${scope.note}`,
@@ -2248,7 +2978,7 @@ function ReviewReadinessPanel({
         </div>
       ) : null}
       <NativeList
-        items={linkedTasks.slice(0, 4).map((task) => ({
+        items={linkedTasks.map((task) => ({
           title: task.title,
           meta: `${task.status} · ${task.priority}`,
           body: `${task.taskId} · updated ${formatDateTime(task.updatedAt)}`,
@@ -2403,8 +3133,8 @@ function DaemonRecoveryPanel({
   diagnostics: DaemonRuntimeDiagnostic[];
   repairActions: DaemonRepairAction[];
 }) {
-  const visibleDiagnostics = diagnostics.slice(0, 4);
-  const visibleActions = repairActions.slice(0, 3);
+  const visibleDiagnostics = diagnostics;
+  const visibleActions = repairActions;
   return (
     <div className="mc-next-runtime-handoff" role="note" aria-label="Gateway recovery diagnostics">
       <div className="mc-next-runtime-handoff-heading">
@@ -2512,7 +3242,7 @@ function LlamaCppRuntimeTruthCard({
               ]}
             />
             <NativeList
-              items={diagnostics.purposes.slice(0, 8).map((item) => ({
+              items={diagnostics.purposes.map((item) => ({
                 title: formatRuntimeLifecycleLabel(item.purpose),
                 meta: `${item.count} lease${item.count === 1 ? "" : "s"}`,
                 body: "Active runtime consumer purpose",
@@ -3100,7 +3830,7 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 export function sourceFailed(
-  data: { sourceStatus: Record<string, { status: "ok" | "error" }> },
+  data: { sourceStatus: Record<string, { status: "ok" | "error" | "not_requested" }> },
   source: string,
 ): boolean {
   return data.sourceStatus[source]?.status === "error";
@@ -3356,9 +4086,10 @@ export function readSpendDays(data: OpsRuntimeData): SpendDay[] {
 }
 
 /** Aggregate the seven-day provider series without relabeling day-scope summary keys as providers. */
-export function readProviderSpendRows(data: OpsRuntimeData): ProviderSpendRow[] {
+export function readProviderSpendRows(data: OpsRuntimeData, dates?: ReadonlySet<string>): ProviderSpendRow[] {
   const providers = new Map<string, ProviderSpendRow>();
   for (const day of data.cost?.dailySeries ?? []) {
+    if (dates && !dates.has(day.isoDate)) continue;
     for (const segment of day.segments) {
       const providerKey = segment.providerKey.trim();
       if (!providerKey) continue;
@@ -3430,4 +4161,15 @@ export function formatLoadAverage(values: number[]) {
     .slice(0, 3)
     .map((value) => value.toFixed(2))
     .join(" / ");
+}
+
+function runtimeEventKey(item: { eventId?: string; eventType: string; timestamp?: string; source?: string }) {
+  return item.eventId ?? JSON.stringify(item);
+}
+
+function formatOptionalBytes(value: number | undefined) {
+  return value === undefined || !Number.isFinite(value) ? "unavailable" : formatBytes(value);
+}
+function formatOptionalDuration(value: number | undefined) {
+  return value === undefined || !Number.isFinite(value) ? "unavailable" : formatDuration(value);
 }

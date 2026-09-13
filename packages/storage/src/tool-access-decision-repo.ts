@@ -6,7 +6,10 @@ import { safeJsonParse } from "./safe-json.js";
 export interface ToolAccessDecisionRecord {
   decisionId: string;
   timestamp: string;
+  /** Canonical policy target; MCP wrappers retain their original request in approval/audit owners. */
   toolName: string;
+  /** Server-owned shared limit identity for a mapped remote tool; not invocation authority. */
+  policyToolName?: "mcp.invoke" | "mesh.invoke";
   agentId: string;
   sessionId: string;
   workspaceId?: string;
@@ -26,6 +29,7 @@ interface ToolAccessDecisionRow {
   decision_id: string;
   timestamp: string;
   tool_name: string;
+  policy_tool_name?: "mcp.invoke" | "mesh.invoke" | null;
   agent_id: string;
   session_id: string;
   workspace_id: string | null;
@@ -81,6 +85,7 @@ function writeDecisionPredicate(alias = ""): string {
   return `(
           ${prefix}risk_level IN ('danger', 'nuclear')
           OR ${prefix}tool_name IN (${CAUTION_MUTATING_TOOL_SQL_LIST})
+          OR ${prefix}policy_tool_name IN ('mcp.invoke', 'mesh.invoke')
           OR ${prefix}tool_name LIKE '%.send'
           OR ${prefix}tool_name LIKE '%.react'
           OR ${prefix}tool_name LIKE '%.unsend'
@@ -105,24 +110,24 @@ export class ToolAccessDecisionRepository {
       INSERT INTO tool_access_decisions (
         decision_id, timestamp, tool_name, agent_id, session_id, workspace_id, task_id, run_id,
         allowed, reason_codes_json, matched_grant_id, requires_approval, risk_level,
-        permission_profile_id, local_operator_override_id, counts_toward_limits
+        permission_profile_id, local_operator_override_id, counts_toward_limits, policy_tool_name
       ) VALUES (
         @decisionId, @timestamp, @toolName, @agentId, @sessionId, @workspaceId, @taskId, @runId,
         @allowed, @reasonCodesJson, @matchedGrantId, @requiresApproval, @riskLevel,
-        @permissionProfileId, @localOperatorOverrideId, @countsTowardLimits
+        @permissionProfileId, @localOperatorOverrideId, @countsTowardLimits, @policyToolName
       )
     `);
     this.countByToolGlobalSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
       FROM tool_access_decisions
-      WHERE tool_name = @toolName
+      WHERE (tool_name = @toolName OR policy_tool_name = @toolName)
         AND counts_toward_limits = 1
         AND timestamp >= @since
     `);
     this.countByToolAgentSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
       FROM tool_access_decisions
-      WHERE tool_name = @toolName
+      WHERE (tool_name = @toolName OR policy_tool_name = @toolName)
         AND agent_id = @agentId
         AND counts_toward_limits = 1
         AND timestamp >= @since
@@ -130,7 +135,7 @@ export class ToolAccessDecisionRepository {
     this.countByToolSessionSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
       FROM tool_access_decisions
-      WHERE tool_name = @toolName
+      WHERE (tool_name = @toolName OR policy_tool_name = @toolName)
         AND session_id = @sessionId
         AND counts_toward_limits = 1
         AND timestamp >= @since
@@ -140,7 +145,7 @@ export class ToolAccessDecisionRepository {
       FROM tool_access_decisions AS decision
       LEFT JOIN chat_session_meta AS meta
         ON meta.session_id = decision.session_id
-      WHERE decision.tool_name = @toolName
+      WHERE (decision.tool_name = @toolName OR decision.policy_tool_name = @toolName)
         AND (
           decision.workspace_id = @workspaceId
           OR (decision.workspace_id IS NULL AND meta.workspace_id = @workspaceId)
@@ -151,7 +156,7 @@ export class ToolAccessDecisionRepository {
     this.countByToolTaskSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
       FROM tool_access_decisions
-      WHERE tool_name = @toolName
+      WHERE (tool_name = @toolName OR policy_tool_name = @toolName)
         AND task_id = @taskId
         AND counts_toward_limits = 1
         AND timestamp >= @since
@@ -216,6 +221,7 @@ export class ToolAccessDecisionRepository {
       decisionId,
       timestamp: now,
       toolName: input.toolName,
+      policyToolName: input.policyToolName ?? null,
       agentId: input.agentId,
       sessionId: input.sessionId,
       workspaceId: input.workspaceId ?? null,
@@ -366,6 +372,7 @@ export function mapToolAccessDecisionRow(row: ToolAccessDecisionRow): ToolAccess
     decisionId: row.decision_id,
     timestamp: row.timestamp,
     toolName: row.tool_name,
+    policyToolName: row.policy_tool_name ?? undefined,
     agentId: row.agent_id,
     sessionId: row.session_id,
     workspaceId: row.workspace_id ?? undefined,

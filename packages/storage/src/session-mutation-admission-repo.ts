@@ -5278,7 +5278,8 @@ export class SessionMutationAdmissionRepository {
         storedAdmission.actor_id !== payloadAdmission.actorId ||
         storedAdmission.operation !== payloadAdmission.operation ||
         storedAdmission.material_sha256 !== payloadAdmission.materialSha256 ||
-        storedAdmission.status !== (child.status === "completed" ? "completed" : "cancelled") ||
+        (storedAdmission.status !== (child.status === "completed" ? "completed" : "cancelled") &&
+          !isCompletedLateBlockedPostCommitChild(child, metadata, payload.effect, storedAdmission)) ||
         storedAdmission.terminal_authority_kind !== "post_commit_child_stage" ||
         storedAdmission.terminal_durable_run_id !== childRunId ||
         storedAdmission.terminal_durable_run_status !== "running" ||
@@ -6465,6 +6466,47 @@ function normalizePostCommitChildDispatchInput(input: AssertPostCommitChildDispa
       : input.effect === "memory_maintenance"
         ? { stage: "memory_maintenance_evaluation" as const, terminal: true }
         : { stage: "background_counter" as const, terminal: false }),
+  });
+}
+
+function isCompletedLateBlockedPostCommitChild(
+  child: DurableRunFenceRow,
+  metadata: Record<string, unknown>,
+  effect: string,
+  admission: AdmissionRow,
+): boolean {
+  // A policy-blocked stage cancels its write admission, while its durable
+  // workflow completes the recorded no-op. Release the parent only when the
+  // exact canonical stage receipt and admission settlement prove that outcome.
+  if (child.status !== "completed" || admission.status !== "cancelled") return false;
+  const receipt = readJsonObject(metadata.generalChatPostCommitCanonical);
+  const stages = readJsonObject(receipt?.stages);
+  if (
+    !receipt ||
+    !hasExactKeys(receipt, ["effect", "stages", "version"]) ||
+    receipt.version !== 1 ||
+    receipt.effect !== effect ||
+    !stages
+  )
+    return false;
+  const allowedStages =
+    effect === "commitments"
+      ? ["commitments_write"]
+      : effect === "background_review"
+        ? ["background_counter", "background_evidence"]
+        : effect === "memory_maintenance"
+          ? ["memory_maintenance_evaluation"]
+          : [];
+  if (Object.keys(stages).some((stage) => !allowedStages.includes(stage))) return false;
+  return allowedStages.some((stage) => {
+    const outcome = readJsonObject(stages[stage]);
+    return (
+      outcome !== undefined &&
+      hasExactKeys(outcome, ["completedAt", "disposition"]) &&
+      outcome.disposition === "late_blocked" &&
+      isCanonicalIsoTimestamp(outcome.completedAt) &&
+      admission.terminal_idempotency_key === `chat-post-commit-child-stage:v2:${child.run_id}:${stage}:late_blocked`
+    );
   });
 }
 

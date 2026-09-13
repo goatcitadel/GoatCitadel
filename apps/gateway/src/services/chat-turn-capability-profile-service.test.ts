@@ -11,15 +11,23 @@ import {
   type McpRequesterResolutionBinding,
   type McpRequesterResolutionBindingMaterial,
   type ToolPolicyActorContext,
+  type ToolInvokeRequest,
   type WorkPassportRecord,
 } from "@goatcitadel/contracts";
-import { verifyChatTurnCapabilityProfile } from "@goatcitadel/storage";
+import { verifyChatTurnCapabilityProfile, verifyChatTurnCapabilityCatalogBinding } from "@goatcitadel/storage";
 import {
   resolveChatTurnCapabilityProfile,
   type ChatTurnCapabilityProfileResolveDeps,
   type ChatTurnCapabilityProfileResolveInput,
 } from "./chat-turn-capability-profile-service.js";
 import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
+import { normalizeMcpRequesterDiscoveryOutput } from "./mcp-requester-resolution.js";
+import { createMcpRequesterDiscoverySecretScanner } from "./mcp-resolution-secret-guard.js";
+import type { NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
+import { resolveMeshChatToolSchemas, type MeshChatToolSchema } from "./gateway/mesh-chat-catalog.js";
+import { createMeshChatCatalogFixture } from "./gateway/mesh-chat-catalog-test-fixtures.js";
+import { createMeshChatTurnContext, resolveMeshChatToolBinding } from "./gateway/mesh-chat-binding.js";
+import { GatewayService } from "./gateway-service.js";
 
 const TOOL_ENTRY: CapabilityCatalogEntry = {
   capabilityId: "tool:browser.search",
@@ -161,6 +169,56 @@ function buildInput(): ChatTurnCapabilityProfileResolveInput {
   };
 }
 
+function configureNativeDiscovery(deps: ChatTurnCapabilityProfileResolveDeps) {
+  const buildBinding = configureRequesterMcp(deps);
+  const wrapper: CapabilityCatalogEntry = { ...TOOL_ENTRY, capabilityId: "tool:mcp.invoke", toolName: "mcp.invoke" };
+  deps.listCapabilityCatalog = vi.fn(async () => [wrapper]);
+  const normalized = normalizeMcpRequesterDiscoveryOutput(
+    "tenant-mcp",
+    {
+      tools: [
+        {
+          rawRemoteToolName: "search",
+          canonicalToolName: "mcp.tenant-mcp.search",
+          description: "Search records",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    },
+    createMcpRequesterDiscoverySecretScanner(),
+  );
+  const discover = vi.fn(async () => [normalized]);
+  deps.discoverMcpRequesterCatalogs = discover;
+  const freeze = vi.fn<NonNullable<ChatTurnCapabilityProfileResolveDeps["resolveMcpRequesterCatalogBindings"]>>(
+    async (input) =>
+      input.tools.map((tool) =>
+        buildBinding({ ...input, canonicalToolName: tool.canonicalToolName, modelToolName: "" }),
+      ),
+  );
+  deps.resolveMcpRequesterCatalogBindings = freeze;
+  deps.resolveMcpRequesterResolutionBinding = vi.fn(() => {
+    throw new Error("Native schemas must not repeat discovery");
+  });
+  const schema = vi.fn(async (_input: unknown, native: readonly NativeMcpChatToolSchema[] = []) => ({
+    tools: native.map((tool) => tool.providerDefinition),
+    modelToCanonical: new Map(native.map((tool) => [tool.modelName, tool.canonicalName])),
+    canonicalToModel: new Map(native.map((tool) => [tool.canonicalName, tool.modelName])),
+    policyDecisions: native.map((tool) => ({
+      toolName: tool.canonicalName,
+      allowed: true,
+      requiresApproval: true,
+      reasonCodes: ["permission_profile_requires_approval"],
+    })),
+  }));
+  deps.resolveToolSchema = schema;
+  return { discover, freeze, schema, normalized, wrapper };
+}
+
 function buildDeps() {
   const inspectable = [TOOL_ENTRY, SKILL_ENTRY, INSPECTABLE_ONLY];
   const callable = [TOOL_ENTRY, SKILL_ENTRY];
@@ -290,6 +348,66 @@ function configureSafeRead(deps: ChatTurnCapabilityProfileResolveDeps): void {
 }
 
 describe("resolveChatTurnCapabilityProfile", () => {
+  it("admits secret-scanned native MCP schemas against the final catalog and freezes exact provider definitions", async () => {
+    const { deps } = buildDeps();
+    const f = configureNativeDiscovery(deps);
+    const result = await resolveChatTurnCapabilityProfile(deps, buildInput());
+    expect(f.discover).toHaveBeenCalledTimes(1);
+    expect(f.freeze).toHaveBeenCalledTimes(1);
+    expect(f.freeze.mock.calls[0]![0]).toMatchObject({
+      catalogSnapshotId: result.catalogSnapshot.snapshotId,
+      callableCatalogSha256: result.profile.catalog.callableHash,
+      tools: [
+        {
+          canonicalToolName: "mcp.tenant-mcp.search",
+          expectedToolDefinitionSha256: f.normalized.tools[0]!.toolDefinitionSha256,
+        },
+      ],
+    });
+    const discoveryHook = vi.mocked(deps.discoverMcpRequesterCatalogs!).mock.calls[0]![0];
+    expect(discoveryHook.callableCatalogSha256).not.toBe(result.profile.catalog.callableHash);
+    const selected = result.profile.selection.tools[0]!;
+    expect(selected.modelName).toHaveLength(48);
+    expect(selected.providerDefinition).toEqual(f.schema.mock.calls[0]![1]![0]!.providerDefinition);
+    expect(selected.mcpRequesterResolution?.callableCatalogSha256).toBe(result.profile.catalog.callableHash);
+    expect(selected.effectPotential).toMatchObject({ potential: "unknown", sourceKind: "mcp" });
+    expect(JSON.stringify(result)).not.toContain("policyBinding");
+    expect(deps.resolveMcpRequesterResolutionBinding).not.toHaveBeenCalled();
+    verifyChatTurnCapabilityProfile(result.profile);
+  });
+
+  it("omits a native server when final revalidation fails and rejects attempts to inject its old schema", async () => {
+    const { deps } = buildDeps();
+    const f = configureNativeDiscovery(deps);
+    f.freeze.mockResolvedValue(undefined);
+    const result = await resolveChatTurnCapabilityProfile(deps, buildInput());
+    expect(result.profile.selection.tools).toEqual([]);
+    deps.resolveToolSchema = async () => ({
+      tools: [REQUESTER_MCP_PROVIDER_TOOL],
+      modelToCanonical: new Map([["mcp_tenant_mcp_search", "mcp.tenant-mcp.search"]]),
+      canonicalToModel: new Map([["mcp.tenant-mcp.search", "mcp_tenant_mcp_search"]]),
+      policyDecisions: [],
+    });
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow(
+      "changed after its final discovery",
+    );
+  });
+
+  it.each(["manual", "unsupported_actor", "missing_wrapper"])(
+    "skips native credential discovery for %s",
+    async (caseName) => {
+      const { deps, policyContext } = buildDeps();
+      const f = configureNativeDiscovery(deps);
+      const input = buildInput();
+      if (caseName === "manual") input.toolAutonomy = "manual";
+      if (caseName === "unsupported_actor") policyContext.authActorSource = "none";
+      if (caseName === "missing_wrapper") deps.listCapabilityCatalog = async () => [];
+      await resolveChatTurnCapabilityProfile(deps, input);
+      expect(f.discover).not.toHaveBeenCalled();
+      expect(f.freeze).not.toHaveBeenCalled();
+    },
+  );
+
   it("freezes one server-owned workspace snapshot into preview and immutable selection", async () => {
     const { deps } = buildDeps();
     const workspaceSnapshot = {
@@ -756,59 +874,27 @@ describe("resolveChatTurnCapabilityProfile", () => {
     expect(admitted.resolverId).toBe("gateway.tenant-mcp");
     expect(Object.isFrozen(admitted)).toBe(true);
     verifyChatTurnCapabilityProfile(resolution.profile);
+    verifyChatTurnCapabilityCatalogBinding(resolution.profile, resolution.catalogSnapshot);
   });
 });
 
-const MESH_CAPABILITY_ID = "mesh:node-a:tool:project.status";
-
-const MESH_PROJECTION = {
-  nodeId: "node-a",
-  admissionGeneration: 1,
-  publisherGeneration: 3,
-  manifestSha256: "d".repeat(64),
-  entrySha256: "e".repeat(64),
-  localId: "project.status",
-  capabilityKind: "tool" as const,
-  status: "active" as const,
-  reasons: ["activation_live"],
-  effectPosture: "read_only" as const,
-};
-
-const MESH_TOOL_ENTRY: CapabilityCatalogEntry = {
-  capabilityId: MESH_CAPABILITY_ID,
-  kind: "mesh_tool",
-  category: "mesh_published",
-  title: "Project status",
-  summary: "Mesh tool published by node node-a.",
-  callable: true,
-  trustLabel: "Mesh activated",
-  mesh: MESH_PROJECTION,
-};
-
-const MESH_BINDING = {
-  nodeId: "node-a",
-  publisherGeneration: 3,
-  manifestSha256: "d".repeat(64),
-  entrySha256: "e".repeat(64),
-  activationId: `mesh-activation-${"f".repeat(48)}`,
-  activationRevision: 2,
-  publicationLeaseFencingToken: 5,
-  permissionEnvelopeSha256: "a".repeat(64),
-  effectPosture: "read_only" as const,
-  healthGeneration: 4,
-};
+const MESH_FIXTURE = createMeshChatCatalogFixture();
+const MESH_CAPABILITY_ID = MESH_FIXTURE.capabilityId;
+const MESH_TOOL_ENTRY = MESH_FIXTURE.entry;
+const MESH_PROJECTION = MESH_TOOL_ENTRY.mesh!;
+const MESH_BINDING = MESH_FIXTURE.binding;
 
 function configureMeshTool(deps: ChatTurnCapabilityProfileResolveDeps) {
   deps.listCapabilityCatalog = vi.fn(() => [MESH_TOOL_ENTRY]);
-  deps.resolveToolSchema = vi.fn(async () => ({
-    tools: [
-      {
-        ...PROVIDER_TOOL,
-        function: { ...PROVIDER_TOOL.function, name: "mesh_node_a_project_status" },
-      },
-    ],
-    modelToCanonical: new Map([["mesh_node_a_project_status", MESH_CAPABILITY_ID]]),
-    canonicalToModel: new Map([[MESH_CAPABILITY_ID, "mesh_node_a_project_status"]]),
+  deps.resolveMeshToolSchemas = vi.fn((input) => resolveMeshChatToolSchemas(MESH_FIXTURE.deps, input));
+  deps.resolveToolSchema = vi.fn(async (
+    _input: Parameters<ChatTurnCapabilityProfileResolveDeps["resolveToolSchema"]>[0],
+    _nativeTools?: readonly NativeMcpChatToolSchema[],
+    meshTools: readonly MeshChatToolSchema[] = [],
+  ) => ({
+    tools: meshTools.map((tool) => tool.providerDefinition),
+    modelToCanonical: new Map(meshTools.map((tool) => [tool.modelName, tool.canonicalName])),
+    canonicalToModel: new Map(meshTools.map((tool) => [tool.canonicalName, tool.modelName])),
     policyDecisions: [
       {
         toolName: MESH_CAPABILITY_ID,
@@ -845,6 +931,7 @@ describe("resolveChatTurnCapabilityProfile mesh publication binding", () => {
     // Remote execution keeps the conservative recovery upper bound.
     expect(tool.effectPotential).toMatchObject({ potential: "unknown", sourceKind: "remote" });
     verifyChatTurnCapabilityProfile(resolution.profile);
+    verifyChatTurnCapabilityCatalogBinding(resolution.profile, resolution.catalogSnapshot);
   });
 
   it("fails the profile freeze closed when the activation no longer revalidates", async () => {
@@ -871,6 +958,20 @@ describe("resolveChatTurnCapabilityProfile mesh publication binding", () => {
     await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow(/mesh_capability_freeze_drift/u);
   });
 
+  it.each([
+    ["publisher identity", { mesh: { ...MESH_PROJECTION, localId: "other.tool" } }],
+    ["inactive publication", { mesh: { ...MESH_PROJECTION, status: "review_required" as const } }],
+    ["local tool alias", { toolName: "project.status" }],
+  ])("rejects a malformed mesh %s before returning a preflight preview", async (_label, patch) => {
+    const { deps } = buildDeps();
+    configureMeshTool(deps);
+    deps.listCapabilityCatalog = vi.fn(() => [{ ...MESH_TOOL_ENTRY, ...patch }]);
+
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow(
+      /mesh_capability_freeze_drift/u,
+    );
+  });
+
   it("never treats a mesh skill descriptor as a trusted skill or callable tool", async () => {
     const { deps } = buildDeps();
     const meshSkillEntry: CapabilityCatalogEntry = {
@@ -895,5 +996,136 @@ describe("resolveChatTurnCapabilityProfile mesh publication binding", () => {
     expect(resolution.profile.selection.trustedSkills).toEqual([]);
     expect(resolution.profile.selection.tools).toHaveLength(1);
     verifyChatTurnCapabilityProfile(resolution.profile);
+  });
+
+  it("rejects schema substitutions after manifest admission", async () => {
+    const { deps } = buildDeps();
+    configureMeshTool(deps);
+    const resolveSchema = deps.resolveToolSchema;
+    deps.resolveToolSchema = async (...args) => {
+      const schema = await resolveSchema(...args);
+      schema.tools[0] = { ...schema.tools[0], injected: true };
+      return schema;
+    };
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow("schema changed");
+  });
+
+  it("rejects activation drift after schema admission even when the manifest stayed the same", async () => {
+    const { deps } = buildDeps();
+    configureMeshTool(deps).mockImplementation(() => ({ ...MESH_BINDING, healthGeneration: 5 }));
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow("schema changed");
+  });
+
+  it("rejects a structural copy of a schema and never stores the private policy handle", async () => {
+    const { deps } = buildDeps();
+    configureMeshTool(deps);
+    const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+    expect(JSON.stringify(resolution)).not.toContain("policyBinding");
+    const resolve = deps.resolveMeshToolSchemas!;
+    deps.resolveMeshToolSchemas = async (input) => (await resolve(input)).map((schema) => ({ ...schema }));
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow("not server-owned");
+  });
+
+  it("does not load mesh schemas for manual turns", async () => {
+    const { deps } = buildDeps();
+    configureMeshTool(deps);
+    const resolution = await resolveChatTurnCapabilityProfile(deps, { ...buildInput(), toolAutonomy: "manual" });
+    expect(deps.resolveMeshToolSchemas).not.toHaveBeenCalled();
+    expect(resolution.profile.selection.tools).toEqual([]);
+  });
+});
+
+async function createMeshBindingFixture() {
+  const { deps } = buildDeps();
+  configureMeshTool(deps);
+  const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+  const getProfile = vi.fn(async () => resolution.profile);
+  const getCatalog = vi.fn(async () => resolution.catalogSnapshot);
+  const runtime = {
+    ...MESH_FIXTURE.deps,
+    storage: { ...MESH_FIXTURE.deps.storage,
+      chatTurnCapabilityProfiles: { get: getProfile }, capabilityCatalogSnapshots: { get: getCatalog } },
+  } as unknown as Parameters<typeof resolveMeshChatToolBinding>[0];
+  const request: ToolInvokeRequest = {
+    agentId: "assistant", toolName: MESH_CAPABILITY_ID, toolRunId: "mesh-tool-run",
+    sessionId: resolution.profile.identity.sessionId, turnId: resolution.profile.identity.turnId,
+    workspaceId: resolution.profile.identity.workspaceId, citadelId: resolution.profile.identity.citadelId,
+    args: { query: "Project status", nodeId: "untrusted-target", toolName: "untrusted-tool" },
+    permissionProfileId: resolution.profile.governance.permission.profileId,
+    policyContext: { authActorId: resolution.profile.identity.authActorId,
+      authActorSource: resolution.profile.identity.authActorSource },
+  };
+  return { runtime, resolution, request, getProfile, getCatalog, context: createMeshChatTurnContext(resolution.profile) };
+}
+
+describe("mesh Chat current policy binding", () => {
+  it("recovers the exact stored profile and manifest without promoting body-supplied targets", async () => {
+    const fixture = await createMeshBindingFixture();
+    const result = await resolveMeshChatToolBinding(fixture.runtime, fixture.request, fixture.context);
+    expect(result!.executionProfileSha256).toBe(fixture.resolution.profile.hashes.profileHash);
+    expect(result!.schema.canonicalName).toBe(MESH_CAPABILITY_ID);
+    expect(result!.schema.publication).toEqual(MESH_BINDING);
+    expect(fixture.getProfile).toHaveBeenCalledWith(fixture.resolution.profile.profileId);
+    expect(fixture.getCatalog).toHaveBeenCalledWith(fixture.resolution.profile.catalog.snapshotId);
+    expect(() => JSON.stringify(fixture.context)).toThrow("cannot be serialized");
+  });
+
+  it("requires a live private context, including after JSON round trips", async () => {
+    const fixture = await createMeshBindingFixture();
+    for (const context of [undefined, { ...fixture.context }, JSON.parse("{}")]) {
+      await expect(resolveMeshChatToolBinding(fixture.runtime, fixture.request, context)).rejects.toThrow("exact current frozen");
+    }
+    expect(fixture.getProfile).not.toHaveBeenCalled();
+  });
+
+  it.each(["sessionId", "turnId", "workspaceId", "citadelId", "permissionProfileId"] as const)(
+    "rejects a context reused for another %s", async (field) => {
+      const fixture = await createMeshBindingFixture();
+      await expect(resolveMeshChatToolBinding(fixture.runtime, { ...fixture.request, [field]: "different" }, fixture.context))
+        .rejects.toThrow("exact current frozen");
+    },
+  );
+
+  it.each(["authActorId", "authActorSource"] as const)("rejects a changed %s", async (field) => {
+    const fixture = await createMeshBindingFixture();
+    await expect(resolveMeshChatToolBinding(fixture.runtime, {
+      ...fixture.request, policyContext: { ...fixture.request.policyContext, [field]: field === "authActorId" ? "other" : "none" },
+    }, fixture.context)).rejects.toThrow("exact current frozen");
+    expect(fixture.getProfile).not.toHaveBeenCalled();
+  });
+
+  it.each(["profile", "catalog", "activation"])("rejects changed %s authority after context creation", async (owner) => {
+    const fixture = await createMeshBindingFixture();
+    if (owner === "profile") {
+      const changed = structuredClone(fixture.resolution.profile);
+      changed.selection.tools[0]!.providerDefinition = { changed: true };
+      fixture.getProfile.mockResolvedValue(changed);
+    } else if (owner === "catalog") {
+      const changed = structuredClone(fixture.resolution.catalogSnapshot);
+      changed.callableEntries[0]!.mesh!.status = "revoked";
+      fixture.getCatalog.mockResolvedValue(changed);
+    } else {
+      fixture.runtime.activations = { resolveProfileBindings: async () => new Map() };
+    }
+    await expect(resolveMeshChatToolBinding(fixture.runtime, fixture.request, fixture.context)).rejects.toThrow();
+  });
+
+  it("uses the mapped identity in both Gateway inspection and recorded evaluation", async () => {
+    const fixture = await createMeshBindingFixture();
+    const access = { allowed: true, requiresApproval: true, reasonCodes: ["approval_required"] };
+    const inspectAccess = vi.fn(async () => access);
+    const evaluateAccess = vi.fn(async () => access);
+    const host = {
+      prepareToolAccessEvaluation: vi.fn(async (request: ToolInvokeRequest) => request),
+      storage: fixture.runtime.storage, meshCapabilityActivationService: fixture.runtime.activations,
+      policyEngine: { inspectAccess, evaluateAccess },
+    } as unknown as GatewayService;
+    expect(await GatewayService.prototype.inspectToolAccess.call(host, fixture.request, { meshTurnContext: fixture.context })).toEqual(access);
+    expect(inspectAccess).toHaveBeenCalledWith(fixture.request, { meshToolBinding: expect.any(Object) });
+    expect(evaluateAccess).not.toHaveBeenCalled();
+    expect(await GatewayService.prototype.evaluateToolAccess.call(host, fixture.request, { meshTurnContext: fixture.context })).toEqual(access);
+    expect(evaluateAccess).toHaveBeenCalledWith(fixture.request, { meshToolBinding: expect.any(Object) });
+    await expect(GatewayService.prototype.inspectToolAccess.call(host, fixture.request)).rejects.toThrow("exact current frozen");
+    expect(inspectAccess).toHaveBeenCalledTimes(1);
   });
 });

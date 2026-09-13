@@ -199,3 +199,13 @@ describe("approval helpers", () => {
     expect(buildApprovalEvidenceModel({ count: 1, nested: [false, null] })).toBeNull();
   });
 });
+
+it("exposes exact capability identity and scope before a lifecycle decision", () => {
+  const model = buildApprovalEvidenceModel(
+    { candidateId: "candidate-1", versionId: "version-2", title: "Approve candidate" },
+    { capabilityLifecycle: { subjectId: "candidate-1", subjectKind: "capability_candidate", scopeKind: "global" } },
+  );
+  expect(model?.targets).toEqual(expect.arrayContaining([
+    "Candidate Id: candidate-1", "Version Id: version-2", "Subject Id: candidate-1", "Subject Kind: capability_candidate", "Scope Kind: global",
+  ]));
+});

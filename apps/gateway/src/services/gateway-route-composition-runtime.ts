@@ -23,6 +23,7 @@ import { createSessionsListRoutePort } from "./sessions-list-route-service.js";
 import { UpdateScoutService } from "./update-scout-service.js";
 import { WorkflowRecipeService } from "./workflow-recipe-service.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
+import { readOnboardingFirstTaskEvidence } from "./onboarding-first-task-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import { serializePathWithinRoot } from "./security-utils.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -380,7 +381,30 @@ export function composeRuntimeAdminRouteDependencies(
     onboarding: {
       bootstrapOnboarding: (input) => onboardingStateService.bootstrapOnboarding(onboardingStateHost, input),
       getOnboardingStartupState: () => onboardingStateService.getOnboardingStartupState(onboardingStateHost),
-      getOnboardingState: () => onboardingStateService.getOnboardingState(onboardingStateHost),
+      getOnboardingState: async () => {
+        const state = onboardingStateService.getOnboardingState(onboardingStateHost);
+        const firstTask = await readOnboardingFirstTaskEvidence(gateway.storage, state);
+        return {
+          ...state,
+          firstTask,
+          firstRunChecklist: state.firstRunChecklist?.map((item) =>
+            item.id === "first_chat" && firstTask.status === "verified"
+              ? {
+                  ...item,
+                  status: "complete" as const,
+                  detail: "A real model response is recorded in Chat.",
+                  proofRefs: [
+                    {
+                      kind: "runtime_evidence" as const,
+                      label: "Verified response",
+                      ref: `chat.turn:${firstTask.turnId}`,
+                    },
+                  ],
+                }
+              : item,
+          ),
+        };
+      },
       markOnboardingComplete: async (completedBy) =>
         await onboardingStateService.markOnboardingComplete(onboardingStateHost, completedBy),
     },
@@ -410,7 +434,9 @@ export function composeRuntimeAdminRouteDependencies(
     remoteWorkers: {
       registry: gateway.storage.remoteWorkerAdmissions,
       assignments: gateway.storage.remoteWorkerAssignments,
+      runtimeReads: gateway.storage.remoteWorkerRuntimeReads,
       operatorControl: {
+        budgets: gateway.storage.remoteWorkerBudgets,
         admissions: gateway.storage.remoteWorkerAdmissions,
         audit: gateway.storage.audit,
         manifestVerifier: createConfiguredRemoteWorkerManifestVerifier(),

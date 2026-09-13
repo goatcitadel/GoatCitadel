@@ -141,6 +141,7 @@ vi.mock("./chat-workbench-service.js", () => ({
   revertChatSessionWorkbenchChanges: vi.fn((_deps, sessionId) => ({ sessionId, reverted: true })),
   revertChatSessionWorkbenchFile: vi.fn((_deps, sessionId, input) => ({ sessionId, input, reverted: true })),
   runChatSessionWorkbenchCommand: vi.fn((_deps, sessionId, input) => ({ sessionId, input, exitCode: 0 })),
+  previewChatSessionWorkbenchFileOperation: vi.fn((_deps, sessionId, input) => ({ sessionId, input, reviewed: true })),
   runChatSessionWorkbenchFileOperation: vi.fn((_deps, sessionId, input) => ({ sessionId, input, operated: true })),
   saveChatSessionWorkbenchFile: vi.fn((_deps, sessionId, input) => ({ sessionId, input, saved: true })),
 }));
@@ -170,6 +171,7 @@ function createGateway() {
       rootDir: "F:/code/personal-ai",
       assistant: {
         workspaceDir: "workspace",
+        capabilities: { candidateRoot: "workspace/capability-candidates" },
       },
       toolPolicy: {
         sandbox: {
@@ -679,6 +681,7 @@ describe("composeChatRouteDependencies", () => {
     );
     expect(
       await deps.chatSessions.runChatSessionWorkbenchFileOperation("session-1", {
+        expectedRevision: "a".repeat(64),
         operation: "create_file",
         path: "src/new.ts",
       }),

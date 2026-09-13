@@ -96,6 +96,7 @@ export interface RemoteWorkerAssignmentRecord {
 export interface RemoteWorkerAssignmentDispatchAuthority {
   readonly schemaVersion: typeof REMOTE_WORKER_ASSIGNMENT_DISPATCH_AUTHORITY_SCHEMA_VERSION;
   readonly durableRunId: string;
+  /** Canonical DurableRunRecord.attemptCount: zero for the first execution. */
   readonly durableRunAttempt: number;
   readonly dispatchOwnerId: string;
   readonly durableRunVersion: number;
@@ -110,6 +111,7 @@ export interface StartRemoteWorkerAssignmentGenerationCommand {
   readonly nodeId: string;
   readonly nodeAdmissionGeneration: number;
   readonly dispatchOwnerId: string;
+  /** Canonical DurableRunRecord.attemptCount: zero for the first execution. */
   readonly durableRunAttempt: number;
   readonly leaseTokenSha256: string;
   readonly idempotencyKey: string;
@@ -166,6 +168,29 @@ export interface RemoteWorkerAssignmentLeaseRecord {
   readonly expiresAt: string;
   readonly idempotencyKey: string;
   readonly requestSha256: string;
+}
+
+/** A read-only observation. Neither field authorizes execution or lease renewal. */
+export interface RemoteWorkerAssignmentApprovalWaitRecord {
+  readonly approvalId: string;
+  readonly runtimeAuthoritySha256: string;
+}
+
+/** Observation of a canonical approval wake. A ready response still requires
+ * protected lease renewal; the retained old lease never authorizes execution. */
+export interface RemoteWorkerAssignmentApprovalResumeRecord extends RemoteWorkerAssignmentApprovalWaitRecord {
+  readonly resumeSha256: string;
+}
+
+/** Identity of a retained parent binding. Observing a ready binding requires
+ * protected lease rotation before execution; a pending observation grants none. */
+export interface RemoteWorkerAssignmentParentRecoveryRecord {
+  readonly bindingSha256: string;
+}
+
+export interface ResolvedRemoteWorkerAssignmentParentRecovery extends ResolvedRemoteWorkerAssignmentAuthority {
+  readonly phase: "waiting" | "renew";
+  readonly recovery: RemoteWorkerAssignmentParentRecoveryRecord;
 }
 
 export interface ResolvedRemoteWorkerAssignmentAuthority {
@@ -308,6 +333,8 @@ interface SettleRemoteWorkerAssignmentCommandBase {
 export interface SettleRemoteWorkerAssignmentWorkerCommand extends SettleRemoteWorkerAssignmentCommandBase {
   readonly origin: "worker";
   readonly leaseTokenSha256: string;
+  /** Proposed terminal-only rotation, committed atomically with settlement. */
+  readonly renewalLeaseTokenSha256?: string;
 }
 
 export interface SettleRemoteWorkerAssignmentRecoveryCommand extends SettleRemoteWorkerAssignmentCommandBase {
@@ -520,7 +547,7 @@ export function normalizeStartRemoteWorkerAssignmentGenerationCommand(
     nodeId: identifier(input.nodeId, "nodeId"),
     nodeAdmissionGeneration: positiveInteger(input.nodeAdmissionGeneration, "nodeAdmissionGeneration"),
     dispatchOwnerId: identifier(input.dispatchOwnerId, "dispatchOwnerId"),
-    durableRunAttempt: positiveInteger(input.durableRunAttempt, "durableRunAttempt"),
+    durableRunAttempt: nonNegativeInteger(input.durableRunAttempt, "durableRunAttempt"),
     leaseTokenSha256: digest(input.leaseTokenSha256, "leaseTokenSha256"),
     idempotencyKey: identifier(input.idempotencyKey, "idempotencyKey", 512),
   });
@@ -726,6 +753,7 @@ export function normalizeSettleRemoteWorkerAssignmentCommand(
       "expectedAssignmentGeneration",
       "expectedLeaseRevision",
       "leaseTokenSha256",
+      "renewalLeaseTokenSha256",
       "outcome",
       "origin",
       "finalEventSequence",
@@ -740,6 +768,7 @@ export function normalizeSettleRemoteWorkerAssignmentCommand(
     "assignment settlement command",
     [
       "leaseTokenSha256",
+      "renewalLeaseTokenSha256",
       "resultSha256",
       "outputManifestSha256",
       "failureSha256",
@@ -752,9 +781,22 @@ export function normalizeSettleRemoteWorkerAssignmentCommand(
     (input.origin === "worker" &&
       (!("leaseTokenSha256" in input) || "gatewayActorId" in input || "recoveryEvidenceSha256" in input)) ||
     (input.origin === "gateway_recovery" &&
-      ("leaseTokenSha256" in input || !("gatewayActorId" in input) || !("recoveryEvidenceSha256" in input)))
+      ("leaseTokenSha256" in input ||
+        "renewalLeaseTokenSha256" in input ||
+        !("gatewayActorId" in input) ||
+        !("recoveryEvidenceSha256" in input)))
   ) {
     throw new TypeError("Remote worker assignment settlement origin evidence is invalid.");
+  }
+  if (
+    input.origin === "worker" &&
+    input.renewalLeaseTokenSha256 !== undefined &&
+    input.renewalLeaseTokenSha256 === input.leaseTokenSha256
+  ) {
+    throw new TypeError("Remote worker terminal renewal requires a distinct lease token.");
+  }
+  if (input.origin === "worker" && input.outcome === "cancelled" && input.renewalLeaseTokenSha256 !== undefined) {
+    throw new TypeError("Cancelled remote worker settlement cannot renew execution authority.");
   }
   if (input.outcome === "completed" && (!input.resultSha256 || !input.outputManifestSha256 || input.failureSha256)) {
     throw new TypeError("Completed remote worker assignment settlement requires only result and output digests.");
@@ -791,6 +833,11 @@ export function normalizeSettleRemoteWorkerAssignmentCommand(
         ...common,
         origin: "worker" as const,
         leaseTokenSha256: digest(input.leaseTokenSha256, "leaseTokenSha256"),
+        ...(input.renewalLeaseTokenSha256 === undefined
+          ? {}
+          : {
+              renewalLeaseTokenSha256: digest(input.renewalLeaseTokenSha256, "renewalLeaseTokenSha256"),
+            }),
       })
     : Object.freeze({
         ...common,
@@ -1029,7 +1076,7 @@ export function assertRemoteWorkerAssignmentDispatchAuthority(
     throw new TypeError("Remote worker assignment dispatch authority schema version is unsupported.");
   }
   identifier(value.durableRunId, "durableRunId");
-  positiveInteger(value.durableRunAttempt, "durableRunAttempt");
+  nonNegativeInteger(value.durableRunAttempt, "durableRunAttempt");
   identifier(value.dispatchOwnerId, "dispatchOwnerId");
   positiveInteger(value.durableRunVersion, "durableRunVersion");
   isoTimestamp(value.durableRunLeaseExpiresAt, "durableRunLeaseExpiresAt");

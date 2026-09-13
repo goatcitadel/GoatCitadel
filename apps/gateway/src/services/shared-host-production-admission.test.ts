@@ -14,7 +14,7 @@ describe("shared-host production admission wiring", () => {
   it("creates one app-owned lifecycle before runtime construction and reserves deferred init before scheduling", () => {
     const ownerIndex = appSource.indexOf("createAppSharedHostLifecycle(app)");
     const lifecyclePluginIndex = appSource.indexOf("app.register(sharedHostLifecyclePlugin");
-    const storagePluginIndex = appSource.indexOf("app.register(gatewayPlugin)");
+    const storagePluginIndex = appSource.search(/await\s+app\.register\(gatewayPlugin\s*[,)]/u);
     expect(ownerIndex).toBeGreaterThanOrEqual(0);
     expect(lifecyclePluginIndex).toBeGreaterThan(ownerIndex);
     expect(storagePluginIndex).toBeGreaterThan(lifecyclePluginIndex);

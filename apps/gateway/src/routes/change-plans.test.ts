@@ -12,6 +12,17 @@ function build(evolution: Record<string, unknown>) {
 }
 
 describe("Change Plan resource routes", () => {
+  it("binds monitoring verification to actor scope and the supplied revision", async () => {
+    const verifyMonitoringPlan = vi.fn(async () => ({ planId: "plan-1", status: "completed", revision: 6 }));
+    const app = build({ verifyMonitoringPlan });
+    const response = await app.inject({ method: "POST", url: "/api/v1/change-plans/plan-1/verifications", payload: { workspaceId: "default", expectedRevision: 5 } });
+    expect(response.statusCode).toBe(200);
+    expect(verifyMonitoringPlan).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "default", actorId: "operator-test" }), "plan-1", 5);
+    const invalid = await app.inject({ method: "POST", url: "/api/v1/change-plans/plan-1/verifications", payload: { workspaceId: "default", expectedRevision: 5, actorId: "another-operator" } });
+    expect(invalid.statusCode).toBe(400);
+    expect(verifyMonitoringPlan).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
   it("creates only a bounded typed plan intent", async () => {
     const create = vi.fn(async () => ({ planId: "plan-1", status: "awaiting_confirmation", revision: 1 }));
     const app = build({ create });

@@ -1,5 +1,10 @@
 /* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
+import {
+  hasApprovedToolCompletionEvidence,
+  hasApprovedToolPreDispatchEvidence,
+} from "./approved-tool-boundary-evidence.js";
+import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import type {
   ApprovalEffectRecord,
   ApprovalInboxItemState,
@@ -362,6 +367,8 @@ export interface ApprovalEffectsServiceDeps {
   findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
+  prepareRemoteWorkerApprovalHandoff?(approvalId: string): Promise<Record<string, unknown>>;
+  shouldDeferRemoteWorkerApprovalWake?(runId: string, approvalId: string): Promise<boolean>;
   executeApprovedSkillHubLifecycleOperation?(
     operationId: string,
     approvalId: string,
@@ -466,6 +473,7 @@ export interface ApprovalEffectsServiceContext {
   readonly storage: Pick<
     Storage,
     | "approvalEffects"
+    | "approvalEvents"
     | "approvals"
     | "skillHubOperations"
     | "approvalWaitRuns"
@@ -2586,6 +2594,13 @@ export class ApprovalEffectsService {
       return;
     }
     const wake = await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+      if (await this.deps.shouldDeferRemoteWorkerApprovalWake?.(runId, effect.approvalId)) {
+        await this.deferClaimedEffectForRetry(effect, this.workerId,
+          new Error("Worker Chat has not settled its approval wait."), {
+            deliveryState: "retry_scheduled", reason: "remote_worker_wait_not_settled", runId,
+          }, APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS);
+        return undefined;
+      }
       const wakeResult = await this.deps.wakeDurableRun(runId, {
         eventKey: "approval.resolved",
         correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
@@ -2629,6 +2644,7 @@ export class ApprovalEffectsService {
         explicitNonWakeResult: explicitNonWake,
       };
     });
+    if (!wake) return;
     const { result, recoveredResult, explicitNonWakeResult } = wake;
     if (result.outcome === "woke") {
       this.deps.requestRunProcessing(runId);
@@ -2849,7 +2865,29 @@ export class ApprovalEffectsService {
     if (pendingAction.actionType === "code_mode.run") {
       executedAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
     } else {
-      executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId, signal);
+      try {
+        executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId, signal);
+      } catch (error) {
+        if (!(error instanceof RemoteWorkerApprovalResumeRequiredError)) throw error;
+        let handoffError: unknown = error;
+        if (this.deps.prepareRemoteWorkerApprovalHandoff) {
+          try {
+            await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+              const result = await this.deps.prepareRemoteWorkerApprovalHandoff!(effect.approvalId);
+              if (!await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, { result }))
+                throw new Error("Worker approval handoff lost its effect claim.");
+            });
+            return;
+          } catch (error) { handoffError = error; }
+        }
+        await this.deferClaimedEffectForRetry(effect, this.workerId, handoffError, {
+          deliveryState: "retry_scheduled",
+          reason: "remote_worker_resume_required",
+          actionType: pendingAction.actionType,
+          resolutionStatus: "pending",
+        });
+        return;
+      }
     }
 
     if (!(await this.isEffectStillClaimed(effect.effectId))) {
@@ -3124,6 +3162,7 @@ export class ApprovalEffectsService {
     let queuedDurableProjection = false;
     try {
       await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+        let completedToolRunId: string | undefined;
         const completeMaterialization = async () => {
           const completed = await this.ctx.storage.approvalEffects.completeEffect(
             effect.effectId,
@@ -3133,6 +3172,21 @@ export class ApprovalEffectsService {
           );
           if (!completed) {
             throw new Error(`Approval effect ${effect.effectId} lost its materialization completion lease.`);
+          }
+          if (completedToolRunId) {
+            // The effect and its exact Chat receipt become visible together.
+            // A failed completion or patch rolls back both writes.
+            await this.ctx.storage.chatToolRuns.patch(completedToolRunId, {
+              effectDisposition: null,
+              effectOutcomeKind: "concrete",
+              effectEvidence: {
+                version: "goatcitadel.tool-effect.v1",
+                outcomeKind: "concrete",
+                reason: "canonical_effect_receipt_linked",
+                refs: [{ owner: "approval_effect", refId: effect.effectId }],
+              },
+              failureGuidance: "",
+            });
           }
         };
         if (pendingAction.actionType !== "tool.invoke") {
@@ -3154,6 +3208,12 @@ export class ApprovalEffectsService {
         const toolRun = (await this.ctx.storage.chatToolRuns.listByTurn(inlineApproval.turnId)).find(
           (candidate) => candidate.approvalId === effect.approvalId,
         );
+        if (
+          toolRun &&
+          await hasApprovedToolCompletionEvidence(this.ctx.storage, {
+            effect, pendingAction, toolRun, inlineApproval, actionRecord,
+          })
+        ) completedToolRunId = toolRun.toolRunId;
         if (toolRun && toolRun.status !== "executed") {
           const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "completed" });
           await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
@@ -3510,15 +3570,24 @@ export class ApprovalEffectsService {
         (candidate) => candidate.approvalId === input.approvalId,
       );
       if (toolRun && toolRun.status !== "failed") {
-        const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "dispatch_failed" });
+        const beforeDispatch = await hasApprovedToolPreDispatchEvidence(this.ctx.storage, {
+          approvalId: input.approvalId,
+          toolName: input.toolName,
+          auditEventId: input.actionRecord?.auditEventId,
+        });
+        const settlement = buildToolEffectEvidence({
+          potential: "unknown",
+          phase: beforeDispatch ? "pre_dispatch_blocked" : "dispatch_failed",
+        });
         await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
           effectPotential: "unknown",
           effectDisposition: settlement.disposition,
           effectOutcomeKind: settlement.outcomeKind,
           effectEvidence: settlement.evidence,
-          failureGuidance:
-            "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
+          failureGuidance: beforeDispatch
+            ? "Approved execution was blocked before dispatch. Resolve the reported restriction before requesting a new invocation."
+            : "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
           result: input.toolResult,
           error: input.failure.message,
           finishedAt: input.now,

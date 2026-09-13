@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 import {
+  isMcpRequesterProviderAlias,
   MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
   canonicalJsonString,
   mcpRequesterScopeHashMaterial,
@@ -21,6 +22,7 @@ import {
   assertMcpToolCallAuthority,
   assertNormalizedMcpRequesterDiscoveryCatalog,
   createMcpRequesterProviderAlias,
+  matchesMcpRequesterProviderAlias,
   extractMcpRequesterDiscoveryOutputInput,
   issueMcpProfileDiscoveryAuthority,
   issueMcpToolCallAuthority,
@@ -1482,7 +1484,7 @@ function snapshotOutcomeRecord(input: unknown): Readonly<McpProfileDiscoveryOutc
     ] as const) {
       assertOutcomeCanonicalIdentifier(value[field]);
     }
-    if (typeof value.providerAlias !== "string" || !/^mcp__[a-f0-9]{64}$/u.test(value.providerAlias)) {
+    if (!isMcpRequesterProviderAlias(value.providerAlias)) {
       throw new TypeError();
     }
     for (const field of [
@@ -1778,6 +1780,11 @@ export interface McpRequesterScopedProfileFreezeHookInput {
   requesterScopeSha256?: string;
   canonicalToolName: string;
   modelToolName: string;
+  /** Pin a descriptor from the preceding secret-scanned discovery pass. */
+  expectedToolDefinitionSha256?: string;
+  /** Recovery may only reconstruct the exact retained native binding/alias. */
+  expectedBindingSha256?: string;
+  expectedProviderAlias?: string;
 }
 
 /**
@@ -1827,6 +1834,29 @@ export interface McpRequesterScopedProfileFreezeInput {
   shutdownSignal?: AbortSignal;
   revocationSignal?: AbortSignal;
 }
+
+export type McpRequesterScopedCatalogDiscoveryHookInput = Omit<
+  McpRequesterScopedProfileFreezeHookInput,
+  | "canonicalToolName"
+  | "modelToolName"
+  | "expectedToolDefinitionSha256"
+  | "expectedBindingSha256"
+  | "expectedProviderAlias"
+>;
+
+export type McpRequesterScopedCatalogDiscoveryInput = Omit<
+  McpRequesterScopedProfileFreezeInput,
+  "hook" | "outcomes"
+> & { hook: McpRequesterScopedCatalogDiscoveryHookInput };
+
+export interface McpRequesterScopedCatalogFreezeHookInput extends McpRequesterScopedCatalogDiscoveryHookInput {
+  serverId: string;
+  tools: readonly { canonicalToolName: string; expectedToolDefinitionSha256: string }[];
+}
+
+export type McpRequesterScopedCatalogFreezeInput = Omit<McpRequesterScopedProfileFreezeInput, "hook"> & {
+  hook: McpRequesterScopedCatalogFreezeHookInput;
+};
 
 const FREEZE_CURRENT_STATE_KEYS = [
   "actorId",
@@ -1910,20 +1940,23 @@ function serverBindingFields(server: McpRequesterScopedServerSnapshot): {
 }
 
 /**
- * Freeze-side orchestrator (HX-415 slice 7c): the future implementation of the
- * profile-service `resolveMcpRequesterResolutionBinding` hook. It derives the
- * private discovery authority strictly from the authenticated hook identity and
- * live server-owned state, resolves + discovers over the injected driver,
- * normalizes and secret-scans the catalog, records the process-local discovery
- * outcome, and returns the non-secret immutable binding. `authActorSource:
- * none`/missing actor NEVER resolves; static servers return `undefined`
- * untouched. EVERY failure disposes the attempt, reports one content-free
- * taxonomy code through `onDiagnostic`, and returns `undefined` — no resolved
- * value, lease, or raw cause ever escapes this function.
+ * Shared discovery owner for enumeration and final profile freeze. It derives
+ * private authority from the authenticated identity and fresh server state,
+ * resolves and discovers over the injected driver, then secret-scans the
+ * normalized catalog before invoking its synchronous consumer. Every attempt is
+ * disposed before returning, and failures expose only content-free taxonomy.
  */
-export async function resolveRequesterScopedBindingForProfileFreeze(
-  input: McpRequesterScopedProfileFreezeInput,
-): Promise<McpRequesterResolutionBinding | undefined> {
+async function withRequesterScopedProfileDiscovery<T>(
+  input: McpRequesterScopedCatalogDiscoveryInput,
+  consume: (discovery: {
+    catalog: McpNormalizedRequesterDiscoveryCatalog;
+    initial: SnapshotFreezeCurrentState;
+    server: McpRequesterScopedServerSnapshot;
+    discoveryAttemptId: string;
+    actorId: string;
+    actorSource: McpRequesterScopeAuthActorSource;
+  }) => T,
+): Promise<T | undefined> {
   const hook = input.hook;
   if (!hook.authActorId || !isMcpRequesterScopeActorSource(hook.authActorSource)) {
     reportDiagnostic(input.onDiagnostic, "requester_context_missing");
@@ -1934,6 +1967,19 @@ export async function resolveRequesterScopedBindingForProfileFreeze(
   let attempt: McpProfileDiscoveryResolutionAttempt | undefined;
   let attemptOpen = true;
   try {
+    const scopeHash = digest(
+      mcpRequesterScopeHashMaterial({
+        profileId: hook.profileId,
+        turnId: hook.turnId,
+        sessionId: hook.sessionId,
+        workspaceId: hook.workspaceId,
+        authActorId: actorId,
+        authActorSource: actorSource,
+      }),
+    );
+    if (hook.requesterScopeSha256 !== undefined && hook.requesterScopeSha256 !== scopeHash) {
+      throw new McpRequesterResolutionError("requester_scope_mismatch");
+    }
     const initial = snapshotFreezeCurrentState(await input.readCurrentState({}));
     if (!initial) {
       // Static-mode server or missing resolver configuration: not a failure —
@@ -2008,60 +2054,7 @@ export async function resolveRequesterScopedBindingForProfileFreeze(
       extractMcpRequesterDiscoveryOutputInput(server.serverId, discovered.rawToolsListResult),
       input.scanner,
     );
-    const tool = catalog.tools.find((candidate) => candidate.canonicalToolName === hook.canonicalToolName);
-    if (!tool) throw new McpRequesterResolutionError("server_not_callable");
-    const requesterScopeSha256 = digest(
-      mcpRequesterScopeHashMaterial({
-        profileId: hook.profileId,
-        turnId: hook.turnId,
-        sessionId: hook.sessionId,
-        workspaceId: hook.workspaceId,
-        authActorId: actorId,
-        authActorSource: actorSource,
-      }),
-    );
-    if (hook.requesterScopeSha256 !== undefined && hook.requesterScopeSha256 !== requesterScopeSha256) {
-      throw new McpRequesterResolutionError("requester_scope_mismatch");
-    }
-    const material = {
-      schemaVersion: MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
-      mode: "requester_scoped" as const,
-      serverId: server.serverId,
-      toolName: hook.canonicalToolName,
-      resolverId: server.requesterResolution.resolverId,
-      resolverVersion: server.requesterResolution.resolverVersion,
-      resolverConfigGeneration: server.requesterResolution.configGeneration,
-      requesterScopeSha256,
-      serverConfigRevision: server.configurationRevision,
-      serverConfigSha256: mcpRequesterScopedServerConfigHash(server),
-      transportPolicySha256: mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy),
-      callableCatalogSnapshotId: hook.catalogSnapshotId,
-      callableCatalogSha256: hook.callableCatalogSha256,
-      ...(initial.meshActivation === undefined ? {} : { meshActivation: initial.meshActivation }),
-    };
-    const binding = Object.freeze({ ...material, bindingSha256: digest(material) }) as McpRequesterResolutionBinding;
-    assertMcpRequesterResolutionBindingIntegrity(binding);
-    input.outcomes.recordProfileDiscoveryOutcome({
-      profileId: hook.profileId,
-      serverId: server.serverId,
-      canonicalToolName: hook.canonicalToolName,
-      discoveryAttemptId,
-      discoveryAttemptGeneration: 1,
-      rawRemoteToolName: tool.rawRemoteToolName,
-      providerAlias: createMcpRequesterProviderAlias({
-        serverId: server.serverId,
-        rawRemoteToolName: tool.rawRemoteToolName,
-        canonicalToolName: tool.canonicalToolName,
-        normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
-        bindingSha256: binding.bindingSha256,
-      }),
-      normalizedDiscoveryCatalogSha256: catalog.catalogSha256,
-      normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
-      bindingSha256: binding.bindingSha256,
-      requesterScopeSha256,
-      recordedAtMs: (input.now ?? Date.now)(),
-    });
-    return binding;
+    return consume({ catalog, initial, server, discoveryAttemptId, actorId, actorSource });
   } catch (error) {
     reportDiagnostic(input.onDiagnostic, error instanceof McpRequesterResolutionError ? error.code : "resolver_failed");
     return undefined;
@@ -2069,6 +2062,152 @@ export async function resolveRequesterScopedBindingForProfileFreeze(
     attemptOpen = false;
     attempt?.dispose();
   }
+}
+
+/**
+ * First-pass native catalog discovery. Only normalized, secret-scanned tool
+ * descriptions leave this owner; it records no invocation outcome and every
+ * resolution attempt is disposed before the catalog reaches its caller.
+ */
+export async function discoverRequesterScopedCatalogForProfile(
+  input: McpRequesterScopedCatalogDiscoveryInput,
+): Promise<McpNormalizedRequesterDiscoveryCatalog | undefined> {
+  return withRequesterScopedProfileDiscovery(input, ({ catalog }) => catalog);
+}
+
+/** Freeze one selected tool against the final canonical callable catalog. */
+export async function resolveRequesterScopedBindingForProfileFreeze(
+  input: McpRequesterScopedProfileFreezeInput,
+): Promise<McpRequesterResolutionBinding | undefined> {
+  return withRequesterScopedProfileDiscovery(input, (discovery) => {
+    const { binding, outcome } = buildRequesterScopedProfileDiscoveryBinding(
+      input.hook,
+      discovery,
+      (input.now ?? Date.now)(),
+    );
+    input.outcomes.recordProfileDiscoveryOutcome(outcome);
+    return binding;
+  });
+}
+
+/** Revalidate a server's selected descriptors together, with one disposable connection. */
+export async function resolveRequesterScopedCatalogBindingsForProfileFreeze(
+  input: McpRequesterScopedCatalogFreezeInput,
+): Promise<McpRequesterResolutionBinding[] | undefined> {
+  if (input.hook.tools.length === 0) return [];
+  return withRequesterScopedProfileDiscovery(input, (discovery) => {
+    if (
+      input.hook.serverId !== discovery.server.serverId ||
+      input.hook.tools.length > 256 ||
+      new Set(input.hook.tools.map((tool) => tool.canonicalToolName)).size !== input.hook.tools.length
+    ) {
+      throw new McpRequesterResolutionError("requester_context_ambiguous");
+    }
+    // Check every descriptor before recording any outcome. A drifting server
+    // cannot leave a partially authorized batch behind.
+    const selected = input.hook.tools.map((tool) =>
+      buildRequesterScopedProfileDiscoveryBinding(
+        {
+          ...input.hook,
+          ...tool,
+          modelToolName: "",
+        },
+        discovery,
+        (input.now ?? Date.now)(),
+      ),
+    );
+    for (const { outcome } of selected) input.outcomes.recordProfileDiscoveryOutcome(outcome);
+    return selected.map(({ binding }) => binding);
+  });
+}
+
+function buildRequesterScopedProfileDiscoveryBinding(
+  hook: McpRequesterScopedProfileFreezeHookInput,
+  {
+    catalog,
+    initial,
+    server,
+    discoveryAttemptId,
+    actorId,
+    actorSource,
+  }: {
+    catalog: McpNormalizedRequesterDiscoveryCatalog;
+    initial: SnapshotFreezeCurrentState;
+    server: McpRequesterScopedServerSnapshot;
+    discoveryAttemptId: string;
+    actorId: string;
+    actorSource: McpRequesterScopeAuthActorSource;
+  },
+  recordedAtMs: number,
+): { binding: McpRequesterResolutionBinding; outcome: McpProfileDiscoveryOutcomeRecord } {
+  const tool = catalog.tools.find((candidate) => candidate.canonicalToolName === hook.canonicalToolName);
+  if (!tool) throw new McpRequesterResolutionError("server_not_callable");
+  if (
+    hook.expectedToolDefinitionSha256 !== undefined &&
+    hook.expectedToolDefinitionSha256 !== tool.toolDefinitionSha256
+  ) {
+    throw new McpRequesterResolutionError("schema_revalidation_drift");
+  }
+  const requesterScopeSha256 = digest(
+    mcpRequesterScopeHashMaterial({
+      profileId: hook.profileId,
+      turnId: hook.turnId,
+      sessionId: hook.sessionId,
+      workspaceId: hook.workspaceId,
+      authActorId: actorId,
+      authActorSource: actorSource,
+    }),
+  );
+  if (hook.requesterScopeSha256 !== undefined && hook.requesterScopeSha256 !== requesterScopeSha256) {
+    throw new McpRequesterResolutionError("requester_scope_mismatch");
+  }
+  const material = {
+    schemaVersion: MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
+    mode: "requester_scoped" as const,
+    serverId: server.serverId,
+    toolName: hook.canonicalToolName,
+    resolverId: server.requesterResolution.resolverId,
+    resolverVersion: server.requesterResolution.resolverVersion,
+    resolverConfigGeneration: server.requesterResolution.configGeneration,
+    requesterScopeSha256,
+    serverConfigRevision: server.configurationRevision,
+    serverConfigSha256: mcpRequesterScopedServerConfigHash(server),
+    transportPolicySha256: mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy),
+    callableCatalogSnapshotId: hook.catalogSnapshotId,
+    callableCatalogSha256: hook.callableCatalogSha256,
+    ...(initial.meshActivation === undefined ? {} : { meshActivation: initial.meshActivation }),
+  };
+  const binding = Object.freeze({ ...material, bindingSha256: digest(material) }) as McpRequesterResolutionBinding;
+  assertMcpRequesterResolutionBindingIntegrity(binding);
+  const aliasInput = {
+    serverId: server.serverId,
+    rawRemoteToolName: tool.rawRemoteToolName,
+    canonicalToolName: tool.canonicalToolName,
+    normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
+    bindingSha256: binding.bindingSha256,
+  };
+  const providerAlias = hook.expectedProviderAlias ?? createMcpRequesterProviderAlias(aliasInput);
+  if (
+    (hook.expectedBindingSha256 !== undefined && hook.expectedBindingSha256 !== binding.bindingSha256) ||
+    !matchesMcpRequesterProviderAlias(aliasInput, providerAlias)
+  ) {
+    throw new McpRequesterResolutionError("schema_revalidation_drift");
+  }
+  const outcome: McpProfileDiscoveryOutcomeRecord = {
+    profileId: hook.profileId,
+    serverId: server.serverId,
+    canonicalToolName: hook.canonicalToolName,
+    discoveryAttemptId,
+    discoveryAttemptGeneration: 1,
+    rawRemoteToolName: tool.rawRemoteToolName,
+    providerAlias,
+    normalizedDiscoveryCatalogSha256: catalog.catalogSha256,
+    normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
+    bindingSha256: binding.bindingSha256,
+    requesterScopeSha256,
+    recordedAtMs,
+  };
+  return { binding, outcome };
 }
 
 /**

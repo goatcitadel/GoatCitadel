@@ -32,6 +32,7 @@ import {
   withChatTurnRuntimeAuthorityCheckpoint,
 } from "./chat-durable-runtime-authority.js";
 import { markGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
+import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
@@ -175,6 +176,78 @@ describe("approval-resolution-effects-service", () => {
     );
     expect(patchIfStatus.mock.invocationCallOrder[0]).toBeLessThan(completeEffect.mock.invocationCallOrder[0]!);
     expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
+  });
+
+  it("retains worker approval execution across processor restart without waking Chat or changing the request", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const approvalId = "remote-resume-approval";
+      storage.approvals.createDeterministicDetachedWithTtlDuration({
+        approvalId, kind: "tool.invoke", riskLevel: "danger",
+        payload: { toolName: "fs.write" }, preview: {},
+        linkage: { workspaceId: "workspace", sessionId: "session", turnId: "turn", runId: "run" },
+      }, 60_000);
+      storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator" });
+      storage.pendingApprovalActions.upsertPending({
+        approvalId, actionType: "tool.invoke", createdAt: new Date().toISOString(),
+        request: { toolName: "fs.write", args: { path: "result.txt", content: "retained" },
+          sessionId: "session", turnId: "turn", runId: "run" },
+      });
+      const original = storage.pendingApprovalActions.find(approvalId);
+      const action = storage.approvalEffects.upsert({
+        approvalId, effectKind: "pending_action_execute", targetKind: "pending_action", targetId: approvalId, payload: {},
+      });
+      const asyncStorage = createSqliteAsyncStorage(storage);
+      const deps = createApprovalEffectDeps();
+      deps.executeApprovedPendingAction.mockRejectedValue(new RemoteWorkerApprovalResumeRequiredError());
+      const createProcessor = () => new ApprovalEffectsService(
+        { storage: asyncStorage, publishRealtime: vi.fn() } as unknown as ServiceContext, deps,
+      ) as unknown as {
+        workerId: string;
+        handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void>;
+      };
+      const first = createProcessor();
+      const claim = storage.approvalEffects.claimNextPendingEffect(
+        first.workerId, new Date().toISOString(), new Date(Date.now() + 60_000).toISOString(),
+      )!;
+      expect(claim.effectId).toBe(action.effectId);
+      await first.handlePendingActionExecute(claim);
+      expect(storage.pendingApprovalActions.find(approvalId)).toEqual(original);
+      expect(storage.approvalEffects.get(action.effectId)).toMatchObject({
+        status: "running", result: { reason: "remote_worker_resume_required", resolutionStatus: "pending", delivered: false },
+      });
+
+      // A replacement processor reads the retained sibling wait before the
+      // retry is due. It must not infer that approval has executed the tool.
+      const wake = storage.approvalEffects.upsert({
+        approvalId, effectKind: "linked_chat_turn_wake", targetKind: "chat_turn", targetId: "turn",
+        payload: { runId: "run" },
+      });
+      const restarted = createProcessor();
+      const wakeClaim = storage.approvalEffects.claimNextPendingEffect(
+        restarted.workerId, new Date().toISOString(), new Date(Date.now() + 60_000).toISOString(),
+      );
+      // The real repository also keeps this wake unclaimable while its action
+      // is deferred; the handler's sibling guard is a second boundary.
+      expect(wakeClaim).toBeUndefined();
+      let retry: ApprovalEffectRecord | undefined;
+      await vi.waitFor(() => {
+        retry = storage.approvalEffects.claimNextPendingEffect(
+          restarted.workerId, new Date().toISOString(), new Date(Date.now() + 60_000).toISOString(),
+        );
+        expect(retry?.effectId).toBe(action.effectId);
+      }, { timeout: 5_000, interval: 50 });
+      await restarted.handlePendingActionExecute(retry!);
+      expect(storage.approvalEffects.get(action.effectId)).toMatchObject({
+        status: "running", attemptCount: 2, result: { reason: "remote_worker_resume_required" },
+      });
+      expect(storage.approvalEffects.get(wake.effectId).status).toBe("pending");
+      expect(deps.wakeDurableRun).not.toHaveBeenCalled();
+      expect(deps.requestRunProcessing).not.toHaveBeenCalled();
+      expect(deps.executeApprovedPendingAction).toHaveBeenCalledTimes(2);
+      expect(storage.pendingApprovalActions.find(approvalId)).toEqual(original);
+      expect(storage.approvals.get(approvalId).status).toBe("approved");
+    } finally { storage.close(); }
   });
 
   it("defers a previously claimed linked Chat wake until approved action settlement commits", async () => {

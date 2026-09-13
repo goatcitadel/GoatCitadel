@@ -5,6 +5,7 @@ import {
   type RemoteWorkerEffectTransitionState,
 } from "@goatcitadel/contracts";
 import type {
+  RemoteWorkerAssignmentProtectedCommitFence,
   RemoteWorkerEffectReceiptRecord,
   RemoteWorkerEffectRepository,
   RemoteWorkerEffectTransitionRecord,
@@ -31,6 +32,7 @@ import type { AwaitableOwnerMethods } from "./remote-worker-owner-port.js";
  */
 
 export interface RemoteWorkerEffectExecutionFence {
+  protectedAuthority?: RemoteWorkerAssignmentProtectedCommitFence;
   registryWorkspaceId: string;
   assignmentId: string;
   assignmentGeneration: number;
@@ -39,6 +41,7 @@ export interface RemoteWorkerEffectExecutionFence {
 }
 
 export type RemoteWorkerEffectDispatchOutcome =
+  | { kind: "waiting_approval"; approvalRecordSha256: string }
   | {
       kind: "blocked_before_dispatch";
       approvalRecordSha256: string | null;
@@ -65,6 +68,7 @@ export type RemoteWorkerEffectDispatchOutcome =
       boundaryReceiptSha256: string | null;
       sanitizedError: string;
       approvalRecordSha256?: string | null;
+      approvalWaited?: boolean;
     };
 
 export interface RemoteWorkerEffectCoordinatorPort {
@@ -76,9 +80,11 @@ export interface RemoteWorkerEffectCoordinatorPort {
    */
   dispatch(input: {
     fence: RemoteWorkerEffectExecutionFence;
+    intentId: string;
     effectSelector: string;
     canonicalArgsSha256: string;
     workerIdempotencyKey: string;
+    signal?: AbortSignal;
   }): Promise<RemoteWorkerEffectDispatchOutcome>;
 }
 
@@ -87,7 +93,7 @@ export interface RemoteWorkerEffectSettlementDependencies {
   coordinator: RemoteWorkerEffectCoordinatorPort;
 }
 
-type RemoteWorkerEffectRepositoryMethod = "recordIntent" | "appendTransition" | "recordReceipt";
+type RemoteWorkerEffectRepositoryMethod = "recordIntent" | "appendTransition" | "recordReceipt" | "findSettlement" | "readTransitionHistory";
 
 export type RemoteWorkerEffectRepositoryPort = AwaitableOwnerMethods<
   RemoteWorkerEffectRepository,
@@ -101,12 +107,13 @@ export interface DispatchRemoteWorkerEffectInput {
   canonicalArgs: unknown;
   workerIdempotencyKey: string;
   intentIdempotencyKey: string;
+  signal?: AbortSignal;
 }
 
 export interface DispatchRemoteWorkerEffectResult {
   intentId: string;
   transitions: RemoteWorkerEffectTransitionRecord[];
-  receipt: RemoteWorkerEffectReceiptRecord;
+  receipt?: RemoteWorkerEffectReceiptRecord;
 }
 
 export class RemoteWorkerEffectSettlementService {
@@ -131,6 +138,17 @@ export class RemoteWorkerEffectSettlementService {
       workerIdempotencyKey: input.workerIdempotencyKey,
       idempotencyKey: input.intentIdempotencyKey,
     });
+
+    const settled = await this.repository.findSettlement(
+      fence.registryWorkspaceId,
+      fence.assignmentId,
+      fence.assignmentGeneration,
+      intent.intentId,
+    );
+    if (settled) return { intentId: intent.intentId, ...settled };
+    const retained = await this.repository.readTransitionHistory(
+      fence.registryWorkspaceId, fence.assignmentId, fence.assignmentGeneration, intent.intentId,
+    );
 
     const transitions: RemoteWorkerEffectTransitionRecord[] = [];
     let sequence = 0;
@@ -161,13 +179,30 @@ export class RemoteWorkerEffectSettlementService {
     // 2. Invoke ONLY through the canonical coordinator with the execution fence.
     const outcome = await this.coordinator.dispatch({
       fence,
+      intentId: intent.intentId,
       effectSelector: input.effectSelector,
       canonicalArgsSha256: intent.canonicalArgsSha256,
       workerIdempotencyKey: input.workerIdempotencyKey,
+      signal: input.signal,
     });
 
+    // The first approval snapshot remains historical evidence even after its
+    // resolution changes. Reuse its exact correlation and idempotency position.
+    const approvalWait = retained.find((entry) => entry.record.transitionState === "approval_wait");
+    if (approvalWait) {
+      const { schemaVersion, transitionState, ...correlation } = approvalWait.correlation;
+      void schemaVersion; void transitionState;
+      await append("approval_wait", correlation);
+    }
+    if (outcome.kind === "waiting_approval") {
+      if (!approvalWait) await append("approval_wait", {
+        ...emptyCorrelation(), approvalRecordSha256: outcome.approvalRecordSha256,
+      });
+      return { intentId: intent.intentId, transitions };
+    }
+
     // 3. Record ONLY exact correlations to the coordinator's evidence.
-    const receiptState = await this.recordOutcome(append, outcome);
+    const receiptState = await this.recordOutcome(append, outcome, Boolean(approvalWait));
     const terminal = transitions[transitions.length - 1]!;
 
     const receipt = await this.repository.recordReceipt({
@@ -190,10 +225,11 @@ export class RemoteWorkerEffectSettlementService {
       state: RemoteWorkerEffectTransitionState,
       correlation: Omit<RemoteWorkerEffectCorrelation, "schemaVersion" | "transitionState">,
     ) => Promise<void>,
-    outcome: RemoteWorkerEffectDispatchOutcome,
+    outcome: Exclude<RemoteWorkerEffectDispatchOutcome, { kind: "waiting_approval" }>,
+    retainedApprovalWait: boolean,
   ): Promise<RemoteWorkerEffectReceiptState> {
     const approvalRecordSha256 = "approvalRecordSha256" in outcome ? (outcome.approvalRecordSha256 ?? null) : null;
-    if ("approvalWaited" in outcome && outcome.approvalWaited) {
+    if (!retainedApprovalWait && "approvalWaited" in outcome && outcome.approvalWaited) {
       await append("approval_wait", { ...emptyCorrelation(), approvalRecordSha256 });
     }
     switch (outcome.kind) {
@@ -213,12 +249,6 @@ export class RemoteWorkerEffectSettlementService {
           ...emptyCorrelation(),
           approvalRecordSha256,
           externalSideEffectRunId: outcome.externalSideEffectRunId,
-        });
-        await append("external_boundary_started", {
-          ...emptyCorrelation(),
-          approvalRecordSha256,
-          externalSideEffectRunId: outcome.externalSideEffectRunId,
-          boundaryReceiptSha256: outcome.boundaryReceiptSha256,
         });
         await append("completed_no_effect", {
           ...emptyCorrelation(),

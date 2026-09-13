@@ -14,6 +14,7 @@ import {
   decodeWindowsProtectedRevokeKeysetResponse,
   decodeWindowsProtectedSignAdmissionEvidenceResponse,
   decodeWindowsProtectedSignRuntimePopV2Response,
+  decodeWindowsProtectedSignTlsClientCertificateVerifyResponse,
   decodeWindowsHelperRequest,
   decodeWindowsHelperResponse,
   encodeWindowsHelperInspectRequest,
@@ -21,6 +22,7 @@ import {
   encodeWindowsProtectedRevokeKeysetRequest,
   encodeWindowsProtectedSignAdmissionEvidenceRequest,
   encodeWindowsProtectedSignRuntimePopV2Request,
+  encodeWindowsProtectedSignTlsClientCertificateVerifyRequest,
   validateWindowsProtectedRequestPayload,
   type WindowsProtectedCreateKeysetRequest,
   type WindowsProtectedCreateKeysetResult,
@@ -31,6 +33,8 @@ import {
   type WindowsProtectedSignAdmissionEvidenceResult,
   type WindowsProtectedSignRuntimePopV2Request,
   type WindowsProtectedSignRuntimePopV2Result,
+  type WindowsProtectedSignTlsClientCertificateVerifyRequest,
+  type WindowsProtectedSignTlsClientCertificateVerifyResult,
   type WindowsHelperProcessResult,
   type WindowsHelperRequestOpcode,
   type WindowsHelperResponse,
@@ -51,6 +55,8 @@ export const WINDOWS_SERVICE_CLIENT_EXIT_CODE = Object.freeze({
 export interface WindowsServiceClientRunOptions {
   /** Tests may shorten the deadline, but callers cannot exceed the fixed cap. */
   timeoutMs?: number;
+  /** Stop this owned process when its originating connection or operation closes. */
+  signal?: AbortSignal;
 }
 
 export class WindowsServiceClientExitError extends Error {
@@ -97,6 +103,10 @@ export async function runWindowsServiceClientOneShot(
   options: WindowsServiceClientRunOptions = {},
 ): Promise<WindowsHelperProcessResult> {
   const timeoutMs = validateRunInputs(executablePath, requestFrame, options);
+  const signal = options.signal;
+  if (signal?.aborted) {
+    throw new WindowsHelperProcessError("cancelled", "Windows protected service client was cancelled before dispatch");
+  }
 
   return await new Promise<WindowsHelperProcessResult>((resolve, reject) => {
     const stdoutChunks: Buffer[] = [];
@@ -107,7 +117,7 @@ export async function runWindowsServiceClientOneShot(
     let spawned = false;
     let stdinError: Error | undefined;
     let terminalCause: Error | undefined;
-    let terminalReason: "process_error" | "timed_out" | "stdout_limit" | "stderr_limit" | undefined;
+    let terminalReason: "process_error" | "timed_out" | "stdout_limit" | "stderr_limit" | "cancelled" | undefined;
     let terminationTimer: NodeJS.Timeout | undefined;
 
     let child: ChildProcessWithoutNullStreams;
@@ -132,9 +142,10 @@ export async function runWindowsServiceClientOneShot(
     const clearTimers = (): void => {
       if (timer !== undefined) clearTimeout(timer);
       if (terminationTimer !== undefined) clearTimeout(terminationTimer);
+      signal?.removeEventListener("abort", abort);
     };
 
-    const stop = (reason: "process_error" | "timed_out" | "stdout_limit" | "stderr_limit", cause?: Error): void => {
+    const stop = (reason: NonNullable<typeof terminalReason>, cause?: Error): void => {
       if (terminalReason !== undefined || settled) return;
       terminalReason = reason;
       terminalCause = cause;
@@ -168,6 +179,7 @@ export async function runWindowsServiceClientOneShot(
     };
 
     const timer = setTimeout(() => stop("timed_out"), timeoutMs);
+    const abort = (): void => stop("cancelled");
 
     child.once("spawn", () => {
       spawned = true;
@@ -220,6 +232,7 @@ export async function runWindowsServiceClientOneShot(
           timed_out: "Windows protected service client exceeded its fixed deadline",
           stdout_limit: "Windows protected service client exceeded the stdout limit",
           stderr_limit: "Windows protected service client exceeded the stderr limit",
+          cancelled: "Windows protected service client was cancelled; its operation outcome may require reconciliation",
         } as const;
         reject(
           new WindowsHelperProcessError(
@@ -255,7 +268,9 @@ export async function runWindowsServiceClientOneShot(
       // if it emitted protocol bytes without accepting the complete request.
       stdinError = error;
     });
-    child.stdin.end(Buffer.from(requestFrame));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    else child.stdin.end(Buffer.from(requestFrame));
   });
 }
 
@@ -309,6 +324,7 @@ export async function runWindowsServiceClient(
       requestOpcode === WINDOWS_HELPER_OPCODE.CREATE_KEYSET ||
       requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_ADMISSION_EVIDENCE ||
       requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_RUNTIME_POP_V2 ||
+      requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_TLS_CLIENT_CERTIFICATE_VERIFY ||
       requestOpcode === WINDOWS_HELPER_OPCODE.REVOKE_LOCAL_KEYSET;
     if (response.kind === "success" && !isCallable) {
       throw new WindowsHelperProtocolError("protected service client returned success for an unavailable opcode");
@@ -354,6 +370,14 @@ export async function runWindowsServiceClient(
               installedTreeAttestationSha256: envelope.subarray(224, 256),
               installedTreeVerificationReceiptSha256: envelope.subarray(256, 288),
             },
+          });
+        } else if (requestOpcode === WINDOWS_HELPER_OPCODE.SIGN_TLS_CLIENT_CERTIFICATE_VERIFY) {
+          decodeWindowsProtectedSignTlsClientCertificateVerifyResponse(result.stdout, {
+            expectedStateSha256: request.payload.subarray(16, 48),
+            expectedGeneration: request.payload.readBigUInt64LE(52),
+            expectedKeysetReceiptSha256: request.payload.subarray(60, 92),
+            expectedWorkerPublicKeySpkiSha256: request.payload.subarray(96, 128),
+            preimage: request.payload.subarray(128, 128 + request.payload.readUInt32LE(92)),
           });
         } else {
           decodeWindowsProtectedSignRuntimePopV2Response(result.stdout, {
@@ -467,4 +491,30 @@ export async function signWindowsProtectedRuntimePopV2(
     throw new WindowsServiceClientExitError(result);
   }
   return decodeWindowsProtectedSignRuntimePopV2Response(result.stdout, input);
+}
+
+/** One bounded exchange. Installed availability remains owned by the administrator's coordinator. */
+export async function signWindowsProtectedTlsClientCertificateVerify(
+  executablePath: string,
+  input: WindowsProtectedSignTlsClientCertificateVerifyRequest,
+  options: WindowsServiceClientRunOptions = {},
+): Promise<WindowsProtectedSignTlsClientCertificateVerifyResult> {
+  const frame = encodeWindowsProtectedSignTlsClientCertificateVerifyRequest(input);
+  const body = frame.subarray(16);
+  const expected = {
+    expectedStateSha256: body.subarray(16, 48),
+    expectedGeneration: body.readBigUInt64LE(52),
+    expectedKeysetReceiptSha256: body.subarray(60, 92),
+    expectedWorkerPublicKeySpkiSha256: body.subarray(96, 128),
+    preimage: body.subarray(128, 128 + body.readUInt32LE(92)),
+  };
+  const result = await runWindowsServiceClientOneShot(executablePath, frame, options);
+  if (
+    result.exitCode !== WINDOWS_SERVICE_CLIENT_EXIT_CODE.SUCCESS ||
+    result.signal !== null ||
+    result.stderr.byteLength !== 0
+  ) {
+    throw new WindowsServiceClientExitError(result);
+  }
+  return decodeWindowsProtectedSignTlsClientCertificateVerifyResponse(result.stdout, expected);
 }

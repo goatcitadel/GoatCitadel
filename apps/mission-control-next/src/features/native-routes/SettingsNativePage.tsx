@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- SettingsNativePage keeps the settings route frame, the per-section dispatcher, and the exported settings helpers that the helper test suites import; the section components themselves live in ./settings/sections/. */
-import { useCallback } from "react";
+import { lazy, Suspense, useCallback } from "react";
+import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
+import { DraftLeaveDialog } from "./library/DraftLeaveDialog";
 import {
   providerTemplates,
   type AgenticRunListItem,
@@ -34,34 +36,31 @@ import {
   type OpenAICodexOAuthStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getRouteReleaseScope, normalizeAppRoute, routeKicker, type AppRoute } from "@next/app/route-model";
-import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
-  describeDirtySections,
-  useAnySectionDirty,
   useBeforeUnloadGuard,
   useNavigateGuard,
 } from "./library/use-form-dirty";
 import "./native-routes.css";
 import { BudgetSection } from "./settings/sections/BudgetSection";
-import { TrustPolicySection } from "./settings/sections/TrustPolicySection";
-import { WorkspaceCapabilitiesSection } from "./settings/sections/WorkspaceCapabilitiesSection";
-import { CitadelCapabilitiesSection } from "./settings/sections/CitadelCapabilitiesSection";
+const TrustPolicySection = lazy(() => import("./settings/sections/TrustPolicySection").then((module) => ({ default: module.TrustPolicySection })));
+const WorkspaceCapabilitiesSection = lazy(() => import("./settings/sections/WorkspaceCapabilitiesSection").then((module) => ({ default: module.WorkspaceCapabilitiesSection })));
+const CitadelCapabilitiesSection = lazy(() => import("./settings/sections/CitadelCapabilitiesSection").then((module) => ({ default: module.CitadelCapabilitiesSection })));
 import { UnknownSettingsSection } from "./settings/sections/UnknownSettingsSection";
-import { LocalAiSection } from "./settings/sections/LocalAiSection";
-import { AccessSection } from "./settings/sections/AccessSection";
+const LocalAiSection = lazy(() => import("./settings/sections/LocalAiSection").then((module) => ({ default: module.LocalAiSection })));
+const AccessSection = lazy(() => import("./settings/sections/AccessSection").then((module) => ({ default: module.AccessSection })));
 import { GeneralSection } from "./settings/sections/GeneralSection";
-import { PersonalitiesSection } from "./settings/sections/PersonalitiesSection";
-import { ChannelsSection } from "./settings/sections/ChannelsSection";
-import { ToolsSection } from "./settings/sections/ToolsSection";
-import { HooksSection } from "./settings/sections/HooksSection";
-import { RuntimeSection } from "./settings/sections/RuntimeSection";
-import { WorkspacesSection } from "./settings/sections/WorkspacesSection";
-import { OnboardingSection } from "./settings/sections/OnboardingSection";
-import { AddonsSection } from "./settings/sections/AddonsSection";
-import { PermissionsSection } from "./settings/sections/PermissionsSection";
-import { McpSection } from "./settings/sections/McpSection";
-import { IntegrationsSection } from "./settings/sections/IntegrationsSection";
-import { ProvidersSection } from "./settings/sections/ProvidersSection";
+const PersonalitiesSection = lazy(() => import("./settings/sections/PersonalitiesSection").then((module) => ({ default: module.PersonalitiesSection })));
+const ChannelsSection = lazy(() => import("./settings/sections/ChannelsSection").then((module) => ({ default: module.ChannelsSection })));
+const ToolsSection = lazy(() => import("./settings/sections/ToolsSection").then((module) => ({ default: module.ToolsSection })));
+const HooksSection = lazy(() => import("./settings/sections/HooksSection").then((module) => ({ default: module.HooksSection })));
+const RuntimeSection = lazy(() => import("./settings/sections/RuntimeSection").then((module) => ({ default: module.RuntimeSection })));
+const WorkspacesSection = lazy(() => import("./settings/sections/WorkspacesSection").then((module) => ({ default: module.WorkspacesSection })));
+const OnboardingSection = lazy(() => import("./settings/sections/OnboardingSection").then((module) => ({ default: module.OnboardingSection })));
+const AddonsSection = lazy(() => import("./settings/sections/AddonsSection").then((module) => ({ default: module.AddonsSection })));
+const PermissionsSection = lazy(() => import("./settings/sections/PermissionsSection").then((module) => ({ default: module.PermissionsSection })));
+const McpSection = lazy(() => import("./settings/sections/McpSection").then((module) => ({ default: module.McpSection })));
+const IntegrationsSection = lazy(() => import("./settings/sections/IntegrationsSection").then((module) => ({ default: module.IntegrationsSection })));
+const ProvidersSection = lazy(() => import("./settings/sections/ProvidersSection").then((module) => ({ default: module.ProvidersSection })));
 import {
   SettingsActionList,
   SettingsButtonRow,
@@ -146,9 +145,9 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
     navigate: guardedNavigate,
     pending,
     confirmDiscard,
+    confirmKeep,
     cancelDiscard,
   } = useNavigateGuard<AppRoute>(props.navigate, isSameRoute);
-  const dirtyKeys = useAnySectionDirty();
   const guardedProps: SettingsNativePageProps = { ...props, navigate: guardedNavigate };
 
   return (
@@ -159,21 +158,11 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
       description={descriptionForSettingsSection(section)}
       releaseStatus={getRouteReleaseScope(props.route).status}
     >
-      {renderSettingsSection({ ...guardedProps, section })}
-      <ConfirmModal
-        open={pending !== null}
-        title="Discard unsaved changes?"
-        message={
-          dirtyKeys.length > 0
-            ? `You have unsaved changes in ${describeDirtySections(dirtyKeys)}.`
-            : "You have unsaved changes."
-        }
-        confirmLabel="Discard changes"
-        cancelLabel="Stay on this page"
-        danger
-        onConfirm={confirmDiscard}
-        onCancel={cancelDiscard}
-      />
+      <Suspense key={`${section}:${props.activeWorkspaceId}:${props.activeCitadelId ?? "global"}`} fallback={<BlocksShuffleLoader label={`Loading ${labelForSettingsSection(section)}`} />}>
+        {renderSettingsSection({ ...guardedProps, section })}
+      </Suspense>
+      <DraftLeaveDialog open={pending !== null} keys={pending?.keys ?? []}
+        onContinue={confirmKeep} onDiscard={confirmDiscard} onCancel={cancelDiscard} />
     </SettingsPageFrame>
   );
 }
@@ -292,6 +281,7 @@ export function buildProviderEditorDraft(
     googleCloud?: LlmProviderConfig["googleCloud"];
     apiKeySource?: string;
     apiKeyRef?: string;
+    apiKeyEnv?: string;
   } | null,
 ): ProviderEditorDraft {
   return {
@@ -301,7 +291,7 @@ export function buildProviderEditorDraft(
     apiStyle: provider?.apiStyle ?? "openai-responses",
     defaultModel: provider?.defaultModel ?? "",
     authMode: provider?.authMode ?? "",
-    apiKeyEnv: provider?.apiKeySource === "env" ? (provider.apiKeyRef ?? "") : "",
+    apiKeyEnv: provider?.apiKeyEnv ?? (provider?.apiKeySource === "env" ? (provider.apiKeyRef ?? "") : ""),
     googleProjectId: provider?.googleCloud?.projectId ?? "",
     googleProjectIdEnv: provider?.googleCloud?.projectIdEnv ?? "",
     googleLocation: provider?.googleCloud?.location ?? "",

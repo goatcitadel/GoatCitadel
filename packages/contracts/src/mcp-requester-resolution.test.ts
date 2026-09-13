@@ -228,6 +228,19 @@ describe("requester-scoped MCP contracts", () => {
     ).toThrow(/opaque full-digest/);
   });
 
+  it("accepts full-digest provider-safe aliases and retained hex aliases, rejecting truncation and noncanonical padding", () => {
+    for (const providerAlias of [`mcp__${"A".repeat(43)}`, `mcp__${"f".repeat(64)}`]) {
+      expect(mcpToolCallAuthorityHashMaterial({ ...toolCallAuthorityInput(), providerAlias }).providerAlias).toBe(
+        providerAlias,
+      );
+    }
+    for (const providerAlias of [`mcp__${"A".repeat(42)}`, `mcp__${"A".repeat(44)}`, `mcp__${"A".repeat(42)}B`]) {
+      expect(() => mcpToolCallAuthorityHashMaterial({ ...toolCallAuthorityInput(), providerAlias })).toThrow(
+        /opaque full-digest/,
+      );
+    }
+  });
+
   it("domain-separates normalized tool, catalog, and provider alias materials", () => {
     const tool = {
       serverId: "tenant-mcp",

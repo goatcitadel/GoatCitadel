@@ -64,6 +64,9 @@ function createGatewayHarness() {
     integrationConnections: {
       get: vi.fn(() => createDiscordConnection()),
     },
+    inboundChannelEvents: {
+      latestAcceptedAt: vi.fn(async () => undefined),
+    },
     systemSettings: {
       get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),
       set: vi.fn((key: string, value: unknown) => {
@@ -198,6 +201,13 @@ describe("GatewayService Discord parity seams", () => {
     });
     expect(status.lastReadyAt).toBe("2026-03-31T00:06:00.000Z");
     expect(status.lastInboundAt).toBe("2026-03-31T00:07:00.000Z");
+    gateway.storage.inboundChannelEvents.latestAcceptedAt.mockResolvedValue("2026-03-31T00:09:00.000Z");
+    const refreshed = await integrationChannel.getIntegrationConnectionChannelRuntimeStatus(connection.connectionId);
+    expect(refreshed.lastInboundAt).toBe("2026-03-31T00:09:00.000Z");
+    expect(gateway.storage.inboundChannelEvents.latestAcceptedAt).toHaveBeenCalledWith(
+      "discord",
+      connection.connectionId,
+    );
     expect(
       (await integrationChannel.getIntegrationConnectionChannelCapabilities(connection.connectionId)).supportedActions,
     ).not.toContain("channel.presence");

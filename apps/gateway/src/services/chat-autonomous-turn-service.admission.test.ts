@@ -543,6 +543,85 @@ async function finalizeRealAutonomousRun(
 }
 
 describe("deterministic autonomous Chat child admission", () => {
+  it("creates and reuses a cron session when the real storage lookup reports it missing", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goat-cron-new-session-"));
+    const storage = new Storage({
+      dbPath: path.join(root, "test.db"),
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    try {
+      const { deps, createDurableRun } = buildDeps({
+        getSession: (sessionId) => asyncStorage.sessions.getBySessionId(sessionId),
+        storage: {
+          sessions: asyncStorage.sessions,
+          chatSessionMeta: asyncStorage.chatSessionMeta,
+          chatSessionPrefs: asyncStorage.chatSessionPrefs,
+          chatSessionBindings: asyncStorage.chatSessionBindings,
+          runImmediateTransaction: asyncStorage.runImmediateTransaction,
+        } as ChatAutonomousTurnDeps["storage"],
+      });
+      const input = {
+        job: {
+          jobId: CRON_TOKEN.jobId,
+          name: "Weekly review",
+          action: "agent_turn",
+          schedule: "0 9 * * 1",
+          enabled: true,
+        } as CronJobRecord,
+        runId: CRON_TOKEN.runId,
+        config: { prompt: "Review the external repositories." },
+        cronRun: CRON_TOKEN,
+      };
+      const first = await runCronAgentTurn(deps, input);
+      const replay = await runCronAgentTurn(deps, input);
+      expect(first).toMatchObject({
+        mode: "agent_turn",
+        durableRunId: buildCronChatAdmissionIdentity(CRON_TOKEN).durableRunId,
+      });
+      expect(replay).toEqual(first);
+      expect(storage.sessions.getBySessionId(first.sessionId!)).toMatchObject({
+        account: "scheduler",
+        channel: "mission",
+      });
+      expect(storage.chatSessionMeta.get(first.sessionId!)).toMatchObject({
+        workspaceId: "default",
+        origin: "system",
+        includeInHistory: false,
+      });
+      expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(1);
+      expect(createDurableRun).toHaveBeenCalledTimes(1);
+    } finally {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat an unavailable session store as a missing cron session", async () => {
+    const failure = new Error("session store unavailable");
+    const { deps, prepareAgentChatTurn, createDurableRun } = buildDeps({
+      getSession: vi.fn().mockRejectedValue(failure),
+    });
+    await expect(
+      runCronAgentTurn(deps, {
+        job: {
+          jobId: CRON_TOKEN.jobId,
+          name: "Weekly review",
+          action: "agent_turn",
+          schedule: "0 9 * * 1",
+          enabled: true,
+        } as CronJobRecord,
+        runId: CRON_TOKEN.runId,
+        config: { prompt: "Review the external repositories." },
+        cronRun: CRON_TOKEN,
+      }),
+    ).rejects.toBe(failure);
+    expect(deps.ensureChatSessionRuntimeGrants).not.toHaveBeenCalled();
+    expect(prepareAgentChatTurn).not.toHaveBeenCalled();
+    expect(createDurableRun).not.toHaveBeenCalled();
+  });
+
   it("derives byte-stable, domain-specific child ids from the canonical cron run id", () => {
     const first = buildCronChatAdmissionIdentity(CRON_TOKEN);
     const replay = buildCronChatAdmissionIdentity({ ...CRON_TOKEN });

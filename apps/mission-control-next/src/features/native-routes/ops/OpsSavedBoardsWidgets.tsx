@@ -1,3 +1,4 @@
+import { DetailInspector } from "../../../components/DetailInspector";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { OpsSavedBoardPlacement } from "@goatcitadel/contracts";
 import { fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/agentic";
@@ -10,6 +11,9 @@ import type { NativeRoutePagesProps } from "../types";
 
 interface OpsSavedBoardsWidgetProps {
   placement: OpsSavedBoardPlacement;
+  inspected?: boolean;
+  onInspect?: () => void;
+  onCloseInspector?: () => void;
   workspaceId: string;
   boardGeneration: number;
   theme?: string;
@@ -18,7 +22,7 @@ interface OpsSavedBoardsWidgetProps {
 
 type WidgetLoadState<T> =
   | { status: "loading"; data: null; error: null }
-  | { status: "ready"; data: T; error: null }
+  | { status: "ready"; data: T; error: null; fetchedAt: string }
   | { status: "error"; data: null; error: string };
 
 export function OpsSavedBoardsWidget(props: OpsSavedBoardsWidgetProps) {
@@ -40,6 +44,9 @@ export function OpsSavedBoardsWidget(props: OpsSavedBoardsWidgetProps) {
           sourceLabel="Blocked"
           sourceRoute={{ area: "ops", section: "boards", theme: props.theme }}
           navigate={props.navigate}
+          inspected={props.inspected}
+          onInspect={props.onInspect}
+          onCloseInspector={props.onCloseInspector}
         >
           <p className="mc-next-ops-board-widget-empty" role="alert">
             This saved placement is not in the trusted built-in widget registry.
@@ -68,6 +75,9 @@ function AgenticRunKanbanWidget(props: OpsSavedBoardsWidgetProps) {
       sourceLabel="Canonical agentic runs"
       sourceRoute={{ area: "ops", section: "kanban", theme: props.theme }}
       navigate={props.navigate}
+      inspected={props.inspected}
+      onInspect={props.onInspect}
+      onCloseInspector={props.onCloseInspector}
       state={load.state}
       onRetry={load.retry}
     >
@@ -102,6 +112,9 @@ function ApprovalQueueSummaryWidget(props: OpsSavedBoardsWidgetProps) {
       sourceLabel="Canonical approvals"
       sourceRoute={{ area: "ops", section: "approvals", theme: props.theme }}
       navigate={props.navigate}
+      inspected={props.inspected}
+      onInspect={props.onInspect}
+      onCloseInspector={props.onCloseInspector}
       state={load.state}
       onRetry={load.retry}
     >
@@ -137,6 +150,9 @@ function RuntimeTruthSummaryWidget(props: OpsSavedBoardsWidgetProps) {
       sourceLabel="Canonical host truth"
       sourceRoute={{ area: "ops", section: "runtime", theme: props.theme }}
       navigate={props.navigate}
+      inspected={props.inspected}
+      onInspect={props.onInspect}
+      onCloseInspector={props.onCloseInspector}
       state={load.state}
       onRetry={load.retry}
     >
@@ -173,6 +189,9 @@ function TaskStatusSummaryWidget(props: OpsSavedBoardsWidgetProps) {
       sourceLabel="Canonical task lifecycle"
       sourceRoute={{ area: "ops", section: "kanban", theme: props.theme }}
       navigate={props.navigate}
+      inspected={props.inspected}
+      onInspect={props.onInspect}
+      onCloseInspector={props.onCloseInspector}
       state={load.state}
       onRetry={load.retry}
     >
@@ -204,6 +223,9 @@ function UsageCostSummaryWidget(props: OpsSavedBoardsWidgetProps) {
       sourceLabel="Canonical Gateway aggregate"
       sourceRoute={{ area: "ops", section: "costs", theme: props.theme }}
       navigate={props.navigate}
+      inspected={props.inspected}
+      onInspect={props.onInspect}
+      onCloseInspector={props.onCloseInspector}
       state={load.state}
       onRetry={load.retry}
     >
@@ -282,6 +304,9 @@ function WidgetChrome({
   navigate,
   state,
   onRetry,
+  inspected,
+  onInspect,
+  onCloseInspector,
   children,
 }: {
   label: string;
@@ -290,16 +315,17 @@ function WidgetChrome({
   navigate: NativeRoutePagesProps["navigate"];
   state?: WidgetLoadState<unknown>;
   onRetry?: () => void;
+  inspected?: boolean;
+  onInspect?: () => void;
+  onCloseInspector?: () => void;
   children: ReactNode;
 }) {
   return (
     <article className="mc-next-ops-board-widget" aria-label={label} aria-busy={state?.status === "loading"}>
       <header className="mc-next-ops-board-widget-header">
         <div>
-          <span className="mc-next-ops-board-widget-kicker">Projected summary</span>
           <h3>{label}</h3>
         </div>
-        <span className="mc-next-ops-board-widget-source">{sourceLabel}</span>
       </header>
       <div className="mc-next-ops-board-widget-body" aria-live="polite">
         {state?.status === "loading" ? (
@@ -318,10 +344,36 @@ function WidgetChrome({
         )}
       </div>
       <footer className="mc-next-ops-board-widget-footer">
+        {onInspect ? (
+          <NativeButton variant="outline" onClick={onInspect}>
+            Tile details
+          </NativeButton>
+        ) : null}
         <NativeButton variant="ghost" onClick={() => navigate(sourceRoute)}>
           Open source
         </NativeButton>
       </footer>
+      <DetailInspector open={Boolean(inspected)} title={label} onClose={() => onCloseInspector?.()}>
+        <p>{sourceLabel}</p>
+        <p>
+          {state?.status === "ready"
+            ? "Fetched " + state.fetchedAt
+            : state?.status === "error"
+              ? "Source unavailable"
+              : "Source not loaded"}
+        </p>
+        <p>
+          This tile summarizes a bounded source read. Open its source for the complete record and available actions.
+        </p>
+        {state?.status === "ready" ? (
+          children
+        ) : state?.status === "error" ? (
+          <p role="alert">{state.error}</p>
+        ) : (
+          <p role="status">Loading this source…</p>
+        )}
+        <NativeButton onClick={() => navigate(sourceRoute)}>Open source</NativeButton>
+      </DetailInspector>
     </article>
   );
 }
@@ -372,7 +424,8 @@ function useWidgetData<T>(workspaceId: string, boardGeneration: number, loader: 
     void loaderRef
       .current()
       .then((data) => {
-        if (active && requestRef.current === requestId) setState({ status: "ready", data, error: null });
+        if (active && requestRef.current === requestId)
+          setState({ status: "ready", data, error: null, fetchedAt: new Date().toISOString() });
       })
       .catch((error: unknown) => {
         if (active && requestRef.current === requestId) {
@@ -400,6 +453,6 @@ function formatCurrency(value: number): string {
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: value < 1 ? 3 : 2,
+    maximumFractionDigits: value < 1 ? 6 : 2,
   }).format(value);
 }

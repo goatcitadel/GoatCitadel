@@ -4,6 +4,11 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default"><SolidColorBrush x:Key="GoatAccentBrush" Color="#65D1C5"/></ResourceDictionary>
+                <ResourceDictionary x:Key="Light"><SolidColorBrush x:Key="GoatAccentBrush" Color="#006B62"/></ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast"><SolidColorBrush x:Key="GoatAccentBrush" Color="{ThemeResource SystemColorHighlightColor}"/></ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>

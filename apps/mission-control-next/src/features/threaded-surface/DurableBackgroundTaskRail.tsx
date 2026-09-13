@@ -318,7 +318,7 @@ function BackgroundTaskCard({
               type="button"
               className="mc-next-background-task__approval"
               key={approval.approvalId}
-              onClick={onOpenApprovals}
+              onClick={() => onOpenApprovals?.()}
               disabled={!onOpenApprovals}
             >
               <span>{approval.status}</span>
