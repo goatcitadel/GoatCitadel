@@ -7,8 +7,9 @@ import { useUnifiedSidebar } from "../app/UnifiedSidebar";
 import "./detail-inspector.css";
 
 /** Stable children across viewport changes; only the sheet's modality changes. */
-export function DetailInspector({ open, title, subtitle, children, actions, pinned = false, onTogglePinned, onClose }: {
+export function DetailInspector({ open, title, subtitle, children, actions, owner = "feature", pinned = false, onTogglePinned, onClose }: {
   open: boolean; title: string; subtitle?: ReactNode; children: ReactNode; actions?: ReactNode;
+  owner?: "shell" | "feature";
   pinned?: boolean; onTogglePinned?: () => void; onClose: () => void;
 }) {
   const compact = useMediaQuery("(max-width: 1179px)");
@@ -49,7 +50,7 @@ export function DetailInspector({ open, title, subtitle, children, actions, pinn
   if (!visible) return null;
   return <>
     {compact ? <div className="mc-next-detail-scrim" aria-hidden="true" onClick={onClose} /> : null}
-    <aside ref={ref} className="mc-next-detail-inspector" role={compact ? "dialog" : "region"} aria-modal={compact ? true : undefined} aria-labelledby={headingId} tabIndex={-1}>
+    <aside ref={ref} className="mc-next-detail-inspector" data-inspector-owner={owner} role={compact ? "dialog" : "region"} aria-modal={compact ? true : undefined} aria-labelledby={headingId} tabIndex={-1}>
       <header><div><h2 id={headingId} ref={headingRef} tabIndex={-1}>{title}</h2>{subtitle ? <div className="mc-next-detail-subtitle">{subtitle}</div> : null}</div>
         <div className="mc-next-detail-actions">{actions}{onTogglePinned ? <NativeButton variant="ghost" aria-label={pinned ? "Unpin details" : "Pin details"} aria-pressed={pinned} onClick={onTogglePinned}>{pinned ? <PinOff size={16} /> : <Pin size={16} />}</NativeButton> : null}<NativeButton variant="ghost" aria-label="Close details" onClick={onClose}><X size={18} /></NativeButton></div>
       </header>

@@ -7,6 +7,7 @@ import {
   MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
   buildMcpRequesterScopedTurnContextFromCapabilityProfile,
   createMcpRequesterScopedTurnContext,
+  matchesMcpRequesterScopedTurnContextProfile,
   readMcpRequesterScopedTurnContext,
   type McpRequesterScopedToolCallTurnContext,
 } from "./mcp-requester-resolution-service.js";
@@ -161,6 +162,47 @@ describe("McpRequesterScopedTurnContextHandle (HX-415 slice 7d)", () => {
     const malformed = profileRecord({ authActorId: "operator-1", authActorSource: "token" });
     (malformed.hashes as { profileHash: string }).profileHash = "NOT-A-SHA";
     expect(buildMcpRequesterScopedTurnContextFromCapabilityProfile(malformed)).toBeUndefined();
+  });
+
+  it("compares only genuine handles with the canonical capability profile", () => {
+    const profile = profileRecord({ authActorId: "operator-1", authActorSource: "token" });
+    const handle = buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile);
+    const context = readMcpRequesterScopedTurnContext(handle)!;
+    expect(matchesMcpRequesterScopedTurnContextProfile(handle, profile)).toBe(true);
+    for (const forged of [context, { ...context }, undefined, null, "context"]) {
+      expect(matchesMcpRequesterScopedTurnContextProfile(forged, profile)).toBe(false);
+    }
+    expect(readMcpRequesterScopedTurnContext(handle)).toEqual(context);
+    expect(() => JSON.stringify(handle)).toThrow();
+  });
+
+  it("rejects changed scope, hashes and composition generations in an otherwise genuine handle", () => {
+    const profile = profileRecord({ authActorId: "operator-1", authActorSource: "token" });
+    const context = readMcpRequesterScopedTurnContext(
+      buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile),
+    )!;
+    for (const field of Object.keys(context) as Array<keyof McpRequesterScopedToolCallTurnContext>) {
+      const value = context[field];
+      const changed = field === "actorSource" ? "basic" : typeof value === "number" ? value + 1 : /^[a-f0-9]{64}$/u.test(value) ? "0".repeat(64) : `${value}-changed`;
+      const handle = createMcpRequesterScopedTurnContext({ ...context, [field]: changed });
+      expect(matchesMcpRequesterScopedTurnContextProfile(handle, profile), field).toBe(false);
+    }
+  });
+
+  it("rejects missing or changed canonical identity and malformed profile records", () => {
+    const profile = profileRecord({ authActorId: "operator-1", authActorSource: "token" });
+    const handle = buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile);
+    for (const canonical of [
+      profileRecord({ authActorId: "operator-2", authActorSource: "token" }),
+      profileRecord({ authActorId: "operator-1", authActorSource: "none" }),
+      profileRecord({}),
+      { ...profile, hashes: { ...profile.hashes, profileHash: "INVALID" } },
+      { ...profile, catalog: { ...profile.catalog, snapshotId: "replacement-snapshot" } },
+      undefined,
+      {},
+    ]) {
+      expect(matchesMcpRequesterScopedTurnContextProfile(handle, canonical as typeof profile)).toBe(false);
+    }
   });
 
   it("keeps turn-context construction scoped to the runner, the gateway composition, and the definition site", () => {

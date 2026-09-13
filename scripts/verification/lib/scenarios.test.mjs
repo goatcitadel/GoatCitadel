@@ -219,7 +219,7 @@ test("Mission Control Next shell interaction targets Route details instead of Ch
       return { first: () => routeDetailsButton };
     },
     locator(selector) {
-      assert.equal(selector, ".mc-next-shell-inspector");
+      assert.equal(selector, '[data-inspector-owner="shell"]');
       return { isVisible: async () => inspectorVisible };
     },
     async waitForTimeout() {},
@@ -271,7 +271,7 @@ test("Mission Control Next shell interaction reaches Route details through the t
       return { first: () => ({ isVisible: async () => false }) };
     },
     locator(selector) {
-      assert.equal(selector, ".mc-next-shell-inspector");
+      assert.equal(selector, '[data-inspector-owner="shell"]');
       return {
         async waitFor({ state }) {
           assert.equal(state, "visible");
@@ -322,20 +322,17 @@ test("mobile Chat proof rejects shell inspector ownership and opens threaded Act
   const page = {
     getByRole(role, options) {
       assert.equal(role, "button");
+      if (options.name.test("Activity")) {
+        assert.equal(options.name.test("Hide activity"), true);
+        assert.equal(options.name.test("Open Route details"), false);
+        return { first: () => activityButton };
+      }
       requestedRouteDetailsName = options.name;
       return { count: async () => 0 };
     },
     locator(selector) {
-      if (selector === ".mc-next-shell-inspector") {
+      if (selector === '[data-inspector-owner="shell"]') {
         return { count: async () => 0 };
-      }
-      if (selector === ".mc-next-threaded-mobile-bar .mc-next-threaded-menu-button") {
-        return {
-          filter({ hasText }) {
-            assert.equal(hasText.test("Activity"), true);
-            return { first: () => activityButton };
-          },
-        };
       }
       if (selector === '.mc-next-threaded-context-panel[aria-label="Thread utility drawer"]') {
         return { first: () => activityPanel };
@@ -368,11 +365,25 @@ test("mobile Chat proof fails closed when the generic Route details control is p
       return { count: async () => 1 };
     },
     locator(selector) {
-      assert.equal(selector, ".mc-next-shell-inspector");
+      assert.equal(selector, '[data-inspector-owner="shell"]');
       return { count: async () => 0 };
     },
   };
 
+  await assert.rejects(
+    () => openMissionControlNextThreadedActivity(page),
+    /generic Route details inspector instead of threaded Activity/,
+  );
+});
+
+test("mobile Chat proof rejects a shell-owned inspector even without its toggle", async () => {
+  const page = {
+    getByRole() { return { count: async () => 0 }; },
+    locator(selector) {
+      assert.equal(selector, '[data-inspector-owner="shell"]');
+      return { count: async () => 1 };
+    },
+  };
   await assert.rejects(
     () => openMissionControlNextThreadedActivity(page),
     /generic Route details inspector instead of threaded Activity/,
@@ -405,8 +416,8 @@ test("mobile shell proof exercises accessible scope controls and the drawer Comm
     ["Active Citadel", visibleLocator("Active Citadel")],
     ["Active Workspace", visibleLocator("Active Workspace")],
     [
-      "Open Command Palette",
-      visibleLocator("Open Command Palette", () => {
+      "Command Palette",
+      visibleLocator("Command Palette", () => {
         railVisible = false;
         paletteVisible = true;
       }),
@@ -419,6 +430,12 @@ test("mobile shell proof exercises accessible scope controls and the drawer Comm
     ],
     ["Close navigation", closeNavigation],
   ]);
+  rail.getByRole = (role, { name, exact }) => {
+    assert.equal(role, "button");
+    assert.equal(name, "Command Palette");
+    assert.equal(exact, true);
+    return { first: () => controls.get(name) };
+  };
   const page = {
     locator(selector) {
       assert.equal(selector, ".mc-next-rail.open");
@@ -430,6 +447,7 @@ test("mobile shell proof exercises accessible scope controls and the drawer Comm
         return { first: () => visibleLocator("palette") };
       }
       if (role === "combobox" || role === "button") {
+        assert.notEqual(name, "Command Palette", "the palette action must belong to the navigation drawer");
         assert.ok(controls.has(name), `unexpected accessible control: ${String(name)}`);
         return { first: () => controls.get(name) };
       }
@@ -453,7 +471,7 @@ test("mobile shell proof exercises accessible scope controls and the drawer Comm
   const result = await exerciseMissionControlNextMobileRail(page);
 
   assert.equal(result.railCloseButton, closeNavigation);
-  assert.deepEqual(activated, ["Open Command Palette", "Open navigation"]);
+  assert.deepEqual(activated, ["Command Palette", "Open navigation"]);
   assert.equal(railVisible, true);
   assert.equal(paletteVisible, false);
 });

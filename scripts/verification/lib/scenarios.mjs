@@ -4410,7 +4410,7 @@ export async function performVerificationInteraction(page, interaction, packageN
     return;
   }
   if (interaction === "open-inspector" && packageName === NEXT_UI_PACKAGE) {
-    const inspector = page.locator(".mc-next-detail-inspector");
+    const inspector = page.locator('[data-inspector-owner="shell"]');
     const routeDetailsButton = page.getByRole("button", { name: /^(Open|Hide) Route details$/i }).first();
     if (!(await routeDetailsButton.isVisible().catch(() => false))) {
       const overflowButton = page.getByRole("button", { name: /^More controls$/i }).first();
@@ -6133,7 +6133,7 @@ function formatBrowserScenarioFailure(error) {
 
 export async function openMissionControlNextThreadedActivity(page) {
   const routeDetailsControl = page.getByRole("button", { name: /^(Open|Hide) Route details$/i });
-  const shellInspector = page.locator(".mc-next-shell-inspector");
+  const shellInspector = page.locator('[data-inspector-owner="shell"]');
   if ((await routeDetailsControl.count()) > 0 || (await shellInspector.count()) > 0) {
     throw new Error("mobile Chat exposed the generic Route details inspector instead of threaded Activity");
   }

@@ -2473,6 +2473,24 @@ export function readMcpRequesterScopedTurnContext(input: unknown): McpRequesterS
   return (input as McpRequesterScopedTurnContextValue)[readRequesterScopedTurnContextSymbol]();
 }
 
+/** Compare an existing branded handle with its canonical record without granting a handle to the consumer. */
+export function matchesMcpRequesterScopedTurnContextProfile(
+  input: unknown,
+  profile: Pick<ChatTurnCapabilityProfileRecord, "profileId" | "identity" | "catalog" | "hashes">,
+): boolean {
+  const context = readMcpRequesterScopedTurnContext(input);
+  if (!context) return false;
+  try {
+    const canonical = readMcpRequesterScopedTurnContext(
+      buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile),
+    );
+    return canonical !== undefined && canonicalJsonString(context) === canonicalJsonString(canonical);
+  } catch {
+    // Missing or malformed persisted identity must never validate an existing handle.
+    return false;
+  }
+}
+
 export interface McpRequesterScopedToolCallDispatchInput {
   context: McpRequesterScopedToolCallTurnContext;
   serverId: string;

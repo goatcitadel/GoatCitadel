@@ -594,7 +594,7 @@ export function ShellInspectorLayer({
   onClose: () => void;
   onTogglePinned: () => void;
 }) {
-  return inspectorEntry ? <DetailInspector open={hasVisibleInspector} title={inspectorEntry.title} subtitle={inspectorEntry.subtitle} pinned={detailPanelPinned} onClose={onClose} onTogglePinned={onTogglePinned} actions={inspectorEntry.actions}>{inspectorEntry.body}</DetailInspector> : null;
+  return inspectorEntry ? <DetailInspector owner="shell" open={hasVisibleInspector} title={inspectorEntry.title} subtitle={inspectorEntry.subtitle} pinned={detailPanelPinned} onClose={onClose} onTogglePinned={onTogglePinned} actions={inspectorEntry.actions}>{inspectorEntry.body}</DetailInspector> : null;
 }
 
 function StatusPill({

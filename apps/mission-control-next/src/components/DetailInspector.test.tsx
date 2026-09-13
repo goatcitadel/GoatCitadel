@@ -3,6 +3,7 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UnifiedSidebarProvider } from "../app/UnifiedSidebar";
+import { ShellInspectorLayer } from "../app/MissionControlShellChrome";
 import { DetailInspector } from "./DetailInspector";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../features/native-routes/library/session-drafts";
 import { useDraftLeave } from "../features/native-routes/library/DraftLeaveDialog";
@@ -87,4 +88,18 @@ it("returns focus to a connected opener when an open inspector unmounts", async 
   expect(document.activeElement).toBe(document.querySelector(".mc-next-detail-inspector h2"));
   await act(async () => root.render(null));
   expect(document.activeElement).toBe(opener);
+});
+
+it("identifies the shell inspector separately from feature-owned detail panels", async () => {
+  await act(async () => root.render(
+    <ShellInspectorLayer detailPanelPinned={false} hasVisibleInspector
+      inspectorEntry={{ id: "route-summary", title: "Route summary", body: "Evidence" }}
+      onClose={() => {}} onTogglePinned={() => {}} />,
+  ));
+  expect(document.querySelector('[data-inspector-owner="shell"] h2')?.textContent).toBe("Route summary");
+  await act(async () => root.render(
+    <DetailInspector open title="Code context" onClose={() => {}}>Feature evidence</DetailInspector>,
+  ));
+  expect(document.querySelector('[data-inspector-owner="shell"]')).toBeNull();
+  expect(document.querySelector('[data-inspector-owner="feature"] h2')?.textContent).toBe("Code context");
 });

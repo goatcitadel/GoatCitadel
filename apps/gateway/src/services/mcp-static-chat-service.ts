@@ -45,7 +45,7 @@ import {
   normalizeMcpRequesterDiscoveryOutput,
 } from "./mcp-requester-resolution.js";
 import {
-  buildMcpRequesterScopedTurnContextFromCapabilityProfile,
+  matchesMcpRequesterScopedTurnContextProfile,
   readMcpRequesterScopedTurnContext,
   type McpRequesterScopedCatalogDiscoveryHookInput,
   type McpRequesterScopedTurnContextHandle,
@@ -183,10 +183,7 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
       const context = readMcpRequesterScopedTurnContext(input.mcpRequesterTurnContext);
       if (!context) throw unavailable();
       const profile = await this.options.storage.chatTurnCapabilityProfiles.get(context.profileId);
-      const rebuilt = readMcpRequesterScopedTurnContext(
-        buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile),
-      );
-      if (!rebuilt || canonicalJsonString(rebuilt) !== canonicalJsonString(context)) throw unavailable();
+      if (!matchesMcpRequesterScopedTurnContextProfile(input.mcpRequesterTurnContext, profile)) throw unavailable();
       const canonicalName = `mcp.${input.server.serverId}.${input.toolName}`;
       const frozen = await this.frozen(profile, canonicalName);
       if (input.server.configurationBindingId !== frozen.binding.configurationBindingId) throw unavailable();
