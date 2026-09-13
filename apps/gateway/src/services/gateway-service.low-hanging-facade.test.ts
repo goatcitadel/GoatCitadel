@@ -1,9 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("node:sqlite", () => ({
-  DatabaseSync: class DatabaseSync {},
-  StatementSync: class StatementSync {},
-}));
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 
 import { GatewayService } from "./gateway-service.js";
 import { NotFoundError } from "@goatcitadel/contracts";
@@ -19,6 +15,26 @@ function createGatewayHarness() {
   };
   gateway.runtimeDecisionRecorder = { record: vi.fn() };
   return gateway;
+}
+
+const permissionStorages: Storage[] = [];
+afterEach(() => { for (const storage of permissionStorages.splice(0)) storage.close(); });
+
+function createPermissionGatewayHarness() {
+  const gateway = createGatewayHarness();
+  const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  permissionStorages.push(storage);
+  gateway.storage = createSqliteAsyncStorage(storage);
+  gateway.publishRealtime = vi.fn();
+  return gateway;
+}
+
+async function createReviewedDefaultProfile(gateway: GatewayService) {
+  const review = await gateway.reviewPermissionProfileSelection({ operation: "defaults", scope: "workspace",
+    scopeRef: "workspace-a", defaultForSurfaces: ["code", "cowork"], createdBy: "operator-a" });
+  return await gateway.createPermissionProfile({ label: "Review", scope: "workspace", scopeRef: "workspace-a",
+    approvalMode: "approve_risky", defaultForSurfaces: ["code", "cowork"], createdBy: "operator-a",
+    expectedSelectionRevision: review.revision });
 }
 
 describe("GatewayService low-hanging facade delegation", () => {
@@ -928,182 +944,51 @@ describe("GatewayService low-hanging facade delegation", () => {
     });
   });
 
-  it("reconciles custom permission profile default surfaces into activations", async () => {
-    const gateway = createGatewayHarness();
-    const baseProfile = {
-      profileId: "profile-review",
-      label: "Review",
-      builtin: false,
-      status: "active",
-      scope: "workspace",
-      scopeRef: "workspace-a",
-      approvalMode: "approve_risky",
-      toolPatterns: ["session.status"],
-      allow: [],
-      deny: [],
-      defaultForSurfaces: ["code", "cowork"],
-      createdBy: "operator-a",
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-    };
-    const deactivateProfileActivations = vi.fn(() => 0);
-    const activateProfile = vi.fn((input: unknown) => ({ activationId: "activation-1", ...input }));
-    gateway.storage = {
-      gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
-      permissionProfiles: {
-        createProfile: vi.fn(() => baseProfile),
-        getProfile: vi.fn(() => baseProfile),
-        updateProfile: vi.fn(() => ({
-          ...baseProfile,
-          defaultForSurfaces: ["chat"],
-          updatedAt: "2026-05-17T00:10:00.000Z",
-        })),
-        deactivateProfileActivations,
-        activateProfile,
-      },
-    };
-    gateway.publishRealtime = vi.fn();
+  it("reconciles reviewed permission profile defaults through the atomic repository owner", async () => {
+    const gateway = createPermissionGatewayHarness();
+    const profile = await createReviewedDefaultProfile(gateway);
+    const reviewInput = { operation: "defaults" as const, profileId: profile.profileId,
+      defaultForSurfaces: ["chat" as const], createdBy: "operator-a" };
+    const review = await gateway.reviewPermissionProfileSelection(reviewInput);
+    expect(review.activeProfiles.filter((item) => item.profile.profileId === profile.profileId)
+      .map((item) => item.activation.surface).sort()).toEqual(["code", "cowork"]);
 
-    await GatewayService.prototype.createPermissionProfile.call(gateway, {
-      label: "Review",
-      scope: "workspace",
-      scopeRef: "workspace-a",
-      approvalMode: "approve_risky",
-      defaultForSurfaces: ["code", "cowork"],
-      createdBy: "operator-a",
-    });
-
-    expect(deactivateProfileActivations).toHaveBeenCalledWith({
-      profileId: "profile-review",
-      operatorId: undefined,
-      workspaceId: "workspace-a",
-    });
-    expect(activateProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "profile-review", operatorId: undefined, surface: "code" }),
-    );
-    expect(activateProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "profile-review", operatorId: undefined, surface: "cowork" }),
-    );
-
-    activateProfile.mockClear();
-    await GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
-      updatedBy: "operator-a",
-      defaultForSurfaces: ["chat"],
-    });
-    expect(activateProfile).toHaveBeenCalledTimes(1);
-    expect(activateProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "profile-review", operatorId: undefined, surface: "chat" }),
-    );
+    const update = { updatedBy: "operator-a", defaultForSurfaces: ["chat" as const],
+      expectedRevision: profile.revision, expectedSelectionRevision: review.revision };
+    const updated = await gateway.updatePermissionProfile(profile.profileId, update);
+    expect(updated.revision).not.toBe(profile.revision);
+    const after = await gateway.reviewPermissionProfileSelection(reviewInput);
+    expect(after.activeProfiles.filter((item) => item.profile.profileId === profile.profileId)
+      .map((item) => item.activation.surface)).toEqual(["chat"]);
+    await expect(gateway.updatePermissionProfile(profile.profileId, update)).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect((await gateway.reviewPermissionProfileSelection(reviewInput)).revision).toBe(after.revision);
   });
 
-  it("resolves custom permission profile defaults after create and update", async () => {
-    const gateway = createGatewayHarness();
-    const fallbackProfile = {
-      profileId: "safe",
-      label: "Safe",
-      builtin: true,
-      status: "active",
-      scope: "global",
-      approvalMode: "approve_all",
-      toolPatterns: ["*"],
-      createdBy: "system",
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-    };
-    let profile = {
-      profileId: "profile-review",
-      label: "Review",
-      builtin: false,
-      status: "active",
-      scope: "workspace",
-      scopeRef: "workspace-a",
-      approvalMode: "approve_risky",
-      toolPatterns: ["session.status"],
-      allow: [],
-      deny: [],
-      defaultForSurfaces: ["code", "cowork"],
-      createdBy: "operator-a",
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-    };
-    const activeSurfaces = new Set<string>();
-    gateway.storage = {
-      gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
-      permissionProfiles: {
-        createProfile: vi.fn(() => profile),
-        getProfile: vi.fn(() => profile),
-        updateProfile: vi.fn((_profileId: string, input: { defaultForSurfaces?: string[] }) => {
-          profile = {
-            ...profile,
-            defaultForSurfaces: input.defaultForSurfaces ?? profile.defaultForSurfaces,
-            updatedAt: "2026-05-17T00:10:00.000Z",
-          };
-          return profile;
-        }),
-        deactivateProfileActivations: vi.fn(() => {
-          activeSurfaces.clear();
-          return 0;
-        }),
-        activateProfile: vi.fn((input: { surface?: string }) => {
-          if (input.surface) {
-            activeSurfaces.add(input.surface);
-          }
-          return { activationId: `activation-${input.surface}`, ...input };
-        }),
-        resolveContext: vi.fn((input: { surface?: string }) => ({
-          permissionProfile: input.surface && activeSurfaces.has(input.surface) ? profile : fallbackProfile,
-        })),
-      },
-    };
-    gateway.publishRealtime = vi.fn();
-
-    await GatewayService.prototype.createPermissionProfile.call(gateway, {
-      label: "Review",
-      scope: "workspace",
-      scopeRef: "workspace-a",
-      approvalMode: "approve_risky",
-      defaultForSurfaces: ["code", "cowork"],
-      createdBy: "operator-a",
+  it("resolves custom permission profile defaults after reviewed create and update", async () => {
+    const gateway = createPermissionGatewayHarness();
+    const profile = await createReviewedDefaultProfile(gateway);
+    const resolve = (surface: "chat" | "code" | "cowork") => gateway.resolveToolPolicyContext({
+      operatorId: "operator-a", workspaceId: "workspace-a", surface,
     });
-    await expect(
-      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
-        operatorId: "operator-a",
-        workspaceId: "workspace-a",
-        surface: "code",
-      }),
-    ).resolves.toMatchObject({ permissionProfileId: "profile-review" });
-    await expect(
-      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
-        operatorId: "operator-a",
-        workspaceId: "workspace-a",
-        surface: "chat",
-      }),
-    ).resolves.toMatchObject({ permissionProfileId: "safe" });
-
-    await GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
-      updatedBy: "operator-a",
-      defaultForSurfaces: ["chat"],
+    await expect(resolve("code")).resolves.toMatchObject({ permissionProfileId: profile.profileId });
+    await expect(resolve("cowork")).resolves.toMatchObject({ permissionProfileId: profile.profileId });
+    await expect(resolve("chat")).resolves.toMatchObject({ permissionProfileId: "safe" });
+    const review = await gateway.reviewPermissionProfileSelection({ operation: "defaults", profileId: profile.profileId,
+      defaultForSurfaces: ["chat"], createdBy: "operator-a" });
+    await gateway.updatePermissionProfile(profile.profileId, {
+      updatedBy: "operator-a", defaultForSurfaces: ["chat"],
+      expectedRevision: profile.revision, expectedSelectionRevision: review.revision,
     });
-    await expect(
-      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
-        operatorId: "operator-a",
-        workspaceId: "workspace-a",
-        surface: "code",
-      }),
-    ).resolves.toMatchObject({ permissionProfileId: "safe" });
-    await expect(
-      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
-        operatorId: "operator-a",
-        workspaceId: "workspace-a",
-        surface: "chat",
-      }),
-    ).resolves.toMatchObject({ permissionProfileId: "profile-review" });
+    await expect(resolve("code")).resolves.toMatchObject({ permissionProfileId: "safe" });
+    await expect(resolve("cowork")).resolves.toMatchObject({ permissionProfileId: "safe" });
+    await expect(resolve("chat")).resolves.toMatchObject({ permissionProfileId: profile.profileId });
   });
 
   it("classifies tool configuration projection failures as committed mutations", async () => {
     const gateway = createGatewayHarness();
     const profile = {
       profileId: "profile-review",
+      revision: "b".repeat(64),
       label: "Review",
       builtin: false,
       status: "active",
@@ -1133,11 +1018,11 @@ describe("GatewayService low-hanging facade delegation", () => {
     gateway.storage = {
       gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
       permissionProfiles: {
-        createProfile: vi.fn(() => profile),
+        createProfileWithDefaults: vi.fn(() => profile),
         getProfile: vi.fn(() => profile),
-        updateProfile: vi.fn(() => profile),
+        updateProfileWithDefaults: vi.fn(() => profile),
         archiveProfile: vi.fn(() => true),
-        activateProfile: vi.fn(() => ({
+        activateReviewedProfile: vi.fn(() => ({
           activationId: "activation-a",
           profileId: profile.profileId,
           operatorId: "operator-a",
@@ -1162,13 +1047,16 @@ describe("GatewayService low-hanging facade delegation", () => {
         }),
       () =>
         GatewayService.prototype.updatePermissionProfile.call(gateway, profile.profileId, {
+          expectedRevision: profile.revision,
           updatedBy: "operator-a",
           label: "Updated",
         }),
-      () => GatewayService.prototype.archivePermissionProfile.call(gateway, profile.profileId, "operator-a"),
+      () => GatewayService.prototype.archivePermissionProfile.call(gateway, profile.profileId, "operator-a", profile.revision),
       () =>
         GatewayService.prototype.activatePermissionProfile.call(gateway, {
           profileId: profile.profileId,
+          expectedProfileRevision: profile.revision,
+          expectedSelectionRevision: "c".repeat(64),
           operatorId: "operator-a",
           surface: "chat",
           createdBy: "operator-a",
@@ -1201,6 +1089,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     gateway.config.assistant.deploymentProfile = "remote_hardened";
     const safeProfile = {
       profileId: "profile-safe",
+      revision: "d".repeat(64),
       label: "Safe custom",
       builtin: false,
       status: "active",
@@ -1230,10 +1119,10 @@ describe("GatewayService low-hanging facade delegation", () => {
         get: vi.fn(() => ({ workspaceId: "workspace-a" })),
       },
       permissionProfiles: {
-        createProfile,
+        createProfileWithDefaults: createProfile,
         getProfile: vi.fn((profileId: string) => (profileId === "profile-bypass" ? bypassProfile : safeProfile)),
-        updateProfile,
-        activateProfile,
+        updateProfileWithDefaults: updateProfile,
+        activateReviewedProfile: activateProfile,
       },
     };
 
@@ -1249,6 +1138,7 @@ describe("GatewayService low-hanging facade delegation", () => {
 
     await expect(
       GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-safe", {
+        expectedRevision: safeProfile.revision,
         updatedBy: "operator-a",
         approvalMode: "bypass",
       }),
@@ -1257,6 +1147,7 @@ describe("GatewayService low-hanging facade delegation", () => {
 
     await expect(
       GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-bypass", {
+        expectedRevision: bypassProfile.revision,
         updatedBy: "operator-a",
         label: "Still bypass",
       }),
@@ -1265,6 +1156,7 @@ describe("GatewayService low-hanging facade delegation", () => {
 
     await expect(
       GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-bypass", {
+        expectedRevision: bypassProfile.revision,
         updatedBy: "operator-a",
         approvalMode: "approve_risky",
       }),
@@ -1277,6 +1169,8 @@ describe("GatewayService low-hanging facade delegation", () => {
     await expect(
       GatewayService.prototype.activatePermissionProfile.call(gateway, {
         profileId: "profile-bypass",
+        expectedProfileRevision: bypassProfile.revision,
+        expectedSelectionRevision: "e".repeat(64),
         operatorId: "operator-a",
         createdBy: "operator-a",
       }),

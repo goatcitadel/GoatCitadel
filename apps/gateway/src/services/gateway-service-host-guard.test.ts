@@ -362,7 +362,12 @@ describe("gateway service host guard", () => {
     // Bumped to 187 for the latest Chat route capabilities, including the
     // narrow aggregate-stop control for durable fan-out and runtime settings
     // reads and compatibility owner used by governed Chat change plans.
-    expect(portMemberCount).toBeLessThanOrEqual(187);
+    // Three reviewed owner methods were added for permission-selection reviews
+    // and MCP environment/OAuth preparation; none is an untyped service escape hatch.
+    for (const member of ["reviewPermissionProfileSelection", "prepareMcpStaticEnvironment", "resolveMcpOAuthClientId"]) {
+      expect(portSource).toContain(`${member}: gateway.${member}.bind(gateway),`);
+    }
+    expect(portMemberCount).toBeLessThanOrEqual(190);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

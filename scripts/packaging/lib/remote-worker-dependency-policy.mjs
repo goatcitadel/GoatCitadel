@@ -8,7 +8,7 @@ const schemaRuntime = {
     version: "8.20.0",
     dependencies: { "fast-deep-equal": "^3.1.3", "fast-uri": "^3.0.1",
       "json-schema-traverse": "^1.0.0", "require-from-string": "^2.0.2" },
-    resolved: { "fast-deep-equal": "3.1.3", "fast-uri": "3.1.5",
+    resolved: { "fast-deep-equal": "3.1.3", "fast-uri": "3.1.6",
       "json-schema-traverse": "1.0.0", "require-from-string": "2.0.2" },
   },
   "ajv-formats": {
@@ -19,7 +19,7 @@ const schemaRuntime = {
     peerDependenciesMeta: { ajv: { optional: true } },
   },
   "fast-deep-equal": { version: "3.1.3", dependencies: {}, resolved: {} },
-  "fast-uri": { version: "3.1.5", dependencies: {}, resolved: {} },
+  "fast-uri": { version: "3.1.6", dependencies: {}, resolved: {} },
   "json-schema-traverse": { version: "1.0.0", dependencies: {}, resolved: {} },
   "require-from-string": { version: "2.0.2", dependencies: {}, resolved: {} },
 };

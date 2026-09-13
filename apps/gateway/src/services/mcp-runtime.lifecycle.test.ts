@@ -126,13 +126,15 @@ function createFakeChild(options: FakeChildOptions = {}): {
   };
 }
 
-/**
- * Flush the microtask/macrotask queue so promise continuations chained inside
- * `withStdioMcpClient` (e.g. resolving `initialize` then issuing `tools/call`)
- * run before the test drives the next fake event.
- */
-function flushAsync(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+/** Wait for the real request boundary after asynchronous environment preparation. */
+async function waitForRequest(stdin: FakeStdin, method: string): Promise<{ id: number; method: string }> {
+  return await vi.waitFor(() => {
+    const request = stdin.writes
+      .map((payload) => JSON.parse(payload) as { id: number; method: string })
+      .find((entry) => entry.method === method);
+    expect(request, `MCP ${method} request must be sent before driving child events`).toBeDefined();
+    return request!;
+  });
 }
 
 /** A fake taskkill process so we can drive its error/exit lifecycle. */
@@ -352,9 +354,7 @@ describe("mcp runtime invoke crash and cancellation handling", () => {
       2000,
     );
 
-    // withStdioMcpClient writes the `initialize` request to stdin synchronously
-    // (before its first await), so it is already captured here.
-    const initializeRequest = JSON.parse(fake.stdin.writes[0]!) as { id: number };
+    const initializeRequest = await waitForRequest(fake.stdin, "initialize");
     fake.stdout.emit(
       "data",
       `${JSON.stringify({
@@ -367,7 +367,7 @@ describe("mcp runtime invoke crash and cancellation handling", () => {
         },
       })}\n`,
     );
-    await flushAsync();
+    await waitForRequest(fake.stdin, "tools/call");
 
     // tools/call is now pending. Feed bounded stderr, then crash the child
     // before it ever responds.
@@ -397,7 +397,7 @@ describe("mcp runtime invoke crash and cancellation handling", () => {
       2000,
     );
 
-    const initializeRequest = JSON.parse(fake.stdin.writes[0]!) as { id: number };
+    const initializeRequest = await waitForRequest(fake.stdin, "initialize");
     fake.stdout.emit(
       "data",
       `${JSON.stringify({
@@ -406,7 +406,7 @@ describe("mcp runtime invoke crash and cancellation handling", () => {
         result: { protocolVersion: "2024-11-05", capabilities: { tools: {} } },
       })}\n`,
     );
-    await flushAsync();
+    await waitForRequest(fake.stdin, "tools/call");
 
     // tools/call is now pending against an unresponsive (hung/crashing) child;
     // the caller cancels it.
@@ -429,14 +429,26 @@ describe("mcp runtime invoke crash and cancellation handling", () => {
 });
 
 describe("mcp runtime stdio client abort and close paths", () => {
+  it("does not launch a child when cancelled during environment preparation", async () => {
+    const controller = new AbortController();
+    const run = vi.fn();
+    const clientRun = withStdioMcpClient(TEST_SERVER, 1000, run, controller.signal);
+    controller.abort();
+
+    await expect(clientRun).rejects.toBe(controller.signal.reason);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("terminates the child exactly once when an in-flight request aborts", async () => {
     setPlatform("linux");
     vi.useFakeTimers();
-    const { child, kill } = createFakeChild({ pid: 6161 });
+    const { child, stdin, kill } = createFakeChild({ pid: 6161 });
     spawnMock.mockReturnValue(child);
     const controller = new AbortController();
 
     const clientRun = withStdioMcpClient(TEST_SERVER, 1000, async () => "unreachable", controller.signal);
+    await waitForRequest(stdin, "initialize");
     controller.abort();
 
     await expect(clientRun).rejects.toThrow("The operation was aborted.");
@@ -448,10 +460,11 @@ describe("mcp runtime stdio client abort and close paths", () => {
 
   it("reports captured stderr only once when the child exits before responding", async () => {
     setPlatform("linux");
-    const { child, stderr, kill, emitClose } = createFakeChild({ pid: 6161 });
+    const { child, stdin, stderr, kill, emitClose } = createFakeChild({ pid: 6161 });
     spawnMock.mockReturnValue(child);
 
     const clientRun = withStdioMcpClient(TEST_SERVER, 1000, async () => "unreachable");
+    await waitForRequest(stdin, "initialize");
     stderr.emit("data", "boom: config missing");
     emitClose(1);
 

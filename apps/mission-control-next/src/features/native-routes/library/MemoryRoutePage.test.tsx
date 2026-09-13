@@ -1,9 +1,9 @@
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { createElement, type ReactNode } from "react";
 import { __resetSessionDraftsForTests } from "./session-drafts";
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DraftLeaveDialog } from "./DraftLeaveDialog";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
@@ -22,6 +22,16 @@ import {
   readMetadataStringList,
   resolveMemoryItemWorkspaceLabel,
 } from "./MemoryRoutePage";
+
+const renderers: ReactTestRenderer[] = [];
+const create: typeof createRenderer = (...args) => {
+  const renderer = createRenderer(...args);
+  renderers.push(renderer);
+  return renderer;
+};
+afterEach(async () => {
+  await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); });
+});
 
 const memorySnapshot = vi.hoisted(() => ({
   // HX-402 P1: approval-first mutation surface state.
@@ -313,6 +323,7 @@ const memorySnapshot = vi.hoisted(() => ({
       workspaceId: "default",
       policy: {
         workspaceId: "default",
+        revision: "a".repeat(64),
         enabled: true,
         runMode: "manual",
         timingStrategy: "fixed",
@@ -879,7 +890,7 @@ describe("MemoryRoutePage", () => {
       ttlOverrideSeconds: 7200,
     });
     expect(memorySnapshot.forgetSelectedItem).toHaveBeenCalledTimes(1);
-    expect(memorySnapshot.savePolicy).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, runMode: "scheduled", providerId: "anthropic", model: "claude-sonnet" }), memorySnapshot.data.maintenanceStatus.policy.updatedAt);
+    expect(memorySnapshot.savePolicy).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, runMode: "scheduled", providerId: "anthropic", model: "claude-sonnet" }), memorySnapshot.data.maintenanceStatus.policy.revision);
     expect(memorySnapshot.runMaintenance).toHaveBeenCalledTimes(1);
     expect(memorySnapshot.savePolicy).toHaveBeenCalledTimes(1);
     expect(memorySnapshot.reload).toHaveBeenCalledTimes(1);
@@ -888,7 +899,7 @@ describe("MemoryRoutePage", () => {
     expect(memorySnapshot.setSelectedRunId).toHaveBeenCalledWith("run-1");
   });
 
-  it("retains policy input and its base through refresh, Keep, and remount", async () => {
+  it("retains policy input and its revision through refresh, Keep, and remount even when timestamps match", async () => {
     const original = memorySnapshot.data.maintenanceStatus.policy;
     let renderer!: ReactTestRenderer;
     const element = () => <MemoryRoutePage route={{ area: "library", section: "memory", view: "maintenance" }} activeWorkspaceId="default" activeWorkspaceName="Default" pendingApprovals={0} navigate={vi.fn()} setActiveWorkspaceId={vi.fn()} />;
@@ -897,7 +908,7 @@ describe("MemoryRoutePage", () => {
       expect(renderer.root.findAllByProps({ "aria-label": "Maintenance model identifier" })).toHaveLength(0);
       await act(async () => { findButton(renderer.root, "Edit policy").props.onClick(); });
       await act(async () => { renderer.root.findByProps({ "aria-label": "Maintenance model identifier" }).props.onChange({ target: { value: "unsaved-model" } }); });
-      memorySnapshot.data.maintenanceStatus.policy = { ...original, updatedAt: "2026-09-13T00:00:00.000Z" };
+      memorySnapshot.data.maintenanceStatus.policy = { ...original, revision: "b".repeat(64) };
       await act(async () => { renderer.update(element()); });
       expect(renderer.root.findByProps({ "aria-label": "Maintenance model identifier" }).props.value).toBe("unsaved-model");
       expect(collectText(renderer.root)).toContain("The policy changed since editing began");
@@ -910,7 +921,7 @@ describe("MemoryRoutePage", () => {
       await act(async () => { findButton(renderer.root, "Resume policy edit").props.onClick(); });
       expect(renderer.root.findByProps({ "aria-label": "Maintenance model identifier" }).props.value).toBe("unsaved-model");
       await act(async () => { findButton(renderer.root, "Save policy").props.onClick(); });
-      expect(memorySnapshot.savePolicy).toHaveBeenCalledWith(expect.objectContaining({ model: "unsaved-model" }), original.updatedAt);
+      expect(memorySnapshot.savePolicy).toHaveBeenCalledWith(expect.objectContaining({ model: "unsaved-model" }), original.revision);
     } finally {
       memorySnapshot.data.maintenanceStatus.policy = original;
       await act(async () => renderer?.unmount());

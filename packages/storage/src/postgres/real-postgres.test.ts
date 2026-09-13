@@ -7394,8 +7394,11 @@ test(
         await scopedPool.query(`ALTER INDEX "${index.name}" RENAME TO "gc_v149_legacy_u${ordinal}"`);
       }
 
-      const applied = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      const throughV149 = POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 149);
+      const applied = await runPostgresMigrations(migrationClient, throughV149);
       assert.deepEqual(applied.appliedVersions, [149]);
+      assert.equal(applied.latestVersion, 149);
+      assert.deepEqual((await runPostgresMigrations(migrationClient, throughV149)).appliedVersions, []);
 
       const revision = await scopedPool.query<{ type: string }>(
         `SELECT pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS type

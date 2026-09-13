@@ -92,7 +92,7 @@ misconfiguration finding is clear. Evidence:
 Source cleanup commit `efee19b6e` was pushed to `main`; GitHub's Code Quality
 workflow passed for that commit. The dependency update is a separate checkpoint.
 
-## Remaining hosted failures
+## Hosted failures at the initial checkpoint
 
 The Verification Fast run `34771617145` at `136494173` also exposed failures
 outside this lint/dependency slice. Its checks partition passed 11 of 12
@@ -105,8 +105,9 @@ permission-profile facade fixtures, the Gateway facade size guard, the MCP
 turn-context construction boundary, MCP child-process lifecycle assertions,
 memory maintenance UI fixtures and a virtualized-list DOM lifetime. The real
 PostgreSQL job failed its v149 catalog-lineage test. These are recorded failures,
-not dismissed or assumed to be harmless fixture drift. They require focused
-reproduction and correction before claiming full CI success.
+not dismissed or assumed to be harmless fixture drift. The follow-up below
+records their reproduction and correction; full CI success still needs a fresh
+hosted run.
 
 The original logs and downloaded manifests remain under
 `.tmp/comparison-ci-136494173/`; compact inventories are
@@ -116,3 +117,60 @@ The original logs and downloaded manifests remain under
 The broader C1-C6 implementation and live acceptance remain open. Drive
 formatting is paused. This slice performs no virtual-disk, installed-service,
 user-database, provider-credential or external-channel operation.
+
+## Follow-up: current contracts, asynchronous boundaries, and packaging
+
+Commit `80fbba5d7` preserved the MCP context-owner and shell-inspector corrections.
+Its hosted Gateway shard 2 passed. Repository hygiene then ran 1,029 tests: 996
+passed, 32 platform-specific tests skipped, and one failed because worker
+packaging still pinned `fast-uri` 3.1.5 after the security update to 3.1.6.
+
+The following changes address the remaining reproduced failures:
+
+- Demo bootstrap fixtures return the canonical memory page shape, preserving
+  idempotent seeding and the optional-memory failure case.
+- MCP lifecycle tests wait for actual initialize and tool-call writes before
+  injecting crashes or cancellation. A separate case proves cancellation before
+  launch starts no child. Runtime environment and approval checks are unchanged.
+- Mesh route tests wait for the persisted dispatch event and settle or cancel
+  their own pending invocations before closing the temporary database.
+- Permission-profile default tests use the real SQLite repository through the
+  Gateway, including selection review, record revisions, activation replacement,
+  context resolution, and stale-retry rejection. Projection-failure and hardened
+  deployment fixtures use the current atomic owner methods and review inputs.
+- The composition guard accounts for the three explicitly typed and bound
+  permission-selection and MCP preparation methods added by the implementation.
+- Memory UI fixtures use opaque revisions, prove conflict detection even when
+  timestamps match, preserve the original draft revision across remount, and
+  unmount every test renderer.
+- Waiting for the notes list's lazy import reproduced the hosted Virtuoso null
+  DOM error locally. The test now explicitly waits for that import and exercises
+  all 55 row callbacks with a DOM-free virtualizer fixture before searching.
+  This is search/selection proof, not browser layout or windowing proof.
+- Worker packaging accepts the installed `fast-uri` 3.1.6 graph and rejects both
+  the older version and an unreviewed future version. Exact graph checks remain.
+- The v149 PostgreSQL test applies migrations through v149, then verifies replay
+  is empty and retains its existing catalog assertions. It previously applied
+  versions 150-173 while expecting only 149. Historical migration source is unchanged.
+
+Final local evidence for this follow-up:
+
+- Five Gateway suites: 90 tests passed, with no unhandled rejections.
+- Full Mission Control coverage lane: 1,142 tests passed across 145 files.
+- Worker package integrity tests: 29 passed, including Windows junction checks.
+- Real PostgreSQL 16 v149 test: one passed, zero skipped. Its fresh loopback
+  cluster was stopped; PID file, process, and listener absence were verified.
+- Strict lint, locked Gateway/Mission Control/storage typechecks, documentation
+  checks, migration parity, and whitespace checks passed.
+
+Logs: `.tmp/comparison-ci-gateway-fixtures-final.log`,
+`.tmp/comparison-ci-ui-coverage-final.log`,
+`.tmp/comparison-ci-odysseus-import-before.log`,
+`.tmp/comparison-ci-worker-package-after-v2.log`,
+`.tmp/comparison-ci-v149-postgres-tests-v1.log`, and
+`.tmp/comparison-ci-v149-cleanup-final.json`.
+
+Full hosted verification remains pending. No installed worker payload was
+rebuilt or activated in this follow-up. C1-C6 and the remaining mutation-owner,
+native-worker, physical-machine, provider/channel, and comparison acceptance
+requirements remain open. Formatting stays paused.

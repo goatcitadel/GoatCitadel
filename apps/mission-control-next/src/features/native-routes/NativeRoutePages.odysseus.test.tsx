@@ -1,14 +1,26 @@
 import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "./library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
+import type { NativeSelectableListItem } from "./primitives/NativeSelectableList";
 const renderers: ReactTestRenderer[] = [];
 function create(...args: Parameters<typeof createRenderer>) { const renderer = createRenderer(...args); renderers.push(renderer); return renderer; }
 beforeEach(() => { __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests(); });
 afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
 
 vi.mock("./route-diagnostics", () => ({ recordRouteDiagnostic: vi.fn() }));
+
+// react-test-renderer has no DOM measurements. Preserve the real lazy wrapper
+// and row callbacks while keeping these search/selection tests independent of
+// whether Virtuoso loads before the list is filtered below its window threshold.
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: ({ data, itemContent }: {
+    data: NativeSelectableListItem[];
+    itemContent: (index: number, item: NativeSelectableListItem) => ReactNode;
+  }) => <div data-testid="windowed-note-rows">{data.map((item, index) => itemContent(index, item))}</div>,
+}));
 
 import { NativeRoutePages } from "./NativeRoutePages";
 
@@ -249,6 +261,8 @@ describe("NativeRoutePages odysseus library sections", () => {
     mocks.listReminders.mockResolvedValueOnce({ items: Array.from({ length: 25 }, (_, i) => ({ ...reminder, reminderId: "reminder-" + i, title: "Access reminder " + i })) });
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = renderLibrary("notes"); });
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(renderer.root.findByProps({ "data-testid": "windowed-note-rows" }).findAllByType("button")).toHaveLength(55);
     const search = (label: string) => renderer.root.findAllByType("label").find(node => collectText(node).includes(label))!.findByType("input");
     await act(async () => { search("Search notes").props.onChange({ target: { value: "Access note 54" } }); search("Search reminders").props.onChange({ target: { value: "Access reminder 24" } }); });
     expect(collectText(renderer.root)).toContain("Access note 54");

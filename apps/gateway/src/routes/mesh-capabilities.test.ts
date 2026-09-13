@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   MESH_CAPABILITY_PERMISSION_SCHEMA_VERSION,
@@ -27,8 +27,12 @@ const NODE_FINGERPRINT = "sha256:node-a";
 
 const apps: FastifyInstance[] = [];
 const storages: Storage[] = [];
+const pendingInvocations: Array<{ controller: AbortController; promise: Promise<unknown> }> = [];
 
 afterEach(async () => {
+  const pending = pendingInvocations.splice(0);
+  for (const invocation of pending) invocation.controller.abort();
+  await Promise.allSettled(pending.map((invocation) => invocation.promise));
   for (const app of apps.splice(0)) {
     await app.close();
   }
@@ -650,6 +654,7 @@ describe("mesh capability invocation routes (M3)", () => {
     });
     const activation = applied.activation;
     const args = { query: "release notes" };
+    const controller = new AbortController();
     const dispatchPromise = harness.invocation.dispatch(
       {
         workspaceId: "default",
@@ -672,12 +677,21 @@ describe("mesh capability invocation routes (M3)", () => {
         turnId: "turn-a",
         executionProfileSha256: "9".repeat(64),
       },
-      {},
+      { signal: controller.signal },
     );
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const invocationId = (await harness.storage.mesh.listReplicationEvents(50)).find(
-      (event) => event.eventType === "mesh_capability_invocation_dispatch",
-    )!.payload.invocationId as string;
+    pendingInvocations.push({ controller, promise: dispatchPromise });
+    // Keep failures observed while the test waits for the committed dispatch.
+    // The original promise is still returned and asserted by each route test.
+    let dispatchFailure: { error: unknown } | undefined;
+    void dispatchPromise.catch((error: unknown) => { dispatchFailure = { error }; });
+    const invocationId = await vi.waitFor(async () => {
+      const event = (await harness.storage.mesh.listReplicationEvents(50)).find(
+        (item) => item.eventType === "mesh_capability_invocation_dispatch",
+      );
+      if (dispatchFailure) throw dispatchFailure.error;
+      expect(event, "dispatch must commit before exercising node routes").toBeDefined();
+      return event!.payload.invocationId as string;
+    }, { timeout: 3000, interval: 10 });
     return {
       invocationId,
       args,

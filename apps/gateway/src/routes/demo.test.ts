@@ -467,9 +467,10 @@ function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean; nor
       ),
     },
     memory: {
-      listItems: vi.fn((query: Record<string, unknown>) =>
-        state.memories.filter((item) => item.namespace === query.namespace && item.title === query.query),
-      ),
+      listItems: vi.fn((query: Record<string, unknown>) => {
+        const items = state.memories.filter((item) => item.namespace === query.namespace && item.title === query.query);
+        return { items, total: items.length, snapshotAt: new Date().toISOString() };
+      }),
     },
     knowledge: {
       knowledgeMemoryWrite: vi.fn(async (input: Record<string, unknown>) => {
