@@ -174,3 +174,36 @@ Full hosted verification remains pending. No installed worker payload was
 rebuilt or activated in this follow-up. C1-C6 and the remaining mutation-owner,
 native-worker, physical-machine, provider/channel, and comparison acceptance
 requirements remain open. Formatting stays paused.
+
+## Follow-up: portable evidence paths and database fixture setup
+
+The `e954a9c94` hosted run passed the canonical Mission Control suite, Gateway
+shards 1-4, bundled PostgreSQL restart, and the real PostgreSQL lanes. Its Checks
+job then rejected machine-specific paths in the comparison evidence document.
+The UI job's library partition failed one Gateway-core accounting case after
+22.2 seconds of fresh SQLite setup exceeded its 20-second test deadline.
+
+The evidence document now uses `%TEMP%` for 141 historical temporary-directory
+prefixes and retains every receipt directory and filename. The standalone
+repository hygiene check reproduced the failure before this change and passes
+after it. No receipt was moved or deleted.
+
+Accounting tests still create a separate real SQLite database for every case.
+Database setup now has a 60-second `beforeEach` hook deadline; the accounting
+behavior keeps its existing 20-second test deadline and all settlement, retry,
+cost, uncertainty, and persistence-fault assertions. Cleanup verifies the owned
+temporary root before removal. The full Gateway-core coverage suite passes:
+86 tests across six files. Strict lint, locked typecheck, and documentation checks
+also pass.
+
+Evidence: `.tmp/comparison-ci-hygiene-before.log`,
+`.tmp/comparison-ci-hygiene-after.log`,
+`.tmp/comparison-ci-accounting-before.log`,
+`.tmp/comparison-ci-accounting-hook-coverage.log`,
+`.tmp/comparison-ci-accounting-hook-lint.log`, and
+`.tmp/comparison-ci-accounting-hook-typecheck.log`, with final documentation proof
+in `.tmp/comparison-ci-hook-docs-final.log`. Hosted artifacts are retained locally under
+`.tmp/comparison-ci-e954a9c94/`.
+
+The hosted retry is still required. Charter/template/blueprint atomicity and
+reviewed writes remain open alongside the rest of C1-C6. Formatting remains paused.

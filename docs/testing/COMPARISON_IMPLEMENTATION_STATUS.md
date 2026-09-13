@@ -4,6 +4,10 @@ This tracks the approved C0-C6 sequence in the [master program](../MASTER_COMPLE
 It records local evidence separately from live-provider quality, external delivery,
 packaged installation, and two-machine acceptance. The implementation is not complete.
 
+Historical evidence paths beginning with `%TEMP%` refer to the Windows temporary
+directory of the account that ran the check. Their named subdirectories and files
+identify retained local receipts; those receipts are not published with this document.
+
 Latest daily-usability progress: Workbench file actions now require an explicit
 review of the exact source, destination and affected paths. Required revisions
 reject intervening file edits, folder changes and destination replacement before
@@ -3146,7 +3150,7 @@ Fresh proof:
   and PowerShell-parent death, detached descendants, nested-job breakaway, timed-out
   shutdown, path and environment refusal, AddressSanitizer execution and refusal
   when the service dispatcher is invoked outside SCM. The native receipt is at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Host 1kfPbr\acceptance.json`.
+  `%TEMP%\Goat Worker Host 1kfPbr\acceptance.json`.
   x64 and ARM64 builds were reproducible; only x64 binaries executed.
 - `.tmp/comparison-worker-host-worker-suite.log`: all 173 worker tests passed.
 - `.tmp/comparison-worker-host-package-build.log`: the x64 v2 package built with
@@ -3211,10 +3215,10 @@ Fresh proof:
 - `.tmp/comparison-worker-service-identity-host-lane.log`: the named host lane
   passed worker typecheck, 28 focused TypeScript tests and 19 native test records
   (17 lifetime scenarios, their parent, and the identity suite). The lifetime
-  receipt is `C:\Users\spurn\AppData\Local\Temp\Goat Worker Host 7JAmhc\acceptance.json`.
+  receipt is `%TEMP%\Goat Worker Host 7JAmhc\acceptance.json`.
   x64 and ARM64 builds were reproducible; only x64 executed.
 - The identity receipt at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Identity CJUWHW\acceptance.json`
+  `%TEMP%\Goat Worker Identity CJUWHW\acceptance.json`
   records 74 checks in each normal and AddressSanitizer build. It includes the
   actual interactive process token, a temporary identification impersonation token
   with verified reversion, and read-only queries of the Windows EventLog service.
@@ -3229,7 +3233,7 @@ Fresh proof:
   The host receipt now uses `goatcitadel.remote-worker.windows-host.v2` and records
   the service account/privilege contract. The package inventory remains v2.
 - `.tmp/comparison-worker-service-identity-relocation.json` records the copy at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Identity Package P9a7mV\payload`.
+  `%TEMP%\Goat Worker Identity Package P9a7mV\payload`.
   `.tmp/comparison-worker-service-identity-package-probe.log` passed all 15 package
   inventory tests and loaded the relocated worker runtime and declared dependencies
   with Node 24.19.0 / OpenSSL 3.5.7. Inventory was checked again after that probe.
@@ -3280,7 +3284,7 @@ Fresh local proof:
   lane passed all 21 top-level tests, including 20 package inventory tests and the
   Windows installer/configuration suite. Missing installer helpers and old v1/v2
   manifests are refused even when the modified inventory is freshly hashed.
-- `C:\Users\spurn\AppData\Local\Temp\Goat Worker Install a1FkGJ\acceptance.json`
+- `%TEMP%\Goat Worker Install a1FkGJ\acceptance.json`
   records 28 temporary-file cases under each PowerShell 5.1.26100.9343 and 7.6.5
   engine, plus 37 native checks in each normal and AddressSanitizer run per engine.
   File checks cover atomic permissions, writer/rename exclusion, handle-bound
@@ -3292,7 +3296,7 @@ Fresh local proof:
   passed worker typecheck, 28 focused TypeScript tests and 19 native records after
   integrating the installed-file owner. x64 and ARM64 builds were reproducible;
   only x64 executed. The receipt is
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Host IR3RuL\acceptance.json`.
+  `%TEMP%\Goat Worker Host IR3RuL\acceptance.json`.
 - `.tmp/comparison-worker-install-owner-scoped-lint.log` records passing scoped
   JavaScript lint; formatting and PowerShell CRLF checks also passed. The earlier
   `.tmp/comparison-worker-install-owner-behavior-first.log` fixture failure remains
@@ -3306,7 +3310,7 @@ Fresh local proof:
   remain historical evidence.
 - `.tmp/comparison-worker-install-owner-relocation.json` records an independent
   copy at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Service Install Package AEvdq4\payload`.
+  `%TEMP%\Goat Worker Service Install Package AEvdq4\payload`.
   The copied install/uninstall entrypoints ran with `-Preflight` under both
   PowerShell engines using synthetic public inputs. The installer checked the
   real package inventory and reported only the missing elevation; uninstall also
@@ -3357,14 +3361,14 @@ the fix, without installing or creating a production pipe.
 Fresh evidence:
 
 - `.tmp/comparison-worker-signer-caller-focused-final.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Signer Caller MGiuZV` record 796 checks
+  `%TEMP%\Goat Signer Caller MGiuZV` record 796 checks
   in each normal and AddressSanitizer run. They cover all byte-valued opcodes for
   both roles and refusal, malformed/substituted identity projections, role-specific
   hello roundtrips, an actual interactive process token and retained descriptor
   ownership. Positive service identity remains a policy projection, not an actual
   service logon or authenticated pipe exchange.
 - `.tmp/comparison-worker-signer-caller-pipe-owner-failing.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Signer Caller i9AlYp\normal.log` retain
+  `%TEMP%\Goat Signer Caller i9AlYp\normal.log` retain
   the reproduced owner-lifetime failure separately from the passing run.
 - Independent native builds are retained under
   `.tmp/comparison-signer-caller-windows-x64-Oq1G2z` and
@@ -3426,23 +3430,23 @@ operator-only signing operations and token/LSA checks remain enforced.
 Fresh local evidence:
 
 - `.tmp/comparison-worker-signer-permissions-red.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Signer Caller RyabI2\normal.log`
+  `%TEMP%\Goat Signer Caller RyabI2\normal.log`
   retain the failing missing-worker pipe regression. The corrected focused run,
   `.tmp/comparison-worker-signer-permissions-focused.log`, passed all 809 checks
   in each normal and AddressSanitizer build, with evidence under
-  `C:\Users\spurn\AppData\Local\Temp\Goat Signer Caller zu9Ldx`.
+  `%TEMP%\Goat Signer Caller zu9Ldx`.
 - `.tmp/comparison-worker-signer-permissions-install-final.log` passed all 15
   installer checks, including 30 actual filesystem/descriptor scenarios per
   PowerShell engine. The new fixture retains the worker's exact read/execute ACE
   on a copied file; only SYSTEM ownership/control is substituted with the test
   user. SYSTEM-owned production installation is not proved. Receipts are under
-  `C:\Users\spurn\AppData\Local\Temp\goat-broker-recipe-ZErRaf\powershell` and
-  `C:\Users\spurn\AppData\Local\Temp\goat-broker-recipe-0aleo9\pwsh`.
+  `%TEMP%\goat-broker-recipe-ZErRaf\powershell` and
+  `%TEMP%\goat-broker-recipe-0aleo9\pwsh`.
   The first installer run's outdated comment assertion remains a separate failure
   in `.tmp/comparison-worker-signer-permissions-install.log`.
 - `.tmp/comparison-worker-signer-permissions-worker-install.log` passed all 21
   worker installation/package-file checks. Its retained Windows receipt is under
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Install Wx66Cb`.
+  `%TEMP%\Goat Worker Install Wx66Cb`.
 - Independent native trios are retained under
   `.tmp/comparison-signer-permissions-windows-x64-gerFJt` and
   `.tmp/comparison-signer-permissions-windows-arm64-NNLrBi`, with
@@ -3624,8 +3628,8 @@ Fresh local evidence:
   PowerShell engines, native configuration/ACL fixtures and sanitizer execution.
 - `.tmp/comparison-worker-enrollment-handoff-final.log` separately passed both
   PowerShell engines after cleanup-finally hardening, with 40 cases per engine.
-  Receipts are retained in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Enrollment e8pGNC`
-  (5.1) and `C:\Users\spurn\AppData\Local\Temp\Goat Worker Enrollment URaGcp` (7).
+  Receipts are retained in `%TEMP%\Goat Worker Enrollment e8pGNC`
+  (5.1) and `%TEMP%\Goat Worker Enrollment URaGcp` (7).
   The checks use actual
   temporary files and held Windows handles, synthetic credentials and isolated
   child processes. They cover exact report/hash binding, ambient setting
@@ -3749,7 +3753,7 @@ Fresh local proof:
   Killing a separate task-owned controller also caused its still-running child
   to exit through the job's kill-on-close policy.
 - Receipts, binaries, build logs and unchanged source hashes are retained in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job UDF4GD`. Earlier normal
+  `%TEMP%\Goat Worker Cell Job UDF4GD`. Earlier normal
   and sanitizer evidence remains in `Goat Worker Cell Job cGnwUb` under the same
   temporary directory. Scoped JavaScript lint passed.
 
@@ -3796,7 +3800,7 @@ Fresh component proof:
   after validation. Existing profiles are never adopted on creation failure.
 - Binaries, build logs, normal/sanitizer/network/crash receipts and unchanged
   native-source hashes are retained in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job brPdPy`.
+  `%TEMP%\Goat Worker Cell Job brPdPy`.
   The earlier passing controlled-network run remains in `Goat Worker Cell Job
   jAeuYJ` under the same temporary directory. Scoped JavaScript lint passed.
 
@@ -3848,7 +3852,7 @@ Fresh proof:
   a separate control directory. It still requires exact parentage/job membership
   and observes the child exit after terminating only its owned controller.
 - Binaries, build logs, source hashes and normal/sanitizer/network/crash receipts
-  are retained in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job KvHfJP`.
+  are retained in `%TEMP%\Goat Worker Cell Job KvHfJP`.
   The earlier complete controlled-crash run is retained in `Goat Worker Cell Job
   VZP6mC` under the same temporary directory. Scoped JavaScript lint passed.
 
@@ -3877,7 +3881,7 @@ distinguish label and audit-SACL operations.
 
 Fresh `pnpm verify:remote-worker:windows-cell-job` evidence is retained in
 `.tmp/comparison-worker-native-acl-named.log` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job 92tfXx`:
+`%TEMP%\Goat Worker Cell Job 92tfXx`:
 
 - Normal and AddressSanitizer builds each passed 222 checks, including 41
   launch-filesystem and 83 workspace checks. Each build also passed the seven
@@ -3935,7 +3939,7 @@ Separate local receipts record 37 contract tests, three focused static-binding
 tests including an actual PostgreSQL connection close/reopen, and passing
 contracts/storage typechecks and scoped lint. The PostgreSQL run used and stopped
 its own loopback cluster; its evidence remains in
-`C:\Users\spurn\AppData\Local\Temp\gc-static-mcp-binding-pg-qYe0ON` and
+`%TEMP%\gc-static-mcp-binding-pg-qYe0ON` and
 `.tmp/comparison-static-mcp-postgres.log`. No migration was needed for this
 optional metadata in the existing immutable profile envelope.
 
@@ -3944,7 +3948,7 @@ workers racing initial creation, preserving a later connection-status update,
 rejecting stale authority, rolling back an enclosing transaction and reopening
 persisted configuration after both workers close. The final owned PostgreSQL
 cluster was stopped; receipts remain in `.tmp/comparison-mcp-registry-postgres-legacy.log`
-and `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-CSJCJh`. Six storage tests
+and `%TEMP%\gc-mcp-registry-pg-CSJCJh`. Six storage tests
 also passed, covering stale compare-and-set input, missing rows, competing initial
 creation, readback failure and transaction rollback. Contracts/storage and Gateway
 typechecks and scoped lint passed. The final six-file Gateway run passed 75 tests
@@ -3988,7 +3992,7 @@ Fresh receipts for this source boundary:
   after a remote configuration write, and auth/configuration persistence after
   both workers close and a fresh worker opens. The owned loopback cluster was
   stopped; its retained directory is
-  `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-irpeP0`.
+  `%TEMP%\gc-mcp-registry-pg-irpeP0`.
 - Gateway typecheck and scoped lint passed. `verify:gateway:async-boundary`
   passed ten scanner tests and checked 970 production TypeScript files.
 - `2026-09-11T08-29-01-738Z-auth-matrix-a169714d` passed both authentication
@@ -4036,7 +4040,7 @@ separate PostgreSQL run passed all 25 tests across both files, including two act
 RPC workers sending one loopback refresh, refusing another send, and retaining an
 uncertain result after both workers close and a fresh worker reopens. Its owned
 cluster was stopped; evidence is in `.tmp/comparison-mcp-reservation-postgres.log`
-and `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-qxklXd`.
+and `%TEMP%\gc-mcp-registry-pg-qxklXd`.
 
 SQLite/loopback tests additionally cover commit-acknowledgment loss, terminal-ledger
 failure rolling back auth publication, redaction, pre-dispatch retry, changed
@@ -4078,7 +4082,7 @@ Validation:
   including competing actual PostgreSQL RPC workers, atomic environment/auth
   rollback and invalidation, stale publication rejection, and close/reopen.
   The owned cluster was stopped; its evidence directory is
-  `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-4KDwKX`.
+  `%TEMP%\gc-mcp-registry-pg-4KDwKX`.
 - Gateway typecheck and scoped lint passed. The async-boundary lane passed ten
   tests and scanned 971 production TypeScript files.
 - `2026-09-11T09-35-04-302Z-auth-matrix-ebf5a47e` passed both authentication
@@ -4167,7 +4171,7 @@ Fresh proof:
   case also passed. The earlier two PostgreSQL attempts exposed fixture session
   and memory-scope mismatches, which were corrected before this full rerun.
   The owned cluster was stopped and its evidence directory retained at
-  `C:\Users\spurn\AppData\Local\Temp\gc-mesh-catalog-pg-KsrO7s`.
+  `%TEMP%\gc-mesh-catalog-pg-KsrO7s`.
 - Gateway typecheck and scoped lint passed. Runtime-truth run
   `2026-09-11T10-36-01-475Z-runtime-truth-a8947468` passed both durable approval
   recovery across restart and canonical shell consistency, without skips.
@@ -4207,7 +4211,7 @@ Fresh proof:
   attempt exposed an unsupported column-rename simulation in canonical shape
   validation; the final forward migration uses direct constraint replacement.
   The owned cluster was stopped and evidence retained at
-  `C:\Users\spurn\AppData\Local\Temp\gc-mesh-policy-pg-VV8j9t`.
+  `%TEMP%\gc-mesh-policy-pg-VV8j9t`.
 - `.tmp/comparison-mesh-policy-migrations.log`: the named migration-parity lane
   passed its 27 inventory/lineage tests, 24 PostgreSQL integrity tests and 45
   runtime-schema tests. Registry counts are 219 SQLite and 164 PostgreSQL.
@@ -4650,7 +4654,7 @@ Fresh proof:
 
 - `.tmp/comparison-native-runtime-bundle-tests-corrected.log`: the named
   `verify:remote-worker:windows-cell-job` lane passed with no skips. Retained
-  evidence is under `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job hLHEZt`.
+  evidence is under `%TEMP%\Goat Worker Cell Job hLHEZt`.
   Normal and AddressSanitizer builds each passed 277 native checks, including
   55 bundle checks and a real AppContainer launch. Both passed seven loopback
   checks; the restricted probe retained its actual timeout while the same
@@ -4695,7 +4699,7 @@ Fresh proof:
 
 - `.tmp/comparison-native-parent-custody-tests-final.log`: the complete named
   `verify:remote-worker:windows-cell-job` lane passed with no skips. Evidence is
-  retained under `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job OG179q`.
+  retained under `%TEMP%\Goat Worker Cell Job OG179q`.
   Normal and AddressSanitizer builds each passed 316 native checks, including
   122 workspace checks and the existing 41 filesystem and 55 runtime-bundle
   checks. Each also passed seven loopback checks; restricted probes timed out
@@ -4755,7 +4759,7 @@ Fresh proof:
   raced publication against cleanup; a fresh worker after both clients closed
   recovered retirement and preserved current environment authority. The owned
   loopback cluster was stopped, with evidence retained at
-  `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-eBRQi6`.
+  `%TEMP%\gc-mcp-registry-pg-eBRQi6`.
 - Gateway typecheck and scoped lint passed. `verify:gateway:async-boundary`
   passed ten scanner tests and checked 982 production TypeScript files. An
   existing mesh-catalog cached promise now uses an explicit awaited owner;
@@ -4809,7 +4813,7 @@ Fresh local proof:
   Current credentials survived while the exact retired reference remained fenced.
   The owned PostgreSQL process exited with code zero after explicit shutdown;
   its evidence remains at
-  `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-TbWA4P`.
+  `%TEMP%\gc-mcp-registry-pg-TbWA4P`.
 - Gateway typecheck, scoped lint and `verify:gateway:async-boundary` passed. The
   latter passed ten scanner tests and inspected 983 production TypeScript files.
 - `2026-09-11T16-23-48-465Z-runtime-truth-10670009` and
@@ -4861,7 +4865,7 @@ Fresh proof:
   an uncertain deletion after database reopen and preserved the current token.
   The test used synthetic custodian IDs and credentials. The task-owned direct
   PostgreSQL process exited with code zero after explicit shutdown; evidence is
-  retained at `C:\Users\spurn\AppData\Local\Temp\gc-mcp-registry-pg-kMbelz`.
+  retained at `%TEMP%\gc-mcp-registry-pg-kMbelz`.
 - Gateway typecheck and scoped lint passed on the final production source.
   `verify:gateway:async-boundary` passed ten scanner tests and checked 984
   production TypeScript files.
@@ -4925,7 +4929,7 @@ Fresh proof:
   directory index has grown. The seven controlled network checks passed in both
   builds, with the same probe connecting outside AppContainer. The controller
   crash probe confirmed its child exited. Evidence is retained at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job 0pVqXA`.
+  `%TEMP%\Goat Worker Cell Job 0pVqXA`.
 - Gateway typecheck through its output-lock wrapper and focused lint passed in
   `.tmp/comparison-mesh-chat-typecheck.log` and
   `.tmp/comparison-mesh-chat-lint.log`.
@@ -5038,7 +5042,7 @@ Evidence:
 - `.tmp/comparison-native-stdin-bundle.log` records the final execution of the
   test entrypoint behind `verify:remote-worker:windows-cell-job`. Its retained
   native artifacts are under
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job KuvPbU`.
+  `%TEMP%\Goat Worker Cell Job KuvPbU`.
   Normal and sanitizer receipts each also passed seven loopback checks. The
   AppContainer probe retained a timeout while the same native control connected
   outside it. The task-owned controller-crash child exited, and source hashes
@@ -5093,7 +5097,7 @@ Evidence for this batch:
   `.tmp/comparison-native-vhd-final.log`, through the test entrypoint behind
   `verify:remote-worker:windows-cell-job`.
 - The final native receipts are under
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job lTXVmt`.
+  `%TEMP%\Goat Worker Cell Job lTXVmt`.
   Both builds executed 47 backing-file checks and 151 workspace checks, alongside
   the existing filesystem/input/bundle/resource cases. They cover actual fixed
   allocation, cancellation after the file becomes visible, provisioning expiry,
@@ -5136,7 +5140,7 @@ Proof is split explicitly:
   invalidation of stale unattached readiness, passed the same 461-check local
   lane in `.tmp/comparison-native-vhd-attachment-final.log`. The final native
   evidence is under
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job rKcyYa`.
+  `%TEMP%\Goat Worker Cell Job rKcyYa`.
   Both receipts report 13 attachment-authority rejection checks and
   `volumeAttachmentExercised: false`. The existing 47 backing-file checks, 151
   workspace checks and filesystem/input/bundle/resource cases also executed.
@@ -5280,7 +5284,7 @@ Fresh proof for this change:
   host/service-identity tests with no skips. The native host forwards the exact
   registry path/digest while still removing unlisted environment variables.
   Evidence: `.tmp/comparison-destination-registry-windows-host.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Host a3biBf`.
+  `%TEMP%\Goat Worker Host a3biBf`.
 - The full Chat receipt is
   `.tmp/worker-gateway-restart-90ce38ba-83cb-41a1-a22c-e67c6a016f82/result.json`:
   one destination receipt, a Gateway restart from PID 46404 to 32228, and five
@@ -5317,7 +5321,7 @@ Current local proof:
   real create/edit/stale-content/path-escape cases, native protocol bounds,
   AddressSanitizer and cancellation that joins the exact running helper PID.
   Evidence: `.tmp/comparison-destination-write-native-final-r2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Files YRNwUQ`.
+  `%TEMP%\Goat Worker Files YRNwUQ`.
 - The selected stock-worker write/settlement/restart case passed over native
   mTLS: `.tmp/comparison-destination-write-stock-worker.log` (one selected,
   four unselected). It verifies actual changed bytes, one retained settlement,
@@ -5445,7 +5449,7 @@ Current proof:
 
 - `pnpm verify:remote-worker:windows-service-install` passed all 29 tests:
   `.tmp/comparison-service-registry-install-final.log`. Retained evidence is
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Install 9RsaIm/acceptance.json`.
+  `%TEMP%\Goat Worker Install 9RsaIm/acceptance.json`.
   PowerShell 5.1 and 7 each passed 46 real temporary-file behavior checks,
   including stale selection, concurrent writers, a service starting during
   staging, pinned-file replacement refusal, updates, disable and corrupt retained
@@ -5456,8 +5460,8 @@ Current proof:
 - `pnpm verify:remote-worker:windows-host` passed: 29 worker lifecycle/configuration
   tests and 19 native host/service-identity tests, without skips.
   `.tmp/comparison-service-registry-host.log` retains the result. Native evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Host h1kyjC` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Identity yvvKrD`.
+  `%TEMP%\Goat Worker Host h1kyjC` and
+  `%TEMP%\Goat Worker Identity yvvKrD`.
 - A fresh Windows x64 package contains 1,622 files at
   `.tmp/comparison-service-registry-package-02e043462e664596894c79258cf7155c/payload`,
   manifest SHA-256
@@ -6088,7 +6092,7 @@ native owner and its caller. A caller must join the job before destroying it.
 
 Fresh `pnpm verify:remote-worker:windows-cell-job` passed in
 `.tmp/comparison-worker-interactive-stdio-r2.log`. Evidence is retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job L7Lp2m`:
+`%TEMP%\Goat Worker Cell Job L7Lp2m`:
 
 - `normal.json` and `asan.json`: **532 checks each**, including 57 interactive
   channel checks, 40 static-input checks, 51 launch-filesystem checks, 158 workspace
@@ -6110,7 +6114,7 @@ Fresh `pnpm verify:remote-worker:windows-cell-job` passed in
 The file-executor build inventory includes the new transitive header. Separate
 `pnpm verify:remote-worker:windows-files` passed **9 tests**, including native and
 AddressSanitizer execution, in `.tmp/comparison-worker-interactive-stdio-files.log`.
-Its retained root is `C:\Users\spurn\AppData\Local\Temp\Goat Worker Files aSikcN`.
+Its retained root is `%TEMP%\Goat Worker Files aSikcN`.
 Scoped script lint and `git diff --check` also passed.
 
 This is an internal native prerequisite, not a completed destination stdio MCP
@@ -6153,7 +6157,7 @@ Fresh local proof is recorded in these separate receipts:
 
 - `.tmp/comparison-worker-stdio-bridge-native-r3.log`: named
   `pnpm verify:remote-worker:windows-stdio` passed **8 tests**, with evidence in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio naIB3P`. Cases cover a fresh
+  `%TEMP%\Goat Worker Stdio naIB3P`. Cases cover a fresh
   output-dependent challenge, binary exchange with simultaneous stdout/stderr,
   bundle drift before entry, authority revocation and confirmed child exit,
   malformed/incomplete configuration, cancellation of a stalled authority check,
@@ -6175,7 +6179,7 @@ candidate's Node executable, worker modules, native helper and guard. Inventory
 verification occurs before imports and again after the run. All **8 tests** passed
 in `.tmp/comparison-worker-stdio-bridge-package-stdio.log`; native receipts and the
 verified inventory are retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio mqjvI4/results.json`.
+`%TEMP%\Goat Worker Stdio mqjvI4/results.json`.
 
 Separate package `--probe` verification passed in
 `.tmp/comparison-worker-stdio-bridge-package-probe.log`, exercising startup,
@@ -6256,7 +6260,7 @@ Fresh evidence:
 - `.tmp/comparison-worker-mcp-stdio-native-r7.log`: named
   `pnpm verify:remote-worker:windows-stdio` passed **12 tests**, including real
   Node MCP success, schema drift, malformed output and a stalled server. Evidence
-  is in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio D8LQNF`.
+  is in `%TEMP%\Goat Worker Stdio D8LQNF`.
   Each MCP case retains its actual input/output trace in `case-N/mcp-exchange.json`.
   The positive case reads a fresh fixture file, answers ping, refuses sampling,
   calls the tool exactly once and confirms native image/cleanup proof. Negative
@@ -6267,7 +6271,7 @@ Fresh evidence:
   successful job execution. Both builds passed eight loopback checks, retaining
   the in-AppContainer timeout and successful native controls outside it. Separate
   static-input and interactive controller-crash tests confirmed child exit.
-  Evidence is in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job VDQVkG`.
+  Evidence is in `%TEMP%\Goat Worker Cell Job VDQVkG`.
   All 28 recorded source hashes still matched after the run.
 
 The failed R1-R4 native receipts remain separate: they exposed the fixture image
@@ -6288,7 +6292,7 @@ package's own Node runtime, worker modules, helper and guard, with inventory
 verification before imports and after the run. The log is
 `.tmp/comparison-worker-mcp-stdio-package-native.log`; the verified inventory and
 actual MCP traces are retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio YRXhFV`.
+`%TEMP%\Goat Worker Stdio YRXhFV`.
 
 Separate package `--probe` verification passed in
 `.tmp/comparison-worker-mcp-stdio-package-probe.log`, covering startup, actual
@@ -6322,7 +6326,7 @@ refused.
 
 Fresh `pnpm verify:remote-worker:windows-cell-job` evidence is retained in
 `.tmp/comparison-worker-workspace-reopen-native-51161b3ab6244f47a3cca691e48dcaf8.log`
-and `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job K8XW5K`.
+and `%TEMP%\Goat Worker Cell Job K8XW5K`.
 Both normal and AddressSanitizer builds passed **611 checks**, including **226
 workspace checks** and 53 launch-filesystem checks. The 68 additional checks cover
 close/reopen identity preservation, invalid records, changed parent/root identities,
@@ -6369,7 +6373,7 @@ Fresh source verification:
 - `pnpm verify:remote-worker:windows-cell-job`: **625 checks in each normal and
   AddressSanitizer build**, including 239 workspace and 69 runtime-bundle checks,
   in `.tmp/comparison-worker-protected-stdio-cell-c303db24e716473bb32be285e848c630.log`.
-  Evidence is retained in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job tXqwnS`.
+  Evidence is retained in `%TEMP%\Goat Worker Cell Job tXqwnS`.
   The actual interactive child finishes its protocol while the fixture changes
   work-root permissions; the protected owner then refuses success and still
   verifies child cleanup and pipe drain. Both builds also passed the eight
@@ -6381,7 +6385,7 @@ Fresh source verification:
   provisioned roots, records their identities and releases its provisioning pins
   before the bridge starts. Actual MCP execution reads the fresh note and retains
   native protected-workspace/image/cleanup proof in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio blwZId\case-5\mcp-exchange.json`.
+  `%TEMP%\Goat Worker Stdio blwZId\case-5\mcp-exchange.json`.
   Substituted identities and protocol downgrade produce no child process.
 
 The first native-lane attempt remains separately recorded in
@@ -6398,7 +6402,7 @@ candidate's own Node runtime, worker modules, native helper and image guard, wit
 inventory verification before and after. The log is
 `.tmp/comparison-worker-protected-stdio-package-native-158278ad4b714a6f9d30544dd68395dc.log`;
 actual traces and verified package inventory are retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio vxyED3`.
+`%TEMP%\Goat Worker Stdio vxyED3`.
 Separate package startup/filesystem/HTTP MCP probe verification passed in
 `.tmp/comparison-worker-protected-stdio-package-probe-b9a942e061b24c598709bd0be605dfb7.log`.
 All endpoints and copied data belonged to controlled local fixtures.
@@ -6437,7 +6441,7 @@ Fresh verification:
   The protected Node MCP case uses the actual worker runtime and file-backed journal,
   verifies persistence before native entry, then restarts with a fresh journal
   adapter and confirms one invocation with no replay. Evidence is retained in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio CpXOxL\case-5\mcp-exchange.json`.
+  `%TEMP%\Goat Worker Stdio CpXOxL\case-5\mcp-exchange.json`.
   Gateway transport and settlement are controlled fixtures.
 - The fresh unsigned Windows x64 candidate is
   `.tmp/comparison-worker-workspace-journal-package-2597ac8bb37946f585ef774cf1d93005/payload`.
@@ -6448,7 +6452,7 @@ Fresh verification:
   before and after. The log is
   `.tmp/comparison-worker-workspace-journal-package-native-2597ac8b.log`; actual
   traces and the protected journal case are retained in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio szyWBf`.
+  `%TEMP%\Goat Worker Stdio szyWBf`.
 - Separate package inventory, startup, filesystem and authenticated HTTP MCP
   probes passed in `.tmp/comparison-worker-workspace-journal-package-probe-2597ac8b.log`.
   All endpoints, directories and copied data were controlled local fixtures.
@@ -6485,7 +6489,7 @@ checks. Separate loopback and static/interactive controller-crash checks also
 passed. The log is
 `.tmp/comparison-worker-disk-recovery-process-7a151c92d83b4a529be8861a2fc9b683.log`.
 Evidence is retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job mx5hnr`.
+`%TEMP%\Goat Worker Cell Job mx5hnr`.
 Both native receipts report `virtualDiskRecoveryProcessVerified: true`: after
 closing the recorded disk and workspace handles, the fixture starts an exact
 native child without inherited handles, supplies the independent fixture records
@@ -6538,7 +6542,7 @@ Fresh-process unattached recovery, the loopback checks and static/interactive
 controller-crash checks also passed. The log is
 `.tmp/comparison-worker-attached-disk-recovery-native-d67603fb856f4bdebc37ed9f3ec93015.log`;
 native receipts and traces are retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job hkdpU4`.
+`%TEMP%\Goat Worker Cell Job hkdpU4`.
 All **28 source hashes** matched after verification.
 
 Both receipts explicitly retain `volumeAttachmentExercised: false` and
@@ -6599,12 +6603,12 @@ unattached recovery. Actual loopback controls and both controller-crash cases
 passed. The source check matched all **36 packaged C++/JavaScript input hashes**
 against the checkout. Log:
 `.tmp/comparison-worker-cell-acceptance-6ce6d6cf-native.log`; native receipts:
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job d4IwAI`.
+`%TEMP%\Goat Worker Cell Job d4IwAI`.
 
 The same extracted entry point's `--preflight` returned exit 1 for absent
 `SeManageVolumePrivilege`. Its retained log is
 `.tmp/comparison-worker-cell-acceptance-6ce6d6cf-preflight.log`, with native evidence
-in `C:\Users\spurn\AppData\Local\Temp\Goat Cell Preflight SA9iZx`.
+in `%TEMP%\Goat Cell Preflight SA9iZx`.
 Both native receipts retain `volumeAttachmentExercised: false` and
 `volumeAttachmentRecoveryVerified: false`. This run attached or detached no disk.
 
@@ -7031,7 +7035,7 @@ allocation intact until the fixture explicitly restores them.
 
 The final log is `.tmp/comparison-worker-provisioning-journal-verified.log`.
 Native receipts, compile logs and source hashes are retained in
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job UCbnPF`.
+`%TEMP%\Goat Worker Cell Job UCbnPF`.
 All **31 source hashes** matched a fresh post-run check. Each build also passed
 eight controlled loopback checks; separate static and interactive controller-crash
 receipts confirm owned child exit. These controller-crash cases remain distinct
@@ -7125,7 +7129,7 @@ Fresh evidence:
 - Native normal and AddressSanitizer builds each pass **998 checks**, including
   **301 journal checks**. The final log is
   `.tmp/comparison-cell-checkpoints-native-required-ack.log`; native receipts and
-  compile logs are in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job 1didAC`.
+  compile logs are in `%TEMP%\Goat Worker Cell Job 1didAC`.
   All **31 source hashes** still match, and both compile logs have no C warnings or
   errors. Both receipts retain `volumeAttachmentExercised: false` and
   `volumeAttachmentRecoveryVerified: false`.
@@ -7196,7 +7200,7 @@ Fresh evidence:
 
 - `pnpm verify:remote-worker:windows-cell-provisioning` passes **5/5 with no skips**
   in `.tmp/comparison-cell-bridge-proof-first.log`. Its retained directory is
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge 0TSRJc`.
+  `%TEMP%\Goat Worker Provisioning Bridge 0TSRJc`.
 - Within that lane, the Gateway service file passes **16/16 with no skips**.
   Three cases use actual protected Windows parents, the real compiled image guard,
   the real native helper and canonical SQLite repositories. Five committed records
@@ -7246,8 +7250,8 @@ skips** in `.tmp/comparison-cell-installer-named-lane.log`. The installer portio
 passes **51 behavior checks** in each of Windows PowerShell 5.1.26100.9343 and
 PowerShell 7.6.5, plus **50 native configuration checks** in each normal and
 AddressSanitizer build for each engine. The final named-lane receipt is retained at
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Install BI0KRl`; the earlier focused
-corrected run is separate at `C:\Users\spurn\AppData\Local\Temp\Goat Worker Install VVbbS7`.
+`%TEMP%\Goat Worker Install BI0KRl`; the earlier focused
+corrected run is separate at `%TEMP%\Goat Worker Install VVbbS7`.
 Both exercise preflight and file fixtures without changing SCM state. Scoped script
 lint passes in `.tmp/comparison-cell-installer-lint-final.log`.
 
@@ -7335,7 +7339,7 @@ Fresh local evidence:
   projections, bounded custody decoding, the exact parent descriptor, real
   interactive/impersonating caller refusal and unrelated SCM-service refusal are
   covered. The process's actual privilege bytes remain unchanged. Receipt:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Identity cm1QWP\acceptance.json`;
+  `%TEMP%\Goat Cell Controller Identity cm1QWP\acceptance.json`;
   log: `.tmp/comparison-cell-controller-identity-third.log`.
 - The first controller run stopped at a narrowing warning in fixture byte fills.
   The second exposed a fixture assumption that an impersonating caller could
@@ -7346,7 +7350,7 @@ Fresh local evidence:
   checks in each normal/AddressSanitizer build and 301 journal checks each. Both
   receipts retain `volumeAttachmentExercised: false` and
   `volumeAttachmentRecoveryVerified: false`. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job bhPSo3`;
+  `%TEMP%\Goat Worker Cell Job bhPSo3`;
   log: `.tmp/comparison-cell-controller-parent-regression.log`.
 - Scoped JavaScript lint passed. Documentation and diff checks are recorded with
   this source change.
@@ -7400,14 +7404,14 @@ Fresh local evidence:
   and pending read/write/connect cancellation or timeout. Caller token rights
   remain unchanged and all six clients are joined. Seventeen native source files
   are snapshotted and hashed. Receipt:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Transport AmHdTy\acceptance.json`;
+  `%TEMP%\Goat Cell Controller Transport AmHdTy\acceptance.json`;
   log: `.tmp/comparison-cell-controller-transport-final.log`.
 - The worker token collector now accepts a retained process handle as a read-only
   input; the existing current-process entrypoint delegates to it. The combined
   worker/controller identity regression passed 2/2 with no skips: 74 worker checks
   and 248 controller checks in each normal/AddressSanitizer build. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Identity xH6VZZ` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Identity MpoT9W`;
+  `%TEMP%\Goat Worker Identity xH6VZZ` and
+  `%TEMP%\Goat Cell Controller Identity MpoT9W`;
   log: `.tmp/comparison-cell-controller-peer-identity-regression.log`.
 - Scoped lint passed. Documentation and whitespace checks accompany this change.
 
@@ -7464,7 +7468,7 @@ Fresh evidence:
   revoked authority preserve only the prepared record and create no workspace.
   A wrong final acknowledgement cannot claim delivery or replay effects.
 - All 24 native inputs were snapshotted and hashed. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol qmN09R\acceptance.json`;
+  `%TEMP%\Goat Cell Controller Protocol qmN09R\acceptance.json`;
   log: `.tmp/comparison-cell-controller-protocol-final.log`.
 - Scoped build/test-script lint passed. Documentation and whitespace checks
   accompany the change.
@@ -7526,7 +7530,7 @@ Fresh evidence:
   inspection checks, including Windows access decisions and descriptor readback
   on task-owned objects. Privileges remain unchanged.
 - Its 31 snapshotted inputs and receipts are retained at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Client Identity GXicoU\acceptance.json`;
+  `%TEMP%\Goat Cell Controller Client Identity GXicoU\acceptance.json`;
   log: `.tmp/comparison-controller-client-identity-final.log`.
 - All 47 native signer packaging tests pass without skips, including actual
   reproducible x64 and ARM64 service/client/availability/test builds and x64 ASan
@@ -7535,13 +7539,13 @@ Fresh evidence:
   two shared files and updating the independent count; the 47/47 result is a new
   complete invocation.
 - Controller identity passes 248 checks per native build at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Identity VqrmzP`.
+  `%TEMP%\Goat Cell Controller Identity VqrmzP`.
   Transport passes 121 checks per build at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Transport vK8GY5`.
+  `%TEMP%\Goat Cell Controller Transport vK8GY5`.
   The production controller recompiles and refuses interactive launch; protocol
   creation/recovery and refusal regressions pass 205 checks across nine sessions
   per build at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol pHt03k`.
+  `%TEMP%\Goat Cell Controller Protocol pHt03k`.
 - Scoped script lint passes. Documentation and whitespace checks accompany this
   source change.
 
@@ -7597,7 +7601,7 @@ Fresh evidence:
   welcomes/nonces, valid-hash records with wrong bindings/order/anchors, bad
   digests, impossible frame lengths, unexpected frame kinds, premature success
   receipts and truncated replies never reach the checkpoint/receipt consumer.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol izYHPg\acceptance.json`;
+  Evidence: `%TEMP%\Goat Cell Controller Protocol izYHPg\acceptance.json`;
   log: `.tmp/comparison-controller-client-protocol-final.log`.
 - `pnpm verify:remote-worker:windows-cell-provisioning` passes 6/6 without skips,
   including locked worker/Gateway typechecks. Its real Gateway coordinator suite
@@ -7605,7 +7609,7 @@ Fresh evidence:
   cancellation. The controller option refuses this interactive worker before
   emitting a checkpoint or creating a journal, with no direct fallback. Both
   native builds reject an interactive `--controller` invocation and extra mode
-  arguments. Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge GKWhke`;
+  arguments. Evidence: `%TEMP%\Goat Worker Provisioning Bridge GKWhke`;
   log: `.tmp/comparison-controller-helper-bridge-final.log`.
 - The complete `pnpm verify:remote-worker:windows-tls` invocation passes: locked
   typechecks, 376 worker tests, 16 key-identifier tests and all 23 native TLS
@@ -7673,10 +7677,10 @@ Fresh evidence:
   match both real NTFS directory IDs and compare the intended descriptor bytes
   with the production runtime builder. The preflight calls refuse installation
   in this unelevated context and report no service, parent or privilege mutation.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Install vLqMS8\acceptance.json`;
+  Evidence: `%TEMP%\Goat Worker Install vLqMS8\acceptance.json`;
   log: `.tmp/comparison-controller-install-final.log`.
 - Reproducible controller payload evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload oSnW6E\acceptance.json`.
+  `%TEMP%\Goat Controller Payload oSnW6E\acceptance.json`.
   x64 is 292,864 bytes, SHA-256
   `3d79eb99eb0918d24787d6b48e1787aefac351f3202bd328dcf5eaf15cce2340`;
   ARM64 is 270,848 bytes, SHA-256
@@ -7754,7 +7758,7 @@ Evidence for this change:
   an append but before commit. The disposable PostgreSQL instance was stopped
   after matching its data directory, PID, executable, command line and port.
   Retained evidence:
-  `C:\Users\spurn\AppData\Local\Temp\gc-cell-exchange-pg-VHOMU4\acceptance.json`.
+  `%TEMP%\gc-cell-exchange-pg-VHOMU4\acceptance.json`.
 - Contracts, storage, remote-worker and Gateway typechecks passed together under
   the output lock; `.tmp/comparison-cell-exchange-verified-typecheck.log`.
   An earlier check caught a worker test importing storage source. The fixture
@@ -7807,14 +7811,14 @@ Evidence for this change:
   server processes. The query-only signer regression passes 121 checks per build.
   Both actual C++ fixture outputs decode to the expected TypeScript hashes and
   little-endian directory IDs. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Client Identity ldLRui\acceptance.json`;
+  `%TEMP%\Goat Cell Controller Client Identity ldLRui\acceptance.json`;
   log: `.tmp/comparison-cell-custody-native-client.log`.
 - `pnpm verify:remote-worker:windows-cell-provisioning` passes 7/7 without skips,
   with output-locked worker and Gateway typechecks. The real pinned helper and
   both normal/AddressSanitizer raw modes reject interactive custody reads without
   output. Existing actual helper/Gateway creation, checkpoint recovery, malformed
   input, acknowledgement and watchdog cases pass. Evidence directory:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge 0ePl8h`;
+  `%TEMP%\Goat Worker Provisioning Bridge 0ePl8h`;
   log: `.tmp/comparison-cell-custody-provisioning.log`. Its retained Gateway JSON
   report records 16/16 cases without skips.
 - `pnpm verify:remote-worker:windows-tls` passes: all 427 worker tests, 16 key
@@ -7889,7 +7893,7 @@ Validation completed for the source changes:
   `create_once`, the other returns `reconcile`, and one cell/plan is retained.
   The earlier 13-case run failed in the fixture's final row-count query; the
   query now binds the assignment key, and the complete lane was rerun cleanly.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\gc-cell-preparation-pg-Y7bjFZ\acceptance.json`.
+  Evidence: `%TEMP%\gc-cell-preparation-pg-Y7bjFZ\acceptance.json`.
   The task-owned cluster was stopped after checking its data directory, PID,
   executable, command line and port.
 - Worker preparation/checkpoint clients and custody reader: 58/58;
@@ -7941,7 +7945,7 @@ Validation for this source boundary:
   service suite also passes 16/16. Worker/Gateway typechecks pass under the
   repository output lock.
 - Real compiled-helper evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge ER8xzz`.
+  `%TEMP%\Goat Worker Provisioning Bridge ER8xzz`.
   `worker-native-complete.json` retains five native records and exact restart
   recovery; `worker-native-lost-ack.json` retains two records after a lost
   acknowledgement. Both prove one creation and an unchanged native journal
@@ -7992,7 +7996,7 @@ Fresh source proof:
   `.tmp/comparison-cell-device-binding-native-verified.log`.
 - Normal and AddressSanitizer receipts each report 1,063 checks, including 65
   new dependency-metadata/device-refusal cases and 89 attachment-owner checks.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job kS1New`.
+  Evidence: `%TEMP%\Goat Worker Cell Job kS1New`.
   Both explicitly report `volumeAttachmentExercised: false`,
   `volumeAttachmentRecoveryVerified: false` and `volumeDeviceBindingVerified: false`.
 - Actual network denial and owner-crash/descendant shutdown checks also pass
@@ -8022,7 +8026,7 @@ device binding as unverified. All test-owned processes exited.
 - ZIP SHA-256: `cdb7d4b5d43de356f37c1e90fce66edd1c518779f20ebf2d48cd1206c4d3ce89`.
 - Independent manifest SHA-256: `f28ea65880fc86ca4fef49d456c0d251246016843e4bcedd1c24338e34d8b7d2`.
 - Extraction/run receipt: `.tmp/comparison-cell-device-acceptance-8a8d4d9cf83640d59782091aab77ca0a/portable-evidence.json`.
-- Native evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job SyBkz5`;
+- Native evidence: `%TEMP%\Goat Worker Cell Job SyBkz5`;
   `.tmp/comparison-cell-device-acceptance-portable.log`.
 
 After extracting the ZIP on a Windows x64 test machine, the default component
@@ -8086,7 +8090,7 @@ Validation for the initial GPT component revision:
 
 - `pnpm verify:remote-worker:windows-cell-job` passed the complete named lane;
   `.tmp/comparison-cell-layout-native-final-v3.log`.
-- Evidence root: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job mNMPEd`.
+- Evidence root: `%TEMP%\Goat Worker Cell Job mNMPEd`.
   Normal and AddressSanitizer receipts each pass 1,235 checks, including 172 layout
   component cases and four exported fixture checkpoints. Both explicitly retain
   `volumeLayoutExercised: false`, `volumeAttachmentExercised: false` and
@@ -8149,7 +8153,7 @@ Fresh evidence:
 
 - `verify:remote-worker:windows-cell-job` passed; normal and AddressSanitizer
   builds each execute 1,241 checks, including 175 layout and 304 provisioning
-  journal checks. Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job 9gyNiQ`;
+  journal checks. Evidence: `%TEMP%\Goat Worker Cell Job 9gyNiQ`;
   log: `.tmp/comparison-cell-layout-binding-native.log`.
 - The shared TypeScript decoder accepts each build's four native layout records,
   and the exchange computes the same GPT identifiers as its recovered native
@@ -8161,7 +8165,7 @@ Fresh evidence:
 - `verify:remote-worker:windows-cell-provisioning` passes worker/Gateway
   typechecks and all eight native bridge cases, including its 16-test Gateway
   coordinator subprocess. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge 5mMab8`;
+  `%TEMP%\Goat Worker Provisioning Bridge 5mMab8`;
   log: `.tmp/comparison-cell-layout-provisioning-v2.log`.
 - Three SQLite and three fresh PostgreSQL protected-exchange cases pass,
   including full-chain projection/replay, lease rotation, transaction rollback,
@@ -8228,7 +8232,7 @@ Fresh evidence for the final recovery and authority checks:
 
 - `pnpm verify:remote-worker:windows-cell-job` passed. Normal and AddressSanitizer
   builds each execute 1,523 checks, including 586 journal and 175 layout cases.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job aKdSe5`;
+  Evidence: `%TEMP%\Goat Worker Cell Job aKdSe5`;
   log: `.tmp/comparison-cell-volume-journal-native-final.log`.
 - The shared decoder verifies each build's five creation records, six volume
   records and four nested layout records. All 37 native source hashes match the
@@ -8236,7 +8240,7 @@ Fresh evidence for the final recovery and authority checks:
 - `pnpm verify:remote-worker:windows-cell-provisioning` passes worker/Gateway
   typechecks and all eight bridge cases, including the 16-test real Gateway
   coordinator subprocess. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge tMgYFr`;
+  `%TEMP%\Goat Worker Provisioning Bridge tMgYFr`;
   log: `.tmp/comparison-cell-volume-provisioning-final.log`.
 - All 28 focused contract tests and scoped ESLint pass. Logs:
   `.tmp/comparison-cell-volume-contracts.log` and `.tmp/comparison-cell-volume-lint.log`.
@@ -8291,7 +8295,7 @@ Fresh local evidence for this source:
 - Four actual PostgreSQL cases pass, including protected revocation, expiry and
   independent connection races. The owned loopback cluster was stopped and its
   evidence retained at
-  `C:\Users\spurn\AppData\Local\Temp\gc-cell-volume-exchange-pg-3iqz2y4g.qy2`.
+  `%TEMP%\gc-cell-volume-exchange-pg-3iqz2y4g.qy2`.
   Log: `.tmp/comparison-cell-volume-exchange-postgres-run-v2.log`.
 - `pnpm verify:storage:migration-parity` passes all 27 manifest tests, 24 integrity
   tests and 45 runtime-schema tests for SQLite 222/PostgreSQL 167. Log:
@@ -8306,7 +8310,7 @@ Fresh local evidence for this source:
   `.tmp/comparison-cell-volume-exchange-async-boundary.log`.
 - `pnpm verify:remote-worker:windows-cell-provisioning` passes all eight bridge
   cases and its 17-test Gateway subprocess, with no failures or pending tests.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge vRffj5`;
+  Evidence: `%TEMP%\Goat Worker Provisioning Bridge vRffj5`;
   log: `.tmp/comparison-cell-volume-exchange-provisioning-v2.log`. The first attempt
   respected the active migration output lock; verification ran after it released.
   The task-owned native processes are stopped. This proves creation/recovery
@@ -8367,7 +8371,7 @@ Fresh evidence for this source:
   authority acknowledgements and independently flushes all eleven records. It
   also checks lost authority, incorrect acknowledgements, malformed challenges,
   missing owner composition and unchanged retained bytes after refused recovery.
-  Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol ANbfIU`;
+  Evidence: `%TEMP%\Goat Cell Controller Protocol ANbfIU`;
   log: `.tmp/comparison-cell-volume-controller-protocol-v3.log`.
 - The controller fixture uses real pipe identity, journal files, VHDX creation
   and flushed acknowledgement files with controlled attachment/layout replies.
@@ -8383,15 +8387,15 @@ Fresh evidence for this source:
   including its 17-test Gateway subprocess and explicit refusal of volume
   operations through direct or uninstalled controller paths. Worker and Gateway
   typechecks pass in the same invocation. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge xc4ZXa`;
+  `%TEMP%\Goat Worker Provisioning Bridge xc4ZXa`;
   log: `.tmp/comparison-cell-volume-controller-provisioning-v4.log`.
 - `pnpm verify:remote-worker:windows-cell-job` passes its full component lane,
   including 1,523 checks in each native build. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job z6zfKG`;
+  `%TEMP%\Goat Worker Cell Job z6zfKG`;
   log: `.tmp/comparison-cell-volume-controller-native-job-v3.log`.
 - The controller payload test passes two byte-identical builds for each of
   Windows x64 and ARM64, with the reviewed 29-file source inventory. Evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload Y3aHxM`;
+  `%TEMP%\Goat Controller Payload Y3aHxM`;
   log: `.tmp/comparison-cell-volume-controller-payload-v4.log`. This proves
   compilation/reproducibility; ARM64 execution and installation were not run.
 - Scoped ESLint, documentation checks and whitespace checks pass. Earlier
@@ -8452,7 +8456,7 @@ Validation:
   scenarios pass against PostgreSQL 16 in a task-owned disposable cluster.
   The cluster was stopped after checking process/data-directory/port ownership;
   retained evidence is under
-  `C:\Users\spurn\AppData\Local\Temp\gc-worker-runtime-read-pg-cmcvndmu.vbn`.
+  `%TEMP%\gc-worker-runtime-read-pg-cmcvndmu.vbn`.
 - `.tmp/comparison-worker-runtime-read-contracts-v1.log`: 13 tests pass, including
   identity/truth validation and rejection of executable accessors in cell data.
 - `.tmp/comparison-worker-runtime-read-gateway-v1.log`: 45 route/service tests
@@ -8508,7 +8512,7 @@ Fresh proof for this extension:
   and actual expiry/pruning.
 - `.tmp/comparison-worker-contact-postgres-tests-v1.log`: the same six scenarios
   pass on PostgreSQL 16. The task-owned cluster at
-  `C:\Users\spurn\AppData\Local\Temp\gc-worker-contact-pg-p2nhirft.hm5`
+  `%TEMP%\gc-worker-contact-pg-p2nhirft.hm5`
   was stopped after checking process/data-directory/port ownership.
 - `.tmp/comparison-worker-contact-contracts-v1.log`: 15 contract tests pass.
 - `.tmp/comparison-worker-contact-gateway-v1.log`: 45 Gateway route/service tests
@@ -8570,13 +8574,13 @@ Fresh proof:
   each normal/AddressSanitizer build and compiles the same source for ARM64.
   ARM64 was not executed. Evidence:
   `.tmp/comparison-cell-volume-binding-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Volume Binding gNgWfG`.
+  `%TEMP%\Goat Worker Volume Binding gNgWfG`.
 - `pnpm verify:remote-worker:windows-cell-job` passes 1,871 checks in each native
   normal/AddressSanitizer run, including these 348 new checks. The receipt reports
   `volumeBindingExercised`, `volumeLayoutExercised` and
   `volumeAttachmentExercised` as false. Evidence:
   `.tmp/comparison-cell-volume-binding-job-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job QRGz1h`.
+  `%TEMP%\Goat Worker Cell Job QRGz1h`.
 - Portable acceptance source inventories include the new owner and test. All six
   inventory/staging checks pass in
   `.tmp/comparison-cell-volume-binding-acceptance-files-v1.log`.
@@ -8644,12 +8648,12 @@ Fresh proof:
   read-only Windows schema/query checks pass in each normal/AddressSanitizer
   build. The same source compiles for ARM64, which was not executed. Evidence:
   `.tmp/comparison-cell-ntfs-format-v4.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker NTFS Format qTfHbX`.
+  `%TEMP%\Goat Worker NTFS Format qTfHbX`.
 - `pnpm verify:remote-worker:windows-cell-job`: 3,133 checks pass in each native
   normal/AddressSanitizer run, including all 1,262 formatter checks. Its
   `ntfsFormatExercised`, `volumeBindingExercised` and `volumeLayoutExercised`
   fields remain false. Evidence: `.tmp/comparison-cell-ntfs-format-job-v1.log`
-  and `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job HtImB5`.
+  and `%TEMP%\Goat Worker Cell Job HtImB5`.
 - The portable acceptance inventory includes the new owner, adapter and tests;
   all six inventory/staging checks pass in
   `.tmp/comparison-cell-ntfs-format-inventory-v1.log`.
@@ -8699,24 +8703,24 @@ Fresh proof:
   VHDX creation with controlled attachment/GPT/format responses. Fresh readers
   verify persisted histories, and independent JavaScript reconstructs both full
   formatting records. Evidence: `.tmp/comparison-cell-format-journal-job-v2.log`
-  and `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job V0X0aO`.
+  and `%TEMP%\Goat Worker Cell Job V0X0aO`.
   The initial v1 compile caught a signed/unsigned test comparison, fixed before
   the passing v2 run.
 - `pnpm verify:remote-worker:windows-cell-controller-protocol`: 2,476 checks and
   46 sessions in each normal/AddressSanitizer build. Existing creation/volume
   transport and interactive service refusal still pass. Evidence:
   `.tmp/comparison-cell-format-journal-controller-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol 305Knc`.
+  `%TEMP%\Goat Cell Controller Protocol 305Knc`.
 - `pnpm verify:remote-worker:windows-cell-provisioning`: worker/Gateway typechecks
   and all eight helper/Gateway bridge checks pass, including real creation,
   recovery, lost acknowledgements and custody refusal. Evidence:
   `.tmp/comparison-cell-format-journal-provisioning-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge ys1j1h`.
+  `%TEMP%\Goat Worker Provisioning Bridge ys1j1h`.
 - The controller payload builds reproducibly twice for both x64 and ARM64 with
   all 35 retained source inputs. This is build evidence; ARM64 was not executed
   and no service was installed. Evidence:
   `.tmp/comparison-cell-format-journal-payload-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload OfpjtX`.
+  `%TEMP%\Goat Controller Payload OfpjtX`.
 - All six portable inventory/staging checks pass in
   `.tmp/comparison-cell-format-journal-inventory-v1.log`.
 - Changed packaging modules pass ESLint with zero warnings in
@@ -8763,7 +8767,7 @@ Fresh proof:
   `.tmp/comparison-cell-format-exchange-sqlite-v2.log` and
   `.tmp/comparison-cell-format-exchange-postgres-tests-v2.log`.
   Its isolated PostgreSQL cluster was verified and stopped; evidence remains at
-  `C:\Users\spurn\AppData\Local\Temp\gc-cell-format-exchange-pg-pggcujj0.ui0`.
+  `%TEMP%\gc-cell-format-exchange-pg-pggcujj0.ui0`.
 - Worker client/coordinator tests: 51 passed. Protected Gateway protocol tests:
   49 passed. Evidence: `.tmp/comparison-cell-format-exchange-worker-v1.log` and
   `.tmp/comparison-cell-format-exchange-gateway-v1.log`.
@@ -8788,7 +8792,7 @@ Fresh proof:
   `.tmp/comparison-cell-format-exchange-provisioning-v1.log` and
   `.tmp/comparison-cell-format-exchange-types-v2.log`.
   The bridge uses temporary native fixtures retained at
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge CjNEhN`;
+  `%TEMP%\Goat Worker Provisioning Bridge CjNEhN`;
   it does not certify an installed service or exercise physical formatting.
 - ESLint reports zero errors across the 22 checked source/test files. Strict
   zero-warning lint remains nonzero for the protocol service's existing
@@ -8838,7 +8842,7 @@ Fresh proof:
   exact thirteen-record recovery frames; real recovery refuses the unattached
   fixture and preserves its bytes. Evidence:
   `.tmp/comparison-cell-format-controller-native-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol PnJHEG`.
+  `%TEMP%\Goat Cell Controller Protocol PnJHEG`.
   The initial run exposed the test reader's earlier eleven-record size limit;
   it was updated to the new bounded thirteen-record history before this rerun.
 - All 152 focused worker tests pass, including binary format transport, exact
@@ -8849,11 +8853,11 @@ Fresh proof:
   helper/Gateway regression checks and worker/Gateway typechecks. This proves
   the creation bridge remains intact; it is not physical formatting acceptance.
   Evidence: `.tmp/comparison-cell-format-controller-provisioning-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge QrK80t`.
+  `%TEMP%\Goat Worker Provisioning Bridge QrK80t`.
 - Controller payloads build reproducibly twice for both x64 and ARM64 with all
   35 retained production source inputs. ARM64 was compiled, not executed.
   Evidence: `.tmp/comparison-cell-format-controller-payload-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload ftKeQz`.
+  `%TEMP%\Goat Controller Payload ftKeQz`.
 - The worker typecheck and all seven changed TypeScript/test/packaging modules
   pass ESLint with zero warnings:
   `.tmp/comparison-cell-format-controller-types-v2.log` and
@@ -8905,13 +8909,13 @@ Fresh proof:
   revoked authority and lost/mismatched acknowledgements. An independent Node
   encoder matches both 512-byte records. ARM64 compiles without execution.
   Evidence: `.tmp/comparison-cell-root-protection-native-v4.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Volume Protection dWCxIW`.
+  `%TEMP%\Goat Worker Volume Protection dWCxIW`.
 - `pnpm verify:remote-worker:windows-cell-format` passes 1,277 component checks
   and 24 read-only Windows checks in each normal/AddressSanitizer build. The new
   regression refuses a newly detected filesystem before any controlled format
   submission and refuses identity drift during final authorization. ARM64
   compiles. Evidence: `.tmp/comparison-cell-root-protection-format-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker NTFS Format mv4B0s`.
+  `%TEMP%\Goat Worker NTFS Format mv4B0s`.
 - The reproduced failures are retained in
   `.tmp/comparison-cell-root-protection-authority-race-v1.log` and
   `.tmp/comparison-cell-root-protection-format-race-v1.log`. An initial compile
@@ -8923,11 +8927,11 @@ Fresh proof:
   checks and unchanged thirteen-record wire history. Its journal/VHDX fixtures
   remain unattached. Evidence:
   `.tmp/comparison-cell-root-protection-controller-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol Tmoxd7`.
+  `%TEMP%\Goat Cell Controller Protocol Tmoxd7`.
 - Controller payloads build reproducibly twice for both x64 and ARM64, with
   37 production inputs including the new protection component. Evidence:
   `.tmp/comparison-cell-root-protection-payload-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload UpX9ZT`.
+  `%TEMP%\Goat Controller Payload UpX9ZT`.
 - The three changed packaging modules pass strict ESLint with zero warnings,
   and `pnpm docs:check` passes. Logs:
   `.tmp/comparison-cell-root-protection-lint-v1.log` and
@@ -8982,30 +8986,30 @@ Fresh proof:
   and rehashed binding drift. An independent Node encoder reconstructs both
   protection records byte-for-byte from the actual fifteen-record receipts.
   Evidence: `.tmp/comparison-cell-protection-journal-native-v3.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job y8CF6M`.
+  `%TEMP%\Goat Worker Cell Job y8CF6M`.
 - `pnpm verify:remote-worker:windows-cell-protection` passes 1,197 component
   checks and 40 actual temporary-directory checks in each normal/AddressSanitizer
   build, including portable policy-hash checks. ARM64 compiles without execution.
   Evidence: `.tmp/comparison-cell-protection-journal-root-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Volume Protection 2dfQss`.
+  `%TEMP%\Goat Worker Volume Protection 2dfQss`.
 - `pnpm verify:remote-worker:windows-cell-controller-protocol` passes 5,602
   checks across 67 sessions, including 58 native-client sessions, in each normal
   and AddressSanitizer build. Its existing thirteen-record transport and 66
   format-authority checks remain unchanged; no installed service or physical
   volume operation ran. Evidence:
   `.tmp/comparison-cell-protection-journal-controller-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol 4XIoZr`.
+  `%TEMP%\Goat Cell Controller Protocol 4XIoZr`.
 - `pnpm verify:remote-worker:windows-cell-provisioning` passes both worker/Gateway
   typechecks under the repository output lock and all eight helper/Gateway
   tests. The native helper now includes the protection component in its pinned
   source inventory. Exact journal recovery, lost-acknowledgement refusal,
   modified-image refusal and interactive custody refusal still pass. Evidence:
   `.tmp/comparison-cell-protection-journal-provisioning-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge sYoWmB`.
+  `%TEMP%\Goat Worker Provisioning Bridge sYoWmB`.
 - Controller payloads build reproducibly twice for each x64/ARM64 target from
   all 37 production inputs. ARM64 is compile-only. Evidence:
   `.tmp/comparison-cell-protection-journal-payload-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload pvBj2V`.
+  `%TEMP%\Goat Controller Payload pvBj2V`.
 - The five changed packaging modules pass strict ESLint with zero warnings.
   Evidence: `.tmp/comparison-cell-protection-journal-lint-v1.log`.
 
@@ -9067,7 +9071,7 @@ Fresh proof:
   Evidence: `.tmp/comparison-cell-protection-exchange-sqlite-v2.log` and
   `.tmp/comparison-cell-protection-exchange-postgres-tests-v1.log`. The exclusively
   created cluster at
-  `C:\Users\spurn\AppData\Local\Temp\gc-cell-protection-exchange-pg-kd3y4nwu.eib`
+  `%TEMP%\gc-cell-protection-exchange-pg-kd3y4nwu.eib`
   used loopback port 54319 and was verified stopped afterward.
 - The worker client/coordinator passes 59 tests, and the Gateway execution
   protocol passes 50. Evidence: `.tmp/comparison-cell-protection-exchange-worker-v1.log`
@@ -9085,7 +9089,7 @@ Fresh proof:
   exchange contract. Evidence:
   `.tmp/comparison-cell-protection-exchange-versioning-v1.log`,
   `.tmp/comparison-cell-protection-exchange-provisioning-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge MAC8SU`.
+  `%TEMP%\Goat Worker Provisioning Bridge MAC8SU`.
 - Twenty-two changed source/test files pass strict ESLint without warnings. The
   separately checked execution-protocol owner has no errors and retains its
   existing 1,023/1,000-line warning. Evidence:
@@ -9137,7 +9141,7 @@ Fresh proof:
   cancellation, rehashed format/policy/volume/root drift, foreign principals,
   exact recovery transport and refusal of real recovery for the unattached
   fixture. Evidence: `.tmp/comparison-cell-protection-transport-controller-v1.log`
-  and `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol FTHF1p`.
+  and `%TEMP%\Goat Cell Controller Protocol FTHF1p`.
 - Five focused worker files pass 181 tests. This includes exact binary recovery,
   checkpoint acknowledgements, creation/recovery separation, partial evidence,
   changed canonical history, helper custody and rotated-lease startup. Evidence:
@@ -9151,13 +9155,13 @@ Fresh proof:
   each of x64 and ARM64, retaining all 37 production source inputs. ARM64
   compilation is not ARM64 execution. Evidence:
   `.tmp/comparison-cell-protection-transport-payload-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload kO1eck`.
+  `%TEMP%\Goat Controller Payload kO1eck`.
 - Worker/Gateway typechecks pass under the repository output lock. The named
   helper/Gateway regression lane passes eight tests with the new transport
   source, including explicit refusal of operations 3-8 from direct component
   execution or an interactive caller without installed controller custody.
   Evidence: `.tmp/comparison-cell-protection-transport-provisioning-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge Rsu4xu`.
+  `%TEMP%\Goat Worker Provisioning Bridge Rsu4xu`.
 - Eight changed TypeScript/JavaScript source and test files pass strict ESLint
   with no warnings: `.tmp/comparison-cell-protection-transport-lint-v2.log`.
 
@@ -9199,7 +9203,7 @@ every truncated response and single-byte corruption of the canonical reparse
 fixture, foreign GUIDs, UTF-16/offset errors, second aliases, wrong parents,
 sibling names, ordinary-directory substitution and alternate streams. Evidence:
 `.tmp/comparison-cell-mount-target-native-v2.log` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Mount Target P0of81`.
+`%TEMP%\Goat Worker Mount Target P0of81`.
 The packaging test passes strict ESLint without warnings.
 
 This primitive creates no mount or authority. Its caller must still own retained
@@ -9254,7 +9258,7 @@ authority boundary, revocation during both mutation preparations, identity drift
 uncertain SDK errors, cancellation, incomplete/reordered/foreign records and
 every single-byte corruption. Node independently reconstructs all four records.
 Evidence: `.tmp/comparison-cell-mount-native-v3.log` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Volume Mount uIk7ax`.
+`%TEMP%\Goat Worker Volume Mount uIk7ax`.
 The first compile exposed a signed/unsigned fixture warning; the corrected lane
 passes with warnings treated as errors. The packaging test passes strict ESLint.
 
@@ -9266,8 +9270,8 @@ journal checks. Its live-attachment environment option and installed-payload
 overrides were explicitly required to be absent before dispatch. Evidence:
 `.tmp/comparison-cell-mount-protection-regression-v1.log`,
 `.tmp/comparison-cell-mount-job-regression-v1.log`,
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Volume Protection 9CzfPn` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job 6DaKBd`.
+`%TEMP%\Goat Worker Volume Protection 9CzfPn` and
+`%TEMP%\Goat Worker Cell Job 6DaKBd`.
 The job lane creates unattached VHDX fixtures; its attachment, layout, formatting
 and volume-root protection execution flags all remain false.
 
@@ -9323,7 +9327,7 @@ mismatches and consistently rehashed attempts to substitute protected host
 objects. Node independently verifies the complete chain and reconstructs the
 four mount records. Evidence:
 `.tmp/comparison-cell-mount-journal-native-v3.log` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job Czjp6s`.
+`%TEMP%\Goat Worker Cell Job Czjp6s`.
 
 The first compile exposed a shadowed fixture variable. After correction, the
 normal lane passed but the larger AddressSanitizer build exceeded the compiler's
@@ -9339,16 +9343,16 @@ builds pass for x64 and ARM64 with 41 recorded source inputs; ARM64 is compiled,
 not executed. Evidence: `.tmp/comparison-cell-mount-journal-controller-v1.log`,
 `.tmp/comparison-cell-mount-journal-provisioning-v1.log` and
 `.tmp/comparison-cell-mount-journal-payload-v1.log`, with retained directories
-`C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol 6H6awR`,
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Provisioning Bridge fwSutf` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload 6BbTL4`.
+`%TEMP%\Goat Cell Controller Protocol 6H6awR`,
+`%TEMP%\Goat Worker Provisioning Bridge fwSutf` and
+`%TEMP%\Goat Controller Payload 6BbTL4`.
 These verify existing transport compatibility and build inputs; mount-aware
 controller/helper operations have not been exposed or activated.
 
 The standalone mount owner also passes its normal/AddressSanitizer regression
 with 2,378 checks per build, including nine ordinary-directory checks, and ARM64
 compilation. Evidence: `.tmp/comparison-cell-mount-journal-owner-v1.log` and
-`C:\Users\spurn\AppData\Local\Temp\Goat Worker Volume Mount wtCYzU`.
+`%TEMP%\Goat Worker Volume Mount wtCYzU`.
 
 These tests create ordinary task-owned directories, protected journal files and
 unattached VHDX fixtures. Layout, formatting, root protection and mounting use
@@ -9556,7 +9560,7 @@ Validation:
   exposed an invalid-handle case that was fixed and passed on retry.
 - Evidence is retained in
   `.tmp/comparison-mounted-workspace-component-v4.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Mounted Workspace vgARmR\acceptance.json`.
+  `%TEMP%\Goat Mounted Workspace vgARmR\acceptance.json`.
   Earlier failed attempts remain recorded separately; they are not passing proof.
 - The existing `verify:remote-worker:windows-cell-job` lane also passes: 4,939
   checks per normal/AddressSanitizer build, including 239 workspace and 2,377
@@ -9620,7 +9624,7 @@ Validation:
   corruption inside an authorization callback, missing canonical records,
   suffixes, torn writes, rehashed substitutions and refusal to resume recovery.
 - Evidence: `.tmp/comparison-mounted-workspace-journal-native-v3.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job 3GSgm6`, including
+  `%TEMP%\Goat Worker Cell Job 3GSgm6`, including
   `mounted-workspace-normal.json` and `mounted-workspace-asan.json`.
   The prior compiler-warning and combined-ASAN-timeout attempts are retained
   separately; they are not passing proof. The timeout led to the separate
@@ -9630,12 +9634,12 @@ Validation:
   108 native client sessions. This preserves the existing nineteen-record
   protocol; it does not establish transport for the two new workspace records.
   Evidence: `.tmp/comparison-mounted-workspace-journal-controller-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol BdiGMI`.
+  `%TEMP%\Goat Cell Controller Protocol BdiGMI`.
 - The controller payload test passes reproducible x64 and ARM64 builds from
   all 43 source inputs. ARM64 was compiled, not executed, and no installed
   service was started. Evidence:
   `.tmp/comparison-mounted-workspace-journal-payload-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload sMMTnK`.
+  `%TEMP%\Goat Controller Payload sMMTnK`.
 - Scoped strict ESLint and governance document validation pass. The full
   `pnpm docs:check` stops at two missing button types in the separate UI task's
   `DetailInspector.test.tsx:17-18`; that file remains untouched here. Evidence:
@@ -9692,7 +9696,7 @@ Validation:
   PostgreSQL clusters were stopped, with evidence retained. Latest evidence:
   `.tmp/comparison-workspace-exchange-sqlite-v2.log`,
   `.tmp/comparison-workspace-exchange-postgres-v2.log` and
-  `C:\Users\spurn\AppData\Local\Temp\gc-workspace-exchange-pg-ooy1wqho.2bg`.
+  `%TEMP%\gc-workspace-exchange-pg-ooy1wqho.2bg`.
 - `pnpm verify:storage:migration-parity` passes for SQLite 226 / PostgreSQL 171.
   The append-only manifest update preserves every earlier migration record.
   Evidence: `.tmp/comparison-workspace-exchange-migration-v1.log`.
@@ -9761,14 +9765,14 @@ Validation:
   place for both groups. These use actual pipe identity, retained journal bytes
   and flushed acknowledgements, with controlled volume/directory drivers and
   unattached VHDX fixtures. Evidence: `.tmp/comparison-workspace-transport-controller-v1.log`
-  and `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol qCfgTb`.
+  and `%TEMP%\Goat Cell Controller Protocol qCfgTb`.
 - Compiled helper callbacks: 48 scenarios pass in each build, including the
   complete 33,150-byte stream and rejection of a 257th authority challenge.
   The first run found an old 19-record guard that refused the new operation;
   that guard was extended and the same test passed. Both receipts are retained:
   `.tmp/comparison-workspace-transport-helper-v1.log` and
   `.tmp/comparison-workspace-transport-helper-v2.log`. Successful native evidence:
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Helper Protocol ERHtw7`.
+  `%TEMP%\Goat Cell Helper Protocol ERHtw7`.
 - Worker protocol/startup: 110 tests pass; coordinator/client regression: 94
   tests pass. Logs: `.tmp/comparison-workspace-transport-worker-v1.log` and
   `.tmp/comparison-workspace-transport-coordinator-v1.log`.
@@ -9778,7 +9782,7 @@ Validation:
 - Reproducible controller payloads pass for x64 and ARM64, with all 43 source
   inputs checked against the current files. ARM64 is compile-only. Evidence:
   `.tmp/comparison-workspace-transport-payload-v1.log` and
-  `C:\Users\spurn\AppData\Local\Temp\Goat Controller Payload HHsMnW`.
+  `%TEMP%\Goat Controller Payload HHsMnW`.
 - Six complete retained native histories pass shared TypeScript decoding and
   independent reconstruction of both workspace records. This includes failure
   scenarios with complete bytes; retained bytes do not override failed authority

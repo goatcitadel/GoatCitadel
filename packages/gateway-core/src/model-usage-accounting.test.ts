@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, it } from "vitest";
+import { afterEach, beforeEach, describe, it } from "vitest";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   ModelUsageAccountingService,
@@ -16,10 +16,21 @@ import {
 
 const storages: Storage[] = [];
 const roots: string[] = [];
+let harness: ReturnType<typeof createHarness>;
+
+// Fresh SQLite migrations can exceed 20 seconds on the shared coverage runner.
+// Keep setup separate from the accounting behavior's unchanged test deadline.
+beforeEach(() => {
+  harness = createHarness();
+}, 60_000);
 
 afterEach(() => {
   for (const storage of storages.splice(0)) storage.close();
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith("goatcitadel-model-accounting-"));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }, 20_000);
 
 function createHarness(): { storage: Storage; accounting: ModelUsageAccountingService } {
@@ -95,11 +106,10 @@ async function invokeFetch<T>(
   return { pending, handle: await reservation.accept() };
 }
 
-// Every case uses a real SQLite database. Concurrent package coverage on the
-// hosted runner can push setup and teardown beyond Vitest's 5-second default.
+// Every case retains its own real SQLite database and a bounded behavior deadline.
 describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   it("makes successful terminal settlement faults authoritative and never reclassifies them", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const originalFinalize = storage.modelUsageEvents.finalizeAndProject.bind(storage.modelUsageEvents);
     let finalizeCalls = 0;
     storage.modelUsageEvents.finalizeAndProject = ((...args: Parameters<typeof originalFinalize>) => {
@@ -128,7 +138,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("makes failed-attempt settlement faults authoritative over the provider error", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const originalFinalize = storage.modelUsageEvents.finalizeAndProject.bind(storage.modelUsageEvents);
     let finalizeCalls = 0;
     storage.modelUsageEvents.finalizeAndProject = ((...args: Parameters<typeof originalFinalize>) => {
@@ -150,7 +160,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("abandons a synchronous fetch throw without counting a network attempt", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     await assert.rejects(
       invokeFetch(reservation, () => {
@@ -162,12 +172,8 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
     assert.equal(storage.modelUsageEvents.list({ workspaceId: "workspace-1" }).summary.attemptCount, 0);
   });
 
-  // Real SQLite-backed harness: this case builds and tears down a database per run
-  // and sits close to vitest's 5s default under CI load. The suite ran under
-  // node:test before, which applied no such default, so the margin was never
-  // exercised. Give it explicit headroom rather than leaving it marginal.
   it("makes an intent-abandon persistence fault authoritative over a synchronous fetch error", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     let abandonCalls = 0;
     storage.modelUsageEvents.abandonTransportIntent = ((
@@ -191,7 +197,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   }, 20_000);
 
   it("makes a dispatch-unknown persistence fault authoritative and leaves recovery ownership intact", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     let markCalls = 0;
     storage.modelUsageEvents.markDispatchUnknown = ((
@@ -213,7 +219,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("makes an accepted lease-renewal persistence fault authoritative and leaves recovery ownership intact", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const call = await invokeFetch(await accounting.prepareDispatch(dispatchInput()), () =>
       Promise.resolve({ ok: true }),
     );
@@ -240,7 +246,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("records promise rejection as failed_before_usage", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     const failure = new Error("provider unavailable");
     const { pending, handle } = await invokeFetch(reservation, () => Promise.reject(failure));
@@ -252,7 +258,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("preserves provider-reported cost provenance and Responses cached input usage", async () => {
-    const { accounting } = createHarness();
+    const { accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     const { pending, handle } = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await pending;
@@ -274,7 +280,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("keeps partial usage on failure and classifies cancellation once", async () => {
-    const { accounting } = createHarness();
+    const { accounting } = harness;
     const partialReservation = await accounting.prepareDispatch(dispatchInput());
     const partial = await invokeFetch(partialReservation, () => Promise.resolve({ ok: true }));
     await partial.pending;
@@ -302,7 +308,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("keeps the first terminal settlement authoritative across later outcomes", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     const call = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await call.pending;
@@ -323,7 +329,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("blocks duplicate dispatch identity but permits an explicit new generation", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const first = await accounting.prepareDispatch(dispatchInput());
     await assert.rejects(
       accounting.prepareDispatch(dispatchInput()),
@@ -342,7 +348,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("tracks exact numeric zero instead of treating it as unknown", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     const call = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await call.pending;
@@ -361,7 +367,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("merges split stream usage, drops invalid values, and never detaches cost provenance", async () => {
-    const { accounting } = createHarness();
+    const { accounting } = harness;
     const reservation = await accounting.prepareDispatch(dispatchInput());
     const call = await invokeFetch(reservation, () => Promise.resolve({ ok: true }));
     await call.pending;
@@ -378,7 +384,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("persists frozen reasoning, service-account, and ADC attribution at the transport seam", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(
       dispatchInput({
         attribution: {
@@ -407,7 +413,7 @@ describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   });
 
   it("keeps local dispatch uncertainty unresolved while proving exact zero cost", async () => {
-    const { storage, accounting } = createHarness();
+    const { storage, accounting } = harness;
     const reservation = await accounting.prepareDispatch(
       dispatchInput({
         effectiveProviderId: "llamacpp",
