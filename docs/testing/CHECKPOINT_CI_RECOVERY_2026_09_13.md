@@ -28,19 +28,26 @@ The Trivy run at `136494173` reported 18 high-severity findings. GitHub advisory
 ranges and npm release availability were checked on 2026-09-13 before updating
 the following dependency families:
 
-| Dependency | Previous | Requested patched version | Owner |
+| Dependency | Previous | Patched version | Owner |
 | --- | --- | --- | --- |
 | `@xmldom/xmldom` | 0.8.13 | 0.8.15 | `mammoth` document import |
 | `browserslist` | 4.28.1 | 4.28.7 | Babel build tooling |
 | `fast-uri` | 3.1.5 | 3.1.6 | Ajv validation |
 | `js-yaml` | 4.3.1 | 4.3.2 | Cosmiconfig tooling |
 | `sharp` | 0.35.3 | 0.35.4 | Policy-engine image tools and repo tooling |
+| `tar` | 7.5.18 | 7.5.21 | CycloneDX SBOM tooling |
 
 Primary references: [xmldom 0.8.15](https://github.com/xmldom/xmldom/releases/tag/0.8.15),
 [Browserslist advisory](https://github.com/advisories/GHSA-73wf-gq98-2v4g),
 [fast-uri advisory](https://github.com/advisories/GHSA-jqff-g426-hqxp),
-[js-yaml advisory](https://github.com/advisories/GHSA-2883-xcg3-v3hh), and
-[sharp advisory](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c).
+[js-yaml advisory](https://github.com/advisories/GHSA-2883-xcg3-v3hh),
+[sharp advisory](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c), and
+[tar advisory](https://github.com/advisories/GHSA-r292-9mhp-454m).
+
+The scan with development dependencies included identified two additional `tar`
+findings, CVE-2026-59873 and CVE-2026-73566. Both are addressed by 7.5.21. The
+lockfile changes stay within these six families and their required dependency
+trees; unrelated direct dependencies were not upgraded.
 
 `image-size` remains at the patched local 1.2.1 dependency used by `pptxgenjs`.
 The current npm release, 2.0.2, still has no published fix for
@@ -57,14 +64,33 @@ detection again. Only the existing two exceptions were renewed, through
   unmount regression.
 - Remote-worker execution protocol: 52 tests passed.
 - Locked Gateway, Mission Control and policy-engine TypeScript build checks passed.
+- The locked Mission Control production build passed with the updated build dependencies.
 - `pnpm docs:check` passed, including nine Docker-secret source tests.
 - `pnpm verify:gateway:async-boundary` passed ten tests and scanned 997 production
   TypeScript files.
-- The image parser patch review passed all three tests before renewal.
+- The image parser patch review passed all three tests before renewal and after
+  the frozen dependency installation.
+- Policy-engine tests with the updated image and document dependencies: 927
+  passed across 70 files.
+- The SBOM tool's resolved `tar` 7.5.21 dependency created and read a compressed
+  fixture archive successfully, without extracting it.
 
-Dependency installation and the final refreshed vulnerability scan are still
-pending while this report is being prepared. Their results must be recorded
-before claiming the dependency findings repaired.
+Lockfile resolution and frozen installation completed. The final Trivy 0.69.3
+scan used a freshly downloaded database and included development dependencies:
+1,380 pnpm dependency entries, zero unsuppressed high or critical findings. The
+scope was `pnpm-lock.yaml`, with the same two expiring image-parser exceptions
+described above. This does not assert that every severity, secret or
+misconfiguration finding is clear. Evidence:
+
+- `.tmp/comparison-checkpoint-trivy-all-dependencies-final.json`
+- `.tmp/comparison-checkpoint-ci-policy-engine-final.log`
+- `.tmp/comparison-checkpoint-image-patch-final.log`
+- `.tmp/comparison-checkpoint-tar-proof-final.json`
+- `.tmp/comparison-checkpoint-ci-typecheck-final.log`
+- `.tmp/comparison-checkpoint-ci-next-build-final.log`
+
+Source cleanup commit `efee19b6e` was pushed to `main`; GitHub's Code Quality
+workflow passed for that commit. The dependency update is a separate checkpoint.
 
 ## Remaining hosted failures
 

@@ -117,7 +117,7 @@ test("Trivy exceptions are limited and expire for review", () => {
     .split(/\r?\n/u)
     .filter((line) => /^CVE-/u.test(line));
 
-  assert.deepEqual(ignoredEntries, ["CVE-2025-71329 exp:2026-09-08", "CVE-2025-71330 exp:2026-09-08"]);
+  assert.deepEqual(ignoredEntries, ["CVE-2025-71329 exp:2026-09-27", "CVE-2025-71330 exp:2026-09-27"]);
   const packageManifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   assert.equal(packageManifest.pnpm?.patchedDependencies?.["image-size@1.2.1"], "patches/image-size@1.2.1.patch");
 });
