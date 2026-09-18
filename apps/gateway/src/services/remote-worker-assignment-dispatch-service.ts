@@ -22,6 +22,7 @@ import type {
   ResolveRemoteWorkerAssignmentWorkloadInput,
 } from "@goatcitadel/storage";
 import type { CurrentRemoteWorkerRuntimeCredentialAuthority } from "./remote-worker-current-authority-service.js";
+import { readProjectedWorkerAssignmentWorkload, type RemoteWorkerWorkloadProjector } from "./remote-worker-assignment-workload-reader.js";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -102,6 +103,7 @@ export class RemoteWorkerAssignmentDispatchService {
   public constructor(
     private readonly assignments: RemoteWorkerAssignmentDispatchStorePort,
     private readonly meshAdmissions: RemoteWorkerAssignmentMeshAdmissionPort,
+    private readonly projectWorkload?: RemoteWorkerWorkloadProjector,
   ) {}
 
   public async listOffers(
@@ -176,7 +178,7 @@ export class RemoteWorkerAssignmentDispatchService {
         }),
       );
       if (!context) return undefined;
-      return await this.assignments.resolveTaskBoundChatWorkload({
+      const binding = {
         authority: authority.claim,
         meshAdmission: context.meshAdmission,
         registryWorkspaceId: authority.claim.registryWorkspaceId,
@@ -184,7 +186,8 @@ export class RemoteWorkerAssignmentDispatchService {
         expectedAssignmentGeneration: input.expectedAssignmentGeneration,
         expectedLeaseRevision: input.expectedLeaseRevision,
         leaseTokenSha256,
-      });
+      };
+      return await readProjectedWorkerAssignmentWorkload({ assignments: this.assignments, projectWorkload: this.projectWorkload }, binding);
     } catch {
       throw rejected("Remote worker assignment workload is unavailable.");
     }

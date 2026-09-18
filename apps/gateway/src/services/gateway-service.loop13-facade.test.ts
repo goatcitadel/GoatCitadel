@@ -1145,7 +1145,7 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     await expect(GatewayService.prototype.requireMcpServer.call(gateway, "missing")).rejects.toThrow(
       /Unknown MCP server/,
     );
-    await GatewayService.prototype.writeMcpServers.call(gateway, [{ serverId: "server-2" }] as never,
+    await gateway.mcpServerStore.writeServers([{ serverId: "server-2" }] as never,
       await GatewayService.prototype.readMcpServers.call(gateway));
     expect(systemSettingsStore.get("mcp_servers_v1")).toEqual([
       expect.objectContaining({ serverId: "server-2", configurationBindingId: expect.any(String) }),
@@ -1168,7 +1168,7 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       },
     ]);
     expect(
-      await GatewayService.prototype.patchMcpServerState.call(gateway, "server-1", {
+      await gateway.mcpServerStore.patchServerState("server-1", {
         status: "error",
         lastError: "boom",
       }),
@@ -1181,20 +1181,20 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       { serverId: "server-1", toolName: "z.tool" },
       { serverId: "server-1", toolName: "a.tool" },
     ]);
-    await GatewayService.prototype.writeMcpTools.call(gateway, [
+    await gateway.mcpServerStore.writeTools([
       { serverId: "server-1", toolName: "new.tool" },
     ] as never);
     expect(gateway.storage.systemSettings.set).toHaveBeenCalledWith("mcp_tools_v1", [
       { serverId: "server-1", toolName: "new.tool" },
     ]);
-    expect(await GatewayService.prototype.readMcpAuthState.call(gateway)).toEqual({ "server-1": { connected: true } });
+    expect(await gateway.mcpServerStore.readAuthState()).toEqual({ "server-1": { connected: true } });
     const authServer = { ...await GatewayService.prototype.requireMcpServer.call(gateway, "server-1"), authType: "oauth2" as const };
     delete authServer.authState;
     systemSettingsStore.set("mcp_servers_v1", [authServer]);
     const expectedAuth = { updatedAt: "2026-09-11T00:00:00.000Z" };
     systemSettingsStore.set("mcp_auth_state_v1", { "server-1": expectedAuth });
     const nextAuth = { ...expectedAuth, oauthState: "fixture-handshake" };
-    await GatewayService.prototype.writeMcpAuthState.call(gateway, { server: authServer, expected: expectedAuth, next: nextAuth });
+    await gateway.mcpServerStore.writeAuthState({ server: authServer, expected: expectedAuth, next: nextAuth });
     expect(systemSettingsStore.get("mcp_auth_state_v1")).toEqual({ "server-1": nextAuth });
     systemSettingsStore.set("mcp_servers_v1", [
       { serverId: "server-1", label: "Server One", transport: "stdio", status: "connected", enabled: true },
@@ -1212,15 +1212,6 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       ),
     ).toEqual(["a.tool", "z.tool"]);
     expect(await GatewayService.prototype.listMcpBrowserFallbackTargets.call(gateway)).toEqual([]);
-    expect(await GatewayService.prototype.createMcpServer.call(gateway, { label: "New" } as never)).toMatchObject({
-      serverId: "server-created",
-    });
-    await expect(GatewayService.prototype.connectMcpServer.call(gateway, "server-1")).resolves.toMatchObject({
-      status: "connected",
-    });
-    expect(await GatewayService.prototype.disconnectMcpServer.call(gateway, "server-1")).toMatchObject({
-      status: "disconnected",
-    });
     await expect(
       GatewayService.prototype.invokeMcpTool.call(gateway, { serverId: "server-1" } as never),
     ).resolves.toMatchObject({ invoked: true });
@@ -1249,7 +1240,6 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
         "gpt-active",
       ),
     ).toEqual([{ providerId: "moonshot", model: "kimi-latest" }]);
-    expect(mcpServerAdminService.createMcpServer).toHaveBeenCalledWith(gateway, { label: "New" });
   });
 });
 

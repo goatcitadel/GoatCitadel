@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -60,6 +61,11 @@ import {
 const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 
 export class MemoryContextService {
+  private readonly queryEmbeddingCache = new Map<string, {
+    embedding: number[];
+    providerIsReal: boolean;
+    expiresAt: number;
+  }>();
   public constructor(
     private readonly storage: Storage,
     private readonly llmService: LlmService,
@@ -91,7 +97,7 @@ export class MemoryContextService {
           embedding: input.queryEmbedding,
           providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
         }
-      : await this.resolveQueryEmbedding(input, prompt, usageLineage);
+      : await this.resolveQueryEmbedding(input, prompt, accessReceipt.fingerprint, usageLineage);
     const queryEmbedding = resolvedQueryEmbedding.embedding;
     const queryHash = buildQueryHash(prompt, queryEmbedding);
     if (shouldShortCircuit) {
@@ -564,6 +570,7 @@ export class MemoryContextService {
   private async resolveQueryEmbedding(
     input: MemoryContextComposeRequest,
     prompt: string,
+    accessFingerprint: string,
     usageLineage?: TrustedUtilityModelUsageLineage,
   ): Promise<{ embedding?: number[]; providerIsReal: boolean }> {
     if (input.queryEmbedding && input.queryEmbedding.length > 0) {
@@ -575,6 +582,26 @@ export class MemoryContextService {
     if (!prompt) {
       return { providerIsReal: false };
     }
+    // Cache only the query computation. Sources and canonical access are still
+    // read on every composition so edits, deletions and access changes take effect.
+    // Hash exact prompt bytes: embedding providers need not be case-insensitive.
+    const profile = currentEmbeddingProfile();
+    const cacheKey = createHash("sha256").update(JSON.stringify({
+      prompt, profile, endpoint: process.env.GOATCITADEL_EMBEDDINGS_URL,
+      scope: input.scope, workspaceId: input.workspaceId, workspace: input.workspace,
+      sessionId: input.sessionId, taskId: input.taskId, runId: input.runId,
+      phaseId: input.phaseId, accessFingerprint,
+    })).digest("hex");
+    const now = Date.now();
+    for (const [key, entry] of this.queryEmbeddingCache) {
+      if (entry.expiresAt <= now) this.queryEmbeddingCache.delete(key);
+    }
+    const cached = this.queryEmbeddingCache.get(cacheKey);
+    if (!input.forceRefresh && cached) {
+      throwIfMemoryContextAborted(input.signal);
+      return { embedding: [...cached.embedding], providerIsReal: cached.providerIsReal };
+    }
+    this.queryEmbeddingCache.delete(cacheKey);
     try {
       const generated = await generateEmbedding(prompt, undefined, undefined, {
         purpose: "embedding_query",
@@ -592,6 +619,22 @@ export class MemoryContextService {
           utilityKind: "memory_context_query_embedding",
         },
       });
+      throwIfMemoryContextAborted(input.signal);
+      const ttlMs = Math.min(300_000, this.config.assistant.memory.qmd.cacheTtlSeconds * 1000);
+      // Never retain a degraded result: a recovered provider must be retried.
+      if (ttlMs > 0 && generated.embedding.length > 0
+        && profile.status === "active" && generated.profile.status === "active"
+        && generated.metadata.provider === profile.provider) {
+        if (this.queryEmbeddingCache.size >= 128) {
+          const oldest = this.queryEmbeddingCache.keys().next().value;
+          if (oldest !== undefined) this.queryEmbeddingCache.delete(oldest);
+        }
+        this.queryEmbeddingCache.set(cacheKey, {
+          embedding: [...generated.embedding],
+          providerIsReal: generated.metadata.provider !== "pseudo",
+          expiresAt: Date.now() + ttlMs,
+        });
+      }
       return {
         ...(generated.embedding.length > 0 ? { embedding: generated.embedding } : {}),
         providerIsReal: generated.metadata.provider !== "pseudo",

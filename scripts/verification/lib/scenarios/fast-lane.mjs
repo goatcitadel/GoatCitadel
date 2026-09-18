@@ -15,6 +15,10 @@ const FAST_LANE_SAFE_TEST_CONCURRENCY = 2;
 // roughly eight and a half minutes. Sharding only pays off across machines, so the
 // shards run serially in a local lane and one-per-job in CI.
 const FAST_LANE_VITEST_MAX_WORKERS = 4;
+// UI and recursive library coverage share one stage. Bound the whole stage to
+// four test workers: two for UI plus one per concurrently running library.
+const FAST_LANE_UI_VITEST_MAX_WORKERS = 2;
+const FAST_LANE_LIBRARY_VITEST_MAX_WORKERS = 1;
 const GATEWAY_TEST_SHARDS = Object.freeze(
   Array.from({ length: GATEWAY_COVERAGE_SHARD_COUNT }, (_unused, index) => index + 1),
 );
@@ -103,10 +107,7 @@ export const FAST_LANE_COMMANDS = Object.freeze([
       "--filter",
       "@goatcitadel/mission-control-next",
       "test:coverage",
-      // This scenario runs beside the recursive library coverage command. An
-      // uncapped Vitest pool on each side can oversubscribe a high-core host and
-      // turn the shell's cold dynamic import into a false 20-second timeout.
-      `--maxWorkers=${FAST_LANE_VITEST_MAX_WORKERS}`,
+      `--maxWorkers=${FAST_LANE_UI_VITEST_MAX_WORKERS}`,
     ],
   },
   {
@@ -122,6 +123,7 @@ export const FAST_LANE_COMMANDS = Object.freeze([
       "-r",
       "--workspace-concurrency=2",
       "test:coverage",
+      `--maxWorkers=${FAST_LANE_LIBRARY_VITEST_MAX_WORKERS}`,
     ],
   },
   {

@@ -50,6 +50,10 @@ interface Harness {
 }
 
 const harnesses: Harness[] = [];
+// Each case builds a fresh, fully migrated database with synchronous=FULL.
+// Measured Windows fixture startup alone takes about 15 seconds; this budget
+// includes setup and does not change storage or transaction deadlines.
+const FIXTURE_TEST_TIMEOUT_MS = 30_000;
 
 afterEach(() => {
   for (const harness of harnesses.splice(0)) {
@@ -286,7 +290,7 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     expect(item2?.forgotten_at).toBeTruthy();
 
     expect(countMemoryChangeHistoryRows(harness.db)).toBe(2);
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 
   it("rolls back every batch mutation on a real transactional failure", async () => {
     let updateCallCount = 0;
@@ -361,5 +365,5 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     expect(item2).toStrictEqual(item2Snapshot);
 
     expect(countMemoryChangeHistoryRows(harness.db)).toBe(0);
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 });

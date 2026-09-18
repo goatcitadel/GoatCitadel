@@ -4,23 +4,25 @@ import type {
   McpInvokeResponse,
   McpOAuthStartResponse,
   McpServerCreateInput,
-  McpServerPolicy,
+  McpServerPolicyUpdateRequest,
   McpServerRecord,
   McpServerTemplateRecord,
-  McpServerUpdateInput,
+  McpServerUpdateRequest,
   McpTemplateDiscoveryResult,
   McpToolRecord,
 } from "@goatcitadel/contracts";
 import type { McpElicitationService } from "./mcp-elicitation-service.js";
 import { preserveMcpServerSecretsForPublicUpdate, projectMcpPublicValue } from "./mcp-public-projection.js";
+import { NotFoundError } from "@goatcitadel/contracts";
+import { assertMcpServerReview } from "./mcp-server-revision.js";
 
 export interface McpRoutePort {
   /** Shared MCP elicitation store, also consumed by the approval-inbox respond/list tools. */
   readonly elicitations: McpElicitationService;
   completeMcpOAuth(serverId: string, code: string, state?: string): Promise<McpServerRecord>;
   connectMcpServer(serverId: string): Promise<McpServerRecord>;
-  createMcpServer(input: McpServerCreateInput): Promise<McpServerRecord>;
-  deleteMcpServer(serverId: string): Promise<{ deleted: boolean }>;
+  createMcpServer(input: McpServerCreateInput, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
+  deleteMcpServer(serverId: string, expectedRevision: string, onCommitted?: () => void | Promise<void>): Promise<{ deleted: boolean }>;
   disconnectMcpServer(serverId: string): Promise<McpServerRecord>;
   invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse>;
   listMcpServers(): Promise<McpServerRecord[]>;
@@ -29,8 +31,8 @@ export interface McpRoutePort {
   listMcpTools(serverId: string): Promise<McpToolRecord[]>;
   runMcpServerHealthCheck(serverId: string): Promise<ConnectorDiagnosticReport>;
   startMcpOAuth(serverId: string): Promise<McpOAuthStartResponse>;
-  updateMcpServer(serverId: string, input: McpServerUpdateInput): Promise<McpServerRecord>;
-  updateMcpServerPolicy(serverId: string, policy: Partial<McpServerPolicy>): Promise<McpServerRecord>;
+  updateMcpServer(serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
+  updateMcpServerPolicy(serverId: string, policy: McpServerPolicyUpdateRequest, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
 }
 
 export type McpAdminPort = McpRoutePort;
@@ -47,6 +49,16 @@ export class McpRouteService {
     return projectMcpPublicValue(await this.mcp.listMcpServers());
   }
 
+  public async getMcpServer(serverId: string) {
+    return projectMcpPublicValue(await this.requireServer(serverId));
+  }
+
+  private async requireServer(serverId: string) {
+    const current = (await this.mcp.listMcpServers()).find((server) => server.serverId === serverId);
+    if (!current) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
+    return current;
+  }
+
   public async listMcpTemplates() {
     return projectMcpPublicValue(await this.mcp.listMcpTemplates());
   }
@@ -55,18 +67,19 @@ export class McpRouteService {
     return projectMcpPublicValue(await this.mcp.listMcpTemplateDiscovery());
   }
 
-  public async createMcpServer(input: McpServerCreateInput) {
-    return projectMcpPublicValue(await this.mcp.createMcpServer(input));
+  public async createMcpServer(input: McpServerCreateInput, onCommitted?: () => void | Promise<void>) {
+    return projectMcpPublicValue(await this.mcp.createMcpServer(input, onCommitted));
   }
 
-  public async updateMcpServer(serverId: string, input: McpServerUpdateInput) {
-    const current = (await this.mcp.listMcpServers()).find((server) => server.serverId === serverId);
-    const reconciled = current ? preserveMcpServerSecretsForPublicUpdate(current, input) : input;
-    return projectMcpPublicValue(await this.mcp.updateMcpServer(serverId, reconciled));
+  public async updateMcpServer(serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>) {
+    const current = await this.requireServer(serverId);
+    assertMcpServerReview(current, input.expectedRevision);
+    const reconciled = preserveMcpServerSecretsForPublicUpdate(current, input);
+    return projectMcpPublicValue(await this.mcp.updateMcpServer(serverId, { ...reconciled, expectedRevision: input.expectedRevision }, onCommitted));
   }
 
-  public async deleteMcpServer(serverId: string) {
-    return await this.mcp.deleteMcpServer(serverId);
+  public async deleteMcpServer(serverId: string, expectedRevision: string, onCommitted?: () => void | Promise<void>) {
+    return await this.mcp.deleteMcpServer(serverId, expectedRevision, onCommitted);
   }
 
   public connectMcpServer(serverId: string) {
@@ -93,12 +106,12 @@ export class McpRouteService {
     return this.mcp.invokeMcpTool(input).then(projectMcpPublicValue);
   }
 
-  public async updateMcpServerPolicy(serverId: string, policy: Partial<McpServerPolicy>) {
-    const current = (await this.mcp.listMcpServers()).find((server) => server.serverId === serverId);
-    const reconciled = current
-      ? (preserveMcpServerSecretsForPublicUpdate(current, { policy }).policy ?? policy)
-      : policy;
-    return projectMcpPublicValue(await this.mcp.updateMcpServerPolicy(serverId, reconciled));
+  public async updateMcpServerPolicy(serverId: string, input: McpServerPolicyUpdateRequest, onCommitted?: () => void | Promise<void>) {
+    const current = await this.requireServer(serverId);
+    const { expectedRevision, ...policy } = input;
+    assertMcpServerReview(current, expectedRevision);
+    const reconciled = preserveMcpServerSecretsForPublicUpdate(current, { policy }).policy ?? policy;
+    return projectMcpPublicValue(await this.mcp.updateMcpServerPolicy(serverId, { ...reconciled, expectedRevision }, onCommitted));
   }
 
   public async runMcpServerHealthCheck(serverId: string) {

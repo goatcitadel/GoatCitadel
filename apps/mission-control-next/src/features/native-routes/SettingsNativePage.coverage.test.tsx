@@ -130,6 +130,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationCatalog: fn(),
     fetchIntegrationConnectionDiagnostics: fn(),
     fetchIntegrationConnections: vi.fn(),
+    fetchIntegrationConnection: vi.fn(),
     fetchIntegrationFormSchema: fn(),
     fetchIntegrationPlugins: fn(),
     fetchNotificationDeliveries: fn({ items: [] }),
@@ -144,7 +145,8 @@ const settingsMocks = vi.hoisted(() => {
     fetchMcpElicitations: fn({ items: [] }),
     fetchMcpRemotePreview: fn(),
     fetchMcpServerModeManifest: fn(),
-    fetchMcpServers: fn(),
+    fetchMcpServers: vi.fn(async (): Promise<{ items?: Array<Record<string, unknown>> }> => ({ items: [] })),
+    fetchMcpServer: vi.fn(async (_id: string): Promise<Record<string, unknown>> => ({})),
     fetchMcpTemplates: fn(),
     fetchMcpTools: fn(),
     fetchMeshReadiness: fn({ status: "ready", blockers: [] }),
@@ -249,7 +251,7 @@ const settingsMocks = vi.hoisted(() => {
     updateIntegrationConnection: fn(),
     updateNotificationRule: fn(),
     updateNotificationTarget: fn(),
-    updateMcpServer: fn(),
+    updateMcpServer: vi.fn(async (_id: string, _input: Record<string, unknown>): Promise<Record<string, unknown>> => ({})),
     updatePersonality: fn(),
     updatePermissionProfile: fn(),
     updateWorkspace: fn(),
@@ -339,6 +341,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchIntegrationCatalog: settingsMocks.fetchIntegrationCatalog,
   fetchIntegrationConnectionDiagnostics: settingsMocks.fetchIntegrationConnectionDiagnostics,
   fetchIntegrationConnections: settingsMocks.fetchIntegrationConnections,
+  fetchIntegrationConnection: settingsMocks.fetchIntegrationConnection,
   fetchIntegrationFormSchema: settingsMocks.fetchIntegrationFormSchema,
   fetchIntegrationPlugins: settingsMocks.fetchIntegrationPlugins,
   fetchNotificationDeliveries: settingsMocks.fetchNotificationDeliveries,
@@ -352,7 +355,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchMcpElicitations: settingsMocks.fetchMcpElicitations,
   fetchMcpRemotePreview: settingsMocks.fetchMcpRemotePreview,
   fetchMcpServerModeManifest: settingsMocks.fetchMcpServerModeManifest,
-  fetchMcpServers: settingsMocks.fetchMcpServers,
+  fetchMcpServers: async () => { const result = await settingsMocks.fetchMcpServers(); return { ...result, items: result.items?.map((server: Record<string, unknown>) => ({ ...server, revision: server.revision ?? "a".repeat(64) })) }; },
+  fetchMcpServer: settingsMocks.fetchMcpServer,
   fetchMcpTemplates: settingsMocks.fetchMcpTemplates,
   fetchMcpTools: settingsMocks.fetchMcpTools,
   fetchMeshReadiness: settingsMocks.fetchMeshReadiness,
@@ -664,6 +668,7 @@ function setupResponses() {
         : [
             {
               connectionId: "conn-1",
+              revision: "a".repeat(64),
               catalogId: "github",
               key: "github",
               label: "GitHub",
@@ -683,6 +688,7 @@ function setupResponses() {
   });
   settingsMocks.updateIntegrationConnection.mockResolvedValue({
     connectionId: "conn-1",
+    revision: "b".repeat(64),
     catalogId: "github",
     key: "github",
     label: "GitHub ops",
@@ -855,6 +861,9 @@ function setupResponses() {
     ],
   });
   settingsMocks.fetchMcpTemplates.mockResolvedValue({ items: [] });
+  settingsMocks.fetchMcpServer.mockImplementation(async (id: string) => { const result = await settingsMocks.fetchMcpServers(); const server = result.items?.find((item: Record<string, unknown>) => item.serverId === id); return { ...server, revision: server?.revision ?? "a".repeat(64) }; });
+  settingsMocks.updateMcpServer.mockImplementation(async (id: string, input: Record<string, unknown>) => { const current = await settingsMocks.fetchMcpServer(id); return { ...current, ...input, revision: "b".repeat(64) }; });
+  settingsMocks.deleteMcpServer.mockResolvedValue({ deleted: true });
   settingsMocks.fetchMcpElicitations.mockResolvedValue({ items: [] });
   settingsMocks.fetchMcpRemotePreview.mockResolvedValue({
     generatedAt: "2026-05-30T00:00:00.000Z",
@@ -2492,7 +2501,7 @@ describe("SettingsNativePage broad native sections", () => {
       await deleteConnectionModal?.props.onConfirm();
     });
     await flush();
-    expect(settingsMocks.deleteIntegrationConnection).toHaveBeenCalledWith("conn-1");
+    expect(settingsMocks.deleteIntegrationConnection).toHaveBeenCalledWith("conn-1", expect.stringMatching(/^[a-f0-9]{64}$/));
 
     settingsMocks.fetchMcpServers.mockRejectedValueOnce(new Error("mcp offline"));
     const general = await mount("general");
@@ -2813,7 +2822,7 @@ describe("SettingsNativePage broad native sections", () => {
     settingsMocks.fetchMcpTools.mockResolvedValue({
       items: [{ toolName: "approval.inspect", description: "Inspect pending approvals" }],
     });
-    settingsMocks.createMcpServer.mockResolvedValueOnce(createdServer);
+    settingsMocks.createMcpServer.mockResolvedValueOnce({ ...createdServer, revision: "c".repeat(64) });
     settingsMocks.runMcpServerHealthCheck.mockResolvedValueOnce({
       status: "ok",
       checks: [{ key: "connect", status: "ok", message: "Connected" }],
@@ -2918,7 +2927,7 @@ describe("SettingsNativePage broad native sections", () => {
       await mcpDeleteModal?.props.onConfirm();
     });
     await flush();
-    expect(settingsMocks.deleteMcpServer).toHaveBeenCalledWith("srv-1");
+    expect(settingsMocks.deleteMcpServer).toHaveBeenCalledWith("srv-1", "a".repeat(64));
     expect(collectText(mcp.root)).toContain("MCP server Approval Inbox deleted.");
   });
 
@@ -2987,6 +2996,7 @@ describe("SettingsNativePage broad native sections", () => {
       items: [
         {
           connectionId: "conn-1",
+          revision: "b".repeat(64),
           catalogId: "github",
           key: "github",
           label: "Remote GitHub",
@@ -3004,8 +3014,8 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Edit connection"));
     expect(page.root.findByProps({ value: "Retained integration draft" })).toBeTruthy();
     expect(findButton(page.root, "Save changes").props.disabled).toBe(true);
-    expect(collectText(page.root)).toContain("Connection changed");
-    await click(findButton(page.root, "Apply draft to current connection"));
+    expect(collectText(page.root)).toContain("Current saved connection");
+    await click(findButton(page.root, "Use current connection review"));
     await click(findButton(page.root, "Save changes"));
     expect(settingsMocks.updateIntegrationConnection).toHaveBeenLastCalledWith(
       "conn-1",
@@ -3021,6 +3031,7 @@ describe("SettingsNativePage broad native sections", () => {
           : [
               {
                 connectionId: "conn-1",
+                revision: "a".repeat(64),
                 catalogId: "github",
                 key: "github",
                 label: "GitHub",
@@ -3257,6 +3268,7 @@ describe("SettingsNativePage broad native sections", () => {
       items: snapshot.items.map((item: any) => ({
         ...item,
         configurationRevision: 2,
+        revision: "b".repeat(64),
         label: "Server changed elsewhere",
       })),
     });
@@ -3266,7 +3278,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(page.root.findByProps({ "aria-label": "MCP server label" }).props.value).toBe("Retained local label");
     expect(findButton(page.root, "Save changes").props.disabled).toBe(true);
     expect(settingsMocks.updateMcpServer).not.toHaveBeenCalled();
-    await click(findButton(page.root, "Apply draft to current server"));
+    await click(findButton(page.root, "Use current server review"));
     settingsMocks.updateMcpServer.mockRejectedValueOnce(new Error("MCP save unavailable"));
     await click(findButton(page.root, "Save changes"));
     expect(collectText(page.root)).toContain("MCP save unavailable");

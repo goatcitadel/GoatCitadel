@@ -120,4 +120,61 @@ describe("useRemoteWorkerInlineActivity", () => {
     expect(latest?.error).toMatch(/unavailable/u);
     expect(latest?.assignments).toHaveLength(0);
   });
+
+  it.each(["workspaceId", "sessionId", "turnId"] as const)(
+    "clears the previous %s before effects and rejects its late refresh",
+    async (field) => {
+      const initial = { workspaceId: "workspace-a", sessionId: "session-a", turnId: "turn-a" };
+      apiMocks.fetchRemoteWorkerAssignments.mockResolvedValueOnce({ items: [{ assignmentId: "old-assignment" }] });
+      const initialRead = (value: RemoteWorkerInlineActivityState) => {
+        latest = value;
+      };
+      await act(async () => {
+        renderer = create(createElement(Harness, { ...initial, onValue: initialRead }));
+      });
+      expect(latest?.assignments[0]?.assignmentId).toBe("old-assignment");
+      const oldRevision = latest!.revision;
+      let resolveOld!: (value: unknown) => void;
+      apiMocks.fetchRemoteWorkerAssignments.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      );
+      let oldReload!: Promise<void>;
+      await act(async () => {
+        oldReload = latest!.reload();
+      });
+      let resolveCurrent!: (value: unknown) => void;
+      apiMocks.fetchRemoteWorkerAssignments.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveCurrent = resolve;
+          }),
+      );
+      const renders: RemoteWorkerInlineActivityState[] = [];
+      await act(async () =>
+        renderer!.update(
+          createElement(Harness, {
+            ...initial,
+            [field]: `${field}-b`,
+            onValue: (value) => {
+              latest = value;
+              renders.push(value);
+            },
+          }),
+        ),
+      );
+      expect(renders.length).toBeGreaterThan(0);
+      expect(renders.every((value) => value.assignments.length === 0)).toBe(true);
+      await act(async () => {
+        resolveOld({ items: [{ assignmentId: "late-old-assignment" }] });
+        await oldReload;
+      });
+      expect(latest?.assignments).toHaveLength(0);
+      await act(async () => resolveCurrent({ items: [{ assignmentId: "current-assignment" }] }));
+      expect(latest?.assignments[0]?.assignmentId).toBe("current-assignment");
+      expect(latest!.revision).toBeGreaterThan(oldRevision);
+    },
+  );
 });

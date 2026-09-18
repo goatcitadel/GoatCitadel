@@ -11,6 +11,9 @@ import type { DatabaseClient } from "./db.js";
 import { ModelUsageEventRepository } from "./model-usage-event-repo.js";
 import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
 import { RemoteWorkerNonceRepository } from "./remote-worker-nonce-repo.js";
+import { RemoteWorkerRuntimeResultRepository } from "./remote-worker-runtime-result-repo.js";
+import type { RemoteWorkerRuntimeOutputArtifact } from "@goatcitadel/contracts";
+import { RemoteWorkerNativeFileReceiptRepository } from "./remote-worker-native-file-receipt-repo.js";
 
 interface AssignmentHead {
   manifest_sha256: string;
@@ -27,6 +30,10 @@ const INFERENCE_SCOPE = "i.registry_workspace_id = @registryWorkspaceId AND i.as
  * appear on the next read, but assignment generations must never be combined. */
 export class RemoteWorkerRuntimeReadRepository {
   public constructor(private readonly db: DatabaseClient) {}
+
+  public readNativeOutputArtifact(input: RemoteWorkerRuntimeReadKey & { assignmentGeneration: number; nonce: string }): RemoteWorkerRuntimeOutputArtifact | null {
+    return new RemoteWorkerRuntimeResultRepository(this.db).readOutputArtifactForOperator(input);
+  }
 
   public findAssignmentRuntime(input: RemoteWorkerRuntimeReadKey): RemoteWorkerAssignmentRuntime | undefined {
     const key = normalizeRemoteWorkerRuntimeReadKey(input);
@@ -98,6 +105,8 @@ export class RemoteWorkerRuntimeReadRepository {
         (SELECT COUNT(*) FROM remote_worker_effect_receipts WHERE ${SCOPE} AND receipt_state = 'manual_reconciliation') AS reconciliation`)
         .get<{ intents: number; receipts: number; reconciliation: number }>(scope)!;
       artifactAndEffects = {
+        nativeOutputArtifacts: new RemoteWorkerRuntimeResultRepository(this.db).listOutputArtifactNoncesForOperator({ ...key, assignmentGeneration: generation }),
+        nativeFileArtifacts: new RemoteWorkerNativeFileReceiptRepository(this.db).listReceiptNoncesForOperator({ ...key, assignmentGeneration: generation }),
         uploadCount: Number(artifacts.uploads), committedUploadCount: Number(artifacts.committed),
         quarantinedUploadCount: Number(artifacts.quarantined), cleanupPendingCount: Number(artifacts.cleanup_pending),
         manifestFileCount: artifacts.file_count === null ? null : Number(artifacts.file_count),

@@ -115,6 +115,78 @@ describe("useScrollToBottom", () => {
     expect(onBottomStateChange).toHaveBeenLastCalledWith(true);
   });
 
+  it("counts appended messages once, ignores history and deltas, and resets for branches and sessions", () => {
+    const onBottomStateChange = vi.fn();
+    const update = (ids: string[], sessionId = "session-1") => render({
+      followOutput: false, onBottomStateChange,
+      signals: baseSignals({ sessionId, conversationMessageIds: ids }),
+    });
+    update(["a:user"]);
+    update(["history:user", "a:user"]);
+    expect(latest!.newMessageCount).toBe(0);
+    update(["history:user", "a:user", "a:assistant"]);
+    expect(latest!.newMessageCount).toBe(1);
+    update(["history:user", "a:user", "a:assistant"]);
+    expect(latest!.newMessageCount).toBe(1);
+    update(["history:user", "a:user", "a:assistant", "b:user", "b:assistant"]);
+    expect(latest!.newMessageCount).toBe(3);
+    act(() => latest!.jumpToLatest());
+    expect(latest!.newMessageCount).toBe(0);
+    update(["a:user", "branch:user"]);
+    expect(latest!.newMessageCount).toBe(0);
+    update(["other:user"], "session-2");
+    expect(latest!.newMessageCount).toBe(0);
+  });
+
+  it("preserves the visible paragraph when content above it changes height", () => {
+    let resized: (() => void) | undefined;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { resized = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    render({ followOutput: false, onBottomStateChange: vi.fn(), signals: baseSignals() });
+    const scroller = container!.querySelector(".scroll") as HTMLElement;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 2000 },
+      clientHeight: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 300 },
+    });
+    const turn = document.createElement("div");
+    turn.dataset.turnId = "turn-1";
+    const paragraph = document.createElement("p");
+    turn.append(paragraph);
+    scroller.prepend(turn);
+    let documentTop = 320;
+    vi.spyOn(paragraph, "getBoundingClientRect").mockImplementation(() => ({
+      top: documentTop - scroller.scrollTop,
+      bottom: documentTop - scroller.scrollTop + 40,
+    }) as DOMRect);
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    documentTop += 120;
+    act(() => resized?.());
+    expect(scroller.scrollTop).toBe(420);
+    expect(paragraph.getBoundingClientRect().top).toBe(20);
+    // A second observation must not apply the same compensation twice.
+    act(() => resized?.());
+    expect(scroller.scrollTop).toBe(420);
+  });
+
+  it("cancels a scheduled follow when the reader scrolls up before the next frame", () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    let frame: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frame = callback; return 71; });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    render({ followOutput: true, onBottomStateChange: vi.fn(), signals: baseSignals() });
+    const scroller = container!.querySelector(".scroll") as HTMLElement;
+    setScrollMetrics(scroller, { scrollHeight: 2000, scrollTop: 100, clientHeight: 400 });
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(cancelFrame).toHaveBeenCalledWith(71);
+    act(() => frame?.(0));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("auto-follows new content while followOutput is true, pinning to the end via rAF", () => {
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {

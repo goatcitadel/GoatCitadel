@@ -382,6 +382,17 @@ export class ApprovalRepository {
     return approval;
   }
 
+  /** Transaction-owned execution checks must hold this row lock until their
+   * dependent write commits. The caller still validates scope, binding and
+   * expiry with the database clock; this method grants no execution authority. */
+  public lockApprovedForUpdate(approvalId: string): ApprovalRequest {
+    const approval = this.getForUpdate(approvalId);
+    if (approval.status !== "approved") {
+      throw new ConflictError({ code: "STATE_CONFLICT", message: "An approved action is required" });
+    }
+    return approval;
+  }
+
   public list(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
     const scopedWorkspaceId = workspaceId?.trim();
     // The workspace lives inside linkage_json, so a workspace-scoped list filters in memory.
@@ -528,12 +539,12 @@ export class ApprovalRepository {
       // resolution time and expiry comparison are both owned by the database.
       void options?.resolvedAt;
 
-      const exactDetachedActivation = current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND;
+      const exactDetachedActivation = current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND || current.kind === "remote_worker.native_runtime" || current.kind === "remote_worker.native_runtime_install";
       if (exactDetachedActivation && (input.decision === "edit" || input.editedPayload !== undefined)) {
         throw new ValidationError({
           code: "FIELD_INVALID",
           field: "editedPayload",
-          message: "Mesh capability activation approvals are immutable; reject and create a new activation request.",
+          message: "This execution approval is immutable; reject and create a new request.",
         });
       }
 
@@ -575,11 +586,11 @@ export class ApprovalRepository {
   public mergeLinkage(approvalId: string, linkagePatch: NonNullable<ApprovalRequest["linkage"]>): ApprovalRequest {
     return this.db.transaction("immediate", () => {
       const row = this.getForUpdateRow(approvalId);
-      if (row.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND) {
+      if (row.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND || row.kind === "remote_worker.native_runtime" || row.kind === "remote_worker.native_runtime_install") {
         throw new ValidationError({
           code: "FIELD_INVALID",
           field: "linkage",
-          message: "Mesh capability activation approval linkage is immutable.",
+          message: "This execution approval linkage is immutable.",
         });
       }
       const payload = safeJsonParse<Record<string, unknown>>(row.payload_json, {});

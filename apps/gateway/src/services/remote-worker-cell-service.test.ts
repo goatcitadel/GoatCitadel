@@ -12,9 +12,11 @@ import {
   REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION,
   REMOTE_WORKER_CELL_PROVISIONING_PLAN_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
+  remoteWorkerCellCapacityInventorySha256,
   remoteWorkerAssignmentParentContextSha256,
   remoteWorkerCellProvisioningBindingSha256,
   remoteWorkerCellProvisioningPlanSha256, REMOTE_WORKER_CELL_PROVISIONING_EXCHANGE_SCHEMA_VERSION,
@@ -41,6 +43,8 @@ import {
 import {
   RemoteWorkerCellService,
   type RemoteWorkerCellRepositoryPort,
+  type RemoteWorkerCellServiceDeps,
+  type WorkerCellCapacityAdmissionResult,
   type WorkerCellAssignmentAuthorityPort,
   type WorkerCellCapacityAdmissionInput,
 } from "./remote-worker-cell-service.js";
@@ -49,6 +53,7 @@ import {
   type NativeWorkerCellProvisioningPort,
 } from "./remote-worker-cell-provisioning-service.js";
 import { volumeExchangeFixture } from "../../../../packages/contracts/src/remote-worker-cell-volume-test-fixture.js";
+import { capacityInventoryFixture } from "../../../../packages/contracts/src/remote-worker-cell-capacity-inventory-test-fixture.js";
 
 const clients: DatabaseClient[] = [];
 const FUTURE = "2099-01-01T00:00:00.000Z";
@@ -306,252 +311,178 @@ function footprint(overrides: Partial<RemoteWorkerCellCapacityFootprint> = {}): 
 }
 
 function promiseBackedRepository(repository: RemoteWorkerCellRepository): RemoteWorkerCellRepositoryPort {
-  return {
-    profileOrReplay: async (input) => repository.profileOrReplay(input),
-    getCell: async (key) => repository.getCell(key),
-    recordCapacityHighWater: async (input) => repository.recordCapacityHighWater(input),
-  };
+  return { profileOrReplay: async (input) => repository.profileOrReplay(input) };
 }
 
 const activeAuthority: WorkerCellAssignmentAuthorityPort = { assertGenerationActive: async () => undefined };
 const deniedAuthority: WorkerCellAssignmentAuthorityPort = {
-  assertGenerationActive: () => {
-    throw new Error("assignment generation is not an active authority");
-  },
+  assertGenerationActive: () => { throw new Error("assignment generation is not an active authority"); },
 };
 
-function capacityInput(
-  s: Seeded,
-  overrides: Partial<WorkerCellCapacityAdmissionInput> = {},
-): WorkerCellCapacityAdmissionInput {
+function capacityPort() {
   return {
-    ...s.key,
-    footprint: footprint(),
-    reservation: reservation(),
-    incomingBytes: 1_000,
-    peakDiskBytes: 1_000,
-    peakMemoryBytes: 10,
-    peakFileCount: 1,
-    peakProcessCount: 1,
-    rawOutputBytes: 100,
-    now: s.now,
-    ...overrides,
+    admit: vi.fn<RemoteWorkerCellServiceDeps["capacityAdmission"]["admit"]>(),
+    readForAssignment: vi.fn<RemoteWorkerCellServiceDeps["capacityAdmission"]["readForAssignment"]>(),
+    admitInventory: vi.fn<RemoteWorkerCellServiceDeps["capacityAdmission"]["admitInventory"]>(),
+    readInventory: vi.fn<RemoteWorkerCellServiceDeps["capacityAdmission"]["readInventory"]>(),
   };
 }
 
+function capacityInput(s: Seeded): WorkerCellCapacityAdmissionInput {
+  const cell = s.repo.getCell(s.key)!;
+  const credentialAuthority = {
+    registryWorkspaceId: s.key.registryWorkspaceId, bootstrapId: "capacity-bootstrap", workerId: s.profile.workerId,
+    workerGeneration: s.profile.workerGeneration, credentialId: "capacity-credential", credentialGeneration: 1,
+    authorizationCredentialSha256: D("credential"), nodeId: "capacity-node", clientCertificateSha256: D("certificate"),
+    runtimeManifestSha256: D("runtime"), workspaceCeilingSha256: D("workspace"), capabilityCeilingSha256: D("capability"),
+    protectedAdmissionEnvelopeSha256: D("envelope"), protectedAdmissionContextSha256: D("context"), claimsSha256: D("claims"),
+  };
+  return {
+    ...s.key, leaseRevision: 1, leaseTokenSha256: D("lease"),
+    protectedAuthority: { credentialAuthority, meshAdmission: {
+      schemaVersion: REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
+      registryWorkspaceId: s.key.registryWorkspaceId, bootstrapId: credentialAuthority.bootstrapId,
+      workerId: s.profile.workerId, workerGeneration: s.profile.workerGeneration,
+      credentialId: credentialAuthority.credentialId, credentialGeneration: 1, workspaceId: "default",
+      nodeId: credentialAuthority.nodeId, admissionGeneration: 1, joinAuthorityGeneration: 1,
+      joinCredentialSha256: D("join"), protectedAdmissionEnvelopeSha256: D("envelope"), protectedAdmissionContextSha256: D("context"),
+    } },
+    expectedCapacityRevision: cell.capacityRevision, expectedCleanupRevision: cell.cleanupRevision,
+    expectedExecutionRevision: cell.executionRevision,
+    observation: { footprint: footprint(), reservation: reservation(), incomingBytes: 1_000,
+      peakDiskBytes: 1_000, peakMemoryBytes: 10, peakFileCount: 1, peakProcessCount: 1, rawOutputBytes: 100 },
+  };
+}
+
+function capacityFixture(name: string) {
+  const s = seed(name);
+  const cell = s.repo.profileOrReplay({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now }).cell;
+  const owner = capacityPort();
+  const authority = { assertGenerationActive: vi.fn() };
+  const service = new RemoteWorkerCellService({ repository: promiseBackedRepository(s.repo), assignmentAuthority: authority, capacityAdmission: owner });
+  return { ...s, cell, owner, authority, service, input: capacityInput(s) };
+}
+
 describe("HX-505 cell service composition", () => {
-  it("rejects a caller reservation that widens the immutable cell profile", async () => {
-    const s = seed("capacity-widen");
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority });
-    const initial = await service.profileCell({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    await expect(
-      service.evaluateCapacityAdmission(
-        capacityInput(s, {
-          reservation: reservation({ allocatedDiskBytes: 8_000_000 }),
-          incomingBytes: 5_000_000,
-        }),
-      ),
-    ).rejects.toThrow(/immutable.*reservation/iu);
-    expect(s.repo.getCell(s.key)).toEqual(initial.cell);
+  it("awaits inventory admission with exact frozen capture bytes and derived physical accounting", async () => {
+    const f = capacityFixture("inventory-owner"), inventory = capacityInventoryFixture(f.cell.profileSha256, "gateway-inventory");
+    const input = { ...f.input, expectedBackupRevision: f.cell.backupRevision, inventory,
+      inventoryBinding: { profileSha256: inventory.profileSha256, captureSha256: inventory.captureSha256,
+        inventorySha256: remoteWorkerCellCapacityInventorySha256(inventory) } };
+    let finish!: (value: WorkerCellCapacityAdmissionResult) => void;
+    f.owner.admitInventory.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    let settled = false;
+    const pending = f.service.admitCapacityInventory(input).then(value => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const frozen = f.owner.admitInventory.mock.calls[0]![0];
+    Object.assign(inventory.areas[0]!.objects[0]!, { allocatedBytes: 8_000_000 });
+    Object.assign(input.inventoryBinding, { captureSha256: D("changed") });
+    expect(remoteWorkerCellCapacityInventorySha256(frozen.inventory)).toBe(frozen.inventoryBinding.inventorySha256);
+    expect(frozen.observation).toMatchObject({ footprint: { mutableRootBytes: 69_632 }, peakFileCount: 4 });
+    expect(Object.isFrozen(frozen.inventory.areas[0]!.objects)).toBe(true);
+    finish({ decision: "accept", reason: "inventory committed", cell: f.cell });
+    expect((await pending).decision).toBe("accept");
+    expect(f.owner.admit).not.toHaveBeenCalled();
+    expect(f.authority.assertGenerationActive).not.toHaveBeenCalled();
   });
 
-  it("does not add the same retained footprint again when an observation repeats", async () => {
-    const s = seed("capacity-repeat");
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority });
-    await service.profileCell({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    const observation = capacityInput(s, {
-      footprint: footprint({ failedCleanupBytes: 25, quarantineEvidenceBytes: 50 }),
-      incomingBytes: 5_000_000,
-    });
-    await service.evaluateCapacityAdmission(observation);
-    const repeated = await service.evaluateCapacityAdmission(observation);
-    expect(repeated.cell.failedCleanupRetainedBytes).toBe(25);
-    expect(repeated.cell.quarantineRetainedBytes).toBe(50);
-    const omitted = await service.evaluateCapacityAdmission(
-      capacityInput(s, {
-        footprint: footprint({ mutableRootBytes: 3_999_960 }),
-        incomingBytes: 1,
-      }),
-    );
-    expect(omitted.decision).toBe("quarantine");
-    expect(omitted.cell.failedCleanupRetainedBytes).toBe(25);
-    expect(omitted.cell.quarantineRetainedBytes).toBe(50);
-    expect(omitted.cell.peakDiskBytes).toBeGreaterThanOrEqual(4_000_035);
+  it("does not substitute partial inventories or fall back after atomic inventory rejection", async () => {
+    const f = capacityFixture("inventory-refused"), inventory = capacityInventoryFixture(f.cell.profileSha256, "gateway-refused");
+    const input = { ...f.input, expectedBackupRevision: f.cell.backupRevision, inventory,
+      inventoryBinding: { profileSha256: inventory.profileSha256, captureSha256: inventory.captureSha256,
+        inventorySha256: remoteWorkerCellCapacityInventorySha256(inventory) } };
+    await expect(f.service.admitCapacityInventory({ ...input, inventory: { ...inventory, areas: inventory.areas.slice(1) } })).rejects.toThrow(/every footprint area/u);
+    expect(f.owner.admitInventory).not.toHaveBeenCalled();
+    f.owner.admitInventory.mockRejectedValue(new Error("capture authority changed"));
+    await expect(f.service.admitCapacityInventory(input)).rejects.toThrow("capture authority changed");
+    expect(f.owner.admit).not.toHaveBeenCalled();
+    expect(f.repo.getCell(f.key)).toEqual(f.cell);
   });
 
-  it("requires current assignment authority before admitting capacity", async () => {
-    const s = seed("capacity-revoked");
-    s.repo.profileOrReplay({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    const before = s.repo.getCell(s.key);
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: deniedAuthority });
-    await expect(service.evaluateCapacityAdmission(capacityInput(s))).rejects.toThrow(/active authority/u);
-    expect(s.repo.getCell(s.key)).toEqual(before);
+  it("reads only the protected retained inventory revision", async () => {
+    const f = capacityFixture("inventory-read");
+    f.owner.readInventory.mockResolvedValue(null);
+    expect(await f.service.readCapacityInventory({ ...f.input, capacityRevision: 1 })).toBeNull();
+    expect(f.owner.readInventory.mock.calls[0]![0]).not.toHaveProperty("observation");
+    await expect(f.service.readCapacityInventory({ ...f.input, capacityRevision: 0 })).rejects.toThrow(/positive/u);
+    expect(f.owner.readInventory).toHaveBeenCalledTimes(1);
+    expect(f.owner.admitInventory).not.toHaveBeenCalled();
   });
 
-  it("refuses to commit an admission computed before another capacity observation", async () => {
-    const s = seed("capacity-race");
-    s.repo.profileOrReplay({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    const repository = promiseBackedRepository(s.repo);
-    const write = repository.recordCapacityHighWater;
-    repository.recordCapacityHighWater = vi.fn(async (input) => {
-      const { expectedCapacityRevision: _revision, ...concurrent } = input;
-      s.repo.recordCapacityHighWater({ ...concurrent, peakDiskBytes: 4_500_000, failedCleanupRetainedBytes: 99 });
-      return write(input);
-    });
-    const service = new RemoteWorkerCellService({ repository, assignmentAuthority: activeAuthority });
-    await expect(service.evaluateCapacityAdmission(capacityInput(s))).rejects.toThrow(/capacity revision/iu);
-    expect(s.repo.getCell(s.key)).toMatchObject({
-      capacityRevision: 1,
-      peakDiskBytes: 4_500_000,
-      failedCleanupRetainedBytes: 99,
-    });
+  it("awaits the atomic capacity owner and freezes the complete authority and observation before delivery", async () => {
+    const f = capacityFixture("capacity-atomic-owner");
+    let finish!: (value: WorkerCellCapacityAdmissionResult) => void;
+    f.owner.admit.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    let settled = false;
+    const pending = f.service.evaluateCapacityAdmission(f.input).then(value => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const command = f.owner.admit.mock.calls[0]![0];
+    Object.assign(f.input.observation, { incomingBytes: 8_000_000 });
+    Object.assign(f.input.observation.footprint, { mutableRootBytes: 8_000_000 });
+    Object.assign(f.input.observation.reservation, { allocatedDiskBytes: 8_000_000 });
+    Object.assign(f.input.protectedAuthority.credentialAuthority, { credentialGeneration: 999 });
+    Object.assign(f.input.protectedAuthority.meshAdmission, { admissionGeneration: 999 });
+    expect(command.observation.incomingBytes).toBe(1_000);
+    expect(command.observation.footprint.mutableRootBytes).toBe(1_000);
+    expect(command.observation.reservation.allocatedDiskBytes).toBe(4_000_000);
+    expect(command.protectedAuthority.credentialAuthority.credentialGeneration).toBe(1);
+    expect(command.protectedAuthority.meshAdmission.admissionGeneration).toBe(1);
+    expect(Object.isFrozen(command)).toBe(true);
+    expect(Object.isFrozen(command.protectedAuthority.credentialAuthority)).toBe(true);
+    const result = { decision: "accept" as const, reason: "committed by capacity owner", cell: { ...f.cell, capacityRevision: f.cell.capacityRevision + 1 } };
+    finish(result);
+    expect(await pending).toEqual(result);
+    expect(f.authority.assertGenerationActive).not.toHaveBeenCalled();
+    expect(f.owner.readForAssignment).not.toHaveBeenCalled();
   });
 
-  it("refuses an admission computed before cleanup retained additional bytes", async () => {
-    const s = seed("capacity-cleanup-race");
-    s.repo.profileOrReplay({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    const repository = promiseBackedRepository(s.repo);
-    const write = repository.recordCapacityHighWater;
-    repository.recordCapacityHighWater = vi.fn(async (input) => {
-      for (const toState of ["pending", "stopping", "verifying_zero", "failed_cleanup"] as const) {
-        s.repo.transitionCleanup({
-          ...s.key,
-          expectedRevision: s.repo.getCell(s.key)!.cleanupRevision,
-          toState,
-          failedCleanupRetainedBytes: toState === "failed_cleanup" ? 4_000_001 : 0,
-          detailSha256: D(`cleanup:${toState}`),
-          now: s.now,
-        });
-      }
-      return write(input);
-    });
-    const service = new RemoteWorkerCellService({ repository, assignmentAuthority: activeAuthority });
-    await expect(service.evaluateCapacityAdmission(capacityInput(s))).rejects.toThrow(/cleanup revision/iu);
-    expect(s.repo.getCell(s.key)).toMatchObject({
-      capacityRevision: 0,
-      cleanupRevision: 5,
-      failedCleanupRetainedBytes: 4_000_001,
-    });
-    expect(s.repo.listEvidenceAfter(s.key, 0).filter((row) => row.domain === "capacity")).toHaveLength(0);
+  it("awaits protected capacity snapshots without writing or using preflight-only authority", async () => {
+    const f = capacityFixture("capacity-snapshot");
+    f.owner.readForAssignment.mockResolvedValue(f.cell);
+    expect(await f.service.readCapacitySnapshot(f.input)).toEqual(f.cell);
+    const command = f.owner.readForAssignment.mock.calls[0]![0];
+    expect(command.leaseTokenSha256).toBe(f.input.leaseTokenSha256);
+    expect(command.protectedAuthority).toEqual(f.input.protectedAuthority);
+    expect(command).not.toHaveProperty("observation");
+    expect(f.owner.admit).not.toHaveBeenCalled();
+    expect(f.authority.assertGenerationActive).not.toHaveBeenCalled();
   });
 
-  it("retains observation values across asynchronous authority checks", async () => {
-    const s = seed("capacity-input-drift");
-    s.repo.profileOrReplay({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    const observation = capacityInput(s);
-    const authority = {
-      assertGenerationActive: vi.fn(async () => {
-        Object.assign(observation, { incomingBytes: 8_000_000, peakMemoryBytes: 999 });
-        Object.assign(observation.footprint, { mutableRootBytes: 8_000_000 });
-      }),
-    };
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: authority });
-    const result = await service.evaluateCapacityAdmission(observation);
-    expect(result.decision).toBe("accept");
-    expect(result.cell.peakDiskBytes).toBe(1_000);
-    expect(result.cell.peakMemoryBytes).toBe(10);
-    expect(authority.assertGenerationActive).toHaveBeenCalledTimes(2);
+  it("propagates an atomic authority rejection without a fallback write", async () => {
+    const f = capacityFixture("capacity-refused");
+    f.owner.admit.mockRejectedValue(new Error("assignment revoked at commit"));
+    await expect(f.service.evaluateCapacityAdmission(f.input)).rejects.toThrow("assignment revoked at commit");
+    expect(f.repo.getCell(f.key)).toEqual(f.cell);
+    expect(f.owner.admit).toHaveBeenCalledTimes(1);
+    expect(f.owner.readForAssignment).not.toHaveBeenCalled();
   });
 
-  it("rechecks assignment authority after reading the capacity snapshot", async () => {
-    const s = seed("capacity-authority-drift");
-    s.repo.profileOrReplay({ profile: s.profile, idempotencyKey: "profile", createdAt: s.now });
-    const authority = {
-      assertGenerationActive: vi
-        .fn()
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error("assignment revoked")),
-    };
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: authority });
-    const before = s.repo.getCell(s.key);
-    await expect(service.evaluateCapacityAdmission(capacityInput(s))).rejects.toThrow("assignment revoked");
-    expect(s.repo.getCell(s.key)).toEqual(before);
+  it.each(["authority", "revision", "observation"] as const)("rejects invalid %s before calling storage", async kind => {
+    const f = capacityFixture("capacity-invalid-" + kind);
+    if (kind === "authority") Object.assign(f.input, { protectedAuthority: undefined });
+    else if (kind === "revision") Object.assign(f.input, { expectedExecutionRevision: -1 });
+    else Object.assign(f.input.observation, { peakMemoryBytes: Number.NaN });
+    await expect(f.service.evaluateCapacityAdmission(f.input)).rejects.toThrow();
+    expect(f.owner.admit).not.toHaveBeenCalled();
+    expect(f.owner.readForAssignment).not.toHaveBeenCalled();
+    expect(f.repo.getCell(f.key)).toEqual(f.cell);
   });
 
   it("seats a cell only for a committed, active assignment generation", async () => {
     const s = seed("service");
-    const denied = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: deniedAuthority });
-    await expect(
-      denied.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now }),
-    ).rejects.toThrow(/active authority/u);
-    const service = new RemoteWorkerCellService({
-      repository: promiseBackedRepository(s.repo),
-      assignmentAuthority: activeAuthority,
-    });
-    const outcome = await service.profileCell({
-      profile: s.profile,
-      idempotencyKey: "cell:idem:1",
-      createdAt: s.now,
-    });
-    expect(outcome.disposition).toBe("created");
-  });
-
-  it("accepts within the reservation, rejects without touching state, and quarantines counting bytes", async () => {
-    const s = seed("pressure");
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority });
-    await service.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now });
-
-    const accept = await service.evaluateCapacityAdmission({
-      ...s.key,
-      footprint: footprint(),
-      reservation: reservation(),
-      incomingBytes: 1_000,
-      peakDiskBytes: 1_000,
-      peakMemoryBytes: 10,
-      peakFileCount: 1,
-      peakProcessCount: 1,
-      rawOutputBytes: 100,
-      now: s.now,
-    });
-    expect(accept.decision).toBe("accept");
-    expect(accept.cell.capacityRevision).toBe(1);
-
-    // Reject: over the worst-case allocation, no unrecoverable bytes → canonical state untouched.
-    const before = s.repo.getCell(s.key)!;
-    const reject = await service.evaluateCapacityAdmission({
-      ...s.key,
-      footprint: footprint(),
-      reservation: reservation(),
-      incomingBytes: 5_000_000,
-      peakDiskBytes: 1_000,
-      peakMemoryBytes: 10,
-      peakFileCount: 1,
-      peakProcessCount: 1,
-      rawOutputBytes: 100,
-      now: s.now,
-    });
-    expect(reject.decision).toBe("reject");
-    expect(reject.cell.capacityRevision).toBe(before.capacityRevision);
-
-    // Quarantine: over allocation WITH unrecoverable retained bytes → counted, never deleted.
-    const quarantine = await service.evaluateCapacityAdmission({
-      ...s.key,
-      footprint: footprint({ quarantineEvidenceBytes: 50, failedCleanupBytes: 25 }),
-      reservation: reservation(),
-      incomingBytes: 5_000_000,
-      peakDiskBytes: 1_000,
-      peakMemoryBytes: 10,
-      peakFileCount: 1,
-      peakProcessCount: 1,
-      rawOutputBytes: 100,
-      now: s.now,
-    });
-    expect(quarantine.decision).toBe("quarantine");
-    expect(quarantine.cell.quarantineRetainedBytes).toBe(50);
-    expect(quarantine.cell.failedCleanupRetainedBytes).toBe(25);
-    expect(s.repo.getCell(s.key)).toBeDefined();
+    const denied = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: deniedAuthority, capacityAdmission: capacityPort() });
+    await expect(denied.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now })).rejects.toThrow(/active authority/u);
+    const service = new RemoteWorkerCellService({ repository: promiseBackedRepository(s.repo), assignmentAuthority: activeAuthority, capacityAdmission: capacityPort() });
+    expect((await service.profileCell({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now })).disposition).toBe("created");
   });
 
   it("admits worker egress only through the policy-enforced exact authority", () => {
     const s = seed("egress");
-    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority });
-    const config = {
-      allowlists: [["api.example.com:443"]],
-      maxConnections: 8,
-      connectDeadlineMs: 10_000,
-      maxBytesPerConnection: 1_048_576,
-      directSocketBypassProven: true,
-    };
+    const service = new RemoteWorkerCellService({ repository: s.repo, assignmentAuthority: activeAuthority, capacityAdmission: capacityPort() });
+    const config = { allowlists: [["api.example.com:443"]], maxConnections: 8, connectDeadlineMs: 10_000,
+      maxBytesPerConnection: 1_048_576, directSocketBypassProven: true };
     expect(service.assertWorkerEgressAllowed("api.example.com:443", config).host).toBe("api.example.com");
     expect(() => service.assertWorkerEgressAllowed("169.254.169.254:80", config)).toThrow();
   });

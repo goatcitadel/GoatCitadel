@@ -19,6 +19,7 @@ import {
   requestRuntimeTruthApproval,
   assertRuntimeTruthToolCompletion,
 } from "./runtime-truth-approval.mjs";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 
 export async function runRuntimeTruthLane(context, _options = {}, deps) {
   const {
@@ -34,7 +35,6 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     forceVerificationUiPackage,
     installMissionControlNextBrowserState,
     path,
-    prepareVerificationRuntime,
     relativeToRun,
     requestJson,
     restartGatewayProcess,
@@ -48,7 +48,6 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     waitForDurableRunStatus,
     waitForVerificationRouteReady,
     writeJson,
-    writeDeterministicLlmProviderConfig,
   } = deps;
 
   let stack;
@@ -61,18 +60,20 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   // recovered approval it would have observed inline.
   let durableTruth = null;
   try {
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-runtime-truth`);
     llmStub = await startDeterministicLlmStub({
       replyText: "Verification restart reply.",
       expectedAuthorization: `Bearer ${VERIFICATION_STUB_LLM_KEY}`,
       dispatchPlanRequiredTool: "fs_read",
     });
-    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
+    // Reuse the fresh browser fixture: never copy operator configuration or
+    // private workspaces into a recovery test that launches a real Gateway.
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-runtime-truth`, llmStub.baseUrl);
     const approvalFixture = await prepareRuntimeTruthApproval(runtimeRoot);
     stack = await startVerificationStack(context, {
       includeUi: false,
       runtimeRoot,
       gatewayEnv: {
+        GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
         GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
@@ -140,6 +141,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         const gatewayBeforeRestart = ownedGatewayProcessIdentity(stack);
 
         stack.gateway = await restartGatewayProcess(context, stack, {
+          GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
           GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
           GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
           GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",

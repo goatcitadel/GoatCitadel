@@ -79,6 +79,8 @@ const GOVERNED_REMEDIATION_FOUNDATION_VERSION = 134;
 const GOVERNED_REMEDIATION_FOUNDATION_NAME = "governed_remediation_durable_owner";
 const GOVERNED_REMEDIATION_AUTHORITY_VERSION = 135;
 const GOVERNED_REMEDIATION_AUTHORITY_NAME = "governed_remediation_recipe_and_phase_authority";
+const GOVERNED_REMEDIATION_PARENT_RESERVATION_TABLE = "governed_remediation_parent_reservations";
+const GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE = "governed_remediation_parent_resolutions";
 const GOVERNED_REMEDIATION_BOOTSTRAP_TABLES = [
   "governed_remediation_states",
   "governed_remediation_receipts",
@@ -160,7 +162,19 @@ const POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL = `
         AND attribute.attname OPERATOR(pg_catalog.=) 'approval_id'
         AND attribute.attnum OPERATOR(pg_catalog.>) 0
         AND NOT attribute.attisdropped
-    ) AS legacy_approval_column_exists
+    ) AS legacy_approval_column_exists,
+    EXISTS (
+      SELECT 1 FROM pg_catalog.pg_class AS relation
+      WHERE relation.relnamespace OPERATOR(pg_catalog.=) @schemaOid::pg_catalog.oid
+        AND relation.relname OPERATOR(pg_catalog.=) 'governed_remediation_parent_reservations'
+        AND relation.relkind OPERATOR(pg_catalog.=) 'r'
+    ) AS parent_reservation_table_exists,
+    EXISTS (
+      SELECT 1 FROM pg_catalog.pg_class AS relation
+      WHERE relation.relnamespace OPERATOR(pg_catalog.=) @schemaOid::pg_catalog.oid
+        AND relation.relname OPERATOR(pg_catalog.=) 'governed_remediation_parent_resolutions'
+        AND relation.relkind OPERATOR(pg_catalog.=) 'r'
+    ) AS parent_resolution_table_exists
 `;
 
 const POSTGRES_REMOTE_WORKER_MESH_BOOTSTRAP_PREFLIGHT_SQL = `
@@ -549,7 +563,7 @@ export function buildCanonicalPostgresSchemaShapeManifest(
       simulatedMigrations.push({
         version: migration.version,
         name: "governed_remediation_bootstrap_replacement_shape",
-        sql: buildGovernedRemediationBootstrapDropSql(POSTGRES_SCHEMA_SHAPE_SIMULATION_IDENTITY),
+        sql: buildGovernedRemediationBootstrapDropSql(POSTGRES_SCHEMA_SHAPE_SIMULATION_IDENTITY, true, true),
       });
     }
     if (isCanonicalRemoteWorkerMeshAuthorityMigration(migration)) {
@@ -757,7 +771,7 @@ function buildCanonicalForeignKey(
   };
 }
 
-function buildGovernedRemediationBootstrapManifest(): PostgresSchemaShapeManifest {
+function buildGovernedRemediationBootstrapManifest(includeParentReservations = false, includeParentResolutions = false): PostgresSchemaShapeManifest {
   const authority = POSTGRES_MIGRATIONS.find(
     (migration) =>
       migration.version === GOVERNED_REMEDIATION_AUTHORITY_VERSION &&
@@ -766,14 +780,33 @@ function buildGovernedRemediationBootstrapManifest(): PostgresSchemaShapeManifes
   if (!authority) {
     throw new Error("Postgres governed-remediation bootstrap compatibility is missing canonical migration 135.");
   }
-  const complete = buildPostgresSchemaShapeManifest([authority]);
-  const tableNames = new Set<string>(GOVERNED_REMEDIATION_BOOTSTRAP_TABLES);
+  const parentReservations = POSTGRES_MIGRATIONS.find(
+    (migration) => migration.version === 188 && migration.name === "governed_remediation_parent_reservations",
+  );
+  if (includeParentReservations && !parentReservations) {
+    throw new Error("Postgres remediation bootstrap compatibility is missing canonical parent reservations.");
+  }
+  const parentResolutions = POSTGRES_MIGRATIONS.find(
+    (migration) => migration.version === 190 && migration.name === "governed_remediation_parent_resolutions",
+  );
+  if (includeParentResolutions && (!includeParentReservations || !parentResolutions)) {
+    throw new Error("Postgres remediation bootstrap compatibility is missing canonical parent resolution authority.");
+  }
+  const complete = buildPostgresSchemaShapeManifest([
+    authority, ...(includeParentReservations ? [parentReservations!] : []),
+    ...(includeParentResolutions ? [parentResolutions!] : []),
+  ]);
+  const tableNames = new Set<string>([
+    ...GOVERNED_REMEDIATION_BOOTSTRAP_TABLES,
+    ...(includeParentResolutions ? [GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE] : []),
+    ...(includeParentReservations ? [GOVERNED_REMEDIATION_PARENT_RESERVATION_TABLE] : []),
+  ]);
   const manifest: PostgresSchemaShapeManifest = {
     tables: complete.tables.filter((table) => tableNames.has(table.name)),
     indexes: complete.indexes.filter((index) => tableNames.has(index.tableName)),
   };
   const actualNames = manifest.tables.map((table) => table.name).sort();
-  const expectedNames = [...GOVERNED_REMEDIATION_BOOTSTRAP_TABLES].sort();
+  const expectedNames = [...tableNames].sort();
   if (actualNames.length !== expectedNames.length || actualNames.some((name, index) => name !== expectedNames[index])) {
     throw new Error("Postgres governed-remediation bootstrap compatibility manifest is incomplete.");
   }
@@ -845,17 +878,23 @@ function buildBootstrapRowsSql(
   return `/* ${marker} */ SELECT EXISTS (${rowSources}) AS has_rows`;
 }
 
-function buildGovernedRemediationBootstrapRowsSql(migrationSchema: PostgresMigrationSchemaIdentity): string {
+function buildGovernedRemediationBootstrapRowsSql(migrationSchema: PostgresMigrationSchemaIdentity, includeParentReservations = false, includeParentResolutions = false): string {
   return buildBootstrapRowsSql(
     migrationSchema,
-    GOVERNED_REMEDIATION_BOOTSTRAP_TABLES,
+    [...GOVERNED_REMEDIATION_BOOTSTRAP_TABLES,
+      ...(includeParentReservations ? [GOVERNED_REMEDIATION_PARENT_RESERVATION_TABLE] : []),
+      ...(includeParentResolutions ? [GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE] : [])],
     "goatcitadel_governed_remediation_bootstrap_rows",
   );
 }
 
-function buildGovernedRemediationBootstrapDropSql(migrationSchema: PostgresMigrationSchemaIdentity): string {
+function buildGovernedRemediationBootstrapDropSql(migrationSchema: PostgresMigrationSchemaIdentity, includeParentReservations = false, includeParentResolutions = false): string {
   const schema = quotePostgresIdentifier(migrationSchema.name);
-  return GOVERNED_REMEDIATION_BOOTSTRAP_DROP_ORDER.map(
+  return [
+    ...(includeParentResolutions ? [GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE] : []),
+    ...(includeParentReservations ? [GOVERNED_REMEDIATION_PARENT_RESERVATION_TABLE] : []),
+    ...GOVERNED_REMEDIATION_BOOTSTRAP_DROP_ORDER,
+  ].map(
     (table) => `DROP TABLE ${schema}.${quotePostgresIdentifier(table)}`,
   ).join(";\n");
 }
@@ -970,6 +1009,8 @@ async function prepareGovernedRemediationBootstrapForFoundation(
   const preflight = await tx.query<{
     state_table_exists: boolean;
     legacy_approval_column_exists: boolean;
+    parent_reservation_table_exists: boolean;
+    parent_resolution_table_exists: boolean;
   }>(POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL.replaceAll("@schemaOid", "$1"), [migrationSchema.oid]);
   const state = preflight.rows[0];
   if (!state?.state_table_exists || state.legacy_approval_column_exists) return;
@@ -979,15 +1020,21 @@ async function prepareGovernedRemediationBootstrapForFoundation(
   // v134/v135 forward ledger is replayed. Prove that exact empty shape, remove
   // only those empty relations transactionally, then let both frozen migrations
   // install their own constraints, triggers, and ledger evidence normally.
-  const manifest = buildGovernedRemediationBootstrapManifest();
+  const includeParentReservations = state.parent_reservation_table_exists === true;
+  const includeParentResolutions = state.parent_resolution_table_exists === true;
+  const manifest = buildGovernedRemediationBootstrapManifest(includeParentReservations, includeParentResolutions);
   const replacementLockSql = buildPostgresSchemaShapeReplacementLockSql(migrationSchema, manifest);
   if (replacementLockSql) await tx.query(replacementLockSql);
   const lockedPreflight = await tx.query<{
     state_table_exists: boolean;
     legacy_approval_column_exists: boolean;
+    parent_reservation_table_exists: boolean;
+    parent_resolution_table_exists: boolean;
   }>(POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL.replaceAll("@schemaOid", "$1"), [migrationSchema.oid]);
   const lockedState = lockedPreflight.rows[0];
-  if (!lockedState?.state_table_exists || lockedState.legacy_approval_column_exists) {
+  if (!lockedState?.state_table_exists || lockedState.legacy_approval_column_exists
+    || (lockedState.parent_reservation_table_exists === true) !== includeParentReservations
+    || (lockedState.parent_resolution_table_exists === true) !== includeParentResolutions) {
     throw new Error(
       "Postgres governed-remediation bootstrap classification changed while acquiring its replacement lock; refusing automatic replacement.",
     );
@@ -1000,13 +1047,13 @@ async function prepareGovernedRemediationBootstrapForFoundation(
       { cause: error },
     );
   }
-  const rows = await tx.query<{ has_rows: boolean }>(buildGovernedRemediationBootstrapRowsSql(migrationSchema));
+  const rows = await tx.query<{ has_rows: boolean }>(buildGovernedRemediationBootstrapRowsSql(migrationSchema, includeParentReservations, includeParentResolutions));
   if (rows.rows[0]?.has_rows !== false) {
     throw new Error(
       "Postgres governed-remediation bootstrap relations contain rows; refusing to replace authority-bearing state.",
     );
   }
-  await tx.query(buildGovernedRemediationBootstrapDropSql(migrationSchema));
+  await tx.query(buildGovernedRemediationBootstrapDropSql(migrationSchema, includeParentReservations, includeParentResolutions));
 }
 
 async function prepareRemoteWorkerMeshBootstrapForAuthority(
@@ -1654,17 +1701,25 @@ function prepareGovernedRemediationBootstrapForFoundationSync(
   const state = db.prepare(POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL).get<{
     state_table_exists: boolean;
     legacy_approval_column_exists: boolean;
+    parent_reservation_table_exists: boolean;
+    parent_resolution_table_exists: boolean;
   }>({ schemaOid: migrationSchema.oid });
   if (!state?.state_table_exists || state.legacy_approval_column_exists) return;
 
-  const manifest = buildGovernedRemediationBootstrapManifest();
+  const includeParentReservations = state.parent_reservation_table_exists === true;
+  const includeParentResolutions = state.parent_resolution_table_exists === true;
+  const manifest = buildGovernedRemediationBootstrapManifest(includeParentReservations, includeParentResolutions);
   const replacementLockSql = buildPostgresSchemaShapeReplacementLockSql(migrationSchema, manifest);
   if (replacementLockSql) db.exec(replacementLockSql);
   const lockedState = db.prepare(POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL).get<{
     state_table_exists: boolean;
     legacy_approval_column_exists: boolean;
+    parent_reservation_table_exists: boolean;
+    parent_resolution_table_exists: boolean;
   }>({ schemaOid: migrationSchema.oid });
-  if (!lockedState?.state_table_exists || lockedState.legacy_approval_column_exists) {
+  if (!lockedState?.state_table_exists || lockedState.legacy_approval_column_exists
+    || (lockedState.parent_reservation_table_exists === true) !== includeParentReservations
+    || (lockedState.parent_resolution_table_exists === true) !== includeParentResolutions) {
     throw new Error(
       "Postgres governed-remediation bootstrap classification changed while acquiring its replacement lock; refusing automatic replacement.",
     );
@@ -1677,13 +1732,13 @@ function prepareGovernedRemediationBootstrapForFoundationSync(
       { cause: error },
     );
   }
-  const rows = db.prepare(buildGovernedRemediationBootstrapRowsSql(migrationSchema)).get<{ has_rows: boolean }>();
+  const rows = db.prepare(buildGovernedRemediationBootstrapRowsSql(migrationSchema, includeParentReservations, includeParentResolutions)).get<{ has_rows: boolean }>();
   if (rows?.has_rows !== false) {
     throw new Error(
       "Postgres governed-remediation bootstrap relations contain rows; refusing to replace authority-bearing state.",
     );
   }
-  db.exec(buildGovernedRemediationBootstrapDropSql(migrationSchema));
+  db.exec(buildGovernedRemediationBootstrapDropSql(migrationSchema, includeParentReservations, includeParentResolutions));
 }
 
 function prepareRemoteWorkerMeshBootstrapForAuthoritySync(

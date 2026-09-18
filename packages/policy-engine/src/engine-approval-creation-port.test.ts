@@ -82,6 +82,7 @@ function createHarness() {
   const appendApprovalEvent = vi.fn();
   const runDb = vi.fn();
   const storage = {
+    runImmediateTransaction: vi.fn(async <T>(work: () => T | Promise<T>): Promise<T> => await work()),
     approvals: {
       create,
       get: vi.fn(),

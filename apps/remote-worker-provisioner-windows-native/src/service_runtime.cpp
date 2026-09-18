@@ -5,6 +5,7 @@
 
 #include "ed25519_runtime.hpp"
 #include "local_transport.hpp"
+#include "service_configuration_query.hpp"
 #include "signer_inspection.hpp"
 
 #include <array>
@@ -33,7 +34,7 @@ constexpr std::size_t kConfigurationBufferBytes = 8192U;
 constexpr std::size_t kTokenBufferBytes = 16384U;
 constexpr std::uint32_t kAdministratorServiceMask =
     SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG |
-    SERVICE_QUERY_STATUS | READ_CONTROL | SYNCHRONIZE;
+    SERVICE_QUERY_STATUS | READ_CONTROL;
 
 constexpr std::array<std::uint32_t, 1U> kLocalSystemSidParts = {18U};
 constexpr std::array<std::uint32_t, 2U> kAdministratorsSidParts = {
@@ -597,19 +598,10 @@ bool QueryServiceConfig2IntoBuffer(
   if (service == nullptr || buffer == nullptr || returned_bytes == nullptr) {
     return false;
   }
-  buffer->fill(0U);
-  DWORD required = 0U;
-  if (QueryServiceConfig2W(
-          service,
-          information_level,
-          buffer->data(),
-          static_cast<DWORD>(buffer->size()),
-          &required) == FALSE ||
-      required < minimum_bytes || required > buffer->size()) {
-    return false;
-  }
-  *returned_bytes = required;
-  return true;
+  return QueryBoundedServiceConfiguration(buffer, minimum_bytes, returned_bytes,
+      [service, information_level](LPBYTE data, DWORD capacity, LPDWORD needed) noexcept {
+        return QueryServiceConfig2W(service, information_level, data, capacity, needed);
+      });
 }
 
 bool CollectConfiguredService(
@@ -620,12 +612,11 @@ bool CollectConfiguredService(
   }
   alignas(16) std::array<std::uint8_t, kConfigurationBufferBytes> buffer{};
   DWORD required = 0U;
-  if (QueryServiceConfigW(
-          service,
-          reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data()),
-          static_cast<DWORD>(buffer.size()),
-          &required) == FALSE ||
-      required < sizeof(QUERY_SERVICE_CONFIGW) || required > buffer.size()) {
+  if (!QueryBoundedServiceConfiguration(&buffer, sizeof(QUERY_SERVICE_CONFIGW), &required,
+      [service](LPBYTE data, DWORD capacity, LPDWORD needed) noexcept {
+        return QueryServiceConfigW(service,
+            reinterpret_cast<QUERY_SERVICE_CONFIGW*>(data), capacity, needed);
+      })) {
     return false;
   }
   const auto* configuration =
@@ -839,13 +830,34 @@ bool QueryTokenInformationFixed(
   return true;
 }
 
-bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
-  if (snapshot == nullptr) {
+bool QueryTokenRestrictionState(HANDLE token, bool* token_unrestricted) noexcept {
+  if (token_unrestricted == nullptr) {
     return false;
+  }
+  *token_unrestricted = false;
+  if (token == nullptr) {
+    return false;
+  }
+  // TokenHasRestrictions records filtering history, including SCM's required
+  // removal of excess privileges. IsTokenRestricted tests restricting SIDs.
+  // A FALSE result can also be an API failure, which must remain fail-closed.
+  SetLastError(NO_ERROR);
+  const BOOL restricted = IsTokenRestricted(token);
+  if (restricted == FALSE && GetLastError() != NO_ERROR) {
+    return false;
+  }
+  *token_unrestricted = restricted == FALSE;
+  return true;
+}
+
+ServiceIdentityValidation CollectProcessToken(
+    ServiceIdentitySnapshot* snapshot) noexcept {
+  if (snapshot == nullptr) {
+    return ServiceIdentityValidation::ServiceIdentity;
   }
   HANDLE raw_token = nullptr;
   if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token) == FALSE) {
-    return false;
+    return ServiceIdentityValidation::TokenOpen;
   }
   const ScopedHandle token(raw_token);
   alignas(16) std::array<std::uint8_t, kTokenBufferBytes> buffer{};
@@ -853,37 +865,34 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
 
   if (!QueryTokenInformationFixed(
           token.get(), TokenUser, &buffer, sizeof(TOKEN_USER), &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenUserCollection;
   }
   const auto* user = reinterpret_cast<const TOKEN_USER*>(buffer.data());
   if (!CopySidToSnapshot(user->User.Sid, &snapshot->token_user)) {
-    return false;
+    return ServiceIdentityValidation::TokenUserCollection;
   }
 
   if (!QueryTokenInformationFixed(
           token.get(), TokenType, &buffer, sizeof(TOKEN_TYPE), &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenTypeCollection;
   }
   snapshot->token_type = static_cast<std::uint32_t>(
       *reinterpret_cast<const TOKEN_TYPE*>(buffer.data()));
 
   if (!QueryTokenInformationFixed(
           token.get(), TokenSessionId, &buffer, sizeof(DWORD), &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenSessionCollection;
   }
   snapshot->token_session_id =
       *reinterpret_cast<const DWORD*>(buffer.data());
 
-  if (!QueryTokenInformationFixed(
-          token.get(), TokenHasRestrictions, &buffer, sizeof(BOOLEAN), &returned) ||
-      !DecodeTokenHasRestrictions(
-          buffer.data(), returned, &snapshot->token_unrestricted)) {
-    return false;
+  if (!QueryTokenRestrictionState(token.get(), &snapshot->token_unrestricted)) {
+    return ServiceIdentityValidation::TokenRestrictionsCollection;
   }
 
   if (!QueryTokenInformationFixed(
           token.get(), TokenIsAppContainer, &buffer, sizeof(DWORD), &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenAppContainerCollection;
   }
   snapshot->token_non_appcontainer =
       *reinterpret_cast<const DWORD*>(buffer.data()) == 0U;
@@ -894,7 +903,7 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
           &buffer,
           static_cast<DWORD>(offsetof(TOKEN_GROUPS, Groups)),
           &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenRestrictedSidsCollection;
   }
   const auto* restricted =
       reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
@@ -902,17 +911,17 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
 
   if (!QueryTokenInformationFixed(
           token.get(), TokenGroups, &buffer, sizeof(TOKEN_GROUPS), &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenGroupsCollection;
   }
   const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
   if (groups->GroupCount > snapshot->token_groups.size()) {
-    return false;
+    return ServiceIdentityValidation::TokenGroupsCollection;
   }
   const std::size_t required_group_bytes =
       offsetof(TOKEN_GROUPS, Groups) +
       (static_cast<std::size_t>(groups->GroupCount) * sizeof(SID_AND_ATTRIBUTES));
   if (required_group_bytes > returned) {
-    return false;
+    return ServiceIdentityValidation::TokenGroupsCollection;
   }
   snapshot->token_group_count = groups->GroupCount;
   for (std::size_t index = 0U; index < snapshot->token_group_count; ++index) {
@@ -920,7 +929,7 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
     if (!CopySidToSnapshot(
             groups->Groups[index].Sid,
             &snapshot->token_groups[index].sid)) {
-      return false;
+      return ServiceIdentityValidation::TokenGroupsCollection;
     }
   }
 
@@ -930,19 +939,19 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
           &buffer,
           sizeof(TOKEN_PRIVILEGES),
           &returned)) {
-    return false;
+    return ServiceIdentityValidation::TokenPrivilegesCollection;
   }
   const auto* privileges =
       reinterpret_cast<const TOKEN_PRIVILEGES*>(buffer.data());
   if (privileges->PrivilegeCount > snapshot->token_privileges.size()) {
-    return false;
+    return ServiceIdentityValidation::TokenPrivilegesCollection;
   }
   const std::size_t required_privilege_bytes =
       offsetof(TOKEN_PRIVILEGES, Privileges) +
       (static_cast<std::size_t>(privileges->PrivilegeCount) *
        sizeof(LUID_AND_ATTRIBUTES));
   if (required_privilege_bytes > returned) {
-    return false;
+    return ServiceIdentityValidation::TokenPrivilegesCollection;
   }
   snapshot->token_privilege_count = privileges->PrivilegeCount;
   for (std::size_t index = 0U;
@@ -957,7 +966,7 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
 
   LUID change_notify{};
   if (LookupPrivilegeValueW(nullptr, SE_CHANGE_NOTIFY_NAME, &change_notify) == FALSE) {
-    return false;
+    return ServiceIdentityValidation::TokenPrivilegeLookup;
   }
   snapshot->change_notify_luid_low_part = change_notify.LowPart;
   snapshot->change_notify_luid_high_part = change_notify.HighPart;
@@ -974,27 +983,31 @@ bool CollectProcessToken(ServiceIdentitySnapshot* snapshot) noexcept {
   } else if (GetLastError() == ERROR_NO_TOKEN) {
     snapshot->current_thread_has_no_token = true;
   } else {
-    return false;
+    return ServiceIdentityValidation::ThreadTokenCollection;
   }
-  return true;
+  return ServiceIdentityValidation::Valid;
 }
 
-bool CollectServiceIdentitySnapshot(
+ServiceIdentityValidation CollectServiceIdentitySnapshot(
     DWORD argument_count,
     wchar_t** arguments,
     SC_HANDLE service,
     ServiceIdentitySnapshot* snapshot) noexcept {
   if (service == nullptr || snapshot == nullptr) {
-    return false;
+    return ServiceIdentityValidation::ServiceIdentity;
   }
   snapshot->exact_service_main_arguments =
       argument_count == 1U && arguments != nullptr &&
       arguments[0] != nullptr &&
       EqualWideLiteral(arguments[0], kRuntimeServiceName);
   snapshot->current_process_id = GetCurrentProcessId();
-  return CollectConfiguredService(service, snapshot) &&
-         CollectServiceObjectSecurity(service, snapshot) &&
-         CollectProcessToken(snapshot);
+  if (!CollectConfiguredService(service, snapshot)) {
+    return ServiceIdentityValidation::ConfigurationCollection;
+  }
+  if (!CollectServiceObjectSecurity(service, snapshot)) {
+    return ServiceIdentityValidation::ServiceSecurityCollection;
+  }
+  return CollectProcessToken(snapshot);
 }
 
 SERVICE_STATUS ToNativeStatus(const ServiceStatusSnapshot& snapshot) noexcept {
@@ -1278,8 +1291,7 @@ RunningStatusResult WaitForExactRunningServiceStatus(
             SC_STATUS_PROCESS_INFO,
             reinterpret_cast<LPBYTE>(&status),
             sizeof(status),
-            &returned) == FALSE ||
-        returned != sizeof(status)) {
+            &returned) == FALSE) {
       return RunningStatusResult::IdentityMismatch;
     }
     const RunningServiceStatusSnapshot snapshot = {
@@ -1335,7 +1347,7 @@ DWORD WINAPI ServiceStartupWorker(void* raw_context) noexcept {
     return FinishStartupWorker(
         context,
         static_cast<std::uint32_t>(
-            ServiceIdentityValidation::ServiceIdentity));
+            ServiceIdentityValidation::ManagerOpen));
   }
   const ScopedServiceHandle service(OpenServiceW(
       manager.get(),
@@ -1345,7 +1357,7 @@ DWORD WINAPI ServiceStartupWorker(void* raw_context) noexcept {
     return FinishStartupWorker(
         context,
         static_cast<std::uint32_t>(
-            ServiceIdentityValidation::ServiceIdentity));
+            ServiceIdentityValidation::ServiceOpen));
   }
 
   InterlockedExchange(&context->transport_touched, 1);
@@ -1373,15 +1385,14 @@ DWORD WINAPI ServiceStartupWorker(void* raw_context) noexcept {
   }
 
   ServiceIdentitySnapshot identity{};
-  if (!CollectServiceIdentitySnapshot(
+  const ServiceIdentityValidation collection = CollectServiceIdentitySnapshot(
           context->argument_count,
           context->arguments,
           service.get(),
-          &identity)) {
+          &identity);
+  if (collection != ServiceIdentityValidation::Valid) {
     return FinishStartupWorker(
-        context,
-        static_cast<std::uint32_t>(
-            ServiceIdentityValidation::ServiceIdentity));
+        context, static_cast<std::uint32_t>(collection));
   }
   const ServiceIdentityValidation validation =
       ValidateServiceIdentitySnapshot(identity, expected_binary_path);
@@ -1389,9 +1400,10 @@ DWORD WINAPI ServiceStartupWorker(void* raw_context) noexcept {
     return FinishStartupWorker(
         context, static_cast<std::uint32_t>(validation));
   }
-  if (!GrantCurrentSignerInspectionAccess()) {
+  SignerInspectionDiagnostic inspection{};
+  if (!GrantCurrentSignerInspectionAccess(&inspection)) {
     return FinishStartupWorker(
-        context, static_cast<std::uint32_t>(ServiceIdentityValidation::ServiceIdentity));
+        context, worker_host::WorkerInspectionServiceExitCode(inspection));
   }
   if (IsDeadlineExpired(context->startup_deadline)) {
     return FinishStartupWorker(
@@ -2440,17 +2452,16 @@ const char* ServiceTransportResultLabel(
   return "custody_or_journal";
 }
 
-bool DecodeTokenHasRestrictions(
-    const std::uint8_t* bytes,
-    std::size_t returned_bytes,
-    bool* token_unrestricted) noexcept {
-  if (bytes == nullptr || token_unrestricted == nullptr ||
-      returned_bytes != sizeof(BOOLEAN) || bytes[0] > 1U) {
-    return false;
-  }
-  *token_unrestricted = bytes[0] == 0U;
-  return true;
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+ServiceIdentityValidation CollectCurrentProcessTokenForTest(
+    ServiceIdentitySnapshot* snapshot) noexcept {
+  return CollectProcessToken(snapshot);
 }
+bool QueryTokenRestrictionStateForTest(
+    void* token, bool* token_unrestricted) noexcept {
+  return QueryTokenRestrictionState(token, token_unrestricted);
+}
+#endif
 
 CommandDisposition DecideCommandDisposition(
     const wchar_t* command_line) noexcept {
@@ -2509,8 +2520,10 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
   if (!snapshot.exact_service_main_arguments) {
     return ServiceIdentityValidation::LaunchContext;
   }
-  if (snapshot.current_process_id == 0U ||
-      snapshot.configured_service_type != SERVICE_WIN32_OWN_PROCESS ||
+  if (snapshot.current_process_id == 0U) {
+    return ServiceIdentityValidation::ProcessIdentity;
+  }
+  if (snapshot.configured_service_type != SERVICE_WIN32_OWN_PROCESS ||
       snapshot.configured_start_type != SERVICE_DEMAND_START ||
       snapshot.configured_error_control != SERVICE_ERROR_NORMAL ||
       !EqualFixedWideString(
@@ -2520,20 +2533,31 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
       !snapshot.triggers_empty || !snapshot.failure_actions_empty ||
       !snapshot.failure_actions_on_non_crash_disabled ||
       !snapshot.delayed_auto_start_disabled ||
-      snapshot.configured_service_sid_type != SERVICE_SID_TYPE_UNRESTRICTED ||
-      !IsRequiredPrivilegeListExact(snapshot) ||
-      snapshot.token_type != static_cast<std::uint32_t>(TokenPrimary) ||
-      snapshot.token_session_id != 0U || !snapshot.token_unrestricted ||
+      snapshot.configured_service_sid_type != SERVICE_SID_TYPE_UNRESTRICTED) {
+    return ServiceIdentityValidation::ConfigurationIdentity;
+  }
+  if (!IsRequiredPrivilegeListExact(snapshot)) {
+    return ServiceIdentityValidation::RequiredPrivilegesIdentity;
+  }
+  if (snapshot.token_type != static_cast<std::uint32_t>(TokenPrimary) ||
+      snapshot.token_session_id != 0U ||
       !snapshot.token_non_appcontainer ||
       !snapshot.current_thread_has_no_token ||
-      snapshot.restricted_sid_count != 0U ||
-      snapshot.token_group_count > snapshot.token_groups.size() ||
-      snapshot.token_privilege_count > snapshot.token_privileges.size() ||
-      !snapshot.service_dacl_present || snapshot.service_dacl_defaulted ||
+      snapshot.restricted_sid_count != 0U) {
+    return ServiceIdentityValidation::TokenExecutionIdentity;
+  }
+  if (!snapshot.token_unrestricted) {
+    return ServiceIdentityValidation::TokenRestricted;
+  }
+  if (snapshot.token_group_count > snapshot.token_groups.size() ||
+      snapshot.token_privilege_count > snapshot.token_privileges.size()) {
+    return ServiceIdentityValidation::TokenBounds;
+  }
+  if (!snapshot.service_dacl_present || snapshot.service_dacl_defaulted ||
       !snapshot.service_dacl_protected ||
       !snapshot.service_dacl_non_inheriting ||
       snapshot.service_ace_count > snapshot.service_aces.size()) {
-    return ServiceIdentityValidation::ServiceIdentity;
+    return ServiceIdentityValidation::ServiceDaclIdentity;
   }
 
   const SidSnapshot local_system = MakeNtSidSnapshot(
@@ -2546,7 +2570,7 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
       kProvisionerServiceSidParts.data(), kProvisionerServiceSidParts.size());
   if (!EqualSidSnapshot(snapshot.token_user, local_system) ||
       !EqualSidSnapshot(snapshot.service_object_owner, local_system)) {
-    return ServiceIdentityValidation::ServiceIdentity;
+    return ServiceIdentityValidation::SystemIdentity;
   }
 
   std::size_t provisioner_service_count = 0U;
@@ -2558,7 +2582,7 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
       if ((group.attributes & (SE_GROUP_ENABLED | SE_GROUP_OWNER)) !=
               (SE_GROUP_ENABLED | SE_GROUP_OWNER) ||
           (group.attributes & SE_GROUP_USE_FOR_DENY_ONLY) != 0U) {
-        return ServiceIdentityValidation::ServiceIdentity;
+        return ServiceIdentityValidation::SignerGroupIdentity;
       }
     }
     if (EqualSidSnapshot(group.sid, service_logon) &&
@@ -2570,26 +2594,28 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
       for (const std::uint32_t rid : kProhibitedLogonSidRids) {
         const SidSnapshot prohibited = MakeNtSidSnapshot(&rid, 1U);
         if (EqualSidSnapshot(group.sid, prohibited)) {
-          return ServiceIdentityValidation::ServiceIdentity;
+          return ServiceIdentityValidation::ProhibitedLogon;
         }
       }
     }
   }
   if (provisioner_service_count != 1U ||
-      enabled_service_logon_count != 1U ||
-      snapshot.token_privilege_count != 1U) {
-    return ServiceIdentityValidation::ServiceIdentity;
+      enabled_service_logon_count != 1U) {
+    return ServiceIdentityValidation::ServiceGroupCount;
+  }
+  if (snapshot.token_privilege_count != 1U) {
+    return ServiceIdentityValidation::TokenPrivilegeIdentity;
   }
   const TokenPrivilegeSnapshot& privilege = snapshot.token_privileges[0];
   if (privilege.luid_low_part != snapshot.change_notify_luid_low_part ||
       privilege.luid_high_part != snapshot.change_notify_luid_high_part ||
       (privilege.attributes & SE_PRIVILEGE_ENABLED) == 0U ||
       (privilege.attributes & SE_PRIVILEGE_REMOVED) != 0U) {
-    return ServiceIdentityValidation::ServiceIdentity;
+    return ServiceIdentityValidation::TokenPrivilegeIdentity;
   }
 
   if (snapshot.service_ace_count != 3U) {
-    return ServiceIdentityValidation::ServiceIdentity;
+    return ServiceIdentityValidation::ServiceAceCount;
   }
   const ServiceAceSnapshot& system_ace = snapshot.service_aces[0];
   const ServiceAceSnapshot& administrators_ace = snapshot.service_aces[1];
@@ -2606,7 +2632,7 @@ ServiceIdentityValidation ValidateServiceIdentitySnapshot(
       worker_ace.type != ACCESS_ALLOWED_ACE_TYPE || worker_ace.flags != 0U ||
       worker_ace.mask != kRuntimeWorkerSignerQueryMask ||
       !EqualSidSnapshot(worker_ace.sid, worker)) {
-    return ServiceIdentityValidation::ServiceIdentity;
+    return ServiceIdentityValidation::ServiceAceIdentity;
   }
   return ServiceIdentityValidation::Valid;
 }

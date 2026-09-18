@@ -25,10 +25,12 @@ export function probeRemoteWorkerWindowsPackage(input) {
   const source = `import fs from "node:fs"; import path from "node:path"; import {createHash,randomBytes} from "node:crypto"; import {createRequire} from "node:module"; import {createServer} from "node:http"; import {pathToFileURL} from "node:url";
 const root=fs.realpathSync.native(process.cwd());
 const require=createRequire(pathToFileURL(path.join(root,"app/worker/package.json")));
-const modules=["@goatcitadel/contracts","@goatcitadel/contracts/mesh-schema-node","@goatcitadel/remote-worker-provisioner/windows-service-client","zod","@noble/hashes/sha256","ajv","ajv-formats"];
+const modules=["@goatcitadel/contracts","@goatcitadel/contracts/mesh-schema-node","@goatcitadel/contracts/remote-worker-runtime-node","@goatcitadel/remote-worker-provisioner/windows-service-client","zod","@noble/hashes/sha256","ajv","ajv-formats"];
 const resolved=modules.map(name=>({name,path:fs.realpathSync.native(require.resolve(name))}));
 if(resolved.some(item=>!item.path.toLowerCase().startsWith(root.toLowerCase()+path.sep))) throw new Error("Dependency escaped package root.");
 const worker=await import(pathToFileURL(path.join(root,"app/worker/dist/index.js")));
+const runtimeCodec=await import(pathToFileURL(require.resolve("@goatcitadel/contracts/remote-worker-runtime-node")));
+if(["encodeWindowsRuntimeDispatch","prepareWindowsRuntimeDispatch","bindWindowsRuntimeDispatch","encodeWindowsWorkerStdioLaunch"].some(name=>typeof runtimeCodec[name]!=="function")) throw new Error("Packaged native runtime codec is unavailable.");
 if(typeof worker.parseConnectedWorkerStartup!=="function" || typeof worker.createWindowsProtectedWorkerTransport!=="function") throw new Error("Worker entrypoints are unavailable.");
 const provisioning=await import(pathToFileURL(path.join(root,"app/worker/dist/worker-windows-cell-provisioning.js")));
 if(typeof provisioning.createWindowsWorkerCellProvisioning!=="function" || typeof provisioning.encodeWindowsWorkerCellProvisioning!=="function") throw new Error("Packaged native provisioning bridge is unavailable.");
@@ -39,7 +41,7 @@ await schemas.validateMeshCapabilityJson(JSON.stringify({type:"object",propertie
 let rejected=false;
 try { await schemas.validateMeshCapabilityJson(JSON.stringify({type:"integer"}),JSON.stringify("1")); } catch(error) { rejected=error instanceof schemas.MeshSchemaValidationError && error.reason==="invalid"; }
 if(!rejected) throw new Error("Packaged schema validation did not enforce types.");
-if(typeof worker.loadWorkerMeshToolRegistry!=="function" || typeof worker.createWorkerMeshFileReadDescriptor!=="function" || typeof worker.createWorkerMeshFileWriteDescriptor!=="function") throw new Error("Worker tool registry is unavailable.");
+if(typeof worker.loadWorkerMeshToolRegistry!=="function" || typeof worker.createWorkerMeshFileReadDescriptor!=="function" || typeof worker.createWorkerMeshFileWriteDescriptor!=="function" || typeof worker.createWorkerMeshDirectoryListDescriptor!=="function") throw new Error("Worker tool registry is unavailable.");
 const contracts=await import(pathToFileURL(require.resolve("@goatcitadel/contracts")));
 const hash=value=>createHash("sha256").update(contracts.canonicalJsonString(value)).digest("hex");
 const descriptor=worker.createWorkerMeshFileReadDescriptor("package");
@@ -66,6 +68,23 @@ const created=await invokeWrite({path:"note.txt",content:"initial",expectedConte
 const edited=await invokeWrite({path:"note.txt",content:"edited",expectedContent:"initial"});
 const stale=await invokeWrite({path:"note.txt",content:"must not overwrite",expectedContent:"initial"});
 if(created.disposition!=="succeeded" || created.output.created!==true || edited.disposition!=="succeeded" || edited.output.created!==false || edited.output.sha256!==createHash("sha256").update("edited").digest("hex") || stale.disposition!=="failed" || fs.readFileSync(path.join(writeRoot,"note.txt"),"utf8")!=="edited") throw new Error("Packaged file writer did not enforce exact-content replacement.");
+const listDescriptor=worker.createWorkerMeshDirectoryListDescriptor("probe");
+const listUnsignedEntry={localId:"directory.list",kind:"tool",capabilityId:"mesh:probe:tool:directory.list",descriptor:listDescriptor,descriptorSha256:hash(listDescriptor),permissionEnvelopeSha256:hash(listDescriptor.permissions)};
+const listEntry={...listUnsignedEntry,entrySha256:hash(listUnsignedEntry)};
+const listUnsignedManifest={...unsignedManifest,entries:[listEntry]};
+const listManifest={...listUnsignedManifest,manifestSha256:hash(listUnsignedManifest)};
+const listSignal=AbortSignal.timeout(5000);
+const listConfiguration={manifest:listManifest,localId:listEntry.localId,rootId:"probe",rootPath:writeRoot,signal:listSignal,assertConfigurationCurrent:async()=>undefined};
+const listRegistry={schemaVersion:worker.WORKER_MESH_TOOL_REGISTRY_SCHEMA_VERSION,workspaceId:"probe",nodeId:"probe",bindings:[{toolName:"fs.list",manifest:listManifest,localId:listEntry.localId,rootId:"probe",rootPath:writeRoot}]};
+const listRegistryBytes=JSON.stringify(listRegistry),listRegistryFile=writeRoot+".registry.json";
+fs.writeFileSync(listRegistryFile,listRegistryBytes,{flag:"wx"});
+await worker.loadWorkerMeshToolRegistry({file:listRegistryFile,sha256:createHash("sha256").update(listRegistryBytes).digest("hex")},{workspaceId:"probe",nodeId:"probe"},listSignal);
+const listing=await import(pathToFileURL(path.join(root,"app/worker/dist/worker-mesh-directory-list.js")));
+const listBinding=await listing.createWorkerMeshDirectoryListBinding(listConfiguration);
+const listed=await listBinding.owner.execute({entry:listEntry,input:{path:"."},envelope:{workspaceId:"probe",nodeId:"probe",manifestSha256:listManifest.manifestSha256},signal:listSignal});
+if(listed.disposition!=="succeeded" || JSON.stringify(listed.output)!==JSON.stringify({path:".",entries:[{name:"note.txt",type:"file"}],truncated:false})) throw new Error("Packaged directory listing did not use its pinned root and native registry contract.");
+const absentListing=await listBinding.owner.execute({entry:listEntry,input:{path:"missing"},envelope:{workspaceId:"probe",nodeId:"probe",manifestSha256:listManifest.manifestSha256},signal:listSignal});
+if(absentListing.disposition!=="failed" || absentListing.errorCode!=="native_directory_list_refused") throw new Error("Packaged directory refusal was not a known failed read.");
 const nativeMcpTools=[{name:"package.read",inputSchema:{type:"object",properties:{path:{type:"string",enum:["note.txt"]}},required:["path"],additionalProperties:false}}];
 const bearerToken=randomBytes(32).toString("base64url");
 const authorization={type:"bearer_file",file:writeRoot+".token",sha256:createHash("sha256").update(bearerToken).digest("hex")};
@@ -110,7 +129,7 @@ try {
   const refused=await mcpBinding.owner.execute({entry:mcpEntry,input:{toolName:"package.read",arguments:{path:"note.txt"}},envelope:{workspaceId:"probe",nodeId:"probe",manifestSha256:mcpManifest.manifestSha256},signal:mcpSignal,assertRemoteCurrent:async()=>undefined});
   if(refused.disposition!=="failed" || mcpCalls!==1 || authenticatedRequests!==5) throw new Error("Packaged destination MCP reused a changed credential.");
 }finally{const closed=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await closed;}
-console.log(JSON.stringify({node:process.versions.node,openssl:process.versions.openssl,platform:process.platform,architecture:process.arch,nativeProvisioningImagePinned:true,filesystemRead:true,filesystemWrite:true,destinationMcp:true,destinationMcpBearer:true,credentialRootSeparation:true,credentialChangeRefused:true,authenticatedRequests,mcpCalls,fileWriteProbeDirectory:writeRoot,modules:resolved.map(item=>item.name)}));`;
+console.log(JSON.stringify({node:process.versions.node,openssl:process.versions.openssl,platform:process.platform,architecture:process.arch,nativeProvisioningImagePinned:true,filesystemRead:true,filesystemWrite:true,filesystemList:true,destinationMcp:true,destinationMcpBearer:true,credentialRootSeparation:true,credentialChangeRefused:true,authenticatedRequests,mcpCalls,fileWriteProbeDirectory:writeRoot,modules:resolved.map(item=>item.name)}));`;
   const child = spawnSync(path.join(input.root, "app/runtime/node.exe"), ["--input-type=module", "-e", source], {
     cwd: input.root,
     windowsHide: true,

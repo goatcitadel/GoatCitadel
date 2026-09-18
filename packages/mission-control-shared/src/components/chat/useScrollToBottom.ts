@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { isThreadScrollNearBottom } from "./ChatThreadPrimitives";
 
 /**
@@ -35,6 +35,8 @@ export interface ScrollToBottomContentSignals {
   streamingPreviewSignal: string | null;
   /** Current stream error, if any (only re-triggers the follow write). */
   streamError: string | null;
+  /** Selected-path message identities; exclude tool events and token updates. */
+  conversationMessageIds?: readonly string[];
 }
 
 export interface UseScrollToBottomOptions {
@@ -62,6 +64,7 @@ export interface UseScrollToBottomResult<
   handleThreadScroll: () => void;
   /** Stable action that scrolls to the latest content and pins to bottom. */
   jumpToLatest: () => void;
+  newMessageCount: number;
 }
 
 /**
@@ -86,6 +89,34 @@ export function useScrollToBottom<
   const threadEndRef = useRef<SentinelElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const lastBottomStateRef = useRef<boolean | null>(null);
+  const followingRef = useRef(followOutput);
+  followingRef.current = followOutput;
+  const readingAnchorRef = useRef<{ element: HTMLElement; top: number } | null>(null);
+  const captureReadingAnchor = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const top = scroller.getBoundingClientRect().top;
+    const blocks = scroller.querySelectorAll<HTMLElement>("[data-turn-id] p, [data-turn-id] li, [data-turn-id] pre, [data-turn-id] tr, [data-turn-id] summary");
+    const element = Array.from(blocks.length ? blocks : scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
+      .find((block) => block.getBoundingClientRect().bottom > top);
+    readingAnchorRef.current = element ? { element, top: element.getBoundingClientRect().top - top } : null;
+  }, []);
+  const unreadRef = useRef({ sessionId: signals.sessionId, previous: [] as readonly string[], unread: new Set<string>() });
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  useLayoutEffect(() => {
+    const ids = signals.conversationMessageIds ?? [];
+    const state = unreadRef.current;
+    const previousTail = state.previous.at(-1);
+    // A missing former tail denotes a branch change/replacement, not new output.
+    if (state.sessionId !== signals.sessionId || followOutput || (previousTail && !ids.includes(previousTail))) {
+      state.unread.clear();
+    } else if (previousTail) {
+      for (const id of ids.slice(ids.indexOf(previousTail) + 1)) state.unread.add(id);
+    }
+    state.sessionId = signals.sessionId;
+    state.previous = ids;
+    setNewMessageCount(state.unread.size);
+  }, [followOutput, signals.sessionId, signals.conversationMessageIds]);
 
   const {
     sessionId,
@@ -121,8 +152,47 @@ export function useScrollToBottom<
       emitBottomState(true);
       return;
     }
-    emitBottomState(isThreadScrollNearBottom(scrollElement));
-  }, [emitBottomState]);
+    const atBottom = isThreadScrollNearBottom(scrollElement);
+    followingRef.current = atBottom;
+    if (!atBottom && scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
+    if (atBottom) {
+      readingAnchorRef.current = null;
+      unreadRef.current.unread.clear();
+      setNewMessageCount(0);
+    } else {
+      captureReadingAnchor();
+    }
+    emitBottomState(atBottom);
+  }, [emitBottomState, captureReadingAnchor]);
+
+  // Preserve the reader's visible turn when disclosures/code highlighting or
+  // prepended history change heights. Native anchoring may already compensate;
+  // the measured delta is then zero, so it is never applied twice.
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    if (followOutput) {
+      readingAnchorRef.current = null;
+      return;
+    }
+    const restore = () => {
+      if (followingRef.current) return;
+      const anchor = readingAnchorRef.current;
+      if (anchor && scroller.contains(anchor.element)) {
+        const delta = anchor.element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.top;
+        if (Math.abs(delta) > 0.5) scroller.scrollTop += delta;
+      }
+      captureReadingAnchor();
+    };
+    restore();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(restore);
+    for (const child of Array.from(scroller.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [followOutput, sessionId, threadTurnCount, captureReadingAnchor]);
 
   // READ: bottom-sentinel observer reports proximity as the operator scrolls
   // or as new content shifts the sentinel into / out of view. Re-armed when the
@@ -156,6 +226,9 @@ export function useScrollToBottom<
   }, [emitBottomState, followOutput, sessionId, threadTurnCount]);
 
   const jumpToLatest = useCallback(() => {
+    followingRef.current = true;
+    unreadRef.current.unread.clear();
+    setNewMessageCount(0);
     threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
     emitBottomState(true);
   }, [emitBottomState]);
@@ -168,6 +241,7 @@ export function useScrollToBottom<
       return;
     }
     const pinToThreadEnd = () => {
+      if (!followingRef.current) return;
       threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
       emitBottomState(true);
     };
@@ -232,5 +306,6 @@ export function useScrollToBottom<
     threadEndRef,
     handleThreadScroll,
     jumpToLatest,
+    newMessageCount,
   };
 }

@@ -81,6 +81,29 @@ describe("durable Chat routed-context binding", () => {
     expect(prepare).not.toHaveBeenCalled();
     expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
   });
+  it("refuses changed frozen input and failed worker placement before dispatch", async () => {
+    const fixture = await admitRoutedTurn(true);
+    const run = { ...fixture.run, status: "running" as const, leaseOwnerId: "replacement-gateway", attemptCount: 2 };
+    const prepare = vi.fn(async () => buildReplayPrepared(fixture.finalProfile));
+    const baseHost = replayHost(run, fixture.finalProfile, fixture.trace, prepare, vi.fn(() => fixture.finalSnapshot));
+    const findForRun = vi.fn(async (): Promise<RemoteWorkerChatContextSnapshot | undefined> => ({
+      ...fixture.workerContext!, messages: [{ role: "user", content: "Altered retained input" }],
+    }));
+    const resolve = vi.fn(async () => { throw new Error("Worker placement unavailable"); });
+    const host = { ...baseHost, resolveRemoteWorkerChatExecution: resolve,
+      storage: { ...baseHost.storage, remoteWorkerChatContexts: { findForRun } },
+    };
+    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
+
+    findForRun.mockResolvedValue(fixture.workerContext);
+    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow("Worker placement unavailable");
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
+  });
+
   it("atomically rebinds the snapshot to the stable run profile and persists only id/hash references", async () => {
     const fixture = await admitRoutedTurn();
     const payloadText = JSON.stringify(fixture.run.payload);

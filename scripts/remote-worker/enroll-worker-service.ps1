@@ -62,7 +62,6 @@ try {
   foreach ($directory in @($paths.Root,$paths.Payload,$paths.Configuration)) {
     Hold-EnrollmentDirectory $directory $script:WorkerReadOnlySddl
   }
-  Hold-EnrollmentDirectory $paths.State $script:WorkerStateSddl
   Assert-WorkerServiceReadBack $paths
   $null = Hold-EnrollmentFile (Join-Path $paths.Configuration 'install-receipt.json') $script:WorkerReadOnlySddl
   $receipt = ConvertFrom-WorkerJson (Read-WorkerBytes (Join-Path $paths.Configuration 'install-receipt.json'))
@@ -86,6 +85,21 @@ try {
   }
   $settings = Read-WorkerBytes (Join-Path $paths.Configuration 'worker.environment')
   if ((Get-WorkerBytesHash $settings) -cne $receipt.settingsSha256) { throw 'REFUSED: installed settings changed.' }
+  $installedSettings = Get-WorkerInstalledSettings $paths $settings
+  $stateDirectory = $installedSettings['GOATCITADEL_CONNECTED_WORKER_STATE_DIR']
+  if ($stateDirectory -ceq $paths.State) {
+    Assert-WorkerCapacityEnrollmentReceipt $false $receipt $null
+    Hold-EnrollmentDirectory $paths.State $script:WorkerStateSddl
+  } else {
+    Hold-EnrollmentDirectory $paths.State $script:WorkerReadOnlySddl
+    $areas = Get-WorkerCellCapacityPaths $paths.Root
+    foreach ($directory in $areas.Values) {
+      if ($directory -cne $paths.Cells) { Hold-EnrollmentDirectory $directory $script:WorkerStateSddl }
+    }
+    $capacityRecord = Hold-EnrollmentFile $paths.CapacityCustody $script:WorkerReadOnlySddl
+    Assert-WorkerCapacityEnrollmentReceipt $true $receipt $capacityRecord
+    $binding.configuration['cell-capacity.identity'] = $capacityRecord
+  }
   $start = Get-WorkerEnrollmentStartInfo $paths $settings $runId
   $broker = $native::GetServiceStatusLine($script:BrokerServiceName).Split('|')
   if ($broker.Count -ne 8 -or $broker[0] -ne '4' -or [uint32]$broker[1] -eq 0 -or
@@ -110,6 +124,13 @@ try {
   if ($Preflight) { $verdict='passed'; $detail='Enrollment preflight passed; no admission or credential transfer performed.' }
   else {
     $verdict='failed'
+    if ($stateDirectory -cne $paths.State) {
+      # Both installed services hold read leases before admitting any work.
+      # OPEN_EXISTING plus share-none closes the stopped-service/startup race.
+      $leases.Add($files::AcquireInstalledStateWriterGate($paths.StateWriterGate))
+      if ((ConvertTo-CanonicalFileSddl ($native::GetFileSddl($paths.StateWriterGate))) -cne
+          (ConvertTo-CanonicalFileSddl $script:WorkerReadOnlySddl)) { throw 'REFUSED: state writer gate security differs.' }
+    }
     $native::EnablePrivilege('SeRestorePrivilege')
     if (-not (Test-Path -LiteralPath $paths.Enrollment)) {
       $native::CreateProtectedDirectory($paths.Enrollment,$script:WorkerEnrollmentSddl)
@@ -139,7 +160,7 @@ try {
       $null=Get-WorkerFileRecord $file
     }
     $proof=Get-WorkerEnrollmentProof (Read-WorkerBytes $reportFile) (Read-WorkerBytes $credentialFile) $runId
-    $destination=Join-Path $paths.State 'runtime-credential.json'
+    $destination=Join-Path $stateDirectory 'runtime-credential.json'
     $transfer=Publish-WorkerEnrollmentCredential $credentialFile $destination $proof $script:WorkerStateSddl
     $leases.Add($files::OpenRead($destination,2097152))
     $actual=Get-WorkerFileRecord $destination

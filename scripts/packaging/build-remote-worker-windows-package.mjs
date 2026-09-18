@@ -29,6 +29,24 @@ const workspacePackages = Object.freeze({
 });
 const sha = workerPackageSha256;
 
+export function createWorkerPackageDeployment(repositoryDirectory) {
+  if (typeof repositoryDirectory !== "string" || !path.isAbsolute(repositoryDirectory))
+    throw new Error("Worker dependency staging requires an absolute repository directory.");
+  const root = path.resolve(repositoryDirectory);
+  if (fs.realpathSync.native(root).toLowerCase() !== root.toLowerCase())
+    throw new Error("Worker dependency staging cannot use a repository alias.");
+  const scratch = path.join(root, ".tmp");
+  fs.mkdirSync(scratch, { recursive: true });
+  const stat = fs.lstatSync(scratch);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync.native(scratch).toLowerCase() !== scratch.toLowerCase())
+    throw new Error("Worker dependency staging cannot use a linked scratch directory.");
+  // pnpm's legacy deploy computes modulesDir relative to the workspace. Across
+  // Windows drives that becomes absolute and is then incorrectly joined again.
+  // Keep its disposable staging beside the source; only regular package files
+  // are copied to the requested output drive. Retain each run for inspection.
+  return path.join(fs.mkdtempSync(path.join(scratch, "worker-package-dependencies-")), "deployment");
+}
+
 function runPnpm(args, log) {
   const candidates = [
     process.env.npm_execpath,
@@ -152,7 +170,10 @@ export async function buildRemoteWorkerWindowsPackage({
   console.log("Building the worker and its declared workspace dependencies.");
   runPnpm(["--filter", "@goatcitadel/remote-worker...", "typecheck"], path.join(outputDirectory, "typecheck.log"));
   console.log("Staging production dependencies offline with lifecycle scripts disabled.");
-  const deployment = path.join(outputDirectory, "deployment");
+  const deployment = createWorkerPackageDeployment(repository);
+  fs.writeFileSync(path.join(outputDirectory, "dependency-staging.json"), `${JSON.stringify({ directory: deployment }, null, 2)}\n`, {
+    flag: "wx",
+  });
   runPnpm(
     [
       "--filter",
@@ -220,12 +241,15 @@ export async function buildRemoteWorkerWindowsPackage({
     "install-broker-coordinator.ps1",
     "uninstall-broker-coordinator.ps1",
     "broker-coordinator-common.ps1",
+    "broker-state-common.ps1",
+    "broker-state-native.cs",
     "install-worker-service.ps1",
     "uninstall-worker-service.ps1",
     "enroll-worker-service.ps1",
     "worker-enrollment-common.ps1",
     "worker-install-common.ps1",
     "worker-install-native.cs",
+    "worker-controller-key.cs",
     "configure-worker-mesh-registry.ps1",
     "worker-mesh-registry-common.ps1",
   ])
@@ -265,6 +289,7 @@ export async function buildRemoteWorkerWindowsPackage({
   const proof = verifyRemoteWorkerWindowsPackage({ root: payload, expectedManifestSha256: sha(manifestBytes) });
   const result = {
     payload,
+    deploymentDirectory: deployment,
     ...proof,
     dependencies,
     nodeExecutableSha256,

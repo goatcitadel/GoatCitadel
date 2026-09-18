@@ -1055,6 +1055,7 @@ describe("mcp routes", () => {
         url: "https://learn.microsoft.com/api/mcp",
         authType: "none",
       }),
+      expect.any(Function),
     );
   });
 
@@ -1221,7 +1222,7 @@ describe("mcp routes", () => {
       app!.inject({
         method: "PATCH",
         url: "/api/v1/mcp/servers/srv-secret/policy",
-        payload: { redactionMode: "strict" },
+        payload: { redactionMode: "strict", expectedRevision: "a".repeat(64) },
       }),
       app!.inject({ method: "POST", url: "/api/v1/mcp/servers/srv-secret/health-check" }),
     ]);
@@ -1897,11 +1898,13 @@ describe("mcp routes", () => {
       payload: {
         label: "Updated MCP",
         enabled: false,
+        expectedRevision: "a".repeat(64),
       },
     });
     const deleteResponse = await app!.inject({
       method: "DELETE",
       url: "/api/v1/mcp/servers/srv-1",
+      payload: { expectedRevision: "a".repeat(64) },
     });
     const disconnectResponse = await app!.inject({
       method: "POST",
@@ -1928,8 +1931,9 @@ describe("mcp routes", () => {
     expect(service.updateMcpServer).toHaveBeenCalledWith("srv-1", {
       label: "Updated MCP",
       enabled: false,
-    });
-    expect(service.deleteMcpServer).toHaveBeenCalledWith("srv-1");
+      expectedRevision: "a".repeat(64),
+    }, expect.any(Function));
+    expect(service.deleteMcpServer).toHaveBeenCalledWith("srv-1", "a".repeat(64), expect.any(Function));
     expect(service.disconnectMcpServer).toHaveBeenCalledWith("srv-1");
     expect(service.startMcpOAuth).toHaveBeenCalledWith("srv-1");
     expect(service.completeMcpOAuth).toHaveBeenCalledWith("srv-1", "oauth-code", "oauth-state");
@@ -1953,6 +1957,7 @@ describe("mcp routes", () => {
       payload: {
         requireFirstToolApproval: true,
         redactionMode: "strict",
+        expectedRevision: "a".repeat(64),
         allowedToolPatterns: ["tool.*"],
       },
     });
@@ -1964,7 +1969,8 @@ describe("mcp routes", () => {
       requireFirstToolApproval: true,
       redactionMode: "strict",
       allowedToolPatterns: ["tool.*"],
-    });
+      expectedRevision: "a".repeat(64),
+    }, expect.any(Function));
     expect(toolsResponse.json()).toEqual({ items: [{ serverId: "srv-1", toolName: "tool.echo" }] });
     expect(policyResponse.json()).toMatchObject({
       serverId: "srv-1",
@@ -2001,6 +2007,7 @@ describe("mcp routes", () => {
       url: "/api/v1/mcp/servers/srv-1",
       payload: {
         label: "Updated MCP",
+        expectedRevision: "a".repeat(64),
       },
     });
     const disconnectResponse = await app!.inject({
@@ -2027,16 +2034,17 @@ describe("mcp routes", () => {
       url: "/api/v1/mcp/servers/srv-1/policy",
       payload: {
         requireFirstToolApproval: true,
+        expectedRevision: "a".repeat(64),
       },
     });
 
-    expect(updateResponse.statusCode).toBe(400);
+    expect(updateResponse.statusCode).toBe(500);
     expect(disconnectResponse.statusCode).toBe(400);
     expect(oauthStartResponse.statusCode).toBe(400);
     expect(oauthCompleteResponse.statusCode).toBe(400);
     expect(toolsResponse.statusCode).toBe(404);
-    expect(policyResponse.statusCode).toBe(404);
-    expect(updateResponse.json()).toEqual({ error: "update failed" });
+    expect(policyResponse.statusCode).toBe(500);
+    expect(updateResponse.json()).toEqual({ error: "Internal server error" });
     expect(toolsResponse.json()).toEqual({ error: "tools missing" });
   });
 

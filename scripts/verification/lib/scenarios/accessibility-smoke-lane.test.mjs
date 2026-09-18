@@ -193,7 +193,8 @@ test("accessibility smoke retains browser evidence and a failure-only trace for 
       },
       async installMissionControlNextBrowserState() {},
       path: { join: (...parts) => parts.join("/") },
-      async prepareVerificationRuntime() {
+      async prepareCleanRuntime(_runId, baseUrl) {
+        assert.ok(baseUrl.startsWith("http://"));
         return "runtime-root";
       },
       probeKeyboardFocus: async () => ({

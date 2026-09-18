@@ -36,8 +36,7 @@ export async function composeChatCompletionMemoryContext(
     maxContextTokens: memoryInput?.maxContextTokens,
     forceRefresh: memoryInput?.forceRefresh,
   };
-  if (!attribution) return await host.memoryLifecycleService.composeContext(input);
-  return await host.memoryLifecycleService.composeContext(input, {
+  const attributionArgs = attribution ? [{
     workspaceId: input.workspaceId,
     sessionId: input.sessionId,
     turnId: attribution.turnId ?? memoryInput?.turnId,
@@ -48,7 +47,8 @@ export async function composeChatCompletionMemoryContext(
     contextIntentHash: attribution.contextIntentHash,
     contextEntryRefId: attribution.contextEntryRefId,
     routeDecisionId: attribution.routeDecisionId,
-  });
+  }] as const : [] as const;
+  return await host.memoryLifecycleService.composeContext(input, ...attributionArgs);
 }
 
 /**

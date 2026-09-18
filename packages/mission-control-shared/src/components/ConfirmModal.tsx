@@ -2,6 +2,7 @@ import { globalCopy } from "../content/copy";
 import { GCModal } from "./ui";
 
 interface ConfirmModalProps {
+  className?: string;
   open: boolean;
   title: string;
   message: string;
@@ -17,6 +18,7 @@ interface ConfirmModalProps {
 }
 
 export function ConfirmModal({
+  className,
   open,
   title,
   message,
@@ -32,6 +34,7 @@ export function ConfirmModal({
 }: ConfirmModalProps) {
   return (
     <GCModal
+      className={className}
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) {

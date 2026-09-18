@@ -252,6 +252,11 @@ export class ToolAccessDecisionRepository {
     });
   }
 
+  public get(decisionId: string): ToolAccessDecisionRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM tool_access_decisions WHERE decision_id = @decisionId").get<ToolAccessDecisionRow>({ decisionId });
+    return row ? mapToolAccessDecisionRow(row) : undefined;
+  }
+
   public countWritesInLastHour(agentId: string, sessionId: string): number {
     return this.countWritesInLastHourInScope({
       scope: "session",
@@ -267,7 +272,9 @@ export class ToolAccessDecisionRepository {
     sessionId: string;
     workspaceId?: string;
     taskId?: string;
+    excludeDecisionId?: string;
   }): number {
+    this.lockHourlyAccounting();
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     let row: { count: number };
     switch (input.scope) {
@@ -313,7 +320,7 @@ export class ToolAccessDecisionRepository {
         }) as { count: number };
         break;
     }
-    return row.count;
+    return Math.max(0, Number(row.count) - this.excludedCount(input, since, input.toolName));
   }
 
   public countWritesInLastHourInScope(input: {
@@ -322,7 +329,9 @@ export class ToolAccessDecisionRepository {
     sessionId: string;
     workspaceId?: string;
     taskId?: string;
+    excludeDecisionId?: string;
   }): number {
+    this.lockHourlyAccounting();
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     let row: { count: number };
     switch (input.scope) {
@@ -363,7 +372,35 @@ export class ToolAccessDecisionRepository {
         }) as { count: number };
         break;
     }
-    return row.count;
+    return Math.max(0, Number(row.count) - this.excludedCount(input, since));
+  }
+
+  /** Only the canonical already-admitted decision may be excluded by the
+   * runtime. Check the same time, scope and tool/write predicates as the count. */
+  private excludedCount(input: { scope: ToolGrantScope; agentId: string; sessionId: string; workspaceId?: string;
+    taskId?: string; excludeDecisionId?: string }, since: string, toolName?: string): number {
+    if (!input.excludeDecisionId) return 0;
+    const scope = input.scope === "global" ? undefined : input.scope === "agent" ? ["agent_id", input.agentId] :
+      input.scope === "workspace" ? ["workspace_id", input.workspaceId] : input.scope === "task" ? ["task_id", input.taskId] :
+        ["session_id", input.sessionId];
+    const params: Record<string, string> = { decisionId: input.excludeDecisionId, since };
+    if (scope) params.scopeRef = scope[1] ?? "";
+    if (toolName) params.toolName = toolName;
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM tool_access_decisions
+      WHERE decision_id = @decisionId AND counts_toward_limits = 1 AND timestamp >= @since
+      ${scope ? `AND ${scope[0]} = @scopeRef` : ""}
+      AND ${toolName ? "(tool_name = @toolName OR policy_tool_name = @toolName)" : writeDecisionPredicate()}`).get<{ count: number }>(params);
+    return Number(row?.count ?? 0);
+  }
+
+  /** Invocation owners keep evaluation and the counted decision in one
+   * transaction. SQLite's immediate writer transaction serializes that group;
+   * PostgreSQL needs the same shared transaction lock across connections. Only
+   * grant evaluations with hourly constraints enter this accounting boundary. */
+  private lockHourlyAccounting(): void {
+    if (this.db.dialect === "postgres") this.db.prepare(
+      "SELECT pg_advisory_xact_lock(hashtextextended('goatcitadel:tool-policy-hourly-accounting:v1', 910)) AS locked",
+    ).get();
   }
 }
 

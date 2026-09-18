@@ -13,7 +13,7 @@ const components = ["cell_volume_mount", "cell_volume_mount_target", "cell_volum
   "cell_ntfs_format_wmi", "cell_virtual_disk_volume", "cell_virtual_disk_layout", "cell_virtual_disk_device",
   "cell_virtual_disk", "cell_workspace", "cell_filesystem", "cell_security"];
 const sources = [...components.map((name) => `src/${name}.cpp`), "tests/cell_volume_mount_test.cpp"];
-const inputs = [...sources, ...components.map((name) => `src/${name}.hpp`), "src/cell_job.hpp", "src/cell_runtime_bundle.hpp"];
+const inputs = [...sources, ...components.map((name) => `src/${name}.hpp`), "src/cell_job.hpp", "src/cell_runtime_bundle.hpp", "src/cell_capacity.hpp"];
 const snapshot = () => inputs.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(source, file))).digest("hex") }));
 
 function verifyRecords(records) {

@@ -1,10 +1,15 @@
 import { createRequire } from "node:module";
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 const require = createRequire(import.meta.url);
 let retained;
 process.once("message", (input) => {
   try {
     const guard = require(input.guard);
+    for (const name of ["startStateWriterGate", "pauseStateWriterGate", "resumeStateWriterGate"]) {
+      assert.equal(typeof guard[name], "function");
+      assert.throws(() => guard[name](), { code: "REMOTE_WORKER_IMAGE_PIN_REJECTED" });
+    }
     retained = guard.pin(input.identifier);
     process.send({ ready: true, adapterPath: retained.adapterPath, frozen: Object.isFrozen(retained) });
     process.once("message", async (command) => {

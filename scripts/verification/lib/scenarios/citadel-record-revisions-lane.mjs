@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { runCitadelVaultRevisionsScenario } from "./citadel-vault-revisions-lane.mjs";
 import fs from "node:fs/promises";
+import { runCitadelStructureRevisionsScenario } from "./citadel-structure-revisions-lane.mjs";
+import { runCitadelAccessRevisionsScenario } from "./citadel-access-revisions-lane.mjs";
 
 /** Real profile mutations in a disposable Gateway; no volume provisioning or live provider calls. */
 export async function runCitadelRecordRevisionsLane(context, deps) {
@@ -20,7 +24,7 @@ export async function runCitadelRecordRevisionsLane(context, deps) {
     delete config.generation;
     await writeJson(configPath, config);
     stack = await startVerificationStack(context, { includeUi: true, uiMode: "preview", runtimeRoot,
-      gatewayEnv: { GOATCITADEL_VERIFY_STUB_LLM_KEY: "citadel-local-fixture", GOATCITADEL_EMBEDDINGS_PROVIDER: "pseudo" } });
+      gatewayEnv: { GOATCITADEL_DEV_DIAGNOSTICS: "true", GOATCITADEL_VERIFY_VAULT_KEY_BASE64: createHash("sha256").update("gc-citadel-vault-synthetic-fixture-v1").digest("base64"), GOATCITADEL_VERIFY_STUB_LLM_KEY: "citadel-local-fixture", GOATCITADEL_EMBEDDINGS_PROVIDER: "pseudo" } });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-citadel-record-revision");
     await runScenario(context, { id: "citadels.profile-revisions", lane: "citadel-record-revisions",
       title: "Settings and Library reject stale Citadel profile edits, archive, and restore", subsystem: "settings" }, async ({ correlationId }) => {
@@ -32,7 +36,9 @@ export async function runCitadelRecordRevisionsLane(context, deps) {
       const workspace = await requestJson(stack.gatewayUrl, "/api/v1/workspaces", { method: "POST", body: { citadelId, name: "Citadel revision workspace" } });
       assertOk(workspace, "create owned workspace");
       const workspaceId = workspace.body.workspaceId;
-      const charter = await requestJson(stack.gatewayUrl, `${baseUrl}/charter`, { method: "PUT", body: { purpose: "Retain the canonical Charter", kind: "custom" } });
+      const structure = await requestJson(stack.gatewayUrl, `${baseUrl}/structure`);
+      assertOk(structure, "review empty Citadel structure");
+      const charter = await requestJson(stack.gatewayUrl, `${baseUrl}/charter`, { method: "PUT", body: { purpose: "Retain the canonical Charter", kind: "custom", expectedRevision: structure.body.revision } });
       assertOk(charter, "seed owned Charter");
       const read = async () => { const result = await requestJson(stack.gatewayUrl, baseUrl); assertOk(result, "read Citadel"); return result.body; };
       const mutate = async (suffix, method, body) => { const result = await requestJson(stack.gatewayUrl, baseUrl + suffix, { method, body }); assertOk(result, "mutate owned profile"); return result.body; };
@@ -163,6 +169,9 @@ export async function runCitadelRecordRevisionsLane(context, deps) {
         throw error;
       } finally { await browser.close(); }
     });
+    await runCitadelStructureRevisionsScenario(context, deps, stack);
+    await runCitadelAccessRevisionsScenario(context, deps, stack);
+    await runCitadelVaultRevisionsScenario(context, deps, stack);
   } finally {
     try { if (stack) { assert.equal(stack.runtimeRoot, runtimeRoot); await stopVerificationStack(stack); } }
     finally { try { await llmStub?.close(); } finally { restoreUi(); } }

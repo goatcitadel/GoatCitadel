@@ -25,6 +25,34 @@ vi.mock("./approval-remote-action-service.js", () => remoteActions);
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 
 describe("ApprovalRuntimeService", () => {
+  it("does not mask canonical replay failures or read launch data before replay completes", async () => {
+    const readNativeRuntimeReview = vi.fn();
+    const service = new ApprovalRuntimeService({ readNativeRuntimeReview } as never);
+    let finish!: (value: unknown) => void;
+    lifecycle.getApprovalReplay.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const pending = service.getApprovalReplay("native");
+    expect(readNativeRuntimeReview).not.toHaveBeenCalled();
+    const replay = Object.freeze({ approval: Object.freeze({ approvalId: "native" }), events: Object.freeze([]) });
+    finish(replay);
+    await expect(pending).resolves.toBe(replay);
+    expect(readNativeRuntimeReview).toHaveBeenCalledOnce();
+    lifecycle.getApprovalReplay.mockRejectedValueOnce(new Error("canonical history unavailable"));
+    await expect(service.getApprovalReplay("native")).rejects.toThrow("canonical history unavailable");
+    expect(readNativeRuntimeReview).toHaveBeenCalledOnce();
+  });
+  it("attaches ephemeral review context without changing retained replay data", async () => {
+    const replay = { approval: { approvalId: "native" }, events: [] };
+    lifecycle.getApprovalReplay.mockResolvedValueOnce(replay);
+    const readNativeRuntimeReview = vi.fn(() => ({ commandLine: "ephemeral command" }));
+    const service = new ApprovalRuntimeService({ readNativeRuntimeReview } as never);
+    const result = await service.getApprovalReplay("native");
+    expect(result).toHaveProperty("nativeRuntimeReview.commandLine", "ephemeral command");
+    expect(replay).not.toHaveProperty("nativeRuntimeReview");
+    expect(readNativeRuntimeReview).toHaveBeenCalledWith(replay.approval);
+    lifecycle.getApprovalReplay.mockResolvedValueOnce(replay);
+    readNativeRuntimeReview.mockImplementation(() => { throw new Error("context unavailable"); });
+    expect(await service.getApprovalReplay("native")).toBe(replay);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     lifecycle.listToolGrants.mockResolvedValue([{ grantId: "grant-1" }]);

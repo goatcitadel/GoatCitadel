@@ -168,7 +168,9 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
   });
 
   fastify.addHook("onSend", async (request, reply, payload) => {
-    if (isMobilePushRegistrationRequest(request)) {
+    if (isMobilePushRegistrationRequest(request) || getNormalizedRoutePath(request).startsWith("/api/v1/citadels/:citadelId/vault-secrets")
+      || getNormalizedRoutePath(request) === "/api/v1/integrations/connections"
+      || getNormalizedRoutePath(request) === "/api/v1/integrations/connections/:connectionId") {
       reply.header("Cache-Control", "no-store");
       reply.header("Pragma", "no-cache");
     }
@@ -268,6 +270,24 @@ function hashCanonicalPayload(value: unknown): string {
  */
 function hashMutationPayload(request: FastifyRequest): string {
   const routePath = getNormalizedRoutePath(request);
+  if (routePath === "/api/v1/mcp/servers" || routePath.startsWith("/api/v1/mcp/servers/")) {
+    return hashCanonicalPayload({ kind: "mcp_server_redacted_v1", path: request.url.split("?", 1)[0] || request.url });
+  }
+  if (routePath === "/api/v1/channels/drafts" || routePath.startsWith("/api/v1/channels/drafts/")) {
+    return hashCanonicalPayload({ kind: "channel_setup_redacted_v1", path: request.url.split("?", 1)[0] || request.url });
+  }
+  if (routePath === "/api/v1/citadels/:citadelId/vault-secrets"
+    || routePath === "/api/v1/citadels/:citadelId/vault-secrets/:secretId"
+    || routePath === "/api/v1/integrations/connections"
+    || routePath === "/api/v1/integrations/connections/:connectionId") {
+    // A key identifies one attempt. Completed duplicates stay blocked regardless
+    // of body changes; an explicit retry uses a new key and the owner's revision.
+    // Do not fingerprint values, names, or unvalidated extra fields here.
+    return hashCanonicalPayload({
+      kind: routePath.startsWith("/api/v1/integrations/") ? "integration_connection_redacted_v1" : "citadel_vault_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+    });
+  }
   if (SECRET_SENSITIVE_USER_INPUT_ROUTES.has(routePath)) {
     return hashCanonicalPayload({
       kind: "chat_user_input_redacted_v1",

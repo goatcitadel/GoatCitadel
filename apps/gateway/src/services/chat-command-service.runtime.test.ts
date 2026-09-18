@@ -6,6 +6,7 @@ import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import { listChatCommandCatalog, parseChatCommand, type ChatCommandDependencies } from "./chat-command-service.js";
 import { SkillLearningService, type SkillLearningResult } from "./skill-learning-service.js";
+import { createChatCommandDependencies } from "./chat-command-dependencies.js";
 
 function learningResult(overrides: Partial<SkillLearningResult> = {}): SkillLearningResult {
   return {
@@ -233,6 +234,22 @@ function createDeps(): ChatCommandDependencies {
 }
 
 describe("chat command runtime dispatch", () => {
+  it("routes MCP commands through explicit owners without Gateway administration methods", async () => {
+    const deps = createDeps();
+    vi.mocked(deps.listMcpServers).mockResolvedValue([]);
+    const { createMcpServer, connectMcpServer, disconnectMcpServer, ...source } = deps;
+    const commands = createChatCommandDependencies(source as unknown as Parameters<typeof createChatCommandDependencies>[0], {
+      createMcpServer, connectMcpServer, disconnectMcpServer,
+      createChatChangePlan: deps.createChatChangePlan, getSettings: deps.getSettings,
+      listMemoryItems: deps.listMemoryItems, normalizeWorkspaceId: deps.normalizeWorkspaceId,
+    });
+    for (const command of ["/mcp connect mcp-1", "/mcp disconnect mcp-1", "/mcp add-template browser"])
+      expect((await parseChatCommand(commands, "session-1", command)).ok).toBe(true);
+    expect(connectMcpServer).toHaveBeenCalledWith("mcp-1");
+    expect(disconnectMcpServer).toHaveBeenCalledWith("mcp-1");
+    expect(createMcpServer).toHaveBeenCalledOnce();
+    expect(Object.hasOwn(source, "connectMcpServer")).toBe(false);
+  });
   it("awaits asynchronous command dependencies before returning rendered state", async () => {
     const deps = createDeps();
     let releaseUpdate!: () => void;

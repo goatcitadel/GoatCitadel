@@ -1,7 +1,8 @@
 import * as chatCommandService from "./chat-command-service.js";
 import { undoChatTurns, type ChatTurnUndoDependencies } from "./chat-turn-undo-service.js";
 
-type ChatCommandAsyncAdapterKey = "createChatChangePlan" | "getSettings" | "listMemoryItems" | "normalizeWorkspaceId";
+type ChatCommandAsyncAdapterKey = "createChatChangePlan" | "getSettings" | "listMemoryItems" | "normalizeWorkspaceId"
+  | "createMcpServer" | "connectMcpServer" | "disconnectMcpServer";
 
 type ChatCommandDependencySource = Omit<
   chatCommandService.ChatCommandDependencies,
@@ -22,6 +23,9 @@ export function createChatCommandDependencies(
   commandDeps.getSettings = () => asyncAdapters.getSettings();
   commandDeps.listMemoryItems = (input) => asyncAdapters.listMemoryItems(input);
   commandDeps.normalizeWorkspaceId = (workspaceId) => asyncAdapters.normalizeWorkspaceId(workspaceId);
+  commandDeps.createMcpServer = (input) => asyncAdapters.createMcpServer(input);
+  commandDeps.connectMcpServer = (serverId) => asyncAdapters.connectMcpServer(serverId);
+  commandDeps.disconnectMcpServer = (serverId) => asyncAdapters.disconnectMcpServer(serverId);
   const boundFunctions = new Map<unknown, unknown>();
   return new Proxy(commandDeps, {
     get(target, property, receiver) {

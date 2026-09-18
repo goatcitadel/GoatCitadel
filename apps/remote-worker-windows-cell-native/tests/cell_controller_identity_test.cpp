@@ -1,5 +1,6 @@
 #include "cell_controller_identity.hpp"
 #include "cell_workspace.hpp"
+#include "cell_capacity.hpp"
 #include <sddl.h>
 #include <algorithm>
 #include <cstdio>
@@ -181,6 +182,30 @@ void CustodyCases() {
   Check(BuildCellParentSecurity(L"S-1-5-18", L"S-1-15-2-1", &descriptor) == ERROR_INVALID_PARAMETER && descriptor.empty(), "AppContainer cannot control parent");
   Check(BuildCellParentSecurity(L"S-1-5-18", kCellControllerServiceSid, nullptr) == ERROR_INVALID_PARAMETER, "null descriptor destination");
 }
+void CapacityCustodyCases() {
+  std::vector<std::uint8_t> bytes(320); std::memcpy(bytes.data(), "GCCAPS01", 8);
+  for (std::size_t i = 0; i < 13; ++i) { bytes[8 + 24 * i] = 7; bytes[16 + 24 * i] = static_cast<std::uint8_t>(i + 1); }
+  CellControllerCapacityCustodyRecord record;
+  Check(DecodeCellControllerCapacityCustody(bytes, &record) && record.roots[12].volume_serial == 7 && record.roots[12].file_id[0] == 13,
+    "Capacity custody binds thirteen ordered independent directory identities");
+  Check(!DecodeCellControllerCapacityCustody(bytes, nullptr), "Capacity custody needs an output owner");
+  const auto reject = [&](auto mutate) {
+    auto changed = bytes; mutate(changed); auto result = record;
+    Check(!DecodeCellControllerCapacityCustody(changed, &result) && result == CellControllerCapacityCustodyRecord{},
+      "Malformed capacity custody clears every returned identity");
+  };
+  for (std::size_t length = 0; length < bytes.size(); ++length) reject([length](auto& b) { b.resize(length); });
+  reject([](auto& b) { b.push_back(0); });
+  for (std::size_t i = 0; i < 8; ++i) reject([i](auto& b) { b[i] ^= 1; });
+  for (std::size_t i = 0; i < 13; ++i) {
+    reject([i](auto& b) { b[8 + i * 24] = 0; });
+    reject([i](auto& b) { b[16 + i * 24] = 0; });
+    if (i) {
+      reject([i](auto& b) { b[8 + i * 24] = 8; });
+      reject([i](auto& b) { std::copy_n(b.begin() + 8, 24, b.begin() + 8 + i * 24); });
+    }
+  }
+}
 std::vector<std::uint8_t> PrivilegeState(HANDLE token) {
   DWORD size = 0; GetTokenInformation(token, TokenPrivileges, nullptr, 0, &size);
   Check(GetLastError() == ERROR_INSUFFICIENT_BUFFER && size > 0 && size <= 16384, "actual privilege snapshot bound");
@@ -209,6 +234,22 @@ void ActualProcessCases() {
   Check(identity.Verify(SERVICE_START_PENDING, false) == ERROR_INVALID_STATE, "unadmitted instance cannot verify");
   Check(identity.EnableVolumeManagement() == ERROR_INVALID_STATE, "unadmitted instance cannot enable privileges");
   Check(identity.VerifyProvisioningProcess(GetCurrentProcess()) == ERROR_INVALID_STATE, "unadmitted instance cannot bless a helper");
+  Check(identity.VerifyWorkerHostProcess(GetCurrentProcess()) == ERROR_INVALID_STATE, "unadmitted controller cannot bless a host marker");
+  CellCapacityAreaRoots capacity_roots;
+  for (auto& root : capacity_roots) { root.handle = process_token; root.identity.volume_serial = 123; }
+  Check(identity.ReadCapacityRoots(capacity_roots) == ERROR_INVALID_STATE, "unadmitted controller cannot export capacity roots");
+  for (const auto& root : capacity_roots)
+    Check(root.handle == INVALID_HANDLE_VALUE && root.identity == CellFileIdentity{}, "refused root export clears stale handles and identities");
+  const auto root_policy = identity.CapacityRootSecurity();
+  CellFileIdentity claimed_root; claimed_root.volume_serial = 1; claimed_root.file_id.fill(1);
+  Check(root_policy.context == &identity && root_policy.verify != nullptr, "Installed capacity policy retains its exact controller owner");
+  for (unsigned area = 0; area < kCellCapacityAreaCount; ++area)
+    Check(root_policy.verify(root_policy.context, static_cast<CellCapacityArea>(area), process_token, claimed_root) == ERROR_INVALID_STATE,
+      "No area policy bypasses installed controller admission");
+  Check(root_policy.verify(root_policy.context, CellCapacityArea::count, GetCurrentProcess(), claimed_root) == ERROR_INVALID_PARAMETER,
+    "Unknown capacity area refuses before native inspection");
+  Check(root_policy.verify(root_policy.context, CellCapacityArea::mutable_root, INVALID_HANDLE_VALUE, claimed_root) == ERROR_INVALID_PARAMETER,
+    "Invalid capacity root handle refuses");
   Check(ImpersonateSelf(SecurityIdentification) != FALSE, "own identification-only thread token");
   const bool captured = CollectCellControllerToken(process_token, &current);
   const DWORD admission = identity.Open(1, arguments);
@@ -233,7 +274,68 @@ void ActualProcessCases() {
   Check(!ValidateServiceObject(security), "unrelated actual service DACL is refused");
 }
 }
-int main() {
-  TokenCases(); ConfigurationCases(); CustodyCases(); ActualProcessCases();
+void CapacityFixtureCases(const wchar_t* path) {
+  HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  Check(file != INVALID_HANDLE_VALUE, "Open installer-emitted capacity fixture");
+  std::vector<std::uint8_t> bytes(320); LARGE_INTEGER size{}; DWORD read = 0;
+  const bool loaded = GetFileSizeEx(file, &size) && size.QuadPart == 320 && ReadFile(file, bytes.data(), 320, &read, nullptr) && read == 320;
+  Check(loaded, "Read exact installer-emitted capacity record");
+  CellControllerCapacityCustodyRecord record;
+  Check(DecodeCellControllerCapacityCustody(bytes, &record), "Decode real installer-produced root identities");
+  const std::wstring input(path); const auto separator = input.find_last_of(L"\\/");
+  Check(separator != std::wstring::npos, "Fixture path has an explicit parent");
+  std::array<HANDLE, 13> roots{};
+  for (std::size_t i = 0; i < record.roots.size(); ++i) {
+    const auto directory = input.substr(0, separator + 1) + L"area-" + std::to_wstring(i);
+    HANDLE root = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    Check(root != INVALID_HANDLE_VALUE, "Open retained fixture directory for independent native identity read");
+    FILE_ID_INFO id{}; FILE_ATTRIBUTE_TAG_INFO attributes{};
+    const bool matches = GetFileInformationByHandleEx(root, FileIdInfo, &id, sizeof(id)) &&
+      GetFileInformationByHandleEx(root, FileAttributeTagInfo, &attributes, sizeof(attributes)) &&
+      (attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == FILE_ATTRIBUTE_DIRECTORY &&
+      id.VolumeSerialNumber == record.roots[i].volume_serial && !std::memcmp(id.FileId.Identifier, record.roots[i].file_id.data(), 16);
+    roots[i] = root; Check(matches, "Installer/native capacity identity and ordering agree on the real fixture root");
+  }
+  auto verified = record;
+  Check(!ReadCellControllerCapacityCustody(file, roots, verified.roots[0], &verified) && verified == record,
+    "Production reader binds installer bytes to all thirteen retained handles and independent cells identity");
+  Check(ReadCellControllerCapacityCustody(file, roots, record.roots[1], &verified) == ERROR_FILE_INVALID &&
+    verified == CellControllerCapacityCustodyRecord{}, "Wrong independently admitted cells parent clears record output");
+  for (std::size_t i = 0; i < roots.size(); ++i) {
+    auto substituted = roots; substituted[i] = roots[(i + 1) % roots.size()]; verified = record;
+    Check(ReadCellControllerCapacityCustody(file, substituted, record.roots[0], &verified) == ERROR_FILE_INVALID &&
+      verified == CellControllerCapacityCustodyRecord{}, "Substituting any root handle clears the entire record");
+    substituted[i] = file; verified = record;
+    Check(ReadCellControllerCapacityCustody(file, substituted, record.roots[0], &verified) == ERROR_FILE_INVALID &&
+      verified == CellControllerCapacityCustodyRecord{}, "A regular file cannot stand in for an area directory");
+  }
+  verified = record;
+  Check(ReadCellControllerCapacityCustody(roots[0], roots, record.roots[0], &verified) == ERROR_INVALID_HANDLE &&
+    verified == CellControllerCapacityCustodyRecord{}, "A directory cannot stand in for the installer record");
+  Check(ReadCellControllerCapacityCustody(file, roots, record.roots[0], nullptr) == ERROR_INVALID_PARAMETER,
+    "Native capacity reader requires its result owner");
+  for (const auto root : roots) CloseHandle(root);
+  CloseHandle(file);
+}
+void GateOwnershipCase() {
+  std::array<wchar_t, 32768> temp{};
+  Check(GetTempPathW(static_cast<DWORD>(temp.size()), temp.data()) != 0, "resolve ordinary gate fixture directory");
+  const auto path = std::wstring(temp.data()) + L"goat-identity-gate-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  Check(file != INVALID_HANDLE_VALUE, "create only owned empty identity-gate fixture");
+  WorkerStateGateLock retained;
+  Check(retained.Acquire(file, false) == ERROR_SUCCESS, "caller holds independent writer custody");
+  CellControllerIdentity unadmitted;
+  Check(unadmitted.AcquireMeasurementGate(retained) != ERROR_SUCCESS, "unadmitted identity cannot acquire measurement custody");
+  Check(retained.Check() == ERROR_SUCCESS, "refused acquisition cannot release caller's earlier lock");
+  Check(retained.Release() == ERROR_SUCCESS, "original caller still releases its own lock");
+  CloseHandle(file); Check(DeleteFileW(path.c_str()), "remove owned identity-gate fixture");
+}
+int wmain(int argc, wchar_t** argv) {
+  Check(argc == 1 || argc == 2, "Identity fixture accepts only optional capacity-record input");
+  if (argc == 2) CapacityFixtureCases(argv[1]);
+  TokenCases(); ConfigurationCases(); CustodyCases(); CapacityCustodyCases(); ActualProcessCases();
+  GateOwnershipCase();
   std::printf("{\"checks\":%u,\"passed\":true,\"actualInteractiveTokenRefused\":true,\"privilegesUnchanged\":true,\"installedService\":false,\"volumeAttached\":false}\n", checks);
 }

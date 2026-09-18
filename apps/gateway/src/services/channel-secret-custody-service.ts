@@ -34,7 +34,8 @@ export class ChannelSecretCustodyService {
     if (parsed.fieldKey !== expectedField) {
       throw new ValidationError({ message: "The channel credential reference is not bound to the requested field." });
     }
-    const account = `${CONNECTION_PREFIX}${requireIdentifier(connectionId, "connectionId")}:${expectedField}`;
+    // A competing promotion must never replace an already referenced credential.
+    const account = `${CONNECTION_PREFIX}${requireIdentifier(connectionId, "connectionId")}:${expectedField}:${randomUUID()}`;
     this.store.setSecret(account, this.resolve(secretRef));
     return `${SECRET_REF_PREFIX}${account}`;
   }
@@ -104,12 +105,12 @@ export function parseChannelSecretRef(secretRef: string): {
   const parts = account.split(":");
   const temporary = parts[0] === "channel-draft";
   const connection = parts[0] === "channel-connection";
-  if ((!temporary && !connection) || (temporary ? parts.length !== 4 : parts.length !== 3)) {
+  if ((!temporary && !connection) || (temporary ? parts.length !== 4 : parts.length !== 3 && parts.length !== 4)) {
     throw new ValidationError({ message: "The channel credential reference is invalid." });
   }
   const ownerId = requireIdentifier(parts[1] ?? "", temporary ? "draftId" : "connectionId");
   const fieldKey = requireFieldKey(parts[2] ?? "");
-  if (temporary) requireIdentifier(parts[3] ?? "", "credential nonce");
+  if (parts.length === 4) requireIdentifier(parts[3] ?? "", "credential nonce");
   return { account, custody: temporary ? "temporary" : "connection", ownerId, fieldKey };
 }
 

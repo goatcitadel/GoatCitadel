@@ -39,6 +39,9 @@ class CellPipeClientEvidence final {
   CellPipeClientEvidence& operator=(const CellPipeClientEvidence&) = delete;
   DWORD Open(HANDLE connected_pipe) noexcept;
   DWORD Verify() noexcept;
+  // Current OS continuity only; the installed owner must separately admit the
+  // primary endpoint. Neither a PID nor matching token text grants authority.
+  DWORD VerifySameProcess(CellPipeClientEvidence& other) noexcept;
   void Close() noexcept;
   HANDLE Process() const noexcept { return process_; }
   DWORD ProcessId() const noexcept { return process_id_; }
@@ -62,6 +65,7 @@ class CellPipeServerEvidence final {
   CellPipeServerEvidence& operator=(const CellPipeServerEvidence&) = delete;
   DWORD Open(HANDLE connected_pipe) noexcept;
   DWORD Verify() noexcept;
+  DWORD VerifySameProcess(CellPipeServerEvidence& other) noexcept;
   void Close() noexcept;
   HANDLE Process() const noexcept { return process_; }
   DWORD ProcessId() const noexcept { return process_id_; }
@@ -73,6 +77,32 @@ class CellPipeServerEvidence final {
   CellControllerToken primary_;
 };
 
+// Binds a separate runtime pipe to the same retained process as both inherited
+// helper stdio pipes. Owns non-inheritable duplicates, never changes/closes the
+// caller's handles. All three must be distinct local client ends; the runtime
+// end must have been opened by this process. Stdio ends may have been opened by
+// the spawning parent before inheritance. A failed check fences this instance.
+// This proves endpoint continuity, not installed worker identity or permission
+// to execute: the caller must still supply those independent admission owners.
+class CellPipeParentEvidence final {
+ public:
+  ~CellPipeParentEvidence();
+  CellPipeParentEvidence() = default;
+  CellPipeParentEvidence(const CellPipeParentEvidence&) = delete;
+  CellPipeParentEvidence& operator=(const CellPipeParentEvidence&) = delete;
+  DWORD Open(HANDLE input, HANDLE output, HANDLE runtime) noexcept;
+  DWORD Verify() noexcept;
+  HANDLE RuntimePipe() const noexcept { return open_ && !failure_ ? pipes_[2] : nullptr; }
+  HANDLE Process() const noexcept { return open_ && !failure_ ? evidence_[0].Process() : nullptr; }
+  void Close() noexcept;
+ private:
+  DWORD Fail(DWORD error) noexcept;
+  std::array<HANDLE, 3> pipes_{};
+  std::array<CellPipeServerEvidence, 3> evidence_;
+  DWORD failure_ = ERROR_SUCCESS;
+  bool attempted_ = false, open_ = false;
+};
+
 // Server-side worker admission. Both the controller's current installed custody
 // and the client's exact pinned provisioning-helper image/worker token must
 // agree with live pipe evidence. Holding evidence alone never grants an action.
@@ -80,6 +110,7 @@ class CellControllerPeer final {
  public:
   DWORD Open(HANDLE connected_pipe, CellControllerIdentity& controller) noexcept;
   DWORD Verify() noexcept;
+  DWORD VerifyBoundPipe(CellPipeClientEvidence& additional) noexcept;
   void Close() noexcept;
  private:
   CellControllerIdentity* controller_ = nullptr;

@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildWindowsTlsKeyAdapter, compileTlsNative } from "./build-remote-worker-windows-tls.mjs";
 import { resolveExactWindowsToolchain } from "./lib/remote-worker-windows-toolchain.mjs";
-import { createWindowsWorkerFileExecutor } from "../../apps/remote-worker/src/worker-windows-file-executor.ts";
+import { createWindowsWorkerFileExecutor, createWindowsWorkerDirectoryExecutor } from "../../apps/remote-worker/dist/worker-windows-file-executor.js";
 
 const requireNative = createRequire(import.meta.url);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -22,6 +22,7 @@ test("pinned Windows file executor performs bounded CAS writes and refuses path 
   const built = buildWindowsTlsKeyAdapter({ target: "windows-x64", outputDirectory: path.join(output, "native") });
   const guard = requireNative(built.guardAddon);
   const executor = createWindowsWorkerFileExecutor(guard);
+  const directoryExecutor = createWindowsWorkerDirectoryExecutor(guard);
   const root = path.join(output, "documents");
   fs.mkdirSync(root);
   fs.mkdirSync(path.join(root, "nested"));
@@ -29,6 +30,35 @@ test("pinned Windows file executor performs bounded CAS writes and refuses path 
   const outcomes = [];
   const write = (name, content, expectedContent, changes = {}) => executor.write({ rootPath: root,
     rootIdentity: identity, path: name, content, expectedContent, ...changes }, signal());
+  const list = (name = ".", changes = {}) => directoryExecutor.list({ rootPath: root, rootIdentity: identity, path: name, ...changes }, signal());
+  await t.test("lists bounded real directory names and never traverses junctions", async () => {
+    const directory = path.join(root, "listing"); fs.mkdirSync(directory);
+    fs.mkdirSync(path.join(directory, "child"));
+    fs.writeFileSync(path.join(directory, "héllo ☄.txt"), "private bytes are not returned", { flag: "wx" });
+    fs.writeFileSync(path.join(directory, "\ufeffnote.txt"), "other private bytes", { flag: "wx" });
+    const outside = path.join(output, "list-outside"); fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "private.txt"), "private", { flag: "wx" });
+    fs.symlinkSync(outside, path.join(directory, "junction"), "junction");
+    assert.deepEqual(await list("listing"), { rootIdentity: identity, truncated: false, entries: [
+      { name: "child", type: "directory" }, { name: "héllo ☄.txt", type: "file" },
+      { name: "junction", type: "unavailable" }, { name: "\ufeffnote.txt", type: "file" },
+    ] });
+    assert.deepEqual((await list("listing/child")).entries, []);
+    assert.ok((await list()).entries.some(entry => entry.name === "listing" && entry.type === "directory"));
+    for (const name of ["listing/junction", "listing/junction/..", "../list-outside", "C:/", "listing/héllo ☄.txt", "listing/", "listing//child", "NUL", "listing:stream"])
+      await assert.rejects(list(name));
+    outcomes.push({ kind: "native-directory-list", entries: 4, junctionTraversal: false });
+  });
+  await t.test("marks entry and byte truncation explicitly without unbounded enumeration", async () => {
+    const many = path.join(root, "many"); fs.mkdirSync(many);
+    for (let index = 0; index < 129; index++) fs.writeFileSync(path.join(many, `file-${String(index).padStart(3, "0")}`), "", { flag: "wx" });
+    const limited = await list("many"); assert.equal(limited.truncated, true); assert.equal(limited.entries.length, 128);
+    const long = path.join(root, "long"); fs.mkdirSync(long);
+    for (let index = 0; index < 100; index++) fs.writeFileSync(path.join(long, `${String(index).padStart(3, "0")}${"界".repeat(170)}`), "", { flag: "wx" });
+    const bytes = await list("long"); assert.equal(bytes.truncated, true); assert.ok(bytes.entries.length > 0 && bytes.entries.length < 100);
+    assert.ok(Buffer.byteLength(JSON.stringify(bytes)) < 65536);
+    outcomes.push({ kind: "directory-truncation", entryLimit: limited.entries.length, byteLimitEntries: bytes.entries.length });
+  });
   await t.test("creates and replaces real UTF-8 bytes with checked receipts", async () => {
     for (const [name, content, expected, created] of [
       ["nested/note.txt", "Orion 7.\n", null, true],
@@ -92,8 +122,10 @@ test("pinned Windows file executor performs bounded CAS writes and refuses path 
   await t.test("changed root identity and cancelled work refuse before effects", async () => {
     const cancelled = new AbortController(); cancelled.abort();
     await assert.rejects(executor.write({ rootPath: root, rootIdentity: identity, path: "cancelled.txt", content: "x", expectedContent: null }, cancelled.signal));
+    await assert.rejects(directoryExecutor.list({ rootPath: root, rootIdentity: identity, path: "." }, cancelled.signal));
     fs.renameSync(root, root + "-original"); fs.mkdirSync(root);
     const result = await write("replacement.txt", "x", null);
+    await assert.rejects(list());
     assert.notEqual(result.error, 0); assert.equal(result.effectStarted, false);
     assert.equal(fs.existsSync(path.join(root, "replacement.txt")), false);
     assert.equal(fs.existsSync(path.join(root, "cancelled.txt")), false);
@@ -116,11 +148,15 @@ test("pinned Windows file executor performs bounded CAS writes and refuses path 
     };
     for (const executable of [built.fileExecutor, asan]) {
       const call = (input) => {
-        const result = spawnSync(executable, [], { input, windowsHide: true, timeout: 10000, maxBuffer: 4096,
+        const result = spawnSync(executable, [], { input, windowsHide: true, timeout: 10000, maxBuffer: 35000,
           env: { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" } });
         assert.equal(result.error, undefined); assert.equal(result.status, 0);
         assert.equal(result.stderr.length, 0, result.stderr.toString());
-        assert.equal(result.stdout.length, 80); assert.equal(result.stdout.toString("ascii", 0, 8), "GCFILER1");
+        const listing = input.length >= 12 && input.subarray(0, 8).equals(Buffer.from("GCFILES1")) && input.readUInt32LE(8) === 3;
+        if (listing) {
+          assert.ok(result.stdout.length >= 44 && result.stdout.length <= 32812);
+          assert.equal(result.stdout.toString("ascii", 0, 8), "GCFLIST1");
+        } else { assert.equal(result.stdout.length, 80); assert.equal(result.stdout.toString("ascii", 0, 8), "GCFILER1"); }
         return result.stdout;
       };
       const inspection = call(request(1)); assert.equal(inspection.readUInt32LE(8), 0);
@@ -134,6 +170,21 @@ test("pinned Windows file executor performs bounded CAS writes and refuses path 
       for (const input of [Buffer.alloc(1), Buffer.from("GCFILES1"), Buffer.alloc(80000),
         Buffer.concat([request(1), Buffer.from([0])]), request(9), request(2, "../escape.txt", null, "x", admitted)]) {
         const result = call(input); assert.notEqual(result.readUInt32LE(8), 0); assert.equal(result.readUInt32LE(12), 0);
+      }
+      const listed = call(request(3, "", null, "", admitted));
+      assert.equal(listed.readUInt32LE(8), 0); assert.equal(listed.readUInt32LE(12), 0);
+      assert.deepEqual(listed.subarray(20, 44), admitted);
+      const names = []; let offset = 44;
+      for (let index = 0; index < listed.readUInt32LE(16); index++) {
+        assert.equal(listed.readUInt32LE(offset), 1);
+        const length = listed.readUInt32LE(offset + 4);
+        names.push(listed.toString("utf8", offset + 8, offset + 8 + length)); offset += 8 + length;
+      }
+      assert.equal(offset, listed.length); assert.ok(names.includes(name));
+      for (const input of [request(3, "../outside", null, "", admitted), request(3, "", null, "forbidden", admitted),
+        request(3, "", "unexpected", "", admitted), request(3), Buffer.concat([request(3, "", null, "", admitted), Buffer.from([0])])]) {
+        const invalid = call(input); assert.notEqual(invalid.readUInt32LE(8), 0);
+        assert.equal(invalid.readUInt32LE(16), 0); assert.equal(invalid.length, 44);
       }
       outcomes.push({ kind: "native-protocol", asan: executable === asan });
     }

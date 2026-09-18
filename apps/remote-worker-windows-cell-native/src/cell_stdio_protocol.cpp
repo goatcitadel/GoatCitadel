@@ -59,7 +59,8 @@ std::string Hex(const CellFileSha256& bytes) {
 }
 }
 DWORD DecodeWorkerStdioConfiguration(const std::vector<std::uint8_t>& bytes,
-                                    RuntimeJobCommand* output, JobLimits* output_limits, bool protected_workspace) noexcept {
+                                    RuntimeJobCommand* output, JobLimits* output_limits, bool protected_workspace, DWORD maximum_wall_ms) noexcept {
+  if (!maximum_wall_ms || maximum_wall_ms > 86'400'000) return ERROR_INVALID_PARAMETER;
   if (!output || !output_limits || bytes.empty() || bytes.size() > kMaximumStdioConfigurationBytes) return ERROR_INVALID_PARAMETER;
   try {
     Reader reader(bytes);
@@ -82,8 +83,9 @@ DWORD DecodeWorkerStdioConfiguration(const std::vector<std::uint8_t>& bytes,
     limits.raw_output_bytes = reader.Integer(8);
     limits.diagnostic_bytes = static_cast<DWORD>(reader.Integer(4));
     limits.input_bytes = static_cast<DWORD>(reader.Integer(4));
-    // The helper is a bounded local transport, not an unattended process host.
-    if (!limits.wall_ms || limits.wall_ms > 25000 || limits.input_bytes > kMaximumCellJobInputBytes) return ERROR_INVALID_PARAMETER;
+    // The local helper keeps its default ceiling. Only a separate trusted
+    // dispatch decoder selects a longer bound; configuration bytes cannot.
+    if (!limits.wall_ms || limits.wall_ms > maximum_wall_ms || limits.input_bytes > kMaximumCellJobInputBytes) return ERROR_INVALID_PARAMETER;
     const auto environment_count = reader.Integer(4);
     if (environment_count > 64) return ERROR_INVALID_PARAMETER;
     command.launch.environment.clear();

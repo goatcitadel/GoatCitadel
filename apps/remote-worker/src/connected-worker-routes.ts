@@ -149,11 +149,13 @@ export async function readWorkload(
   context: RouteContext,
   lease: LeaseBinding,
   idempotencyKey: string,
+  signal?: AbortSignal,
 ): Promise<WorkerWireResponse> {
   return await callProtectedRoute({
     ...context,
     rawPath: WORKER_ROUTES.readWorkload.rawPath,
     operation: WORKER_ROUTES.readWorkload.operation,
+    ...(signal ? { signal } : {}),
     idempotencyKey,
     payload: {
       schemaVersion: WORKER_ROUTES.readWorkload.schemaVersion,

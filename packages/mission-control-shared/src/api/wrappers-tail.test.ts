@@ -230,17 +230,19 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(mcp.createMcpServer({ label: "Local", transport: "stdio" }), "/api/v1/mcp/servers", {
       method: "POST",
     });
-    await expectCall(mcp.updateMcpServer("server/1", { enabled: true }), "/api/v1/mcp/servers/server%2F1", {
+    await expectCall(mcp.fetchMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1", { cache: "no-store" });
+    await expectCall(mcp.updateMcpServer("server/1", { enabled: true, expectedRevision: "a".repeat(64) }), "/api/v1/mcp/servers/server%2F1", {
       method: "PATCH",
+      body: JSON.stringify({ enabled: true, expectedRevision: "a".repeat(64) }),
     });
     await expectCall(
-      mcp.updateMcpServerPolicy("server/1", { scopes: ["read"] } as never),
+      mcp.updateMcpServerPolicy("server/1", { blockedToolPatterns: ["write*"], expectedRevision: "a".repeat(64) }),
       "/api/v1/mcp/servers/server%2F1/policy",
       {
         method: "PATCH",
       },
     );
-    await expectCall(mcp.deleteMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1", { method: "DELETE" });
+    await expectCall(mcp.deleteMcpServer("server/1", "a".repeat(64)), "/api/v1/mcp/servers/server%2F1", { method: "DELETE", body: JSON.stringify({ expectedRevision: "a".repeat(64) }) });
     await expectCall(mcp.connectMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1/connect", { method: "POST" });
     await expectCall(mcp.disconnectMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1/disconnect", {
       method: "POST",

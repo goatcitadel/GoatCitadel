@@ -526,7 +526,7 @@ export class GovernedBudgetsMirrorRecipeOwner
    * unresolved ones stay, corrupt files are quarantined in place.
    */
   public async replayJournalOnBoot(completion: {
-    completionNoticeFor(remediationId: string): GovernedRemediationCompletionNotice | null;
+    completionNoticeFor(remediationId: string): GovernedRemediationCompletionNotice | null | Promise<GovernedRemediationCompletionNotice | null>;
   }): Promise<GovernedBudgetsMirrorBootReplaySummary> {
     const retired: string[] = [];
     const retained: string[] = [];
@@ -538,7 +538,7 @@ export class GovernedBudgetsMirrorRecipeOwner
         continue;
       }
       if (read.status === "absent") continue;
-      const notice = completion.completionNoticeFor(remediationId);
+      const notice = await completion.completionNoticeFor(remediationId);
       if (!notice || notice.effectDisposition === "effect_unknown") {
         retained.push(remediationId);
         continue;

@@ -9,10 +9,15 @@ import type { ChannelDeliveryRuntimeSendInput } from "./channel-delivery-runtime
 import { commsSend, type CommsHost } from "./comms-service.js";
 import { createChannelDeliveryFailureError, sendQueuedChannelDelivery } from "./gateway/channel-delivery-helpers.js";
 
+type ChannelDeliveryPartStorage = Pick<
+  AsyncStorage,
+  "channelDeliveryParts" | "approvals" | "pendingApprovalActions" | "commsDeliveries"
+>;
+
 /** Journal normalized executable parts at the existing comms/policy boundary.
  * Recovery reads acknowledged provider receipts; it never re-invokes an approval. */
 export async function sendQueuedChannelDeliveryWithParts(
-  storage: AsyncStorage,
+  storage: ChannelDeliveryPartStorage,
   host: CommsHost,
   input: ChannelDeliveryRuntimeSendInput,
 ) {
@@ -58,7 +63,7 @@ export async function sendQueuedChannelDeliveryWithParts(
 }
 
 async function replayPart(
-  storage: AsyncStorage,
+  storage: ChannelDeliveryPartStorage,
   part: ChannelDeliveryPartRecord,
   input: ChannelDeliveryRuntimeSendInput,
 ): Promise<Record<string, unknown>> {

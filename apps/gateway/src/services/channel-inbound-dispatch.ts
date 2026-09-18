@@ -44,6 +44,7 @@ export function getInboundBotLoopGuard(): ChannelBotLoopGuard {
 
 export type IntegrationConnectionRecord = {
   connectionId?: string;
+  revision: string;
   key: string;
   label?: string;
   enabled?: boolean;

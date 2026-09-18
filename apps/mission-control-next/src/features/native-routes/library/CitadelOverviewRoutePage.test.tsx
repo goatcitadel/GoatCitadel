@@ -11,6 +11,7 @@ const apiMocks = vi.hoisted(() => ({
   archiveCitadel: vi.fn(),
   createCitadelFromTemplate: vi.fn(),
   getCitadel: vi.fn(),
+  getCitadelStructureSnapshot: vi.fn(),
   getCitadelGatehouse: vi.fn(),
   isApiRequestError: vi.fn(),
   listCitadels: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveCitadel: apiMocks.archiveCitadel,
   createCitadelFromTemplate: apiMocks.createCitadelFromTemplate,
   getCitadel: apiMocks.getCitadel,
+  getCitadelStructureSnapshot: apiMocks.getCitadelStructureSnapshot,
   getCitadelGatehouse: apiMocks.getCitadelGatehouse,
   isApiRequestError: apiMocks.isApiRequestError,
   listCitadels: apiMocks.listCitadels,
@@ -66,6 +68,7 @@ function readNodeText(node: { children?: unknown[] } | string | number | null | 
 
 const CITADEL = {
   citadelId: "default",
+  revision: "1".repeat(64),
   record: {
     citadelId: "default",
     revision: "a".repeat(64),
@@ -127,6 +130,7 @@ const PERSONAL_CITADEL = {
 const TEMPLATES = [
   {
     id: "personal-chief-of-staff",
+    revision: "2".repeat(64),
     name: "Personal Chief of Staff",
     description: "A private Citadel for life admin.",
     kind: "personal",
@@ -138,6 +142,7 @@ const TEMPLATES = [
   },
   {
     id: "company-co-founder",
+    revision: "3".repeat(64),
     name: "Company Co-Founder",
     description: "A Citadel for operating the company.",
     kind: "company",
@@ -157,14 +162,15 @@ describe("CitadelOverviewRoutePage", () => {
       (error: unknown) => typeof error === "object" && error !== null && "status" in error,
     );
     apiMocks.listCitadelTemplates.mockResolvedValue(TEMPLATES);
+    apiMocks.getCitadelStructureSnapshot.mockReset().mockResolvedValue(CITADEL);
     apiMocks.listCitadels.mockResolvedValue({
       items: [CITADEL.record],
     });
     apiMocks.createCitadelFromTemplate.mockResolvedValue(PERSONAL_CITADEL);
     apiMocks.upsertCitadelCharter.mockImplementation(async (_citadelId: string, input: object) => ({
-      ...CITADEL.charter,
-      ...input,
-      updatedAt: "t2",
+      ...CITADEL,
+      revision: "4".repeat(64),
+      charter: { ...CITADEL.charter, ...input, updatedAt: "t2" },
     }));
     apiMocks.archiveCitadel.mockResolvedValue({
       ...CITADEL.record,
@@ -279,6 +285,7 @@ describe("CitadelOverviewRoutePage", () => {
 
   it("refreshes a rejected restore without retrying it automatically", async () => {
     const archived = { ...CITADEL, record: { ...CITADEL.record, lifecycleStatus: "archived" } };
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValue(archived);
     apiMocks.getCitadel.mockResolvedValue(archived);
     apiMocks.getCitadelGatehouse.mockResolvedValue(GATEHOUSE);
     let renderer: ReactTestRenderer | null = null;
@@ -296,6 +303,7 @@ describe("CitadelOverviewRoutePage", () => {
   });
 
   it("shows the staged setup state without fetching detail when the active Citadel has no Charter", async () => {
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValue({ citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] });
     apiMocks.listCitadels.mockResolvedValueOnce({
       items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: false }],
     });
@@ -312,6 +320,7 @@ describe("CitadelOverviewRoutePage", () => {
   });
 
   it("routes to the Mason when the workspace is not a Citadel yet (404)", async () => {
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValue({ citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] });
     apiMocks.getCitadel.mockRejectedValue({ status: 404 });
     apiMocks.getCitadelGatehouse.mockRejectedValue({ status: 404 });
     const navigate = vi.fn();
@@ -330,7 +339,56 @@ describe("CitadelOverviewRoutePage", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "library", section: "citadel" });
   });
 
+  it("preserves a stale Charter draft and only retries with an explicitly reviewed structure", async () => {
+    apiMocks.getCitadelGatehouse.mockResolvedValue(GATEHOUSE);
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
+    await act(async () => { renderer.root.findByType("textarea").props.onChange({ target: { value: "My retained draft" } }); });
+    const winner = { ...CITADEL, revision: "8".repeat(64), charter: { ...CITADEL.charter, purpose: "Peer purpose" }, chambers: [] };
+    apiMocks.upsertCitadelCharter.mockRejectedValueOnce({ status: 409 });
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValueOnce(winner);
+    await act(async () => { await buttonContaining(renderer, "Save charter").props.onClick(); });
+    expect(apiMocks.upsertCitadelCharter).toHaveBeenCalledExactlyOnceWith("default", expect.objectContaining({ purpose: "My retained draft", expectedRevision: CITADEL.revision }));
+    expect(renderer.root.findByType("textarea").props.value).toBe("My retained draft");
+    expect(treeString(renderer)).toContain("Peer purpose");
+    expect(buttonContaining(renderer, "Save charter").props.disabled).toBe(true);
+    await act(async () => { buttonContaining(renderer, "Apply draft to current Charter").props.onClick(); });
+    expect(apiMocks.upsertCitadelCharter).toHaveBeenCalledTimes(1);
+    await act(async () => { await buttonContaining(renderer, "Save charter").props.onClick(); });
+    expect(apiMocks.upsertCitadelCharter).toHaveBeenNthCalledWith(2, "default", expect.objectContaining({ purpose: "My retained draft", expectedRevision: winner.revision }));
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("refreshes changed template contents without applying them automatically", async () => {
+    const empty = { citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] };
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValue(empty);
+    apiMocks.createCitadelFromTemplate.mockRejectedValueOnce({ status: 409 });
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    apiMocks.listCitadelTemplates.mockResolvedValueOnce(TEMPLATES.map((template) => ({ ...template, revision: "9".repeat(64) })));
+    await act(async () => { await buttonContaining(renderer, "Use template").props.onClick(); });
+    expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledExactlyOnceWith("default", TEMPLATES[0]!.id, empty.revision, TEMPLATES[0]!.revision);
+    expect(treeString(renderer)).toContain("Citadel or template changed");
+    await act(async () => { await buttonContaining(renderer, "Use template").props.onClick(); });
+    expect(apiMocks.createCitadelFromTemplate).toHaveBeenNthCalledWith(2, "default", TEMPLATES[0]!.id, empty.revision, "9".repeat(64));
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("keeps a committed setup when its Gatehouse follow-up fails", async () => {
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValue({ citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] });
+    apiMocks.getCitadelGatehouse.mockRejectedValue(new Error("Summary offline"));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { await buttonContaining(renderer, "Use template").props.onClick(); });
+    expect(treeString(renderer)).toContain("Run personal life");
+    expect(treeString(renderer)).toContain("Template applied. Gatehouse summary unavailable");
+    expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.unmount(); });
+  });
+
   it("creates the active Citadel from the Personal default template", async () => {
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValue({ citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] });
     apiMocks.getCitadel.mockRejectedValue({ status: 404 });
     apiMocks.getCitadelGatehouse.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce(GATEHOUSE);
     let renderer: ReactTestRenderer | null = null;
@@ -342,7 +400,7 @@ describe("CitadelOverviewRoutePage", () => {
       buttonContaining(renderer!, "Use template").props.onClick();
     });
 
-    expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledWith("default", "personal-chief-of-staff");
+    expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledWith("default", "personal-chief-of-staff", "0".repeat(64), "2".repeat(64));
     expect(treeString(renderer!)).toContain("Run personal life");
   });
 });

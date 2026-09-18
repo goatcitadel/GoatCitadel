@@ -29,6 +29,7 @@ import {
   fetchIntegrationPlugins,
   fetchSettings,
   type IntegrationConnection,
+  isApiRequestError,
   invokeIntegrationConnectionAction,
   stageExternalConnectorAction,
   startGoogleMeetSession,
@@ -73,6 +74,9 @@ import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { DetailInspector } from "../../../../components/DetailInspector";
 import { FocusedDetail } from "../../shared/FocusedDetail";
+import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
+import { describeIntegrationConnectionError, useIntegrationConnectionReview } from "./useIntegrationConnectionReview";
+import "./integration-confirmation.css";
 
 type IntegrationDetailDraft = {
   label: string;
@@ -148,10 +152,18 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       connectorDiagnosticsEnabled: runtimeSettings.data?.features?.connectorDiagnosticsV1Enabled === true,
     };
   }, [activeWorkspaceId, requested]);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  const { loading, error, data, reload, updateData } = useAsyncLoad(load, [load]);
+  const applyConnection = useCallback((connectionId: string, connection: IntegrationConnection | null) => {
+    updateData(current => ({ ...current, connections: connection
+      ? current.connections.some(item => item.connectionId === connectionId)
+        ? current.connections.map(item => item.connectionId === connectionId ? connection : item)
+        : [...current.connections, connection]
+      : current.connections.filter(item => item.connectionId !== connectionId) }));
+  }, [updateData]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedConnectionId, setSelectedConnectionId] = useSessionViewState("integrations:" + activeWorkspaceId + ":selection", "");
   const selectionRef = useRef(selectedConnectionId); selectionRef.current = selectedConnectionId;
+  const review = useIntegrationConnectionReview(activeWorkspaceId, selectedConnectionId, applyConnection);
   const [createCatalogId, setCreateCatalogId] = useSessionViewState("integrations:" + activeWorkspaceId + ":catalog", "");
   const [createSchema, setCreateSchema] = useState<IntegrationFormSchema | undefined>();
   const [detailSchema, setDetailSchema] = useState<IntegrationFormSchema | undefined>();
@@ -161,6 +173,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const [pendingDeleteConnection, setPendingDeleteConnection] = useState<{
     connectionId: string;
     label: string;
+    revision: string;
   } | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const [replayAuditBusy, setReplayAuditBusy] = useState(false);
@@ -181,8 +194,9 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const selectedCatalog = data?.catalog.find(item => item.catalogId === (panel === "create" ? createCatalogId : selectedConnection?.catalogId)) ?? null;
   const createCanonical = {label:"",configText:"{}",guidedConfig:createSchema ? applyIntegrationDefaults(createSchema,{}) : {} as Record<string,unknown>};
   const createDraft = useSessionDraft("integration:" + activeWorkspaceId + ":" + createCatalogId + ":new", createCanonical, undefined, { label:"New integration",active:panel === "create",onSave:()=>handleCreate() });
+  const createKeyRef = useRef(createDraft.key); createKeyRef.current = createDraft.key;
   const detailCanonical = {form:selectedConnection ? {label:selectedConnection.label,enabled:selectedConnection.enabled,status:selectedConnection.status,configText:formatJson(selectedConnection.config)} : EMPTY_INTEGRATION_DETAIL_DRAFT,guidedConfig:selectedConnection?.config ?? {}};
-  const detailDraft = useSessionDraft("integration:" + activeWorkspaceId + ":" + selectedConnectionId + ":edit",detailCanonical,selectedConnection?.updatedAt ?? (selectedConnection ? JSON.stringify(selectedConnection) : undefined),{label:selectedConnection?.label ?? "Integration",active:panel === "edit",available:Boolean(selectedConnection),onSave:()=>handleSave()});
+  const detailDraft = useSessionDraft("integration:" + activeWorkspaceId + ":" + selectedConnectionId + ":edit",detailCanonical,selectedConnection?.revision,{label:selectedConnection?.label ?? "Integration",active:panel === "edit",available:Boolean(selectedConnection),onSave:()=>handleSave()});
   const {label:createLabel,configText:createConfig,guidedConfig:createGuidedConfig} = createDraft.value;
   const {form:detailForm,guidedConfig:detailGuidedConfig} = detailDraft.value;
   const setCreateLabel = (label:string) => createDraft.setValue(current=>({...current,label}));
@@ -202,7 +216,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const createCatalogGuard = {requestTransition:(id:string)=>leave.request(()=>{setCreateCatalogId(id);setCreateSchema(undefined);setPanel("create");},[createDraft.key])};
   const toggleCreateJson = () => { try { if (showCreateJson) setCreateGuidedConfig(parseJsonObject(createConfig)); else setCreateConfig(formatJson(createGuidedConfig)); setShowCreateJson(!showCreateJson); } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});} };
   const toggleDetailJson = () => { try { if (showDetailJson) setDetailGuidedConfig(parseJsonObject(detailForm.configText)); else setDetailForm(current=>({...current,configText:formatJson(detailGuidedConfig)}));setShowDetailJson(!showDetailJson); } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});} };
-  useEffect(()=>{setPanel(null);setDiagnostics(null);setLastOperatorActionResult(null);},[activeWorkspaceId]);
+  useEffect(()=>{setPanel(null);setDiagnostics(null);setLastOperatorActionResult(null);setPendingDeleteConnection(null);setNotice(null);},[activeWorkspaceId]);
   useEffect(() => {
     if (!createableCatalog.length) {
       setCreateCatalogId("");
@@ -266,43 +280,56 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     mutationBusy.current = true; setSaving(true);
     try {
       const created = await createIntegrationConnection({catalogId:createCatalogId,label:submitted.label.trim() || undefined,enabled:true,config:showCreateJson ? parseJsonObject(submitted.configText) : (createSchema ? applyIntegrationDefaults(createSchema,submitted.guidedConfig) : submitted.guidedConfig)});
+      if (!review.isCurrent() || createKeyRef.current !== createDraft.key) return false;
       const saved = createDraft.acceptSaved(createCanonical,undefined,submitted);
-      setNotice({tone:"success",message:"Connection " + created.label + " created."});await reload();
+      applyConnection(created.connectionId, created);
+      setNotice({tone:"success",message:"Connection " + created.label + " created."});
       if(saved && panelRef.current === "create") {setSelectedConnectionId(created.connectionId);setPanel("details");}
       return saved;
-    } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});return false;}
+    } catch(cause) {if (review.isCurrent() && createKeyRef.current === createDraft.key) setNotice({tone:"error",message:getErrorMessage(cause)});return false;}
     finally {mutationBusy.current=false;setSaving(false);}
   };
   const handleSave = async (): Promise<boolean> => {
-    if (mutationBusy.current || !selectedConnection || detailDraft.hasRemoteChanges) return false;
+    if (mutationBusy.current || !selectedConnection || detailDraft.hasRemoteChanges || review.required || !detailDraft.baseRevision) return false;
     const submitted=detailDraft.value;
     mutationBusy.current=true;setSaving(true);
     try {
-      const updated=await updateIntegrationConnection(selectedConnection.connectionId,{label:submitted.form.label.trim() || undefined,enabled:submitted.form.enabled,status:submitted.form.status as IntegrationConnection["status"],config:showDetailJson ? parseJsonObject(submitted.form.configText,selectedConnection.config) : submitted.guidedConfig});
-      const saved=detailDraft.acceptSaved({form:{label:updated.label,enabled:updated.enabled,status:updated.status,configText:formatJson(updated.config)},guidedConfig:updated.config},updated.updatedAt ?? JSON.stringify(updated),submitted);
-      setNotice({tone:"success",message:"Connection updated."});await reload();return saved;
-    } catch(cause) {setNotice({tone:"error",message:getErrorMessage(cause)});return false;}
+      const updated=await updateIntegrationConnection(selectedConnection.connectionId,{expectedRevision:String(detailDraft.baseRevision),label:submitted.form.label.trim() || undefined,enabled:submitted.form.enabled,status:submitted.form.status as IntegrationConnection["status"],config:showDetailJson ? parseJsonObject(submitted.form.configText,selectedConnection.config) : submitted.guidedConfig});
+      if (!review.isCurrent()) return false;
+      const saved=detailDraft.acceptSaved({form:{label:updated.label,enabled:updated.enabled,status:updated.status,configText:formatJson(updated.config)},guidedConfig:updated.config},updated.revision,submitted);
+      applyConnection(updated.connectionId, updated);
+      setNotice({tone:"success",message:"Connection updated."});return saved;
+    } catch(cause) {
+      if (!review.isCurrent()) return false;
+      setNotice({tone:"error",message:describeIntegrationConnectionError(cause)});
+      if (isApiRequestError(cause) && (cause.status === 404 || cause.status === 409 || (cause.status ?? 500) >= 500)) await review.refresh();
+      return false;
+    }
     finally {mutationBusy.current=false;setSaving(false);}
   };
 
   const handleDelete = async () => {
-    if (!pendingDeleteConnection) {
+    if (!pendingDeleteConnection || mutationBusy.current || review.required || !review.isCurrent()) {
       return;
     }
-    setDeletePending(true);
+    mutationBusy.current = true; setDeletePending(true);
     try {
-      await deleteIntegrationConnection(pendingDeleteConnection.connectionId);
+      await deleteIntegrationConnection(pendingDeleteConnection.connectionId, pendingDeleteConnection.revision);
+      if (!review.isCurrent()) return;
+      applyConnection(pendingDeleteConnection.connectionId, null);
       discardSessionDraft("integration:" + activeWorkspaceId + ":" + pendingDeleteConnection.connectionId + ":edit");
       discardSessionDraft("integration:" + activeWorkspaceId + ":" + pendingDeleteConnection.connectionId + ":actions");
       setPanel(null);
       setNotice({ tone: "success", message: "Connection deleted." });
       setDiagnostics(null);
       setPendingDeleteConnection(null);
-      await reload();
     } catch (deleteError) {
-      setNotice({ tone: "error", message: getErrorMessage(deleteError) });
+      if (!review.isCurrent()) return;
+      setPendingDeleteConnection(null);
+      setNotice({ tone: "error", message: describeIntegrationConnectionError(deleteError) });
+      if (isApiRequestError(deleteError) && (deleteError.status === 404 || deleteError.status === 409 || (deleteError.status ?? 500) >= 500)) await review.refresh();
     } finally {
-      setDeletePending(false);
+      mutationBusy.current = false; setDeletePending(false);
     }
   };
 
@@ -527,7 +554,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell loading={loading && !data} error={data ? null : error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? <SettingsStack>
         <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
@@ -621,7 +648,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                 emptyLabel="No integration catalog entries are available."
                 maxHeight="min(58vh, 34rem)"
               /></NativeDisclosureCard></SettingsStack></FocusedDetail> : panel === "edit" ? <FocusedDetail title={"Edit " + (selectedConnection?.label ?? "connection")} onClose={closePanel}><SettingsStack>
-          {detailDraft.hasRemoteChanges ? <NativeCard title="Connection changed" subtitle="Review the current saved values before retrying."><p>{selectedConnection?.label} · {selectedConnection?.status} · Updated {formatDateTime(selectedConnection?.updatedAt)}</p><NativeDisclosureCard id="integration-current-config" title="Current configuration"><fieldset disabled><ConfigFormBuilder schema={detailSchema} value={selectedConnection?.config ?? {}} onChange={() => {}} /></fieldset></NativeDisclosureCard><NativeButton onClick={detailDraft.rebaseToCurrent}>Apply draft to current connection</NativeButton></NativeCard> : null}
+          {detailDraft.hasRemoteChanges || review.required ? <IntegrationConnectionReview connection={selectedConnection} loading={review.loading} error={review.error} missing={review.missing} onReload={() => void review.refresh()} onAccept={() => { detailDraft.rebaseToCurrent(); review.accept(); }} /> : null}
           <SettingsFieldGrid>
                   <SettingsField label="Label">
                     <input
@@ -669,7 +696,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     value={detailGuidedConfig}
                     onChange={setDetailGuidedConfig}
                   />
-                )}<SettingsButtonRow><NativeButton disabled={saving || detailDraft.hasRemoteChanges || !selectedConnection} onClick={() => void handleSave()}>Save changes</NativeButton><NativeButton variant="secondary" onClick={toggleDetailJson}>{showDetailJson ? "Use guided fields" : "Advanced JSON"}</NativeButton><NativeButton variant="secondary" onClick={closePanel}>Close editor</NativeButton></SettingsButtonRow>
+                )}<SettingsButtonRow><NativeButton disabled={saving || detailDraft.hasRemoteChanges || review.required || !selectedConnection || !detailDraft.baseRevision} onClick={() => void handleSave()}>Save changes</NativeButton><NativeButton variant="secondary" onClick={toggleDetailJson}>{showDetailJson ? "Use guided fields" : "Advanced JSON"}</NativeButton><NativeButton variant="secondary" onClick={closePanel}>Close editor</NativeButton></SettingsButtonRow>
         </SettingsStack></FocusedDetail> : <>
           <SettingsButtonRow><NativeButton onClick={() => openPanel("create")}><Plus size={16} />Add integration{hasSessionDraft("integration:" + activeWorkspaceId + ":" + createCatalogId + ":new") ? " · Unsaved" : ""}</NativeButton><NativeButton variant="secondary" onClick={() => void reload()}>Refresh</NativeButton></SettingsButtonRow>
           <NativeCard title="Connected integrations" subtitle="" stats={[{label:"Connections",value:data.issues.some(issue=>issue.label === "Integration connections") ? "Unavailable" : String(data.connections.length)},{label:"Catalog",value:data.issues.some(issue=>issue.label === "Integration catalog") ? "Unavailable" : String(data.catalog.length)},{label:"Plugins",value:!requested.plugins ? "Not loaded" : data.issues.some(issue=>issue.label === "Integration plugins") ? "Unavailable" : (Array.isArray(data.plugins) ? String(data.plugins.length) : "Unavailable")}]}>
@@ -692,6 +719,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         </>}
         <DetailInspector open={panel === "details"} title={selectedConnection?.label ?? "Connection unavailable"} onClose={closePanel}>
           <SettingsStack>
+            {review.required ? <IntegrationConnectionReview connection={selectedConnection} loading={review.loading} error={review.error} missing={review.missing} onReload={() => void review.refresh()} onAccept={() => { detailDraft.rebaseToCurrent(); review.accept(); }} /> : null}
             {selectedConnection ? (
               <>
                 <p>{selectedConnection.status} · {selectedConnection.enabled ? "Enabled" : "Disabled"}</p>
@@ -721,10 +749,12 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
 
                   <NativeButton
                     variant="destructive"
+                    disabled={review.required || saving || deletePending || !selectedConnection.revision}
                     onClick={() =>
                       setPendingDeleteConnection({
                         connectionId: selectedConnection.connectionId,
                         label: selectedConnection.label,
+                        revision: selectedConnection.revision,
                       })
                     }
                   >
@@ -837,6 +867,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       </SettingsStack> : null}
       {leave.dialog}
       <ConfirmModal
+        className="mc-next-integration-confirmation"
         open={pendingDeleteConnection !== null}
         danger
         pending={deletePending}

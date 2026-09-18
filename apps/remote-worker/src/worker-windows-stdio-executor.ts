@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { workerMeshRejected } from "./worker-mesh-capability-data.js";
+import { workerLocalStateActivity } from "./worker-local-state-activity.js";
 import { decodeWindowsWorkerStdioCompletion, encodeWindowsWorkerStdioFrame, encodeWindowsWorkerStdioLaunch,
   normalizeWindowsWorkerStdioLaunch, type WindowsWorkerStdioCompletion } from "./worker-windows-stdio-codec.js";
 
@@ -54,10 +55,13 @@ export async function startWindowsWorkerStdio(input: unknown, options: {
   try { await assertCurrent(); }
   catch { leases.delete(pinned.lease); throw workerMeshRejected(); }
   let child: ReturnType<typeof spawn>;
+  let finishWriter: (cleanupVerified: boolean) => void;
+  try { finishWriter = workerLocalStateActivity.beginExternalWriter(); }
+  catch { leases.delete(pinned.lease); throw workerMeshRejected(); }
   try {
     child = spawn(pinned.executorPath, [], { cwd: path.dirname(pinned.executorPath), windowsHide: true, shell: false,
       env: { SystemRoot: process.env.SystemRoot }, stdio: ["pipe", "pipe", "pipe"] });
-  } catch { leases.delete(pinned.lease); throw workerMeshRejected(); }
+  } catch { finishWriter(true); leases.delete(pinned.lease); throw workerMeshRejected(); }
   const stdin = child.stdin!, stdout = child.stdout!, stderr = child.stderr!;
   let buffer = Buffer.alloc(0), queued = 0, submitted = 0, outputBytes = 0, errorBytes = 0;
   let failure: Error | undefined, receipt: WindowsWorkerStdioCompletion | undefined;
@@ -120,6 +124,7 @@ export async function startWindowsWorkerStdio(input: unknown, options: {
     } catch { fail(); }
   });
   child.once("close", (code, exitSignal) => {
+    let cleanupVerified = false;
     closed = true;
     clearTimeout(timer); clearTimeout(killTimer);
     signal.removeEventListener("abort", fail);
@@ -132,8 +137,10 @@ export async function startWindowsWorkerStdio(input: unknown, options: {
         !receipt.appContainerVerified || !receipt.launchFilesVerified || !receipt.processImageVerified || !receipt.zeroProcessesVerified || !receipt.outputDrained ||
         !receipt.standardInputComplete || !ending || receipt.standardInputBytesWritten !== submitted ||
         receipt.standardOutputBytes !== outputBytes || receipt.standardErrorBytes !== errorBytes)) throw workerMeshRejected();
+      cleanupVerified = receipt.zeroProcessesVerified && receipt.outputDrained;
       resolveCompletion(receipt);
     } catch { failure ??= workerMeshRejected(); rejectCompletion(failure); }
+    finishWriter(cleanupVerified);
     notify(); resolveClosed();
   });
   const writeBytes = (bytes: Buffer) => new Promise<void>((resolve, reject) => {

@@ -6,16 +6,18 @@ namespace goatcitadel::remote_worker_provisioner {
 
 using SignerInspectionObject = worker_host::WorkerInspectionObject;
 using SignerInspectionAcl = worker_host::WorkerInspectionAcl;
+using SignerInspectionDiagnostic = worker_host::WorkerInspectionDiagnostic;
 constexpr std::size_t kSignerInspectionAclBytes = worker_host::kWorkerInspectionAclBytes;
 
-// Preserve every original ACE and append only the fixed worker's inspection
-// grant. This composes a descriptor; it never changes a kernel object.
+// Preserve every original ACE and append the fixed worker and availability
+// broker inspection grants. This composes a descriptor; it never changes a kernel object.
 bool ComposeSignerInspectionAcl(PSID owner, PACL original,
     SignerInspectionObject object, SignerInspectionAcl* output) noexcept;
 
 // Called only by the signer after its complete SCM/token identity validation,
 // before arming transport. Targets only this process and its own primary token.
-bool GrantCurrentSignerInspectionAccess() noexcept;
+bool GrantCurrentSignerInspectionAccess(
+    SignerInspectionDiagnostic* diagnostic = nullptr) noexcept;
 
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
 // Tests use their own process and a newly duplicated, unassigned token, with

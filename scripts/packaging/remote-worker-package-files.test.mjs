@@ -14,7 +14,31 @@ import {
   WORKER_PACKAGE_MANIFEST_NAME,
   readPackageFile,
 } from "./lib/remote-worker-package-files.mjs";
-import { buildRemoteWorkerWindowsPackage } from "./build-remote-worker-windows-package.mjs";
+import { buildRemoteWorkerWindowsPackage, createWorkerPackageDeployment } from "./build-remote-worker-windows-package.mjs";
+
+test("worker dependency staging stays beside the workspace and preserves prior runs", () => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "goat-worker-deployment-")));
+  const first = createWorkerPackageDeployment(root);
+  assert.equal(path.relative(root, first).split(path.sep)[0], ".tmp");
+  assert.equal(path.isAbsolute(path.relative(root, first)), false);
+  assert.equal(fs.existsSync(first), false);
+  fs.mkdirSync(first);
+  const marker = path.join(first, "retained.txt");
+  fs.writeFileSync(marker, "previous staging", { flag: "wx" });
+  const second = createWorkerPackageDeployment(root);
+  assert.notEqual(first, second);
+  assert.equal(fs.existsSync(second), false);
+  assert.equal(fs.readFileSync(marker, "utf8"), "previous staging");
+  assert.throws(() => createWorkerPackageDeployment("relative"), /absolute repository/);
+});
+
+test("worker dependency staging refuses a redirected scratch directory", () => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "goat-worker-deployment-alias-")));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "goat-worker-deployment-outside-"));
+  fs.symlinkSync(outside, path.join(root, ".tmp"), process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => createWorkerPackageDeployment(root), /linked scratch/);
+  assert.deepEqual(fs.readdirSync(outside), []);
+});
 
 test("worker package accepts only the exact installed schema runtime graph", () => {
   const require = createRequire(new URL("../../packages/contracts/package.json", import.meta.url));
@@ -76,9 +100,12 @@ function fixture() {
     "app/install/worker-enrollment-common.ps1",
     "app/install/worker-install-common.ps1",
     "app/install/worker-install-native.cs",
+    "app/install/worker-controller-key.cs",
     "app/install/configure-worker-mesh-registry.ps1",
     "app/install/worker-mesh-registry-common.ps1",
     "app/install/broker-coordinator-common.ps1",
+    "app/install/broker-state-common.ps1",
+    "app/install/broker-state-native.cs",
     "app/install/install-broker-coordinator.ps1",
     "app/install/uninstall-broker-coordinator.ps1",
     "bin/worker.ps1",
@@ -198,8 +225,11 @@ for (const name of [
   "worker-enrollment-common.ps1",
   "worker-install-common.ps1",
   "worker-install-native.cs",
+  "worker-controller-key.cs",
   "configure-worker-mesh-registry.ps1",
   "worker-mesh-registry-common.ps1",
+  "broker-state-common.ps1",
+  "broker-state-native.cs",
 ]) {
   test(`worker package refuses a rehashed inventory missing ${name}`, () => {
     const input = fixture();

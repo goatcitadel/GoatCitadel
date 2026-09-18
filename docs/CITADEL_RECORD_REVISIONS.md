@@ -4,6 +4,8 @@ Citadel profile edits, archive, and restore require the revision returned by the
 profile read. This protects the name, slug, description, kind, default workspace,
 and lifecycle record. Charter, template, blueprint, membership, and access-rule
 mutations have separate owners and are not covered by this profile revision.
+Charter and setup writes now use the separate
+[structure revision contract](CITADEL_STRUCTURE_REVISIONS.md).
 
 `CitadelRecord.revision` is an opaque SHA-256 token bound to the persisted profile
 and its timestamps. Derived `hasCharter` is excluded so directory and detail reads

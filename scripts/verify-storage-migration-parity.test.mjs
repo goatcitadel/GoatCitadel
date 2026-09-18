@@ -1008,12 +1008,18 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 228);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 228]);
-  assert.equal(postgres.migrations.length, 173);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 173]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "permission_profile_selection");
-  assert.equal(postgres.migrations.at(-1)?.name, "permission_profile_selection");
+  assert.equal(sqlite.migrations.length, 250);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 250]);
+  assert.equal(postgres.migrations.length, 195);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 195]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "remote_worker_runtime_install_evidence");
+  assert.equal(postgres.migrations.at(-1)?.name, "remote_worker_runtime_install_evidence");
+  assert.equal(sqlite.migrations.find(record => record.version === 249)?.name, "remote_worker_native_policy_reservations");
+  assert.equal(postgres.migrations.find(record => record.version === 194)?.name, "remote_worker_native_policy_reservations");
+  assert.equal(sqlite.migrations.find(record => record.version === 248)?.name, "remote_worker_native_file_transfers");
+  assert.equal(postgres.migrations.find(record => record.version === 193)?.name, "remote_worker_native_file_transfers");
+  assert.equal(sqlite.migrations.find(record => record.version === 246)?.name, "remote_worker_runtime_output_evidence");
+  assert.equal(postgres.migrations.find(record => record.version === 191)?.name, "remote_worker_runtime_output_evidence");
   assert.equal(
     postgres.migrations.find((record) => record.version === 62)?.name,
     "chat_delegation_step_degraded_handoff_repairs",
@@ -1026,7 +1032,7 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(postgres.migrations.find((record) => record.version === 2)?.sqlPayloadSha256, undefined);
   assert.deepEqual(
     postgres.migrations.filter((record) => !record.sqlPayloadSha256).map((record) => record.version),
-    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173],
+    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195],
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(

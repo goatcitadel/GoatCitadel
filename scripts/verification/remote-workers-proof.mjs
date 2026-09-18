@@ -479,6 +479,7 @@ for (const [index, check] of checks.entries()) {
       "tsx",
       "--test",
       "--test-concurrency=1",
+      "--test-timeout=180000",
       ...REMOTE_WORKER_LIVE_POSTGRES_SUITES.map((suite) => `src/${suite}`),
     ];
     // Connection-reset signatures get ONE fresh-cluster re-attempt: on this
@@ -487,13 +488,11 @@ for (const [index, check] of checks.entries()) {
     // cause. Assertion failures without that signature do not retry.
     const connectionResetPattern =
       /ECONNRESET|ECONNREFUSED|Connection terminated|server closed the connection|terminated unexpectedly/iu;
-    // The same interference can leave a postmaster ACCEPTING but never
-    // answering, which would block spawnSync forever. The suites complete in
-    // well under a minute against a healthy cluster, so a stalled run is
-    // killed at this budget and retried once on a fresh cluster instead of
-    // hanging the lane past any caller's timeout. Two stalled attempts plus the
-    // ~40s of earlier checks still land inside a 10-minute budget.
-    const livePostgresTimeoutMs = 240_000;
+    // Every isolated case replays the migration ledger. The expanded native
+    // recovery/result suite exceeded the old four-minute aggregate budget
+    // while continuing to pass cases. Bound each test above, and retain an
+    // independent whole-process ceiling for runner or teardown stalls.
+    const livePostgresTimeoutMs = 30 * 60_000;
     const maxAttempts = providedUrl ? 1 : 2;
     let attempt = 0;
     let hermeticStop;

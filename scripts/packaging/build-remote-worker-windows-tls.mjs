@@ -23,22 +23,36 @@ export const CELL_PROVISIONING_SOURCES = Object.freeze([
   "cell_volume_protection.cpp", "cell_volume_protection.hpp",
   "cell_volume_mount.cpp", "cell_volume_mount.hpp", "cell_volume_mount_target.cpp", "cell_volume_mount_target.hpp",
   "cell_mounted_workspace.cpp", "cell_mounted_workspace.hpp",
+  "cell_mounted_workspace_capacity.cpp", "cell_capacity.cpp", "cell_capacity.hpp",
+  "cell_capacity_wire.cpp", "cell_capacity_wire.hpp",
+  "cell_joined_capacity_wire.cpp", "cell_joined_capacity_wire.hpp",
   "cell_filesystem.cpp", "cell_filesystem.hpp", "cell_security.cpp", "cell_security.hpp",
   "cell_controller_identity.cpp", "cell_controller_identity.hpp",
   "cell_controller_transport.cpp", "cell_controller_transport.hpp",
   "cell_controller_protocol.cpp", "cell_controller_protocol.hpp",
   "cell_controller_client_identity.cpp", "cell_controller_client_identity.hpp",
   "cell_controller_client_protocol.cpp", "cell_controller_client_protocol.hpp",
+  ...["cell_runtime_client_session", "cell_runtime_session", "cell_runtime_result", "cell_runtime_file_transfer", "cell_runtime_streams", "cell_controller_runtime",
+    "cell_runtime_transfer", "cell_runtime_dispatch", "cell_journal_runtime", "cell_stdio_protocol", "cell_runtime_bundle", "cell_job", "cell_job_stdio"]
+    .flatMap(name => [`${name}.cpp`, `${name}.hpp`]),
+  "cell_job_stdio_internal.hpp",
+  "cell_runtime_bundle_install.cpp",
+  "cell_runtime_install.cpp", "cell_runtime_install.hpp",
+  ...["cell_controller_install", "cell_install_capacity", "cell_install_capacity_challenge", "cell_install_capacity_pipe",
+    "cell_controller_attestation", "cell_installed_pool_capacity", "cell_pool_capacity"].flatMap(name => [`${name}.cpp`, `${name}.hpp`]),
+  "cell_install_capacity_stdio.hpp",
 ]);
-export const CELL_PROVISIONING_HOST_SOURCES = Object.freeze(["service_identity.cpp", "service_identity.hpp", "worker_host.hpp"]);
+export const CELL_PROVISIONING_HOST_SOURCES = Object.freeze(["service_identity.cpp", "service_identity.hpp", "worker_host.hpp", "service_inspection.cpp", "service_inspection.hpp"]);
 export const STDIO_EXECUTOR_SOURCES = Object.freeze([
   "cell_stdio_main.cpp", "cell_stdio_protocol.cpp", "cell_stdio_protocol.hpp",
   "cell_job.cpp", "cell_job.hpp", "cell_job_stdio.cpp", "cell_job_stdio.hpp", "cell_job_stdio_internal.hpp",
   "cell_filesystem.cpp", "cell_filesystem.hpp", "cell_runtime_bundle.cpp", "cell_runtime_bundle.hpp",
   "cell_workspace.cpp", "cell_workspace.hpp", "cell_security.cpp", "cell_security.hpp",
+  "cell_capacity.cpp", "cell_capacity.hpp",
 ]);
 export const FILE_EXECUTOR_SOURCES = Object.freeze([
   "cell_tool_main.cpp", "cell_filesystem.cpp", "cell_filesystem.hpp", "cell_runtime_bundle.hpp", "cell_job.hpp", "cell_job_stdio.hpp", "cell_workspace.hpp",
+  "cell_capacity.hpp",
 ]);
 export const TLS_IMAGE_GUARD_SOURCES = Object.freeze(["node_image_guard.cpp", "node_image_guard_api.hpp"]);
 export const TLS_ADAPTER_SOURCES = Object.freeze([
@@ -59,9 +73,17 @@ export function compileTlsNative({
   dll = false,
   asan = false,
   compilerTimeoutMs = 60000,
+  sourceBatchSize = 0,
 }) {
   if (!Number.isSafeInteger(compilerTimeoutMs) || compilerTimeoutMs < 1000 || compilerTimeoutMs > 120000) {
     throw new Error("Native compiler timeout must be an integer from 1000 to 120000 milliseconds.");
+  }
+  if (!Number.isSafeInteger(sourceBatchSize) || sourceBatchSize < 0 || sourceBatchSize > 16) {
+    throw new Error("Native source batch size must be an integer from 0 to 16.");
+  }
+  const objects = sources.map(source => path.join(outputDirectory, `${path.basename(source, path.extname(source))}.obj`));
+  if (sourceBatchSize && new Set(objects.map(object => object.toLowerCase())).size !== sources.length) {
+    throw new Error("Batched native sources must have distinct object names.");
   }
   const toolchain = resolveExactWindowsToolchain(target);
   const architecture = toolchain.definition.toolArchitecture;
@@ -74,7 +96,7 @@ export function compileTlsNative({
     toolchain.vcLibraryRoot,
     ...["ucrt", "um"].map((part) => path.join(toolchain.sdkLibraryRoot, part, architecture)),
   ];
-  const args = [
+  const compileArgs = [
     "/nologo",
     "/MT",
     "/std:c++20",
@@ -97,7 +119,8 @@ export function compileTlsNative({
     ...(dll ? ["/LD"] : []),
     ...(asan ? ["/fsanitize=address", "/Zi"] : []),
     ...include.map((value) => `/I${value}`),
-    ...sources,
+  ];
+  const linkArgs = [
     "/link",
     "/Brepro",
     "/INCREMENTAL:NO",
@@ -111,27 +134,36 @@ export function compileTlsNative({
     "bcrypt.lib",
     `/OUT:${path.join(outputDirectory, outputName)}`,
   ];
-  const result = spawnSync(toolchain.compilerPath, args, {
-    cwd: outputDirectory,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: compilerTimeoutMs,
-    env: {
-      SystemRoot: process.env.SystemRoot,
-      PATH: path.dirname(toolchain.compilerPath),
-      TEMP: outputDirectory,
-      TMP: outputDirectory,
-    },
-  });
-  fs.writeFileSync(
-    path.join(outputDirectory, `${outputName}.build.log`),
-    `${result.stdout ?? ""}${result.stderr ?? ""}`,
-    { flag: "wx" },
-  );
-  if (result.error || result.status !== 0)
-    throw new Error(
-      `Native TLS build failed (${result.status ?? result.error?.code}): ${result.stdout ?? ""}${result.stderr ?? ""}`,
-    );
+  // Large proof fixtures compile sequential bounded batches with unchanged
+  // optimization and sanitizer flags, then link the complete object set. The
+  // default single-command release build retains its original argument order.
+  const commands = [];
+  if (sourceBatchSize) {
+    for (let offset = 0; offset < sources.length; offset += sourceBatchSize)
+      commands.push([...compileArgs, "/c", ...sources.slice(offset, offset + sourceBatchSize)]);
+    commands.push([...compileArgs, ...objects, ...linkArgs]);
+  } else commands.push([...compileArgs, ...sources, ...linkArgs]);
+  const output = [];
+  for (const [index, args] of commands.entries()) {
+    const result = spawnSync(toolchain.compilerPath, args, {
+      cwd: outputDirectory,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: compilerTimeoutMs,
+      env: {
+        SystemRoot: process.env.SystemRoot,
+        PATH: path.dirname(toolchain.compilerPath),
+        TEMP: outputDirectory,
+        TMP: outputDirectory,
+      },
+    });
+    output.push(`${commands.length > 1 ? `Native build step ${index + 1}/${commands.length}\n` : ""}${result.stdout ?? ""}${result.stderr ?? ""}`);
+    if (result.error || result.status !== 0) {
+      fs.writeFileSync(path.join(outputDirectory, `${outputName}.build.log`), output.join(""), { flag: "wx" });
+      throw new Error(`Native TLS build failed (${result.status ?? result.error?.code}): ${output.join("")}`);
+    }
+  }
+  fs.writeFileSync(path.join(outputDirectory, `${outputName}.build.log`), output.join(""), { flag: "wx" });
   return path.join(outputDirectory, outputName);
 }
 
@@ -181,6 +213,7 @@ export function buildWindowsTlsKeyAdapter({ target, outputDirectory }) {
   assertNoRemoteWorkerBuildPathLeak(stdioBytes, [repository, outputDirectory]);
   const stdioSha256 = createHash("sha256").update(stdioBytes).digest("hex");
   const cellProvisioningExecutor = compileTlsNative({ target, outputDirectory, outputName: CELL_PROVISIONING_EXE,
+    sourceBatchSize: 8,
     sources: [...CELL_PROVISIONING_SOURCES, ...CELL_PROVISIONING_HOST_SOURCES]
       .filter((name) => name.endsWith(".cpp")).map((name) => path.join(sourceDirectory, name)) });
   const cellProvisioningBytes = fs.readFileSync(cellProvisioningExecutor);
@@ -197,7 +230,7 @@ export function buildWindowsTlsKeyAdapter({ target, outputDirectory }) {
     target,
     outputDirectory,
     outputName: TLS_IMAGE_GUARD_ADDON,
-    sources: ["node_image_guard.cpp", "helper_process.cpp", "tls_key_codec.cpp"].map((name) =>
+    sources: ["node_image_guard.cpp", "helper_process.cpp", "tls_key_codec.cpp", "service_identity.cpp"].map((name) =>
       path.join(sourceDirectory, name),
     ),
     includes: [sourceDirectory],

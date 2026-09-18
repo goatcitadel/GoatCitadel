@@ -18,6 +18,8 @@
  * and identifiers are opaque, server-derived values echoed back verbatim.
  */
 import {
+  normalizeRemoteWorkerRuntimeOutputArtifact,
+  serializeRemoteWorkerRuntimeOutputArtifact,
   normalizeRemoteWorkerAssignmentRuntime,
   type RemoteWorkerAssignmentRuntime,
   freezeRemoteWorkerAssignmentEventPage,
@@ -185,4 +187,16 @@ export async function fetchRemoteWorkerAssignmentRuntime(
   if (result.workspaceId !== scope || result.assignmentId !== assignment)
     throw new Error("Remote worker runtime evidence does not match the requested scope.");
   return result;
+}
+
+/** Uses normal operator authentication; never a worker credential or public link. */
+export async function fetchRemoteWorkerNativeOutputArtifact(workspaceId: string, assignmentId: string, assignmentGeneration: number, nonce: string) {
+  const scope = normalizeWorkspaceId(workspaceId), assignment = normalizeScopedId(assignmentId, "assignment id");
+  if (!Number.isSafeInteger(assignmentGeneration) || assignmentGeneration < 1 || assignmentGeneration > 2147483647 ||
+      !/^[0-9a-f]{64}$/u.test(nonce) || /^0+$/u.test(nonce)) throw new Error("Invalid native output artifact scope.");
+  const payload = await request<unknown>(`/api/v1/ops/workspaces/${encodeURIComponent(scope)}/remote-worker-assignments/${encodeURIComponent(assignment)}/native-output-artifacts/${nonce}?assignmentGeneration=${assignmentGeneration}`);
+  const document = normalizeRemoteWorkerRuntimeOutputArtifact(payload);
+  if (document.registryWorkspaceId !== scope || document.assignmentId !== assignment || document.assignmentGeneration !== assignmentGeneration || document.output.nonce !== nonce)
+    throw new Error("Native output artifact scope mismatch.");
+  return serializeRemoteWorkerRuntimeOutputArtifact(document);
 }

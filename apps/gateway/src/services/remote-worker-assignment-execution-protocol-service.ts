@@ -1,3 +1,4 @@
+import { dispatchArtifactSubmission, isArtifactSubmission, type ArtifactSubmission, type ArtifactSubmissionDependencies } from "./remote-worker-artifact-submissions.js";
 import {
   inferenceRequestProjection,
   inferenceFrameProjection,
@@ -6,7 +7,9 @@ import {
 } from "./remote-worker-inference-exchange-projections.js";
 export type { RemoteWorkerInferenceExchangeRequestProjection, RemoteWorkerInferenceExchangeFrameProjection } from "./remote-worker-inference-exchange-projections.js";
 import { createHash } from "node:crypto";
-import { types as nodeUtilTypes } from "node:util";
+import { normalizeRemoteWorkerNativePoolPageSubmission, type RemoteWorkerNativePoolPageSubmission, type RemoteWorkerNativePoolPage } from "@goatcitadel/contracts";
+import { normalizeRemoteWorkerNativePoolCleanupPageSubmission, type RemoteWorkerNativePoolCleanupPageSubmission } from "@goatcitadel/contracts";
+import { snapshotHeaders, snapshotTransportIdentity, snapshotExecutionResponse as responseSnapshot } from "./remote-worker-assignment-execution-transport.js";
 import {
   REMOTE_WORKER_INFERENCE_EXECUTION_TIMEOUT_MS,
   REMOTE_WORKER_ASSIGNMENT_INFERENCE_EXCHANGE_SCHEMA_VERSION,
@@ -19,12 +22,16 @@ import {
   evaluateRemoteWorkerRuntimeCredentialRoutePolicy,
   normalizeRemoteWorkerArtifactManifest,
   normalizeRemoteWorkerArtifactPart,
-  normalizeRemoteWorkerChatToolSubmission,
-  normalizeRemoteWorkerCellProvisioningSubmission,
-  normalizeRemoteWorkerCellPreparationSubmission, type RemoteWorkerCellPreparationSubmission, type RemoteWorkerCellPreparation,
-  normalizeRemoteWorkerMeshNodeAuthorityFence,
   type RemoteWorkerArtifactManifest,
   type RemoteWorkerArtifactPartDescriptor,
+  normalizeRemoteWorkerChatToolSubmission,
+  normalizeRemoteWorkerCellProvisioningSubmission,
+  normalizeRemoteWorkerCellCapacitySubmission,
+  type RemoteWorkerCellCapacitySubmission, type RemoteWorkerCellCapacityExchange,
+  normalizeRemoteWorkerCellBackingCapacitySubmission,
+  type RemoteWorkerCellBackingCapacitySubmission, type RemoteWorkerCellBackingCapacityExchange,
+  normalizeRemoteWorkerCellPreparationSubmission, type RemoteWorkerCellPreparationSubmission, type RemoteWorkerCellPreparation,
+  normalizeRemoteWorkerMeshNodeAuthorityFence,
   type RemoteWorkerAssignmentGenerationRecord,
   type RemoteWorkerAssignmentRecord,
   type RemoteWorkerInferenceRequestSubmission,
@@ -39,11 +46,6 @@ import type {
   RemoteWorkerArtifactUploadRecord,
   RemoteWorkerAssignmentProtectedCommitFence,
 } from "@goatcitadel/storage";
-import type {
-  AppendPartInput,
-  CommitArtifactInput,
-  OpenUploadInput,
-} from "./remote-worker-artifact-settlement-service.js";
 import { snapshotRemoteWorkerAssignmentDispatchAuthority } from "./remote-worker-assignment-dispatch-service.js";
 import type { RemoteWorkerAssignmentMeshAuthorityPort } from "./remote-worker-assignment-protocol-service.js";
 import type {
@@ -59,8 +61,11 @@ import type {
   RemoteWorkerInferencePerformOutcome,
 } from "./remote-worker-inference-service.js";
 import type { DispatchRemoteWorkerChatToolInput } from "./remote-worker-chat-tool-runtime.js";
-import { exchangeRemoteWorkerCellProvisioning, prepareRemoteWorkerCellProvisioning,
-  type RemoteWorkerCellProvisioningExchangePort } from "./remote-worker-cell-provisioning-exchange.js";
+import { dispatchNativeSubmission, type NativeSubmissionDependencies } from "./remote-worker-native-submissions.js";
+import { type NativeRuntimeSubmission, type NativeRuntimeSubmissionResult } from "./remote-worker-native-runtime-submissions.js";
+import { type NativeFileSubmission, type NativeFileSubmissionResult } from "./remote-worker-native-file-submissions.js";
+import { normalizeRemoteWorkerCellObjectInventoryPageSubmission, type RemoteWorkerCellObjectInventoryPageSubmission,
+  type RemoteWorkerCellObjectInventoryPageExchange } from "@goatcitadel/contracts";
 import {
   RemoteWorkerAssignmentExecutionProtocolError,
   assertPlainRecord,
@@ -73,11 +78,13 @@ import {
   positiveInteger,
   rejected,
   safeDigestEqual,
+  normalizeNativeRuntimeSettlementSubmission,
   snapshotClock,
 } from "./remote-worker-assignment-execution-validators.js";
 import { REMOTE_WORKER_NATIVE_TLS_LIMITS } from "./remote-worker-native-tls-listener.js";
+import { normalizeRemoteWorkerNativeCapacityPageSubmission, type RemoteWorkerNativeCapacityPageSubmission,
+  type RemoteWorkerNativeCapacityPageExchange } from "@goatcitadel/contracts";
 import {
-  REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES,
   consumeRemoteWorkerDurableNonce,
   normalizeRemoteWorkerProtocolBody,
   prepareRemoteWorkerProofOfPossession,
@@ -151,19 +158,13 @@ export interface RemoteWorkerInferenceExchangeOwnerPort {
 }
 
 /** The production-dark HX-506 owners: CAS-backed artifacts plus coordinated external effects. */
-export interface RemoteWorkerSettlementSubmissionOwnerPort {
-  readonly artifacts: {
-    openUpload(input: OpenUploadInput): Awaitable<RemoteWorkerArtifactUploadRecord>;
-    appendPart(input: AppendPartInput): Awaitable<RemoteWorkerArtifactUploadRecord>;
-    commitArtifact(input: CommitArtifactInput): Awaitable<RemoteWorkerArtifactUploadRecord>;
-  };
+export interface RemoteWorkerSettlementSubmissionOwnerPort extends NativeSubmissionDependencies, ArtifactSubmissionDependencies {
   readonly effects: {
     dispatchEffect(input: DispatchRemoteWorkerEffectInput): Awaitable<DispatchRemoteWorkerEffectResult>;
   };
   readonly chatTools?: {
     dispatchTool(input: DispatchRemoteWorkerChatToolInput): Awaitable<RemoteWorkerChatToolResult>;
   };
-  readonly cellProvisioning?: RemoteWorkerCellProvisioningExchangePort;
 }
 
 export interface RemoteWorkerAssignmentExecutionStorePort {
@@ -219,6 +220,14 @@ export type RemoteWorkerAssignmentExecutionProtocolResponse =
       }>)
   | (ResponseBase & Readonly<{ disposition: "chat_tool_recorded"; tool: RemoteWorkerChatToolResult }>)
   | (ResponseBase & Readonly<{ disposition: "cell_provisioning_recorded"; cellProvisioning: RemoteWorkerCellProvisioningExchange }>)
+  | (ResponseBase & Readonly<{ disposition: "cell_capacity_snapshot" | "cell_capacity_recorded"; cellCapacity: RemoteWorkerCellCapacityExchange }>)
+  | (ResponseBase & Readonly<{ disposition: "cell_backing_capacity_snapshot" | "cell_backing_capacity_recorded"; cellBackingCapacity: RemoteWorkerCellBackingCapacityExchange }>)
+  | (ResponseBase & Readonly<{ disposition: "cell_object_inventory_page"; cellObjectInventoryPage: RemoteWorkerCellObjectInventoryPageExchange }>)
+  | (ResponseBase & Readonly<{ disposition: "native_capacity_page"; nativeCapacityPage: RemoteWorkerNativeCapacityPageExchange }>)
+  | (ResponseBase & Readonly<{ disposition: "native_pool_page"; nativePoolPage: RemoteWorkerNativePoolPage }>)
+  | (ResponseBase & Readonly<{ disposition: "native_pool_cleanup_page"; nativePoolPage: RemoteWorkerNativePoolPage }>)
+  | (ResponseBase & NativeRuntimeSubmissionResult)
+  | (ResponseBase & NativeFileSubmissionResult)
   | (ResponseBase & Readonly<{ disposition: "cell_provisioning_prepared"; cellPreparation: RemoteWorkerCellPreparation }>);
 
 interface InferencePayload {
@@ -239,29 +248,18 @@ interface SettlementEnvelope {
 }
 
 type SettlementSubmission =
+  | RemoteWorkerNativePoolPageSubmission
+  | RemoteWorkerNativePoolCleanupPageSubmission
   | RemoteWorkerChatToolSubmission
   | RemoteWorkerCellProvisioningSubmission
+  | RemoteWorkerCellCapacitySubmission
+  | RemoteWorkerCellBackingCapacitySubmission
   | RemoteWorkerCellPreparationSubmission
-  | Readonly<{
-      kind: "artifact.open";
-      uploadAttempt: number;
-      declaredFileCount: number;
-      declaredTotalBytes: number;
-      stagingRootSha256: string;
-      expiresAt: string;
-    }>
-  | Readonly<{ kind: "artifact.part"; uploadId: string; part: RemoteWorkerArtifactPartDescriptor }>
-  | Readonly<{
-      kind: "artifact.commit";
-      uploadId: string;
-      manifest: RemoteWorkerArtifactManifest;
-      files: readonly Readonly<{
-        logicalPath: string;
-        logicalPathSha256: string;
-        bytesBase64: string;
-        mimeType: string;
-      }>[];
-    }>
+  | RemoteWorkerCellObjectInventoryPageSubmission
+  | RemoteWorkerNativeCapacityPageSubmission
+  | NativeRuntimeSubmission
+  | NativeFileSubmission
+  | ArtifactSubmission
   | Readonly<{
       kind: "effect.dispatch";
       intentIndex: number;
@@ -562,18 +560,9 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
       protectedAuthority: fenced.protectedAuthority,
     });
     const submission = payload.submission;
-    if (submission.kind === "cell.provisioning.prepare") {
-      const cellPreparation = await prepareRemoteWorkerCellProvisioning(this.dependencies.settlement.cellProvisioning,
-        { ...identity, leaseRevision: payload.leaseRevision, submission, signal: executionSignal(fenced.signal) });
-      return responseSnapshot({ ...base, disposition: "cell_provisioning_prepared", cellPreparation });
-    }
-    if (submission.kind === "cell.provisioning.snapshot" || submission.kind === "cell.provisioning.checkpoint" ||
-        submission.kind === "cell.volume.checkpoint" || submission.kind === "cell.format.checkpoint" ||
-        submission.kind === "cell.protection.checkpoint" || submission.kind === "cell.mount.checkpoint" || submission.kind === "cell.mounted-workspace.checkpoint") {
-      const cellProvisioning = await exchangeRemoteWorkerCellProvisioning(this.dependencies.settlement.cellProvisioning,
-        { ...identity, leaseRevision: payload.leaseRevision, submission, signal: executionSignal(fenced.signal) });
-      return responseSnapshot({ ...base, disposition: "cell_provisioning_recorded", cellProvisioning });
-    }
+    const native = await dispatchNativeSubmission(this.dependencies.settlement,
+      { ...identity, leaseRevision: payload.leaseRevision, submission, signal: executionSignal(fenced.signal) });
+    if (native) return responseSnapshot({ ...base, ...native });
     if (submission.kind === "chat.tool") {
       const owner = this.dependencies.settlement.chatTools;
       if (!owner) throw rejected("Worker Chat tool execution is unavailable.");
@@ -583,54 +572,9 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
       });
       return responseSnapshot({ ...base, disposition: "chat_tool_recorded", tool });
     }
-    if (submission.kind === "artifact.open") {
-      const upload = await this.dependencies.settlement.artifacts.openUpload({
-        ...identity,
-        uploadAttempt: submission.uploadAttempt,
-        declaredFileCount: submission.declaredFileCount,
-        declaredTotalBytes: submission.declaredTotalBytes,
-        stagingRootSha256: submission.stagingRootSha256,
-        expiresAt: submission.expiresAt,
-        idempotencyKey,
-      });
-      return responseSnapshot({ ...base, disposition: "artifact_recorded", upload });
-    }
-    if (submission.kind === "artifact.part") {
-      const upload = await this.dependencies.settlement.artifacts.appendPart({
-        ...identity,
-        uploadId: submission.uploadId,
-        part: submission.part,
-        idempotencyKey,
-      });
-      return responseSnapshot({ ...base, disposition: "artifact_recorded", upload });
-    }
-    if (submission.kind === "artifact.commit") {
-      // The manifest carries a full settlement identity, and the CAS writer
-      // shards blobs by its executionWorkspaceId BEFORE storage compares the
-      // manifest identity. Bind every field to the fenced records here so a
-      // worker holding one assignment's lease cannot stage bytes under another
-      // workspace, worker, or generation.
-      assertManifestIdentityBinding(submission.manifest, fenced);
-      const upload = await this.dependencies.settlement.artifacts.commitArtifact({
-        ...identity,
-        uploadId: submission.uploadId,
-        manifest: submission.manifest,
-        files: submission.files.map((file) =>
-          Object.freeze({
-            logicalPath: file.logicalPath,
-            logicalPathSha256: file.logicalPathSha256,
-            bytes: Buffer.from(file.bytesBase64, "base64"),
-            mimeType: file.mimeType,
-          }),
-        ),
-        idempotencyKey,
-        // Bounded strictly below the native listener's per-request deadline so
-        // a CAS commit cannot keep installing blobs after the socket is gone
-        // and the durable nonce is already spent.
-        signal: executionSignal(fenced.signal),
-      });
-      return responseSnapshot({ ...base, disposition: "artifact_recorded", upload });
-    }
+    if (isArtifactSubmission(submission)) return responseSnapshot({ ...base, ...await dispatchArtifactSubmission(this.dependencies.settlement,
+      { identity, submission, idempotencyKey, fenced, signal: executionSignal(fenced.signal) }) });
+    if (submission.kind !== "effect.dispatch") throw rejected("Unsupported assignment settlement submission.");
     const effect = await this.dependencies.settlement.effects.dispatchEffect({
       fence: {
         registryWorkspaceId: payload.registryWorkspaceId,
@@ -777,13 +721,35 @@ function normalizeSettlementPayload(value: unknown): SettlementPayload {
     assignmentGeneration: positiveInteger(fields.assignmentGeneration, "assignmentGeneration"),
     leaseRevision: positiveInteger(fields.leaseRevision, "leaseRevision"),
     leaseTokenSha256: createHash("sha256").update(rawLeaseToken, "utf8").digest("hex"),
-    submission: normalizeSettlementSubmission(fields.submission),
+    submission: normalizeSettlementSubmission(fields.submission, rawLeaseToken),
   });
 }
 
-function normalizeSettlementSubmission(value: unknown): SettlementSubmission {
+function normalizeSettlementSubmission(value: unknown, rawLeaseToken: string): SettlementSubmission {
   assertPlainRecord(value, "settlement submission");
   const kind = (value as Record<string, unknown>)["kind"];
+  if (kind === "cell.native_pool.page" || kind === "cell.native_pool.cleanup.page") {
+    try { return kind === "cell.native_pool.cleanup.page" ? normalizeRemoteWorkerNativePoolCleanupPageSubmission(value) : normalizeRemoteWorkerNativePoolPageSubmission(value); }
+    catch { throw rejected("Worker native pool page request is invalid."); }
+  }
+  const native = normalizeNativeRuntimeSettlementSubmission(value, kind, rawLeaseToken);
+  if (native) return native;
+  if (kind === "cell.native_capacity.page" || kind === "cell.native_capacity.lookup") {
+    try { return normalizeRemoteWorkerNativeCapacityPageSubmission(value); }
+    catch { throw rejected("Worker native capacity page submission is invalid."); }
+  }
+  if (kind === "cell.object_inventory.page" || kind === "cell.object_inventory.page_snapshot") {
+    try { return normalizeRemoteWorkerCellObjectInventoryPageSubmission(value); }
+    catch { throw rejected("Worker inventory page submission is invalid."); }
+  }
+  if (kind === "cell.backing_capacity.snapshot" || kind === "cell.backing_capacity.observation") {
+    try { return normalizeRemoteWorkerCellBackingCapacitySubmission(value); }
+    catch { throw rejected("Worker cell backing capacity submission is invalid."); }
+  }
+  if (kind === "cell.capacity.snapshot" || kind === "cell.capacity.observation") {
+    try { return normalizeRemoteWorkerCellCapacitySubmission(value); }
+    catch { throw rejected("Worker cell capacity submission is invalid."); }
+  }
   if (kind === "cell.provisioning.prepare") {
     try { return normalizeRemoteWorkerCellPreparationSubmission(value); }
     catch { throw rejected("Worker cell preparation submission is invalid."); }
@@ -898,62 +864,12 @@ function normalizeSettlementSubmission(value: unknown): SettlementSubmission {
   throw rejected("Remote worker assignment settlement submission kind is invalid.");
 }
 
-/**
- * Bind the worker-declared artifact manifest identity to the fenced records.
- * `normalizeRemoteWorkerArtifactManifest` only proves shape; storage compares
- * the identity only after the CAS writer has already sharded blobs by the
- * manifest's own `executionWorkspaceId`, so the comparison must happen here,
- * before any blob is installed.
- */
-function assertManifestIdentityBinding(
-  manifest: RemoteWorkerArtifactManifest,
-  fenced: {
-    readonly authority: CurrentRemoteWorkerRuntimeCredentialAuthority;
-    readonly records: ResolvedRemoteWorkerAssignmentAuthority;
-  },
-): void {
-  const identity = manifest.identity;
-  const { assignment, generation } = fenced.records;
-  if (
-    identity.registryWorkspaceId !== assignment.registryWorkspaceId ||
-    identity.executionWorkspaceId !== assignment.manifest.executionWorkspaceId ||
-    identity.assignmentId !== assignment.assignmentId ||
-    identity.assignmentGeneration !== generation.assignmentGeneration ||
-    identity.workerId !== fenced.authority.workerId ||
-    identity.workerGeneration !== fenced.authority.workerGeneration ||
-    identity.runtimeManifestSha256 !== fenced.authority.runtimeManifestSha256 ||
-    identity.workspaceCeilingSha256 !== fenced.authority.workspaceCeilingSha256 ||
-    identity.capabilityCeilingSha256 !== fenced.authority.capabilityCeilingSha256 ||
-    identity.assignmentManifestSha256 !== assignment.manifestSha256
-  ) {
-    throw rejected("Remote worker assignment artifact manifest does not bind the fenced assignment authority.");
-  }
-}
-
 function responseBase(route: RemoteWorkerAssignmentExecutionRoute, registryWorkspaceId: string): ResponseBase {
   return Object.freeze({
     schemaVersion: REMOTE_WORKER_ASSIGNMENT_EXECUTION_RESPONSE_SCHEMA_VERSION,
     operation: route.operation,
     registryWorkspaceId,
   });
-}
-
-function responseSnapshot<T extends RemoteWorkerAssignmentExecutionProtocolResponse>(value: T): T {
-  const encoded = canonicalJsonString(value);
-  if (Buffer.byteLength(encoded, "utf8") > REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES) {
-    throw rejected("Remote worker assignment execution response exceeds its byte limit.");
-  }
-  return freezeJson(JSON.parse(encoded) as T) as T;
-}
-
-function freezeJson(value: unknown): unknown {
-  if (Array.isArray(value)) return Object.freeze(value.map((item) => freezeJson(item)));
-  if (value !== null && typeof value === "object") {
-    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) result[key] = freezeJson(item);
-    return Object.freeze(result);
-  }
-  return value;
 }
 
 function assertTransportAuthorityBinding(
@@ -976,75 +892,6 @@ function credentialAuthorizationSha256(headers: RemoteWorkerRequestHeaders): str
   const match = /^Bearer ([A-Za-z0-9_-]{43})$/u.exec(authorization);
   if (match === null) throw rejected("Remote worker assignment execution authorization is invalid.");
   return createHash("sha256").update(canonical32ByteSecret(match[1], "authorization credential"), "utf8").digest("hex");
-}
-
-function snapshotHeaders(value: unknown): RemoteWorkerRequestHeaders {
-  assertPlainRecord(value, "request headers");
-  if (Reflect.ownKeys(value).some((key) => typeof key !== "string")) {
-    throw rejected("Remote worker assignment execution headers are invalid.");
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Object.keys(descriptors).length > 32) throw rejected("Remote worker assignment execution headers are invalid.");
-  const result: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const [rawName, descriptor] of Object.entries(descriptors)) {
-    const name = rawName.toLowerCase();
-    if (
-      rawName !== name ||
-      name.length < 1 ||
-      name.length > 128 ||
-      !/^[a-z0-9-]+$/u.test(name) ||
-      Object.hasOwn(result, name) ||
-      !descriptor.enumerable ||
-      descriptor.get !== undefined ||
-      descriptor.set !== undefined ||
-      typeof descriptor.value !== "string" ||
-      descriptor.value.length > 8_192 ||
-      /[\r\n]/u.test(descriptor.value)
-    ) {
-      throw rejected("Remote worker assignment execution headers are invalid.");
-    }
-    result[name] = descriptor.value;
-  }
-  return Object.freeze(result);
-}
-
-function snapshotTransportIdentity(value: unknown): RemoteWorkerTransportIdentity {
-  const fields = exactOwnDataFields(
-    value,
-    [
-      "source",
-      "certificateDerSha256",
-      "publicKeySpkiSha256",
-      "trustAnchorDerSha256",
-      "tlsExporterSha256",
-      "tlsExporter",
-    ],
-    [],
-    "transport identity",
-  );
-  if (
-    !Buffer.isBuffer(fields.tlsExporter) ||
-    nodeUtilTypes.isProxy(fields.tlsExporter) ||
-    fields.tlsExporter.byteLength !== 32
-  ) {
-    throw rejected("Remote worker assignment execution TLS exporter is invalid.");
-  }
-  const snapshot: RemoteWorkerTransportIdentity = Object.freeze({
-    source: fields.source as "native_mtls",
-    certificateDerSha256: digest(fields.certificateDerSha256, "certificateDerSha256"),
-    publicKeySpkiSha256: digest(fields.publicKeySpkiSha256, "publicKeySpkiSha256"),
-    trustAnchorDerSha256: digest(fields.trustAnchorDerSha256, "trustAnchorDerSha256"),
-    tlsExporterSha256: digest(fields.tlsExporterSha256, "tlsExporterSha256"),
-    tlsExporter: Buffer.from(fields.tlsExporter),
-  });
-  if (
-    snapshot.source !== "native_mtls" ||
-    !safeDigestEqual(createHash("sha256").update(snapshot.tlsExporter).digest("hex"), snapshot.tlsExporterSha256)
-  ) {
-    snapshot.tlsExporter.fill(0);
-    throw rejected("Remote worker assignment execution transport identity is invalid.");
-  }
-  return snapshot;
 }
 
 function contractExecutionRoute<Code extends 11 | 12>(

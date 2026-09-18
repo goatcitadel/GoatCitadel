@@ -27,7 +27,8 @@ import {
   type GovernedRemediationVerificationReceipt,
 } from "@goatcitadel/contracts";
 import {
-  GovernedRemediationRepository,
+  type GovernedRemediationRepository,
+  type DeepAsyncRepository,
   type GovernedRemediationClaimedPhaseOutcome,
   type GovernedRemediationClaimedPhasePublicationResult,
   type GovernedRemediationPhaseClaimAcquireResult,
@@ -274,7 +275,7 @@ export interface GovernedRemediationRecoveryInput {
 }
 
 export interface GovernedRemediationCoordinatorOptions {
-  readonly repository: GovernedRemediationRepository;
+  readonly repository: GovernedRemediationRepository | DeepAsyncRepository<GovernedRemediationRepository>;
   readonly registry: GovernedRemediationRecipeRegistry;
   readonly authority: GovernedRemediationAuthorityPort;
   readonly durableParent: GovernedRemediationDurableParentPort;
@@ -346,7 +347,7 @@ type StatePatch = Partial<
  * receipt/failure plus state transition in one storage transaction.
  */
 export class GovernedRemediationCoordinator {
-  private readonly repository: GovernedRemediationRepository;
+  private readonly repository: GovernedRemediationRepository | DeepAsyncRepository<GovernedRemediationRepository>;
   private readonly registry: GovernedRemediationRecipeRegistry;
   private readonly authority: GovernedRemediationAuthorityPort;
   private readonly durableParent: GovernedRemediationDurableParentPort;
@@ -392,20 +393,20 @@ export class GovernedRemediationCoordinator {
    * stored state, receipts, and effect-reconciliation records, never from owner
    * or model claims.
    */
-  public completionNoticeFor(remediationId: string): GovernedRemediationCompletionNotice | null {
+  public async completionNoticeFor(remediationId: string): Promise<GovernedRemediationCompletionNotice | null> {
     let stored: GovernedRemediationStoredState;
     try {
-      stored = this.repository.getState(secretFreeIdentifier(remediationId, "remediation ID"));
+      stored = await this.repository.getState(secretFreeIdentifier(remediationId, "remediation ID"));
     } catch (error) {
       if (error instanceof NotFoundError) return null;
       throw error;
     }
     if (!TERMINAL_STATES.has(stored.record.state)) return null;
-    return this.buildCompletionNotice(stored);
+    return await this.buildCompletionNotice(stored);
   }
 
-  private buildCompletionNotice(stored: GovernedRemediationStoredState): GovernedRemediationCompletionNotice {
-    const receipts = this.repository.listReceipts(stored.record.remediationId);
+  private async buildCompletionNotice(stored: GovernedRemediationStoredState): Promise<GovernedRemediationCompletionNotice> {
+    const receipts = await this.repository.listReceipts(stored.record.remediationId);
     const applicationReceipt = receipts.find((receipt) => receipt.kind === "application");
     const rolledBackReceipt = receipts.find(
       (receipt) => receipt.kind === "rollback" && receipt.outcome === "rolled_back",
@@ -413,7 +414,7 @@ export class GovernedRemediationCoordinator {
     let effectReconciliation: GovernedRemediationReconciliation | null = null;
     if (stored.record.reconciliationId) {
       try {
-        const reconciliation = this.repository.getReconciliation(stored.record.reconciliationId);
+        const reconciliation = await this.repository.getReconciliation(stored.record.reconciliationId);
         if (reconciliation.domain === "effect") effectReconciliation = reconciliation;
       } catch (error) {
         if (!(error instanceof NotFoundError)) throw error;
@@ -458,24 +459,15 @@ export class GovernedRemediationCoordinator {
     if (!TERMINAL_STATES.has(stored.record.state)) return;
     const port = this.completionPorts.get(stored.ownerId);
     if (!port) return;
-    let notice: GovernedRemediationCompletionNotice;
-    try {
-      notice = this.buildCompletionNotice(stored);
-    } catch {
-      return;
-    }
-    try {
-      const result = port.onRemediationSettled(notice);
-      if (result && typeof (result as Promise<void>).catch === "function") {
-        void (result as Promise<void>).catch(() => undefined);
-      }
-    } catch {
-      // Settlement is already durable; retirement retries via boot replay.
-    }
+    // Neither an asynchronous evidence read nor owner retirement can gate a
+    // committed result. Boot replay can recover either failed operation.
+    void this.buildCompletionNotice(stored)
+      .then((notice) => port.onRemediationSettled(notice))
+      .catch(() => undefined);
   }
 
   /** Creation is side-effect free. A revision-bound continuation must opt in to every later phase. */
-  public start(input: StartGovernedRemediationInput): GovernedRemediationStoredState {
+  public async start(input: StartGovernedRemediationInput): Promise<GovernedRemediationStoredState> {
     exactKeys(strictRecord(input, "creation command"), [
       "remediationId",
       "requesterActorId",
@@ -576,7 +568,7 @@ export class GovernedRemediationCoordinator {
       updatedAt: requestedAt,
     };
     try {
-      return this.repository.createState({
+      return await this.repository.createState({
         ownerId: resolution.recipe.ownerId,
         record,
         idempotencyKey: creationIdempotencyKey,
@@ -585,7 +577,7 @@ export class GovernedRemediationCoordinator {
       if (!(error instanceof ConflictError)) throw error;
       let stored: GovernedRemediationStoredState;
       try {
-        stored = this.repository.getState(remediationId);
+        stored = await this.repository.getState(remediationId);
       } catch (lookupError) {
         if (lookupError instanceof NotFoundError) throw error;
         throw lookupError;
@@ -614,7 +606,7 @@ export class GovernedRemediationCoordinator {
       "continuation idempotency key",
       512,
     );
-    let current = this.repository.getState(remediationId);
+    let current = await this.repository.getState(remediationId);
     this.assertCaller(current, requesterActorId, workspaceId);
     if (current.record.revision !== expectedStateRevision) {
       throw conflict("Governed remediation continuation has a stale state revision.");
@@ -691,7 +683,7 @@ export class GovernedRemediationCoordinator {
 
     let stateCursor: GovernedRemediationStateRecoveryCursor | undefined;
     while (stateSeen.size < limit) {
-      const page = this.repository.listStateRecoveryCandidates({
+      const page = await this.repository.listStateRecoveryCandidates({
         states: ACTIVE_RECOVERY_STATES,
         updatedBefore,
         after: stateCursor,
@@ -720,7 +712,7 @@ export class GovernedRemediationCoordinator {
 
     let reconciliationCursor: GovernedRemediationReconciliationRecoveryCursor | undefined;
     while (reconciliationSeen.size < limit) {
-      const page = this.repository.listReconciliationRecoveryCandidates({
+      const page = await this.repository.listReconciliationRecoveryCandidates({
         domains: ["effect", "resume"],
         updatedBefore,
         after: reconciliationCursor,
@@ -768,7 +760,7 @@ export class GovernedRemediationCoordinator {
     const updatedBefore = input.updatedBefore ?? this.now();
     let cursor: GovernedRemediationReconciliationRecoveryCursor | undefined;
     while (seen.size < limit) {
-      const page = this.repository.listReconciliationRecoveryCandidates({
+      const page = await this.repository.listReconciliationRecoveryCandidates({
         domains: ["effect", "resume"],
         updatedBefore,
         after: cursor,
@@ -874,7 +866,7 @@ export class GovernedRemediationCoordinator {
 
   private async driveAutomatic(remediationId: string): Promise<GovernedRemediationStoredState> {
     for (let guard = 0; guard < 32; guard += 1) {
-      const current = this.repository.getState(remediationId);
+      const current = await this.repository.getState(remediationId);
       if (TERMINAL_STATES.has(current.record.state)) return current;
       let resolution: GovernedRemediationRecipeResolution;
       try {
@@ -899,12 +891,12 @@ export class GovernedRemediationCoordinator {
           return current;
         case "applying":
           {
-            const failureCount = this.repository.listFailures(remediationId).length;
+            const failureCount = (await this.repository.listFailures(remediationId)).length;
             await this.driveApplying(current, resolution);
-            const after = this.repository.getState(remediationId);
+            const after = await this.repository.getState(remediationId);
             if (
               after.record.revision === current.record.revision &&
-              this.repository.listFailures(remediationId).length === failureCount
+              (await this.repository.listFailures(remediationId)).length === failureCount
             ) {
               return after;
             }
@@ -912,7 +904,7 @@ export class GovernedRemediationCoordinator {
           break;
         case "verifying":
           await this.driveVerifying(current, resolution);
-          if (this.repository.getState(remediationId).record.revision === current.record.revision) return current;
+          if ((await this.repository.getState(remediationId)).record.revision === current.record.revision) return current;
           break;
         case "credential_verified":
           if (resolution.recipe.activationMode === "not_applicable") {
@@ -929,21 +921,21 @@ export class GovernedRemediationCoordinator {
               {},
               operationKey("await-activation-approval", remediationId),
             );
-            return this.repository.getState(remediationId);
+            return await this.repository.getState(remediationId);
           } else {
             await this.transitionState(current, "activating", {}, operationKey("activate-no-approval", remediationId));
           }
           break;
         case "activating":
           await this.driveActivating(current, resolution);
-          if (this.repository.getState(remediationId).record.revision === current.record.revision) return current;
+          if ((await this.repository.getState(remediationId)).record.revision === current.record.revision) return current;
           break;
         case "verified":
           await this.transitionState(current, "resuming", {}, operationKey("begin-resume", remediationId));
           break;
         case "resuming":
           await this.driveResuming(current, resolution);
-          if (this.repository.getState(remediationId).record.revision === current.record.revision) return current;
+          if ((await this.repository.getState(remediationId)).record.revision === current.record.revision) return current;
           break;
         case "reconciling_resume":
           if (!current.record.reconciliationId) return current;
@@ -973,13 +965,13 @@ export class GovernedRemediationCoordinator {
     approvalId: string | null,
     prompt: GovernedRemediationPromptReference | null,
   ): Promise<GovernedRemediationStoredState> {
-    if (!resolution.owner) return this.failNoEffectWithoutOwner(state, "preflight", "unowned_target");
+    if (!resolution.owner) return await this.failNoEffectWithoutOwner(state, "preflight", "unowned_target");
     const effectId = remediationEffectId(state.record.remediationId);
     const operationId = operationKey(
       `parent-reserve:${state.record.revision}:${stableDigest(canonicalJsonString({ approvalId, prompt })).slice(0, 16)}`,
       state.record.remediationId,
     );
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -988,7 +980,7 @@ export class GovernedRemediationCoordinator {
       effectId,
       expectedOwnerRevision: state.record.expectedOwnerRevision,
     });
-    if (!acquired) return this.repository.getState(state.record.remediationId);
+    if (!acquired) return await this.repository.getState(state.record.remediationId);
 
     const preflightAuthority = await this.authorize(
       state,
@@ -1001,7 +993,7 @@ export class GovernedRemediationCoordinator {
       operationId,
     );
     if (preflightAuthority.status === "denied") {
-      return this.publishNoEffectFailure(
+      return await this.publishNoEffectFailure(
         state,
         acquired,
         "preflight",
@@ -1027,10 +1019,10 @@ export class GovernedRemediationCoordinator {
         ),
       );
     } catch {
-      return this.publishNoEffectFailure(state, acquired, "preflight", "internal_error", null, "preflight-invalid");
+      return await this.publishNoEffectFailure(state, acquired, "preflight", "internal_error", null, "preflight-invalid");
     }
     if (preflight.status === "rejected") {
-      return this.publishNoEffectFailure(
+      return await this.publishNoEffectFailure(
         state,
         acquired,
         "preflight",
@@ -1040,7 +1032,7 @@ export class GovernedRemediationCoordinator {
       );
     }
     if (state.record.expectedOwnerRevision !== null && preflight.ownerRevision !== state.record.expectedOwnerRevision) {
-      return this.publishNoEffectFailure(
+      return await this.publishNoEffectFailure(
         state,
         acquired,
         "preflight",
@@ -1064,7 +1056,7 @@ export class GovernedRemediationCoordinator {
       operationId,
     );
     if (reservationAuthority.status === "denied") {
-      return this.publishNoEffectFailure(
+      return await this.publishNoEffectFailure(
         state,
         acquired,
         "preflight",
@@ -1101,11 +1093,11 @@ export class GovernedRemediationCoordinator {
       } catch {
         // A reservation may have committed. Leave the claim active so only an
         // exact idempotent caller retry or post-expiry takeover can continue.
-        return this.repository.getState(state.record.remediationId);
+        return await this.repository.getState(state.record.remediationId);
       }
     }
     if (reservation.status === "rejected") {
-      return this.publishNoEffectFailure(
+      return await this.publishNoEffectFailure(
         state,
         acquired,
         "preflight",
@@ -1121,11 +1113,11 @@ export class GovernedRemediationCoordinator {
       promptExpiresAt: prompt?.promptExpiresAt ?? state.record.promptExpiresAt,
       effectId,
     });
-    const published = this.publishClaimed(acquired, state.record.revision, {
+    const published = await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_transition",
       nextState: next,
     });
-    const applied = published.state ?? this.repository.getState(state.record.remediationId);
+    const applied = published.state ?? await this.repository.getState(state.record.remediationId);
     return applied.record.state === "applying" ? this.driveAutomatic(applied.record.remediationId) : applied;
   }
 
@@ -1137,14 +1129,14 @@ export class GovernedRemediationCoordinator {
       await this.quarantineEffectState(state, "apply", "internal_error", null, "apply-binding-missing");
       return;
     }
-    const existing = this.findApplicationReceipt(state.record.remediationId);
+    const existing = await this.findApplicationReceipt(state.record.remediationId);
     if (existing) {
       if (!this.applicationMatchesState(existing, state, resolution)) {
         await this.quarantineEffectState(state, "recovery", "owner_revision_conflict", null, "application-lineage");
         return;
       }
       const operationId = operationKey("apply-receipt-recovery", state.record.remediationId);
-      const acquired = this.acquirePhaseClaim({
+      const acquired = await this.acquirePhaseClaim({
         state,
         aggregateKind: "state",
         aggregateId: state.record.remediationId,
@@ -1154,15 +1146,15 @@ export class GovernedRemediationCoordinator {
         expectedOwnerRevision: state.record.expectedOwnerRevision,
       });
       if (!acquired) return;
-      this.publishClaimed(acquired, state.record.revision, {
+      await this.publishClaimed(acquired, state.record.revision, {
         kind: "state_receipt",
         receipt: existing,
         nextState: this.nextState(state, "verifying", { latestReceiptId: existing.receiptId }),
       });
       return;
     }
-    const priorFailures = this.repository
-      .listFailures(state.record.remediationId)
+    const priorFailures = (await this.repository
+      .listFailures(state.record.remediationId))
       .filter((failure) => failure.phase === "apply" && failure.effectBoundary === "not_crossed");
     const attempt = priorFailures.length + 1;
     if (attempt > resolution.recipe.maxApplyAttempts) {
@@ -1171,7 +1163,7 @@ export class GovernedRemediationCoordinator {
         await this.quarantineEffectState(state, "recovery", "internal_error", null, "attempt-lineage-missing");
         return;
       }
-      const acquired = this.acquirePhaseClaim({
+      const acquired = await this.acquirePhaseClaim({
         state,
         aggregateKind: "state",
         aggregateId: state.record.remediationId,
@@ -1189,7 +1181,7 @@ export class GovernedRemediationCoordinator {
         ownerRevisionObserved: last.ownerRevisionObserved,
         suffix: `apply-exhausted-${attempt}`,
       });
-      this.publishClaimed(acquired, state.record.revision, {
+      await this.publishClaimed(acquired, state.record.revision, {
         kind: "state_failure",
         failure,
         nextState: this.nextState(state, "failed", { failureId: failure.failureId }),
@@ -1198,7 +1190,7 @@ export class GovernedRemediationCoordinator {
     }
 
     const operationId = operationKey(`apply:${attempt}`, state.record.remediationId);
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -1219,7 +1211,7 @@ export class GovernedRemediationCoordinator {
       operationId,
     );
     if (authority.status === "denied") {
-      this.publishNoEffectFailure(state, acquired, "apply", authority.reason, null, `apply-authority-${attempt}`);
+      await this.publishNoEffectFailure(state, acquired, "apply", authority.reason, null, `apply-authority-${attempt}`);
       return;
     }
     let result;
@@ -1263,9 +1255,9 @@ export class GovernedRemediationCoordinator {
         suffix: `apply-rejected-${attempt}`,
       });
       if (attempt < resolution.recipe.maxApplyAttempts) {
-        this.publishClaimed(acquired, state.record.revision, { kind: "failure_only", failure });
+        await this.publishClaimed(acquired, state.record.revision, { kind: "failure_only", failure });
       } else {
-        this.publishClaimed(acquired, state.record.revision, {
+        await this.publishClaimed(acquired, state.record.revision, {
           kind: "state_failure",
           failure,
           nextState: this.nextState(state, "failed", { failureId: failure.failureId }),
@@ -1288,7 +1280,7 @@ export class GovernedRemediationCoordinator {
       return;
     }
     const receipt = this.applicationReceipt(state, resolution, result);
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_receipt",
       receipt,
       nextState: this.nextState(state, "verifying", { latestReceiptId: receipt.receiptId }),
@@ -1299,7 +1291,7 @@ export class GovernedRemediationCoordinator {
     state: GovernedRemediationStoredState,
     resolution: GovernedRemediationRecipeResolution,
   ): Promise<void> {
-    const application = this.findApplicationReceipt(state.record.remediationId);
+    const application = await this.findApplicationReceipt(state.record.remediationId);
     if (!resolution.owner || !application || !resolution.recipe.verificationProbeId) {
       await this.quarantineEffectState(state, "recovery", "internal_error", null, "verify-lineage-missing");
       return;
@@ -1310,7 +1302,7 @@ export class GovernedRemediationCoordinator {
     }
     const expectedRevision = application.ownerRevisionAfter;
     const operationId = operationKey("verify:initial", state.record.remediationId);
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -1331,7 +1323,7 @@ export class GovernedRemediationCoordinator {
       operationId,
     );
     if (authority.status === "denied") {
-      this.publishRollbackRequired(state, acquired, "verify", authority.reason, expectedRevision, "verify-authority");
+      await this.publishRollbackRequired(state, acquired, "verify", authority.reason, expectedRevision, "verify-authority");
       return;
     }
     let result;
@@ -1365,7 +1357,7 @@ export class GovernedRemediationCoordinator {
           acquired,
         );
       } else {
-        this.publishRollbackRequired(
+        await this.publishRollbackRequired(
           state,
           acquired,
           "verify",
@@ -1389,7 +1381,7 @@ export class GovernedRemediationCoordinator {
     }
     const receipt = this.verificationReceipt(state, application, null, result, "initial");
     const nextState = resolution.recipe.activationMode === "owner_step" ? "credential_verified" : "verified";
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_receipt",
       receipt,
       nextState: this.nextState(state, nextState, { latestReceiptId: receipt.receiptId }),
@@ -1400,8 +1392,8 @@ export class GovernedRemediationCoordinator {
     state: GovernedRemediationStoredState,
     resolution: GovernedRemediationRecipeResolution,
   ): Promise<void> {
-    const application = this.findApplicationReceipt(state.record.remediationId);
-    const initialVerification = this.findVerificationReceipt(state.record.remediationId, "initial");
+    const application = await this.findApplicationReceipt(state.record.remediationId);
+    const initialVerification = await this.findVerificationReceipt(state.record.remediationId, "initial");
     if (
       !resolution.owner ||
       resolution.recipe.activationMode !== "owner_step" ||
@@ -1417,7 +1409,7 @@ export class GovernedRemediationCoordinator {
     }
     const expectedRevision = initialVerification.ownerRevisionObserved;
     const operationId = operationKey("activate-and-verify", state.record.remediationId);
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -1438,7 +1430,7 @@ export class GovernedRemediationCoordinator {
       operationId,
     );
     if (activationAuthority.status === "denied") {
-      this.publishRollbackRequired(
+      await this.publishRollbackRequired(
         state,
         acquired,
         "activation",
@@ -1470,7 +1462,7 @@ export class GovernedRemediationCoordinator {
     }
     if (activation.status !== "activated") {
       if (activation.status === "rejected" && activation.ownerRevisionObserved === expectedRevision) {
-        this.publishRollbackRequired(
+        await this.publishRollbackRequired(
           state,
           acquired,
           "activation",
@@ -1519,7 +1511,7 @@ export class GovernedRemediationCoordinator {
       `${operationId}:probe`,
     );
     if (probeAuthority.status === "denied") {
-      this.publishActivationRollbackRequired(
+      await this.publishActivationRollbackRequired(
         state,
         acquired,
         activationReceipt,
@@ -1546,7 +1538,7 @@ export class GovernedRemediationCoordinator {
         ),
       );
     } catch {
-      this.publishActivationQuarantine(
+      await this.publishActivationQuarantine(
         state,
         acquired,
         activationReceipt,
@@ -1563,7 +1555,7 @@ export class GovernedRemediationCoordinator {
     ) {
       const observed = probe.ownerRevisionObserved;
       if (observed !== activation.ownerRevisionAfter) {
-        this.publishActivationQuarantine(
+        await this.publishActivationQuarantine(
           state,
           acquired,
           activationReceipt,
@@ -1572,7 +1564,7 @@ export class GovernedRemediationCoordinator {
           "activation-probe-drift",
         );
       } else {
-        this.publishActivationRollbackRequired(
+        await this.publishActivationRollbackRequired(
           state,
           acquired,
           activationReceipt,
@@ -1584,7 +1576,7 @@ export class GovernedRemediationCoordinator {
       return;
     }
     const receipt = this.verificationReceipt(state, application, activationReceipt.receiptId, probe, "activated");
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_activation_receipts",
       activationReceipt,
       verificationReceipt: receipt,
@@ -1598,11 +1590,11 @@ export class GovernedRemediationCoordinator {
     terminalState: "rolled_back" | "declined" | "expired",
     commandIdempotencyKey: string,
   ): Promise<GovernedRemediationStoredState> {
-    const application = this.findApplicationReceipt(state.record.remediationId);
+    const application = await this.findApplicationReceipt(state.record.remediationId);
     if (!resolution.owner || !application || resolution.recipe.rollbackStrategy === "manual_required") {
       return this.publishRollbackFailureWithoutOwner(state, "internal_error", null, terminalState);
     }
-    const expectedRevision = this.latestProvenOwnerRevision(state, application);
+    const expectedRevision = await this.latestProvenOwnerRevision(state, application);
     if (!expectedRevision) {
       return this.publishRollbackFailureWithoutOwner(state, "owner_revision_conflict", null, terminalState);
     }
@@ -1610,7 +1602,7 @@ export class GovernedRemediationCoordinator {
       `rollback:${terminalState}:${stableDigest(commandIdempotencyKey).slice(0, 32)}`,
       state.record.remediationId,
     );
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -1619,7 +1611,7 @@ export class GovernedRemediationCoordinator {
       effectId: application.effectId,
       expectedOwnerRevision: expectedRevision,
     });
-    if (!acquired) return this.repository.getState(state.record.remediationId);
+    if (!acquired) return await this.repository.getState(state.record.remediationId);
     const authority = await this.authorize(
       state,
       resolution,
@@ -1631,7 +1623,7 @@ export class GovernedRemediationCoordinator {
       operationId,
     );
     if (authority.status === "denied") {
-      return this.publishRollbackFailure(
+      return await this.publishRollbackFailure(
         state,
         acquired,
         authority.reason,
@@ -1657,10 +1649,10 @@ export class GovernedRemediationCoordinator {
         ),
       );
     } catch {
-      return this.publishRollbackFailure(state, acquired, "rollback_failed", null, "rollback-invalid", terminalState);
+      return await this.publishRollbackFailure(state, acquired, "rollback_failed", null, "rollback-invalid", terminalState);
     }
     if (result.status === "failed" || result.ownerRevisionBefore !== expectedRevision) {
-      return this.publishRollbackFailure(
+      return await this.publishRollbackFailure(
         state,
         acquired,
         result.status === "failed" ? "rollback_failed" : "owner_revision_conflict",
@@ -1678,25 +1670,25 @@ export class GovernedRemediationCoordinator {
       ownerRevisionBefore: result.ownerRevisionBefore,
       ownerRevisionAfter: result.ownerRevisionAfter,
     };
-    const published = this.publishClaimed(acquired, state.record.revision, {
+    const published = await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_receipt",
       receipt,
       nextState: this.nextState(state, terminalState, { latestReceiptId: receipt.receiptId }),
     });
-    return published.state ?? this.repository.getState(state.record.remediationId);
+    return published.state ?? await this.repository.getState(state.record.remediationId);
   }
 
   private async driveResuming(
     state: GovernedRemediationStoredState,
     resolution: GovernedRemediationRecipeResolution,
   ): Promise<void> {
-    const verification = this.findLatestVerificationReceipt(state.record.remediationId);
+    const verification = await this.findLatestVerificationReceipt(state.record.remediationId);
     if (!verification || !state.record.parentReservationId || !state.record.effectId) {
       await this.quarantineResume(state, "resume_failed", "resume-lineage-missing");
       return;
     }
     const operationId = operationKey("durable-resume", state.record.remediationId);
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -1725,7 +1717,7 @@ export class GovernedRemediationCoordinator {
         ownerRevisionObserved: verification.ownerRevisionObserved,
         suffix: "resume-authority",
       });
-      this.publishClaimed(acquired, state.record.revision, {
+      await this.publishClaimed(acquired, state.record.revision, {
         kind: "state_failure",
         failure,
         nextState: this.nextState(state, "failed", { failureId: failure.failureId }),
@@ -1749,19 +1741,19 @@ export class GovernedRemediationCoordinator {
         ownerRevisionObserved: verification.ownerRevisionObserved,
         suffix: "resume-rejected",
       });
-      this.publishClaimed(acquired, state.record.revision, {
+      await this.publishClaimed(acquired, state.record.revision, {
         kind: "state_failure",
         failure,
         nextState: this.nextState(state, "failed", { failureId: failure.failureId }),
       });
       return;
     }
-    if (result.resumedRunVersion !== state.record.expectedWaitingRunVersion + 1) {
+    if (result.resumedRunVersion !== state.record.expectedWaitingRunVersion + 2) {
       await this.quarantineResume(state, "owner_revision_conflict", "resume-version", acquired);
       return;
     }
     const receipt = this.resumeReceipt(state, verification, result.resumedRunVersion);
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_receipt",
       receipt,
       nextState: this.nextState(state, "completed", { latestReceiptId: receipt.receiptId }),
@@ -1769,7 +1761,7 @@ export class GovernedRemediationCoordinator {
   }
 
   private async recoverReconciliation(reconciliationId: string): Promise<GovernedRemediationReconciliation> {
-    const reconciliation = this.repository.getReconciliation(reconciliationId);
+    const reconciliation = await this.repository.getReconciliation(reconciliationId);
     if (TERMINAL_RECONCILIATION_STATES.has(reconciliation.state)) return reconciliation;
     return reconciliation.domain === "resume"
       ? this.recoverResumeReconciliation(reconciliation)
@@ -1779,22 +1771,22 @@ export class GovernedRemediationCoordinator {
   private async recoverEffectReconciliation(
     reconciliation: GovernedRemediationReconciliation,
   ): Promise<GovernedRemediationReconciliation> {
-    const state = this.repository.getState(reconciliation.remediationId);
+    const state = await this.repository.getState(reconciliation.remediationId);
     let resolution: GovernedRemediationRecipeResolution;
     try {
       resolution = this.resolveStored(state);
     } catch {
-      return this.manualReconciliation(reconciliation, "unknown");
+      return await this.manualReconciliation(reconciliation, "unknown");
     }
-    if (!resolution.owner || !state.record.effectId) return this.manualReconciliation(reconciliation, "unknown");
-    const application = this.findApplicationReceipt(state.record.remediationId);
+    if (!resolution.owner || !state.record.effectId) return await this.manualReconciliation(reconciliation, "unknown");
+    const application = await this.findApplicationReceipt(state.record.remediationId);
     const durableActivation = application
-      ? this.findLatestActivationReceipt(state.record.remediationId, application.receiptId)
+      ? (await this.findLatestActivationReceipt(state.record.remediationId, application.receiptId))
       : undefined;
     const expectedRevision =
       durableActivation?.ownerRevisionAfter ?? application?.ownerRevisionAfter ?? state.record.expectedOwnerRevision;
     const operationId = operationKey(`effect-reconcile:${reconciliation.revision}`, reconciliation.reconciliationId);
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "reconciliation",
       aggregateId: reconciliation.reconciliationId,
@@ -1804,7 +1796,7 @@ export class GovernedRemediationCoordinator {
       effectId: state.record.effectId,
       expectedOwnerRevision: expectedRevision,
     });
-    if (!acquired) return this.repository.getReconciliation(reconciliation.reconciliationId);
+    if (!acquired) return await this.repository.getReconciliation(reconciliation.reconciliationId);
     const authority = await this.authorize(
       state,
       resolution,
@@ -1821,7 +1813,7 @@ export class GovernedRemediationCoordinator {
       },
     );
     if (authority.status === "denied") {
-      return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
+      return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
     }
     let observation;
     try {
@@ -1844,7 +1836,7 @@ export class GovernedRemediationCoordinator {
     }
     if (observation.observation === "unknown" || observation.observation === "effect_present_unverified") {
       if (reconciliation.state === "quarantined") return reconciliation;
-      return this.publishReconciliationTransition(
+      return await this.publishReconciliationTransition(
         reconciliation,
         acquired,
         "quarantined",
@@ -1861,7 +1853,7 @@ export class GovernedRemediationCoordinator {
         null,
         observation.ownerRevisionObserved,
       );
-      return this.publishReconciliationReceipt(
+      return await this.publishReconciliationReceipt(
         reconciliation,
         acquired,
         receipt,
@@ -1880,21 +1872,21 @@ export class GovernedRemediationCoordinator {
         (observedApplication.ownerRevisionBefore !== application.ownerRevisionBefore ||
           observedApplication.ownerRevisionAfter !== application.ownerRevisionAfter))
     ) {
-      return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
+      return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
     }
     if (
       observation.observation === "effect_verified" &&
       observation.ownerRevisionObserved !==
         (durableActivation?.ownerRevisionAfter ?? observedApplication.ownerRevisionAfter)
     ) {
-      return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
+      return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
     }
     if (
       observation.observation === "rolled_back" &&
       observation.ownerRevisionBefore !==
         (durableActivation?.ownerRevisionAfter ?? observedApplication.ownerRevisionAfter)
     ) {
-      return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
+      return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
     }
     const applicationReceipt =
       application ??
@@ -1925,30 +1917,30 @@ export class GovernedRemediationCoordinator {
           reconciliationReceipt,
           nextReconciliation: next,
         };
-    const published = this.publishClaimed(acquired, reconciliation.revision, outcome);
-    return published.reconciliation ?? this.repository.getReconciliation(reconciliation.reconciliationId);
+    const published = await this.publishClaimed(acquired, reconciliation.revision, outcome);
+    return published.reconciliation ?? await this.repository.getReconciliation(reconciliation.reconciliationId);
   }
 
   private async recoverResumeReconciliation(
     reconciliation: GovernedRemediationReconciliation,
   ): Promise<GovernedRemediationReconciliation> {
-    const state = this.repository.getState(reconciliation.remediationId);
+    const state = await this.repository.getState(reconciliation.remediationId);
     let resolution: GovernedRemediationRecipeResolution;
     try {
       resolution = this.resolveStored(state);
     } catch {
-      return this.manualReconciliation(reconciliation, "unknown");
+      return await this.manualReconciliation(reconciliation, "unknown");
     }
-    const verification = this.findLatestVerificationReceipt(state.record.remediationId);
+    const verification = await this.findLatestVerificationReceipt(state.record.remediationId);
     if (!verification || !state.record.parentReservationId || !state.record.effectId) {
-      return this.manualReconciliation(reconciliation, "unknown");
+      return await this.manualReconciliation(reconciliation, "unknown");
     }
     const operationId = operationKey("durable-resume", state.record.remediationId);
     const claimOperationId = operationKey(
       `resume-reconcile:${reconciliation.revision}`,
       reconciliation.reconciliationId,
     );
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "reconciliation",
       aggregateId: reconciliation.reconciliationId,
@@ -1958,7 +1950,7 @@ export class GovernedRemediationCoordinator {
       effectId: state.record.effectId,
       expectedOwnerRevision: verification.ownerRevisionObserved,
     });
-    if (!acquired) return this.repository.getReconciliation(reconciliation.reconciliationId);
+    if (!acquired) return await this.repository.getReconciliation(reconciliation.reconciliationId);
     const authority = await this.authorize(
       state,
       resolution,
@@ -1975,7 +1967,7 @@ export class GovernedRemediationCoordinator {
       },
     );
     if (authority.status === "denied") {
-      return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
+      return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
     }
     const request = this.resumeRequest(state, verification, operationId);
     let observation: GovernedRemediationDurableResumeObservation;
@@ -1997,11 +1989,11 @@ export class GovernedRemediationCoordinator {
     }
     if (observation.observation === "unknown") {
       if (reconciliation.state === "quarantined") return reconciliation;
-      return this.publishReconciliationTransition(reconciliation, acquired, "quarantined", "unknown", null);
+      return await this.publishReconciliationTransition(reconciliation, acquired, "quarantined", "unknown", null);
     }
     if (observation.observation === "resume_completed") {
-      if (observation.resumedRunVersion !== state.record.expectedWaitingRunVersion + 1) {
-        return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
+      if (observation.resumedRunVersion !== state.record.expectedWaitingRunVersion + 2) {
+        return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", "unknown", null);
       }
       const resumeReceipt = this.resumeReceipt(state, verification, observation.resumedRunVersion);
       const reconciliationReceipt = this.reconciliationReceipt(
@@ -2017,13 +2009,13 @@ export class GovernedRemediationCoordinator {
         ownerRevisionObserved: null,
         resolutionReceiptId: reconciliationReceipt.receiptId,
       });
-      const published = this.publishClaimed(acquired, reconciliation.revision, {
+      const published = await this.publishClaimed(acquired, reconciliation.revision, {
         kind: "reconciliation_resume_receipts",
         resumeReceipt,
         reconciliationReceipt,
         nextReconciliation: next,
       });
-      return published.reconciliation ?? this.repository.getReconciliation(reconciliation.reconciliationId);
+      return published.reconciliation ?? await this.repository.getReconciliation(reconciliation.reconciliationId);
     }
     const reconciliationReceipt = this.reconciliationReceipt(
       state,
@@ -2033,7 +2025,7 @@ export class GovernedRemediationCoordinator {
       null,
       null,
     );
-    return this.publishReconciliationReceipt(
+    return await this.publishReconciliationReceipt(
       reconciliation,
       acquired,
       reconciliationReceipt,
@@ -2044,9 +2036,9 @@ export class GovernedRemediationCoordinator {
   }
 
   private async finalizeResumeReconciliation(remediationId: string): Promise<GovernedRemediationStoredState> {
-    const state = this.repository.getState(remediationId);
+    const state = await this.repository.getState(remediationId);
     if (state.record.state !== "reconciling_resume" || !state.record.reconciliationId) return state;
-    const reconciliation = this.repository.getReconciliation(state.record.reconciliationId);
+    const reconciliation = await this.repository.getReconciliation(state.record.reconciliationId);
     if (
       reconciliation.state !== "resolved_resumed" &&
       reconciliation.state !== "resolved_not_resumed" &&
@@ -2055,18 +2047,18 @@ export class GovernedRemediationCoordinator {
       return state;
     }
     const operationId = operationKey(`resume-reconciliation-finalize:${reconciliation.revision}`, remediationId);
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: remediationId,
       phase: "resume_reconcile",
       operationId,
       effectId: state.record.effectId,
-      expectedOwnerRevision: this.findLatestVerificationReceipt(remediationId)?.ownerRevisionObserved ?? null,
+      expectedOwnerRevision: (await this.findLatestVerificationReceipt(remediationId))?.ownerRevisionObserved ?? null,
     });
-    if (!acquired) return this.repository.getState(remediationId);
+    if (!acquired) return await this.repository.getState(remediationId);
     if (reconciliation.state === "resolved_resumed") {
-      const receipts = this.repository.listReceipts(remediationId);
+      const receipts = await this.repository.listReceipts(remediationId);
       const resolutionReceipt = receipts.find(
         (candidate): candidate is Extract<GovernedRemediationReceipt, { kind: "reconciliation" }> =>
           candidate.kind === "reconciliation" && candidate.receiptId === reconciliation.resolutionReceiptId,
@@ -2085,24 +2077,24 @@ export class GovernedRemediationCoordinator {
         resolutionReceipt.applicationReceiptId !== null ||
         !receipt
       ) {
-        const published = this.publishClaimed(acquired, state.record.revision, {
+        const published = await this.publishClaimed(acquired, state.record.revision, {
           kind: "state_transition",
           nextState: this.nextState(state, "failed", {}),
         });
-        return published.state ?? this.repository.getState(remediationId);
+        return published.state ?? await this.repository.getState(remediationId);
       }
-      const published = this.publishClaimed(acquired, state.record.revision, {
+      const published = await this.publishClaimed(acquired, state.record.revision, {
         kind: "state_receipt",
         receipt,
         nextState: this.nextState(state, "completed", { latestReceiptId: receipt.receiptId }),
       });
-      return published.state ?? this.repository.getState(remediationId);
+      return published.state ?? await this.repository.getState(remediationId);
     }
-    const published = this.publishClaimed(acquired, state.record.revision, {
+    const published = await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_transition",
       nextState: this.nextState(state, "failed", {}),
     });
-    return published.state ?? this.repository.getState(remediationId);
+    return published.state ?? await this.repository.getState(remediationId);
   }
 
   private async declineOrExpire(
@@ -2129,7 +2121,7 @@ export class GovernedRemediationCoordinator {
     throw conflict(`Governed remediation cannot be ${terminalState}d in its current state.`);
   }
 
-  private acquirePhaseClaim(input: {
+  private async acquirePhaseClaim(input: {
     state: GovernedRemediationStoredState;
     aggregateKind: "state" | "reconciliation";
     aggregateId: string;
@@ -2138,7 +2130,7 @@ export class GovernedRemediationCoordinator {
     operationId: string;
     effectId: string | null;
     expectedOwnerRevision: string | null;
-  }): AcquiredPhaseClaim | null {
+  }): Promise<AcquiredPhaseClaim | null> {
     const leaseToken = randomBytes(32).toString("base64url");
     const leaseTokenSha256 = createHash("sha256").update(Buffer.from(leaseToken, "base64url")).digest("hex");
     // Claim identity is the stable phase generation; claimant and raw-bearer
@@ -2164,10 +2156,10 @@ export class GovernedRemediationCoordinator {
     } as const;
     let result: GovernedRemediationPhaseClaimAcquireResult;
     try {
-      result = this.repository.acquirePhaseClaim(request);
+      result = await this.repository.acquirePhaseClaim(request);
     } catch {
       // Preserve the raw bearer in memory and replay the exact acquisition once.
-      result = this.repository.acquirePhaseClaim(request);
+      result = await this.repository.acquirePhaseClaim(request);
     }
     if (result.disposition !== "acquired" && result.disposition !== "replayed") return null;
     if (
@@ -2180,11 +2172,11 @@ export class GovernedRemediationCoordinator {
     return Object.freeze({ claim: result.claim, leaseToken });
   }
 
-  private publishClaimed(
+  private async publishClaimed(
     acquired: AcquiredPhaseClaim,
     expectedAggregateRevision: number,
     outcome: GovernedRemediationClaimedPhaseOutcome,
-  ): GovernedRemediationClaimedPhasePublicationResult {
+  ): Promise<GovernedRemediationClaimedPhasePublicationResult> {
     const input = {
       claim: {
         remediationId: acquired.claim.remediationId,
@@ -2200,11 +2192,11 @@ export class GovernedRemediationCoordinator {
     } as const;
     let published: GovernedRemediationClaimedPhasePublicationResult;
     try {
-      published = this.repository.publishClaimedPhaseOutcome(input);
+      published = await this.repository.publishClaimedPhaseOutcome(input);
     } catch {
       // A commit may have succeeded before the response was lost. Replaying the
       // same witnessed publication is safe and must never redo the owner effect.
-      published = this.repository.publishClaimedPhaseOutcome(input);
+      published = await this.repository.publishClaimedPhaseOutcome(input);
     }
     if (published.state && !published.replayed) this.notifySettled(published.state);
     return published;
@@ -2320,18 +2312,18 @@ export class GovernedRemediationCoordinator {
   ): Promise<GovernedRemediationStoredState> {
     const next = this.nextState(current, state, patch);
     try {
-      const transitioned = this.repository.transitionState({
+      const transitioned = (await this.repository.transitionState({
         ownerId: current.ownerId,
         expectedRevision: current.record.revision,
         next,
         idempotencyKey,
         recordedAt: next.updatedAt,
-      }).record;
+      })).record;
       this.notifySettled(transitioned);
       return transitioned;
     } catch (error) {
       if (!(error instanceof ConflictError) || strict) throw error;
-      const latest = this.repository.getState(current.record.remediationId);
+      const latest = await this.repository.getState(current.record.remediationId);
       if (latest.record.revision > current.record.revision) return latest;
       throw error;
     }
@@ -2518,14 +2510,14 @@ export class GovernedRemediationCoordinator {
     };
   }
 
-  private publishNoEffectFailure(
+  private async publishNoEffectFailure(
     state: GovernedRemediationStoredState,
     acquired: AcquiredPhaseClaim,
     phase: GovernedRemediationFailurePhase,
     reason: GovernedRemediationFailureReason,
     ownerRevisionObserved: string | null,
     suffix: string,
-  ): GovernedRemediationStoredState {
+  ): Promise<GovernedRemediationStoredState> {
     const failure = this.failure(state, {
       phase,
       reason,
@@ -2534,22 +2526,22 @@ export class GovernedRemediationCoordinator {
       ownerRevisionObserved,
       suffix,
     });
-    const published = this.publishClaimed(acquired, state.record.revision, {
+    const published = await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_failure",
       failure,
       nextState: this.nextState(state, "failed", { failureId: failure.failureId }),
     });
-    return published.state ?? this.repository.getState(state.record.remediationId);
+    return published.state ?? await this.repository.getState(state.record.remediationId);
   }
 
-  private publishRollbackRequired(
+  private async publishRollbackRequired(
     state: GovernedRemediationStoredState,
     acquired: AcquiredPhaseClaim,
     phase: "verify" | "activation",
     reason: GovernedRemediationFailureReason,
     ownerRevisionObserved: string,
     suffix: string,
-  ): void {
+  ): Promise<void> {
     const failure = this.failure(state, {
       phase,
       reason,
@@ -2558,21 +2550,21 @@ export class GovernedRemediationCoordinator {
       ownerRevisionObserved,
       suffix,
     });
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_failure",
       failure,
       nextState: this.nextState(state, "rolling_back", { failureId: failure.failureId }),
     });
   }
 
-  private publishActivationRollbackRequired(
+  private async publishActivationRollbackRequired(
     state: GovernedRemediationStoredState,
     acquired: AcquiredPhaseClaim,
     activationReceipt: GovernedRemediationActivationReceipt,
     reason: GovernedRemediationFailureReason,
     ownerRevisionObserved: string,
     suffix: string,
-  ): void {
+  ): Promise<void> {
     const failure = this.failure(state, {
       phase: "activation",
       reason,
@@ -2581,7 +2573,7 @@ export class GovernedRemediationCoordinator {
       ownerRevisionObserved,
       suffix,
     });
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_activation_failure",
       activationReceipt,
       failure,
@@ -2592,14 +2584,14 @@ export class GovernedRemediationCoordinator {
     });
   }
 
-  private publishActivationQuarantine(
+  private async publishActivationQuarantine(
     state: GovernedRemediationStoredState,
     acquired: AcquiredPhaseClaim,
     activationReceipt: GovernedRemediationActivationReceipt,
     reason: GovernedRemediationFailureReason,
     ownerRevisionObserved: string | null,
     suffix: string,
-  ): void {
+  ): Promise<void> {
     const failure = this.failure(state, {
       phase: "activation",
       reason,
@@ -2615,7 +2607,7 @@ export class GovernedRemediationCoordinator {
       ownerRevisionObserved === activationReceipt.ownerRevisionAfter ? "effect_state_unknown" : "owner_revision_drift",
       ownerRevisionObserved,
     );
-    this.publishClaimed(acquired, state.record.revision, {
+    await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_activation_failure_reconciliation",
       activationReceipt,
       failure,
@@ -2642,13 +2634,13 @@ export class GovernedRemediationCoordinator {
         : phase === "activation"
           ? "activate_and_verify"
           : effectRecoveryClaimPhase(state.record.state);
-    const application = this.findApplicationReceipt(state.record.remediationId);
+    const application = await this.findApplicationReceipt(state.record.remediationId);
     const expectedRecoveryRevision =
       ownerRevisionObserved ??
-      (application ? this.latestProvenOwnerRevision(state, application) : state.record.expectedOwnerRevision);
+      (application ? (await this.latestProvenOwnerRevision(state, application)) : state.record.expectedOwnerRevision);
     const claim =
       acquired ??
-      this.acquirePhaseClaim({
+      await this.acquirePhaseClaim({
         state,
         aggregateKind: "state",
         aggregateId: state.record.remediationId,
@@ -2657,7 +2649,7 @@ export class GovernedRemediationCoordinator {
         effectId: state.record.effectId,
         expectedOwnerRevision: expectedRecoveryRevision,
       });
-    if (!claim) return this.repository.getState(state.record.remediationId);
+    if (!claim) return await this.repository.getState(state.record.remediationId);
     const failure = this.failure(state, {
       phase,
       reason,
@@ -2674,7 +2666,7 @@ export class GovernedRemediationCoordinator {
       ownerRevisionObserved,
     );
     const nextState = state.record.state === "rolling_back" ? "rollback_failed" : "failed";
-    const published = this.publishClaimed(claim, state.record.revision, {
+    const published = await this.publishClaimed(claim, state.record.revision, {
       kind: "state_failure_reconciliation",
       failure,
       reconciliation,
@@ -2683,7 +2675,7 @@ export class GovernedRemediationCoordinator {
         reconciliationId: reconciliation.reconciliationId,
       }),
     });
-    return published.state ?? this.repository.getState(state.record.remediationId);
+    return published.state ?? await this.repository.getState(state.record.remediationId);
   }
 
   private async quarantineResume(
@@ -2694,7 +2686,7 @@ export class GovernedRemediationCoordinator {
   ): Promise<GovernedRemediationStoredState> {
     const claim =
       acquired ??
-      this.acquirePhaseClaim({
+      await this.acquirePhaseClaim({
         state,
         aggregateKind: "state",
         aggregateId: state.record.remediationId,
@@ -2702,9 +2694,9 @@ export class GovernedRemediationCoordinator {
         operationId: operationKey(`resume-quarantine:${suffix}`, state.record.remediationId),
         effectId: state.record.effectId,
         expectedOwnerRevision:
-          this.findLatestVerificationReceipt(state.record.remediationId)?.ownerRevisionObserved ?? null,
+          (await this.findLatestVerificationReceipt(state.record.remediationId))?.ownerRevisionObserved ?? null,
       });
-    if (!claim) return this.repository.getState(state.record.remediationId);
+    if (!claim) return await this.repository.getState(state.record.remediationId);
     const failure = this.failure(state, {
       phase: "resume",
       reason,
@@ -2714,7 +2706,7 @@ export class GovernedRemediationCoordinator {
       suffix,
     });
     const reconciliation = this.reconciliation(state, failure, "resume", "resume_receipt_missing", null);
-    const published = this.publishClaimed(claim, state.record.revision, {
+    const published = await this.publishClaimed(claim, state.record.revision, {
       kind: "state_failure_reconciliation",
       failure,
       reconciliation,
@@ -2723,17 +2715,17 @@ export class GovernedRemediationCoordinator {
         reconciliationId: reconciliation.reconciliationId,
       }),
     });
-    return published.state ?? this.repository.getState(state.record.remediationId);
+    return published.state ?? await this.repository.getState(state.record.remediationId);
   }
 
-  private publishRollbackFailure(
+  private async publishRollbackFailure(
     state: GovernedRemediationStoredState,
     acquired: AcquiredPhaseClaim,
     reason: GovernedRemediationFailureReason,
     ownerRevisionObserved: string | null,
     suffix: string,
     terminalIntent: "rolled_back" | "declined" | "expired",
-  ): GovernedRemediationStoredState {
+  ): Promise<GovernedRemediationStoredState> {
     const failure = this.failure(state, {
       phase: "rollback",
       reason,
@@ -2744,7 +2736,7 @@ export class GovernedRemediationCoordinator {
     });
     const reconciliation = this.reconciliation(state, failure, "effect", "rollback_failed", ownerRevisionObserved);
     const nextState = state.record.state === "rolling_back" ? "rollback_failed" : "failed";
-    const published = this.publishClaimed(acquired, state.record.revision, {
+    const published = await this.publishClaimed(acquired, state.record.revision, {
       kind: "state_failure_reconciliation",
       failure,
       reconciliation,
@@ -2753,7 +2745,7 @@ export class GovernedRemediationCoordinator {
         reconciliationId: reconciliation.reconciliationId,
       }),
     });
-    return published.state ?? this.repository.getState(state.record.remediationId);
+    return published.state ?? await this.repository.getState(state.record.remediationId);
   }
 
   private async publishRollbackFailureWithoutOwner(
@@ -2762,7 +2754,7 @@ export class GovernedRemediationCoordinator {
     ownerRevisionObserved: string | null,
     terminalIntent: "rolled_back" | "declined" | "expired",
   ): Promise<GovernedRemediationStoredState> {
-    const acquired = this.acquirePhaseClaim({
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -2771,8 +2763,8 @@ export class GovernedRemediationCoordinator {
       effectId: state.record.effectId,
       expectedOwnerRevision: ownerRevisionObserved,
     });
-    if (!acquired) return this.repository.getState(state.record.remediationId);
-    return this.publishRollbackFailure(
+    if (!acquired) return await this.repository.getState(state.record.remediationId);
+    return await this.publishRollbackFailure(
       state,
       acquired,
       reason,
@@ -2782,12 +2774,12 @@ export class GovernedRemediationCoordinator {
     );
   }
 
-  private failNoEffectWithoutOwner(
+  private async failNoEffectWithoutOwner(
     state: GovernedRemediationStoredState,
     phase: GovernedRemediationFailurePhase,
     reason: GovernedRemediationFailureReason,
-  ): GovernedRemediationStoredState {
-    const acquired = this.acquirePhaseClaim({
+  ): Promise<GovernedRemediationStoredState> {
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "state",
       aggregateId: state.record.remediationId,
@@ -2796,33 +2788,33 @@ export class GovernedRemediationCoordinator {
       effectId: remediationEffectId(state.record.remediationId),
       expectedOwnerRevision: state.record.expectedOwnerRevision,
     });
-    if (!acquired) return this.repository.getState(state.record.remediationId);
-    return this.publishNoEffectFailure(state, acquired, phase, reason, null, "owner-unavailable");
+    if (!acquired) return await this.repository.getState(state.record.remediationId);
+    return await this.publishNoEffectFailure(state, acquired, phase, reason, null, "owner-unavailable");
   }
 
   private async quarantineUnboundState(state: GovernedRemediationStoredState): Promise<GovernedRemediationStoredState> {
     if (state.record.effectId === null) {
-      return this.failNoEffectWithoutOwner(state, "recovery", "unowned_target");
+      return await this.failNoEffectWithoutOwner(state, "recovery", "unowned_target");
     }
     if (state.record.state === "resuming") {
       return this.quarantineResume(state, "unowned_target", "recipe-binding-drift");
     }
     if (state.record.state === "reconciling_resume") {
       if (!state.record.reconciliationId) return state;
-      this.manualReconciliation(this.repository.getReconciliation(state.record.reconciliationId), "unknown");
+      await this.manualReconciliation((await this.repository.getReconciliation(state.record.reconciliationId)), "unknown");
       return this.finalizeResumeReconciliation(state.record.remediationId);
     }
     return this.quarantineEffectState(state, "recovery", "unowned_target", null, "recipe-binding-drift");
   }
 
-  private publishReconciliationTransition(
+  private async publishReconciliationTransition(
     reconciliation: GovernedRemediationReconciliation,
     acquired: AcquiredPhaseClaim,
     state: GovernedRemediationReconciliation["state"],
     observation: GovernedRemediationReconciliationObservation,
     ownerRevisionObserved: string | null,
-  ): GovernedRemediationReconciliation {
-    const published = this.publishClaimed(acquired, reconciliation.revision, {
+  ): Promise<GovernedRemediationReconciliation> {
+    const published = await this.publishClaimed(acquired, reconciliation.revision, {
       kind: "reconciliation_transition",
       nextReconciliation: this.nextReconciliation(reconciliation, state, {
         observation,
@@ -2830,18 +2822,18 @@ export class GovernedRemediationCoordinator {
         resolutionReceiptId: null,
       }),
     });
-    return published.reconciliation ?? this.repository.getReconciliation(reconciliation.reconciliationId);
+    return published.reconciliation ?? await this.repository.getReconciliation(reconciliation.reconciliationId);
   }
 
-  private publishReconciliationReceipt(
+  private async publishReconciliationReceipt(
     reconciliation: GovernedRemediationReconciliation,
     acquired: AcquiredPhaseClaim,
     receipt: Extract<GovernedRemediationReceipt, { kind: "reconciliation" }>,
     state: GovernedRemediationReconciliation["state"],
     observation: GovernedRemediationReconciliationObservation,
     ownerRevisionObserved: string | null,
-  ): GovernedRemediationReconciliation {
-    const published = this.publishClaimed(acquired, reconciliation.revision, {
+  ): Promise<GovernedRemediationReconciliation> {
+    const published = await this.publishClaimed(acquired, reconciliation.revision, {
       kind: "reconciliation_receipt",
       receipt,
       nextReconciliation: this.nextReconciliation(reconciliation, state, {
@@ -2850,16 +2842,16 @@ export class GovernedRemediationCoordinator {
         resolutionReceiptId: receipt.receiptId,
       }),
     });
-    return published.reconciliation ?? this.repository.getReconciliation(reconciliation.reconciliationId);
+    return published.reconciliation ?? await this.repository.getReconciliation(reconciliation.reconciliationId);
   }
 
-  private manualReconciliation(
+  private async manualReconciliation(
     reconciliation: GovernedRemediationReconciliation,
     observation: GovernedRemediationReconciliationObservation,
-  ): GovernedRemediationReconciliation {
+  ): Promise<GovernedRemediationReconciliation> {
     if (reconciliation.state === "manual_required") return reconciliation;
-    const state = this.repository.getState(reconciliation.remediationId);
-    const acquired = this.acquirePhaseClaim({
+    const state = await this.repository.getState(reconciliation.remediationId);
+    const acquired = await this.acquirePhaseClaim({
       state,
       aggregateKind: "reconciliation",
       aggregateId: reconciliation.reconciliationId,
@@ -2869,42 +2861,42 @@ export class GovernedRemediationCoordinator {
       effectId: state.record.effectId,
       expectedOwnerRevision: reconciliation.ownerRevisionObserved,
     });
-    if (!acquired) return this.repository.getReconciliation(reconciliation.reconciliationId);
-    return this.publishReconciliationTransition(reconciliation, acquired, "manual_required", observation, null);
+    if (!acquired) return await this.repository.getReconciliation(reconciliation.reconciliationId);
+    return await this.publishReconciliationTransition(reconciliation, acquired, "manual_required", observation, null);
   }
 
-  private findApplicationReceipt(remediationId: string): GovernedRemediationApplicationReceipt | undefined {
-    return this.repository
-      .listReceipts(remediationId)
+  private async findApplicationReceipt(remediationId: string): Promise<GovernedRemediationApplicationReceipt | undefined> {
+    return (await this.repository
+      .listReceipts(remediationId))
       .find((receipt): receipt is GovernedRemediationApplicationReceipt => receipt.kind === "application");
   }
 
-  private findVerificationReceipt(
+  private async findVerificationReceipt(
     remediationId: string,
     discriminator: "initial" | "activated",
-  ): GovernedRemediationVerificationReceipt | undefined {
+  ): Promise<GovernedRemediationVerificationReceipt | undefined> {
     const expectedId = stableId("verification", remediationId, discriminator);
-    return this.repository
-      .listReceipts(remediationId)
+    return (await this.repository
+      .listReceipts(remediationId))
       .find(
         (receipt): receipt is GovernedRemediationVerificationReceipt =>
           receipt.kind === "verification" && receipt.receiptId === expectedId,
       );
   }
 
-  private findLatestVerificationReceipt(remediationId: string): GovernedRemediationVerificationReceipt | undefined {
-    return this.repository
-      .listReceipts(remediationId)
+  private async findLatestVerificationReceipt(remediationId: string): Promise<GovernedRemediationVerificationReceipt | undefined> {
+    return (await this.repository
+      .listReceipts(remediationId))
       .filter((receipt): receipt is GovernedRemediationVerificationReceipt => receipt.kind === "verification")
       .at(-1);
   }
 
-  private findLatestActivationReceipt(
+  private async findLatestActivationReceipt(
     remediationId: string,
     applicationReceiptId: string,
-  ): GovernedRemediationActivationReceipt | undefined {
-    return this.repository
-      .listReceipts(remediationId)
+  ): Promise<GovernedRemediationActivationReceipt | undefined> {
+    return (await this.repository
+      .listReceipts(remediationId))
       .filter(
         (receipt): receipt is GovernedRemediationActivationReceipt =>
           receipt.kind === "activation" && receipt.applicationReceiptId === applicationReceiptId,
@@ -2928,13 +2920,13 @@ export class GovernedRemediationCoordinator {
     );
   }
 
-  private latestProvenOwnerRevision(
+  private async latestProvenOwnerRevision(
     state: GovernedRemediationStoredState,
     application: GovernedRemediationApplicationReceipt,
-  ): string | null {
+  ): Promise<string | null> {
     return (
-      this.findLatestActivationReceipt(state.record.remediationId, application.receiptId)?.ownerRevisionAfter ??
-      this.findLatestVerificationReceipt(state.record.remediationId)?.ownerRevisionObserved ??
+      (await this.findLatestActivationReceipt(state.record.remediationId, application.receiptId))?.ownerRevisionAfter ??
+      (await this.findLatestVerificationReceipt(state.record.remediationId))?.ownerRevisionObserved ??
       application.ownerRevisionAfter
     );
   }

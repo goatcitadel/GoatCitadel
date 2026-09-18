@@ -178,6 +178,50 @@ describe("approval-resolution-effects-service", () => {
     expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
   });
 
+  it.each(["remote_worker.native_runtime", "remote_worker.native_runtime_install"])("keeps an early %s review waiting until its exact parent wake completes", async kind => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const scope = { registryWorkspaceId: "registry", assignmentId: "assignment", assignmentGeneration: 1,
+        workspaceId: "workspace", taskId: "task", durableRunId: "parent", sessionId: "session", turnId: "turn" };
+      const { approval } = storage.approvals.createDeterministicDetachedWithTtlDuration({ approvalId: "native-review",
+        kind, riskLevel: "danger", preview: {}, payload: { [kind === "remote_worker.native_runtime" ? "nativeRuntime" : "nativeRuntimeInstall"]: {
+          registryWorkspaceId: "registry", assignmentId: "assignment", assignmentGeneration: 1 } },
+        linkage: { workspaceId: "workspace", taskId: "task", durableRunId: "parent", sessionId: "session",
+          turnId: "turn", actionType: kind } }, 60_000);
+      storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator" });
+      storage.durableRuns.createRun({ runId: "native-wait", workflowKey: "approval.wait", status: "waiting" });
+      storage.approvalWaitRuns.createOrGet({ approvalId: approval.approvalId, runId: "native-wait" });
+      const wait = storage.approvalEffects.upsert({ approvalId: approval.approvalId,
+        effectKind: "approval_wait_wake", targetKind: "durable_run", targetId: "native-wait",
+        payload: { nativeRuntimeParent: { runId: "parent", turnId: "turn" } } });
+      const deps = createApprovalEffectDeps();
+      const service = () => new ApprovalEffectsService({ storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext, deps);
+      const processor = service() as unknown as { workerId: string; handleWakeEffect(effect: ApprovalEffectRecord, resolveWait: boolean): Promise<void> };
+      const now = storage.durableRuns.readDatabaseNow();
+      const claimed = storage.approvalEffects.claimNextPendingEffect(processor.workerId, now, new Date(Date.parse(now) + 60_000).toISOString())!;
+      expect(claimed.effectId).toBe(wait.effectId);
+      const parent = storage.approvalEffects.upsert({ approvalId: approval.approvalId,
+        effectKind: "linked_chat_turn_wake", targetKind: "chat_turn", targetId: "turn", payload: { runId: "parent" } });
+      await processor.handleWakeEffect(claimed, true);
+      expect(deps.wakeDurableRun).not.toHaveBeenCalled();
+      expect(storage.approvalWaitRuns.get(approval.approvalId)?.resolvedAt).toBeUndefined();
+      expect(storage.approvalWaitRuns.findUnresolvedNativeForAssignment(scope)?.approvalId)
+        .toBe(kind === "remote_worker.native_runtime" ? approval.approvalId : undefined);
+      expect(storage.approvalEffects.get(wait.effectId).result.reason).toBe("native_runtime_parent_wake_pending");
+      const parentClaim = storage.approvalEffects.claimNextPendingEffect("parent-waker", now, new Date(Date.parse(now) + 60_000).toISOString())!;
+      expect(parentClaim.effectId).toBe(parent.effectId);
+      expect(storage.approvalEffects.completeEffect(parentClaim.effectId, "parent-waker", parentClaim.version,
+        { result: { wakeOutcome: "woke", runId: "parent" } })?.status).toBe("completed");
+      const restarted = service() as unknown as { deferNativeRuntimeWaitUntilParentWakes(effect: ApprovalEffectRecord): Promise<boolean> };
+      expect(await restarted.deferNativeRuntimeWaitUntilParentWakes(storage.approvalEffects.get(wait.effectId))).toBe(false);
+      for (const nativeRuntimeParent of [null, { runId: "foreign", turnId: "turn" }, { runId: "parent", turnId: "foreign" }]) {
+        await expect(restarted.deferNativeRuntimeWaitUntilParentWakes({ ...storage.approvalEffects.get(wait.effectId),
+          payload: { nativeRuntimeParent } })).rejects.toThrow("parent wake binding");
+      }
+      expect(storage.approvalWaitRuns.get(approval.approvalId)?.resolvedAt).toBeUndefined();
+    } finally { storage.close(); }
+  });
+
   it("retains worker approval execution across processor restart without waking Chat or changing the request", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
@@ -1287,7 +1331,9 @@ describe("approval-resolution-effects-service", () => {
     expect(deferEffectForRetry).toHaveBeenCalledOnce();
   });
 
-  it("does not wake a linked turn when the turn trace belongs to another session", async () => {
+  it.each(["session", "native_parent", "native_action", "native_valid"].flatMap(mode =>
+    (mode === "session" ? ["code_mode.run"] : ["remote_worker.native_runtime", "remote_worker.native_runtime_install"]).map(kind => ({ mode, kind }))))(
+    "routes linked Chat wakes using exact $mode authority for $kind", async ({ mode, kind }) => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
       approvalId: String(input.approvalId),
@@ -1307,7 +1353,7 @@ describe("approval-resolution-effects-service", () => {
       {
         storage: {
           approvalEffects: { upsert, claimNextPendingEffect: vi.fn(), get: vi.fn(), listByApproval: vi.fn() },
-          approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+          approvalWaitRuns: { getRunId: vi.fn(() => mode === "native_valid" ? "native-wait" : undefined) },
           pendingApprovalActions: { find: vi.fn(() => undefined) },
           approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
           chatInlineApprovals: { get: vi.fn(() => undefined) },
@@ -1338,13 +1384,15 @@ describe("approval-resolution-effects-service", () => {
     await service.enqueueResolutionEffects(
       {
         approvalId: "approval-1",
-        kind: "code_mode.run",
+        kind,
         riskLevel: "caution",
         status: "approved",
         payload: {},
         preview: {},
         linkage: {
-          sessionId: "session-a",
+          sessionId: mode === "session" ? "session-a" : "session-b",
+          durableRunId: mode === "native_parent" ? "original-parent" : "durable-turn-b",
+          actionType: mode === "native_action" ? "tool.invoke" : kind,
           turnId: "turn-b",
           workspaceId: "workspace-1",
         },
@@ -1361,9 +1409,12 @@ describe("approval-resolution-effects-service", () => {
 
     expect(upsert.mock.calls.map(([input]) => input.effectKind)).toEqual([
       "approval_resolution_signals",
-      "pending_action_execute",
+      ...(mode === "session" ? ["pending_action_execute"] : []),
+      ...(mode === "native_valid" ? ["approval_wait_wake", "linked_chat_turn_wake"] : []),
       "approval_after_hooks",
     ]);
+    if (mode === "native_valid") expect(upsert.mock.calls.find(([input]) => input.effectKind === "approval_wait_wake")?.[0]).toMatchObject({
+      targetId: "native-wait", payload: { nativeRuntimeParent: { runId: "durable-turn-b", turnId: "turn-b" } } });
   });
 
   it("enqueues Code Mode recovery effects when the pending action row is missing", async () => {

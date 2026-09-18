@@ -16,6 +16,7 @@ import { SERVER_CERT_PEM, SERVER_KEY_PEM } from "./worker-wire-client-tls.test-f
 import { loadWorkerMcpBearerCredential, type WorkerMcpBearerCredentialReference } from "./worker-mcp-bearer-credential.js";
 import { createWorkerMeshFileReadDescriptor } from "./worker-mesh-file-read.js";
 import { createWorkerMeshFileWriteDescriptor } from "./worker-mesh-file-write.js";
+import { createWorkerMeshDirectoryListDescriptor } from "./worker-mesh-directory-list.js";
 import * as nativeFiles from "./worker-windows-file-executor.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -99,13 +100,17 @@ describe("destination MCP HTTP owner", () => {
     }
     expect(f.server.authorizationChecks).toEqual([]);
   });
-  it.each(["fs.read", "fs.write"])("keeps bearer credentials outside every %s tool root", async (toolName) => {
+  it.each(["fs.read", "fs.write", "fs.list"])("keeps bearer credentials outside every %s tool root", async (toolName) => {
     const f = await fixture(true);
     // This isolates registry separation; the packaged probe covers the native writer.
     if (toolName === "fs.write") vi.spyOn(nativeFiles, "createWindowsWorkerFileExecutor").mockReturnValue({
       inspect: async () => "01".repeat(24), write: async () => { throw new Error("No write in registry validation."); },
     });
-    const descriptor = (toolName === "fs.read" ? createWorkerMeshFileReadDescriptor : createWorkerMeshFileWriteDescriptor)("documents");
+    if (toolName === "fs.list") vi.spyOn(nativeFiles, "createWindowsWorkerDirectoryExecutor").mockReturnValue({
+      inspect: async () => "01".repeat(24), list: async () => { throw new Error("No enumeration in registry validation."); },
+    });
+    const descriptor = (toolName === "fs.read" ? createWorkerMeshFileReadDescriptor
+      : toolName === "fs.list" ? createWorkerMeshDirectoryListDescriptor : createWorkerMeshFileWriteDescriptor)("documents");
     const unsignedEntry = { localId: "file", kind: "tool" as const, capabilityId: "mesh:node-a:tool:file", descriptor,
       descriptorSha256: workerMeshHash(descriptor), permissionEnvelopeSha256: workerMeshHash(descriptor.permissions) };
     const entry = { ...unsignedEntry, entrySha256: workerMeshHash(unsignedEntry) };

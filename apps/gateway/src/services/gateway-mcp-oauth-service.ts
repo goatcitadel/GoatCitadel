@@ -1,6 +1,6 @@
 import { redactSecretText, type McpServerRecord } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { logger } from "@goatcitadel/gateway-core";
+import { cleanupPublishedMcpOAuthCredentials } from "./mcp-oauth-publication-cleanup.js";
 import type { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import type { McpAuthStateRecord, McpOAuthTokenRequest } from "./mcp-server-admin-service.js";
 import type { McpServerStore } from "./mcp-server-store.js";
@@ -69,7 +69,7 @@ export class GatewayMcpOAuthService {
       beforeRequest: () => Promise<void>,
     ) => Promise<McpAuthStateRecord>,
   ): Promise<McpAuthStateRecord> {
-    const { registry, storage, tokenService } = this.options;
+    const { registry, storage } = this.options;
     const reservation = await registry.reserveAuthRequest(server, expected, kind);
     const request = reservation.auth.tokenRequest;
     let published: McpAuthStateRecord | undefined;
@@ -134,13 +134,7 @@ export class GatewayMcpOAuthService {
         `MCP OAuth token request did not finish: ${detail} Reconnect this server from Settings if recovery is required.`,
       );
     }
-    if (this.options.reconcileRetiredCredentials) {
-      try { await this.options.reconcileRetiredCredentials(); }
-      catch {
-        // Publication already committed; cleanup cannot authorize another request.
-        logger.warn("MCP OAuth retained credential cleanup requires reconciliation.");
-      }
-    } else tokenService.retireReplacedTokens(reservation.server.serverId, expected, published);
+    await cleanupPublishedMcpOAuthCredentials(this.options, reservation.server.serverId, expected, published);
     return published;
   }
 }

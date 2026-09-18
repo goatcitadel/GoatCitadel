@@ -53,6 +53,7 @@ function connection(
 ): IntegrationConnection {
   return {
     connectionId,
+    revision: "a".repeat(64),
     catalogId: "channel.discord",
     kind: "channel",
     key: "discord",

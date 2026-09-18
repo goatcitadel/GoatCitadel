@@ -4923,7 +4923,9 @@ describe("ToolPolicyEngine outside-root read access", () => {
         outcome: "blocked",
         policyReason: expect.stringContaining("blocked"),
       });
-      expect(storage.runImmediateTransaction).not.toHaveBeenCalled();
+      // Policy accounting owns a transaction; terminal approval state is still
+      // deferred to the canonical side-effect owner.
+      expect(storage.runImmediateTransaction).toHaveBeenCalledOnce();
       expect(storage.pendingApprovalActions.markResolved).not.toHaveBeenCalled();
       expect(storage.approvalEvents.append).not.toHaveBeenCalled();
     } finally {

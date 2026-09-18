@@ -10,7 +10,14 @@ import {
   type GovernedRemediationRecipe,
   type GovernedRemediationScope,
 } from "@goatcitadel/contracts";
-import { GovernedRemediationRepository, createDatabase, type DatabaseClient } from "@goatcitadel/storage";
+import {
+  Storage,
+  createDatabase,
+  createSqliteAsyncStorage,
+  type AsyncStorage,
+  type DeepAsyncRepository,
+  type GovernedRemediationRepository,
+} from "@goatcitadel/storage";
 import {
   GovernedRemediationCoordinator,
   type GovernedRemediationAuthorityPort,
@@ -33,11 +40,11 @@ import {
   type GovernedRemediationReconcileResult,
 } from "./governed-remediation-registry.js";
 
-const opened: DatabaseClient[] = [];
+const opened: AsyncStorage[] = [];
 const files: string[] = [];
 
-afterEach(() => {
-  for (const db of opened.splice(0)) db.close();
+afterEach(async () => {
+  for (const storage of opened.splice(0)) await storage.close();
   for (const file of files.splice(0)) {
     for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
       try {
@@ -313,7 +320,7 @@ class FakeDurableParent implements GovernedRemediationDurableParentPort {
     const replay = this.resumes.get(request.idempotencyKey);
     if (replay !== undefined) return { status: "resumed" as const, resumedRunVersion: replay, replayed: true };
     if (this.rejectResume) return { status: "rejected" as const, reason: "resume_failed" as const };
-    const resumedRunVersion = request.expectedWaitingRunVersion + 1;
+    const resumedRunVersion = request.expectedWaitingRunVersion + 2;
     this.resumes.set(request.idempotencyKey, resumedRunVersion);
     if (this.throwAfterResumeCommit) {
       this.throwAfterResumeCommit = false;
@@ -374,13 +381,25 @@ function createHarness(
     phaseLeaseDurationSeconds?: number;
     extraRegistrations?: ConstructorParameters<typeof GovernedRemediationRecipeRegistry>[0];
     completionPorts?: readonly GovernedRemediationCompletionRegistration[];
+    decorateRepository?: (
+      repository: DeepAsyncRepository<GovernedRemediationRepository>,
+    ) => DeepAsyncRepository<GovernedRemediationRepository>;
   } = {},
 ) {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-remediation-coordinator-${randomUUID()}.db`);
   files.push(dbPath);
   const db = createDatabase({ dbPath });
-  opened.push(db);
-  const repository = new GovernedRemediationRepository(db);
+  const storage = new Storage({
+    db,
+    transcriptsDir: `${dbPath}.transcripts`,
+    auditDir: `${dbPath}.audit`,
+    modelUsageRecoverySweepIntervalMs: 60_000,
+  });
+  const asyncStorage = createSqliteAsyncStorage(storage);
+  opened.push(asyncStorage);
+  const repository = storage.governedRemediations;
+  const asyncRepository = input.decorateRepository?.(asyncStorage.governedRemediations)
+    ?? asyncStorage.governedRemediations;
   const events: string[] = [];
   const owner = input.owner ?? new FakeConfigurationOwner(events);
   const parent = input.parent ?? new FakeDurableParent(events);
@@ -395,7 +414,7 @@ function createHarness(
   ]);
   const makeCoordinator = (claimantId: string) =>
     new GovernedRemediationCoordinator({
-      repository,
+      repository: asyncRepository,
       registry,
       authority,
       durableParent: parent,
@@ -498,9 +517,61 @@ describe("GovernedRemediationRecipeRegistry runtime boundary", () => {
 });
 
 describe("GovernedRemediationCoordinator v2 authority", () => {
+  it("waits for asynchronous creation to persist before resolving the command", async () => {
+    const pendingWrite = barrier();
+    const harness = createHarness({
+      decorateRepository: (repository) => new Proxy(repository, {
+        get(target, property, receiver) {
+          if (property === "createState") {
+            return async (...args: Parameters<typeof repository.createState>) => {
+              await pendingWrite.wait();
+              return repository.createState(...args);
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    });
+    let settled = false;
+    const creation = harness.coordinator.start(startInput()).then((result) => {
+      settled = true;
+      return result;
+    });
+    await pendingWrite.entered;
+    try {
+      expect(settled).toBe(false);
+      expect(() => harness.repository.getState("remediation-1")).toThrow();
+      expect(harness.owner.rawApplyCalls).toBe(0);
+    } finally {
+      pendingWrite.release();
+    }
+    expect((await creation).record.state).toBe("blocked");
+    expect(harness.repository.getState("remediation-1").record.revision).toBe(1);
+  });
+
+  it("replays an asynchronously rejected committed acquisition with the same lease witness", async () => {
+    const harness = createHarness();
+    const original = harness.repository.acquirePhaseClaim.bind(harness.repository);
+    const applyRequests: Parameters<typeof original>[0][] = [];
+    harness.repository.acquirePhaseClaim = (input) => {
+      const result = original(input);
+      if (input.phase === "apply") {
+        applyRequests.push(input);
+        if (applyRequests.length === 1) throw new Error("claim response lost after commit");
+      }
+      return result;
+    };
+    await harness.coordinator.start(startInput());
+    expect((await proceed(harness)).record.state).toBe("completed");
+    expect(applyRequests).toHaveLength(2);
+    expect(applyRequests[1]).toEqual(applyRequests[0]);
+    expect(harness.owner.rawApplyCalls).toBe(1);
+    expect(harness.owner.committedApplyCount).toBe(1);
+  });
+
   it("separates creation from continuation and binds requester, workspace, recipe digest, and revision", async () => {
     const harness = createHarness();
-    const created = harness.coordinator.start(startInput());
+    const created = await harness.coordinator.start(startInput());
     expect(created.record).toMatchObject({
       state: "blocked",
       revision: 1,
@@ -541,12 +612,12 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
         action: { kind: "proceed" },
       }),
     ).rejects.toThrow(/stale state revision/u);
-    expect(() =>
+    await expect(
       harness.coordinator.start(
         startInput({ requesterActorId: "actor-other", creationIdempotencyKey: "create-remediation-drift" }),
       ),
-    ).toThrow(/conflicts with durable authority|conflict/u);
-    expect(() =>
+    ).rejects.toThrow(/conflicts with durable authority|conflict/u);
+    await expect(
       createHarness().coordinator.start(
         startInput({
           remediationId: "remediation-wildcard",
@@ -554,8 +625,8 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
           creationIdempotencyKey: "create-remediation-wildcard",
         }),
       ),
-    ).toThrow(/exact initial owner revision/u);
-    expect(() =>
+    ).rejects.toThrow(/exact initial owner revision/u);
+    await expect(
       createHarness().coordinator.start(
         startInput({
           remediationId: "remediation-future",
@@ -563,14 +634,14 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
           creationIdempotencyKey: "create-remediation-future",
         }),
       ),
-    ).toThrow(/too far in the future/u);
+    ).rejects.toThrow(/too far in the future/u);
     expect(harness.owner.rawApplyCalls).toBe(0);
   });
 
   it("reserves the exact parent checkpoint before one claimed effect and completes with atomic receipts", async () => {
     const harness = createHarness();
     harness.parent.throwAfterReserveCommit = true;
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(result.record.state).toBe("completed");
     expect(harness.events.indexOf("reserve")).toBeLessThan(harness.events.indexOf("apply"));
@@ -609,7 +680,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     authority.requirePreEffectApproval = true;
     authority.requireActivationApproval = true;
     const harness = createHarness({ configuredRecipe, owner, authority });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
 
     const awaitingPre = await proceed(harness);
     expect(awaitingPre.record.state).toBe("awaiting_preapproval");
@@ -670,7 +741,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const authority = new RecordingAuthority();
     authority.requirePreEffectApproval = true;
     const harness = createHarness({ configuredRecipe, authority });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
 
     const inputBound = await harness.coordinator.continue({
       remediationId: "remediation-1",
@@ -716,7 +787,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
       }
       return result;
     };
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(injected).toBe(true);
     expect(result.record.state).toBe("completed");
@@ -733,7 +804,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     owner.activationMode = "owner_step";
     owner.failProbeOnCall = 2;
     const harness = createHarness({ configuredRecipe, owner });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(result.record.state).toBe("rolled_back");
     const receipts = harness.repository.listReceipts("remediation-1");
@@ -751,7 +822,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const owner = new FakeConfigurationOwner();
     owner.applyRejectsRemaining = 1;
     const harness = createHarness({ owner });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(result.record.state).toBe("completed");
     expect(owner.rawApplyCalls).toBe(2);
@@ -770,7 +841,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const authority = new RecordingAuthority();
     authority.malformed = true;
     const harness = createHarness({ authority });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(result.record.state).toBe("failed");
     expect(harness.parent.reserveCalls).toBe(0);
@@ -784,7 +855,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const authority = new RecordingAuthority();
     authority.authorizePreflightCalls = 1;
     const harness = createHarness({ authority });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
 
     const result = await proceed(harness);
 
@@ -801,7 +872,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const harness = createHarness();
     const gate = barrier();
     harness.owner.applyBarrier = gate;
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const workerA = proceed(harness);
     await gate.entered;
     expect(harness.repository.getState("remediation-1").record.state).toBe("applying");
@@ -823,7 +894,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const owner = new FakeConfigurationOwner();
     owner.applyThrowsAfterCommit = true;
     const harness = createHarness({ owner });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const quarantined = await proceed(harness);
     expect(quarantined.record.state).toBe("failed");
     expect(harness.repository.listReceipts("remediation-1")).toEqual([]);
@@ -854,7 +925,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const owner = new FakeConfigurationOwner();
     owner.applyThrowsAfterCommit = true;
     const harness = createHarness({ owner });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     await proceed(harness);
     owner.reconcileOverride = {
       observation: "effect_verified",
@@ -875,7 +946,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     parent.throwAfterResumeCommit = true;
     parent.observationOverride = { observation: "unknown" };
     const harness = createHarness({ parent, phaseLeaseDurationSeconds: 1 });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const quarantined = await proceed(harness);
     expect(quarantined.record.state).toBe("reconciling_resume");
     expect(parent.resumeCalls).toBe(1);
@@ -910,7 +981,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const owner = new FakeConfigurationOwner();
     owner.activationMode = "owner_step";
     const harness = createHarness({ configuredRecipe, owner });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const awaiting = await proceed(harness);
     expect(awaiting.record.state).toBe("awaiting_activation_approval");
     const declined = await harness.coordinator.continue({
@@ -927,11 +998,11 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     expect(harness.repository.listReceipts("remediation-1").at(-1)?.kind).toBe("rollback");
 
     const manual = createHarness({ configuredRecipe: manualRecipe() });
-    manual.coordinator.start(startInput({ recipeId: "recipe.product.manual" }));
+    await manual.coordinator.start(startInput({ recipeId: "recipe.product.manual" }));
     expect((await proceed(manual)).record.state).toBe("manual_required");
 
     const expiring = createHarness();
-    expiring.coordinator.start(startInput());
+    await expiring.coordinator.start(startInput());
     const expired = await expiring.coordinator.continue({
       remediationId: "remediation-1",
       requesterActorId: "actor-1",
@@ -949,7 +1020,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
     const rawSecret = "ghp_123456789012345678901234567890";
     owner.malformedApplySecret = rawSecret;
     const harness = createHarness({ owner });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(result.record.state).toBe("failed");
     harness.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").all();
@@ -968,7 +1039,7 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
       ["remediation-a", "2026-08-08T20:00:00.000Z"],
       ["remediation-b", "2026-08-08T20:00:01.000Z"],
     ] as const) {
-      harness.coordinator.start(
+      await harness.coordinator.start(
         startInput({
           remediationId,
           creationIdempotencyKey: `create-${remediationId}`,
@@ -1023,9 +1094,9 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
     const { notices, registration } = recordingCompletionPort();
     const foreign = recordingCompletionPort("some-other-owner");
     const harness = createHarness({ completionPorts: [registration, foreign.registration] });
-    harness.coordinator.start(startInput());
-    expect(harness.coordinator.completionNoticeFor("remediation-1")).toBeNull();
-    expect(harness.coordinator.completionNoticeFor("remediation-missing")).toBeNull();
+    await harness.coordinator.start(startInput());
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toBeNull();
+    expect(await harness.coordinator.completionNoticeFor("remediation-missing")).toBeNull();
 
     const result = await proceed(harness);
     expect(result.record.state).toBe("completed");
@@ -1040,7 +1111,7 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
       effectId: result.record.effectId,
       latestReceiptId: result.record.latestReceiptId,
     });
-    expect(harness.coordinator.completionNoticeFor("remediation-1")).toEqual(notices[0]);
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toEqual(notices[0]);
   });
 
   it("keeps settlement durable when the completion callback itself fails", async () => {
@@ -1058,11 +1129,35 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
         },
       ],
     });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const result = await proceed(harness);
     expect(result.record.state).toBe("completed");
     expect(calls).toBe(1);
-    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+      effectDisposition: "effect_applied",
+    });
+  });
+
+  it("keeps settlement durable after an asynchronous evidence-read failure and allows boot replay", async () => {
+    const { notices, registration } = recordingCompletionPort();
+    const harness = createHarness({ completionPorts: [registration] });
+    const original = harness.repository.listReceipts.bind(harness.repository);
+    let failTerminalRead = true;
+    harness.repository.listReceipts = (remediationId, limit) => {
+      if (failTerminalRead && harness.repository.getState(remediationId).record.state === "completed") {
+        throw new Error("settlement evidence temporarily unavailable");
+      }
+      return original(remediationId, limit);
+    };
+    await harness.coordinator.start(startInput());
+    expect((await proceed(harness)).record.state).toBe("completed");
+    await expect(harness.coordinator.completionNoticeFor("remediation-1"))
+      .rejects.toThrow("settlement evidence temporarily unavailable");
+    expect(notices).toEqual([]);
+    expect(harness.owner.rawApplyCalls).toBe(1);
+    failTerminalRead = false;
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+      terminalState: "completed",
       effectDisposition: "effect_applied",
     });
   });
@@ -1070,7 +1165,7 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
   it("reports no_effect for pre-effect terminal outcomes", async () => {
     const { notices, registration } = recordingCompletionPort();
     const harness = createHarness({ completionPorts: [registration] });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const declined = await harness.coordinator.continue({
       remediationId: "remediation-1",
       requesterActorId: "actor-1",
@@ -1082,7 +1177,7 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
     expect(declined.record.state).toBe("declined");
     expect(harness.owner.rawApplyCalls).toBe(0);
     expect(notices.at(-1)).toMatchObject({ terminalState: "declined", effectDisposition: "no_effect" });
-    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
       effectDisposition: "no_effect",
     });
   });
@@ -1093,7 +1188,7 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
     owner.activationMode = "owner_step";
     const { notices, registration } = recordingCompletionPort();
     const harness = createHarness({ configuredRecipe, owner, completionPorts: [registration] });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const awaiting = await proceed(harness);
     expect(awaiting.record.state).toBe("awaiting_activation_approval");
     expect(notices).toEqual([]);
@@ -1115,18 +1210,18 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
     owner.applyThrowsAfterCommit = true;
     const { notices, registration } = recordingCompletionPort();
     const harness = createHarness({ owner, completionPorts: [registration] });
-    harness.coordinator.start(startInput());
+    await harness.coordinator.start(startInput());
     const quarantined = await proceed(harness);
     expect(quarantined.record.state).toBe("failed");
     expect(notices.at(-1)).toMatchObject({ terminalState: "failed", effectDisposition: "effect_unknown" });
-    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
       effectDisposition: "effect_unknown",
     });
 
     owner.effectVerified = true;
     const recovered = await harness.coordinator.recoverReconciliations({ limit: 10, pageSize: 1 });
     expect(recovered.reconciliations[0]).toMatchObject({ state: "resolved_verified" });
-    expect(harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-1")).toMatchObject({
       terminalState: "failed",
       effectDisposition: "effect_applied",
     });

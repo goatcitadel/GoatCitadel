@@ -83,6 +83,17 @@ describe("HX-506 artifact store (CAS reuse)", () => {
     ).rejects.toMatchObject({ code: "not_found" });
   });
 
+  it("checks an optional exact byte count before reading a receipt-backed blob", async () => {
+    const store = new RemoteWorkerArtifactStore(rootDir), { bytes, sha } = bytesFor("sized");
+    await store.installBlob({ executionWorkspaceId: "default", blobSha256: sha, bytes, signal: controller.signal });
+    for (const expectedByteCount of [0, bytes.length - 1, bytes.length + 1])
+      await expect(store.readBlob({ executionWorkspaceId: "default", blobSha256: sha, expectedByteCount, signal: controller.signal }))
+        .rejects.toMatchObject({ code: "tampered" });
+    await expect(store.readBlob({ executionWorkspaceId: "default", blobSha256: sha, expectedByteCount: -1, signal: controller.signal }))
+      .rejects.toMatchObject({ code: "limit_exceeded" });
+    expect(await store.readBlob({ executionWorkspaceId: "default", blobSha256: sha, expectedByteCount: bytes.length, signal: controller.signal })).toEqual(bytes);
+  });
+
   it("rejects an address outside the artifact namespace", () => {
     const store = new RemoteWorkerArtifactStore(rootDir);
     expect(() => store.resolvePath("../escape")).toThrow(RemoteWorkerArtifactStoreError);

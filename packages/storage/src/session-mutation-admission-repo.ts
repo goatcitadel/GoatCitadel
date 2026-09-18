@@ -1,8 +1,11 @@
 /* eslint-disable max-lines -- Admission, preemption, replay, and cross-dialect fencing stay in one audited checkpoint boundary. */
 import { createHash } from "node:crypto";
-import { canonicalJsonString, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { canonicalJsonString, ConflictError, NotFoundError, ValidationError,
+  GOVERNED_REMEDIATION_RESUME_TEXT, readGovernedRemediationResumeReference, type GovernedRemediationResumeReference } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { allocateDurableRunEventSequence } from "./durable-run-event-repo.js";
+import { DurableRunRepository } from "./durable-run-repo.js";
+import { GovernedRemediationRepository } from "./governed-remediation-repo.js";
 
 export type SessionMutationAdmissionKind = "synchronous" | "turn_write";
 export type SessionMutationAdmissionStatus = "active" | "completed" | "cancelled";
@@ -244,6 +247,54 @@ export interface VerifyDurableTurnPayloadIdentityInput extends TurnWriteAdmissio
   durableRunId: string;
 }
 
+export interface ReserveDurableChatRemediationInput extends TurnWriteAdmissionIdentity {
+  remediationId: string;
+  requesterActorId: string;
+  stateRevision: number;
+  durableRunId: string;
+  blockedCheckpointId: string;
+  expectedWaitingRunVersion: number;
+  recipeSha256: string;
+  effectId: string;
+  expectedOwnerRevision: string;
+  preEffectApprovalId: string | null;
+  promptId: string | null;
+  operationId: string;
+  idempotencyKey: string;
+}
+
+export interface DurableChatRemediationReservation {
+  reservationId: string;
+  reservedRunVersion: number;
+  reservedAt: string;
+  replayed: boolean;
+}
+
+export interface ReleaseDurableChatRemediationInput extends TurnWriteAdmissionIdentity {
+  reservationId: string;
+  remediationId: string;
+  durableRunId: string;
+  requesterActorId: string;
+  stateRevision: number;
+  expectedReservedRunVersion: number;
+  receiptId: string | null;
+  failureId: string | null;
+  operationId: string;
+  idempotencyKey: string;
+}
+
+export interface DurableChatRemediationResolution {
+  resolutionId: string;
+  resultingRunVersion: number;
+  resolvedAt: string;
+  replayed: boolean;
+}
+
+export interface ResumeDurableChatRemediationInput extends Omit<ReleaseDurableChatRemediationInput, "receiptId" | "failureId"> {
+  verificationReceiptId: string;
+  promptId: string;
+}
+
 export interface VerifiedTerminalTurnWriteHandoff {
   durableRunStatus: "completed" | "failed" | "cancelled";
   traceStatus: "completed" | "partial" | "failed" | "cancelled";
@@ -298,6 +349,7 @@ export interface DurableChatUserInputResumeRecord {
   response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string };
   selectedOption?: { optionId: string; label: string; description: string };
   runtimeConfigurationReceipt?: DurableChatRuntimeConfigurationReceipt;
+  runtimeRemediationReceipt?: GovernedRemediationResumeReference;
 }
 
 export interface DurableChatRuntimeConfigurationReceipt {
@@ -927,6 +979,8 @@ interface WaitingChatUserInputTraceRow {
 }
 
 export class SessionMutationAdmissionRepository {
+  private remediationContinuation: { reference: GovernedRemediationResumeReference; resolvedAt: string } | undefined;
+
   public constructor(private readonly db: DatabaseClient) {}
 
   public previewAdmissionIdentity(
@@ -2013,6 +2067,346 @@ export class SessionMutationAdmissionRepository {
   }
 
   /**
+   * Reserve the exact admitted waiting turn before a governed repair effect.
+   * This is a storage fence, not policy or approval authorization: the Gateway
+   * must validate those owners before invoking it and again before the effect.
+   * Lock order remains session, admission, durable run, then remediation state.
+   */
+  public reserveDurableChatRemediation(input: ReserveDurableChatRemediationInput): DurableChatRemediationReservation {
+    const identity = normalizeTurnWriteIdentity(input);
+    const request = {
+      remediationId: identifier(input.remediationId, "remediationId"),
+      requesterActorId: identifier(input.requesterActorId, "requesterActorId"),
+      stateRevision: positiveInteger(input.stateRevision, "stateRevision"),
+      durableRunId: identifier(input.durableRunId, "durableRunId"),
+      blockedCheckpointId: identifier(input.blockedCheckpointId, "blockedCheckpointId"),
+      expectedWaitingRunVersion: positiveInteger(input.expectedWaitingRunVersion, "expectedWaitingRunVersion"),
+      recipeSha256: digest(input.recipeSha256, "recipeSha256"),
+      effectId: identifier(input.effectId, "effectId"),
+      expectedOwnerRevision: boundedIdentifier(input.expectedOwnerRevision, "expectedOwnerRevision", 512),
+      preEffectApprovalId: input.preEffectApprovalId === null ? null : identifier(input.preEffectApprovalId, "preEffectApprovalId"),
+      promptId: input.promptId === null ? null : identifier(input.promptId, "promptId"),
+      operationId: boundedIdentifier(input.operationId, "operationId", 512),
+      idempotencyKey: boundedIdentifier(input.idempotencyKey, "idempotencyKey", 512),
+    };
+    const reservedRunVersion = incrementPositiveInteger(request.expectedWaitingRunVersion);
+    const requestSha256 = sha256(canonicalJsonString({ version: 1, identity, request }));
+    const reservationId = `remediation-parent-${requestSha256}`;
+    const fail = () => admissionConflict("SESSION_MUTATION_REMEDIATION_RESERVATION_CONFLICT", "Remediation parent reservation authority changed.");
+    return this.db.transaction("immediate", () => {
+      const observed = this.requireRow(identity.admissionId, false);
+      this.acquireSessionLock(observed.session_id);
+      const admission = this.requireRow(identity.admissionId, true);
+      this.assertTurnWriteIdentity(admission, identity);
+      if (admission.status !== "active" || admission.actor_id !== request.requesterActorId) throw fail();
+      this.requireAdmissionCurrentAuthority(admission);
+      this.requireExactTurnBinding(admission);
+      this.requireDurableBinding(identity.admissionId, identity.turnId, request.durableRunId, true);
+      const run = this.requireDurableRun(request.durableRunId, true);
+      this.requireExactDurableRunPayloadIdentity(admission, run);
+      const existing = this.db.prepare(`SELECT reservation_id, request_sha256, reserved_run_version, reserved_at
+        FROM governed_remediation_parent_reservations
+        WHERE remediation_id = @remediationId OR idempotency_key = @idempotencyKey`)
+        .all<{ reservation_id: string; request_sha256: string; reserved_run_version: number | string | bigint; reserved_at: string }>({ remediationId: request.remediationId, idempotencyKey: request.idempotencyKey });
+      if (existing.length) {
+        const record = existing[0]!;
+        if (existing.length !== 1 || record.request_sha256 !== requestSha256 || record.reservation_id !== reservationId
+          || asPositiveInteger(record.reserved_run_version) !== reservedRunVersion
+          || run.status !== "waiting" || asPositiveInteger(run.version) !== reservedRunVersion) throw fail();
+        return { reservationId, reservedRunVersion, reservedAt: record.reserved_at, replayed: true };
+      }
+      // Only a durable release result retires a prior reservation's fence.
+      if (this.db.prepare(`SELECT reservation_id FROM governed_remediation_parent_reservations
+        WHERE durable_run_id = @durableRunId AND NOT EXISTS (
+          SELECT 1 FROM governed_remediation_parent_resolutions resolution
+          WHERE resolution.reservation_id = governed_remediation_parent_reservations.reservation_id
+            AND resolution.resolution_kind IN ('released', 'resumed')
+        )`).get({ durableRunId: request.durableRunId })) throw fail();
+      if (this.db.prepare(`SELECT reservation_id FROM chat_turn_secure_configuration_reservations
+        WHERE durable_run_id = @durableRunId AND status IN ('reserved', 'expired_unreconciled')`)
+        .get({ durableRunId: request.durableRunId })) throw fail();
+      this.db.prepare(`SELECT remediation_id FROM governed_remediation_states WHERE remediation_id = @remediationId
+        ${this.db.dialect === "postgres" ? "FOR UPDATE" : ""}`).get({ remediationId: request.remediationId });
+      const { record } = new GovernedRemediationRepository(this.db).getState(request.remediationId);
+      if (record.revision !== request.stateRevision || record.requesterActorId !== request.requesterActorId
+        || record.workspaceId !== identity.workspaceId || record.sessionId !== identity.sessionId
+        || record.sourceTurnId !== identity.turnId || record.durableRunId !== request.durableRunId
+        || record.blockedCheckpointId !== request.blockedCheckpointId || record.recipeSha256 !== request.recipeSha256
+        || record.expectedWaitingRunVersion !== request.expectedWaitingRunVersion
+        || record.expectedOwnerRevision !== request.expectedOwnerRevision || record.parentReservationId !== null
+        || record.effectId !== null || !["offered", "awaiting_preapproval", "awaiting_secure_input"].includes(record.state)) throw fail();
+      const reservedAt = this.readDatabaseTime();
+      const claim = this.db.prepare(`SELECT claim_id FROM governed_remediation_phase_claims
+        WHERE remediation_id = @remediationId AND aggregate_kind = 'state' AND aggregate_id = @remediationId
+          AND phase = 'parent_reserve' AND expected_aggregate_revision = @stateRevision
+          AND operation_id = @operationId AND effect_id = @effectId AND expected_owner_revision = @expectedOwnerRevision
+          AND status = 'active' AND lease_expires_at > @reservedAt`).get({
+            remediationId: request.remediationId, stateRevision: request.stateRevision,
+            operationId: request.operationId, effectId: request.effectId,
+            expectedOwnerRevision: request.expectedOwnerRevision, reservedAt,
+          });
+      if (!claim) throw fail();
+      const parent = new DurableRunRepository(this.db).lockWaitingCheckpointForUpdate({
+        runId: request.durableRunId, checkpointId: request.blockedCheckpointId,
+        expectedRunVersion: request.expectedWaitingRunVersion,
+      });
+      if (!parent || parent.run.workflowKey !== "chat.turn.execute") throw fail();
+      const changed = this.db.prepare(`UPDATE durable_runs SET version = version + 1, updated_at = @reservedAt
+        WHERE run_id = @durableRunId AND workflow_key = 'chat.turn.execute' AND status = 'waiting'
+          AND version = @expectedWaitingRunVersion`).run({
+            durableRunId: request.durableRunId, expectedWaitingRunVersion: request.expectedWaitingRunVersion, reservedAt,
+          });
+      if (Number(changed.changes) !== 1) throw fail();
+      this.db.prepare(`INSERT INTO governed_remediation_parent_reservations (
+        reservation_id, remediation_id, durable_run_id, blocked_checkpoint_id, requester_actor_id, workspace_id,
+        state_revision, waiting_run_version, reserved_run_version, recipe_sha256, effect_id, expected_owner_revision,
+        pre_effect_approval_id, prompt_id, operation_id, idempotency_key, request_sha256, reserved_at
+      ) VALUES (
+        @reservationId, @remediationId, @durableRunId, @blockedCheckpointId, @requesterActorId, @workspaceId,
+        @stateRevision, @expectedWaitingRunVersion, @reservedRunVersion, @recipeSha256, @effectId, @expectedOwnerRevision,
+        @preEffectApprovalId, @promptId, @operationId, @idempotencyKey, @requestSha256, @reservedAt
+      )`).run({ ...request, reservationId, workspaceId: identity.workspaceId, reservedRunVersion, requestSha256, reservedAt });
+      return { reservationId, reservedRunVersion, reservedAt, replayed: false };
+    });
+  }
+
+  /** Observe immutable resume evidence without relying on the current remediation
+   * revision or run status, which may already have advanced after commit. */
+  public findDurableChatRemediationResume(
+    input: Omit<ResumeDurableChatRemediationInput, "stateRevision" | "promptId">,
+  ): DurableChatRemediationResolution | undefined {
+    const identity = normalizeTurnWriteIdentity(input);
+    const request = {
+      reservationId: identifier(input.reservationId, "reservationId"), remediationId: identifier(input.remediationId, "remediationId"),
+      durableRunId: identifier(input.durableRunId, "durableRunId"), requesterActorId: identifier(input.requesterActorId, "requesterActorId"),
+      expectedReservedRunVersion: positiveInteger(input.expectedReservedRunVersion, "expectedReservedRunVersion"),
+      verificationReceiptId: identifier(input.verificationReceiptId, "verificationReceiptId"),
+      operationId: boundedIdentifier(input.operationId, "operationId", 512), idempotencyKey: boundedIdentifier(input.idempotencyKey, "idempotencyKey", 512),
+    };
+    return this.db.transaction("immediate", () => {
+      const observed = this.requireRow(identity.admissionId, false);
+      this.acquireSessionLock(observed.session_id);
+      const admission = this.requireRow(identity.admissionId, true);
+      this.assertTurnWriteIdentity(admission, identity);
+      this.requireDurableBinding(identity.admissionId, identity.turnId, request.durableRunId, true);
+      this.requireExactDurableRunPayloadIdentity(admission, this.requireDurableRun(request.durableRunId, true));
+      if (admission.actor_kind !== "operator" || admission.actor_id !== request.requesterActorId) {
+        throw admissionConflict("SESSION_MUTATION_REMEDIATION_RESUME_CONFLICT", "Remediation resume requester does not own this admission.");
+      }
+      const row = this.db.prepare(`SELECT resolution.resolution_id, resolution.resulting_run_version, resolution.resolved_at
+        FROM governed_remediation_parent_resolutions resolution
+        JOIN governed_remediation_parent_reservations reservation ON reservation.reservation_id = resolution.reservation_id
+        WHERE resolution.reservation_id = @reservationId AND resolution.resolution_kind = 'resumed'
+          AND resolution.receipt_id = @verificationReceiptId AND resolution.operation_id = @operationId
+          AND resolution.idempotency_key = @idempotencyKey AND resolution.previous_run_version = @expectedReservedRunVersion
+          AND reservation.remediation_id = @remediationId AND reservation.durable_run_id = @durableRunId
+          AND reservation.requester_actor_id = @requesterActorId AND reservation.workspace_id = @workspaceId
+          AND reservation.reserved_run_version = @expectedReservedRunVersion`)
+        .get<{ resolution_id: string; resulting_run_version: number | string | bigint; resolved_at: string }>({ ...request, workspaceId: identity.workspaceId });
+      if (!row) return undefined;
+      const resultingRunVersion = asPositiveInteger(row.resulting_run_version);
+      if (resultingRunVersion !== incrementPositiveInteger(request.expectedReservedRunVersion)) {
+        throw admissionConflict("SESSION_MUTATION_REMEDIATION_RESUME_CONFLICT", "Remediation resume version evidence conflicts.");
+      }
+      return { resolutionId: row.resolution_id, resultingRunVersion, resolvedAt: row.resolved_at, replayed: true };
+    });
+  }
+
+  /** Resume a verified repair through the ordinary sealed continuation writer.
+   * The caller still owns current policy/approval and settled-wait verification. */
+  public resumeDurableChatRemediation(input: ResumeDurableChatRemediationInput): DurableChatRemediationResolution {
+    const identity = normalizeTurnWriteIdentity(input);
+    const request = {
+      reservationId: identifier(input.reservationId, "reservationId"), remediationId: identifier(input.remediationId, "remediationId"),
+      durableRunId: identifier(input.durableRunId, "durableRunId"), requesterActorId: identifier(input.requesterActorId, "requesterActorId"),
+      stateRevision: positiveInteger(input.stateRevision, "stateRevision"),
+      expectedReservedRunVersion: positiveInteger(input.expectedReservedRunVersion, "expectedReservedRunVersion"),
+      verificationReceiptId: identifier(input.verificationReceiptId, "verificationReceiptId"), promptId: identifier(input.promptId, "promptId"),
+      operationId: boundedIdentifier(input.operationId, "operationId", 512), idempotencyKey: boundedIdentifier(input.idempotencyKey, "idempotencyKey", 512),
+    };
+    const fail = () => admissionConflict("SESSION_MUTATION_REMEDIATION_RESUME_CONFLICT", "Remediation resume evidence or parent authority changed.");
+    const resultingRunVersion = incrementPositiveInteger(request.expectedReservedRunVersion);
+    const requestSha256 = sha256(canonicalJsonString({ version: 1, kind: "resumed", identity, request }));
+    const resolutionId = `remediation-resolution-${requestSha256}`;
+    return this.db.transaction("immediate", () => {
+      const observed = this.requireRow(identity.admissionId, false);
+      this.acquireSessionLock(observed.session_id);
+      const admission = this.requireRow(identity.admissionId, true);
+      this.assertTurnWriteIdentity(admission, identity);
+      if (admission.actor_kind !== "operator" || admission.actor_id !== request.requesterActorId) throw fail();
+      this.requireExactTurnBinding(admission);
+      this.requireDurableBinding(identity.admissionId, identity.turnId, request.durableRunId, true);
+      const run = this.requireDurableRun(request.durableRunId, true);
+      this.requireExactDurableRunPayloadIdentity(admission, run);
+      const existing = this.db.prepare(`SELECT resolution_id, resolution_kind, request_sha256, resulting_run_version, resolved_at
+        FROM governed_remediation_parent_resolutions WHERE reservation_id = @reservationId OR idempotency_key = @idempotencyKey`)
+        .all<{ resolution_id: string; resolution_kind: string; request_sha256: string; resulting_run_version: number | string | bigint; resolved_at: string }>({ reservationId: request.reservationId, idempotencyKey: request.idempotencyKey });
+      if (existing.length) {
+        const row = existing[0]!;
+        if (existing.length !== 1 || row.resolution_kind !== "resumed" || row.request_sha256 !== requestSha256
+          || row.resolution_id !== resolutionId || asPositiveInteger(row.resulting_run_version) !== resultingRunVersion) throw fail();
+        return { resolutionId, resultingRunVersion, resolvedAt: row.resolved_at, replayed: true };
+      }
+      if (admission.status !== "active") throw fail();
+      this.requireAdmissionCurrentAuthority(admission);
+      const reservation = this.db.prepare(`SELECT remediation_id, durable_run_id, blocked_checkpoint_id, requester_actor_id,
+        workspace_id, recipe_sha256, effect_id, reserved_run_version FROM governed_remediation_parent_reservations
+        WHERE reservation_id = @reservationId`).get<{
+          remediation_id: string; durable_run_id: string; blocked_checkpoint_id: string; requester_actor_id: string;
+          workspace_id: string; recipe_sha256: string; effect_id: string; reserved_run_version: number | string | bigint;
+        }>({ reservationId: request.reservationId });
+      if (!reservation || reservation.remediation_id !== request.remediationId || reservation.durable_run_id !== request.durableRunId
+        || reservation.requester_actor_id !== request.requesterActorId || reservation.workspace_id !== identity.workspaceId
+        || asPositiveInteger(reservation.reserved_run_version) !== request.expectedReservedRunVersion) throw fail();
+      this.db.prepare(`SELECT remediation_id FROM governed_remediation_states WHERE remediation_id = @remediationId
+        ${this.db.dialect === "postgres" ? "FOR UPDATE" : ""}`).get({ remediationId: request.remediationId });
+      const owner = new GovernedRemediationRepository(this.db);
+      const state = owner.getState(request.remediationId);
+      const { record } = state;
+      if (record.state !== "resuming" || record.revision !== request.stateRevision || record.parentReservationId !== request.reservationId
+        || record.workspaceId !== identity.workspaceId || record.sessionId !== identity.sessionId || record.sourceTurnId !== identity.turnId
+        || record.requesterActorId !== request.requesterActorId || record.durableRunId !== request.durableRunId
+        || record.blockedCheckpointId !== reservation.blocked_checkpoint_id || record.effectId !== reservation.effect_id
+        || record.recipeSha256 !== reservation.recipe_sha256 || record.latestReceiptId !== request.verificationReceiptId) throw fail();
+      const verification = owner.getReceipt(request.verificationReceiptId);
+      if (verification.kind !== "verification" || verification.remediationId !== record.remediationId
+        || verification.recipeId !== record.recipeId || verification.recipeVersion !== record.recipeVersion
+        || canonicalJsonString(verification.scope) !== canonicalJsonString(record.scope)) throw fail();
+      const application = owner.getReceipt(verification.applicationReceiptId);
+      if (application.kind !== "application" || application.remediationId !== record.remediationId
+        || application.effectId !== record.effectId || application.ownerId !== state.ownerId) throw fail();
+      if (verification.activationReceiptId) {
+        const activation = owner.getReceipt(verification.activationReceiptId);
+        if (activation.kind !== "activation" || activation.remediationId !== record.remediationId
+          || activation.applicationReceiptId !== application.receiptId || activation.ownerRevisionAfter !== verification.ownerRevisionObserved) throw fail();
+      } else if (application.ownerRevisionAfter !== verification.ownerRevisionObserved) throw fail();
+      const resolvedAt = this.readDatabaseTime();
+      const claim = this.db.prepare(`SELECT claim_id FROM governed_remediation_phase_claims
+        WHERE remediation_id = @remediationId AND aggregate_kind = 'state' AND aggregate_id = @remediationId
+          AND phase = 'resume' AND expected_aggregate_revision = @stateRevision AND operation_id = @operationId
+          AND effect_id = @effectId AND expected_owner_revision = @ownerRevision AND status = 'active' AND lease_expires_at > @resolvedAt`)
+        .get({ remediationId: request.remediationId, stateRevision: request.stateRevision, operationId: request.operationId,
+          effectId: reservation.effect_id, ownerRevision: verification.ownerRevisionObserved, resolvedAt });
+      if (!claim || !new DurableRunRepository(this.db).lockWaitingCheckpointForUpdate({ runId: request.durableRunId,
+        checkpointId: reservation.blocked_checkpoint_id, expectedRunVersion: request.expectedReservedRunVersion })) throw fail();
+      const reference = readGovernedRemediationResumeReference({ schemaVersion: "goatcitadel.remediation-resume-reference.v1",
+        resolutionId, remediationId: request.remediationId, verificationReceiptId: request.verificationReceiptId });
+      if (!reference || this.remediationContinuation) throw fail();
+      this.db.prepare(`INSERT INTO governed_remediation_parent_resolutions (resolution_id, reservation_id, resolution_kind,
+        receipt_id, failure_id, previous_run_version, resulting_run_version, operation_id, idempotency_key, request_sha256, resolved_at)
+        VALUES (@resolutionId, @reservationId, 'resumed', @receiptId, NULL, @previousRunVersion,
+          @resultingRunVersion, @operationId, @idempotencyKey, @requestSha256, @resolvedAt)`)
+        .run({ resolutionId, reservationId: request.reservationId, receiptId: request.verificationReceiptId,
+          previousRunVersion: request.expectedReservedRunVersion, resultingRunVersion, operationId: request.operationId,
+          idempotencyKey: request.idempotencyKey, requestSha256, resolvedAt });
+      this.remediationContinuation = { reference, resolvedAt };
+      try {
+        const continued = this.resolveDurableChatUserInput({ admissionIdentity: { ...identity,
+          aggregateRevision: asPositiveInteger(admission.aggregate_revision), controllerGeneration: asPositiveInteger(admission.controller_generation),
+          materialSha256: admission.material_sha256 }, durableRunId: request.durableRunId,
+          expectedWaitingRunVersion: request.expectedReservedRunVersion, promptId: request.promptId,
+          eventKey: "chat.user_input.resolved", correlationId: request.promptId,
+          // No HTTP authentication is invented for this server-generated outcome.
+          responder: { actorId: request.requesterActorId, authActorSource: "none" },
+          response: { kind: "text", text: GOVERNED_REMEDIATION_RESUME_TEXT } });
+        if (continued.disposition !== "resolved" || continued.run.version !== resultingRunVersion) throw fail();
+      } finally { this.remediationContinuation = undefined; }
+      return { resolutionId, resultingRunVersion, resolvedAt, replayed: false };
+    });
+  }
+
+  /** Release only from durable no-effect/rollback evidence. This does not queue
+   * work, manufacture a successful repair, or authorize any external effect. */
+  public releaseDurableChatRemediation(input: ReleaseDurableChatRemediationInput): DurableChatRemediationResolution {
+    const identity = normalizeTurnWriteIdentity(input);
+    const request = {
+      reservationId: identifier(input.reservationId, "reservationId"),
+      remediationId: identifier(input.remediationId, "remediationId"),
+      durableRunId: identifier(input.durableRunId, "durableRunId"),
+      requesterActorId: identifier(input.requesterActorId, "requesterActorId"),
+      stateRevision: positiveInteger(input.stateRevision, "stateRevision"),
+      expectedReservedRunVersion: positiveInteger(input.expectedReservedRunVersion, "expectedReservedRunVersion"),
+      receiptId: input.receiptId === null ? null : identifier(input.receiptId, "receiptId"),
+      failureId: input.failureId === null ? null : identifier(input.failureId, "failureId"),
+      operationId: boundedIdentifier(input.operationId, "operationId", 512),
+      idempotencyKey: boundedIdentifier(input.idempotencyKey, "idempotencyKey", 512),
+    };
+    const fail = () => admissionConflict("SESSION_MUTATION_REMEDIATION_RELEASE_CONFLICT", "Remediation release evidence or parent authority changed.");
+    if ((request.receiptId === null) === (request.failureId === null)) throw fail();
+    const resultingRunVersion = incrementPositiveInteger(request.expectedReservedRunVersion);
+    const requestSha256 = sha256(canonicalJsonString({ version: 1, kind: "released", identity, request }));
+    const resolutionId = `remediation-resolution-${requestSha256}`;
+    return this.db.transaction("immediate", () => {
+      const observed = this.requireRow(identity.admissionId, false);
+      this.acquireSessionLock(observed.session_id);
+      const admission = this.requireRow(identity.admissionId, true);
+      this.assertTurnWriteIdentity(admission, identity);
+      if (admission.actor_id !== request.requesterActorId) throw fail();
+      this.requireExactTurnBinding(admission);
+      this.requireDurableBinding(identity.admissionId, identity.turnId, request.durableRunId, true);
+      const run = this.requireDurableRun(request.durableRunId, true);
+      this.requireExactDurableRunPayloadIdentity(admission, run);
+      const existing = this.db.prepare(`SELECT resolution_id, resolution_kind, request_sha256, resulting_run_version, resolved_at
+        FROM governed_remediation_parent_resolutions WHERE reservation_id = @reservationId OR idempotency_key = @idempotencyKey`)
+        .all<{ resolution_id: string; resolution_kind: string; request_sha256: string; resulting_run_version: number | string | bigint; resolved_at: string }>({ reservationId: request.reservationId, idempotencyKey: request.idempotencyKey });
+      if (existing.length) {
+        const row = existing[0]!;
+        if (existing.length !== 1 || row.resolution_kind !== "released" || row.request_sha256 !== requestSha256
+          || row.resolution_id !== resolutionId || asPositiveInteger(row.resulting_run_version) !== resultingRunVersion) throw fail();
+        return { resolutionId, resultingRunVersion, resolvedAt: row.resolved_at, replayed: true };
+      }
+      if (admission.status !== "active") throw fail();
+      this.requireAdmissionCurrentAuthority(admission);
+      const reservation = this.db.prepare(`SELECT remediation_id, durable_run_id, blocked_checkpoint_id, requester_actor_id,
+        workspace_id, recipe_sha256, effect_id, reserved_run_version FROM governed_remediation_parent_reservations
+        WHERE reservation_id = @reservationId`).get<{
+          remediation_id: string; durable_run_id: string; blocked_checkpoint_id: string; requester_actor_id: string;
+          workspace_id: string; recipe_sha256: string; effect_id: string; reserved_run_version: number | string | bigint;
+        }>({ reservationId: request.reservationId });
+      if (!reservation || reservation.remediation_id !== request.remediationId || reservation.durable_run_id !== request.durableRunId
+        || reservation.requester_actor_id !== request.requesterActorId || reservation.workspace_id !== identity.workspaceId
+        || asPositiveInteger(reservation.reserved_run_version) !== request.expectedReservedRunVersion) throw fail();
+      this.db.prepare(`SELECT remediation_id FROM governed_remediation_states WHERE remediation_id = @remediationId
+        ${this.db.dialect === "postgres" ? "FOR UPDATE" : ""}`).get({ remediationId: request.remediationId });
+      const owner = new GovernedRemediationRepository(this.db);
+      const { record } = owner.getState(request.remediationId);
+      if (record.revision !== request.stateRevision || record.parentReservationId !== request.reservationId
+        || record.workspaceId !== identity.workspaceId || record.sessionId !== identity.sessionId || record.sourceTurnId !== identity.turnId
+        || record.requesterActorId !== request.requesterActorId || record.durableRunId !== request.durableRunId
+        || record.blockedCheckpointId !== reservation.blocked_checkpoint_id || record.effectId !== reservation.effect_id
+        || record.recipeSha256 !== reservation.recipe_sha256) throw fail();
+      const evidence = request.receiptId ? owner.getReceipt(request.receiptId) : owner.getFailure(request.failureId!);
+      if (evidence.remediationId !== record.remediationId || evidence.recipeId !== record.recipeId
+        || evidence.recipeVersion !== record.recipeVersion || canonicalJsonString(evidence.scope) !== canonicalJsonString(record.scope)) throw fail();
+      if ("kind" in evidence) {
+        if (evidence.kind !== "rollback" || record.state !== "rolled_back" || record.latestReceiptId !== evidence.receiptId) throw fail();
+        const application = owner.getReceipt(evidence.applicationReceiptId);
+        if (application.kind !== "application" || application.remediationId !== record.remediationId
+          || application.effectId !== record.effectId) throw fail();
+      } else if (evidence.effectBoundary !== "not_crossed" || record.state !== "failed"
+        || record.failureId !== evidence.failureId || record.latestReceiptId !== null) throw fail();
+      const parent = new DurableRunRepository(this.db).lockWaitingCheckpointForUpdate({
+        runId: request.durableRunId, checkpointId: reservation.blocked_checkpoint_id,
+        expectedRunVersion: request.expectedReservedRunVersion,
+      });
+      if (!parent || parent.run.workflowKey !== "chat.turn.execute") throw fail();
+      const resolvedAt = this.readDatabaseTime();
+      const changed = this.db.prepare(`UPDATE durable_runs SET version = version + 1, updated_at = @resolvedAt
+        WHERE run_id = @durableRunId AND status = 'waiting' AND version = @expectedReservedRunVersion`)
+        .run({ durableRunId: request.durableRunId, expectedReservedRunVersion: request.expectedReservedRunVersion, resolvedAt });
+      if (Number(changed.changes) !== 1) throw fail();
+      this.db.prepare(`INSERT INTO governed_remediation_parent_resolutions (resolution_id, reservation_id, resolution_kind,
+        receipt_id, failure_id, previous_run_version, resulting_run_version, operation_id, idempotency_key, request_sha256, resolved_at)
+        VALUES (@resolutionId, @reservationId, 'released', @receiptId, @failureId, @previousRunVersion,
+          @resultingRunVersion, @operationId, @idempotencyKey, @requestSha256, @resolvedAt)`)
+        .run({ resolutionId, reservationId: request.reservationId, receiptId: request.receiptId, failureId: request.failureId,
+          previousRunVersion: request.expectedReservedRunVersion, resultingRunVersion, operationId: request.operationId,
+          idempotencyKey: request.idempotencyKey, requestSha256, resolvedAt });
+      return { resolutionId, resultingRunVersion, resolvedAt, replayed: false };
+    });
+  }
+
+  /**
    * Freeze a capability profile to an active turn admission before the profile
    * row itself is inserted. The profile foreign key is deferred, so callers
    * must perform this operation and immutable profile creation in one outer
@@ -2182,6 +2576,7 @@ export class SessionMutationAdmissionRepository {
           normalized.scopeRef,
           String(normalized.expectedWaitingRunVersion),
         );
+        this.assertNoRemediationParentReservation(normalized.durableRunId);
         const activeReservation = this.findActiveDurableChatSecureConfigurationByTargetScope(
           normalized.targetId,
           normalized.scopeRef,
@@ -3073,6 +3468,7 @@ export class SessionMutationAdmissionRepository {
             "Durable Chat run is not at the expected waiting version.",
           );
         }
+        this.assertNoRemediationParentReservation(normalized.durableRunId);
         this.requireExactDurableRunPayloadIdentity(admission, run);
         const payload = parseJsonObject(run.payload_json);
         const metadata = run.metadata_json ? parseJsonObject(run.metadata_json) : {};
@@ -3097,7 +3493,7 @@ export class SessionMutationAdmissionRepository {
             "Durable Chat payload already contains this prompt response.",
           );
         }
-        const resolvedAt = this.readDatabaseTime();
+        const resolvedAt = this.remediationContinuation?.resolvedAt ?? this.readDatabaseTime();
         const activeSecureReservation = this.findActiveDurableChatSecureConfigurationReservation(
           normalized.admissionIdentity.admissionId,
           normalized.durableRunId,
@@ -3197,6 +3593,9 @@ export class SessionMutationAdmissionRepository {
           resolvedAt,
           normalized.runtimeConfigurationReceipt,
         );
+        if (this.remediationContinuation) {
+          responseRecord.runtimeRemediationReceipt = this.remediationContinuation.reference;
+        }
         const resumeRecordSha256 = sha256(canonicalJsonString(responseRecord));
         const queuedRunVersion = incrementPositiveInteger(normalized.expectedWaitingRunVersion);
         const sealMaterial = {
@@ -5175,6 +5574,30 @@ export class SessionMutationAdmissionRepository {
           "Durable Chat user-input responses do not match immutable continuation seals.",
         );
       }
+      if (response.runtimeRemediationReceipt) {
+        const reference = response.runtimeRemediationReceipt;
+        const proof = this.db.prepare(`SELECT resolution.resolution_id
+          FROM governed_remediation_parent_resolutions resolution
+          JOIN governed_remediation_parent_reservations reservation ON reservation.reservation_id = resolution.reservation_id
+          JOIN governed_remediation_states state ON state.remediation_id = reservation.remediation_id
+          JOIN governed_remediation_receipts receipt ON receipt.receipt_id = resolution.receipt_id
+          WHERE resolution.resolution_id = @resolutionId AND resolution.resolution_kind = 'resumed'
+            AND resolution.receipt_id = @verificationReceiptId AND receipt.kind = 'verification'
+            AND receipt.remediation_id = @remediationId AND reservation.remediation_id = @remediationId
+            AND reservation.durable_run_id = @durableRunId AND reservation.workspace_id = @workspaceId
+            AND reservation.requester_actor_id = @actorId AND state.source_turn_id = @turnId
+            AND state.session_id = @sessionId AND state.parent_reservation_id = reservation.reservation_id
+            AND state.effect_id = reservation.effect_id AND state.recipe_sha256 = reservation.recipe_sha256
+            AND resolution.previous_run_version = @waitingRunVersion AND resolution.resulting_run_version = @queuedRunVersion
+            AND resolution.resolved_at = @resolvedAt`).get({
+              resolutionId: reference.resolutionId, verificationReceiptId: reference.verificationReceiptId,
+              remediationId: reference.remediationId, durableRunId: run.run_id, workspaceId: admission.workspace_id,
+              actorId: admission.actor_id, turnId: admission.turn_id, sessionId: admission.session_id,
+              waitingRunVersion: seal.waitingRunVersion, queuedRunVersion: seal.queuedRunVersion, resolvedAt: seal.resolvedAt,
+            });
+        if (!proof) throw admissionConflict("SESSION_MUTATION_REMEDIATION_RESUME_EVIDENCE_CONFLICT",
+          "Durable Chat repair continuation has no exact canonical resolution evidence.");
+      }
     }
   }
 
@@ -6021,6 +6444,20 @@ export class SessionMutationAdmissionRepository {
       throw admissionConflict(
         "SESSION_MUTATION_SECURE_CONFIGURATION_REPLAY_CONFLICT",
         "Secure configuration continuation replay conflicts.",
+      );
+    }
+  }
+
+  private assertNoRemediationParentReservation(durableRunId: string): void {
+    if (this.db.prepare(`SELECT reservation_id FROM governed_remediation_parent_reservations
+      WHERE durable_run_id = @durableRunId AND NOT EXISTS (
+        SELECT 1 FROM governed_remediation_parent_resolutions resolution
+        WHERE resolution.reservation_id = governed_remediation_parent_reservations.reservation_id
+          AND resolution.resolution_kind IN ('released', 'resumed')
+      )`).get({ durableRunId })) {
+      throw admissionConflict(
+        "SESSION_MUTATION_REMEDIATION_RESERVATION_ACTIVE",
+        "A remediation reservation requires receipt-bound resolution before this run can continue.",
       );
     }
   }
@@ -8156,6 +8593,8 @@ function normalizeDurableChatUserInputResumeRecord(
   const kind = record.kind;
   if (kind !== "single_select" && kind !== "text") throw new ValidationError({ field: `${field}.kind` });
   const hasRuntimeConfigurationReceipt = record.runtimeConfigurationReceipt !== undefined;
+  const hasRuntimeRemediationReceipt = record.runtimeRemediationReceipt !== undefined;
+  if (hasRuntimeRemediationReceipt && (kind !== "text" || hasRuntimeConfigurationReceipt)) throw new ValidationError({ field });
   const expectedKeys =
     kind === "single_select"
       ? [
@@ -8165,6 +8604,7 @@ function normalizeDurableChatUserInputResumeRecord(
           "question",
           "response",
           ...(hasRuntimeConfigurationReceipt ? ["runtimeConfigurationReceipt"] : []),
+          ...(hasRuntimeRemediationReceipt ? ["runtimeRemediationReceipt"] : []),
           "selectedOption",
           "title",
         ]
@@ -8175,6 +8615,7 @@ function normalizeDurableChatUserInputResumeRecord(
           "question",
           "response",
           ...(hasRuntimeConfigurationReceipt ? ["runtimeConfigurationReceipt"] : []),
+          ...(hasRuntimeRemediationReceipt ? ["runtimeRemediationReceipt"] : []),
           "title",
         ];
   if (!hasExactKeys(record, expectedKeys)) throw new ValidationError({ field });
@@ -8192,6 +8633,11 @@ function normalizeDurableChatUserInputResumeRecord(
       )
     : undefined;
   if (kind === "text") {
+    const runtimeRemediationReceipt = hasRuntimeRemediationReceipt
+      ? readGovernedRemediationResumeReference(record.runtimeRemediationReceipt) : undefined;
+    if (hasRuntimeRemediationReceipt && (!runtimeRemediationReceipt || response.text !== GOVERNED_REMEDIATION_RESUME_TEXT)) {
+      throw new ValidationError({ field: `${field}.runtimeRemediationReceipt` });
+    }
     if (
       !hasExactKeys(response, ["kind", "text"]) ||
       response.kind !== "text" ||
@@ -8209,6 +8655,7 @@ function normalizeDurableChatUserInputResumeRecord(
       answeredAt,
       response: { kind: "text", text: response.text },
       ...(runtimeConfigurationReceipt ? { runtimeConfigurationReceipt } : {}),
+      ...(runtimeRemediationReceipt ? { runtimeRemediationReceipt } : {}),
     };
   }
   if (

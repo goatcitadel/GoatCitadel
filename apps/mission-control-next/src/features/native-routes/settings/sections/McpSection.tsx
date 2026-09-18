@@ -18,6 +18,7 @@ import {
   runMcpServerHealthCheck,
   startMcpOAuth,
   updateMcpServer,
+  isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
@@ -46,6 +47,9 @@ import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { DetailInspector } from "../../../../components/DetailInspector";
+import { McpServerReview } from "./McpServerReview";
+import { describeMcpServerError, useMcpServerReview } from "./useMcpServerReview";
+import "./integration-confirmation.css";
 import {
   createEmptyMcpRemotePreview,
   createEmptyMcpServerModeManifest,
@@ -89,8 +93,12 @@ export function McpSection(props: SettingsSectionProps) {
   const [detailTab, setDetailTab] = useState<"connection" | "tools" | "diagnostics">("connection");
   const selectionRef = useRef(selectedServerId);
   selectionRef.current = selectedServerId;
-  const scopeRef = useRef(props.activeWorkspaceId);
-  scopeRef.current = props.activeWorkspaceId;
+  const scopeRef = useRef({ workspaceId: props.activeWorkspaceId, serverId: selectedServerId });
+  if (scopeRef.current.workspaceId !== props.activeWorkspaceId || scopeRef.current.serverId !== selectedServerId) scopeRef.current = { workspaceId: props.activeWorkspaceId, serverId: selectedServerId };
+  const currentScope = scopeRef.current;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const isCurrentScope = () => mounted.current && scopeRef.current === currentScope;
   const panelRef = useRef(panel);
   panelRef.current = panel;
   const busyRef = useRef(false);
@@ -115,6 +123,7 @@ export function McpSection(props: SettingsSectionProps) {
       nativeLoad("MCP elicitations", fetchMcpElicitations({ status: "pending" }), { items: [] }),
     ]);
     return {
+      workspaceId: props.activeWorkspaceId,
       issues: nativeLoadIssues([servers, templates, remotePreview, serverMode, pendingElicitations]),
       servers: servers.data.items,
       templates: templates.data.items,
@@ -124,16 +133,23 @@ export function McpSection(props: SettingsSectionProps) {
       remotePreviewAvailable: previewRequested && !remotePreview.issue && Boolean(remotePreview.data.summary),
       serverModeAvailable: previewRequested && !serverMode.issue && Boolean(serverMode.data.summary),
     };
-  }, [templatesRequested, previewRequested]);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  }, [templatesRequested, previewRequested, props.activeWorkspaceId]);
+  const { loading, error, data, reload, updateData } = useAsyncLoad(load, [load]);
+  const applyServer = useCallback((serverId: string, server: McpServerRecord | null) => {
+    updateData(current => ({ ...current, servers: server
+      ? current.servers.some(item => item.serverId === serverId) ? current.servers.map(item => item.serverId === serverId ? server : item) : [...current.servers, server]
+      : current.servers.filter(item => item.serverId !== serverId) }));
+  }, [updateData]);
+  const review = useMcpServerReview(props.activeWorkspaceId, selectedServerId, applyServer);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [pendingDeleteServer, setPendingDeleteServer] = useState<{ serverId: string; label: string } | null>(null);
+  const [pendingDeleteServer, setPendingDeleteServer] = useState<{ serverId: string; label: string; revision: string } | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const [tools, setTools] = useState<Array<{ toolName: string; description?: string }> | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [toolsVersion, setToolsVersion] = useState(0);
   const [healthReport, setHealthReport] = useState<ConnectorDiagnosticReport | null>(null);
   const selectedServer = data?.servers?.find((item) => item.serverId === selectedServerId) ?? null;
+  const gatewayOwned = selectedServerId === "goatcitadel-internal-approval-inbox" || selectedServerId === "goatcitadel-internal-durable-tasks";
   const selectedElicitation =
     data?.pendingElicitations?.find((item) => item.elicitationId === selectedElicitationId) ?? null;
   const selectedRemotePreviewItem = previewRequested
@@ -151,7 +167,7 @@ export function McpSection(props: SettingsSectionProps) {
   const editDraft = useSessionDraft(
     "mcp:" + props.activeWorkspaceId + ":" + selectedServerId + ":edit",
     createMcpEditForm(selectedServer),
-    selectedServer?.configurationRevision ?? JSON.stringify(createMcpEditForm(selectedServer)),
+    selectedServer?.revision,
     {
       label: selectedServer?.label ?? "MCP server",
       active: panel === "edit",
@@ -163,6 +179,14 @@ export function McpSection(props: SettingsSectionProps) {
     setCreateForm = createDraft.setValue;
   const editForm = editDraft.value,
     setEditForm = editDraft.setValue;
+  const requiresReview = review.required || editDraft.hasRemoteChanges;
+  const reviewPanel = requiresReview ? <McpServerReview server={selectedServer} loading={review.loading} error={review.error} missing={review.missing}
+    onReload={() => void review.refresh()} onAccept={() => {
+      if (review.isCurrent() && selectedServer?.revision && !review.loading && !review.error && !review.missing) {
+        editDraft.rebaseToCurrent(); review.accept();
+        setNotice({ tone: "info", message: "Current server reviewed. Save your draft or choose Delete again when ready." });
+      }
+    }} /> : null;
   const openCreate = () =>
     leave.request(() => {
       setTemplatesRequested(true);
@@ -178,7 +202,10 @@ export function McpSection(props: SettingsSectionProps) {
   useEffect(() => {
     setPanel(null);
     setHealthReport(null);
+    setPendingDeleteServer(null);
+    setNotice(null);
   }, [props.activeWorkspaceId]);
+  useEffect(() => { busyRef.current = false; setBusy(false); setDeletePending(false); setPendingDeleteServer(null); }, [currentScope]);
   useEffect(() => {
     setHealthReport(null);
     setTools(null);
@@ -227,7 +254,6 @@ export function McpSection(props: SettingsSectionProps) {
     busyRef.current = true;
     setBusy(true);
     const submitted = createForm;
-    const scope = props.activeWorkspaceId;
     try {
       const created = await createMcpServer({
         label: submitted.label.trim(),
@@ -238,29 +264,31 @@ export function McpSection(props: SettingsSectionProps) {
         oauth: submitted.oauth,
         enabled: isRuntimeInvokableMcpServer(submitted) ? submitted.enabled : false,
       });
+      if (!isCurrentScope()) return false;
+      if (!created?.serverId || !created.revision) throw new Error("The saved MCP server could not be verified. Reload the server inventory before creating another.");
       const clean = createDraft.acceptSaved(createEmptyMcpCreateForm(), undefined, submitted);
+      applyServer(created.serverId, created);
       setNotice({ tone: "success", message: "MCP server " + created.label + " created." });
-      await reload();
-      if (clean && scopeRef.current === scope && panelRef.current === "create") {
+      if (clean && panelRef.current === "create") {
         setSelectedServerId(created.serverId);
         setPanel("detail");
       }
       return clean;
     } catch (cause) {
-      setNotice({ tone: "error", message: getErrorMessage(cause) });
+      if (isCurrentScope()) setNotice({ tone: "error", message: describeMcpServerError(cause) });
       return false;
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      if (isCurrentScope()) { busyRef.current = false; setBusy(false); }
     }
   };
   const handleSave = async (): Promise<boolean> => {
-    if (!selectedServer || busyRef.current) return false;
-    if (editDraft.hasRemoteChanges) {
+    if (!selectedServer || gatewayOwned || busyRef.current) return false;
+    if (requiresReview || !/^[a-f0-9]{64}$/.test(String(editDraft.baseRevision ?? ""))) {
       setNotice({
         tone: "warning",
         message: "The server configuration changed. Review it before applying your retained draft.",
       });
+      if (!requiresReview) await review.refresh();
       return false;
     }
     busyRef.current = true;
@@ -268,23 +296,28 @@ export function McpSection(props: SettingsSectionProps) {
     const submitted = editForm;
     try {
       const updated = await updateMcpServer(selectedServer.serverId, {
+        expectedRevision: String(editDraft.baseRevision),
         label: submitted.label.trim() || undefined,
-        command: selectedServer.transport === "stdio" ? submitted.command.trim() || undefined : undefined,
+        command: selectedServer.transport === "stdio" ? submitted.command.trim() : undefined,
         url: selectedServer.transport !== "stdio" ? submitted.url.trim() || undefined : undefined,
         enabled: selectedServerRuntimeReady ? submitted.enabled : false,
         category: submitted.category as McpServerRecord["category"],
       });
-      const saved = updated?.serverId ? createMcpEditForm(updated) : submitted;
-      const clean = editDraft.acceptSaved(saved, updated?.configurationRevision ?? JSON.stringify(saved), submitted);
+      if (!isCurrentScope()) return false;
+      if (updated?.serverId !== selectedServer.serverId || !updated.revision) throw new Error("The saved MCP server could not be verified. Review the current server before retrying.");
+      const saved = createMcpEditForm(updated);
+      const clean = editDraft.acceptSaved(saved, updated.revision, submitted);
+      applyServer(updated.serverId, updated);
       setNotice({ tone: "success", message: "MCP server updated." });
-      await reload();
       return clean;
     } catch (cause) {
-      setNotice({ tone: "error", message: getErrorMessage(cause) });
+      if (isCurrentScope()) {
+        setNotice({ tone: "error", message: describeMcpServerError(cause) });
+        if (!isApiRequestError(cause) || cause.status === undefined || cause.status === 404 || cause.status === 409 || cause.status >= 500) await review.refresh();
+      }
       return false;
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      if (isCurrentScope()) { busyRef.current = false; setBusy(false); }
     }
   };
   const runServerAction = async (action: () => Promise<unknown>, successMessage: string) => {
@@ -293,31 +326,37 @@ export function McpSection(props: SettingsSectionProps) {
     setBusy(true);
     try {
       await action();
+      if (!isCurrentScope()) return;
       setNotice({ tone: "success", message: successMessage });
       await reload();
     } catch (cause) {
-      setNotice({ tone: "error", message: getErrorMessage(cause) });
+      if (isCurrentScope()) setNotice({ tone: "error", message: describeMcpServerError(cause) });
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      if (isCurrentScope()) { busyRef.current = false; setBusy(false); }
     }
   };
   const handleDeleteServer = async () => {
     if (!pendingDeleteServer || deletePending || busyRef.current) return;
     busyRef.current = true;
     setDeletePending(true);
+    const submitted = pendingDeleteServer;
     try {
-      await deleteMcpServer(pendingDeleteServer.serverId);
-      discardSessionDraft("mcp:" + props.activeWorkspaceId + ":" + pendingDeleteServer.serverId + ":edit");
-      setNotice({ tone: "success", message: "MCP server " + pendingDeleteServer.label + " deleted." });
+      const deleted = await deleteMcpServer(submitted.serverId, submitted.revision);
+      if (!isCurrentScope()) return;
+      if (!deleted.deleted) throw new Error("The MCP deletion could not be verified. Review the current server before retrying.");
+      discardSessionDraft("mcp:" + props.activeWorkspaceId + ":" + submitted.serverId + ":edit");
+      applyServer(submitted.serverId, null);
+      setNotice({ tone: "success", message: "MCP server " + submitted.label + " deleted." });
       setPendingDeleteServer(null);
       if (selectionRef.current === pendingDeleteServer.serverId) setPanel(null);
-      await reload();
     } catch (cause) {
-      setNotice({ tone: "error", message: getErrorMessage(cause) });
+      if (isCurrentScope()) {
+        setPendingDeleteServer(null);
+        setNotice({ tone: "error", message: describeMcpServerError(cause) });
+        if (!isApiRequestError(cause) || cause.status === undefined || cause.status === 404 || cause.status === 409 || cause.status >= 500) await review.refresh();
+      }
     } finally {
-      busyRef.current = false;
-      setDeletePending(false);
+      if (isCurrentScope()) { busyRef.current = false; setDeletePending(false); }
     }
   };
 
@@ -419,26 +458,9 @@ export function McpSection(props: SettingsSectionProps) {
           ) : panel === "edit" ? (
             <FocusedDetail title={"Edit " + (selectedServer?.label ?? "server")} onClose={closePanel}>
               <SettingsStack>
+                {reviewPanel}
                 {selectedServer ? (
                   <>
-                    {editDraft.hasRemoteChanges ? (
-                      <NativeCard
-                        title="Server configuration changed"
-                        subtitle="Your draft is retained. Review the saved values before retrying."
-                      >
-                        <dl>
-                          <dt>Label</dt>
-                          <dd>{selectedServer.label}</dd>
-                          <dt>Command or URL</dt>
-                          <dd>{selectedServer.command || selectedServer.url || "Unavailable"}</dd>
-                          <dt>Enabled</dt>
-                          <dd>{String(selectedServer.enabled)}</dd>
-                          <dt>Category</dt>
-                          <dd>{selectedServer.category}</dd>
-                        </dl>
-                        <NativeButton onClick={editDraft.rebaseToCurrent}>Apply draft to current server</NativeButton>
-                      </NativeCard>
-                    ) : null}
                     <SettingsFieldGrid>
                       <SettingsField label="Label">
                         <input
@@ -520,13 +542,15 @@ export function McpSection(props: SettingsSectionProps) {
                         }}
                       />
                     ) : null}
-                    <NativeButton disabled={busy || editDraft.hasRemoteChanges} onClick={() => void handleSave()}>
+                    <NativeButton disabled={busy || gatewayOwned || requiresReview} onClick={() => void handleSave()}>
                       <Save size={16} />
                       Save changes
                     </NativeButton>
                   </>
                 ) : (
-                  <SettingsEmptyState label="This server is unavailable. Your retained draft has not been discarded." />
+                  <NativeCard title="Retained MCP edits" subtitle="This server is unavailable. Your draft has not been discarded.">
+                    <dl><dt>Label</dt><dd>{editForm.label}</dd><dt>Command or URL</dt><dd>{editForm.command || editForm.url || "None"}</dd><dt>Category</dt><dd>{editForm.category}</dd></dl>
+                  </NativeCard>
                 )}
               </SettingsStack>
             </FocusedDetail>
@@ -741,6 +765,7 @@ export function McpSection(props: SettingsSectionProps) {
             title={selectedServer?.label ?? "Server unavailable"}
             onClose={closePanel}
           >
+            {reviewPanel}
             {selectedServer ? (
               <SettingsStack>
                 <p>
@@ -785,7 +810,7 @@ export function McpSection(props: SettingsSectionProps) {
                     </dl>
                     <fieldset disabled={busy} className="mc-next-settings-fieldset">
                       <SettingsButtonRow>
-                        <NativeButton onClick={() => setPanel("edit")}>
+                        <NativeButton disabled={gatewayOwned} onClick={() => setPanel("edit")}>
                           Edit server{editDraft.isDirty ? " · Unsaved" : ""}
                         </NativeButton>
                         <NativeButton
@@ -793,6 +818,7 @@ export function McpSection(props: SettingsSectionProps) {
                           onClick={() =>
                             void runServerAction(async () => {
                               const flow = await startMcpOAuth(selectedServer.serverId);
+                              if (!isCurrentScope()) return;
                               window.open(flow.authorizeUrl, "_blank", "noopener,noreferrer");
                             }, "MCP OAuth authorization opened.")
                           }
@@ -836,7 +862,7 @@ export function McpSection(props: SettingsSectionProps) {
                             void runServerAction(async () => {
                               const id = selectedServer.serverId;
                               const report = await runMcpServerHealthCheck(id);
-                              if (selectionRef.current === id) {
+                              if (isCurrentScope() && selectionRef.current === id) {
                                 setHealthReport(report);
                                 setDetailTab("diagnostics");
                               }
@@ -858,9 +884,11 @@ export function McpSection(props: SettingsSectionProps) {
                         </NativeButton>
                         <NativeButton
                           variant="destructive"
-                          onClick={() =>
-                            setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label })
-                          }
+                          disabled={gatewayOwned || requiresReview}
+                          onClick={() => {
+                            if (!selectedServer.revision) { void review.refresh(); return; }
+                            setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label, revision: selectedServer.revision });
+                          }}
                         >
                           <Trash2 size={16} />
                           Delete
@@ -946,6 +974,7 @@ export function McpSection(props: SettingsSectionProps) {
       ) : null}
       {leave.dialog}
       <ConfirmModal
+        className="mc-next-integration-confirmation"
         open={pendingDeleteServer !== null}
         danger
         pending={deletePending}

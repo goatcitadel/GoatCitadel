@@ -1,3 +1,4 @@
+import { loadDurableChatWorkerContext, injectDurableChatWorkerContext, resolveDurableChatWorkerExecution } from "./durable-chat-worker-adapter.js";
 /* eslint-disable max-lines -- Durable execution helpers and workflow registry stay co-located so lease, recovery, and step replay stay traceable together. */
 /**
  * Durable execution helpers and workflow registry.
@@ -18,7 +19,8 @@ import {
   type ChannelUnsendInput,
   ConflictError,
   canonicalJsonString,
-  verifyRemoteWorkerChatContextBinding,
+  GOVERNED_REMEDIATION_RESUME_TEXT,
+  readGovernedRemediationResumeReference,
   type ConnectorRecord,
   type McpInvokeRequest,
   type McpInvokeResponse,
@@ -1957,11 +1959,7 @@ export async function executeDurableChatTurnRun(
     }
   }
   const routedContextSnapshot = await loadAndVerifyDurableChatRoutedContextSnapshot(host, run, payload);
-  const remoteContext = run.metadata?.remoteWorkerChatContextSha256 === undefined ? undefined
-    : await host.storage.remoteWorkerChatContexts?.findForRun(run.runId);
-  if (run.metadata?.remoteWorkerChatContextSha256 !== undefined && (!remoteContext ||
-      verifyRemoteWorkerChatContextBinding(remoteContext, run.payload).contextSha256 !== run.metadata.remoteWorkerChatContextSha256))
-    throw new Error(`Durable Chat run ${run.runId} lost its frozen worker context.`);
+  const remoteContext = await loadDurableChatWorkerContext(host, run);
   const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
   if (recoveryTrace.outcome === "invalid") {
     throw new Error(recoveryTrace.reason);
@@ -2028,14 +2026,7 @@ export async function executeDurableChatTurnRun(
     injectFrozenDurableChatRoutedContext(prepared, routedContextSnapshot);
   }
   if (remoteContext) {
-    // Task-bound turns admitted for worker execution retain the same baseline
-    // even when recovered by a different Gateway. Answers to an explicit input
-    // interrupt are appended to the frozen baseline, never a newly read history.
-    const frozen = verifyRemoteWorkerChatContextBinding(remoteContext, run.payload);
-    prepared.history = JSON.parse(canonicalJsonString(frozen.messages));
-    if (resumedContent !== payload.request.content) {
-      prepared.history.push({ role: "user", content: resumedContent });
-    }
+    injectDurableChatWorkerContext(prepared, remoteContext, run, payload.request.content, resumedContent);
   }
   // Explicit legacy-only backfill: runs admitted before capability profiles
   // existed may receive one here. Newly admitted runs always carry payload
@@ -2090,7 +2081,7 @@ export async function executeDurableChatTurnRun(
   const continuation = isDurableChatStreamContinuation(run, payload);
   // Placement is chosen before either runner starts and retained across retries.
   // Existing worker ownership always wins over a new local execution attempt.
-  const remoteWorkerExecution = await host.resolveRemoteWorkerChatExecution?.(run, prepared);
+  const remoteWorkerExecution = await resolveDurableChatWorkerExecution(host, run, prepared);
   const streamRegistration = await host.registerActiveChatTurnStream(
     payload.sessionId,
     payload.turnId,
@@ -3892,6 +3883,12 @@ function publishUnrecoverableProjectionSafely(
 }
 
 function formatDurableChatTurnResumeEntry(response: DurableChatTurnUserInputResumeRecord, index: number): string {
+  if (response.runtimeRemediationReceipt !== undefined) {
+    const receipt = readGovernedRemediationResumeReference(response.runtimeRemediationReceipt);
+    return receipt && response.response.kind === "text" && response.response.text === GOVERNED_REMEDIATION_RESUME_TEXT
+      ? `${index}. Runtime repair verification\n${GOVERNED_REMEDIATION_RESUME_TEXT}\nThis is a server-recorded outcome, not an operator-authored answer.`
+      : `${index}. Invalid runtime repair evidence was excluded from resume context.`;
+  }
   const lines = [
     `${index}. ${response.title?.trim() || response.question.trim()}`,
     `Question: ${response.question.trim()}`,

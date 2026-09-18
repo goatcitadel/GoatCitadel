@@ -49,6 +49,7 @@ const gatewayVitest = (files) => [
   "exec",
   "vitest",
   "run",
+  "--maxWorkers=4",
   ...files.map((file) => `src/${file}`),
 ];
 
@@ -184,6 +185,12 @@ export function buildRemoteWorkersLaneChecks() {
         "src/remote-worker-chat-context.test.ts",
         "src/remote-worker-chat-workflow.test.ts",
         "src/remote-worker-cell.test.ts",
+        "src/remote-worker-cell-capacity-inventory.test.ts",
+        "src/remote-worker-native-capacity-layout.test.ts",
+        "src/remote-worker-native-capacity-capture.test.ts",
+        "src/remote-worker-native-capacity-composition.test.ts",
+        "src/remote-worker-native-capacity-delivery.test.ts",
+        "src/remote-worker-native-capacity-pages.test.ts",
         "src/remote-worker-settlement.test.ts",
         "src/remote-worker-ops.test.ts",
         "src/mesh-schema-node.test.ts",
@@ -194,8 +201,8 @@ export function buildRemoteWorkersLaneChecks() {
       id: "remote-workers.storage",
       // All committed remote-worker SQLite storage owners + their static
       // SQLite<->PostgreSQL schema-parity suites in ONE tsx --test process. Kept
-      // as one node-test check (not six spawns) so the lane fits well within the
-      // 10-minute run budget; the sibling test verifies every cited file exists,
+      // as one node-test check to avoid repeated runner startup;
+      // the sibling test verifies every cited file exists,
       // and each scenario's proof-matrix row names the specific owner it proves.
       title:
         "Storage owners (SQLite): HX-501B1 single-use nonce (176), HX-501 hash-only admission (170), HX-502/HX-504 generation-lease + ordered-event/materialization (171), HX-503 immutable inference request/outbox (177), HX-505 cell state/evidence (178), HX-506 insert-only settlement (179) — no-update/no-delete guards, revision CAS, exactly-once, and every SQLite<->PostgreSQL schema-parity suite",
@@ -247,6 +254,9 @@ export function buildRemoteWorkersLaneChecks() {
         "services/remote-worker-chat-execution-service.test.ts",
         "services/remote-worker-chat-output-service.test.ts",
         "services/remote-worker-chat-sequence.test.ts",
+        "services/remote-worker-chat-usage.test.ts",
+        "services/remote-worker-native-continuation.test.ts",
+        "services/remote-worker-native-chat-acceptance.test.ts",
         "services/remote-worker-approved-action-guard.test.ts",
         "services/gateway-service.approvals-facade.test.ts",
         "services/approval-resolution-effects-service.test.ts",
@@ -278,8 +288,9 @@ export function buildRemoteWorkersLaneChecks() {
     },
     {
       id: "remote-workers.worker-runtime",
-      title: "Connected-worker package: admission, transport, durable state, mesh execution deadlines, cancellation and no-retry recovery",
-      args: ["--filter", "@goatcitadel/remote-worker", "test"],
+      title:
+        "Connected-worker package: admission, transport, durable state, mesh execution deadlines, cancellation and no-retry recovery",
+      args: ["--filter", "@goatcitadel/remote-worker", "test", "--maxWorkers=4"],
       count: "vitest",
       requireAllExecuted: true,
     },
@@ -290,7 +301,10 @@ export function buildRemoteWorkersLaneChecks() {
       // guards it: a self-skipped E2E can never pass the row.
       title:
         "Connected-worker end-to-end (scenario 12): a spawned apps/remote-worker process admits over native mTLS, binds its mesh node, claims a scheduler-shaped offer, reads its workload, ships an ordered transcript, dies mid-loop, restarts, replays byte-identically, renews its lease, and settles exactly once. Destination mesh effects continue during assignment waits and recover interrupted settlement without repeating effects — asserted from durable state",
-      args: gatewayVitest(["services/remote-worker-connected-worker-e2e.test.ts", "services/mesh-capability-destination-e2e.test.ts"]),
+      args: gatewayVitest([
+        "services/remote-worker-connected-worker-e2e.test.ts",
+        "services/mesh-capability-destination-e2e.test.ts",
+      ]),
       count: "vitest",
       requireAllExecuted: true,
     },
@@ -336,8 +350,10 @@ export function buildRemoteWorkersLaneChecks() {
         "vitest",
         "run",
         "src/features/native-routes/ops/RemoteWorkersRoutePage.test.tsx",
+        "src/features/native-routes/ops/RemoteWorkerAssignmentRuntimePanel.test.tsx",
         "src/features/native-routes/ops/RemoteWorkerBudgetPanel.test.tsx",
         "src/features/threaded-surface/RemoteWorkerInlineActivity.test.tsx",
+        "src/features/threaded-surface/RemoteWorkerRuntimeSummary.test.tsx",
         "src/features/threaded-surface/useRemoteWorkerInlineActivity.test.ts",
         "src/app/remote-worker-realtime.test.ts",
       ],

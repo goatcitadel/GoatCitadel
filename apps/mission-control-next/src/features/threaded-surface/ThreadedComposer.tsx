@@ -1537,8 +1537,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             </span>
           ) : null}
           {props.sending && props.hasActiveStream ? (
-            <button type="button" className="mc-next-composer-primary" onClick={props.onStopActiveTurn}>
-              {props.activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}
+            <button type="button" className="mc-next-composer-primary" disabled={props.isStopPending} onClick={props.onStopActiveTurn}>
+              {props.isStopPending ? "Stopping…" : props.activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}
             </button>
           ) : (
             <button type="button" className="mc-next-composer-primary" disabled={!props.canSend} onClick={props.onSend}>

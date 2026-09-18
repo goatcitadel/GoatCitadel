@@ -18,6 +18,7 @@ export interface RemoteWorkerInlineActivityState {
   readonly assignments: readonly RemoteWorkerAssignmentProjection[];
   readonly loading: boolean;
   readonly error: string | null;
+  readonly revision: number;
   readonly reload: () => Promise<void>;
 }
 
@@ -36,7 +37,12 @@ export function useRemoteWorkerInlineActivity(input: RemoteWorkerInlineActivityI
   const sessionId = input.sessionId ?? undefined;
   const turnId = input.turnId ?? undefined;
   const enabled = Boolean(workspaceId && sessionId && turnId);
-  const [assignments, setAssignments] = useState<readonly RemoteWorkerAssignmentProjection[]>([]);
+  const scopeKey = JSON.stringify([workspaceId, sessionId, turnId]);
+  const [loaded, setLoaded] = useState<{
+    scopeKey: string;
+    items: readonly RemoteWorkerAssignmentProjection[];
+    revision: number;
+  }>({ scopeKey, items: [], revision: 0 });
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
@@ -44,29 +50,30 @@ export function useRemoteWorkerInlineActivity(input: RemoteWorkerInlineActivityI
 
   const reload = useCallback(async () => {
     if (!enabled || !sessionId || !turnId) {
-      setAssignments([]);
+      setLoaded({ scopeKey, items: [], revision: 0 });
       setLoading(false);
       return;
     }
     const loadId = loadSequenceRef.current + 1;
     loadSequenceRef.current = loadId;
+    setLoading(true);
     try {
       const page = await fetchRemoteWorkerAssignments(workspaceId, { sessionId, turnId, limit: 25 });
       if (loadSequenceRef.current !== loadId) return;
-      setAssignments(page.items);
+      setLoaded({ scopeKey, items: page.items, revision: loadId });
       setError(null);
     } catch {
       if (loadSequenceRef.current !== loadId) return;
-      setAssignments([]);
+      setLoaded({ scopeKey, items: [], revision: loadId });
       setError("Remote-worker activity is unavailable.");
     } finally {
       if (loadSequenceRef.current === loadId) setLoading(false);
     }
-  }, [enabled, sessionId, turnId, workspaceId]);
+  }, [enabled, scopeKey, sessionId, turnId, workspaceId]);
 
   useEffect(() => {
     if (!enabled) {
-      setAssignments([]);
+      setLoaded({ scopeKey, items: [], revision: 0 });
       setLoading(false);
       setError(null);
       return;
@@ -76,7 +83,7 @@ export function useRemoteWorkerInlineActivity(input: RemoteWorkerInlineActivityI
     return () => {
       loadSequenceRef.current += 1;
     };
-  }, [enabled, reload]);
+  }, [enabled, reload, scopeKey]);
 
   const reloadRef = useRef(reload);
   useEffect(() => {
@@ -113,5 +120,14 @@ export function useRemoteWorkerInlineActivity(input: RemoteWorkerInlineActivityI
     return () => clearInterval(interval);
   }, [enabled, disconnected]);
 
-  return useMemo(() => ({ assignments, loading, error, reload }), [assignments, loading, error, reload]);
+  return useMemo(() => {
+    const current = loaded.scopeKey === scopeKey;
+    return {
+      assignments: current ? loaded.items : [],
+      loading: enabled && (!current || loading),
+      error: current ? error : null,
+      revision: current ? loaded.revision : 0,
+      reload,
+    };
+  }, [loaded, scopeKey, enabled, loading, error, reload]);
 }

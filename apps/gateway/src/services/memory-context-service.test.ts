@@ -28,7 +28,7 @@ vi.mock("@goatcitadel/policy-engine", async (importOriginal) => {
       ...actual.currentEmbeddingProfile(request),
       provider: embeddingMock.provider,
     }),
-    generateEmbedding: async (...args: Parameters<typeof actual.generateEmbedding>) => {
+    generateEmbedding: vi.fn(async (...args: Parameters<typeof actual.generateEmbedding>) => {
       const generated = await actual.generateEmbedding(...args);
       const provider = embeddingMock.generatedProvider ?? embeddingMock.provider;
       if (provider === "pseudo") {
@@ -47,13 +47,14 @@ vi.mock("@goatcitadel/policy-engine", async (importOriginal) => {
           provider,
         },
       };
-    },
+    }),
   };
 });
 
 const tempRoots: string[] = [];
 
 beforeEach(() => {
+  vi.mocked(generateEmbedding).mockClear();
   embeddingMock.provider = "pseudo";
   embeddingMock.generatedProvider = undefined;
 });
@@ -67,6 +68,70 @@ afterEach(async () => {
 });
 
 describe("MemoryContextService", () => {
+  it("reuses query embeddings while observing source deletion and explicit refresh", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const memoryDir = path.join(rootDir, "workspace", "memory");
+    await fs.mkdir(memoryDir);
+    const memoryFile = path.join(memoryDir, "note.md");
+    await fs.writeFile(memoryFile, "Alpha gateway diagnostics require current release evidence.");
+    const service = new MemoryContextService(
+      createStorage() as never, createLlmService() as never, createConfig(rootDir) as never, vi.fn(),
+    );
+    const input = { scope: "chat" as const, sessionId: "session-1", prompt: "Recall Alpha gateway diagnostics and current release evidence." };
+    const first = await service.compose(input);
+    await service.compose(input);
+    expect(generateEmbedding).toHaveBeenCalledTimes(1);
+    expect(first.citations.length).toBeGreaterThan(0);
+    await fs.unlink(memoryFile);
+    const afterDelete = await service.compose(input);
+    expect(afterDelete.quality.reason).toBe("no_candidates");
+    expect(afterDelete.citations).toEqual([]);
+    expect(generateEmbedding).toHaveBeenCalledTimes(1);
+    await service.compose({ ...input, forceRefresh: true });
+    expect(generateEmbedding).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires query embeddings and partitions them by exact prompt, profile, run and canonical access", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const sessionKinds: Record<string, "dm" | "group" | "thread"> = { "session-1": "dm" };
+    const service = new MemoryContextService(
+      createStorage({ sessionKinds }) as never, createLlmService() as never, createConfig(rootDir) as never, vi.fn(),
+    );
+    const input = { scope: "chat" as const, sessionId: "session-1", prompt: "Recall Alpha gateway diagnostics and current release evidence." };
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      await service.compose(input);
+      await service.compose(input);
+      expect(generateEmbedding).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(1_300_001);
+      await service.compose(input);
+      await service.compose({ ...input, prompt: input.prompt.toLowerCase() });
+      await service.compose({ ...input, runId: "other-run" });
+      sessionKinds["session-1"] = "thread";
+      await service.compose(input);
+      embeddingMock.provider = "remote";
+      await service.compose(input);
+      expect(generateEmbedding).toHaveBeenCalledTimes(6);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("retries embedding generation after a provider falls back to pseudo", async () => {
+    embeddingMock.provider = "remote";
+    embeddingMock.generatedProvider = "pseudo";
+    const service = new MemoryContextService(
+      createStorage() as never, createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+    );
+    const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and current release evidence." };
+    await service.compose(input);
+    embeddingMock.generatedProvider = "remote";
+    await service.compose(input);
+    await service.compose(input);
+    expect(generateEmbedding).toHaveBeenCalledTimes(2);
+  });
+
   it("withholds compiled memory context that contains prompt injection", async () => {
     const rootDir = await createWorkspaceRoot();
     await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });

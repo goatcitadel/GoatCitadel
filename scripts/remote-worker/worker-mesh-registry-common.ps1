@@ -42,7 +42,7 @@ function Read-WorkerMeshRegistryInput {
       $registry.bindings -isnot [array] -or $registry.bindings.Count -lt 1 -or $registry.bindings.Count -gt 32 -or
       @($registry.PSObject.Properties.Name).Count -ne 4) { throw 'REFUSED: mesh registry identity or shape differs.' }
   foreach ($binding in $registry.bindings) {
-    if ($binding.toolName -cnotin @('fs.read','fs.write','mcp.http') -or
+    if ($binding.toolName -cnotin @('fs.read','fs.write','fs.list','mcp.http') -or
         $binding.manifest.workspaceId -cne $Ticket.executionWorkspaceId -or $binding.manifest.nodeId -cne $Ticket.nodeId) {
       throw 'REFUSED: mesh registry binding is outside this installed worker.'
     }

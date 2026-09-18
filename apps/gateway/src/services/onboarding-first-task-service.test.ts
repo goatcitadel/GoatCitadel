@@ -22,6 +22,19 @@ function fixture(overrides: Record<string, unknown> = {}) {
   };
 }
 describe("first-task evidence", () => {
+  it("finds the first valid response beyond a full page of non-provider completions", async () => {
+    const storage = fixture();
+    const skipped = Array.from({ length: 1000 }, (_, i) => ({
+      turnId: `demo-${String(i).padStart(4, "0")}`, startedAt: "2026-09-08T00:00:30.000Z",
+      status: "completed", completion: { status: "complete", providerCallCount: 0 }, routing: {},
+    }));
+    const valid = (await storage.chatTurnTraces.listCompletedSince())[0];
+    storage.chatTurnTraces.listCompletedSince.mockReset().mockResolvedValueOnce(skipped).mockResolvedValueOnce([valid]);
+    expect(await readOnboardingFirstTaskEvidence(storage as never, state)).toMatchObject({ status: "verified", turnId: "turn-1" });
+    expect(storage.chatTurnTraces.listCompletedSince).toHaveBeenLastCalledWith(state.completedAt, 1000,
+      { startedAt: "2026-09-08T00:00:30.000Z", turnId: "demo-0999" });
+  });
+
   it("requires actual provider execution and a canonical nonempty assistant message", async () => {
     const storage = fixture();
     const result = await readOnboardingFirstTaskEvidence(storage as never, state);

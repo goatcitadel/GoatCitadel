@@ -1,15 +1,16 @@
+export { startMcpOAuth } from "./mcp-oauth-handshake-service.js";
 import { randomUUID } from "node:crypto";
 import type {
   McpToolRecord,
-  McpOAuthStartResponse,
   McpOAuthConfig,
   McpServerCreateInput,
   McpServerPolicy,
   McpServerRecord,
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
-import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
+import { ValidationError, NotFoundError } from "@goatcitadel/contracts";
+import { assertMcpServerReview, mcpServerRevision, type McpServerWriteReview } from "./mcp-server-revision.js";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
@@ -67,11 +68,12 @@ export interface McpServerAdminHost {
     approvalInbox: Pick<Storage["approvalInbox"], "deleteByReceiver">;
   };
   readMcpServers(): Promise<McpServerRecord[]>;
-  writeMcpServers(servers: McpServerRecord[], expectedServers: McpServerRecord[]): Promise<void>;
-  closeMcpServerSessions?(serverId: string): void;
+  writeMcpServers(servers: McpServerRecord[], expectedServers: McpServerRecord[], review?: McpServerWriteReview): Promise<McpServerRecord[]>;
+  captureMcpServerSessionCloser?(serverId: string): () => void;
   prepareMcpStaticEnvironment?(server: McpServerRecord): Promise<McpServerRecord>;
   resolveMcpOAuthClientId?(server: McpServerRecord): Promise<string | undefined>;
-  patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>): Promise<McpServerRecord>;
+  patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>, expected: McpServerRecord): Promise<McpServerRecord>;
+  completeMcpServerConnection(expected: McpServerRecord, tools: McpToolRecord[]): Promise<McpServerRecord>;
   readMcpTools(): Promise<McpToolRecord[]>;
   writeMcpTools(tools: McpToolRecord[]): Promise<void>;
   resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[]): Promise<McpToolRecord[]>;
@@ -91,12 +93,13 @@ export async function createMcpServer(
   input: McpServerCreateInput,
   ownerServerId?: string,
   ownerPlanId?: string,
+  onCommitted?: () => void | Promise<void>,
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
-    throw new Error(buildInternalMcpServerCreateBlockedMessage());
+    throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
   }
   if (!isAllowedMcpDefinitionForCallerCreate(input)) {
-    throw new Error(buildUnsupportedMcpTransportMessage(input.transport));
+    throw new ValidationError({ message: buildUnsupportedMcpTransportMessage(input.transport) });
   }
   const now = new Date().toISOString();
   if (
@@ -130,13 +133,14 @@ export async function createMcpServer(
   };
   const previous = await host.readMcpServers();
   const servers = [created, ...previous];
-  await host.writeMcpServers(servers, previous);
-  await host.publishRealtime("system", "mcp", {
+  const committed = await host.writeMcpServers(servers, previous);
+  const acknowledgement = committed.find((server) => server.serverId === created.serverId)!;
+  await afterMcpCommit(onCommitted, async () => { await host.publishRealtime("system", "mcp", {
     type: "mcp_server_created",
     serverId: created.serverId,
     transport: created.transport,
-  });
-  return await host.requireMcpServer(created.serverId);
+  }); });
+  return acknowledgement;
 }
 
 export async function updateMcpServer(
@@ -144,13 +148,18 @@ export async function updateMcpServer(
   serverId: string,
   input: McpServerUpdateInput,
   packOwner?: { planId: string; phase: "apply" | "compensate" },
+  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
-    throw new Error(buildInternalMcpServerCreateBlockedMessage());
+    throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
   }
   const now = new Date().toISOString();
   let updated: McpServerRecord | undefined;
   const previous = await host.readMcpServers();
+  const original = previous.find((server) => server.serverId === serverId);
+  if (!original) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
+  if (review) assertMcpServerReview(original, review.expectedRevision);
+  const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const servers = previous.map((item) => {
     if (item.serverId !== serverId) {
       return item;
@@ -182,21 +191,23 @@ export async function updateMcpServer(
   if (!updated) {
     throw new Error(`Unknown MCP server: ${serverId}`);
   }
-  await host.writeMcpServers(servers, previous);
-  host.closeMcpServerSessions?.(serverId);
-  return await host.requireMcpServer(serverId);
+  const committed = await host.writeMcpServers(servers, previous, { serverId, expectedRevision: review?.expectedRevision ?? mcpServerRevision(original) });
+  const acknowledgement = committed.find((server) => server.serverId === serverId)!;
+  await afterMcpCommit(review?.onCommitted, () => { closeOwnedSessions?.(); });
+  return acknowledgement;
 }
 
 export async function updateMcpServerPolicy(
   host: McpServerAdminHost,
   serverId: string,
   policy: Partial<McpServerPolicy>,
+  review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
 ): Promise<McpServerRecord> {
-  return await updateMcpServer(host, serverId, { policy });
+  return await updateMcpServer(host, serverId, { policy }, undefined, review);
 }
 
 export async function connectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
-  const server = await host.requireMcpServer(serverId);
+  let server = await host.requireMcpServer(serverId);
   // HX-415: a requester-scoped server resolves its connection per authenticated
   // requester. It is never connected or discovered globally, and never mutates
   // shared server status, tool cache, or error state. Fail closed BEFORE any
@@ -209,85 +220,38 @@ export async function connectMcpServer(host: McpServerAdminHost, serverId: strin
   if (!isRuntimeSupportedMcpDefinition(server)) {
     throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
   }
-  if (host.prepareMcpStaticEnvironment) await host.prepareMcpStaticEnvironment(server);
+  if (host.prepareMcpStaticEnvironment) server = await host.prepareMcpStaticEnvironment(server);
   const connecting = await host.patchMcpServerState(serverId, {
     status: "connecting",
     lastError: undefined,
-  });
+  }, server);
   try {
     const tools = await host.readMcpTools();
     const existing = tools.filter((item) => item.serverId === serverId);
     const resolvedTools = await host.resolveConnectedMcpTools(connecting, existing);
     // Live discovery is authoritative, including a valid empty catalog. Always
     // replace this server's cache so removed tools cannot survive reconnect.
-    await host.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
-    return await host.patchMcpServerState(serverId, {
-      status: "connected",
-      lastConnectedAt: new Date().toISOString(),
-      lastError: undefined,
-    });
+    return await host.completeMcpServerConnection(connecting, resolvedTools);
   } catch (error) {
     await host.patchMcpServerState(serverId, {
       status: "error",
       lastError: (error as Error).message,
-    });
+    }, connecting);
     throw error;
   }
 }
 
 export async function disconnectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
+  const previous = await host.requireMcpServer(serverId);
+  const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const server = await host.patchMcpServerState(serverId, {
     status: "disconnected",
-  });
-  host.closeMcpServerSessions?.(serverId);
+  }, previous);
+  closeOwnedSessions?.();
   return server;
 }
 
-export async function startMcpOAuth(host: McpServerAdminHost, serverId: string): Promise<McpOAuthStartResponse> {
-  let server = await host.requireMcpServer(serverId);
-  if (server.authType !== "oauth2") {
-    throw new Error("MCP OAuth can only be started for oauth2 servers.");
-  }
-  if (!server.oauth?.authorizationUrl?.trim() || !server.oauth.tokenUrl?.trim()) {
-    throw new Error("MCP OAuth requires authorizationUrl and tokenUrl metadata.");
-  }
-  if (host.prepareMcpStaticEnvironment) server = await host.prepareMcpStaticEnvironment(server);
-  const state = randomUUID();
-  const oauth = server.oauth;
-  if (server.authType !== "oauth2" || !oauth?.authorizationUrl?.trim() || !oauth.tokenUrl?.trim()) {
-    throw new Error("MCP OAuth configuration changed while preparing its environment.");
-  }
-  const callback = oauth.redirectUri?.trim() || "http://127.0.0.1:8787/api/v1/mcp/oauth/callback";
-  const authorizeUrl = new URL(oauth.authorizationUrl);
-  authorizeUrl.searchParams.set("response_type", "code");
-  authorizeUrl.searchParams.set("state", state);
-  authorizeUrl.searchParams.set("redirect_uri", callback);
-  const clientId = host.resolveMcpOAuthClientId ? await host.resolveMcpOAuthClientId(server) : resolveEnvValue(oauth.clientIdEnv);
-  if (clientId) {
-    authorizeUrl.searchParams.set("client_id", clientId);
-  }
-  if (oauth.scopes?.length) {
-    authorizeUrl.searchParams.set("scope", oauth.scopes.join(" "));
-  }
-  const expected = (await host.readMcpAuthState())[serverId];
-  const next = {
-    ...expected,
-    // Reconnect explicitly abandons the old grant, including an uncertain token request.
-    // A late request can no longer publish against this new handshake.
-    accessTokenRef: undefined,
-    refreshTokenRef: undefined,
-    tokenExpiresAt: undefined,
-    scopes: undefined,
-    resourceIndicator: undefined,
-    tokenRequest: undefined,
-    lastCodePreview: undefined,
-    oauthState: state,
-    error: undefined,
-    updatedAt: new Date().toISOString(),
-  };
-  await host.writeMcpAuthState({ server, expected, next });
-  return { authorizeUrl: authorizeUrl.toString(), state };
-}
+
 
 export async function completeMcpOAuth(
   host: McpServerAdminHost,
@@ -315,21 +279,34 @@ export async function completeMcpOAuth(
   return await connectMcpServer(host, serverId);
 }
 
-export async function deleteMcpServer(host: McpServerAdminHost, serverId: string): Promise<{ deleted: boolean }> {
+export async function deleteMcpServer(host: McpServerAdminHost, serverId: string, review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> }): Promise<{ deleted: boolean }> {
   const previous = await host.readMcpServers();
+  const original = previous.find((server) => server.serverId === serverId);
+  if (review && !original) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
+  if (original && review) assertMcpServerReview(original, review.expectedRevision);
+  const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const next = previous.filter((item) => item.serverId !== serverId);
   const deleted = next.length !== previous.length;
   if (deleted) {
-    await host.writeMcpServers(next, previous);
-    host.closeMcpServerSessions?.(serverId);
-    // The registry removes credentials, tool inventory and first-use approvals in the delete transaction.
-    await host.storage.approvalInbox.deleteByReceiver("mcp", serverId);
+    await host.writeMcpServers(next, previous, { serverId, expectedRevision: review?.expectedRevision ?? mcpServerRevision(original!) });
+    await afterMcpCommit(review?.onCommitted, async () => {
+    closeOwnedSessions?.();
+    // The registry removes credentials, tool inventory and approvals in the delete transaction.
     await host.publishRealtime("system", "mcp", {
       type: "mcp_server_deleted",
       serverId,
-    });
+    }); });
   }
   return { deleted };
+}
+
+async function afterMcpCommit(onCommitted: (() => void | Promise<void>) | undefined, followUp: () => void | Promise<void>): Promise<void> {
+  try { await onCommitted?.(); await followUp(); }
+  catch (cause) {
+    const error = cause instanceof Error ? cause : new Error("MCP configuration committed but follow-up work failed.");
+    Object.assign(error, { mutationCommitted: true });
+    throw error;
+  }
 }
 
 function normalizeMcpOAuthConfig(input?: McpOAuthConfig): McpOAuthConfig | undefined {
@@ -350,10 +327,7 @@ function normalizeMcpOAuthConfig(input?: McpOAuthConfig): McpOAuthConfig | undef
     : undefined;
 }
 
-function resolveEnvValue(envKey?: string): string | undefined {
-  const key = normalizeSafeEnvKeyNames(envKey ? [envKey] : [])[0];
-  return key ? process.env[key]?.trim() || undefined : undefined;
-}
+
 
 /** Deps for connected-tool discovery (B5b): sandbox network policy + per-server OAuth token minting. */
 export interface ResolveConnectedMcpToolsDeps {

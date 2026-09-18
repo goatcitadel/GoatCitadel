@@ -1,5 +1,7 @@
 import type {
   Citadel,
+  CitadelAccessMutation,
+  CitadelAccessSnapshot,
   CitadelChamber,
   CitadelChamberInput,
   CitadelCharter,
@@ -16,14 +18,17 @@ import type {
   CitadelPassage,
   CitadelPassageInput,
   CitadelRecord,
+  CitadelStructureMutation,
+  CitadelStructureSnapshot,
   CitadelRole,
   CitadelUpdateInput,
+  CitadelVaultMutation,
+  CitadelVaultSnapshot,
   CitadelVaultSecretInput,
   CitadelVaultSecretRecord,
   CitadelWardInput,
   CitadelWardRecord,
   ChamberSensitivity,
-  SealedValue,
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
@@ -36,6 +41,8 @@ import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/cont
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
+import { CitadelVaultRepository } from "./citadel-vault-repo.js";
+import { applyCitadelAccessChange } from "./citadel-access-change.js";
 
 interface CharterRow {
   citadel_id: string;
@@ -89,15 +96,6 @@ interface WardRow {
   action_pattern: string;
   effect: string;
   created_at: string;
-}
-
-interface VaultSecretRow {
-  secret_id: string;
-  citadel_id: string;
-  secret_name: string;
-  sealed_value_json: string;
-  created_at: string;
-  updated_at: string;
 }
 
 interface PassageRow {
@@ -164,11 +162,7 @@ export class CitadelRepository {
   private readonly getWardStmt;
   private readonly listWardsStmt;
   private readonly deleteWardStmt;
-  private readonly storeVaultSecretStmt;
-  private readonly getVaultSecretStmt;
-  private readonly getVaultSecretByNameStmt;
-  private readonly listVaultSecretsStmt;
-  private readonly deleteVaultSecretStmt;
+  private readonly vault: CitadelVaultRepository;
   private readonly createPassageStmt;
   private readonly getPassageStmt;
   private readonly listPassagesStmt;
@@ -293,25 +287,13 @@ export class CitadelRepository {
       "SELECT * FROM citadel_wards WHERE citadel_id = @citadelId ORDER BY created_at ASC, ward_id ASC",
     );
     this.deleteWardStmt = db.prepare("DELETE FROM citadel_wards WHERE ward_id = @wardId AND citadel_id = @citadelId");
-    this.storeVaultSecretStmt = db.prepare(`
-      INSERT INTO citadel_vault_secrets (secret_id, citadel_id, secret_name, sealed_value_json, created_at, updated_at)
-      VALUES (@secretId, @citadelId, @secretName, @sealedValueJson, @now, @now)
-      ON CONFLICT(citadel_id, secret_name) DO UPDATE SET
-        sealed_value_json = excluded.sealed_value_json,
-        updated_at = excluded.updated_at
-    `);
-    this.getVaultSecretStmt = db.prepare(
-      "SELECT * FROM citadel_vault_secrets WHERE secret_id = @secretId AND citadel_id = @citadelId",
-    );
-    this.getVaultSecretByNameStmt = db.prepare(
-      "SELECT * FROM citadel_vault_secrets WHERE citadel_id = @citadelId AND secret_name = @secretName",
-    );
-    this.listVaultSecretsStmt = db.prepare(
-      "SELECT * FROM citadel_vault_secrets WHERE citadel_id = @citadelId ORDER BY secret_name ASC, secret_id ASC",
-    );
-    this.deleteVaultSecretStmt = db.prepare(
-      "DELETE FROM citadel_vault_secrets WHERE secret_id = @secretId AND citadel_id = @citadelId",
-    );
+    this.vault = new CitadelVaultRepository(db, {
+      withLock: (citadelId, action) => this.withStructureLock(citadelId, action),
+      readRecord: (citadelId) => {
+        const row = this.getRecordForUpdateStmt.get(citadelId) as CitadelRecordRow | undefined;
+        return row ? mapCitadelRecord(row) : undefined;
+      },
+    });
     this.createPassageStmt = db.prepare(`
       INSERT INTO citadel_passages (
         passage_id, source_citadel_id, source_chamber_id, destination_citadel_id,
@@ -396,10 +378,10 @@ export class CitadelRepository {
   }
 
   public createRecord(input: CitadelCreateInput, now = new Date().toISOString()): CitadelRecord {
-    return this.db.transaction("immediate", () => {
-      const name = sanitizeRequired(input.name, "name");
-      const slug = normalizeSlug(input.slug ?? input.name);
-      const citadelId = slug;
+    const name = sanitizeRequired(input.name, "name");
+    const slug = normalizeSlug(input.slug ?? input.name);
+    const citadelId = slug;
+    return this.withStructureLock(citadelId, () => {
       this.assertRecordSlugAvailable(slug);
       const inserted = this.insertRecordStmt.run({
         citadelId, name, description: sanitizeOptional(input.description), slug, kind: input.kind ?? "custom",
@@ -465,7 +447,7 @@ export class CitadelRepository {
     if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) {
       throw new ValidationError({ message: "Review the Citadel before changing it. An expected revision is required." });
     }
-    return this.db.transaction("immediate", () => {
+    return this.withStructureLock(citadelId, () => {
       const row = this.getRecordForUpdateStmt.get(citadelId) as CitadelRecordRow | undefined;
       if (!row) throw new NotFoundError({ entity: "Citadel", id: citadelId });
       const current = mapCitadelRecord(row);
@@ -480,7 +462,12 @@ export class CitadelRepository {
   }
 
   public upsertCharter(input: CitadelCharterInput): CitadelCharter {
-    const now = new Date().toISOString();
+    return this.withStructureLock(input.citadelId, () => this.writeCharter(input));
+  }
+
+  private writeCharter(input: CitadelCharterInput): CitadelCharter {
+    const previous = Date.parse(this.getCharter(input.citadelId)?.updatedAt ?? "");
+    const now = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
     this.upsertCharterStmt.run({
       citadelId: input.citadelId,
       purpose: input.purpose,
@@ -506,6 +493,10 @@ export class CitadelRepository {
   }
 
   public createChamber(input: CitadelChamberInput): CitadelChamber {
+    return this.withStructureLock(input.citadelId, () => this.insertChamber(input));
+  }
+
+  private insertChamber(input: CitadelChamberInput): CitadelChamber {
     const chamberId = randomUUID();
     const now = new Date().toISOString();
     this.createChamberStmt.run({
@@ -534,20 +525,127 @@ export class CitadelRepository {
   }
 
   public getCitadel(citadelId: string): Citadel | undefined {
-    const charter = this.getCharter(citadelId);
-    if (!charter) {
-      return undefined;
-    }
+    const snapshot = this.getStructureSnapshot(citadelId);
+    if (!snapshot.charter) return undefined;
     return {
       citadelId,
-      record: this.findRecord(citadelId),
-      charter,
-      chambers: this.listChambers(citadelId),
+      record: snapshot.record,
+      charter: snapshot.charter,
+      chambers: snapshot.chambers,
     };
   }
 
-  /** Assign an existing agent (by id) to this Citadel's Council. Idempotent. */
+  public getStructureSnapshot(citadelId: string): CitadelStructureSnapshot {
+    return this.withStructureLock(citadelId, () => this.readStructureSnapshot(citadelId));
+  }
+
+  public mutateStructure(input: CitadelStructureMutation): CitadelStructureSnapshot {
+    if (!/^[a-f0-9]{64}$/.test(input.expectedRevision ?? "")) {
+      throw new ValidationError({ message: "Review the current Charter and Chambers before changing them. An expected revision is required." });
+    }
+    return this.withStructureLock(input.citadelId, () => {
+      const current = this.readStructureSnapshot(input.citadelId);
+      if (current.revision !== input.expectedRevision) {
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Citadel changed. Review its current Charter and Chambers before applying your change.",
+          details: { reason: "CITADEL_STRUCTURE_REVISION_CONFLICT" } });
+      }
+      if (current.record?.lifecycleStatus === "archived") {
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "Restore this Citadel before changing its Charter or Chambers.",
+          details: { reason: "CITADEL_ARCHIVED" } });
+      }
+      const change = input.change;
+      if (change.type === "charter" || change.type === "setup") {
+        if (change.charter.defaultChamberId && this.getChamber(change.charter.defaultChamberId)?.citadelId !== input.citadelId) {
+          throw new ValidationError({ message: "The default Chamber must belong to this Citadel." });
+        }
+        this.writeCharter({ ...change.charter, citadelId: input.citadelId });
+        if (change.type === "setup") {
+          for (const chamber of change.chambers) this.insertChamber({ ...chamber, citadelId: input.citadelId });
+        }
+      } else if (change.type === "chamber") {
+        this.insertChamber({ ...change.chamber, citadelId: input.citadelId });
+      } else {
+        throw new ValidationError({ message: "Unsupported Citadel structure change." });
+      }
+      // Capture the acknowledgement while this transaction still owns the lock.
+      return this.readStructureSnapshot(input.citadelId);
+    });
+  }
+
+  private readStructureSnapshot(citadelId: string): CitadelStructureSnapshot {
+    const row = this.getRecordForUpdateStmt.get(citadelId) as CitadelRecordRow | undefined;
+    const record = row ? mapCitadelRecord(row) : undefined;
+    const charter = this.getCharter(citadelId) ?? null;
+    const chambers = this.listChambers(citadelId);
+    const revision = createHash("sha256").update(JSON.stringify({
+      schemaVersion: "citadel.structure.v1", citadelId, recordRevision: record?.revision ?? null, charter, chambers,
+    })).digest("hex");
+    return { citadelId, revision, record, charter, chambers };
+  }
+
+  private withStructureLock<T>(citadelId: string, action: () => T): T {
+    return this.db.transaction("immediate", () => {
+      if (this.db.dialect === "postgres") {
+        // The advisory lock also protects empty/legacy Citadels with no profile row.
+        this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 541)) AS locked")
+          .get({ lockKey: `citadel-structure:${citadelId}` });
+      }
+      return action();
+    });
+  }
+
+  public getAccessSnapshot(citadelId: string): CitadelAccessSnapshot {
+    return this.withStructureLock(citadelId, () => this.readAccessSnapshot(citadelId));
+  }
+
+  public mutateAccess(input: CitadelAccessMutation): CitadelAccessSnapshot {
+    if (!/^[a-f0-9]{64}$/.test(input.expectedRevision ?? "")) {
+      throw new ValidationError({ message: "Review the Citadel access rules before changing them. An expected revision is required." });
+    }
+    return this.withStructureLock(input.citadelId, () => {
+      const current = this.readAccessSnapshot(input.citadelId);
+      if (current.revision !== input.expectedRevision) {
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Citadel access rules changed. Review the current rules before applying your change.",
+          details: { reason: "CITADEL_ACCESS_REVISION_CONFLICT" } });
+      }
+      if (current.structure.record?.lifecycleStatus === "archived") {
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "Restore this Citadel before changing its access rules.",
+          details: { reason: "CITADEL_ARCHIVED" } });
+      }
+      const { citadelId, change } = input;
+      applyCitadelAccessChange(this, citadelId, change);
+      return this.readAccessSnapshot(citadelId);
+    });
+  }
+
+  private readAccessSnapshot(citadelId: string): CitadelAccessSnapshot {
+    const generation = this.db.prepare("SELECT CAST(generation AS TEXT) AS generation FROM citadel_access_revisions WHERE citadel_id = @citadelId")
+      .get<{ generation: string }>({ citadelId })?.generation ?? "0";
+    const content = { citadelId, structure: this.readStructureSnapshot(citadelId), council: this.listCouncilAssignments(citadelId),
+      wards: this.listWards(citadelId), passages: this.listPassages(citadelId), members: this.listMembers(citadelId),
+      integrations: this.listIntegrationGrants(citadelId) };
+    const revision = createHash("sha256").update(JSON.stringify({ schemaVersion: "citadel.access.v1", generation, ...content })).digest("hex");
+    return { ...content, revision };
+  }
+
+  /** Trusted primitive writers also consume a revision, including same-value writes. */
+  private withAccessWrite<T>(citadelId: string, write: () => T): T {
+    return this.withStructureLock(citadelId, () => {
+      const result = write();
+      if (result !== false) {
+        this.db.prepare(`INSERT INTO citadel_access_revisions (citadel_id, generation) VALUES (@citadelId, 1)
+          ON CONFLICT (citadel_id) DO UPDATE SET generation = citadel_access_revisions.generation + 1`).run({ citadelId });
+      }
+      return result;
+    });
+  }
+
+  /** Assign an existing agent; repeated assignments preserve the row but consume a review. */
   public assignAgent(input: CitadelCouncilAssignmentInput): CitadelCouncilAssignment {
+    return this.withAccessWrite(input.citadelId, () => this.writeAssignment(input));
+  }
+
+  private writeAssignment(input: CitadelCouncilAssignmentInput): CitadelCouncilAssignment {
     const now = new Date().toISOString();
     this.assignAgentStmt.run({
       assignmentId: randomUUID(),
@@ -571,11 +669,19 @@ export class CitadelRepository {
   }
 
   public unassignAgent(citadelId: string, agentId: string): boolean {
+    return this.withAccessWrite(citadelId, () => this.deleteAssignment(citadelId, agentId));
+  }
+
+  private deleteAssignment(citadelId: string, agentId: string): boolean {
     const result = this.unassignAgentStmt.run({ citadelId, agentId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
 
   public addWard(input: CitadelWardInput): CitadelWardRecord {
+    return this.withAccessWrite(input.citadelId, () => this.insertWard(input));
+  }
+
+  private insertWard(input: CitadelWardInput): CitadelWardRecord {
     const wardId = randomUUID();
     const now = new Date().toISOString();
     this.addWardStmt.run({
@@ -599,46 +705,43 @@ export class CitadelRepository {
   }
 
   public removeWard(citadelId: string, wardId: string): boolean {
+    return this.withAccessWrite(citadelId, () => this.deleteWard(citadelId, wardId));
+  }
+
+  private deleteWard(citadelId: string, wardId: string): boolean {
     const result = this.deleteWardStmt.run({ citadelId, wardId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
 
+  public getVaultSnapshot(citadelId: string): CitadelVaultSnapshot {
+    return this.vault.getSnapshot(citadelId);
+  }
+
+  public mutateVault(input: CitadelVaultMutation): CitadelVaultSnapshot {
+    return this.vault.mutate(input);
+  }
+
   public storeVaultSecret(input: CitadelVaultSecretInput): CitadelVaultSecretRecord {
-    const secretId = randomUUID();
-    const now = new Date().toISOString();
-    this.storeVaultSecretStmt.run({
-      secretId,
-      citadelId: input.citadelId,
-      secretName: input.secretName,
-      sealedValueJson: JSON.stringify(input.sealedValue),
-      now,
-    });
-    const row = this.getVaultSecretByNameStmt.get({
-      citadelId: input.citadelId,
-      secretName: input.secretName,
-    }) as VaultSecretRow | undefined;
-    if (!row) {
-      throw new Error(`Failed to persist vault secret ${input.secretName} for citadel ${input.citadelId}`);
-    }
-    return mapVaultSecret(row);
+    return this.vault.store(input);
   }
 
   public getVaultSecret(citadelId: string, secretId: string): CitadelVaultSecretRecord | undefined {
-    const row = this.getVaultSecretStmt.get({ citadelId, secretId }) as VaultSecretRow | undefined;
-    return row ? mapVaultSecret(row) : undefined;
+    return this.vault.get(citadelId, secretId);
   }
 
   public listVaultSecrets(citadelId: string): CitadelVaultSecretRecord[] {
-    const rows = this.listVaultSecretsStmt.all({ citadelId }) as VaultSecretRow[];
-    return rows.map(mapVaultSecret);
+    return this.vault.list(citadelId);
   }
 
   public deleteVaultSecret(citadelId: string, secretId: string): boolean {
-    const result = this.deleteVaultSecretStmt.run({ citadelId, secretId });
-    return Number((result as { changes?: number }).changes ?? 0) > 0;
+    return this.vault.delete(citadelId, secretId);
   }
 
   public createPassage(input: CitadelPassageInput): CitadelPassage {
+    return this.withAccessWrite(input.sourceCitadelId, () => this.insertPassage(input));
+  }
+
+  private insertPassage(input: CitadelPassageInput): CitadelPassage {
     const passageId = randomUUID();
     const now = new Date().toISOString();
     this.createPassageStmt.run({
@@ -664,12 +767,20 @@ export class CitadelRepository {
   }
 
   public removePassage(sourceCitadelId: string, passageId: string): boolean {
+    return this.withAccessWrite(sourceCitadelId, () => this.deletePassage(sourceCitadelId, passageId));
+  }
+
+  private deletePassage(sourceCitadelId: string, passageId: string): boolean {
     const result = this.deletePassageStmt.run({ sourceCitadelId, passageId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
 
   /** Add a member to a Citadel, or update their role if already a member. */
   public upsertMember(input: CitadelMemberInput): CitadelMember {
+    return this.withAccessWrite(input.citadelId, () => this.writeMember(input));
+  }
+
+  private writeMember(input: CitadelMemberInput): CitadelMember {
     const now = new Date().toISOString();
     this.upsertMemberStmt.run({
       memberId: randomUUID(),
@@ -694,6 +805,10 @@ export class CitadelRepository {
   }
 
   public removeMember(citadelId: string, subjectId: string): boolean {
+    return this.withAccessWrite(citadelId, () => this.deleteMember(citadelId, subjectId));
+  }
+
+  private deleteMember(citadelId: string, subjectId: string): boolean {
     const result = this.deleteMemberStmt.run({ citadelId, subjectId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
@@ -738,6 +853,10 @@ export class CitadelRepository {
 
   /** Record a Gatehouse integration grant (capabilities only — no secrets). */
   public addIntegrationGrant(input: CitadelIntegrationGrantInput): CitadelIntegrationGrant {
+    return this.withAccessWrite(input.citadelId, () => this.insertIntegrationGrant(input));
+  }
+
+  private insertIntegrationGrant(input: CitadelIntegrationGrantInput): CitadelIntegrationGrant {
     const grantId = randomUUID();
     const now = new Date().toISOString();
     this.addIntegrationGrantStmt.run({
@@ -763,6 +882,10 @@ export class CitadelRepository {
   }
 
   public removeIntegrationGrant(citadelId: string, grantId: string): boolean {
+    return this.withAccessWrite(citadelId, () => this.deleteIntegrationGrant(citadelId, grantId));
+  }
+
+  private deleteIntegrationGrant(citadelId: string, grantId: string): boolean {
     const result = this.deleteIntegrationGrantStmt.run({ citadelId, grantId });
     return Number((result as { changes?: number }).changes ?? 0) > 0;
   }
@@ -841,17 +964,6 @@ function mapWard(row: WardRow): CitadelWardRecord {
     actionPattern: row.action_pattern,
     effect: row.effect as WardEffect,
     createdAt: row.created_at,
-  };
-}
-
-function mapVaultSecret(row: VaultSecretRow): CitadelVaultSecretRecord {
-  return {
-    secretId: row.secret_id,
-    citadelId: row.citadel_id,
-    secretName: row.secret_name,
-    sealedValue: safeJsonParse<SealedValue>(row.sealed_value_json, { iv: "", ciphertext: "", tag: "" }),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
   };
 }
 

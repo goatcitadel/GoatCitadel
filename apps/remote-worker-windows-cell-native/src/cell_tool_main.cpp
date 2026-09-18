@@ -25,12 +25,13 @@ bool DecodePath(const std::uint8_t* bytes, std::size_t length, std::wstring* out
   return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(bytes),
     static_cast<int>(length), output->data(), required) == required;
 }
-DWORD Execute(const std::vector<std::uint8_t>& bytes, CellFileIdentity* identity, CellToolWriteResult* result) {
+DWORD Execute(const std::vector<std::uint8_t>& bytes, CellFileIdentity* identity, CellToolWriteResult* result,
+              CellToolDirectoryResult* listing) {
   if (bytes.size() < kHeaderBytes || std::memcmp(bytes.data(), "GCFILES1", 8)) return ERROR_INVALID_PARAMETER;
   const auto operation = Integer(bytes.data() + 8, 4);
   const auto root_bytes = Integer(bytes.data() + 12, 4), path_bytes = Integer(bytes.data() + 16, 4);
   const auto content_bytes = Integer(bytes.data() + 20, 4), expected_bytes = Integer(bytes.data() + 24, 4);
-  if ((operation != 1 && operation != 2) || !root_bytes || root_bytes > 8192 || path_bytes > 4096 ||
+  if ((operation != 1 && operation != 2 && operation != 3) || !root_bytes || root_bytes > 8192 || path_bytes > 4096 ||
       content_bytes > 32768 || (expected_bytes != kAbsent && expected_bytes > 32768) ||
       bytes.size() != kHeaderBytes + root_bytes + path_bytes + content_bytes + (expected_bytes == kAbsent ? 0 : expected_bytes))
     return ERROR_INVALID_PARAMETER;
@@ -40,11 +41,12 @@ DWORD Execute(const std::vector<std::uint8_t>& bytes, CellFileIdentity* identity
   if (operation == 1 && (path_bytes || content_bytes || expected_bytes != kAbsent || expected_identity != CellFileIdentity{}))
     return ERROR_INVALID_PARAMETER;
   if (operation == 2 && (!path_bytes || expected_identity == CellFileIdentity{})) return ERROR_INVALID_PARAMETER;
+  if (operation == 3 && (content_bytes || expected_bytes != kAbsent || expected_identity == CellFileIdentity{})) return ERROR_INVALID_PARAMETER;
   std::wstring root, relative;
   const auto* cursor = bytes.data() + kHeaderBytes;
   if (!DecodePath(cursor, static_cast<std::size_t>(root_bytes), &root)) return ERROR_INVALID_PARAMETER;
   cursor += root_bytes;
-  if (operation == 2 && !DecodePath(cursor, static_cast<std::size_t>(path_bytes), &relative)) return ERROR_INVALID_PARAMETER;
+  if (path_bytes && !DecodePath(cursor, static_cast<std::size_t>(path_bytes), &relative)) return ERROR_INVALID_PARAMETER;
   cursor += path_bytes;
   std::vector<std::uint8_t> content(cursor, cursor + content_bytes);
   cursor += content_bytes;
@@ -54,6 +56,7 @@ DWORD Execute(const std::vector<std::uint8_t>& bytes, CellFileIdentity* identity
   DWORD error = directory.Open(root, operation == 1 ? nullptr : &expected_identity);
   if (error) return error;
   *identity = directory.Identity();
+  if (operation == 3) return directory.List(relative, listing);
   return operation == 1 ? ERROR_SUCCESS : directory.Write(relative, content, expected, result);
 }
 }
@@ -63,6 +66,8 @@ int wmain(int argc, wchar_t**) {
       GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_PIPE) return 2;
   CellFileIdentity identity{};
   CellToolWriteResult result{};
+  CellToolDirectoryResult listing{};
+  bool list_requested = false;
   DWORD error = ERROR_INVALID_PARAMETER;
   try {
     std::vector<std::uint8_t> bytes;
@@ -78,8 +83,29 @@ int wmain(int argc, wchar_t**) {
       if (bytes.size() + received > kMaximumInput) break;
       bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + received);
     }
-    if (complete) error = Execute(bytes, &identity, &result);
+    list_requested = bytes.size() >= 12 && std::memcmp(bytes.data(), "GCFILES1", 8) == 0 && Integer(bytes.data() + 8, 4) == 3;
+    if (complete) error = Execute(bytes, &identity, &result, &listing);
   } catch (...) { error = ERROR_NOT_ENOUGH_MEMORY; }
+  if (list_requested) {
+    if (error) listing = {};
+    std::vector<std::uint8_t> response(44);
+    std::memcpy(response.data(), "GCFLIST1", 8);
+    Put(response.data() + 8, error, 4);
+    Put(response.data() + 12, listing.truncated ? 1 : 0, 4);
+    Put(response.data() + 16, listing.entries.size(), 4);
+    Put(response.data() + 20, identity.volume_serial, 8);
+    std::copy(identity.file_id.begin(), identity.file_id.end(), response.begin() + 28);
+    for (const auto& entry : listing.entries) {
+      const auto offset = response.size();
+      response.resize(offset + 8 + entry.name.size());
+      Put(response.data() + offset, entry.kind, 4);
+      Put(response.data() + offset + 4, entry.name.size(), 4);
+      std::copy(entry.name.begin(), entry.name.end(), response.begin() + static_cast<std::ptrdiff_t>(offset + 8));
+    }
+    DWORD sent = 0;
+    return WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), response.data(), static_cast<DWORD>(response.size()), &sent, nullptr) &&
+      sent == response.size() ? 0 : 3;
+  }
   std::array<std::uint8_t, 80> response{};
   std::memcpy(response.data(), "GCFILER1", 8);
   Put(response.data() + 8, error, 4);

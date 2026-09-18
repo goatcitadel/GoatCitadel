@@ -19,6 +19,9 @@ function Initialize-WorkerInstallNative {
   if (-not ('GoatCitadel.RemoteWorker.Install.NativeFiles' -as [type])) {
     Add-Type -Path (Join-Path $PSScriptRoot 'worker-install-native.cs')
   }
+  if (-not ('GoatCitadel.RemoteWorker.Install.ControllerKey' -as [type])) {
+    Add-Type -Path (Join-Path $PSScriptRoot 'worker-controller-key.cs')
+  }
 }
 function Get-WorkerServicePaths {
   param([string]$WindowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows))
@@ -35,6 +38,46 @@ function Get-WorkerServicePaths {
     Cells = (Join-Path $root 'cells'); NativeDirectory = (Join-Path $root 'payload\app\worker\native')
     ControllerImage = (Join-Path $root 'payload\app\worker\native\GoatCitadelRemoteWorkerCellController.exe')
     ControllerCustody = (Join-Path $root 'configuration\cell-controller.identity')
+    RuntimeCustody = (Join-Path $root 'configuration\cell-runtime.identity')
+    CapacityCustody = (Join-Path $root 'configuration\cell-capacity.identity')
+    StateWriterGate = (Join-Path $root 'configuration\state-writers.guard')
+    HostRunGuard = (Join-Path $root 'configuration\host-run.guard')
+    RuntimeDirectory = (Join-Path $root 'payload\app\runtime')
+  }
+}
+# Fixed order matches CellCapacityArea and GCCAPS01. These paths are planning
+# metadata only; callers must retain verified ancestor and directory custody.
+function Get-WorkerCellCapacityPaths {
+  param([Parameter(Mandatory=$true)][string]$InstallRoot)
+  $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+  if ($root -notmatch '^[A-Za-z]:\\' -or $root.Substring(2).Contains(':')) {
+    throw 'REFUSED: capacity roots require an ordinary local installation path.'
+  }
+  $areas = [ordered]@{ mutable_root = (Join-Path $root 'cells') }
+  foreach ($name in @('input_staging','backup_staging','artifact_staging','immutable_artifact',
+      'retained_outbox','database_sidecar','backup_publication','manifest','proxy_sidecar',
+      'diagnostic','failed_cleanup','quarantine_evidence')) {
+    $areas[$name] = Join-Path (Join-Path $root 'state') $name.Replace('_','-')
+  }
+  return $areas
+}
+function Get-WorkerCellCapacityCustodyBytes {
+  param([Parameter(Mandatory=$true)][string]$InstallRoot)
+  $areas = Get-WorkerCellCapacityPaths $InstallRoot
+  $pins = [Collections.Generic.List[Microsoft.Win32.SafeHandles.SafeFileHandle]]::new()
+  $ancestors = [Collections.Generic.List[Microsoft.Win32.SafeHandles.SafeFileHandle]]::new()
+  try {
+    # Pin the installation and state parents before collecting child identities.
+    # Callers retain higher ancestors and verify installed ACLs separately.
+    $ancestors.Add([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::PinDirectory($InstallRoot))
+    $ancestors.Add([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::PinDirectory((Join-Path $InstallRoot 'state')))
+    foreach ($directory in $areas.Values) {
+      $pins.Add([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::PinDirectory($directory))
+    }
+    return ,([GoatCitadel.RemoteWorker.Install.NativeFiles]::CreateCellCapacityCustody($pins.ToArray()))
+  } finally {
+    foreach ($pin in $pins) { $pin.Dispose() }
+    foreach ($ancestor in $ancestors) { $ancestor.Dispose() }
   }
 }
 function Assert-WorkerContainedPath {
@@ -129,7 +172,7 @@ function Get-WorkerPackage {
         'app/runtime/worker-host-receipt.json', 'app/worker/dist/main.js', 'app/worker/dist/index.js',
         'app/install/install-worker-service.ps1', 'app/install/uninstall-worker-service.ps1',
         'app/install/enroll-worker-service.ps1', 'app/install/worker-enrollment-common.ps1',
-        'app/install/worker-install-common.ps1', 'app/install/worker-install-native.cs',
+        'app/install/worker-install-common.ps1', 'app/install/worker-install-native.cs', 'app/install/worker-controller-key.cs',
         'app/install/configure-worker-mesh-registry.ps1', 'app/install/worker-mesh-registry-common.ps1',
         'app/install/broker-coordinator-common.ps1', 'app/install/install-broker-coordinator.ps1',
         'app/install/uninstall-broker-coordinator.ps1', 'app/pnpm-lock.yaml',
@@ -179,10 +222,17 @@ function Get-WorkerPackage {
   } finally { $lease.Dispose() }
 }
 function Get-WorkerSettingsBytes {
-  param($Paths, [string]$GatewayHost, [int]$GatewayPort, [string]$RunId)
+  param($Paths, [string]$GatewayHost, [int]$GatewayPort, [string]$RunId, [switch]$CapacityLayout)
   if (-not $GatewayHost -or $GatewayHost.Length -gt 253 -or $GatewayHost -match '[\s\x00-\x1f=]' -or
       $GatewayPort -lt 1 -or $GatewayPort -gt 65535 -or $RunId -cnotmatch '^[a-zA-Z0-9-]{1,80}$') {
     throw 'REFUSED: invalid worker connection settings.'
+  }
+  $stateDirectory = $Paths.State
+  $reportFile = Join-Path $Paths.State 'service-report.json'
+  if ($CapacityLayout) {
+    $areas = Get-WorkerCellCapacityPaths $Paths.Root
+    $stateDirectory = $areas.retained_outbox
+    $reportFile = Join-Path $areas.diagnostic 'service-report.json'
   }
   $entries = @(
     "GOATCITADEL_CONNECTED_WORKER_HOST=$GatewayHost"
@@ -191,8 +241,8 @@ function Get-WorkerSettingsBytes {
     ('GOATCITADEL_CONNECTED_WORKER_CA_FILE=' + (Join-Path $Paths.Configuration 'ca.pem'))
     ('GOATCITADEL_CONNECTED_WORKER_TICKET_FILE=' + (Join-Path $Paths.Configuration 'ticket.json'))
     ('GOATCITADEL_CONNECTED_WORKER_PROTECTED_KEY_FILE=' + (Join-Path $Paths.Configuration 'protected-key.json'))
-    ('GOATCITADEL_CONNECTED_WORKER_STATE_DIR=' + $Paths.State)
-    ('GOATCITADEL_CONNECTED_WORKER_REPORT_FILE=' + (Join-Path $Paths.State 'service-report.json'))
+    ('GOATCITADEL_CONNECTED_WORKER_STATE_DIR=' + $stateDirectory)
+    ('GOATCITADEL_CONNECTED_WORKER_REPORT_FILE=' + $reportFile)
     "GOATCITADEL_CONNECTED_WORKER_RUN_ID=$RunId"
     'GOATCITADEL_CONNECTED_WORKER_STOP_AFTER=complete'
     'GOATCITADEL_CONNECTED_WORKER_EXECUTION_MODE=gateway_inference'
@@ -289,6 +339,52 @@ function Get-WorkerCellControllerCustodyBytes {
     if ($cellsDirectory) { $cellsDirectory.Dispose() }
     if ($nativeDirectory) { $nativeDirectory.Dispose() }
   }
+}
+function Get-WorkerCellRuntimeCustodyBytes {
+  param($Paths, $Inventory)
+  # The source is the independently verified package's fixed Node runtime tree.
+  # Workloads never select this directory or supply its manifest.
+  $names = @('node.exe', 'worker-host-receipt.json')
+  $rows = @($Inventory.Files | Where-Object { $_.path.StartsWith('app/runtime/', [StringComparison]::Ordinal) })
+  if ($rows.Count -ne $names.Count) { throw 'REFUSED: runtime source inventory differs from the supported package.' }
+  $directory = $null; $stream = [IO.MemoryStream]::new(); $writer = [IO.BinaryWriter]::new($stream)
+  try {
+    $directory = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::PinDirectory($Paths.RuntimeDirectory)
+    $writer.Write([Text.Encoding]::ASCII.GetBytes("goatcitadel.worker-runtime-bundle.v1`0"))
+    $writer.Write([uint32]$names.Count)
+    foreach ($name in $names) {
+      $expected = @($rows | Where-Object { $_.path -ceq ('app/runtime/' + $name) })
+      if ($expected.Count -ne 1) { throw 'REFUSED: runtime source pin is missing or duplicated.' }
+      $actual = Get-WorkerFileRecord (Join-Path $Paths.RuntimeDirectory $name)
+      if ($actual.sha256 -cne $expected[0].sha256 -or $actual.sizeBytes -ne $expected[0].sizeBytes) {
+        throw 'REFUSED: runtime source differs from the verified package.'
+      }
+      $pathBytes = [Text.Encoding]::ASCII.GetBytes($name)
+      $writer.Write([uint32]$pathBytes.Length); $writer.Write($pathBytes); $writer.Write([uint64]$actual.sizeBytes)
+      for ($index = 0; $index -lt 32; $index++) { $writer.Write([Convert]::ToByte($actual.sha256.Substring($index * 2, 2), 16)) }
+    }
+    $writer.Flush()
+    $bundleHash = Get-WorkerBytesHash $stream.ToArray()
+    $packageHash = Get-WorkerBytesHash $Inventory.ManifestBytes
+    return ,([GoatCitadel.RemoteWorker.Install.NativeFiles]::CreateCellRuntimeCustody($packageHash, $bundleHash, $directory))
+  } finally { $writer.Dispose(); $stream.Dispose(); if ($directory) { $directory.Dispose() } }
+}
+function Assert-WorkerCellCapacityCustody {
+  param($Paths)
+  # The installer retains all created directory/file handles through service creation.
+  $expected = Get-WorkerCellCapacityCustodyBytes $Paths.Root
+  $actual = Read-WorkerBytes $Paths.CapacityCustody
+  if ($actual.Length -ne 320 -or (Get-WorkerBytesHash $actual) -cne (Get-WorkerBytesHash $expected) -or
+      (ConvertTo-CanonicalFileSddl ([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::GetFileSddl($Paths.CapacityCustody))) -cne
+        (ConvertTo-CanonicalFileSddl $script:WorkerReadOnlySddl)) { throw 'REFUSED: installed capacity custody differs.' }
+}
+function Assert-WorkerCellRuntimeCustody {
+  param($Paths, $Inventory)
+  $expected = Get-WorkerCellRuntimeCustodyBytes $Paths $Inventory
+  $actual = Read-WorkerBytes $Paths.RuntimeCustody
+  if ($actual.Length -ne 96 -or (Get-WorkerBytesHash $actual) -cne (Get-WorkerBytesHash $expected) -or
+      (ConvertTo-CanonicalFileSddl ([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::GetFileSddl($Paths.RuntimeCustody))) -cne
+        (ConvertTo-CanonicalFileSddl $script:WorkerReadOnlySddl)) { throw 'REFUSED: installed runtime custody differs.' }
 }
 function Assert-WorkerCellControllerCustody {
   param($Paths, $Inventory)

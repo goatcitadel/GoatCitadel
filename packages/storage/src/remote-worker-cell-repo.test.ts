@@ -447,6 +447,33 @@ describe("RemoteWorkerCellRepository (SQLite)", () => {
     );
     assert.deepEqual(s.db.prepare("PRAGMA foreign_key_check").all(), []);
   });
+  it("reads retained native pool membership without filtering incomplete or terminal cells", () => {
+    const s = seed("pool-membership");
+    const scope = { registryWorkspaceId: s.profile.registryWorkspaceId, workerId: s.profile.workerId };
+    assert.deepEqual(s.cells.listRetainedNativeCellsForWorker(scope), []);
+    s.cells.profileOrReplay({ profile: { ...s.profile, schemaVersion: "goatcitadel.remote-worker-cell-profile.v2",
+      backend: "windows_native", egressPosture: "deny_all" }, idempotencyKey: "pool-native", createdAt: s.now });
+    const profiled = s.cells.listRetainedNativeCellsForWorker(scope);
+    assert.equal(profiled.length, 1);
+    assert.equal(profiled[0]!.executionState, "profiled");
+    assert.equal(profiled[0]!.workerGeneration, s.profile.workerGeneration);
+    assert.ok(Object.isFrozen(profiled) && Object.isFrozen(profiled[0]));
+    assert.deepEqual(s.cells.listRetainedNativeCellsForWorker({ ...scope, workerId: "different-worker" }), []);
+    assert.deepEqual(s.cells.listRetainedNativeCellsForWorker({ ...scope, registryWorkspaceId: "different-registry" }), []);
+    assert.throws(() => s.cells.listRetainedNativeCellsForWorker({ ...scope, workerId: "" }), /exact registry/u);
+    s.cells.claimProvisioning({ ...s.key, provisioningOwner: "pool-owner", leaseExpiresAt: FUTURE, detailSha256: D("pool-claim"), now: s.now });
+    const ready = s.cells.persistPlatformIdentity({ ...s.key, provisioningOwner: "pool-owner", provisioningLeaseExpiresAt: FUTURE,
+      platformIdentity: { schemaVersion: "goatcitadel.remote-worker-cell-platform.v2", backend: "windows_native",
+        jobName: `gc-cell-${"b".repeat(32)}`, appContainerName: `GoatCitadel.Worker.${"b".repeat(32)}`,
+        volumeIdentitySha256: D("pool-volume"), runtimeBundleSha256: D("pool-runtime"), launcherSha256: D("pool-launcher"), networkPolicy: "deny_all" },
+      detailSha256: D("pool-platform"), now: s.now });
+    s.cells.transitionExecution({ ...s.key, expectedRevision: ready.executionRevision, toState: "cancelled", detailSha256: D("pool-cancel"), now: s.now });
+    assert.equal(s.cells.listRetainedNativeCellsForWorker(scope)[0]!.executionState, "cancelled");
+    const other = seed("pool-container");
+    other.cells.profileOrReplay({ profile: other.profile, idempotencyKey: "pool-container", createdAt: other.now });
+    assert.deepEqual(other.cells.listRetainedNativeCellsForWorker({ registryWorkspaceId: other.profile.registryWorkspaceId,
+      workerId: other.profile.workerId }), []);
+  });
   it("profiles a cell once and exactly replays a repeated idempotency key", () => {
     const s = seed("profile");
     const created = s.cells.profileOrReplay({ profile: s.profile, idempotencyKey: "cell:idem:1", createdAt: s.now });

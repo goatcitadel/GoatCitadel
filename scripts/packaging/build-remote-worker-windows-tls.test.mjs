@@ -138,7 +138,10 @@ test(
         const dlls = [...imports.stdout.matchAll(/^\s+([a-z0-9_.-]+\.dll)\s*$/gimu)]
           .map((match) => match[1].toLowerCase())
           .sort();
-        assert.deepEqual(dlls, ["bcrypt.dll", "kernel32.dll"]);
+        // Writer-gate admission reads protected ACLs and the current service
+        // logon. Keep the operation-level ban below: these dependencies confer
+        // no process creation, service control, network or signing surface.
+        assert.deepEqual(dlls, ["advapi32.dll", "bcrypt.dll", "kernel32.dll", "secur32.dll"]);
         const names = [...imports.stdout.matchAll(/^\s+[0-9a-f]+\s+(\w+)\s*$/gimu)].map((match) => match[1]);
         assert.ok(names.includes("GetFinalPathNameByHandleW") && names.includes("BCryptHashData"));
         assert.deepEqual(

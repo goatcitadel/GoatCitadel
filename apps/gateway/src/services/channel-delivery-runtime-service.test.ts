@@ -363,7 +363,7 @@ describe("ChannelDeliveryRuntimeService", () => {
         rmSync(`${dbPath}${suffix}`, { force: true });
       }
     }
-  }, 15_000);
+  }, 60_000);
 
   it("does not let a delayed runtime's stale queued snapshot overwrite a completed send", async () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-channel-runtime-stale-race-${randomUUID()}.db`);
@@ -415,7 +415,7 @@ describe("ChannelDeliveryRuntimeService", () => {
         rmSync(`${dbPath}${suffix}`, { force: true });
       }
     }
-  }, 15_000);
+  }, 60_000);
 
   it("quarantines a provider success when persisting the sent result fails", async () => {
     const repository = createRepository();

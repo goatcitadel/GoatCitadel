@@ -5,6 +5,7 @@ import type {
   ApprovalRequest,
   DevDiagnosticsEvent,
   GoogleMeetPrerequisiteStatusResponse,
+  IntegrationConnection,
   LlmModelRecord,
   LlmRuntimeConfig,
   ApprovalReplayEvent,
@@ -597,9 +598,13 @@ export class TuiApiClient {
     );
   }
 
+  public async getIntegrationConnection(connectionId: string): Promise<IntegrationConnection> {
+    return this.request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`, { method: "GET" });
+  }
+
   public async updateIntegrationConnection(
     connectionId: string,
-    input: Record<string, unknown>,
+    input: Record<string, unknown> & { expectedRevision: string },
   ): Promise<Record<string, unknown>> {
     return this.request(
       `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`,
@@ -611,12 +616,12 @@ export class TuiApiClient {
     );
   }
 
-  public async deleteIntegrationConnection(connectionId: string): Promise<{ deleted: boolean }> {
+  public async deleteIntegrationConnection(connectionId: string, expectedRevision: string): Promise<{ deleted: boolean }> {
     return this.request(
       `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`,
       {
         method: "DELETE",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ expectedRevision }),
       },
       true,
     );

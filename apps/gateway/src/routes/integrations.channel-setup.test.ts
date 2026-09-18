@@ -313,7 +313,7 @@ describe("channel setup routes", () => {
       payload: { expectedRevision: 3 },
     });
     expect(finalizeResponse.statusCode).toBe(200);
-    expect(finalizeChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", 3);
+    expect(finalizeChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", 3, expect.any(Function));
     expect(finalizeResponse.json()).toEqual(
       expect.objectContaining({
         connection: expect.objectContaining({

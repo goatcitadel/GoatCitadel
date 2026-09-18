@@ -428,8 +428,7 @@ export interface RemoteWorkerCellCapacityFootprint {
   readonly quarantineEvidenceBytes: number;
 }
 
-const CAPACITY_FOOTPRINT_KEYS = [
-  "schemaVersion",
+export const REMOTE_WORKER_CELL_CAPACITY_FOOTPRINT_CATEGORIES = [
   "mutableRootBytes",
   "inputStagingBytes",
   "backupStagingBytes",
@@ -445,9 +444,8 @@ const CAPACITY_FOOTPRINT_KEYS = [
   "quarantineEvidenceBytes",
 ] as const;
 
-const CAPACITY_FOOTPRINT_BYTE_KEYS = CAPACITY_FOOTPRINT_KEYS.filter(
-  (key): key is Exclude<(typeof CAPACITY_FOOTPRINT_KEYS)[number], "schemaVersion"> => key !== "schemaVersion",
-);
+const CAPACITY_FOOTPRINT_KEYS = ["schemaVersion", ...REMOTE_WORKER_CELL_CAPACITY_FOOTPRINT_CATEGORIES] as const;
+const CAPACITY_FOOTPRINT_BYTE_KEYS = REMOTE_WORKER_CELL_CAPACITY_FOOTPRINT_CATEGORIES;
 
 export function normalizeRemoteWorkerCellCapacityFootprint(
   input: RemoteWorkerCellCapacityFootprint,

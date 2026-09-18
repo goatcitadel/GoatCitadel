@@ -59,6 +59,7 @@ import type {
 } from "./remote-worker-current-authority-service.js";
 import type { RemoteWorkerRequestHeaders, RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
 import type { RemoteWorkerChatApprovalWaitReadPort } from "./remote-worker-chat-approval-wait-read-service.js";
+import { readWorkerAssignmentSyncHandoff } from "./remote-worker-assignment-sync-handoff.js";
 
 export const REMOTE_WORKER_ASSIGNMENT_RPC_RESPONSE_SCHEMA_VERSION =
   "goatcitadel.remote-worker-assignment-rpc-response.v1" as const;
@@ -367,7 +368,7 @@ export class RemoteWorkerAssignmentProtocolService {
       advisory.assignment,
       advisory.generation,
     );
-    const recovery = await this.dependencies.assignments.resolveChatParentRecoveryByLeaseTokenHash({
+    const { recovery, waiting } = await readWorkerAssignmentSyncHandoff(this.dependencies, {
       registryWorkspaceId: command.registryWorkspaceId, assignmentId: command.assignmentId,
       expectedAssignmentGeneration: command.assignmentGeneration, expectedLeaseRevision: command.leaseRevision,
       leaseTokenSha256: command.leaseTokenSha256,
@@ -379,11 +380,6 @@ export class RemoteWorkerAssignmentProtocolService {
         disposition: recovery.phase === "renew" ? "parent_recovery_ready" : "parent_recovery_pending", ...records,
         recovery: Object.freeze({ bindingSha256: recovery.recovery.bindingSha256 }) });
     }
-    const waiting = await this.dependencies.approvalWait?.read({
-      registryWorkspaceId: command.registryWorkspaceId, assignmentId: command.assignmentId,
-      expectedAssignmentGeneration: command.assignmentGeneration, expectedLeaseRevision: command.leaseRevision,
-      leaseTokenSha256: command.leaseTokenSha256,
-    }, expectedProtectedAuthority);
     if (waiting) {
       const records = snapshotResolvedAssignmentAuthority(waiting);
       assertRequestBinding(records, command);

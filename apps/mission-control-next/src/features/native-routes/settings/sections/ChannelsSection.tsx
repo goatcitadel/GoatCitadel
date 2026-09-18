@@ -10,6 +10,8 @@ import {
   discoverTelegramTargets,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
+  fetchChannelSetupDraft,
+  reviewChannelSetupConnection,
   fetchIntegrationConnections,
   fetchSlackOAuthStatus,
   startSlackOAuth,
@@ -53,6 +55,8 @@ import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { DetailInspector } from "../../../../components/DetailInspector";
+import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
+import { describeIntegrationConnectionError, useIntegrationConnectionReview } from "./useIntegrationConnectionReview";
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const load = useCallback(async () => {
@@ -68,7 +72,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       connections: connections.data.items,
     };
   }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  const { loading, error, data, reload, updateData } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [panel, setPanel] = useState<"create" | "editor" | "connection" | null>(null);
   const panelRef = useRef(panel);
@@ -89,6 +93,34 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
   const [validationRevision, setValidationRevision] = useState<number | null>(null);
   const [busyAction, setBusyAction] = useState<"save" | "validate" | "test" | "finalize" | null>(null);
   const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? null;
+  const draftScope = useRef({ activeWorkspaceId, selectedDraftId });
+  if (draftScope.current.activeWorkspaceId !== activeWorkspaceId || draftScope.current.selectedDraftId !== selectedDraftId) {
+    draftScope.current = { activeWorkspaceId, selectedDraftId };
+  }
+  const currentScope = draftScope.current;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const isCurrentDraft = () => mounted.current && draftScope.current === currentScope;
+  const applyConnection = useCallback((connectionId: string, connection: (NonNullable<typeof data>)["connections"][number] | null) => {
+    updateData((current) => ({ ...current, connections: connection
+      ? [...current.connections.filter((item) => item.connectionId !== connectionId), connection]
+      : current.connections.filter((item) => item.connectionId !== connectionId) }));
+  }, [updateData]);
+  const connectionReview = useIntegrationConnectionReview(JSON.stringify([activeWorkspaceId, selectedDraftId]), selectedDraft?.connectionId ?? "", applyConnection);
+  const draftConnection = data?.connections.find((item) => item.connectionId === selectedDraft?.connectionId) ?? null;
+  const needsConnectionReview = Boolean(selectedDraft?.connectionId && (connectionReview.required || selectedDraft.connectionRevision !== draftConnection?.revision));
+  const attemptedReview = useRef<{ scope: typeof currentScope; key: string } | null>(null);
+  const { required: connectionReviewRequired, refresh: refreshConnectionReview } = connectionReview;
+  useEffect(() => {
+    if (panel !== "editor" || !needsConnectionReview || connectionReviewRequired) return;
+    const key = JSON.stringify([activeWorkspaceId, selectedDraftId, selectedDraft?.connectionRevision, draftConnection?.revision]);
+    if (attemptedReview.current?.scope === currentScope && attemptedReview.current.key === key) return;
+    attemptedReview.current = { scope: currentScope, key };
+    void refreshConnectionReview();
+  }, [panel, needsConnectionReview, connectionReviewRequired, refreshConnectionReview, currentScope, activeWorkspaceId, selectedDraftId, selectedDraft?.connectionRevision, draftConnection?.revision]);
+  const mergeDraft = (draft: ChannelSetupDraft) => updateData((current) => ({ ...current,
+    drafts: [...current.drafts.filter((item) => item.draftId !== draft.draftId), draft],
+  }));
   const createDefinition = data?.definitions?.find((item) => item.catalog.catalogId === createCatalogId) ?? null;
   const selectedDefinition = selectedDraft
     ? (data?.definitions?.find((item) => item.catalog.catalogId === selectedDraft.catalogId) ?? null)
@@ -135,6 +167,37 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       }),
   };
   const closePanel = () => leave.request(() => setPanel(null));
+  const handleDraftFailure = async (cause: unknown) => {
+    if (!isCurrentDraft()) return;
+    setValidationResult(null);
+    setNotice({ tone: "error", message: describeIntegrationConnectionError(cause) });
+    if (isApiRequestError(cause) && (cause.status === 404 || cause.status === 409 || (cause.status ?? 0) >= 500 || !cause.status)) {
+      await Promise.allSettled([
+        selectedDraft?.connectionId ? connectionReview.refresh() : Promise.resolve(),
+        selectedDraft ? fetchChannelSetupDraft(selectedDraft.draftId).then((draft) => { if (isCurrentDraft()) mergeDraft(draft); }) : Promise.resolve(),
+      ]);
+    }
+  };
+  const handleAcceptConnectionReview = async () => {
+    if (!selectedDraft || !draftConnection || connectionReview.loading || connectionReview.error || busyRef.current) return;
+    busyRef.current = true;
+    setBusyAction("save");
+    const canonical = { label: selectedDraft.label ?? "", enabled: selectedDraft.enabled, values: selectedDraft.draft, advancedText: formatJson(selectedDraft.draft) };
+    try {
+      const reviewed = await reviewChannelSetupConnection(selectedDraft.draftId, {
+        expectedRevision: selectedDraft.revision, expectedConnectionRevision: draftConnection.revision,
+      });
+      if (!isCurrentDraft()) return;
+      channelDraft.acceptSaved({ label: reviewed.label ?? "", enabled: reviewed.enabled, values: reviewed.draft, advancedText: formatJson(reviewed.draft) }, reviewed.revision, canonical);
+      mergeDraft(reviewed);
+      connectionReview.accept();
+      setValidationResult(null);
+      setValidationRevision(null);
+      setNotice({ tone: "success", message: "Connection review saved. Your edits are retained. Save any changes and run the live test again." });
+    } catch (cause) { await handleDraftFailure(cause); }
+    finally { if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); } }
+  };
+  useEffect(() => { busyRef.current = false; setBusyAction(null); }, [activeWorkspaceId, selectedDraftId]);
   useEffect(() => {
     setPanel(null);
     setValidationResult(null);
@@ -341,12 +404,15 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         enabled: draftEnabled,
         draft: publicValues,
       });
+      if (!isCurrentDraft()) return undefined;
       if (Object.keys(secureValues).length > 0) {
         savedDraft = await submitChannelSetupDraftSecrets(savedDraft.draftId, {
           expectedRevision: savedDraft.revision,
           values: secureValues,
         });
       }
+      if (!isCurrentDraft()) return undefined;
+      mergeDraft(savedDraft);
       const clean = channelDraft.acceptSaved(
         {
           label: savedDraft.label ?? draftLabel.trim(),
@@ -362,13 +428,11 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
           tone: "warning",
           message: "The submitted channel draft was saved. Newer edits remain; save them before continuing.",
         });
-        await reload();
         return undefined;
       }
       return savedDraft;
     } catch (saveError) {
-      if (isApiRequestError(saveError) && saveError.status === 409) await reload();
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+      await handleDraftFailure(saveError);
       return undefined;
     }
   };
@@ -381,16 +445,15 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       const savedDraft = await persistDraft(valuesOverride);
       if (savedDraft) {
         setNotice({ tone: "success", message: "Channel draft saved." });
-        await reload();
       }
       return Boolean(savedDraft);
     } finally {
-      busyRef.current = false;
-      setBusyAction(null);
+      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
     }
   };
 
   const handleValidate = async (valuesOverride?: Record<string, unknown>) => {
+    if (needsConnectionReview) return;
     if (!selectedDraft) {
       return;
     }
@@ -403,7 +466,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         return;
       }
       const result = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
-      if (currentDraft.draftId !== selectionRef.current) return;
+      if (!isCurrentDraft()) return;
       setValidationRevision(result.draftRevision);
       setValidationResult({
         kind: "validate",
@@ -416,14 +479,14 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       });
       await reload();
     } catch (validateError) {
-      setNotice({ tone: "error", message: getErrorMessage(validateError) });
+      await handleDraftFailure(validateError);
     } finally {
-      busyRef.current = false;
-      setBusyAction(null);
+      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
     }
   };
 
   const handleTest = async (valuesOverride?: Record<string, unknown>) => {
+    if (needsConnectionReview) return;
     if (!selectedDraft) {
       return;
     }
@@ -436,7 +499,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         return;
       }
       const validation = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
-      if (currentDraft.draftId !== selectionRef.current) return;
+      if (!isCurrentDraft()) return;
       if (validation.status === "error") {
         setValidationRevision(validation.draftRevision);
         setValidationResult({
@@ -449,7 +512,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         return;
       }
       const result = await testChannelSetupDraft(currentDraft.draftId, validation.draftRevision);
-      if (currentDraft.draftId !== selectionRef.current) return;
+      if (!isCurrentDraft()) return;
       setValidationRevision(result.draftRevision);
       setValidationResult({
         kind: "test",
@@ -464,14 +527,14 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
       });
       await reload();
     } catch (testError) {
-      setNotice({ tone: "error", message: getErrorMessage(testError) });
+      await handleDraftFailure(testError);
     } finally {
-      busyRef.current = false;
-      setBusyAction(null);
+      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
     }
   };
 
   const handleFinalize = async (valuesOverride?: Record<string, unknown>) => {
+    if (needsConnectionReview) return;
     if (!selectedDraft) {
       return;
     }
@@ -501,16 +564,16 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
         },
         idempotencyKey: `settings-channel-finalize:${selectedDraft.draftId}:${selectedDraft.revision}`,
       });
+      if (!isCurrentDraft()) return;
       setNotice({
         tone: "success",
         message: `Change Plan ${plan.planId} is ready for exact confirmation in Chat. The draft has not been finalized yet.`,
       });
       navigate({ area: "chat", theme: route.theme });
     } catch (finalizeError) {
-      setNotice({ tone: "error", message: getErrorMessage(finalizeError) });
+      await handleDraftFailure(finalizeError);
     } finally {
-      busyRef.current = false;
-      setBusyAction(null);
+      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
     }
   };
 
@@ -612,6 +675,12 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
               onClose={closePanel}
             >
               <SettingsStack>
+                {needsConnectionReview ? <>
+                  <IntegrationConnectionReview connection={draftConnection} loading={connectionReview.loading || busyAction !== null}
+                    error={connectionReview.error} missing={connectionReview.missing}
+                    onAccept={() => void handleAcceptConnectionReview()} onReload={() => void connectionReview.refresh()} />
+                  <p>Reviewing keeps your setup fields and refreshes inherited credentials. Credentials you explicitly replaced stay in the draft. A new live test is required.</p>
+                </> : null}
                 {validationResult && validationRevision !== selectedDraft?.revision ? (
                   <p role="status">
                     The previous check belongs to a different draft revision. Run the live test again.
@@ -645,6 +714,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                     dirty={draftDirty}
                     feedback={validationRevision === selectedDraft.revision ? validationResult : null}
                     busyAction={busyAction}
+                    reviewRequired={needsConnectionReview}
                     onValuesChange={(next) => {
                       setDraftValues(next);
                       setValidationResult(null);

@@ -1854,6 +1854,17 @@ bool QueryTokenScalar(
          returned == output_size;
 }
 
+bool TokenHasNoRestrictedSids(HANDLE token) noexcept {
+  alignas(16) std::array<std::uint8_t, kMaximumTokenQueryBytes> buffer{};
+  DWORD returned = 0U;
+  // TOKEN_GROUPS includes storage for one SID_AND_ATTRIBUTES. An empty
+  // TokenRestrictedSids result contains only the header (8 bytes on x64).
+  if (!QueryTokenInformationFixed(token, TokenRestrictedSids, buffer.data(),
+          buffer.size(), static_cast<DWORD>(offsetof(TOKEN_GROUPS, Groups)), &returned)) return false;
+  const auto* restricted = reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
+  return restricted->GroupCount == 0U;
+}
+
 bool CaptureClientTokenProjection(
     HANDLE token,
     TOKEN_TYPE required_type,
@@ -2014,19 +2025,7 @@ bool CaptureClientTokenProjection(
     return false;
   }
 
-  if (!QueryTokenInformationFixed(
-          token,
-          TokenRestrictedSids,
-          buffer.data(),
-          buffer.size(),
-          sizeof(TOKEN_GROUPS),
-          &returned)) {
-    return false;
-  }
-  const auto* restricted = reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
-  if (restricted->GroupCount != 0U) {
-    return false;
-  }
+  if (!TokenHasNoRestrictedSids(token)) return false;
   projection.has_restricted_sids = false;
   if (runtime_worker) {
     if (!QueryTokenInformationFixed(token, TokenPrivileges, buffer.data(), buffer.size(),
@@ -2066,8 +2065,8 @@ bool TokenProjectionsEqual(
 bool QueryProcessCreationTime(
     HANDLE process,
     std::uint64_t* creation_file_time) noexcept {
-  if (process == nullptr || process == INVALID_HANDLE_VALUE ||
-      creation_file_time == nullptr) {
+  // GetCurrentProcess() is a valid process pseudo-handle, currently (HANDLE)-1.
+  if (process == nullptr || creation_file_time == nullptr) {
     return false;
   }
   FILETIME creation{};
@@ -2084,7 +2083,9 @@ bool QueryProcessCreationTime(
 }
 
 bool QueryProcessPath(HANDLE process, FixedPath* path) noexcept {
-  if (process == nullptr || process == INVALID_HANDLE_VALUE || path == nullptr) {
+  // The startup self-image query uses GetCurrentProcess(); let Windows validate
+  // process handles instead of confusing its pseudo-handle with a file sentinel.
+  if (process == nullptr || path == nullptr) {
     return false;
   }
   path->value.fill(L'\0');
@@ -2100,7 +2101,7 @@ bool QueryProcessPath(HANDLE process, FixedPath* path) noexcept {
 }
 
 bool IsProcessAlive(HANDLE process) noexcept {
-  return process != nullptr && process != INVALID_HANDLE_VALUE &&
+  return process != nullptr &&
          WaitForSingleObject(process, 0U) == WAIT_TIMEOUT;
 }
 
@@ -2109,7 +2110,8 @@ bool CaptureClientProcessEvidence(
     std::uint32_t pid,
     const FixedPath& expected_path,
     ProcessEvidence* output) noexcept {
-  if (process == nullptr || process == INVALID_HANDLE_VALUE || pid == 0U ||
+  // The client captures its own identity through GetCurrentProcess().
+  if (process == nullptr || pid == 0U ||
       output == nullptr || !IsProcessAlive(process)) {
     return false;
   }
@@ -2580,8 +2582,35 @@ bool IsProtectedCallerOperationAllowed(ProtectedCallerRole role, std::uint8_t op
 }
 
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
+bool TokenHasNoRestrictedSidsForTest(HANDLE token) noexcept {
+  return TokenHasNoRestrictedSids(token);
+}
 bool CaptureProtectedCallerForTest(HANDLE token, TokenProjection* output) noexcept {
   return CaptureClientTokenProjection(token, TokenPrimary, SecurityAnonymous, true, output);
+}
+bool QueryProcessImagePathForTest(HANDLE process,
+    std::array<wchar_t, 512U>* output) noexcept {
+  FixedPath path;
+  if (!output || !QueryProcessPath(process, &path)) return false;
+  *output = path.value;
+  return true;
+}
+bool QueryLiveProcessCreationTimeForTest(HANDLE process,
+    std::uint64_t* creation_file_time) noexcept {
+  return IsProcessAlive(process) && QueryProcessCreationTime(process, creation_file_time);
+}
+bool CaptureCurrentClientProcessForTest(const wchar_t* expected_path,
+    std::uint64_t* creation_file_time, TokenProjection* token) noexcept {
+  FixedPath path;
+  if (!creation_file_time || !token || !AppendLiteral(&path, expected_path)) return false;
+  ProcessEvidence evidence;
+  if (!CaptureClientProcessEvidence(GetCurrentProcess(), GetCurrentProcessId(), path, &evidence)) return false;
+  *creation_file_time = evidence.creation_file_time;
+  *token = evidence.token_projection;
+  // This is the same borrowed pseudo-handle ownership as the production client.
+  evidence.process = nullptr;
+  CloseProcessEvidence(&evidence);
+  return true;
 }
 #endif
 

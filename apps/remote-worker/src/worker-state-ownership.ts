@@ -1,3 +1,4 @@
+import { workerLocalStateActivity } from "./worker-local-state-activity.js";
 import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 
 /** Process exclusion only. This does not protect the vault from other users. */
 export async function acquireWorkerStateOwnership(stateDir: string): Promise<() => Promise<void>> {
-  await mkdir(stateDir, { recursive: true });
+  await workerLocalStateActivity.mutation(async () => { await mkdir(stateDir, { recursive: true }); });
   const canonicalPath = await realpath(stateDir);
   const identity = createHash("sha256")
     .update(process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath)

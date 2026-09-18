@@ -5,6 +5,7 @@ import {
   remoteWorkerInferenceBudgetOperationSha256,
   remoteWorkerInferenceEffectiveRouteSha256,
   remoteWorkerInferenceRequestSha256,
+  type remoteWorkerChatInferenceIdentity,
   type RemoteWorkerBudgetGrantInput,
   type RemoteWorkerInferenceEffectiveRouteReceipt,
 } from "@goatcitadel/contracts";
@@ -41,7 +42,7 @@ export function workerBudgetFixture(db: DatabaseClient, seed: string) {
     maxCostMicrousd: 1_000_000,
     expiresAt,
   };
-  function admit(suffix: string, effectiveRoute = route) {
+  function admit(suffix: string, effectiveRoute = route, identity?: ReturnType<typeof remoteWorkerChatInferenceIdentity>) {
     const submission = authorizeRemoteWorkerInferenceRequestSubmission({
       registryWorkspaceId: "default",
       assignmentId: a.assignmentId,
@@ -49,6 +50,7 @@ export function workerBudgetFixture(db: DatabaseClient, seed: string) {
       inferenceRequestId: `inference-${suffix}`,
       attempt: 1,
       idempotencyKey: `${seed}:${suffix}`,
+      ...identity,
       leaseToken: "fixture-lease",
       messages: [{ role: "user", text: "Compute 2 + 2." }],
       inputSha256: "b".repeat(64),

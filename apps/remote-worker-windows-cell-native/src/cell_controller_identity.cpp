@@ -1,6 +1,7 @@
 #include "cell_controller_identity.hpp"
 #include "cell_workspace.hpp"
 #include "cell_security.hpp"
+#include "cell_capacity.hpp"
 #include <sddl.h>
 #include <algorithm>
 #include <cstring>
@@ -23,6 +24,7 @@ bool NoThreadToken() noexcept {
   return GetLastError() == ERROR_NO_TOKEN;
 }
 struct Handle final { HANDLE value = nullptr; ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); } };
+struct ServiceHandle final { SC_HANDLE value = nullptr; ~ServiceHandle() { if (value) CloseServiceHandle(value); } };
 struct Buffer final {
   alignas(16) std::array<std::uint8_t, 16384> bytes{};
   DWORD size = 0;
@@ -69,6 +71,18 @@ DWORD ReadCustody(HANDLE record, CellControllerCustodyRecord* output) noexcept {
   } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
 }
+bool DecodeCellControllerRuntimeCustody(const std::vector<std::uint8_t>& bytes, CellControllerRuntimeCustodyRecord* output) noexcept {
+  if (!output) return false;
+  *output = {};
+  if (bytes.size() != 96 || std::memcmp(bytes.data(), "GCRTCS01", 8)) return false;
+  CellControllerRuntimeCustodyRecord value;
+  value.source_directory = ReadIdentity(bytes.data() + 8);
+  std::copy_n(bytes.data() + 32, 32, value.bundle_sha256.begin());
+  std::copy_n(bytes.data() + 64, 32, value.package_sha256.begin());
+  if (!value.source_directory.volume_serial || !NonzeroBytes(value.source_directory.file_id) ||
+      !NonzeroBytes(value.bundle_sha256) || !NonzeroBytes(value.package_sha256)) return false;
+  *output = value; return true;
+}
 bool DecodeCellControllerCustody(const std::vector<std::uint8_t>& bytes, CellControllerCustodyRecord* output) noexcept {
   if (!output) return false;
   *output = {};
@@ -81,6 +95,64 @@ bool DecodeCellControllerCustody(const std::vector<std::uint8_t>& bytes, CellCon
       !value.parent.volume_serial || value.native_directory.volume_serial != value.parent.volume_serial ||
       !NonzeroBytes(value.parent.file_id) || !NonzeroBytes(value.native_directory.file_id) || value.parent == value.native_directory) return false;
   *output = value; return true;
+}
+bool DecodeCellControllerCapacityCustody(const std::vector<std::uint8_t>& bytes, CellControllerCapacityCustodyRecord* output) noexcept {
+  static_assert(kCellCapacityAreaCount == 13);
+  if (!output) return false;
+  *output = {};
+  if (bytes.size() != 8 + 24 * kCellCapacityAreaCount || std::memcmp(bytes.data(), "GCCAPS01", 8)) return false;
+  CellControllerCapacityCustodyRecord value;
+  for (std::size_t i = 0; i < value.roots.size(); ++i) {
+    const auto root = ReadIdentity(bytes.data() + 8 + 24 * i);
+    if (!root.volume_serial || !NonzeroBytes(root.file_id) || (i && root.volume_serial != value.roots[0].volume_serial)) return false;
+    for (std::size_t previous = 0; previous < i; ++previous) if (root == value.roots[previous]) return false;
+    value.roots[i] = root;
+  }
+  *output = value; return true;
+}
+DWORD ReadCellControllerCapacityCustody(HANDLE record, const std::array<HANDLE, 13>& supplied_roots,
+  const CellFileIdentity& supplied_parent, CellControllerCapacityCustodyRecord* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto roots = supplied_roots; const auto parent = supplied_parent;
+  *output = {};
+  try {
+    FILE_STANDARD_INFO metadata{}; FILE_ATTRIBUTE_TAG_INFO attributes{};
+    if (!record || record == INVALID_HANDLE_VALUE || GetFileType(record) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandleEx(record, FileStandardInfo, &metadata, sizeof(metadata)) || metadata.Directory || metadata.DeletePending ||
+        metadata.NumberOfLinks != 1 || !GetFileInformationByHandleEx(record, FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return ERROR_INVALID_HANDLE;
+    LARGE_INTEGER length{}, beginning{}; DWORD read = 0;
+    std::vector<std::uint8_t> bytes(320); CellControllerCapacityCustodyRecord value;
+    if (!GetFileSizeEx(record, &length) || length.QuadPart != static_cast<LONGLONG>(bytes.size()) ||
+        !SetFilePointerEx(record, beginning, nullptr, FILE_BEGIN) ||
+        !ReadFile(record, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) || read != bytes.size() ||
+        !DecodeCellControllerCapacityCustody(bytes, &value)) return ERROR_INVALID_DATA;
+    if (value.roots[0] != parent) return ERROR_FILE_INVALID;
+    for (std::size_t i = 0; i < roots.size(); ++i) {
+      if (!roots[i] || roots[i] == INVALID_HANDLE_VALUE || GetFileType(roots[i]) != FILE_TYPE_DISK ||
+          !GetFileInformationByHandleEx(roots[i], FileStandardInfo, &metadata, sizeof(metadata)) || !metadata.Directory || metadata.DeletePending ||
+          !GetFileInformationByHandleEx(roots[i], FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+          (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || !IdentityMatches(roots[i], value.roots[i])) return ERROR_FILE_INVALID;
+    }
+    *output = value; return ERROR_SUCCESS;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD ReadCellControllerRuntimeCustody(HANDLE record, HANDLE source_directory, CellControllerRuntimeCustodyRecord* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  *output = {};
+  try {
+    LARGE_INTEGER length{}, beginning{};
+    std::vector<std::uint8_t> bytes(96); DWORD read = 0;
+    CellControllerRuntimeCustodyRecord value;
+    if (!GetFileSizeEx(record, &length) || length.QuadPart != static_cast<LONGLONG>(bytes.size()) ||
+        !SetFilePointerEx(record, beginning, nullptr, FILE_BEGIN) ||
+        !ReadFile(record, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) || read != bytes.size() ||
+        !DecodeCellControllerRuntimeCustody(bytes, &value)) return ERROR_INVALID_DATA;
+    FILE_STANDARD_INFO metadata{};
+    if (!GetFileInformationByHandleEx(source_directory, FileStandardInfo, &metadata, sizeof(metadata)) ||
+        !metadata.Directory || metadata.DeletePending || !IdentityMatches(source_directory, value.source_directory)) return ERROR_FILE_INVALID;
+    *output = value; return ERROR_SUCCESS;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
 bool ValidateCellControllerToken(const CellControllerToken& token, bool require_volume) noexcept {
   if (token.user != system_sid || token.integrity != L"S-1-16-16384" || token.type != TokenPrimary || token.session != 0 ||
@@ -183,6 +255,7 @@ DWORD CellControllerInstalledFiles::Open() noexcept {
     image_path_ = root_ + L"\\payload\\app\\worker\\native\\" + kCellControllerImageName;
     quoted_image_ = L"\"" + image_path_ + L"\"";
     parent_path_ = root_ + L"\\cells";
+    runtime_path_ = root_ + L"\\payload\\app\\runtime";
     if (!IsLiteralCellPath(root_)) return refuse(ERROR_BAD_PATHNAME);
     DWORD error = OpenFiles();
     if (error) return refuse(error);
@@ -197,7 +270,7 @@ DWORD CellControllerInstalledFiles::OpenFiles() noexcept {
     const auto native = root_ + L"\\payload\\app\\worker\\native";
     std::size_t index = 0;
     for (const auto& directory : {drive, program_data, shared, root_, root_ + L"\\payload", root_ + L"\\payload\\app",
-        root_ + L"\\payload\\app\\worker", native, root_ + L"\\configuration"}) {
+        root_ + L"\\payload\\app\\worker", native, root_ + L"\\configuration", runtime_path_}) {
       HANDLE file = nullptr; std::wstring canonical;
       const DWORD error = directories_.PinPath(directory, true, &file, &canonical);
       if (error) return error;
@@ -212,6 +285,19 @@ DWORD CellControllerInstalledFiles::OpenFiles() noexcept {
     if (!worker_host::VerifyWorkerFileHandle(record_)) return ERROR_ACCESS_DENIED;
     error = ReadCustody(record_, &custody_);
     if (error) return error;
+    error = configuration_.PinPath(root_ + L"\\configuration\\cell-runtime.identity", false, &runtime_record_, &canonical);
+    if (error) return error;
+    if (!worker_host::VerifyWorkerFileHandle(runtime_record_)) return ERROR_ACCESS_DENIED;
+    error = ReadCellControllerRuntimeCustody(runtime_record_, directory_handles_.back(), &runtime_custody_);
+    if (error) return error;
+    std::size_t runtime_index = 0;
+    for (const auto* name : {L"node.exe", L"worker-host-receipt.json"}) {
+      HANDLE file = nullptr;
+      error = runtime_pins_.PinPath(runtime_path_ + L"\\" + name, false, &file, &canonical);
+      if (error) return error;
+      runtime_files_[runtime_index++] = file;
+      if (!worker_host::VerifyWorkerFileHandle(file)) return ERROR_ACCESS_DENIED;
+    }
     error = image_.Open(image_path_, native, custody_.image_sha256, custody_.native_directory);
     if (!error) error = helper_.Open(native + L"\\GoatCitadelRemoteWorkerCellProvisioning.exe", native,
       custody_.provisioning_sha256, custody_.native_directory);
@@ -227,32 +313,96 @@ DWORD CellControllerInstalledFiles::Verify() noexcept {
         ? worker_host::VerifyWorkerAncestorHandle(directory_handles_[index], index == 2)
         : worker_host::VerifyWorkerFileHandle(directory_handles_[index]))) return ERROR_ACCESS_DENIED;
   }
-  if (!record_ || !worker_host::VerifyWorkerFileHandle(record_) || image_.handles_.empty() || helper_.handles_.empty() ||
+  if (!record_ || !worker_host::VerifyWorkerFileHandle(record_) || !runtime_record_ ||
+      !worker_host::VerifyWorkerFileHandle(runtime_record_) || image_.handles_.empty() || helper_.handles_.empty() ||
       !worker_host::VerifyWorkerFileHandle(image_.handles_.back()) ||
       !worker_host::VerifyWorkerFileHandle(helper_.handles_.back())) return ERROR_ACCESS_DENIED;
+  for (const auto file : runtime_files_) {
+    if (!file || !worker_host::VerifyWorkerFileHandle(file)) return ERROR_ACCESS_DENIED;
+  }
   CellControllerCustodyRecord record;
   DWORD error = ReadCustody(record_, &record);
   if (!error && (record.image_sha256 != custody_.image_sha256 || record.provisioning_sha256 != custody_.provisioning_sha256 ||
       record.native_directory != custody_.native_directory || record.parent != custody_.parent)) error = ERROR_FILE_INVALID;
+  CellControllerRuntimeCustodyRecord runtime;
+  if (!error) error = ReadCellControllerRuntimeCustody(runtime_record_, directory_handles_.back(), &runtime);
+  if (!error && (runtime.source_directory != runtime_custody_.source_directory || runtime.bundle_sha256 != runtime_custody_.bundle_sha256 ||
+      runtime.package_sha256 != runtime_custody_.package_sha256)) error = ERROR_FILE_INVALID;
   return error;
 }
 
 DWORD CellControllerInstalledFiles::VerifyControllerProcess(HANDLE process) const noexcept {
   return open_ ? image_.VerifyProcessImage(process) : ERROR_INVALID_STATE;
 }
+DWORD CellControllerInstalledFiles::OpenRuntimeBundle(const std::vector<CellRuntimeBundleFile>& files,
+    PinnedCellRuntimeBundle& output, HANDLE cancellation) noexcept {
+  if (output.Ready()) return ERROR_ALREADY_INITIALIZED;
+  DWORD error = Verify();
+  if (error) return error;
+  if (files.size() != 2 || files[0].relative_path != L"node.exe" || files[1].relative_path != L"worker-host-receipt.json")
+    return ERROR_INVALID_DATA;
+  error = output.Open(runtime_path_, runtime_custody_.source_directory, files, runtime_custody_.bundle_sha256, cancellation);
+  if (!error) error = Verify();
+  if (!error && cancellation && WaitForSingleObject(cancellation, 0) != WAIT_TIMEOUT) error = ERROR_CANCELLED;
+  if (error) output.Reset();
+  return error;
+}
 DWORD CellControllerInstalledFiles::VerifyProvisioningProcess(HANDLE process) const noexcept {
   return open_ ? helper_.VerifyProcessImage(process) : ERROR_INVALID_STATE;
 }
 void CellControllerInstalledFiles::Close() noexcept {
-  open_ = false; record_ = nullptr; directory_handles_.fill(nullptr);
-  helper_.Reset(); image_.Reset(); configuration_.Reset(); directories_.Reset();
-  custody_ = {}; root_.clear(); image_path_.clear(); quoted_image_.clear(); parent_path_.clear();
+  open_ = false; record_ = runtime_record_ = nullptr; directory_handles_.fill(nullptr); runtime_files_.fill(nullptr);
+  runtime_pins_.Reset(); helper_.Reset(); image_.Reset(); configuration_.Reset(); directories_.Reset();
+  custody_ = {}; runtime_custody_ = {}; root_.clear(); image_path_.clear(); quoted_image_.clear(); parent_path_.clear(); runtime_path_.clear();
+}
+DWORD CellControllerIdentity::OpenCapacityFiles() noexcept {
+  try {
+    std::wstring canonical;
+    auto error = capacity_pins_.PinPath(installed_.InstallationRoot() + L"\\configuration\\state-writers.guard",
+      false, &state_writer_gate_, &canonical);
+    LARGE_INTEGER size{};
+    if (!error && (!worker_host::VerifyWorkerFileHandle(state_writer_gate_) ||
+        !GetFileSizeEx(state_writer_gate_, &size) || size.QuadPart != 0)) error = ERROR_ACCESS_DENIED;
+    if (error) return error;
+    const auto state = installed_.InstallationRoot() + L"\\state";
+    error = capacity_pins_.PinPath(state, true, &state_parent_, &canonical);
+    if (!error && !worker_host::VerifyWorkerFileHandle(state_parent_)) error = ERROR_ACCESS_DENIED;
+    if (error) return error;
+    capacity_roots_[0] = parent_;
+    std::size_t index = 1;
+    for (const auto* name : {L"input-staging", L"backup-staging", L"artifact-staging", L"immutable-artifact",
+        L"retained-outbox", L"database-sidecar", L"backup-publication", L"manifest", L"proxy-sidecar",
+        L"diagnostic", L"failed-cleanup", L"quarantine-evidence"}) {
+      auto& root = capacity_roots_[index++];
+      error = capacity_pins_.PinPath(state + L"\\" + name, true, &root, &canonical);
+      if (!error && !worker_host::VerifyWorkerFileHandle(root, true)) error = ERROR_ACCESS_DENIED;
+      if (error) return error;
+    }
+    if (index != capacity_roots_.size()) return ERROR_INVALID_DATA;
+    error = capacity_pins_.PinPath(installed_.InstallationRoot() + L"\\configuration\\cell-capacity.identity",
+      false, &capacity_record_, &canonical);
+    if (!error && !worker_host::VerifyWorkerFileHandle(capacity_record_)) error = ERROR_ACCESS_DENIED;
+    if (!error) error = ReadCellControllerCapacityCustody(capacity_record_, capacity_roots_, ParentIdentity(), &capacity_custody_);
+    return error;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD CellControllerIdentity::VerifyCapacityFiles() noexcept {
+  if (!state_writer_gate_ || !worker_host::VerifyWorkerFileHandle(state_writer_gate_) ||
+      !state_parent_ || !capacity_record_ || !worker_host::VerifyWorkerFileHandle(state_parent_) ||
+      !worker_host::VerifyWorkerFileHandle(capacity_record_)) return ERROR_ACCESS_DENIED;
+  for (std::size_t i = 1; i < capacity_roots_.size(); ++i) {
+    if (!capacity_roots_[i] || !worker_host::VerifyWorkerFileHandle(capacity_roots_[i], true)) return ERROR_ACCESS_DENIED;
+  }
+  CellControllerCapacityCustodyRecord current;
+  const auto error = ReadCellControllerCapacityCustody(capacity_record_, capacity_roots_, ParentIdentity(), &current);
+  return error ? error : current == capacity_custody_ ? ERROR_SUCCESS : ERROR_FILE_INVALID;
 }
 DWORD CellControllerIdentity::VerifyFiles() noexcept {
   DWORD error = installed_.Verify();
   if (!error) error = installed_.VerifyControllerProcess(GetCurrentProcess());
   if (!error && !IdentityMatches(parent_, installed_.ParentIdentity())) error = ERROR_FILE_INVALID;
   if (!error) error = VerifyCellSecurity(parent_, parent_security_);
+  if (!error) error = VerifyCapacityFiles();
   return error;
 }
 DWORD CellControllerIdentity::Open(DWORD count, wchar_t** arguments) noexcept {
@@ -273,6 +423,8 @@ DWORD CellControllerIdentity::Open(DWORD count, wchar_t** arguments) noexcept {
     error = parent_pins_.PinPath(installed_.ParentPath(), true, &parent_, &canonical);
     if (!error && !IdentityMatches(parent_, installed_.ParentIdentity())) error = ERROR_FILE_INVALID;
     if (!error) error = BuildCellParentSecurity(system_sid, kCellControllerServiceSid, &parent_security_);
+    if (!error) error = VerifyCellSecurity(parent_, parent_security_);
+    if (!error) error = OpenCapacityFiles();
     if (error) return refuse(error);
     open_ = true;
     error = Verify(SERVICE_START_PENDING, false);
@@ -303,9 +455,104 @@ DWORD CellControllerIdentity::EnableVolumeManagement() noexcept {
 DWORD CellControllerIdentity::VerifyProvisioningProcess(HANDLE process) const noexcept {
   return open_ ? installed_.VerifyProvisioningProcess(process) : ERROR_INVALID_STATE;
 }
+DWORD CellControllerIdentity::VerifyWorkerHostProcess(HANDLE helper) noexcept {
+  auto error = Verify(SERVICE_RUNNING);
+  if (error) return error;
+  try {
+    const auto& root = installed_.InstallationRoot();
+    const auto image_path = root + L"\\payload\\bin\\GoatCitadelRemoteWorkerHost.exe";
+    const ServiceHandle manager{OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT)};
+    const ServiceHandle service{manager.value ? OpenServiceW(manager.value, L"GoatCitadelRemoteWorker", worker_host::kWorkerServiceRead) : nullptr};
+    worker_host::ServiceConfiguration config; worker_host::ServiceObjectSecurity security;
+    SERVICE_STATUS_PROCESS status{}; DWORD size = 0;
+    if (!service.value || !worker_host::CollectServiceConfiguration(service.value, &config) ||
+        !worker_host::ValidateServiceConfiguration(config, L"\"" + image_path + L"\"", SERVICE_RUNNING) ||
+        !worker_host::CollectServiceObjectSecurity(service.value, &security) || !worker_host::ValidateServiceObject(security) ||
+        !QueryServiceStatusEx(service.value, SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(&status), sizeof(status), &size) ||
+        status.dwCurrentState != SERVICE_RUNNING || !status.dwProcessId) return ERROR_ACCESS_DENIED;
+    Handle process{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, status.dwProcessId)};
+    FILETIME host_created{}, helper_created{}, exited{}, kernel{}, user{};
+    worker_host::TokenIdentity host_token, helper_token;
+    if (!process.value || WaitForSingleObject(process.value, 0) != WAIT_TIMEOUT || WaitForSingleObject(helper, 0) != WAIT_TIMEOUT ||
+        !GetProcessTimes(process.value, &host_created, &exited, &kernel, &user) || !GetProcessTimes(helper, &helper_created, &exited, &kernel, &user) ||
+        CompareFileTime(&helper_created, &host_created) < 0 || !worker_host::CollectWorkerProcessToken(process.value, &host_token) ||
+        !worker_host::CollectWorkerProcessToken(helper, &helper_token) || !worker_host::ValidateWorkerToken(host_token) ||
+        !worker_host::ValidateWorkerToken(helper_token) || !SameLuid(host_token.authentication_id, helper_token.authentication_id) ||
+        !SameLuid(host_token.logon_id, helper_token.logon_id)) return ERROR_ACCESS_DENIED;
+    PinnedCellLaunchFiles pins; HANDLE directory = nullptr, image = nullptr; std::wstring canonical;
+    error = pins.PinPath(root + L"\\payload\\bin", true, &directory, &canonical);
+    if (!error) error = pins.PinPath(image_path, false, &image, &canonical);
+    if (error) return error;
+    if (!worker_host::VerifyWorkerFileHandle(directory) || !worker_host::VerifyWorkerFileHandle(image)) return ERROR_ACCESS_DENIED;
+    std::array<wchar_t, 2048> process_image{}; DWORD image_size = static_cast<DWORD>(process_image.size());
+    if (!QueryFullProcessImageNameW(process.value, 0, process_image.data(), &image_size) || !SamePath(process_image.data(), image_path)) return ERROR_ACCESS_DENIED;
+    const auto marker_path = root + L"\\configuration\\host-run.guard";
+    Handle marker{CreateFileW(marker_path.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+    std::array<wchar_t, 2052> final{};
+    const auto length = marker.value == INVALID_HANDLE_VALUE ? 0 : GetFinalPathNameByHandleW(marker.value, final.data(), static_cast<DWORD>(final.size()), 0);
+    if (!length || length >= final.size() || !SamePath(final.data(), L"\\\\?\\" + marker_path) ||
+        !worker_host::VerifyWorkerFileHandle(marker.value, true) || !worker_host::VerifyWorkerHostRunMarker(marker.value, process.value)) return ERROR_ACCESS_DENIED;
+    SERVICE_STATUS_PROCESS after{};
+    if (!QueryServiceStatusEx(service.value, SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(&after), sizeof(after), &size) ||
+        after.dwCurrentState != SERVICE_RUNNING || after.dwProcessId != status.dwProcessId ||
+        WaitForSingleObject(helper, 0) != WAIT_TIMEOUT || !worker_host::VerifyWorkerHostRunMarker(marker.value, process.value)) return ERROR_ACCESS_DENIED;
+    return Verify(SERVICE_RUNNING);
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD CellControllerIdentity::OpenRuntimeBundle(const std::vector<CellRuntimeBundleFile>& files,
+    PinnedCellRuntimeBundle& output, HANDLE cancellation) noexcept {
+  if (output.Ready()) return ERROR_ALREADY_INITIALIZED;
+  DWORD error = Verify(SERVICE_RUNNING);
+  if (error) return error;
+  error = installed_.OpenRuntimeBundle(files, output, cancellation);
+  if (!error) error = Verify(SERVICE_RUNNING);
+  if (error) output.Reset();
+  return error;
+}
+DWORD CellControllerIdentity::ReadCapacityRoots(CellCapacityAreaRoots& output) noexcept {
+  output = {};
+  const auto error = Verify(SERVICE_RUNNING);
+  if (error) return error;
+  for (std::size_t i = 0; i < output.size(); ++i) output[i] = {capacity_roots_[i], capacity_custody_.roots[i]};
+  return ERROR_SUCCESS;
+}
+DWORD CellControllerIdentity::AcquireMeasurementGate(worker_host::WorkerStateGateLock& gate) noexcept {
+  auto error = Verify(SERVICE_RUNNING);
+  if (!error) error = gate.Acquire(state_writer_gate_, true);
+  if (error) return error;
+  error = Verify(SERVICE_RUNNING);
+  if (error) gate.Release();
+  return error;
+}
+CellCapacityRootSecurity CellControllerIdentity::CapacityRootSecurity() noexcept {
+  return {this, [](void* context, CellCapacityArea area, HANDLE root, const CellFileIdentity& expected) noexcept {
+    return static_cast<CellControllerIdentity*>(context)->VerifyCapacityRoot(area, root, expected);
+  }};
+}
+DWORD CellControllerIdentity::VerifyCapacityRoot(CellCapacityArea area, HANDLE root, const CellFileIdentity& expected) noexcept {
+  if (static_cast<unsigned>(area) >= kCellCapacityAreaCount || !root || root == INVALID_HANDLE_VALUE || expected == CellFileIdentity{})
+    return ERROR_INVALID_PARAMETER;
+  auto error = Verify(SERVICE_RUNNING);
+  if (error) return error;
+  if (expected != capacity_custody_.roots[static_cast<unsigned>(area)]) return ERROR_FILE_INVALID;
+  FILE_ID_INFO id{}; FILE_ATTRIBUTE_TAG_INFO attributes{}; FILE_STANDARD_INFO standard{};
+  if (GetFileType(root) != FILE_TYPE_DISK || !GetFileInformationByHandleEx(root, FileIdInfo, &id, sizeof(id)) ||
+      !GetFileInformationByHandleEx(root, FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+      !GetFileInformationByHandleEx(root, FileStandardInfo, &standard, sizeof(standard))) return ERROR_INVALID_HANDLE;
+  if (!standard.Directory || standard.DeletePending || (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+      id.VolumeSerialNumber != expected.volume_serial || std::memcmp(id.FileId.Identifier, expected.file_id.data(), expected.file_id.size()))
+    return ERROR_FILE_INVALID;
+  if (area == CellCapacityArea::mutable_root) {
+    if (expected != ParentIdentity()) return ERROR_FILE_INVALID;
+    error = VerifyCellSecurity(root, parent_security_);
+  } else if (!worker_host::VerifyWorkerFileHandle(root, true)) error = ERROR_INVALID_SECURITY_DESCR;
+  return error ? error : Verify(SERVICE_RUNNING);
+}
 void CellControllerIdentity::Close() noexcept {
-  open_ = false; parent_ = nullptr;
-  parent_pins_.Reset(); installed_.Close();
+  open_ = false; parent_ = capacity_record_ = state_parent_ = state_writer_gate_ = nullptr;
+  capacity_roots_.fill(nullptr); capacity_custody_ = {};
+  capacity_pins_.Reset(); parent_pins_.Reset(); installed_.Close();
   if (service_) CloseServiceHandle(service_);
   if (manager_) CloseServiceHandle(manager_);
   if (token_) CloseHandle(token_);

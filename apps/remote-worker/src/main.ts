@@ -5,6 +5,9 @@ import { writeWorkerProcessReport } from "./worker-process-report.js";
 import { attachWorkerHostControl } from "./worker-host-control.js";
 import { loadWorkerMeshToolRegistry } from "./worker-mesh-tool-registry.js";
 import { WorkerMeshCapabilityRuntime } from "./worker-mesh-capability-runtime.js";
+import { createWindowsInstalledNativeRuntime } from "./worker-windows-installed-runtime.js";
+import { startWindowsWorkerStateWriterGate } from "./worker-windows-state-writer-gate.js";
+import { CONNECTED_WORKER_ENV, WORKER_HOST_CONTROL_PROTOCOL } from "./worker-environment.js";
 
 /**
  * Connected-worker process entrypoint.
@@ -31,11 +34,13 @@ async function main(): Promise<void> {
   const publishReport = (report: Readonly<Record<string, unknown>>) =>
     writeWorkerProcessReport(config.reportFile, report);
   try {
+    if (process.env[CONNECTED_WORKER_ENV.hostControl] === WORKER_HOST_CONTROL_PROTOCOL) startWindowsWorkerStateWriterGate();
     release = await acquireWorkerStateOwnership(config.stateDir);
     const meshCapabilities = config.meshRegistry ? await loadWorkerMeshToolRegistry(config.meshRegistry, {
       workspaceId: config.ticket.executionWorkspaceId, nodeId: config.ticket.nodeId,
     }, shutdown.signal) : new WorkerMeshCapabilityRuntime([]);
-    await runWorkerProcess(config, { signal: shutdown.signal, publishReport, protectedKeys, meshCapabilities });
+    const nativeRuntime = protectedKeys ? createWindowsInstalledNativeRuntime(protectedKeys) : undefined;
+    await runWorkerProcess(config, { signal: shutdown.signal, publishReport, protectedKeys, meshCapabilities, nativeRuntime });
   } catch (error) {
     exitCode = 1;
     process.stderr.write("Connected worker stopped. Inspect its report and retained state ownership.\n");

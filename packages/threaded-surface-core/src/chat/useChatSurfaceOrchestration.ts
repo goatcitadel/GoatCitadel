@@ -146,6 +146,8 @@ export function useChatSurfaceOrchestration(input: {
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [queueDrainSignal, setQueueDrainSignal] = useState(0);
   const drainingQueueItemIdRef = useRef<string | null>(null);
+  const stopRequestRef = useRef<string | null>(null);
+  const [stoppingStreamToken, setStoppingStreamToken] = useState<string | null>(null);
 
   // The controller intentionally supplies this as a render-current callback.
   // Keep the callback in a ref so the public queue setter remains stable for
@@ -248,10 +250,21 @@ export function useChatSurfaceOrchestration(input: {
     if (!activeStream) {
       return;
     }
+    if (activeStream.sessionId !== input.selectedSessionId || stopRequestRef.current === activeStream.streamToken) return;
+    stopRequestRef.current = activeStream.streamToken;
+    setStoppingStreamToken(activeStream.streamToken);
+    const isCurrent = () => input.activeStreamRef.current === activeStream;
     try {
       if (activeStream.turnId) {
-        await cancelChatTurn(input.selectedSessionId, activeStream.turnId, "mission-control");
-        input.pushLocalNoticeRef.current?.(`Stopped turn ${activeStream.turnId.slice(-6)}.`, "warning");
+        const result = await cancelChatTurn(activeStream.sessionId, activeStream.turnId, "mission-control");
+        if (!isCurrent()) return;
+        if (result.sessionId !== activeStream.sessionId || result.turnId !== activeStream.turnId) {
+          throw new Error("Cancellation response did not match the active turn. Refresh its status before retrying.");
+        }
+        const confirmed = result.cancelled && result.trace.status === "cancelled";
+        input.pushLocalNoticeRef.current?.(confirmed
+          ? `Stopped turn ${activeStream.turnId.slice(-6)}.`
+          : "Cancellation was not confirmed. Refreshing the turn status.", "warning");
         const reloadSession = input.loadSessionCoreStateRef.current;
         if (reloadSession) {
           void reloadSession(input.selectedSessionId, {
@@ -259,13 +272,18 @@ export function useChatSurfaceOrchestration(input: {
             includeThread: true,
           }).catch(() => undefined);
         }
+        if (confirmed) input.abortActiveChatStream(activeStream);
       } else {
         input.pushLocalNoticeRef.current?.("Stopped the local connection before the turn id was assigned.", "warning");
+        input.abortActiveChatStream(activeStream);
       }
     } catch (err) {
-      input.setError((err as Error).message);
+      if (isCurrent()) input.setError((err as Error).message);
     } finally {
-      input.abortActiveChatStream(activeStream);
+      if (stopRequestRef.current === activeStream.streamToken) {
+        stopRequestRef.current = null;
+        setStoppingStreamToken(null);
+      }
     }
   }, [input]);
 
@@ -350,6 +368,7 @@ export function useChatSurfaceOrchestration(input: {
     handleSend,
     handleRetryTurn,
     handleStopActiveTurn,
+    isStopPending: stoppingStreamToken !== null && stoppingStreamToken === input.activeStreamRef.current?.streamToken,
     handleBeginEditTurn,
     handleResumeQueue,
     handleRemoveQueuedItem,

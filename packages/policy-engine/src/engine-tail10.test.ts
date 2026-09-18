@@ -5,6 +5,7 @@ import { ToolPolicyEngine } from "./engine.js";
 
 function createStorageStub(): Storage & AsyncStorage {
   return {
+    runImmediateTransaction: vi.fn(async <T>(work: () => T | Promise<T>): Promise<T> => await work()),
     approvals: {
       create: vi.fn((input) => ({
         approvalId: "approval-tail",

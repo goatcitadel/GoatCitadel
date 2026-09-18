@@ -20,6 +20,7 @@ import type { ApprovalCreateCommitHook, ApprovalLifecycleHost } from "./approval
 import type { ApprovalRemoteActionContext } from "./approval-remote-action-service.js";
 import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 import * as approvalRemoteActionService from "./approval-remote-action-service.js";
+import { projectApprovalNativeRuntimeReview } from "./approval-native-runtime-review-projection.js";
 
 export interface ApprovalRuntime {
   listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit?: number): Promise<ToolGrantRecord[]>;
@@ -171,7 +172,8 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
   }
 
   public async getApprovalReplay(approvalId: string, replayedBy = "operator"): Promise<ApprovalReplayResult> {
-    return approvalLifecycleService.getApprovalReplay(this.host, approvalId, replayedBy);
+    const replay = await approvalLifecycleService.getApprovalReplay(this.host, approvalId, replayedBy);
+    return projectApprovalNativeRuntimeReview(this.host, replay);
   }
 
   public async resolveApproval(

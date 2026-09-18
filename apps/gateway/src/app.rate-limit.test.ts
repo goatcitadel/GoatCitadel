@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
 
 const TOKEN = "security-review-token-1234567890";
@@ -25,13 +25,27 @@ const ENV_KEYS = [
   "GOATCITADEL_RATE_LIMIT_MAX_WEBHOOK_ACCEPTED",
   "GOATCITADEL_DATABASE_DRIVER",
   "GOATCITADEL_ROOT_DIR",
+  "GOATCITADEL_RATE_LIMIT_FIXTURE_KEY",
 ] as const;
 
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [key, process.env[key]]));
 const tempRoots: string[] = [];
+const unexpectedFetch = vi.fn<typeof fetch>(async () => { throw new Error("Rate-limit fixtures must not contact external services."); });
 
 describe("gateway route rate limits", () => {
+  beforeEach(() => {
+    unexpectedFetch.mockClear();
+    vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
+      // Startup inspects optional local inference even when it is disabled.
+      // Keep that check deterministic without contacting a running local server.
+      if (args[0] === "http://127.0.0.1:8080/health" && args[1]?.method === "GET") {
+        return Promise.resolve(new Response(null, { status: 503 }));
+      }
+      return unexpectedFetch(...args);
+    });
+  });
   afterEach(async () => {
+    vi.unstubAllGlobals();
     for (const key of ENV_KEYS) {
       const original = originalEnv.get(key);
       if (original === undefined) {
@@ -43,6 +57,7 @@ describe("gateway route rate limits", () => {
     for (const root of tempRoots.splice(0)) {
       await removeTempRoot(root);
     }
+    expect(unexpectedFetch).not.toHaveBeenCalled();
   });
 
   it(
@@ -172,6 +187,7 @@ describe("gateway route rate limits", () => {
 });
 
 function configureRateLimitedGateway(enabled = true): void {
+  delete process.env.GOATCITADEL_RATE_LIMIT_FIXTURE_KEY;
   process.env.GATEWAY_HOST = "127.0.0.1";
   process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
   process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS = "false";
@@ -190,9 +206,22 @@ function configureRateLimitedGateway(enabled = true): void {
 
 function createIsolatedConfigRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-rate-limit-"));
-  const repoRoot = path.resolve(process.cwd(), "../..");
-  fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
   tempRoots.push(root);
+  const config = path.join(root, "config"); fs.mkdirSync(config);
+  // Explicit fixture inputs prevent local provider credentials, schedules and
+  // absolute data paths from leaking into these application-level tests.
+  const files: Record<string, unknown> = {
+    "assistant.config.json": { auth: { mode: "none" } },
+    "tool-policy.json": { profiles: {}, tools: { profile: "minimal", allow: [], deny: [] }, agents: {},
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] } },
+    "budgets.json": { mode: "balanced", daily: { tokensWarning: 1000, tokensHardCap: 2000, usdWarning: 1, usdHardCap: 2 },
+      session: { tokensHardCap: 1000, turnMaxInputTokens: 500, turnMaxOutputTokens: 500 } },
+    "llm-providers.json": { activeProviderId: "fixture", providers: [{ providerId: "fixture", label: "Unconfigured test provider",
+      baseUrl: "https://provider.invalid/v1", apiStyle: "openai-chat-completions", defaultModel: "fixture",
+      apiKeyEnv: "GOATCITADEL_RATE_LIMIT_FIXTURE_KEY" }] },
+    "cron-jobs.json": { jobs: [] },
+  };
+  for (const [name, value] of Object.entries(files)) fs.writeFileSync(path.join(config, name), `${JSON.stringify(value)}\n`, "utf8");
   return root;
 }
 

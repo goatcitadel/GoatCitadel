@@ -1,4 +1,5 @@
 #include "availability_broker.hpp"
+#include "service_configuration_query.hpp"
 
 #include <array>
 #include <cstddef>
@@ -118,7 +119,7 @@ gc::AvailabilityServiceSnapshot Baseline(
       ACCESS_ALLOWED_ACE_TYPE,
       0U,
       SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG |
-          SERVICE_QUERY_STATUS | READ_CONTROL | SYNCHRONIZE,
+          SERVICE_QUERY_STATUS | READ_CONTROL,
       AdministratorsSid(),
   };
   if (signer) {
@@ -200,6 +201,9 @@ void TestExactTargetValidation() noexcept {
   changed = baseline;
   changed.service_aces[1U].mask |= SERVICE_CHANGE_CONFIG;
   Expect(!gc::ValidateAvailabilityTargetSnapshot(changed, expected), "acl mask exact");
+  changed = baseline;
+  changed.service_aces[1U].mask |= SYNCHRONIZE;
+  Expect(!gc::ValidateAvailabilityTargetSnapshot(changed, expected), "unsupported service synchronize bit refused");
   for (unsigned bit = 0U; bit < 32U; ++bit) {
     changed = baseline;
     changed.service_aces[2U].mask ^= UINT32_C(1) << bit;
@@ -280,8 +284,19 @@ void TestExactBrokerValidation() noexcept {
   changed.exact_service_main_arguments = false;
   Expect(!gc::ValidateAvailabilityBrokerSnapshot(changed, expected), "broker args exact");
   changed = snapshot;
-  changed.service_process_id = 92U;
-  Expect(!gc::ValidateAvailabilityBrokerSnapshot(changed, expected), "broker pid exact");
+  changed.current_process_id = 0U;
+  Expect(!gc::ValidateAvailabilityBrokerSnapshot(changed, expected), "broker needs its own process identity");
+  for (const auto pending_pid : {0U, 92U}) {
+    changed = snapshot;
+    changed.service_process_id = pending_pid;
+    Expect(gc::ValidateAvailabilityBrokerSnapshot(changed, expected),
+           "START_PENDING does not rely on the undefined SCM process id");
+    changed.current_state = SERVICE_RUNNING;
+    changed.checkpoint = 0U;
+    changed.wait_hint = 0U;
+    Expect(!gc::ValidateAvailabilityBrokerSnapshot(changed, expected, false),
+           "RUNNING requires the exact current SCM process id before signer starts");
+  }
   changed = snapshot;
   changed.configured_start_type = SERVICE_AUTO_START;
   Expect(!gc::ValidateAvailabilityBrokerSnapshot(changed, expected), "broker demand start exact");
@@ -309,6 +324,49 @@ void TestExactBrokerValidation() noexcept {
   Expect(gc::ValidateAvailabilityTargetSnapshot(changed, expected), "signer accepts exact SCM startup defaults");
   changed.wait_hint = 2001U;
   Expect(!gc::ValidateAvailabilityTargetSnapshot(changed, expected), "zero-checkpoint startup requires exact SCM wait hint");
+}
+
+void TestSuccessfulConfigurationQueriesWithoutByteCount() noexcept {
+  alignas(16) std::array<std::uint8_t, 8192U> buffer{};
+  DWORD extent = 0U;
+  for (const auto undefined_count : {0U, 1U, 0xffffffffU}) {
+    buffer.fill(0xffU);
+    const bool accepted = gc::QueryBoundedServiceConfiguration(
+        &buffer, sizeof(SERVICE_TRIGGER_INFO), &extent,
+        [undefined_count](LPBYTE data, DWORD capacity, LPDWORD needed) noexcept -> BOOL {
+          // GOATBOX returns success with no triggers and leaves *needed at zero.
+          // Other success values are equally undefined by the Windows API.
+          bool zeroed = capacity == 8192U;
+          for (DWORD index = 0U; index < capacity; ++index) zeroed &= data[index] == 0U;
+          *needed = undefined_count;
+          return zeroed ? TRUE : FALSE;
+        });
+    Expect(accepted && extent == buffer.size(), "successful no-trigger query uses the actual cleared buffer extent");
+    const auto* triggers = reinterpret_cast<const SERVICE_TRIGGER_INFO*>(buffer.data());
+    Expect(triggers->cTriggers == 0U && triggers->pTriggers == nullptr && triggers->pReserved == nullptr,
+           "no-trigger response still has the exact empty structure");
+  }
+  Expect(gc::QueryBoundedServiceConfiguration(&buffer, sizeof(SERVICE_TRIGGER_INFO), &extent,
+      [](LPBYTE data, DWORD, LPDWORD) noexcept -> BOOL {
+        reinterpret_cast<SERVICE_TRIGGER_INFO*>(data)->cTriggers = 1U;
+        return TRUE;
+      }) && reinterpret_cast<const SERVICE_TRIGGER_INFO*>(buffer.data())->cTriggers == 1U,
+      "query adapter preserves a nonempty trigger response for identity refusal");
+  for (const auto error : {ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_INSUFFICIENT_BUFFER}) {
+    extent = 8192U;
+    Expect(!gc::QueryBoundedServiceConfiguration(&buffer, sizeof(SERVICE_TRIGGER_INFO), &extent,
+        [error](LPBYTE, DWORD, LPDWORD needed) noexcept -> BOOL {
+          *needed = 16384U;
+          SetLastError(error);
+          return FALSE;
+        }) && extent == 0U, "failed or oversized query never exposes a usable response");
+  }
+  unsigned calls = 0U;
+  const auto must_not_query = [&calls](LPBYTE, DWORD, LPDWORD) noexcept -> BOOL { ++calls; return TRUE; };
+  Expect(!gc::QueryBoundedServiceConfiguration(&buffer, 0U, &extent, must_not_query) &&
+      !gc::QueryBoundedServiceConfiguration(&buffer, 8193U, &extent, must_not_query) &&
+      !gc::QueryBoundedServiceConfiguration(&buffer, sizeof(SERVICE_TRIGGER_INFO), nullptr, must_not_query) &&
+      calls == 0U, "invalid caller bounds refuse before querying Windows");
 }
 
 struct SupervisorFixture final {
@@ -407,6 +465,7 @@ int RunAvailabilityBrokerTests() noexcept {
   TestStateClassificationAndDeadline();
   TestExactTargetValidation();
   TestExactBrokerValidation();
+  TestSuccessfulConfigurationQueriesWithoutByteCount();
   TestRepeatedSupervision();
   return g_failures;
 }

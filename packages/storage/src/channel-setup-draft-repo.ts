@@ -6,8 +6,10 @@ import type {
   ChannelSetupDraftUpdateInput,
   ChannelSetupFailureCategory,
   ChannelSetupLifecycleMode,
+  IntegrationConnection,
 } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { IntegrationConnectionRepository } from "./integration-connection-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ChannelSetupDraftRow {
@@ -15,6 +17,7 @@ interface ChannelSetupDraftRow {
   revision: number;
   catalog_id: string;
   connection_id: string | null;
+  connection_revision: string | null;
   lifecycle_mode: ChannelSetupLifecycleMode;
   label: string | null;
   enabled: number;
@@ -56,11 +59,11 @@ export class ChannelSetupDraftRepository {
     `);
     this.insertStmt = db.prepare(`
       INSERT INTO channel_setup_drafts (
-        draft_id, revision, catalog_id, connection_id, lifecycle_mode, label, enabled, draft_json, secret_refs_json, hydration_json,
+        draft_id, revision, catalog_id, connection_id, connection_revision, lifecycle_mode, label, enabled, draft_json, secret_refs_json, hydration_json,
         content_version, adapter_version, validation_version, test_version,
         last_validated_at, last_tested_at, last_failure_category, created_at, updated_at
       ) VALUES (
-        @draftId, 1, @catalogId, @connectionId, @lifecycleMode, @label, @enabled, @draftJson, @secretRefsJson, @hydrationJson,
+        @draftId, 1, @catalogId, @connectionId, @connectionRevision, @lifecycleMode, @label, @enabled, @draftJson, @secretRefsJson, @hydrationJson,
         @contentVersion, @adapterVersion, @validationVersion, @testVersion,
         @lastValidatedAt, @lastTestedAt, @lastFailureCategory, @createdAt, @updatedAt
       )
@@ -69,6 +72,7 @@ export class ChannelSetupDraftRepository {
       UPDATE channel_setup_drafts
       SET
         revision = revision + 1,
+        connection_revision = @connectionRevision,
         label = @label,
         enabled = @enabled,
         draft_json = @draftJson,
@@ -118,6 +122,7 @@ export class ChannelSetupDraftRepository {
       secretState?: ChannelSetupDraft["secretState"];
       draftId?: string;
       hydration?: ChannelSetupDraft["hydration"];
+      connectionRevision?: string;
       contentVersion: string;
       adapterVersion: string;
       validationVersion: string;
@@ -126,10 +131,12 @@ export class ChannelSetupDraftRepository {
     now = new Date().toISOString(),
   ): ChannelSetupDraft {
     const draftId = input.draftId ?? randomUUID();
+    return this.withLock(draftId, () => {
     this.insertStmt.run({
       draftId,
       catalogId: input.catalogId,
       connectionId: input.connectionId ?? null,
+      connectionRevision: input.connectionRevision ?? null,
       lifecycleMode: input.lifecycleMode,
       label: input.label ?? null,
       enabled: input.enabled ? 1 : 0,
@@ -147,12 +154,14 @@ export class ChannelSetupDraftRepository {
       updatedAt: now,
     });
     return this.get(draftId);
+    });
   }
 
   public update(
     draftId: string,
     input: ChannelSetupDraftUpdateInput & {
       hydration?: ChannelSetupDraft["hydration"];
+      connectionRevision?: string;
       secretState?: ChannelSetupDraft["secretState"];
       contentVersion?: string;
       adapterVersion?: string;
@@ -163,6 +172,7 @@ export class ChannelSetupDraftRepository {
     },
     now = new Date().toISOString(),
   ): ChannelSetupDraft {
+    return this.withLock(draftId, () => {
     const current = this.get(draftId);
     if (input.expectedRevision !== current.revision) {
       throw draftRevisionConflict(draftId, input.expectedRevision, current.revision);
@@ -170,6 +180,7 @@ export class ChannelSetupDraftRepository {
     const result = this.updateStmt.run({
       draftId,
       expectedRevision: input.expectedRevision,
+      connectionRevision: input.connectionRevision ?? current.connectionRevision ?? null,
       label: input.label === undefined ? (current.label ?? null) : (input.label ?? null),
       enabled: input.enabled === undefined ? (current.enabled ? 1 : 0) : input.enabled ? 1 : 0,
       draftJson: JSON.stringify(input.draft ?? current.draft),
@@ -190,9 +201,52 @@ export class ChannelSetupDraftRepository {
       throw draftRevisionConflict(draftId, input.expectedRevision, actual);
     }
     return this.get(draftId);
+    });
+  }
+
+  /** Commit the exact tested draft, connection generation, and draft removal together. */
+  public finalizeConnection(
+    draftId: string,
+    expectedRevision: number,
+    input: Pick<IntegrationConnection, "connectionId" | "catalogId" | "kind" | "key" | "label" | "enabled" | "status" | "config"> & {
+      lastSyncAt: string;
+    },
+  ): IntegrationConnection {
+    return this.withLock(draftId, () => {
+      const current = this.get(draftId);
+      if (current.revision !== expectedRevision) throw draftRevisionConflict(draftId, expectedRevision, current.revision);
+      if (current.catalogId !== input.catalogId || (current.connectionId && current.connectionId !== input.connectionId)) {
+        throw new ValidationError({ message: "The channel connection does not match its setup draft." });
+      }
+      if (current.connectionId && !/^[a-f0-9]{64}$/u.test(current.connectionRevision ?? "")) {
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "Review the current connection before finalizing this channel draft." });
+      }
+      const connections = new IntegrationConnectionRepository(this.db);
+      const connection = current.connectionId
+        ? connections.update(current.connectionId, {
+            expectedRevision: current.connectionRevision,
+            label: input.label, enabled: input.enabled, status: input.status, config: input.config,
+            lastSyncAt: input.lastSyncAt, lastError: null,
+          })
+        : connections.create(input);
+      this.delete(draftId, current.revision);
+      return connection;
+    });
+  }
+
+  private withLock<T>(draftId: string, action: () => T): T {
+    return this.db.transaction("immediate", () => {
+      if (this.db.dialect === "postgres") {
+        this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 543))")
+          .get({ lockKey: `channel-setup-draft:${draftId}` });
+        this.db.prepare("SELECT draft_id FROM channel_setup_drafts WHERE draft_id = @draftId FOR UPDATE").get({ draftId });
+      }
+      return action();
+    });
   }
 
   public delete(draftId: string, expectedRevision?: number): boolean {
+    return this.withLock(draftId, () => {
     const row = this.getStmt.get(draftId) as ChannelSetupDraftRow | undefined;
     if (!row) {
       return false;
@@ -203,6 +257,7 @@ export class ChannelSetupDraftRepository {
       throw draftRevisionConflict(draftId, revision, Number(row.revision));
     }
     return true;
+    });
   }
 }
 
@@ -212,6 +267,7 @@ function mapRow(row: ChannelSetupDraftRow): ChannelSetupDraft {
     revision: Number(row.revision),
     catalogId: row.catalog_id,
     connectionId: row.connection_id ?? undefined,
+    connectionRevision: row.connection_revision ?? undefined,
     lifecycleMode: row.lifecycle_mode,
     label: row.label ?? undefined,
     enabled: Boolean(row.enabled),

@@ -1,6 +1,10 @@
 export const WORKER_CELL_SOURCE_FILES = Object.freeze([
   "src/cell_job.hpp", "src/cell_job.cpp", "src/cell_job_stdio.hpp", "src/cell_job_stdio_internal.hpp", "src/cell_job_stdio.cpp",
   "src/cell_filesystem.hpp", "src/cell_filesystem.cpp", "src/cell_workspace.hpp", "src/cell_workspace.cpp",
+  "src/cell_capacity.hpp", "src/cell_capacity.cpp",
+  "src/cell_journal_runtime.hpp", "src/cell_journal_runtime.cpp", "tests/cell_journal_runtime_test.cpp",
+  "src/cell_runtime_dispatch.hpp", "src/cell_runtime_dispatch.cpp", "tests/cell_runtime_dispatch_test.cpp",
+  "src/cell_stdio_protocol.hpp", "src/cell_stdio_protocol.cpp",
   "src/cell_security.hpp", "src/cell_security.cpp", "src/cell_virtual_disk.hpp", "src/cell_virtual_disk.cpp",
   "src/cell_virtual_disk_device.hpp", "src/cell_virtual_disk_device.cpp", "tests/cell_virtual_disk_device_test.cpp",
   "src/cell_virtual_disk_layout.hpp", "src/cell_virtual_disk_layout.cpp", "tests/cell_virtual_disk_layout_test.cpp",
@@ -10,7 +14,7 @@ export const WORKER_CELL_SOURCE_FILES = Object.freeze([
   "src/cell_volume_protection.hpp", "src/cell_volume_protection.cpp", "tests/cell_volume_protection_test.cpp",
   "src/cell_volume_mount.hpp", "src/cell_volume_mount.cpp", "tests/cell_volume_mount_test.cpp",
   "src/cell_volume_mount_target.hpp", "src/cell_volume_mount_target.cpp",
-  "src/cell_mounted_workspace.hpp", "src/cell_mounted_workspace.cpp", "tests/cell_mounted_workspace_test.cpp",
+  "src/cell_mounted_workspace.hpp", "src/cell_mounted_workspace.cpp", "src/cell_mounted_workspace_capacity.cpp", "tests/cell_mounted_workspace_test.cpp",
   "src/cell_provisioning_journal.hpp", "src/cell_provisioning_journal.cpp", "tests/cell_provisioning_journal_test.cpp",
   "src/cell_runtime_bundle.hpp", "src/cell_runtime_bundle.cpp", "src/cell_runtime_bundle_install.cpp",
   "tests/job_fixture.cpp", "tests/cell_job_test.cpp", "tests/cell_job_input_test.cpp", "tests/cell_job_stdio_test.cpp",
@@ -21,6 +25,9 @@ export const WORKER_CELL_SOURCE_FILES = Object.freeze([
 export const WORKER_CELL_FIXTURE_SOURCES = Object.freeze(["tests/job_fixture.cpp", "tests/workspace_fixture.cpp"]);
 export const WORKER_CELL_CONTROLLER_SOURCES = Object.freeze([
   "src/cell_job.cpp", "src/cell_job_stdio.cpp", "src/cell_filesystem.cpp", "src/cell_workspace.cpp", "src/cell_security.cpp",
+  "src/cell_capacity.cpp",
+  "src/cell_journal_runtime.cpp", "tests/cell_journal_runtime_test.cpp",
+  "src/cell_runtime_dispatch.cpp", "src/cell_stdio_protocol.cpp", "tests/cell_runtime_dispatch_test.cpp",
   "src/cell_virtual_disk.cpp", "src/cell_runtime_bundle.cpp", "src/cell_runtime_bundle_install.cpp",
   "src/cell_virtual_disk_device.cpp", "tests/cell_virtual_disk_device_test.cpp",
   "src/cell_virtual_disk_layout.cpp", "tests/cell_virtual_disk_layout_test.cpp",
@@ -28,7 +35,7 @@ export const WORKER_CELL_CONTROLLER_SOURCES = Object.freeze([
   "src/cell_ntfs_format.cpp", "src/cell_ntfs_format_wmi.cpp", "tests/cell_ntfs_format_test.cpp",
   "src/cell_volume_protection.cpp", "tests/cell_volume_protection_test.cpp",
   "src/cell_volume_mount.cpp", "src/cell_volume_mount_target.cpp", "tests/cell_volume_mount_test.cpp",
-  "src/cell_mounted_workspace.cpp", "tests/cell_mounted_workspace_test.cpp",
+  "src/cell_mounted_workspace.cpp", "src/cell_mounted_workspace_capacity.cpp", "tests/cell_mounted_workspace_test.cpp",
   "src/cell_provisioning_journal.cpp", "tests/cell_provisioning_journal_test.cpp",
   "tests/cell_job_test.cpp", "tests/cell_job_input_test.cpp", "tests/cell_job_stdio_test.cpp", "tests/cell_filesystem_test.cpp",
   "tests/cell_workspace_test.cpp", "tests/cell_virtual_disk_test.cpp", "tests/cell_virtual_disk_attachment_test.cpp",

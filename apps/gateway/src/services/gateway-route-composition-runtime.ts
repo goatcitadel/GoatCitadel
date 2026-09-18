@@ -18,7 +18,7 @@ import { MobilePushService } from "./mobile-push-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
-import { createConfiguredRemoteWorkerManifestVerifier } from "./remote-worker-manifest-verifier.js";
+import { composeRemoteWorkerRouteDependencies } from "./remote-worker-route-composition.js";
 import { createSessionsListRoutePort } from "./sessions-list-route-service.js";
 import { UpdateScoutService } from "./update-scout-service.js";
 import { WorkflowRecipeService } from "./workflow-recipe-service.js";
@@ -431,19 +431,7 @@ export function composeRuntimeAdminRouteDependencies(
     researchSearch: {
       search: (input) => researchSearch.search(input),
     },
-    remoteWorkers: {
-      registry: gateway.storage.remoteWorkerAdmissions,
-      assignments: gateway.storage.remoteWorkerAssignments,
-      runtimeReads: gateway.storage.remoteWorkerRuntimeReads,
-      operatorControl: {
-        budgets: gateway.storage.remoteWorkerBudgets,
-        admissions: gateway.storage.remoteWorkerAdmissions,
-        audit: gateway.storage.audit,
-        manifestVerifier: createConfiguredRemoteWorkerManifestVerifier(),
-        // Join-secret issuance stays dark with native admission until its
-        // protected signer and assignment owner can pass startup preflight.
-      },
-    },
+    remoteWorkers: composeRemoteWorkerRouteDependencies(gateway),
     runtimeLifecycle: {
       getRuntimeLifecycle: (input) => gateway.runtimeLifecycleReadService.getRuntimeLifecycle(input),
       getTranscript: (sessionId) => gateway.getTranscript(sessionId),

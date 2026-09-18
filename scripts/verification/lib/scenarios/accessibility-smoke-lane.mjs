@@ -1,3 +1,4 @@
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 const ACCESSIBILITY_STUB_REPLY = "KEYBOARD_OK";
 const ACCESSIBILITY_STUB_KEY = "verification-accessibility-smoke-stub-key";
 
@@ -196,7 +197,7 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     installMissionControlNextBrowserState,
     path,
     probeKeyboardFocus,
-    prepareVerificationRuntime,
+    prepareCleanRuntime = prepareUsabilityRuntime,
     relativeToRun,
     runScenario,
     seedMissionControlNextFixture,
@@ -206,7 +207,6 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     startVerificationStack,
     stopVerificationStack,
     waitForVerificationRouteReady,
-    writeDeterministicLlmProviderConfig,
     writeJson,
   } = deps;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
@@ -217,9 +217,9 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     stub = await startDeterministicLlmStub({
       replyText: ACCESSIBILITY_STUB_REPLY,
       expectedAuthorization: `Bearer ${ACCESSIBILITY_STUB_KEY}`,
+      dispatchPlanStreamOnly: options.dispatchPlanStreamOnly,
     });
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-accessibility-smoke`);
-    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
+    runtimeRoot = await prepareCleanRuntime(`${context.runId}-accessibility-smoke`, stub.baseUrl);
     stack = await startVerificationStack(context, {
       runtimeRoot,
       includeUi: true,
@@ -227,6 +227,7 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
       gatewayEnvOmit: options.secretEnvKeys,
       uiEnvOmit: options.secretEnvKeys,
       gatewayEnv: {
+        GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
         GOATCITADEL_AUTH_MODE: "token",
         GOATCITADEL_AUTH_TOKEN: "verification-accessibility-smoke-operator-token",
         GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
@@ -272,7 +273,7 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
               await page.goto(buildVerificationUiUrl(stack.uiUrl, scenario.href), { waitUntil: "domcontentloaded" });
               await waitForVerificationRouteReady(page, scenario.route, NEXT_UI_PACKAGE);
               await setBrowserCorrelation(page, correlationId, fixture.sessionId);
-              const preparationEvidence = await scenario.prepare?.(page);
+              const preparationEvidence = await scenario.prepare?.(page, { stub });
               await page.addScriptTag({ path: axeSourcePath });
               const axeReport = await auditPageAccessibility(page);
               const focusReport = await probeKeyboardFocus(page);

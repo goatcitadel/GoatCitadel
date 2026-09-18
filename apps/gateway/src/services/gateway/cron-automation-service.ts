@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
+import { observeActiveCronAgentRun, reconcileCompletedCronChannelDelivery } from "./cron-channel-reconciliation.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   isCronRunTerminalStatus,
@@ -940,69 +941,13 @@ export class CronAutomationService {
   }
 
   private async reconcileCompletedChannelDelivery(
-    current: CronRunRecord,
-    child: DurableRunRecord,
-    deliveryRun: DurableRunRecord,
+    current: CronRunRecord, child: DurableRunRecord, deliveryRun: DurableRunRecord,
   ): Promise<CronRunResult> {
-    // Connector completion acknowledges queue admission. The channel repository
-    // owns the eventual provider outcome, which may arrive after that checkpoint.
-    const checkpoints = await this.deps.storage.durableRuns.listCheckpoints(deliveryRun.runId);
-    const completions = checkpoints.filter((checkpoint) => checkpoint.checkpointKind === "run_completed");
-    const completion = completions.length === 1 ? completions[0]?.state : undefined;
-    const result = readRecord(completion?.result);
-    const deliveryId = readString(result?.deliveryId);
-    const record = deliveryId ? await this.deps.storage.commsDeliveries.getById(deliveryId) : undefined;
-    if (
-      checkpoints.length >= 200 ||
-      !record ||
-      completion?.dispatchKind !== "integration_channel_send" ||
-      completion.connectorType !== "integration_connection" ||
-      completion.action !== "channel.send" ||
-      deliveryRun.payload.action !== completion.action ||
-      completion.connectorId !== `integration:${record.connectionId}` ||
-      completion.connectorId !== deliveryRun.payload.connectorId ||
-      result?.channelKey !== record.channelKey ||
-      result.target !== record.target ||
-      record.payload?.runId !== child.runId ||
-      record.payload.sessionId !== current.childSessionId
-    ) {
-      return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
-        failureMessage: "The completed delivery child has no matching canonical channel receipt.",
-        reconciliationReason: "Channel delivery identity, parent or destination evidence is missing or inconsistent.",
-      });
-    }
-    if (record.status === "queued") {
-      const advanced = await this.deps.storage.cronRuns.advancePhase(toCronRunExecutionToken(current), {
-        status: "waiting",
-        phase: "delivery",
-      });
-      return await this.toCanonicalCronRunResult(advanced ?? current);
-    }
-    const outcome = {
-      ...buildCanonicalChildOutcome(current, child),
-      deliveryRunId: deliveryRun.runId,
-      deliveryId: record.deliveryId,
-      ...(record.deliveryStatus ? { deliveryStatus: record.deliveryStatus } : {}),
-      ...(record.providerMessageId ? { providerMessageId: record.providerMessageId } : {}),
-    };
-    if (record.status === "sent" && record.deliveryStatus === "sent") {
-      return await this.settleCanonicalAgentTurnCronRun(current, "completed", { outcome });
-    }
-    const ambiguous = record.deliveryStatus === "manual_reconciliation_required" || Boolean(record.providerMessageId);
-    return await this.settleCanonicalAgentTurnCronRun(
-      current,
-      ambiguous || record.status !== "failed" ? "manual_reconciliation_required" : "failed",
-      {
-        outcome,
-        failureMessage: record.error ?? "The channel delivery has no acknowledged successful outcome.",
-        ...(ambiguous || record.status !== "failed"
-          ? {
-              reconciliationReason:
-                "Channel delivery has an unknown external outcome and must not be retried automatically.",
-            }
-          : {}),
-      },
-    );
+    return reconcileCompletedCronChannelDelivery(this.deps, {
+      settle: (run, status, details) => this.settleCanonicalAgentTurnCronRun(run, status, details),
+      project: (run) => this.toCanonicalCronRunResult(run),
+      childOutcome: () => buildCanonicalChildOutcome(current, child),
+    }, current, child, deliveryRun, toCronRunExecutionToken(current));
   }
 
   private async settleCanonicalAgentTurnCronRun(
@@ -1189,29 +1134,21 @@ export class CronAutomationService {
     for (const job of jobs) {
       if (job.activeRunId) {
         try {
-          const active = await this.deps.storage.cronRuns.get(job.activeRunId);
-          // Observe already-attached agent children even when the job is paused
-          // or expired. Cadence must never replay inline work or child admission.
-          if (
-            active?.action === "agent_turn" &&
-            active.status !== "admitting" &&
-            !isCronRunTerminalStatus(active.status)
-          ) {
-            await this.processCanonicalAgentTurnCronRun(active);
-            const current = await this.deps.storage.cronRuns.get(active.runId);
-            if (current && isCronRunTerminalStatus(current.status)) {
-              summary.settledCount += 1;
-              const failed = current.status !== "completed";
-              if (failed) summary.failedCount += 1;
-              summary.items.push({
-                jobId: job.jobId,
-                runId: current.runId,
-                status: failed ? "failed" : "settled",
-                ...(failed
-                  ? { error: readString(current.failure?.message) ?? `Cron run settled as ${current.status}.` }
-                  : {}),
-              });
-            }
+          // Observe attached children even when paused, without new admission.
+          const current = await observeActiveCronAgentRun(this.deps, job.activeRunId,
+            (active) => this.processCanonicalAgentTurnCronRun(active));
+          if (current && isCronRunTerminalStatus(current.status)) {
+            summary.settledCount += 1;
+            const failed = current.status !== "completed";
+            if (failed) summary.failedCount += 1;
+            summary.items.push({
+              jobId: job.jobId,
+              runId: current.runId,
+              status: failed ? "failed" : "settled",
+              ...(failed
+                ? { error: readString(current.failure?.message) ?? `Cron run settled as ${current.status}.` }
+                : {}),
+            });
           }
         } catch (error) {
           summary.failedCount += 1;

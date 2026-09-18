@@ -96,6 +96,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           if (!auth.authorized) {
             if (auth.configPatch) {
               await fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+                expectedRevision: connection.revision,
                 config: {
                   ...connection.config,
                   ...auth.configPatch,
@@ -159,6 +160,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           if (!auth.authorized) {
             if (auth.configPatch) {
               await fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+                expectedRevision: connection.revision,
                 config: {
                   ...connection.config,
                   ...auth.configPatch,

@@ -17,7 +17,7 @@ test("cell controller pipe binds actual caller identity and drains bounded I/O",
   const names = [
     ...["cell_controller_transport", "cell_controller_identity", "cell_filesystem", "cell_workspace", "cell_security"].flatMap((name) =>
       ["cpp", "hpp"].map((extension) => `${cell}/src/${name}.${extension}`)),
-    ...["cell_runtime_bundle", "cell_job", "cell_job_stdio"].map((name) => `${cell}/src/${name}.hpp`),
+    ...["cell_runtime_bundle", "cell_job", "cell_job_stdio", "cell_capacity"].map((name) => `${cell}/src/${name}.hpp`),
     `${cell}/tests/cell_controller_transport_test.cpp`,
     `${host}/src/service_identity.cpp`, `${host}/src/service_identity.hpp`, `${host}/src/worker_host.hpp`,
   ];

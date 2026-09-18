@@ -16,6 +16,8 @@ if (-not $artifactPath.StartsWith($tempPath, [System.StringComparison]::OrdinalI
 [void][System.IO.Directory]::CreateDirectory($artifactPath)
 $recipeRoot = Join-Path $RepositoryRoot "scripts\remote-worker"
 . (Join-Path $recipeRoot "broker-coordinator-common.ps1")
+. (Join-Path $recipeRoot "broker-state-common.ps1")
+$script:StateLeases = New-Object System.Collections.Generic.List[object]
 Initialize-BrokerCoordinatorNativeType
 $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
 $outcomes = New-Object System.Collections.Generic.List[string]
@@ -71,6 +73,15 @@ $PackageResultPath = Join-Path $artifactPath "package-result.json"
 $brokerHash = "1" * 64
 $signerHash = "2" * 64
 $clientHash = "3" * 64
+Invoke-Case "GOATBOX-service-descriptor-matches-supported-service-mask" {
+  $reported = 'O:SYD:P(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCLCRPWPRC;;;BA)(A;;CCLCRC;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)'
+  Assert-True ((ConvertTo-CanonicalSddl $reported) -ceq (ConvertTo-CanonicalSddl $script:SignerServiceObjectSddl)) 'Reported SCM permissions differ from the recipe.'
+  $invalid = $reported.Replace('CCLCRPWPRC;;;BA', '0x120035;;;BA')
+  Assert-True ((ConvertTo-CanonicalSddl $invalid) -cne (ConvertTo-CanonicalSddl $script:SignerServiceObjectSddl)) 'Unsupported service bits must not be accepted.'
+  Assert-Throws { $native::RemoveCreatedService($null) }
+  Assert-Throws { $native::RemoveVerifiedCoordinatorService('foreign-service', '"C:\foreign.exe"', $script:ServiceObjectSddl) }
+  Assert-Throws { $native::RemoveVerifiedCoordinatorService($script:BrokerServiceName, '"C:\foreign.exe"', $script:ServiceObjectSddl) }
+}
 $goodManifest = @{
   target = $Target
   availability = @{ sha256 = $brokerHash; targetServiceSha256 = $signerHash }
@@ -181,6 +192,7 @@ Invoke-Case "directory-lease-refuses-junctions-and-aliased-children" {
 $script:CopiedFiles = New-Object System.Collections.Generic.List[string]
 $script:CreatedDirectories = New-Object System.Collections.Generic.List[string]
 $script:CreatedServices = New-Object System.Collections.Generic.List[string]
+$script:CreatedServiceLeases = New-Object System.Collections.Generic.List[System.IDisposable]
 $script:CleanupFailures = New-Object System.Collections.Generic.List[string]
 $script:DirectoryLeases = New-Object System.Collections.Generic.List[System.IDisposable]
 $script:ImageLeases = New-Object System.Collections.Generic.List[System.IDisposable]
@@ -297,6 +309,21 @@ Invoke-Case "copy-enforces-its-size-bound-before-creation" {
   try { Assert-Throws { Copy-RecipePinnedImage -Source $source -Destination $refused -Sddl $testSddl } }
   finally { $script:MaximumImageBytes = 67108864 }
   Assert-True (-not (Test-Path -LiteralPath $refused)) "Oversize source created a destination."
+}
+
+Invoke-Case "uncertain-service-removal-preserves-payload" {
+  $script:CreatedServices.Add('fixture-only-never-opened')
+  $script:CreatedServiceLeases.Add((New-Object System.IO.MemoryStream))
+  try {
+    Invoke-RecipeRollback
+    Assert-True ($script:CleanupFailures.Count -eq 2) 'Uncertain service cleanup was not reported.'
+    Assert-True (Test-Path -LiteralPath $destination) 'Payload removed while service removal was uncertain.'
+  } finally {
+    foreach ($lease in $script:CreatedServiceLeases) { $lease.Dispose() }
+    $script:CreatedServiceLeases.Clear()
+    $script:CreatedServices.Clear()
+    $script:CleanupFailures.Clear()
+  }
 }
 
 Invoke-Case "partial-copy-is-owned-by-rollback-and-unrelated-file-survives" {

@@ -96,7 +96,7 @@ test("the lane check table is complete, uniquely named, and cites only test file
   const workerRuntimeCheck = checks.find((check) => check.id === "remote-workers.worker-runtime");
   assert.ok(checks.find((check) => check.id === "remote-workers.contracts").args.includes("src/mesh-schema-node.test.ts"),
     "the contracts lane must exercise bounded schema validation and cancellation");
-  assert.deepEqual(workerRuntimeCheck.args, ["--filter", "@goatcitadel/remote-worker", "test"]);
+  assert.deepEqual(workerRuntimeCheck.args, ["--filter", "@goatcitadel/remote-worker", "test", "--maxWorkers=4"]);
   assert.equal(workerRuntimeCheck.count, "vitest");
   assert.equal(workerRuntimeCheck.requireAllExecuted, true, "worker deadline and recovery tests may never self-skip");
   const connectedWorkerCheck = checks.find((check) => check.id === "remote-workers.connected-worker-e2e");

@@ -3,6 +3,26 @@ import test from "node:test";
 
 import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 
+test("stream-only dispatch plans are not consumed by background non-stream requests", async () => {
+  const stub = await startDeterministicLlmStub({ replyText: "Background", dispatchPlanStreamOnly: true,
+    dispatchPlan: [{ type: "success", replyText: "Visible answer" }],
+  });
+  try {
+    for (const stream of [false, true]) {
+      const response = await fetch(`${stub.baseUrl}/chat/completions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: stub.model, stream, messages: [{ role: "user", content: "fixture" }] }),
+      });
+      const body = await response.text();
+      const content = stream
+        ? body.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6)).choices[0].delta.content ?? "").join("")
+        : JSON.parse(body).choices[0].message.content;
+      assert.equal(content, stream ? "Visible answer" : "Background");
+    }
+    assert.equal(stub.dispatchPlanDispatches(), 1);
+  } finally { await stub.close(); }
+});
+
 test("deterministic text and tool replies declare zero cached input for settled model cost", async () => {
   for (const route of ["responses", "chat/completions"]) {
     for (const stream of [false, true]) {

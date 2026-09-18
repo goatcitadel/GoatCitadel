@@ -51,6 +51,9 @@ import {
   runPermissionProfileRevisionsLane,
   runPersonalityCatalogRevisionsLane,
   runCitadelRecordRevisionsLane,
+  runIntegrationConnectionRevisionsLane,
+  runMcpServerRevisionsLane,
+  runChannelConnectionReviewLane,
   runMeshReadinessLane,
   runOperatorProofLane,
   runOrchestrationPerformanceLane,
@@ -116,6 +119,9 @@ const VALID_LANES = new Set([
   "permission-profile-revisions",
   "personality-catalog-revisions",
   "citadel-record-revisions",
+  "integration-connection-revisions",
+  "mcp-server-revisions",
+  "channel-connection-review",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -191,6 +197,9 @@ const REVIEW_LANES = new Set([
   "permission-profile-revisions",
   "personality-catalog-revisions",
   "citadel-record-revisions",
+  "integration-connection-revisions",
+  "mcp-server-revisions",
+  "channel-connection-review",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -394,6 +403,12 @@ async function runLockedVerification(lane, options) {
       await runPersonalityCatalogRevisionsLane(context);
     } else if (lane === "citadel-record-revisions") {
       await runCitadelRecordRevisionsLane(context);
+    } else if (lane === "integration-connection-revisions") {
+      await runIntegrationConnectionRevisionsLane(context);
+    } else if (lane === "mcp-server-revisions") {
+      await runMcpServerRevisionsLane(context);
+    } else if (lane === "channel-connection-review") {
+      await runChannelConnectionReviewLane(context);
     } else if (lane === "realtime-truth") {
       await runRealtimeTruthLane(context, { profile });
     } else if (lane === "journeys") {

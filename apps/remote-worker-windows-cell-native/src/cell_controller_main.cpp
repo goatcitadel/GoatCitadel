@@ -1,8 +1,29 @@
 #include "cell_controller_protocol.hpp"
+#include "cell_runtime_session.hpp"
+#include "cell_installed_pool_capacity.hpp"
+#include "cell_install_capacity_pipe.hpp"
 #include "service_inspection.hpp"
 #include <atomic>
 #include <cstdlib>
 
+namespace goatcitadel::worker_cell {
+// Keep the polymorphic owner in a named namespace: MSVC's RTTI for anonymous
+// namespace classes embeds a source-path hash and breaks reproducible payloads.
+class CellInstalledMeasurementHold final : public CellControllerMeasurementHold {
+ public:
+  CellInstalledMeasurementHold(CellControllerIdentity& identity, const CellFootprintScanGuard& peer) noexcept
+    : identity_(identity), peer_(peer) {}
+  DWORD Acquire() noexcept { return identity_.AcquireMeasurementGate(gate_); }
+  DWORD Verify() noexcept override {
+    const auto error = gate_.Check();
+    return error ? error : peer_.authorize(peer_.context);
+  }
+ private:
+  CellControllerIdentity& identity_;
+  CellFootprintScanGuard peer_;
+  goatcitadel::worker_host::WorkerStateGateLock gate_;
+};
+}
 using namespace goatcitadel::worker_cell;
 #pragma comment(lib, "advapi32.lib")
 namespace {
@@ -49,22 +70,85 @@ DWORD WINAPI Control(DWORD control, DWORD, void*, void*) noexcept {
 }
 struct Connection final {
   CellControllerIdentity& identity;
+  ControllerAttestationKey& signing_key;
   CellControllerPeer peer;
   HANDLE pipe;
   WatchState& watch;
+  std::recursive_mutex custody_mutex;
+  CellRuntimeControllerConnection runtime;
+  std::unique_ptr<CellInstallCapacityPipeAdmission> installation_admission;
+  static DWORD FinishInstallation(void* context) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    return owner.installation_admission ? owner.installation_admission->Finish() : ERROR_INVALID_STATE;
+  }
   static DWORD Authorize(void* context, bool first) noexcept {
     auto& owner = *static_cast<Connection*>(context);
-    return first ? owner.peer.Open(owner.pipe, owner.identity) : owner.peer.Verify();
+    if (!first && owner.runtime.Attempted()) return owner.runtime.Verify();
+    try { std::lock_guard<std::recursive_mutex> lock(owner.custody_mutex); return first ? owner.peer.Open(owner.pipe, owner.identity) : owner.peer.Verify(); }
+    catch (...) { return ERROR_GEN_FAILURE; }
+  }
+  static DWORD RuntimePeer(void* context) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    try { std::lock_guard<std::recursive_mutex> lock(owner.custody_mutex); return owner.peer.Verify(); }
+    catch (...) { return ERROR_GEN_FAILURE; }
+  }
+  static DWORD RuntimeClient(void* context, CellPipeClientEvidence& client) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    try { std::lock_guard<std::recursive_mutex> lock(owner.custody_mutex); return owner.peer.VerifyBoundPipe(client); }
+    catch (...) { return ERROR_GEN_FAILURE; }
+  }
+  static CellRuntimeSessionResult RunRuntime(void* context, HANDLE pipe, HANDLE stop, ULONGLONG deadline,
+      CellProvisioningJournal& journal, const CellControllerRuntimeBinding& binding) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    if (pipe != owner.pipe) { CellRuntimeSessionResult result; result.error = ERROR_INVALID_HANDLE; return result; }
+    return owner.runtime.Run(pipe, deadline, journal, binding, {{RuntimePeer, &owner, stop}, &owner, RuntimeClient});
   }
   static void Arm(void* context, ULONGLONG deadline) noexcept { static_cast<Connection*>(context)->watch.until.store(deadline); }
+  static DWORD BeginMeasurement(void* context, const CellControllerRequest&, HANDLE stop, ULONGLONG deadline,
+      std::unique_ptr<CellControllerMeasurementHold>* output) noexcept {
+    if (!output) return ERROR_INVALID_PARAMETER;
+    output->reset();
+    if (WaitForSingleObject(stop, 0) != WAIT_TIMEOUT || GetTickCount64() >= deadline) return ERROR_OPERATION_ABORTED;
+    try {
+      auto& owner = *static_cast<Connection*>(context);
+      auto hold = std::make_unique<CellInstalledMeasurementHold>(owner.identity, CellFootprintScanGuard{RuntimePeer, &owner, stop});
+      auto error = hold->Acquire();
+      if (!error) error = hold->Verify();
+      if (!error) *output = std::move(hold);
+      return error;
+    } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
   static DWORD ProvisionVolume(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
     const CellVolumeProvisioningCommitter& committer, DWORD wall_ms, HANDLE stop) noexcept {
     auto& owner = *static_cast<Connection*>(context);
     const DWORD error = owner.peer.Verify();
-    // This serial controller owns only provisioning journals; it has no workload
-    // launch path. Each volume check additionally crosses the canonical claim
+    // Each volume check additionally crosses the canonical claim
     // owner through the authenticated session before this journal can advance.
     return error ? error : journal.ProvisionVolume(anchor, committer, wall_ms, stop);
+  }
+  static DWORD ObservePoolCapacity(void* context, CellProvisioningJournal& journal, const CellControllerRequest& request,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellCapacityLayoutRecord* record, CellPoolJoinedCapacity* output) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    return CellInstalledPoolCapacity::Capture(owner.identity, journal, request, limits, guard, record, output);
+  }
+  static RuntimeBundleInstallResult InstallCapacity(void* context, HANDLE pipe, HANDLE stop, ULONGLONG deadline,
+    CellProvisioningJournal& journal, const CellControllerRequest& request, CellControllerMeasurementHold& hold,
+    const CellFootprintScanGuard& canonical, const CellFootprintScanGuard& local) noexcept {
+    RuntimeBundleInstallResult result;
+    auto& owner = *static_cast<Connection*>(context);
+    const auto now = GetTickCount64();
+    if (pipe != owner.pipe || !IsCellControllerInstallCapacity(request.operation) || deadline <= now || deadline - now > 60000) {
+      result.error = ERROR_INVALID_PARAMETER; return result;
+    }
+    try {
+      if (owner.installation_admission) { result.error = ERROR_INVALID_STATE; return result; }
+      owner.installation_admission = std::make_unique<CellInstallCapacityPipeAdmission>(pipe, stop, request.nonce,
+        L"S-1-5-18", kCellControllerServiceSid, local, &owner.signing_key);
+      PinnedCellRuntimeBundle bundle;
+      return CellInstallCapacity::Install(owner.identity, journal, request, hold,
+        {20000, 64, static_cast<DWORD>(deadline - now)}, canonical, owner.installation_admission->Admission(), bundle);
+    } catch (...) { result.error = ERROR_NOT_ENOUGH_MEMORY; return result; }
   }
   static DWORD ProvisionFormat(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
     const CellFormatProvisioningCommitter& committer, DWORD wall_ms, HANDLE stop) noexcept {
@@ -93,6 +177,9 @@ struct Connection final {
 };
 DWORD Run(CellControllerIdentity& identity, HANDLE stop, WatchState& watch) noexcept {
   try {
+    ControllerAttestationKey signing_key;
+    const auto key_error = signing_key.OpenInstalled(kCellControllerServiceSid);
+    if (key_error) return key_error;
     std::vector<std::uint8_t> descriptor;
     DWORD error = BuildCellControllerPipeSecurity(&descriptor);
     if (error) return error;
@@ -109,7 +196,7 @@ DWORD Run(CellControllerIdentity& identity, HANDLE stop, WatchState& watch) noex
       if (error) return error;
       error = ConnectCellPipe(pipe.value, stop, GetTickCount64() + 5000);
       if (!error) {
-        Connection connection{identity, {}, pipe.value, watch};
+        Connection connection{identity, signing_key, {}, pipe.value, watch};
         CellControllerSessionOwner owner;
         owner.parent_path = identity.ParentPath(); owner.parent = identity.ParentIdentity();
         owner.owner_sid = L"S-1-5-18"; owner.controller_sid = kCellControllerServiceSid;
@@ -119,10 +206,20 @@ DWORD Run(CellControllerIdentity& identity, HANDLE stop, WatchState& watch) noex
         owner.provision_protection = Connection::ProvisionProtection;
         owner.provision_mount = Connection::ProvisionMount;
         owner.provision_mounted_workspace = Connection::ProvisionMountedWorkspace;
+        owner.run_runtime = Connection::RunRuntime;
+        owner.begin_measurement = Connection::BeginMeasurement;
+        owner.observe_pool_capacity = Connection::ObservePoolCapacity;
+        owner.install_runtime_capacity = Connection::InstallCapacity;
+        owner.finish_installation = Connection::FinishInstallation;
         // An operation error is returned in its bounded receipt when possible.
         // It never triggers a second dispatch or destroys retained resources.
         RunCellControllerSession(pipe.value, stop, owner);
-        connection.peer.Close();
+        // Kill-on-close is a fallback, not proof that a failed job has drained.
+        // Finish the current receipt attempt, then stop instead of admitting
+        // another writer or measurement after uncertain teardown.
+        if (connection.runtime.RequiresControllerStop()) return ERROR_PROCESS_ABORTED;
+        // Destruction closes the secondary runtime endpoint before its retained
+        // primary peer, after the outer receipt's explicit finish acknowledgement.
       } else if (error != ERROR_TIMEOUT && error != ERROR_OPERATION_ABORTED) return error;
       watch.until.store(GetTickCount64() + 10000);
       if (!DisconnectNamedPipe(pipe.value) && GetLastError() != ERROR_PIPE_NOT_CONNECTED) return GetLastError();
@@ -147,7 +244,8 @@ void WINAPI ServiceMain(DWORD count, wchar_t** arguments) noexcept {
     CellControllerIdentity identity;
     error = identity.Open(count, arguments);
     if (!error && WaitForSingleObject(stop.value, 0) == WAIT_TIMEOUT &&
-        !goatcitadel::worker_host::GrantCurrentSystemWorkerInspectionAccess()) error = ERROR_ACCESS_DENIED;
+        !goatcitadel::worker_host::GrantCurrentSystemWorkerInspectionAccess(
+            goatcitadel::worker_host::WorkerInspectionService::CellController)) error = ERROR_ACCESS_DENIED;
     if (!error && WaitForSingleObject(stop.value, 0) == WAIT_TIMEOUT) error = identity.EnableVolumeManagement();
     if (!error && WaitForSingleObject(stop.value, 0) == WAIT_TIMEOUT) error = Run(identity, stop.value, watch);
     Publish(SERVICE_STOP_PENDING, error, 1, 6000);

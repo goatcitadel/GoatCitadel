@@ -1199,9 +1199,16 @@ int RunProtectedArtifactSigningTests() noexcept {
     ExitProcess(static_cast<UINT>(RunRestartProbeChild()));
   }
   int failures = 0;
+  const auto run = [&failures](const char* name, void (*check)(int*) noexcept) {
+    const int before = failures;
+    check(&failures);
+    if (failures != before) {
+      std::fprintf(stderr, "FAIL: protected signing %s (%d checks)\n", name, failures - before);
+    }
+  };
   g_interop_receipts = {};
   gc::ResetProtectedSigningStateForTest();
-  TestRfcAndDomains(&failures);
+  run("RFC and domains", TestRfcAndDomains);
   for (const std::uint64_t length : {130U, 146U}) {
     IsolatedRoot root;
     gc::ProtectedSigningLease lease;
@@ -1213,14 +1220,14 @@ int RunProtectedArtifactSigningTests() noexcept {
       ++failures;
     }
   }
-  TestBoundariesAndDeterminism(&failures);
-  TestMoveDriftStopAndRevoke(&failures);
-  TestDivergenceFailureCutsAndWipes(&failures);
-  TestIoFailureSeams(&failures);
-  TestConcurrencyAndHandleStability(&failures);
-  TestPostWarmHandleStabilityAcrossCuts(&failures);
-  TestDeterministicSignerCorpus(&failures);
-  TestCrashRestartInvalidation(&failures);
+  run("boundaries and determinism", TestBoundariesAndDeterminism);
+  run("move, drift, stop and revoke", TestMoveDriftStopAndRevoke);
+  run("divergence, failure cuts and wipes", TestDivergenceFailureCutsAndWipes);
+  run("I/O failure seams", TestIoFailureSeams);
+  run("concurrency and handle stability", TestConcurrencyAndHandleStability);
+  run("post-warm handle stability", TestPostWarmHandleStabilityAcrossCuts);
+  run("deterministic signer corpus", TestDeterministicSignerCorpus);
+  run("crash and restart invalidation", TestCrashRestartInvalidation);
   if (failures == 0 && !EmitInteropReceipts()) ++failures;
   gc::ResetProtectedSigningStateForTest();
   return failures;

@@ -4,6 +4,13 @@ Last updated: 2026-09-13
 
 Status: canonical aggregate execution ledger
 
+Task scope correction (2026-09-15): the active comparison implementation task
+finishes at the original seven-step September 9 plan, not the entire M0-M10
+program. Its [fixed completion checklist](testing/COMPARISON_COMPLETION_CHECKLIST.md)
+preserves the original acceptance gates and identifies deferred follow-up work.
+This aggregate ledger remains broader product backlog; it does not independently
+expand that task. Historical progress and all existing work remain preserved.
+
 ## Purpose and authority
 
 This document is the single execution plan for unfinished GoatCitadel work and
@@ -89,6 +96,70 @@ reviews and reports partial connection failure for operator reconciliation.
 Browser QA uses verified package bytes, and rollback compensates only its owned
 MCP changes while routing skill/settings reversals through separate owner reviews.
 
+The native Windows worker now has a read-only capacity inventory tied to admitted
+file handles and complete protected-workspace identity/security records. It
+counts logical bytes, physical allocation, files and directories, including
+sparse/compressed files, and discards incomplete or changed observations. The
+named capacity lane passes 1,212 native assertions in each normal and
+AddressSanitizer build; ARM64 compiles. These are ordinary temporary-directory
+fixtures. Installed quiescence, accounting consumption, complete pool accounting, hard quotas,
+protected execution and installed acceptance remain open. See
+[native capacity inventory](testing/REMOTE_WORKER_NATIVE_CAPACITY.md).
+
+The mounted-workspace reader and provisioning journal now compose that inventory
+with exact native checkpoints and an independently retained anchor/final digest.
+The result carries assignment/profile bindings and recorded roots; changed
+authority, journal bytes or resource bindings withhold the entire observation.
+Normal/AddressSanitizer builds each pass 262 mounted-reader assertions and 739
+dedicated journal assertions. Physical volume checks remain controlled fixtures;
+Gateway accounting consumption, workload quiescence, hard quotas and
+backend activation still need their own owners and acceptance. See
+[journal-bound capacity evidence](testing/COMPARISON_IMPLEMENTATION_STATUS.md#journal-bound-native-capacity).
+
+Read-only capacity observation now has controller/client/helper/worker transport.
+It binds the complete native history and requires a successful terminal receipt,
+clean helper exit and final current authority before returning counts. The
+installed controller refuses requests without a quiescence owner. Each normal
+and AddressSanitizer protocol run passes 2,199 capacity assertions across 27
+sessions; helper streams pass 55 scenarios per build and 192 focused worker
+tests pass. x64/ARM64 controller payloads reproduce, with no ARM64 execution or
+installed-volume claim. Gateway accounting consumption, pool accounting, quotas and backend
+activation remain open. See [capacity transport evidence](testing/COMPARISON_IMPLEMENTATION_STATUS.md#native-capacity-observation-transport).
+
+Native capacity observations now have separate append-only Gateway storage,
+portable complete-history validation, protected assignment RPC and retained
+worker delivery. SQLite 233/PostgreSQL 178 bind exact receipt bytes, original
+lease/revision and database time without advancing readiness or complete
+accounting. Three SQLite and three actual PostgreSQL authority scenarios pass,
+including replay, mid-transaction cancellation rollback and observations after
+the setup lease expires. Worker recovery preserves pending observations after
+response loss or local acknowledgement failure. Focused contract, Gateway,
+worker, migration, typecheck, async-boundary, auth and runtime-truth checks pass.
+Installed quiescence, accounting consumption, whole-pool inventory, quotas,
+protected execution and physical acceptance remain open. See
+[retained capacity observations](testing/COMPARISON_IMPLEMENTATION_STATUS.md#retained-native-capacity-observations).
+
+Host capacity now has a separate native backing-file reader and journal-bound
+join. They measure the fixed VHDX and journal by their original identities,
+without adding allocation inside the guest volume to the host charge. Changed
+authority, metadata, permissions or owner lifetime withhold the whole result.
+The focused lane passes 83 assertions in each normal/AddressSanitizer build;
+the native job lane passes 4,992 assertions per build, including the joined
+journal cases. Actual images remain unattached. Host observations now have a
+distinct controller/client/helper/worker transport and portable complete-history
+decoder. Normal/AddressSanitizer controller runs each pass 2,407 host checks across
+29 sessions; helper streams pass 62 cases per build, 75 contract and 201 focused
+worker tests pass, and x64/ARM64 controller payloads reproduce. Host persistence
+now has its own SQLite 234/PostgreSQL 179 stream, protected Gateway exchange and
+durable worker replay. It shares current-assignment fences with mounted
+observations while preserving distinct raw frames, rows and revisions. Six
+SQLite and six actual PostgreSQL scenarios cover both streams, exact replay,
+revocation and rollback without changing cell accounting. Worker tests cover
+lost acknowledgements, lease renewal and cross-stream concurrency. Accounting
+consumption, installed quiescence and complete pool inventory
+still precede admission or quota enforcement. C5 and the
+full program remain open. See [host backing capacity](testing/REMOTE_WORKER_NATIVE_CAPACITY.md#host-backing-file-allocation).
+
 The C2 rejected-approval parent inconsistency found during UI acceptance now has
 canonical refusal settlement, exact approval lookup, duplicate-safe delivery and
 startup recovery using database-clock approval expiry. Thirty-six focused Gateway
@@ -155,21 +226,83 @@ across storage, Gateway and both operator surfaces. SQLite and actual PostgreSQL
 prove five competing-writer pairs; the named Gateway/browser lane rejects five
 stale writes and accepts five explicitly reviewed retries. Settings retains edit
 drafts and Library retains an unsaved Charter during lifecycle conflicts, with
-desktop and 390 px proof. This completes the local profile-record slice only:
-Charter, template, blueprint and mutable access-rule owners, integration/MCP
-preconditions, C5/C6 source work and full C1-C6 acceptance remain open. See
+desktop and 390 px proof. This completes the local profile-record slice. See
 [Citadel profile revisions](CITADEL_RECORD_REVISIONS.md).
 
 Blueprint import and Mason staging now validate the full portable structure before
 the first persistence call, including every Chamber and the Charter's policy and
 collection fields. Malformed input preserves the current Charter and Chambers;
-valid Mason drafts still stage successfully. This closes the malformed-input
-preflight gap only. Atomic setup writes and required reviewed revisions for
-Charter/template/blueprint changes remain open.
+valid Mason drafts still stage successfully. The subsequent structure owner now
+commits setup atomically and requires reviewed target revisions for Charter,
+Chamber, template, Blueprint and Mason-stage writes, plus a separate template
+content revision. SQLite and actual PostgreSQL prove rollback and seven pairs
+of competing writers. Browser proof rejects three stale structure writes,
+preserves drafts and accepts three explicitly reviewed retries at desktop and
+390 px widths. This closes the local Charter/setup revision slice. See
+[Citadel structure revisions](CITADEL_STRUCTURE_REVISIONS.md).
+
+The nonsecret Citadel access owner now requires a shared reviewed snapshot for
+Council seats, Wards, outgoing Passages, members and Citadel integration grants.
+A persisted generation prevents add/remove cycles from reviving stale reviews.
+Both SQLite and actual PostgreSQL pass eight independent-writer races, rollback,
+and additive migration preservation. Gateway handlers return the owner's snapshot
+and await durable idempotency acknowledgement. Browser checks preserve Ward drafts
+and Council selections, require explicit review, and re-confirm deletions. All
+three profile/structure/access scenarios pass at desktop and 390 px widths. See
+[Citadel access revisions](CITADEL_ACCESS_REVISIONS.md).
+
+Vault stores and deletes now compare metadata-only revisions under the Citadel
+lifecycle lock. The dedicated credential service seals values; generic HTTP
+idempotency no longer fingerprints Vault bodies. Both databases pass six writer
+races, rollback and migration preservation. The canonical UI retains drafts,
+requires explicit current-metadata review, and confirms replacements and deletes.
+Real Gateway/browser proof passes both conflict/retry journeys at desktop and
+390 px widths with synthetic credentials and the dev-verification key, without
+using the OS keychain. All four Citadel revision scenarios pass. See
+[Vault credential revisions](CITADEL_VAULT_REVISIONS.md). This completes the local
+Vault slice. Subsequent integration work is recorded below; MCP preconditions, worker/comparison work and
+full C1-C6 acceptance remain open. Publication and drive formatting remain paused.
+
+Global integration Settings edits and deletes now require the reviewed connection
+revision. The repository compares it atomically on both databases, including
+credential changes between route and service reads. The UI keeps drafts, supports
+read-only recovery, and requires explicit current-value review plus renewed delete
+confirmation. The terminal and existing configuration-patch writers carry their
+read revisions; HTTP idempotency does not fingerprint connection bodies. Actual
+Gateway/browser proof passes on desktop and at 390 px. See
+[integration connection revisions](INTEGRATION_CONNECTION_REVISIONS.md).
+Channel repair/finalization now binds that connection review across hydration,
+validation, test reuse and credential promotion. The owner commits the tested
+draft, reviewed connection and draft removal atomically. Unique promoted
+credential references preserve the credential already in use when a competing
+save fails. Database, Gateway and desktop/390 px browser checks pass. See
+[channel setup connection reviews](CHANNEL_SETUP_CONNECTION_REVIEWS.md).
+MCP edits, policy updates and deletion now require a registry-owned review.
+Atomic configuration acknowledgements and connection-attempt fencing preserve
+winning edits and prevent late discovery from restoring stale tools. Settings
+retains drafts, recovers failed reads and requires explicit review plus a new
+delete confirmation. SQLite, actual PostgreSQL and real Gateway/browser checks
+pass on desktop and at 390 px. See [MCP server revisions](MCP_SERVER_REVISIONS.md).
+This closes the local MCP Settings revision slice. C5/C6 source work, credential
+recovery and full C1-C6 acceptance remain open. Publication and drive operations
+remain paused.
 
 [Implementation evidence and remaining work](testing/COMPARISON_IMPLEMENTATION_STATUS.md)
 records the controlled skill-reuse journey, real local Browser QA execution,
 stdio session ownership, and the exact limits of the Windows/PostgreSQL receipts.
+
+Windows MCP credential staging now retains a completed-write receipt inside each
+new immutable keychain slot. Recovery verifies its original custodian and write
+identity before atomically retiring an unpublished version; deletion checks the
+same receipt and never restores callability. SQLite, actual PostgreSQL competing
+owners and restart, synthetic PowerShell custody, focused integration and auth
+checks pass. Missing/legacy receipts, unindexed credentials, custody migration
+and actual keychain acceptance remain open. See
+[MCP credential write receipts](MCP_CREDENTIAL_WRITE_RECEIPTS.md).
+The Windows package builder now stages dependencies beside the checkout so the
+requested output can be on another drive. A fresh C: package built from F:
+passed its embedded-runtime probe with the same exact payload inventory; this
+does not establish installed service or physical-worker acceptance.
 
 C5 has versioned native cell identities, paired storage migrations, stricter
 Windows process launch limits, and a worker client that verifies inference
@@ -269,7 +402,13 @@ limits. The fresh portable Windows package includes the pinned validator graph
 and passes actual packaged positive/negative schema execution. MCP selector
 validation is supplemented by the destination-native registry/schema owner below.
 The stock worker now loads a separately pinned local registry and executes its
-filesystem reader and Windows NTFS writer within their declared roots. The writer
+filesystem reader, Windows NTFS writer and directory lister within their declared
+roots. Directory listing uses pinned native ancestors, returns names/types only,
+does not follow junctions and reports count/byte truncation explicitly. Normal
+Windows and AddressSanitizer checks, reproducible ARM64 compilation and worker
+regressions cover this adapter. See
+[bounded directory listing](testing/REMOTE_WORKER_MESH_TOOLS.md#listing-directories).
+The writer
 uses a fixed digest-pinned native helper, retained directory identity and an exact
 previous-content check before replacement. Native schemas, permission envelopes,
 file identity and byte limits are enforced locally. A destination HTTP MCP owner
@@ -1425,6 +1564,139 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
   drivers and unattached images. Physical recovery, quotas, protected execution
   and installed acceptance remain required; this does not activate the backend.
   See [mounted workspace transport and startup](testing/COMPARISON_IMPLEMENTATION_STATUS.md#mounted-workspace-transport-and-startup).
+- The native capacity reader now accepts admitted directory handles and composes
+  with the protected workspace owner, requiring complete recorded identities and
+  current security. It separately counts logical/allocated bytes and files,
+  rejects incomplete/drifted reads, and has real NTFS normal/AddressSanitizer
+  proof. Controller/client/helper/worker observation transport now preserves the
+  complete history and final receipt through current-authority checks. Installed
+  quiescence, Gateway accounting consumption, whole-pool accounting and hard disk/file-count
+  enforcement are still required.
+  Its mounted owner and journal wrapper now retain exact checkpoint, assignment,
+  profile and recorded-root bindings through the read, with separate mounted-tree
+  and journal regression proof. This does not establish physical-volume readiness.
+  See [native capacity inventory](testing/REMOTE_WORKER_NATIVE_CAPACITY.md).
+- The injected capacity-admission service now refuses new work with a quarantine
+  decision when observed or retained disk, memory, file-count, process-count or
+  raw-output peaks exceed immutable limits. It validates numeric observations
+  before asynchronous access and preserves violations through later lower
+  readings and the existing capacity/cleanup revision checks. All 52 focused
+  service tests, 13 SQLite owner tests, typecheck, strict lint and both runtime-truth
+  scenarios pass. This closes the admission-decision defect, not production
+  accounting, installed quiescence, OS quotas
+  or quarantine/termination integration. See
+  [capacity admission limits](testing/COMPARISON_IMPLEMENTATION_STATUS.md#worker-capacity-admission-limits).
+- Capacity admission now evaluates the shared contract and records high-water
+  evidence through one protected storage owner. Current credential, mesh,
+  assignment lease and immutable profile remain locked through the decision;
+  capacity, cleanup and execution revisions fence competing state changes.
+  Three SQLite and three actual PostgreSQL authority/rollback scenarios pass,
+  and two concurrent PostgreSQL requests produce one winner. Gateway requires
+  the awaited owner without a preflight-only fallback. Contract/Gateway tests,
+  dependent typechecks, strict lint, async-boundary, auth and runtime-truth checks
+  pass. Complete
+  accounting, pool reservations, installed quiescence, quotas and backend
+  activation still require their own owners and acceptance. See
+  [transactional capacity admission](testing/COMPARISON_IMPLEMENTATION_STATUS.md#transactional-worker-capacity-admission).
+- Complete declared inventory now separates host allocation, guest allocation
+  and logical references, requires every footprint area, and retains exact
+  normalized input with the protected admission decision. SQLite 235 /
+  PostgreSQL 180 preserve logical-byte/inode peaks and fence backup revisions;
+  both inventory and footprint-only admissions retain quarantine decisions.
+  Seven SQLite and nine actual PostgreSQL scenarios pass, including rollback,
+  revocation and concurrent one-winner admission. Native directory/workspace
+  APIs now expose verified per-object identities and byte counts with 1,298
+  normal/AddressSanitizer assertions per build and 262 mounted regressions;
+  ARM64 compiles. Native complete capture/quiescence, whole-pool reservations,
+  quotas and installed execution remain required. See
+  [declared inventory and native object records](testing/COMPARISON_IMPLEMENTATION_STATUS.md#declared-capacity-inventory-and-native-object-records).
+- Per-object reads now compose with the mounted workspace and complete journal,
+  including owner lifetime fencing and entry/totals validation. Mounted tests
+  pass 525 assertions per normal/AddressSanitizer build; journal tests pass 819
+  per build alongside the native job/runtime regression. Installed capture
+  remains unfinished. See
+  [mounted and journal-bound object inventory](testing/COMPARISON_IMPLEMENTATION_STATUS.md#mounted-and-journal-bound-object-inventory).
+- Operation 16 now transports bounded per-object inventory through the native
+  controller/client, helper and Windows worker. Exact history, batch ordering,
+  complete totals, terminal success, clean exit and final authority gate output.
+  Normal/AddressSanitizer protocol and helper tests pass; the worker also proves
+  20,000 objects with all 256 authority checks. Internal Gateway/storage retention
+  now preserves and validates the complete capture with protected assignment
+  fences, immutable replay and final-authority rollback. Bounded remote page
+  delivery now uses protected assignment settlement, durable staging and a
+  worker sender that checks every acknowledgement. Installed capture and
+  whole-pool accounting remain required. See
+  [per-object native inventory transport](testing/COMPARISON_IMPLEMENTATION_STATUS.md#per-object-native-inventory-transport).
+- The job/runtime owner now supports provisional capture while holding its exact
+  verified-empty job and launch-directory pins. Native reads recheck authority;
+  the runtime owner also revalidates protected workspace descriptors. Failure
+  discards output. The journal inventory reader can now borrow this job scope
+  and check its decoded cell name and mounted work identity at each guard.
+  A composed runtime runner now checks native journal custody before launch
+  and withholds inventory until final job/runtime checks pass. The worker and
+  native dispatch entry now bind the complete protected request to an independent
+  nonce/digest. The native transfer now carries that request over bounded local
+  pipe chunks and validates its acknowledgment without treating it as execution
+  success. A distinct framed exchange now requires fresh workload approval for
+  the exact request digest/journal head. The journal owner propagates live
+  authorization to process creation, resume and running-job checks. Bounded
+  input/output adapters now preserve native channel backpressure, per-stream
+  ordering and explicit EOF. One serialized I/O owner now multiplexes these
+  streams with fresh runtime checks and independent input admission, retaining
+  the exchange deadline through callbacks. Bounded terminal transfer now carries
+  job metadata and complete declared inventory with exact digest-bound receipt.
+  A session owner now joins original-journal dispatch, streams and terminal
+  receipt under private cancellation, with exact thread join and byte-count
+  checks. The worker-side owner now composes bounded input/output, approval
+  replies and result retention, with a distinct exact saved-result acknowledgment.
+  Immutable request expectations and result storage now enforce protected
+  assignment/cell fences on SQLite and PostgreSQL. Bounded Gateway page upload
+  and exact-result lookup are connected to that storage owner. The native
+  retention callback now forwards canonical metadata over a separate parent
+  pipe; the parent composes protected Gateway upload and requires its exact
+  saved receipt. Controller operation 17 now defines the explicit same-pipe
+  handoff after full journal recovery and current canonical checks; it requires
+  distinct runtime owners and refuses an unmounted journal. The protected-parent
+  authority bridge now separates fresh runtime and delivery checks, with exact
+  request/head binding and bounded approval replies. Native and Node stream
+  adapters now forward exact approved input and separately acknowledged output;
+  private cross-language pipe cases verify their wire behavior. A native
+  connection owner and exclusive Node dispatcher now compose these callbacks,
+  retained-result accounting and the explicit final handshake. Parent/listener
+  source owners now compose that flow with controller-local outcome retention.
+  A Node-only contracts subpath now shares exact request encoding and derived
+  result expectations between execution owners without importing worker source;
+  existing worker paths retain their wire format. The internal runtime-admission
+  storage owner now commits complete capacity inventory, the starting transition
+  and expectation retention under current assignment and cell fences in one
+  transaction. It now binds the complete executable request to its independent
+  expectation, original journal, mounted workspace identities, platform names
+  and immutable resource limits. Quarantine retains evidence without starting
+  work. The Gateway owner now composes read-only candidate preparation, with
+  fresh nonces and canonical journal bindings; candidates do not create runtime
+  expectations or authorize dispatch. Admission now locks and rechecks a retained,
+  unexpired native-launch approval bound to the exact request, assignment,
+  explicit execution links and cell revisions. Preparation and admission enforce
+  the immutable native environment-name policy before accepting launch input.
+  Such approvals cannot be edited or relinked through the generic approval owner.
+  Candidate preparation now supplies a metadata-only approval draft with
+  canonical execution links and exact request/revision bindings; producing it
+  creates no approval or execution. The internal producer now submits reviews
+  through the existing approval lifecycle, revalidating pending review authority
+  inside its creation transaction and preserving committed/rejected outcomes.
+  Operator replay now projects bounded, expiring in-memory review details without
+  persisting commands or environment values. The canonical approval panel shows
+  those details and disables approval when matching context is unavailable.
+  Reviewed admission now takes its request from private context, checks the
+  canonical approved decision, and invokes atomic capacity/start admission once.
+  Cancellation after commit preserves admission truth without returning a launch
+  request; ambiguous outcomes cannot automatically retry the review.
+  Initial workload selection, durable parking/resume and
+  complete native collection still need composition before
+  live dispatch can use this boundary.
+  Installed dispatch over an actual mounted journal and live admission through
+  this owner remain required.
+  See [job-owned capture](testing/COMPARISON_IMPLEMENTATION_STATUS.md#job-owned-quiescent-capture).
 - Finish mesh-tool and delegation/council placement, and custody-aware recovery
   of unacknowledged MCP writers or older unindexed credential versions.
 - Prove installed Windows custody, enrollment and service lifecycle, followed by
@@ -1439,9 +1711,14 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-502` and `HX-504`.
   database's nonce-acceptance time; missing retained history is unknown and does
   not imply offline state. Six SQLite and six PostgreSQL scenarios, 15 contract
   tests, 45 Gateway tests and 13 nonce regressions pass. Reads cannot run recovery,
-  consume/prune nonces or advance runtime state. UI consumption remains separate;
-  recorded contact and cell state do not establish process/socket liveness or
-  execution readiness. See [authenticated worker contact](testing/COMPARISON_IMPLEMENTATION_STATUS.md#authenticated-worker-contact).
+  consume/prune nonces or advance runtime state. Ops and Chat now share a
+  generation-bound runtime reader. Chat shows compact recorded cost, budget holds,
+  artifact and effect summaries, with expandable execution, capacity and contact
+  evidence. Failed reads and scope changes cannot retain another turn's evidence.
+  Component and desktop/390 px browser checks use real Gateway/SQLite reads with
+  controlled records; connected-worker acceptance remains separate. Recorded
+  contact and cell state do not establish process/socket liveness or execution
+  readiness. See [Chat worker runtime evidence](testing/COMPARISON_IMPLEMENTATION_STATUS.md#chat-worker-runtime-evidence).
 
 ### Acceptance
 
@@ -1515,6 +1792,13 @@ Owner contracts: `OPENCLAW_HERMES_PARITY_PROGRAM.md`, `HX-503` through `HX-507`.
   declarative-config repair remains explicitly manual because the canonical
   config owner cannot prove restart-safe rollback after an arbitrary config
   commit.
+- The coordinator now supports the Gateway's asynchronous repository boundary.
+  Creation, recovery, claims, publication replay, and completion evidence are
+  awaited; failed completion reads remain recoverable through boot replay.
+  The 2026-09-15 focused run passes 41 tests, including the real SQLite async
+  adapter and the Windows mirror fixture. Production authority and durable-parent
+  composition remain outstanding; see the evidence in
+  [Governed Self-Configuration and Repair](./GOVERNED_SELF_CONFIGURATION_AND_REPAIR.md).
 - The two dependencies that kept the fixed `config/budgets.json`
   compatibility mirror manual now exist. A native handle-relative
   capture/publish/restore port (Windows, following the repo's fixed
@@ -1650,13 +1934,15 @@ Owner backlogs: `CAPABILITY_SYSTEM_BACKLOG.md`,
 
 ### Current work
 
-- Integrate live HX-507 worker visibility after M4 instead of testing seeded and
-  live variants in separate broad campaigns. The HX-507 Ops/Chat projections are
-  wired and label registry/assignment/lease/generation/control/settlement truth
-  from canonical storage, but the live-runtime fields (connection health,
-  usage/cost, resource cell, artifact/effect) remain server-labeled `unavailable`
-  and gain new read ports only after M4's inference/settlement routing hold lands
-  and a connected worker populates those records.
+- Complete connected-worker HX-507 acceptance with M4 and the consolidated UI
+  campaign. Ops and Chat now consume retained usage/cost, outstanding budget
+  holds, cell/capacity, artifact/effect and authenticated-contact records. Their
+  shared reader rejects mismatched assignment/worker generations and late reads;
+  Chat clears previous workspace/session/turn results before effect cleanup.
+  Local component and browser proof is complete for this integration. Current
+  socket/process health remains unavailable, and controlled records do not close
+  the installed two-machine journey or the broad accessibility/surface/visual
+  campaign.
 
 ### Acceptance
 

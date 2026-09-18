@@ -1,3 +1,4 @@
+import type { CitadelAccessSnapshot } from "@goatcitadel/contracts";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
   assignCitadelCouncilAgent: vi.fn(),
   fetchAgents: vi.fn(),
   listCitadelCouncil: vi.fn(),
+  getCitadelAccessSnapshot: vi.fn(),
   unassignCitadelCouncilAgent: vi.fn(),
 }));
 
@@ -16,8 +18,15 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   assignCitadelCouncilAgent: apiMocks.assignCitadelCouncilAgent,
   fetchAgents: apiMocks.fetchAgents,
   listCitadelCouncil: apiMocks.listCitadelCouncil,
+  getCitadelAccessSnapshot: apiMocks.getCitadelAccessSnapshot,
+  isApiRequestError: (error: { status?: number }) => typeof error?.status === "number",
   unassignCitadelCouncilAgent: apiMocks.unassignCitadelCouncilAgent,
 }));
+
+const revision = "a".repeat(64);
+function snapshot(items: CitadelAccessSnapshot["council"] = [], rev = revision, citadelId = "default"): CitadelAccessSnapshot {
+  return { citadelId, revision: rev, structure: { citadelId, revision: "s".repeat(64), charter: null, chambers: [] }, wards: [], passages: [], members: [], integrations: [], council: items };
+}
 
 function makeProps(): NativeRoutePagesProps {
   return {
@@ -38,16 +47,17 @@ describe("CitadelCouncilRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.listCitadelCouncil.mockResolvedValue([]);
+    apiMocks.getCitadelAccessSnapshot.mockImplementation(async (id: string) => snapshot(await apiMocks.listCitadelCouncil(id), revision, id));
     apiMocks.fetchAgents.mockResolvedValue({
       items: [{ agentId: "research-agent", name: "Research", lifecycleStatus: "active" }],
     });
-    apiMocks.assignCitadelCouncilAgent.mockResolvedValue({
+    apiMocks.assignCitadelCouncilAgent.mockResolvedValue(snapshot([{
       assignmentId: "a1",
       citadelId: "default",
       agentId: "research-agent",
       createdAt: "t",
-    });
-    apiMocks.unassignCitadelCouncilAgent.mockResolvedValue(undefined);
+    }], "b".repeat(64)));
+    apiMocks.unassignCitadelCouncilAgent.mockResolvedValue(snapshot([], "b".repeat(64)));
   });
 
   it("renders the Council header", () => {
@@ -86,7 +96,7 @@ describe("CitadelCouncilRoutePage", () => {
     await act(async () => {
       button?.props.onClick();
     });
-    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledWith("default", "research-agent");
+    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledWith("default", "research-agent", revision);
   });
 
   it("shows an empty state when no agents are seated", async () => {
@@ -113,5 +123,27 @@ describe("CitadelCouncilRoutePage", () => {
     // A selected option is nested inside the wrapping label, so keep the
     // concise control name stable instead of letting its value join the name.
     expect(select.props["aria-label"]).toBe("Council agent");
+  });
+
+  it("preserves the selected agent on conflict, requires review, and never refetches over its acknowledgement", async () => {
+    const peer = { ...snapshot([], "b".repeat(64)), members: [{ memberId: "m", citadelId: "default", subjectId: "peer", role: "viewer" as const, createdAt: "t", updatedAt: "t" }] };
+    apiMocks.getCitadelAccessSnapshot.mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(peer);
+    apiMocks.assignCitadelCouncilAgent.mockRejectedValueOnce(Object.assign(new Error("Changed"), { status: 409 }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelCouncilRoutePage {...makeProps()} />); });
+    const seat = () => renderer.root.findAllByType("button").find((item) => Array.isArray(item.props.children) && item.props.children.includes("Seat"))!;
+    await act(async () => { await seat().props.onClick(); });
+    expect(renderer.root.findByType("select").props.value).toBe("research-agent");
+    expect(seat().props.disabled).toBe(true);
+    expect(treeString(renderer)).toContain("peer");
+    await act(async () => { await seat().props.onClick(); });
+    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.root.findAllByType("button").find((item) => item.props.children === "Use current access review")!.props.onClick(); });
+    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledTimes(1);
+    await act(async () => { await seat().props.onClick(); });
+    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenLastCalledWith("default", "research-agent", peer.revision);
+    expect(apiMocks.getCitadelAccessSnapshot).toHaveBeenCalledTimes(2);
+    expect(treeString(renderer)).toContain("Agent seated in this Citadel.");
+    act(() => renderer.unmount());
   });
 });

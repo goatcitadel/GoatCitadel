@@ -33,13 +33,13 @@ const charterSchema = z.object({
   defaultChamberId: z.string().min(1).optional(),
   riskPosture: z.enum(["conservative", "balanced", "collaborative", "automation_forward"]).optional(),
   modelPolicyDefault: z.enum(["local_only", "hybrid_guarded", "approved_cloud", "hosted_team"]).optional(),
-});
+}).merge(citadelRevisionSchema);
 
 const chamberSchema = z.object({
   name: z.string().min(1),
   sensitivity: z.enum(["public", "internal", "private", "sensitive", "restricted", "secret"]).optional(),
   sealed: z.boolean().optional(),
-});
+}).merge(citadelRevisionSchema);
 
 const paramsSchema = z.object({
   citadelId: z.string().min(1),
@@ -55,11 +55,14 @@ const DEFAULT_BRIEF_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const fromTemplateSchema = z.object({
   templateId: z.string().min(1),
-});
+  expectedTemplateRevision: z.string().regex(/^[a-f0-9]{64}$/),
+}).merge(citadelRevisionSchema);
+
+const fromBlueprintSchema = z.object({ blueprint: z.unknown() }).merge(citadelRevisionSchema);
 
 const assignAgentSchema = z.object({
   agentId: z.string().min(1),
-});
+}).merge(citadelRevisionSchema);
 
 const councilParamsSchema = z.object({
   citadelId: z.string().min(1),
@@ -70,7 +73,7 @@ const wardSchema = z.object({
   name: z.string().min(1),
   actionPattern: z.string().min(1),
   effect: z.enum(["allow", "deny", "require_approval", "require_dry_run", "redact", "route_local"]),
-});
+}).merge(citadelRevisionSchema);
 
 const wardParamsSchema = z.object({
   citadelId: z.string().min(1),
@@ -80,7 +83,7 @@ const wardParamsSchema = z.object({
 const vaultSecretSchema = z.object({
   name: z.string().min(1),
   value: z.string().min(1),
-});
+}).merge(citadelRevisionSchema);
 
 const vaultSecretParamsSchema = z.object({
   citadelId: z.string().min(1),
@@ -92,7 +95,7 @@ const passageSchema = z.object({
   allowedFields: z.array(z.string().min(1)),
   sourceChamberId: z.string().min(1).optional(),
   expiresAt: z.string().datetime().optional(),
-});
+}).merge(citadelRevisionSchema);
 
 const passageParamsSchema = z.object({
   citadelId: z.string().min(1),
@@ -102,7 +105,7 @@ const passageParamsSchema = z.object({
 const memberSchema = z.object({
   subjectId: z.string().min(1),
   role: z.enum(["owner", "steward", "builder", "operator", "contributor", "viewer", "guest", "agent"]),
-});
+}).merge(citadelRevisionSchema);
 
 const memberRouteParamsSchema = z.object({
   citadelId: z.string().min(1),
@@ -141,7 +144,7 @@ const integrationSchema = z.object({
   capabilities: z.array(z.string().min(1)),
   mode: z.enum(["read", "write", "destructive"]),
   expiresAt: z.string().datetime().optional(),
-});
+}).merge(citadelRevisionSchema);
 
 const integrationParamsSchema = z.object({
   citadelId: z.string().min(1),
@@ -193,6 +196,16 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Citadel ${params.data.citadelId} not found.` });
       }
       return reply.send(citadel);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/citadels/:citadelId/structure", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      return reply.send(await citadels.getStructureSnapshot(params.data.citadelId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -334,8 +347,10 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const charter = await citadels.upsertCharter({ citadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.send(charter);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -363,8 +378,10 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const chamber = await citadels.createChamber({ citadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.code(201).send(chamber);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -403,12 +420,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const citadel = await citadels.createFromTemplate(params.data.citadelId, parsed.data.templateId);
+      const citadel = await citadels.createFromTemplate(params.data.citadelId, parsed.data.templateId, parsed.data.expectedRevision, parsed.data.expectedTemplateRevision);
       if (!citadel) {
         return reply.code(404).send({ error: `Template ${parsed.data.templateId} not found.` });
       }
+      await markMutationCommitted(request);
       return reply.code(201).send(citadel);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -443,18 +462,32 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = await citadels.createFromBlueprint(params.data.citadelId, request.body ?? {});
+      const parsed = fromBlueprintSchema.safeParse(request.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      const result = await citadels.createFromBlueprint(params.data.citadelId, parsed.data.blueprint, parsed.data.expectedRevision);
       if (!result.ok) {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }
+      await markMutationCommitted(request);
       return reply.code(201).send(result.citadel);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
 
   // Council = existing agents assigned to this Citadel (by agentId). Agent details
   // (name/role/tools) are resolved from the agents system, not duplicated here.
+  fastify.get("/api/v1/citadels/:citadelId/access", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      return reply.send(await citadels.getAccessSnapshot(params.data.citadelId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/citadels/:citadelId/council", operatorOnly, async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
     if (!params.success) {
@@ -477,9 +510,11 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const assignment = await citadels.assignAgent({ citadelId: params.data.citadelId, agentId: parsed.data.agentId });
+      const assignment = await citadels.assignAgent({ citadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.code(201).send(assignment);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -489,13 +524,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const removed = await citadels.unassignAgent(params.data.citadelId, params.data.agentId);
-      if (!removed) {
-        return reply.code(404).send({ error: `Agent ${params.data.agentId} is not on this Citadel's council.` });
-      }
-      return reply.code(204).send();
+      const snapshot = await citadels.unassignAgent(params.data.citadelId, params.data.agentId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -524,8 +560,10 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const ward = await citadels.addWard({ citadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.code(201).send(ward);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -535,13 +573,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const removed = await citadels.removeWard(params.data.citadelId, params.data.wardId);
-      if (!removed) {
-        return reply.code(404).send({ error: `Ward ${params.data.wardId} not found.` });
-      }
-      return reply.code(204).send();
+      const snapshot = await citadels.removeWard(params.data.citadelId, params.data.wardId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -552,7 +591,7 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: await citadels.listVaultSecrets(params.data.citadelId) });
+      return reply.send(await citadels.getVaultSnapshot(params.data.citadelId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -568,12 +607,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const result = await citadels.storeVaultSecret(params.data.citadelId, parsed.data.name, parsed.data.value);
+      const result = await citadels.storeVaultSecret(params.data.citadelId, parsed.data.name, parsed.data.value, parsed.data.expectedRevision);
       if (!result.ok) {
         return reply.code(503).send({ error: "Vault is unavailable — the secret store could not provide a key." });
       }
-      return reply.code(201).send(result.secret);
+      await markMutationCommitted(request);
+      return reply.code(201).send(result.snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -600,13 +641,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const removed = await citadels.deleteVaultSecret(params.data.citadelId, params.data.secretId);
-      if (!removed) {
-        return reply.code(404).send({ error: `Vault secret ${params.data.secretId} not found.` });
-      }
-      return reply.code(204).send();
+      const snapshot = await citadels.deleteVaultSecret(params.data.citadelId, params.data.secretId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -635,8 +677,10 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const passage = await citadels.createPassage({ sourceCitadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.code(201).send(passage);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -646,13 +690,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const removed = await citadels.removePassage(params.data.citadelId, params.data.passageId);
-      if (!removed) {
-        return reply.code(404).send({ error: `Passage ${params.data.passageId} not found.` });
-      }
-      return reply.code(204).send();
+      const snapshot = await citadels.removePassage(params.data.citadelId, params.data.passageId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -681,8 +726,10 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const member = await citadels.upsertMember({ citadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.code(201).send(member);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -692,13 +739,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const removed = await citadels.removeMember(params.data.citadelId, params.data.subjectId);
-      if (!removed) {
-        return reply.code(404).send({ error: `Member ${params.data.subjectId} not found.` });
-      }
-      return reply.code(204).send();
+      const snapshot = await citadels.removeMember(params.data.citadelId, params.data.subjectId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -727,8 +775,10 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const grant = await citadels.addIntegration({ citadelId: params.data.citadelId, ...parsed.data });
+      await markMutationCommitted(request);
       return reply.code(201).send(grant);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -738,13 +788,14 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const parsed = citadelRevisionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const removed = await citadels.removeIntegration(params.data.citadelId, params.data.grantId);
-      if (!removed) {
-        return reply.code(404).send({ error: `Integration grant ${params.data.grantId} not found.` });
-      }
-      return reply.code(204).send();
+      const snapshot = await citadels.removeIntegration(params.data.citadelId, params.data.grantId, parsed.data.expectedRevision);
+      await markMutationCommitted(request);
+      return reply.send(snapshot);
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -898,12 +949,16 @@ export const citadelsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = await citadels.stageBlueprint(params.data.citadelId, request.body ?? {});
+      const parsed = fromBlueprintSchema.safeParse(request.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      const result = await citadels.stageBlueprint(params.data.citadelId, parsed.data.blueprint, parsed.data.expectedRevision);
       if (!result.ok) {
         return reply.code(400).send({ error: { blueprint: result.errors } });
       }
+      await markMutationCommitted(request);
       return reply.code(201).send({ citadel: result.citadel, review: result.review });
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });

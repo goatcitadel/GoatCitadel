@@ -1,5 +1,6 @@
 import type { RemoteWorkerAssignmentProjection } from "@goatcitadel/contracts";
 import { useRemoteWorkerInlineActivity } from "./useRemoteWorkerInlineActivity";
+import { RemoteWorkerRuntimeSummary } from "./RemoteWorkerRuntimeSummary";
 import "../../styles/background-task-rail.css";
 
 export interface RemoteWorkerInlineActivityProps {
@@ -19,9 +20,13 @@ function phaseLabel(phase: string | null): string {
 
 function AssignmentActivity({
   assignment,
+  workspaceId,
+  refreshKey,
   onOpenOps,
 }: {
   assignment: RemoteWorkerAssignmentProjection;
+  workspaceId: string;
+  refreshKey: number;
   onOpenOps?: (workerId: string) => void;
 }) {
   const identity = assignment.identity.value;
@@ -47,7 +52,8 @@ function AssignmentActivity({
         )}
         {lease ? (
           <span>
-            lease rev {lease.leaseRevision} · {freshness?.fresh ? "fresh" : "expired"}
+            lease rev {lease.leaseRevision} ·{" "}
+            {freshness ? (freshness.fresh ? "fresh" : "expired") : "freshness unavailable"}
           </span>
         ) : null}
         {lease ? (
@@ -63,9 +69,7 @@ function AssignmentActivity({
         ) : null}
         {materialization ? <span>materialized {materialization.count}</span> : null}
       </div>
-      <p className="mc-next-remote-activity__unavailable">
-        Usage/cost and artifact/effect outcomes are unavailable in this tranche — no cost is inferred.
-      </p>
+      <RemoteWorkerRuntimeSummary workspaceId={workspaceId} assignment={assignment} refreshKey={refreshKey} />
       {onOpenOps && workerId ? (
         <button type="button" className="mc-next-remote-activity__ops-link" onClick={() => onOpenOps(workerId)}>
           View in Ops
@@ -102,13 +106,27 @@ export function RemoteWorkerInlineActivity(props: RemoteWorkerInlineActivityProp
         <h5>Remote workers</h5>
         <span>{activity.assignments.length} bound</span>
       </div>
+      <button
+        type="button"
+        className="mc-next-remote-activity__ops-link"
+        disabled={activity.loading}
+        onClick={() => void activity.reload()}
+      >
+        Refresh worker activity
+      </button>
       {activity.error ? (
         <p className="mc-next-remote-activity__unavailable" role="alert">
           {activity.error}
         </p>
       ) : null}
       {activity.assignments.map((assignment) => (
-        <AssignmentActivity key={assignment.assignmentId} assignment={assignment} onOpenOps={props.onOpenOps} />
+        <AssignmentActivity
+          key={JSON.stringify([props.workspaceId, props.sessionId, props.turnId, assignment.assignmentId])}
+          workspaceId={props.workspaceId}
+          assignment={assignment}
+          refreshKey={activity.revision}
+          onOpenOps={props.onOpenOps}
+        />
       ))}
     </section>
   );

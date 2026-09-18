@@ -39,6 +39,7 @@ function createHost(): DiscordRuntimeBridgeHost & {
   const sessionProjects = new Map<string, { sessionId: string; projectId: string; assignedAt: string }>();
   let connection = {
     connectionId: "discord-1",
+    revision: "a".repeat(64),
     catalogId: "discord",
     kind: "channel",
     key: "discord",

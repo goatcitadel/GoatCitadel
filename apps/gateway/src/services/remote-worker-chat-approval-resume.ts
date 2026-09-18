@@ -11,7 +11,7 @@ type ResumeStorage = Pick<AsyncStorage, "approvals" | "durableRuns" | "remoteWor
  * This read neither grants execution nor replaces the canonical wake checks. */
 export async function shouldDeferRemoteWorkerChatApprovalWake(
   storage: ResumeStorage & Pick<AsyncStorage,
-    "remoteWorkerEffects" | "chatToolRuns" | "chatInlineApprovals" | "chatTurnTraces">,
+    "remoteWorkerEffects" | "chatToolRuns" | "approvalWaitRuns" | "chatInlineApprovals" | "chatTurnTraces">,
   runId: string,
   approvalId: string,
 ): Promise<boolean> {

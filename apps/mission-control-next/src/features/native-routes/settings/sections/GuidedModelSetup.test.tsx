@@ -3,7 +3,7 @@ import { __resetSessionDraftsForTests } from "../../library/session-drafts";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OnboardingState } from "@goatcitadel/contracts";
+import type { ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import { GuidedModelSetup } from "./GuidedModelSetup";
 
 const mocks = vi.hoisted(() => ({
@@ -73,18 +73,18 @@ async function mount(status = "ready", reload = vi.fn(async () => {})) {
   roots.push(root);
   const navigate = vi.fn();
   const notice = vi.fn();
-  await act(async () =>
+  const render = (workspaceId: string) =>
     root.render(
       <GuidedModelSetup
-        workspaceId="default"
+        workspaceId={workspaceId}
         onboarding={{ settings: { llm: { activeProviderId: "test", activeModel: "test-model" } } } as OnboardingState}
         route={{ area: "settings", section: "onboarding", theme: "dark" }}
         navigate={navigate}
         reloadOnboarding={reload}
         setNotice={notice}
       />,
-    ),
-  );
+    );
+  await act(async () => render("default"));
   const button = (name: string) =>
     [...host.querySelectorAll("button")].find((element) => element.textContent?.trim() === name);
   return {
@@ -93,6 +93,7 @@ async function mount(status = "ready", reload = vi.fn(async () => {})) {
     navigate,
     notice,
     reload,
+    changeWorkspace: async (workspaceId: string) => { await act(async () => render(workspaceId)); },
     unmount: async () => {
       roots.splice(roots.indexOf(root), 1);
       await act(async () => root.unmount());
@@ -141,6 +142,47 @@ describe("guided first model setup", () => {
     expect(mocks.complete).toHaveBeenCalledWith("operator");
     expect(view.navigate).not.toHaveBeenCalled();
     expect(view.notice).toHaveBeenCalledWith({ tone: "error", message: "State refresh failed" });
+  });
+  it.each(["unmount", "workspace change"])("ignores late Chat entry after %s", async (interruption) => {
+    let resolve!: () => void;
+    mocks.complete.mockReturnValue(new Promise<void>((done) => { resolve = done; }));
+    const view = await mount();
+    await act(async () => view.button("Enter Chat")!.click());
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    if (interruption === "unmount") await view.unmount();
+    else await view.changeWorkspace("other-workspace");
+    await act(async () => resolve());
+    expect(view.reload).not.toHaveBeenCalled();
+    expect(view.navigate).not.toHaveBeenCalled();
+    expect(view.notice).not.toHaveBeenCalled();
+    if (interruption === "workspace change") expect(view.button("Enter Chat")?.disabled).toBe(false);
+  });
+  it("does not navigate when the screen closes during the onboarding refresh", async () => {
+    let resolve!: () => void;
+    const reload = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
+    const view = await mount("ready", reload);
+    await act(async () => view.button("Enter Chat")!.click());
+    expect(reload).toHaveBeenCalledTimes(1);
+    await view.unmount();
+    await act(async () => resolve());
+    expect(view.navigate).not.toHaveBeenCalled();
+  });
+  it.each(["receipt", "error"])("ignores a prior workspace's late plan %s", async (outcome) => {
+    let resolve!: (value: ChangePlanRecord) => void;
+    let reject!: (reason: Error) => void;
+    mocks.create.mockReturnValueOnce(new Promise<ChangePlanRecord>((done, fail) => { resolve = done; reject = fail; }));
+    const view = await mount("missing");
+    await act(async () => view.button("Connect provider")!.click());
+    await view.changeWorkspace("other-workspace");
+    await act(async () => {
+      if (outcome === "error") reject(new Error("Old workspace failure"));
+      else resolve({ planId: "old-plan", status: "awaiting_confirmation", origin: { workspaceId: "default" },
+        request: { kind: "provider_connection", providerId: "test" } } as ChangePlanRecord);
+    });
+    expect(view.host.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => view.button("Connect provider")!.click());
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    expect(mocks.create).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: "other-workspace" }));
   });
   it("retains effort through unmount and catalog reload and does not duplicate a pending setup plan", async () => {
     const view = await mount();

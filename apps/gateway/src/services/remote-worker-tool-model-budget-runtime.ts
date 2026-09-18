@@ -31,10 +31,14 @@ export class RemoteWorkerToolModelBudgetRuntime {
       return await llm.runWithDispatchAuthority(lineage, async (attempt) => {
         if (!active) throw new Error("Worker tool execution has ended.");
         await input.checkExecution();
+        if (!active) throw new Error("Worker tool execution has ended.");
         await storage.remoteWorkerBudgets.authorizeToolAttempt({ ...key, protectedAuthority,
           leaseTokenSha256: input.fence.leaseTokenSha256, effectSelector: input.intent.effectSelector,
           canonicalArgsSha256: input.intent.canonicalArgsSha256, workerIdempotencyKey: input.intent.workerIdempotencyKey,
           usageEventId: attempt.usageEventId, route: routeReceiptFor(attempt.route) });
+        // A detached request may have awaited either owner while the tool
+        // returned. A completed hold is not permission to dispatch afterward.
+        if (!active) throw new Error("Worker tool execution has ended.");
       }, operation);
     } finally {
       active = false;

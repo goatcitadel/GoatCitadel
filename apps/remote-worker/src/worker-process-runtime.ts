@@ -3,11 +3,13 @@ import { runConnectedWorker, type ConnectedWorkerReport } from "./connected-work
 import type { WorkerRunConfig } from "./worker-runtime-config.js";
 import type { WorkerProtectedKeyOwner } from "./worker-protected-key-owner.js";
 import type { WorkerMeshCapabilityRuntime } from "./worker-mesh-capability-runtime.js";
+import type { WorkerNativeContinuationOwner } from "./worker-native-continuation.js";
 
 export interface WorkerProcessDependencies {
   readonly signal: AbortSignal;
   readonly protectedKeys?: WorkerProtectedKeyOwner;
   readonly meshCapabilities?: WorkerMeshCapabilityRuntime;
+  readonly nativeRuntime?: WorkerNativeContinuationOwner;
   readonly publishReport: (report: Readonly<Record<string, unknown>>) => Promise<void>;
   readonly runOnce?: typeof runConnectedWorker;
   readonly waitForOffer?: (signal: AbortSignal) => Promise<void>;
@@ -44,6 +46,7 @@ export async function runWorkerProcess(
         signal,
         ...(dependencies.protectedKeys ? { protectedKeys: dependencies.protectedKeys } : {}),
         ...(dependencies.meshCapabilities ? { meshCapabilities: dependencies.meshCapabilities } : {}),
+        ...(dependencies.nativeRuntime ? { nativeRuntime: dependencies.nativeRuntime } : {}),
       });
       await publishReport(report);
       lastReport = report;

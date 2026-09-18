@@ -1,6 +1,6 @@
 import {
   ConflictError,
-  canonicalJsonString,
+  canonicalJsonString, normalizeRemoteWorkerRuntimeResultExpectation,
   remoteWorkerAssignmentCanonicalSha256 as digest,
   type DurableRunRecord,
   type RemoteWorkerAssignmentDispatchAuthority,
@@ -17,7 +17,7 @@ import { PendingApprovalActionRepository } from "./pending-approval-action-repo.
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
 import { RemoteWorkerChatResumeRecoveryLedger, type RemoteWorkerChatResumeRecoveryRecord } from "./remote-worker-chat-resume-recovery-ledger.js";
 
-export interface RemoteWorkerChatResumeWake {
+export interface RemoteWorkerToolChatResumeWake {
   schemaVersion: "goatcitadel.remote-worker-chat-resume.v1";
   registryWorkspaceId: string;
   assignmentId: string;
@@ -38,6 +38,16 @@ export interface RemoteWorkerChatResumeWake {
   priorLeaseRevision: number;
   priorLeaseRequestSha256: string;
 }
+
+export interface RemoteWorkerNativeRuntimeResumeWake extends Omit<RemoteWorkerToolChatResumeWake,
+  "schemaVersion" | "intentId" | "intentSha256" | "pendingActionSha256"> {
+  schemaVersion: "goatcitadel.remote-worker-native-runtime-resume.v1";
+  nativeRuntimeBindingSha256: string;
+  intentId?: never;
+  intentSha256?: never;
+  pendingActionSha256?: never;
+}
+export type RemoteWorkerChatResumeWake = RemoteWorkerToolChatResumeWake | RemoteWorkerNativeRuntimeResumeWake;
 
 export interface RecordRemoteWorkerChatResumeWakeInput {
   registryWorkspaceId: string;
@@ -84,12 +94,15 @@ export class RemoteWorkerChatResumeLedger {
       ORDER BY prior_lease_revision DESC LIMIT 1`).get<WakeRow>(registryWorkspaceId, assignmentId, assignmentGeneration);
     if (!row) return undefined;
     const material = parse<RemoteWorkerChatResumeWake>(row.material_json, row.material_sha256);
-    if (material.schemaVersion !== "goatcitadel.remote-worker-chat-resume.v1" ||
+    if (!["goatcitadel.remote-worker-chat-resume.v1", "goatcitadel.remote-worker-native-runtime-resume.v1"].includes(material.schemaVersion) ||
       material.registryWorkspaceId !== row.registry_workspace_id || material.assignmentId !== row.assignment_id ||
       material.assignmentGeneration !== Number(row.assignment_generation) ||
       material.priorLeaseRevision !== Number(row.prior_lease_revision) ||
       material.durableRunId !== row.durable_run_id || material.waitingCheckpointId !== row.waiting_checkpoint_id ||
       row.resume_id !== `worker-resume:${row.material_sha256}`) throw invalid();
+    if (material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1" &&
+        (!/^[a-f0-9]{64}$/.test(material.nativeRuntimeBindingSha256) ||
+          ["intentId", "intentSha256", "pendingActionSha256"].some(key => Object.hasOwn(material, key)))) throw invalid();
     const bound = this.db.prepare(`SELECT dispatch_authority_json, dispatch_authority_sha256
       FROM remote_worker_chat_resume_bindings WHERE resume_id = ?`).get<{
       dispatch_authority_json: string; dispatch_authority_sha256: string;
@@ -105,7 +118,7 @@ export class RemoteWorkerChatResumeLedger {
   }
 
   prepareHandoff(input: RecordRemoteWorkerChatResumeWakeInput, assignment: RemoteWorkerAssignmentRecord,
-    generation: RemoteWorkerAssignmentGenerationRecord, lease: RemoteWorkerAssignmentLeaseRecord, run: DurableRunRecord) {
+    generation: RemoteWorkerAssignmentGenerationRecord, lease: RemoteWorkerAssignmentLeaseRecord, run: DurableRunRecord): RemoteWorkerChatResumeWake {
     const manifest = assignment.manifest;
     const checkpoint = new DurableRunRepository(this.db).getLatestCheckpointByKind(run.runId, "run_waiting");
     const seal = record(run.metadata?.chatTurnRuntimeAuthority);
@@ -123,6 +136,26 @@ export class RemoteWorkerChatResumeLedger {
     // Gateway verifies the complete runtime seal and settled finalizers. These
     // comparisons bind that verification to the exact rows under this lock.
     const approval = new ApprovalRepository(this.db).get(input.approvalId);
+    if (approval.kind === "remote_worker.native_runtime") {
+      const binding = record(approval.payload.nativeRuntime);
+      if (!["approved", "rejected"].includes(approval.status) || approval.linkage?.actionType !== approval.kind ||
+          approval.linkage.workspaceId !== manifest.executionWorkspaceId || approval.linkage.taskId !== manifest.taskId ||
+          approval.linkage.durableRunId !== run.runId || approval.linkage.sessionId !== manifest.sessionId || approval.linkage.turnId !== manifest.turnId ||
+          binding.schemaVersion !== "goatcitadel.native-runtime-approval.v1" || binding.registryWorkspaceId !== assignment.registryWorkspaceId ||
+          binding.assignmentId !== assignment.assignmentId || binding.assignmentGeneration !== generation.assignmentGeneration ||
+          typeof binding.profileSha256 !== "string" || !/^[a-f0-9]{64}$/.test(binding.profileSha256) ||
+          ["expectedCapacityRevision", "expectedExecutionRevision", "expectedCleanupRevision", "expectedBackupRevision"].some(key =>
+            !Number.isSafeInteger(binding[key]) || Number(binding[key]) < 0)) throw invalid();
+      normalizeRemoteWorkerRuntimeResultExpectation(binding.expectation);
+      return { schemaVersion: "goatcitadel.remote-worker-native-runtime-resume.v1" as const,
+        registryWorkspaceId: assignment.registryWorkspaceId, assignmentId: assignment.assignmentId,
+        assignmentGeneration: generation.assignmentGeneration, assignmentManifestSha256: assignment.manifestSha256,
+        durableRunId: run.runId, payloadSha256: digest(run.payload), durableRunAttempt: run.attemptCount,
+        waitingRunVersion: run.version, queuedRunVersion: run.version + 1,
+        waitingCheckpointId: checkpoint.checkpointId, waitingRuntimeAuthoritySha256: input.waitingRuntimeAuthoritySha256,
+        approvalId: approval.approvalId, approvalSha256: digest(approval), nativeRuntimeBindingSha256: digest(binding),
+        priorLeaseRevision: lease.leaseRevision, priorLeaseRequestSha256: lease.requestSha256 } satisfies RemoteWorkerNativeRuntimeResumeWake;
+    }
     const pending = new PendingApprovalActionRepository(this.db).find(input.approvalId);
     const resolved = approval.status === "approved" || approval.status === "rejected" || approval.status === "edited";
     const expectedPendingStatus = approval.status === "approved" ? "pending" : "rejected";
@@ -166,7 +199,7 @@ export class RemoteWorkerChatResumeLedger {
   recordWake(input: RecordRemoteWorkerChatResumeWakeInput, assignment: RemoteWorkerAssignmentRecord,
     generation: RemoteWorkerAssignmentGenerationRecord, lease: RemoteWorkerAssignmentLeaseRecord, run: DurableRunRecord) {
     const material = this.prepareHandoff(input, assignment, generation, lease, run);
-    if (new ApprovalRepository(this.db).get(input.approvalId).status === "approved") {
+    if (material.schemaVersion === "goatcitadel.remote-worker-chat-resume.v1" && new ApprovalRepository(this.db).get(input.approvalId).status === "approved") {
       const handoff = new ApprovalEffectRepository(this.db).listByApproval(input.approvalId).find((effect) =>
         effect.effectKind === "pending_action_execute" && effect.status === "skipped" &&
         effect.result.reason === "remote_worker_resume_handoff");

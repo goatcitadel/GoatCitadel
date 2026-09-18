@@ -21,6 +21,7 @@ import {
   compareArchitectureMetrics,
   readArchitectureMetricsBaseline,
 } from "./architecture-metrics.mjs";
+import { readArchitectureServiceAllowances } from "./architecture-service-allowances.mjs";
 import {
   buildVisualBaselineFileName,
   NEXT_RELEASE_SURFACE_MANIFEST,
@@ -117,6 +118,9 @@ import { runWorkbenchFileRevisionScenario } from "./scenarios/workbench-file-rev
 import { runPermissionProfileRevisionsLane as runPermissionProfileRevisionsLaneImpl } from "./scenarios/permission-profile-revisions-lane.mjs";
 import { runPersonalityCatalogRevisionsLane as runPersonalityCatalogRevisionsLaneImpl } from "./scenarios/personality-catalog-revisions-lane.mjs";
 import { runCitadelRecordRevisionsLane as runCitadelRecordRevisionsLaneImpl } from "./scenarios/citadel-record-revisions-lane.mjs";
+import { runIntegrationConnectionRevisionsLane as runIntegrationConnectionRevisionsLaneImpl } from "./scenarios/integration-connection-revisions-lane.mjs";
+import { runMcpServerRevisionsLane as runMcpServerRevisionsLaneImpl } from "./scenarios/mcp-server-revisions-lane.mjs";
+import { runChannelConnectionReviewLane as runChannelConnectionReviewLaneImpl } from "./scenarios/channel-connection-review-lane.mjs";
 import { runAuthMatrixLane as runAuthMatrixLaneImpl } from "./scenarios/auth-matrix-lane.mjs";
 import { runArchitectureMetricsLane as runArchitectureMetricsLaneImpl } from "./scenarios/architecture-metrics-lane.mjs";
 import { runCatalogParityLane as runCatalogParityLaneImpl } from "./scenarios/catalog-parity-lane.mjs";
@@ -215,6 +219,7 @@ function verificationLaneDeps() {
     readBrowserSseDiagnostics,
     probeAuthMatrixRoute,
     readArchitectureMetricsBaseline,
+    readArchitectureServiceAllowances,
     readJson,
     relativeToRun,
     repoRoot,
@@ -477,6 +482,18 @@ export async function runPersonalityCatalogRevisionsLane(context) {
 
 export async function runCitadelRecordRevisionsLane(context) {
   await runCitadelRecordRevisionsLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runIntegrationConnectionRevisionsLane(context) {
+  await runIntegrationConnectionRevisionsLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runMcpServerRevisionsLane(context) {
+  await runMcpServerRevisionsLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runChannelConnectionReviewLane(context) {
+  await runChannelConnectionReviewLaneImpl(context, verificationLaneDeps());
 }
 
 // Scope caveat (Phase 6 doc-truth): this lane proves the channel-AGNOSTIC durable

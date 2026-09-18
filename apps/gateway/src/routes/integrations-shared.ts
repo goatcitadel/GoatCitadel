@@ -104,6 +104,7 @@ export const createConnectionSchema = z.object({
 });
 
 export const updateConnectionSchema = z.object({
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
   label: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
   status: z.enum(["connected", "disconnected", "error", "paused"]).optional(),

@@ -9,6 +9,8 @@ import type {
   CitadelKind,
   CitadelModelPolicy,
   CitadelRiskPosture,
+  CitadelStructureMutation,
+  CitadelStructureSnapshot,
   CitadelTemplateTarget,
 } from "./citadels.js";
 
@@ -131,38 +133,22 @@ export function validateCitadelBlueprint(value: unknown): CitadelBlueprintValida
   return { ok: errors.length === 0, errors: errors.slice(0, 20) };
 }
 
-/**
- * Import a (validated) Blueprint into a Citadel: upsert the Charter and create the
- * Chambers through an injected persistence target, then return the assembled Citadel.
- */
+/** Translate a validated Blueprint into one reviewed persistence command. */
+export function createCitadelBlueprintMutation(citadelId: string, expectedRevision: string, blueprint: CitadelBlueprint): CitadelStructureMutation {
+  return { citadelId, expectedRevision, change: {
+    type: "setup",
+    charter: { ...blueprint.charter },
+    chambers: blueprint.chambers.map((chamber) => ({ ...chamber })),
+  } };
+}
+
 export function applyCitadelBlueprint(
   target: CitadelTemplateTarget,
   citadelId: string,
   blueprint: CitadelBlueprint,
-): Citadel {
-  target.upsertCharter({
-    citadelId,
-    purpose: blueprint.charter.purpose,
-    kind: blueprint.charter.kind,
-    goals: blueprint.charter.goals,
-    boundaries: blueprint.charter.boundaries,
-    successDefinition: blueprint.charter.successDefinition,
-    riskPosture: blueprint.charter.riskPosture,
-    modelPolicyDefault: blueprint.charter.modelPolicyDefault,
-  });
-  for (const chamber of blueprint.chambers) {
-    target.createChamber({
-      citadelId,
-      name: chamber.name,
-      sensitivity: chamber.sensitivity,
-      sealed: chamber.sealed,
-    });
-  }
-  const citadel = target.getCitadel(citadelId);
-  if (!citadel) {
-    throw new Error(`Failed to import Blueprint into citadel ${citadelId}`);
-  }
-  return citadel;
+  expectedRevision: string,
+): CitadelStructureSnapshot {
+  return target.mutateStructure(createCitadelBlueprintMutation(citadelId, expectedRevision, blueprint));
 }
 
 function safeStringify(value: unknown): string | undefined {

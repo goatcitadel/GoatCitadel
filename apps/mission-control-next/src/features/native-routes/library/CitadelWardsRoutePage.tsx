@@ -1,10 +1,12 @@
+import { useCitadelAccessReview } from "./useCitadelAccessReview";
+import { CitadelAccessReview } from "./CitadelAccessReview";
+import "./citadel-confirmation.css";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { ShieldAlert, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import {
   addCitadelWard,
   evaluateCitadelGatehouseAction,
-  listCitadelWards,
   removeCitadelWard,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -28,12 +30,6 @@ const WARD_EFFECT_META: Record<WardEffect, { label: string; detail: string }> = 
   route_local: { label: "Route local", detail: "Keep matching model work on a local route." },
 };
 
-interface WardsState {
-  loading: boolean;
-  error: string | null;
-  items: CitadelWardRecord[];
-}
-
 const EMPTY_WARD = { name: "", actionPattern: "", effect: "deny" as WardEffect };
 
 /**
@@ -52,90 +48,53 @@ export function CitadelWardsRoutePage({
   const patternId = useId();
   const effectId = useId();
   const probeId = useId();
-  const [wards, setWards] = useState<WardsState>({ loading: true, error: null, items: [] });
+  const access = useCitadelAccessReview(activeCitadelId);
+  const wards = { loading: access.loading, error: access.error, items: access.snapshot?.wards ?? [] };
   const [view, setView] = useState<"new" | "test" | "rule" | null>(null);
-  const [busy, setBusy] = useState(false);
+  const busy = access.busy;
   const [draftError, setDraftError] = useState<string | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const leave = useDraftLeave();
-  const wardDraft = useSessionDraft(`ward:${activeCitadelId}:new`, EMPTY_WARD, undefined, { label: "New Ward", active: view === "new", onSave: (): Promise<boolean> => addWard() });
+  const wardDraft = useSessionDraft(`ward:${activeCitadelId}:new`, EMPTY_WARD, access.snapshot?.revision, { label: "New Ward", available: Boolean(access.snapshot), active: view === "new", onSave: (): Promise<boolean> => addWard() });
   const draft = wardDraft.value;
   const setDraft = wardDraft.setValue;
   const acceptSavedWard = wardDraft.acceptSaved;
   const [probe, setProbe] = useState("");
   const [probeResult, setProbeResult] = useState<{ action: string; effect: string } | null>(null);
   const [selectedWardId, setSelectedWardId] = useState<string | null>(null);
-  const [pendingDeleteWard, setPendingDeleteWard] = useState<CitadelWardRecord | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [pendingDeleteWard, setPendingDeleteWard] = useState<{ ward: CitadelWardRecord; revision: string } | null>(null);
+  const deleteBusy = access.busy;
   const selectedWard = useMemo(
     () => wards.items.find((ward) => ward.wardId === selectedWardId) ?? null,
     [selectedWardId, wards.items],
   );
 
   useEffect(() => {
-    let cancelled = false;
-    setWards((current) => ({ ...current, loading: true, error: null }));
-    void listCitadelWards(activeCitadelId)
-      .then((items) => {
-        if (!cancelled) {
-          setWards({ loading: false, error: null, items });
-          setSelectedWardId((current) =>
-            current && items.some((ward) => ward.wardId === current) ? current : null,
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setWards({ loading: false, error: getErrorMessage(error), items: [] });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+    setPendingDeleteWard(null); setSelectedWardId(null); setView(null);
+    setDraftError(null); setProbeError(null); setProbeResult(null);
   }, [activeCitadelId]);
 
-  const addWard = useCallback(async () => {
-    if (draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0) {
-      return false;
-    }
-    setBusy(true); setDraftError(null);
-    try {
-      const record = await addCitadelWard(activeCitadelId, {
-        name: draft.name.trim(),
-        actionPattern: draft.actionPattern.trim(),
-        effect: draft.effect,
-      });
-      setWards((current) => ({ ...current, items: [...current.items, record] }));
-      setSelectedWardId(record.wardId);
-      if (acceptSavedWard(EMPTY_WARD, undefined, draft)) setView("rule");
-      return true;
-    } catch (error) {
-      setDraftError(getErrorMessage(error));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, [activeCitadelId, draft, acceptSavedWard]);
+  const addWard = async () => {
+    const expectedRevision = wardDraft.baseRevision;
+    if (!access.ready || wardDraft.hasRemoteChanges || typeof expectedRevision !== "string" || !draft.name.trim() || !draft.actionPattern.trim()) return false;
+    setDraftError(null);
+    const saved = await access.run(expectedRevision, () => addCitadelWard(activeCitadelId, {
+      name: draft.name.trim(), actionPattern: draft.actionPattern.trim(), effect: draft.effect, expectedRevision,
+    }));
+    if (!saved) return false;
+    setSelectedWardId(saved.wards.find((item) => !wards.items.some((before) => before.wardId === item.wardId))?.wardId ?? null);
+    if (acceptSavedWard(EMPTY_WARD, saved.revision, draft)) setView("rule");
+    return true;
+  };
 
-  const deleteWard = useCallback(async () => {
-    if (!pendingDeleteWard) {
-      return;
-    }
-    setDeleteBusy(true);
-    try {
-      await removeCitadelWard(activeCitadelId, pendingDeleteWard.wardId);
-      setWards((current) => ({
-        ...current,
-        items: current.items.filter((ward) => ward.wardId !== pendingDeleteWard.wardId),
-      }));
-      setSelectedWardId(null);
-      setPendingDeleteWard(null);
-    } catch (error) {
-      setWards((current) => ({ ...current, error: getErrorMessage(error) }));
-    } finally {
-      setDeleteBusy(false);
-    }
-  }, [activeCitadelId, pendingDeleteWard]);
+  const deleteWard = async () => {
+    if (!pendingDeleteWard || pendingDeleteWard.ward.citadelId !== activeCitadelId) return;
+    const saved = await access.run(pendingDeleteWard.revision, () => removeCitadelWard(activeCitadelId, pendingDeleteWard.ward.wardId, pendingDeleteWard.revision));
+    if (!access.isCurrent()) return;
+    setPendingDeleteWard(null);
+    setView(null);
+    if (saved) setSelectedWardId(null);
+  };
 
   const evaluate = useCallback(async () => {
     const action = probe.trim();
@@ -145,11 +104,11 @@ export function CitadelWardsRoutePage({
     setProbeError(null); setProbeResult(null);
     try {
       const result = await evaluateCitadelGatehouseAction(activeCitadelId, action);
-      setProbeResult(result);
+      if (access.isCurrent()) setProbeResult(result);
     } catch (error) {
-      setProbeError(getErrorMessage(error));
+      if (access.isCurrent()) setProbeError(getErrorMessage(error));
     }
-  }, [activeCitadelId, probe]);
+  }, [activeCitadelId, probe, access]);
 
   return (
     <NativePageFrame
@@ -158,9 +117,12 @@ export function CitadelWardsRoutePage({
       kicker={routeKicker(route)}
       title="Wards"
       description={`Access policy for ${activeCitadelName}. Wards are evaluated deny-wins; the most restrictive matching effect governs an action.`}
-      loading={wards.loading && !wards.items.length}
-      error={wards.error}
+      loading={wards.loading && !wards.items.length && !access.reviewRequired}
+      error={!access.snapshot && !access.reviewRequired ? wards.error : null}
     >
+      {access.error && view !== "new" && (!access.reviewRequired || !access.snapshot) ? <NoticeBanner tone="error" message={access.error} /> : null}
+      {access.reviewRequired && view !== "new" ? <CitadelAccessReview snapshot={access.snapshot} onAccept={access.acceptReview} /> : null}
+      {access.snapshot?.structure.record?.lifecycleStatus === "archived" ? <NoticeBanner tone="warning" message="Restore this Citadel before changing access rules." /> : null}
       <div className="mc-next-settings-button-row">
         <NativeButton onClick={() => leave.request(() => setView("new"), [wardDraft.key])}>Add Ward{wardDraft.isDirty ? " · Unsaved" : ""}</NativeButton>
         <NativeButton variant="outline" onClick={() => leave.request(() => setView("test"), [wardDraft.key])}>Test an action</NativeButton>
@@ -210,7 +172,7 @@ export function CitadelWardsRoutePage({
                   <dd>{WARD_EFFECT_META[selectedWard.effect].label}</dd>
                 </div>
               </dl>
-              <NativeButton variant="destructive" onClick={() => setPendingDeleteWard(selectedWard)}>
+              <NativeButton variant="destructive" disabled={!access.ready} onClick={() => { if (access.snapshot) setPendingDeleteWard({ ward: selectedWard, revision: access.snapshot.revision }); }}>
                 <Trash2 size={16} />
                 Delete Ward
               </NativeButton>
@@ -220,6 +182,8 @@ export function CitadelWardsRoutePage({
 
         <div className="mc-next-native-stack mc-next-citadel-ward-tools">
           <DetailInspector open={view === "new"} title="Add a Ward" onClose={() => leave.request(() => setView(null), [wardDraft.key])}>
+            {access.error && (!access.reviewRequired || !access.snapshot) ? <NoticeBanner tone="error" message={access.error} /> : null}
+            {wardDraft.hasRemoteChanges || access.reviewRequired ? <CitadelAccessReview snapshot={access.snapshot} onAccept={() => { wardDraft.rebaseToCurrent(); access.acceptReview(); }} /> : null}
             {draftError ? <NoticeBanner tone="error" message={draftError} /> : null}
             <label className="mc-next-mason-field" htmlFor={nameId}>
               <span>Name</span>
@@ -261,7 +225,7 @@ export function CitadelWardsRoutePage({
             </fieldset>
             <NativeButton
               variant="default"
-              disabled={busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
+              disabled={busy || !access.ready || wardDraft.hasRemoteChanges || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
               onClick={() => void addWard()}
             >
               <ShieldAlert size={16} />
@@ -295,11 +259,12 @@ export function CitadelWardsRoutePage({
       </NativeGrid>
       {leave.dialog}
       <ConfirmModal
+        className="mc-next-citadel-confirmation"
         open={Boolean(pendingDeleteWard)}
         title="Delete this Ward?"
         message={
           pendingDeleteWard
-            ? `${pendingDeleteWard.name} will stop governing ${pendingDeleteWard.actionPattern}. This cannot be undone.`
+            ? `${pendingDeleteWard.ward.name} will stop governing ${pendingDeleteWard.ward.actionPattern}. This cannot be undone.`
             : "This Ward will be deleted."
         }
         confirmLabel={deleteBusy ? "Deleting…" : "Confirm delete Ward"}

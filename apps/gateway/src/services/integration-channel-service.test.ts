@@ -24,6 +24,7 @@ function createDeps(): IntegrationChannelPort {
         create: vi.fn((input) => {
           const now = "2026-06-18T00:00:00.000Z";
           const connection: IntegrationConnection = {
+            revision: "a".repeat(64),
             connectionId: `11111111-1111-1111-1111-${String(++sequence).padStart(12, "0")}`,
             catalogId: input.catalogId,
             kind: input.kind,

@@ -13,6 +13,10 @@ import {
   normalizeRemoteWorkerInferenceOperationIdentifier,
   normalizeRemoteWorkerInferenceReleaseReason,
   normalizeRemoteWorkerInferenceUsageEventIds,
+  normalizeRemoteWorkerRuntimeReadKey,
+  REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS,
+  remoteWorkerChatInferenceIdentity,
+  type RemoteWorkerChatWorkflowScope,
   remoteWorkerInferenceBudgetOperationMaterial,
   remoteWorkerInferenceBudgetOperationSha256,
   remoteWorkerInferenceCanonicalRequestBody,
@@ -1022,6 +1026,37 @@ export class RemoteWorkerInferenceRepository {
   public getRequest(key: RemoteWorkerInferenceRequestKey): RemoteWorkerInferenceRequestRecord | undefined {
     const row = this.selectStmt().get({ ...key }) as RequestRow | undefined;
     return row ? mapRequest(row) : undefined;
+  }
+
+  /** Do not silently restart a Chat history or its step budget at a native wake. */
+  public hasInferenceOutsideChatSequence(input: RemoteWorkerChatWorkflowScope): boolean {
+    const scope = normalizeRemoteWorkerRuntimeReadKey({ registryWorkspaceId: input.registryWorkspaceId, assignmentId: input.assignmentId });
+    if (!Number.isSafeInteger(input.assignmentGeneration) || input.assignmentGeneration < 1)
+      throw new TypeError("Remote worker assignment generation is invalid.");
+    const params: Record<string, string | number> = { ...scope, assignmentGeneration: input.assignmentGeneration };
+    const keys = Array.from({ length: REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS }, (_, step) => {
+      params[`key${step}`] = remoteWorkerChatInferenceIdentity(input, step).idempotencyKey;
+      return `@key${step}`;
+    });
+    return this.db.prepare(`SELECT 1 AS found FROM remote_worker_inference_requests
+      WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+        AND assignment_generation = @assignmentGeneration AND idempotency_key NOT IN (${keys.join(", ")}) LIMIT 1`)
+      .get(params) !== undefined;
+  }
+
+  /** Full bounded inventory; ordering/history authority is verified by the Chat owner. */
+  public listAssignmentChatRequests(input: RemoteWorkerChatWorkflowScope): RemoteWorkerInferenceRequestRecord[] {
+    const scope = normalizeRemoteWorkerRuntimeReadKey({ registryWorkspaceId: input.registryWorkspaceId, assignmentId: input.assignmentId });
+    if (!Number.isSafeInteger(input.assignmentGeneration) || input.assignmentGeneration < 1)
+      throw new TypeError("Remote worker assignment generation is invalid.");
+    const rows = this.db.prepare(`SELECT * FROM remote_worker_inference_requests
+      WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+        AND assignment_generation = @assignmentGeneration
+      ORDER BY admitted_at, inference_request_id, attempt LIMIT ${REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS + 1}`)
+      .all<RequestRow>({ ...scope, assignmentGeneration: input.assignmentGeneration });
+    if (rows.length > REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS)
+      throw new Error("Worker Chat exceeded its assignment-wide model step limit.");
+    return rows.map(mapRequest);
   }
 
   /** Budget transactions lock the canonical operation before locking its grant. */

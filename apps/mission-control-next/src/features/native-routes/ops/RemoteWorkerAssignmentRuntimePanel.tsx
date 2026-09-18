@@ -1,10 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import type {
-  RemoteWorkerAssignmentProjection,
-  RemoteWorkerAssignmentRuntime,
-  RemoteWorkerTruth,
-} from "@goatcitadel/contracts";
-import { fetchRemoteWorkerAssignmentRuntime } from "@goatcitadel/mission-control-shared/api/remote-workers";
+import type { ReactNode } from "react";
+import type { RemoteWorkerAssignmentProjection, RemoteWorkerTruth } from "@goatcitadel/contracts";
+import { useRemoteWorkerAssignmentRuntime } from "../../remote-workers/useRemoteWorkerAssignmentRuntime";
+import { NativeOutputDownloads } from "../../remote-workers/NativeOutputDownloads";
 import { NativeButton, NoticeBanner } from "../primitives";
 
 const number = (value: number | null | undefined) =>
@@ -58,71 +55,14 @@ export function RemoteWorkerAssignmentRuntimePanel({
   assignment: RemoteWorkerAssignmentProjection;
   refreshKey?: string;
 }) {
-  const identity = assignment.identity.value;
-  const key = [
-    workspaceId,
-    assignment.assignmentId,
-    identity?.assignmentGeneration,
-    identity?.workerId,
-    identity?.workerGeneration,
-  ].join(":");
-  const [state, setState] = useState<{ key: string; data: RemoteWorkerAssignmentRuntime | null; error: string | null }>(
-    { key, data: null, error: null },
-  );
-  const [attempt, setAttempt] = useState(0);
-  const sequence = useRef(0);
-  useEffect(() => {
-    const requestId = ++sequence.current;
-    setState({ key, data: null, error: null });
-    void fetchRemoteWorkerAssignmentRuntime(workspaceId, assignment.assignmentId)
-      .then((result) => {
-        if (sequence.current !== requestId) return;
-        if (
-          result.workspaceId !== workspaceId ||
-          result.assignmentId !== assignment.assignmentId ||
-          result.assignmentGeneration !== (identity?.assignmentGeneration ?? null) ||
-          result.workerId !== (identity?.workerId ?? null) ||
-          result.workerGeneration !== (identity?.workerGeneration ?? null)
-        ) {
-          setState({
-            key,
-            data: null,
-            error: "Assignment identity changed. Refresh the worker before inspecting this generation.",
-          });
-          return;
-        }
-        setState({ key, data: result, error: null });
-      })
-      .catch(() => {
-        if (sequence.current === requestId)
-          setState({
-            key,
-            data: null,
-            error: "Assignment runtime evidence is unavailable. No health, usage, or settlement was inferred.",
-          });
-      });
-    return () => {
-      sequence.current = requestId + 1;
-    };
-  }, [
-    workspaceId,
-    assignment.assignmentId,
-    identity?.assignmentGeneration,
-    identity?.workerId,
-    identity?.workerGeneration,
-    key,
-    refreshKey,
-    attempt,
-  ]);
-  const data = state.key === key ? state.data : null;
-  const error = state.key === key ? state.error : null;
+  const { data, error, reload } = useRemoteWorkerAssignmentRuntime({ workspaceId, assignment, refreshKey });
   const usage = data?.usageAndCost.value;
   const cell = data?.resourceCell.value;
   const effects = data?.artifactAndEffects.value;
   const contact = data?.connectionHealth.value;
   return (
     <div className="mc-next-worker-runtime" aria-label="Assignment runtime evidence">
-      <NativeButton variant="outline" onClick={() => setAttempt((value) => value + 1)}>
+      <NativeButton variant="outline" onClick={reload}>
         Refresh assignment evidence
       </NativeButton>
       {error ? (
@@ -282,6 +222,7 @@ export function RemoteWorkerAssignmentRuntimePanel({
               />
             ) : null}
             <p>Receipt counts do not establish successful effect settlement.</p>
+            <NativeOutputDownloads key={`${data.assignmentId}:${data.assignmentGeneration}`} runtime={data} />
           </TruthSection>
         </>
       )}

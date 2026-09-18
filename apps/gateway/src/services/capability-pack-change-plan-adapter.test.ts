@@ -49,8 +49,9 @@ async function harness() {
   const mcpHost = {
     readMcpServers: async () => servers,
     requireMcpServer: async (id: string) => servers.find((server) => server.serverId === id)!,
-    writeMcpServers: async (updated: McpServerRecord[]) => {
+    writeMcpServers: async (updated: McpServerRecord[]): Promise<McpServerRecord[]> => {
       servers.splice(0, servers.length, ...updated);
+      return [...servers];
     },
   } as McpServerAdminHost;
   const compensateMcp = vi.fn((input) => compensatePackMcpServer(mcpHost, input));

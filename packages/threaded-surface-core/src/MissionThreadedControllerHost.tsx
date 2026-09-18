@@ -2004,6 +2004,7 @@ export function MissionThreadedControllerHost({
     handleSend,
     handleRetryTurn,
     handleStopActiveTurn,
+    isStopPending,
     handleBeginEditTurn,
     handleResumeQueue,
     handleRemoveQueuedItem,
@@ -4105,13 +4106,12 @@ export function MissionThreadedControllerHost({
       [attachmentId]: mode,
     }));
   }, []);
+  const requiresThreadKnowledge = pendingAttachments.some((attachment) => {
+    const mode = pendingAttachmentModes[attachment.attachmentId] ?? "message";
+    return isDocumentAttachment(attachment) && mode !== "message";
+  }) || knowledgeUrlDraft.trim().length > 0;
   const attachPendingKnowledgeSources = useCallback(async () => {
     const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
-    const requiresThreadKnowledge =
-      pendingAttachments.some((attachment) => {
-        const mode = pendingAttachmentModes[attachment.attachmentId] ?? "message";
-        return isDocumentAttachment(attachment) && mode !== "message";
-      }) || normalizedKnowledgeUrl.length > 0;
     if (!requiresThreadKnowledge) {
       return;
     }
@@ -4169,6 +4169,7 @@ export function MissionThreadedControllerHost({
     knowledgeUrlMode,
     pendingAttachmentModes,
     pendingAttachments,
+    requiresThreadKnowledge,
     setThreadKnowledgeAttachments,
     threadKnowledgeAttachments?.items,
   ]);
@@ -4424,6 +4425,7 @@ export function MissionThreadedControllerHost({
     async (turnId: string) => {
       const nextThread = await handleSelectBranchTurn(turnId);
       if (nextThread) {
+        setFollowThreadOutput(true);
         setSelectedTurnId(nextThread.activeLeafTurnId ?? turnId);
       }
     },
@@ -4657,12 +4659,15 @@ export function MissionThreadedControllerHost({
       // auto-follow so the new turn and its streamed response stay in view
       // even if the operator had scrolled up earlier in the session.
       setFollowThreadOutput(true);
-      await attachPendingKnowledgeSources();
+      // Keep ordinary submission inside the click's synchronous update batch.
+      // Awaiting an empty preparation step can defer optimistic feedback past
+      // the next frame. Real knowledge attachment still completes before send.
+      if (requiresThreadKnowledge) await attachPendingKnowledgeSources();
       await handleSend();
     } catch (cause) {
       setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
     }
-  }, [attachPendingKnowledgeSources, handleSend, setFollowThreadOutput, setUiError]);
+  }, [attachPendingKnowledgeSources, handleSend, requiresThreadKnowledge, setFollowThreadOutput, setUiError]);
 
   const handleSendWithKnowledge = useCallback(async () => {
     const queueCommand = parseQueueCommand(draft);
@@ -5449,6 +5454,7 @@ export function MissionThreadedControllerHost({
         activeGeneratedArtifact,
         onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
         onStopActiveTurn: () => void handleStopActiveTurn(),
+        isStopPending,
         onSend: () => void handleComposerSend(),
         coworkStopRunControl: resolveCoworkComposerStopControl({
           mode: messageMode,

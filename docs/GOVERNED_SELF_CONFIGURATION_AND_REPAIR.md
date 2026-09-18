@@ -228,6 +228,236 @@ Recommended slices:
 5. Add scoped remote custody, packaged/source/Docker/shared-host profile coverage, delegated child-to-parent resume, and the named proof lane.
 6. Only after integrated proof, update release/public claims from “repair foundations” to governed self-configuration and self-repair; until delegated resume and remote custody pass, describe the narrower primary-turn/local profile scope explicitly.
 
+### Asynchronous coordinator storage proof (2026-09-15)
+
+`GovernedRemediationCoordinator` accepts synchronous or asynchronous repositories.
+Its creation and completion-query methods now return promises, and phase claims,
+publications, recovery reads, and receipt queries are awaited. Claim acquisition
+and publication retain their exact replay witnesses when a committed operation's
+response rejects. Settlement notifications remain nonblocking; a failed evidence
+read or callback leaves durable settlement available to boot replay. The budgets
+mirror boot replay now awaits the completion query.
+
+The focused coordinator and budgets-mirror suites pass **41 tests**. Coordinator
+tests use the real SQLite asynchronous storage adapter, including delayed creation,
+lost acquisition/publication responses, competing workers, authority checks,
+rollback/recovery, and failed settlement evidence reads. The mirror suite retains
+the synchronous repository compatibility path and its real Windows handle-relative
+fixture. Evidence: `.tmp/remediation-async-focused-20260915-c.log`. The run used
+the repository's schema-template accelerator and a 60-second test timeout because
+initial schema creation exceeded the default 15 seconds. Earlier failed attempts
+are retained; this timeout does not change production leases or operation limits.
+
+Gateway typecheck, targeted ESLint, and `verify:gateway:async-boundary` also pass
+(`.tmp/remediation-async-typecheck-20260915-c.log`,
+`.tmp/remediation-async-eslint-20260915-b.log`, and
+`.tmp/remediation-async-boundary-20260915-a.log`). This proves the local async
+storage prerequisite, not production coordinator composition, PostgreSQL runtime
+execution, packaged restart, browser secure input, or live provider acceptance.
+
+The runtime remediation Change Plan adapter also binds its origin actor to the
+remediation requester before preparation, continuation, or reconciliation, and
+checks the exact target owner before continuation. Missing or different actors
+cannot inherit the stored requester identity. Eight adapter tests pass, including
+foreign workspace/session, stale revision, and wrong target owner refusal
+(`.tmp/remediation-origin-focused-20260915-b.log`); Gateway typecheck and targeted
+lint pass. This closes an adapter ownership gap before production continuation
+is registered; it does not supply the missing canonical parent reservation owner.
+
+The canonical durable-run repository now exposes
+`lockWaitingCheckpointForUpdate` for the parent reservation transaction. It
+locks the parent, checks the exact waiting version, resolves only the latest
+waiting checkpoint by its exact run/checkpoint identity beyond diagnostic list
+caps, and rejects malformed checkpoint state rather than using a sanitized
+fallback. Three SQLite tests pass (`.tmp/remediation-parent-checkpoint-20260915-b.log`),
+with storage typecheck and targeted lint passing. Callers must hold the same
+immediate transaction through the reservation write and version CAS. This read
+does not create or persist a reservation. A subsequent real PostgreSQL fresh
+installation also passes the exact waiting-checkpoint lookup and version CAS
+test (see the parent-reservation proof below).
+
+SQLite migration 243 and PostgreSQL migration 188 add an immutable parent
+reservation ledger, with bounded identifiers, exact integer version progression,
+foreign keys, and unique remediation, retry-key, and waiting-run-version bindings.
+The PostgreSQL bootstrap bridge handles the optional pre-created table under its
+existing exact-shape, emptiness, and replacement-lock checks before rebuilding
+the remediation foundation. It does not use cascading deletion or replace
+populated reservation records.
+
+The named migration-parity lane passes all 27 registry, 24 integrity, and 45
+runtime-schema tests (`.tmp/remediation-bootstrap-migration-lane-20260915-final.log`);
+59 migrator/schema-shape tests also pass
+(`.tmp/remediation-bootstrap-migrator-20260915-c.log`). Storage typecheck and
+targeted lint pass. The isolated PostgreSQL run proves fresh bootstrap through
+188, all three reservation foreign keys, and the waiting-parent lock
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-c.log`).
+The session admission owner now provides an atomic parent-reservation transaction:
+it checks the exact admitted Chat payload, current session authority, remediation
+revision, active phase claim, and latest waiting checkpoint before advancing the
+run version and appending the reservation. Exact retries do not advance it again;
+an unresolved reservation prevents a second remediation from reserving that run.
+Focused SQLite tests prove refusal of changed authority and rollback when the
+ledger insert fails (`.tmp/remediation-reserve-owner-tests-20260915-b.log`).
+The full admission regression suite now passes 30 tests, including a reproduced
+ordinary-input bypass: observing the reserved run version no longer lets the
+user-input resolver queue that run without repair resolution. The generic durable
+run updater also refuses queued/running transitions while a reservation is unresolved.
+Secure configuration
+and remediation also refuse to acquire each other's reserved parent, and an
+unreconciled secure reservation prevents remediation acquisition
+(`.tmp/remediation-resume-fences-regression-20260915-a.log`). Checkpoint pruning now
+preserves reservation references even after the run becomes terminal or exceeds
+the disk budget; the reported remaining bytes still include retained evidence.
+Focused reservation and pruning checks pass
+(`.tmp/remediation-reserve-retention-tests-20260915-a.log`). Storage typecheck and
+targeted lint pass. An isolated PostgreSQL transaction run also passes actual
+admission-bound reservation, injected-insert rollback, exact replay, competing
+reservation refusal, and retained-checkpoint pruning
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-transaction-b.log`).
+That run exposed and fixed unquoted camel-case aliases in the existing pruner;
+the seven SQLite pruning tests pass after quoting those aliases. The task-owned
+PostgreSQL process shut down cleanly. Admission/approval composition, receipt-bound successful resume,
+and production Gateway wiring
+remain incomplete; the storage fence does not authorize or execute a repair.
+
+The combined durable-run and admission regression suite passes 66 tests after
+adding the generic queue fence (`.tmp/remediation-queue-fence-tests-20260915-a.log`).
+An isolated PostgreSQL rerun confirms ordinary-input and queued/running transition
+refusal alongside rollback, replay, and retention
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-fences-b.log`);
+its task-owned database shut down cleanly. Typecheck, targeted lint, and docs checks pass.
+
+The resume contract now accounts for both canonical transitions: a parent reserved
+at waiting version N advances to N+1, and successful resume must produce N+2.
+SQLite 244 and PostgreSQL 189 update the receipt and completed-state lineage guards
+without rewriting retained records or earlier migration entries. The coordinator,
+reconciliation observation checks, and repository validation use that same rule.
+Migration parity passes through both new versions. This correction is a prerequisite
+for the atomic resolution/resume producer described below; a reservation alone
+continues to block generic queue transitions.
+The 41 coordinator/recipe tests pass with N+2
+(`.tmp/remediation-resume-version-coordinator-20260915-b.log`). A real isolated
+PostgreSQL run passes bootstrap through 189, checks both installed lineage guards
+for N+2, and repeats reservation/rollback/replay/queue-refusal/retention proof
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-resume-version-a.log`).
+The test database shut down cleanly. Storage and Gateway typecheck, targeted lint,
+and documentation checks pass.
+
+SQLite 245 and PostgreSQL 190 add the immutable parent-resolution ledger. Each
+reservation can retain one resumed/released outcome, its exact next run version,
+stable request identity, and a receipt or no-effect failure reference. The schema
+enforces unique outcomes and retained evidence; evidence-kind/lineage authorization
+and the atomic run transition remain the transaction producer's responsibility.
+The fresh PostgreSQL bridge includes this optional table in its locked, exact-shape,
+empty-only replacement set, dropping it before its referenced tables without CASCADE.
+The two schema tests, 56 migrator tests, migration parity, storage typecheck, and
+targeted lint pass. The isolated PostgreSQL run proves bootstrap through 190 and
+all three resolution foreign keys, then shuts down cleanly
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-resolution-a.log`).
+The admission owner now implements atomic release from exact settled rollback or
+no-effect failure evidence. It locks the admitted parent and remediation state,
+validates stored evidence and ownership, advances the waiting version, and appends
+the immutable resolution in one transaction. Release leaves the run waiting;
+ordinary continuation remains a separate operation. Uncertain effects, mismatched
+authority, and a no-effect claim contradicted by a recorded application remain
+fenced. Only a recorded release or successful resume retires the generic queue/input reservation fence.
+Exact retries return the original resolution after later run progress without
+another version change.
+
+The combined 69-test durable/admission regression suite passes
+(`.tmp/remediation-release-regression-20260915-a.log`). The three focused release
+tests additionally pass the contradictory-evidence refusal
+(`.tmp/remediation-release-tests-20260915-c.log`). PostgreSQL proves injected-write
+rollback, retained fencing on failure, successful no-effect release, and exact replay
+after ordinary continuation (`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-release-a.log`);
+the test database shut down cleanly. The extra contradictory-evidence assertion is
+SQLite proof. Storage typecheck and targeted lint pass. Gateway composition and
+live end-to-end repair proof remain incomplete.
+
+Successful-repair continuation now has a bounded, content-free reference type
+(`goatcitadel.remediation-resume-reference.v1`) distinct from an operator-authored
+answer. Storage accepts it only on a text continuation with fixed server wording
+and an exact immutable continuation seal, then joins the referenced resumed
+resolution, reservation, verification receipt, admitted run/actor, remediation
+state, versions, and timestamp. A correctly hashed continuation with no resolution
+is rejected. The runtime formatter labels accepted repair context as a server
+outcome and excludes malformed/free-text substitutions. The read/format path
+does not itself enable automatic resume.
+The reference contract test and all 102 durable-execution tests pass
+(`.tmp/remediation-resume-context-contract-tests-20260915-a.log`,
+`.tmp/remediation-resume-context-gateway-regression-20260915-a.log`). The full
+admission regression also passes (`.tmp/remediation-resume-context-storage-regression-20260915-a.log`).
+Storage/Gateway typecheck, targeted lint, and docs checks pass for that read path.
+
+The admission owner now also implements the successful-resume transaction. It
+requires the exact reserved parent, resuming state revision, active resume claim,
+verification/application lineage, and ordinary text wait. It records the immutable
+resolution and invokes the existing sealed continuation writer in the same
+transaction, advancing the original wait from N through reserved N+1 to queued
+N+2. The repair reference is supplied privately by this transaction, never by the
+ordinary user-input API. Exact replay returns the original result after later run
+progress. Current policy, purpose-specific approvals, and settled-wait validation
+remain responsibilities of the still-missing Gateway parent composition.
+The focused SQLite test proves mismatched authority refusal, injected seal-write
+rollback with the parent still fenced, successful reference validation, and exact
+replay (`.tmp/remediation-resume-writer-tests-20260915-a.log`). All 71 combined
+durable/admission regression tests pass
+(`.tmp/remediation-resume-writer-regression-20260915-a.log`). An isolated PostgreSQL
+run proves seal-write fault rollback, retained fencing, successful sealed-reference
+validation, and replay after later progress
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-resume-a.log`);
+its temporary database shut down cleanly. Storage typecheck, targeted lint, and
+documentation checks pass. Production Gateway wiring, reconciliation resume,
+secure-input waits, and live end-to-end repair acceptance remain incomplete.
+
+The Gateway now has a durable-parent adapter over these repository operations.
+It derives identity from the canonical admitted Chat payload, acquires the
+session/admission/run locks in order, and holds them through settled-wait checks,
+the mandatory current-authorization callback, and the storage mutation. Missing
+or unsettled checkpoint authority fails before authorization. Successful resume
+observation uses immutable receipt evidence and survives later run progress;
+queued/running status alone never establishes a completed repair. An unmatched
+observation remains unknown. There is no permissive authorization default, and
+the adapter is not yet registered in production: the real deny-wins and
+purpose-specific approval owner, reconciliation retry, and coordinator composition
+remain necessary before activation.
+
+Three real async SQLite adapter tests pass, including denial without mutation,
+waiting-authority refusal, and successful resume/replay/observation
+(`.tmp/remediation-parent-adapter-tests-20260915-c.log`). Ten focused storage
+remediation tests pass (`.tmp/remediation-parent-adapter-storage-tests-20260915-a.log`).
+PostgreSQL proves the new exact receipt lookup, refusal of a foreign requester,
+and unmatched-operation observation, alongside transaction rollback and replay
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-observe-a.log`);
+the isolated test database shut down cleanly. Gateway typecheck, targeted lint,
+and the asynchronous Gateway boundary lane pass. The named durable-recovery and
+runtime-truth stack lanes have not been rerun for this unregistered adapter.
+
+Scope disposition (2026-09-15): the generic repair expansion below is preserved
+follow-up backlog under the [fixed comparison checklist](testing/COMPARISON_COMPLETION_CHECKLIST.md).
+No original seven-step dependency requires production registration of this
+coordinator. Existing guided onboarding and Change Plans remain in scope;
+unrelated generic repair policy/phase-claim/activation work is deferred.
+
+The approval evidence verifier now defines a bounded repair-specific contract
+and distinct `runtime.remediation.pre_effect` / `runtime.remediation.activation`
+approval kinds. It reads real approval records and database time, requires an
+unexpired approved decision from the original requester, and matches the exact
+repair, recipe, owner, capability, scope, parent wait, and approval linkage.
+Generic Change Plan confirmations, extra payload fields, changed linkage,
+cross-purpose reuse, and missing expiry are rejected. Activation additionally
+binds the persisted application receipt and its resulting owner revision; the
+same activation approval is checked for the post-activation probe.
+
+Four tests using real SQLite approval records pass
+(`.tmp/remediation-approval-authority-tests-20260915-b.log`), as do Gateway
+typecheck and targeted lint. Activation receipt checks use real stored receipts
+with a test phase projection; this is approval-component proof, not a complete
+activation workflow. The verifier does not itself grant policy access or verify
+phase leases. Current deny-wins policy, active operation-claim checks, approval
+creation/resolution wiring, and production coordinator registration remain
+required. No live provider, installed-service, or external messaging action ran.
+
 Related owner truth:
 
 - [Canonical Runtime State Model](./CANONICAL_RUNTIME_STATE_MODEL.md)

@@ -326,7 +326,7 @@ describe("ToolInvocationCoordinatorService", () => {
       status: "disconnected",
       config: { webhookUrl: "https://example.com/hooks/proactive" },
     });
-    const policyEngine = new ToolPolicyEngine(config, storage);
+    const policyEngine = new ToolPolicyEngine(config, createSqliteAsyncStorage(storage));
     const coordinator = new ToolInvocationCoordinatorService(
       createHost({
         approvalInbox: storage.approvalInbox,
@@ -399,7 +399,7 @@ describe("ToolInvocationCoordinatorService", () => {
       return new Response("ok", { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const policyEngine = new ToolPolicyEngine(config, storage);
+    const policyEngine = new ToolPolicyEngine(config, createSqliteAsyncStorage(storage));
     const coordinator = new ToolInvocationCoordinatorService(
       createHost({
         approvalInbox: storage.approvalInbox,

@@ -184,11 +184,14 @@ export class RemoteWorkerArtifactStore {
     executionWorkspaceId: string;
     blobSha256: string;
     signal: AbortSignal;
+    expectedByteCount?: number;
   }): Promise<Uint8Array> {
     assertAbortSignal(input.signal);
     const blobSha256 = assertDigest(input.blobSha256);
     const relPath = this.blobRelPath(input.executionWorkspaceId, blobSha256);
-    return this.readVerified(this.resolvePath(relPath), blobSha256, input.signal);
+    if (input.expectedByteCount !== undefined && (!Number.isSafeInteger(input.expectedByteCount) || input.expectedByteCount < 0 ||
+        input.expectedByteCount > REMOTE_WORKER_SETTLEMENT_BOUNDS.maxTotalBytes)) throw new RemoteWorkerArtifactStoreError("limit_exceeded");
+    return this.readVerified(this.resolvePath(relPath), blobSha256, input.signal, input.expectedByteCount);
   }
 
   public resolvePath(relPath: string): string {
@@ -213,13 +216,14 @@ export class RemoteWorkerArtifactStore {
     }
   }
 
-  private async readVerified(absolutePath: string, blobSha256: string, signal: AbortSignal): Promise<Uint8Array> {
+  private async readVerified(absolutePath: string, blobSha256: string, signal: AbortSignal, expectedByteCount?: number): Promise<Uint8Array> {
     throwIfAborted(signal);
     const before = await this.safeLstat(absolutePath, signal);
     if (before.kind !== "file" || before.symbolicLink || before.reparsePoint) {
       throw new RemoteWorkerArtifactStoreError("unsafe_path");
     }
-    if (before.size > BigInt(REMOTE_WORKER_SETTLEMENT_BOUNDS.maxTotalBytes)) {
+    if (before.size > BigInt(REMOTE_WORKER_SETTLEMENT_BOUNDS.maxTotalBytes) ||
+        (expectedByteCount !== undefined && before.size !== BigInt(expectedByteCount))) {
       throw new RemoteWorkerArtifactStoreError("tampered");
     }
     const handle = await this.filesystem.openReadOnly(absolutePath, signal);

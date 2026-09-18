@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "onecore.lib")
 
 namespace goatcitadel::worker_cell {
 namespace {
@@ -188,6 +189,13 @@ void CellPipeClientEvidence::Close() noexcept {
   if (process_) CloseHandle(process_);
   process_ = pipe_ = nullptr; process_id_ = 0; creation_time_ = 0; primary_ = {};
 }
+DWORD CellPipeClientEvidence::VerifySameProcess(CellPipeClientEvidence& other) noexcept {
+  DWORD error = Verify();
+  if (!error) error = other.Verify();
+  if (!error && (ProcessId() != other.ProcessId() || CreationTime() != other.CreationTime() ||
+      !CompareObjectHandles(Process(), other.Process()))) error = ERROR_ACCESS_DENIED;
+  return error ? error : Verify();
+}
 CellPipeServerEvidence::~CellPipeServerEvidence() { Close(); }
 DWORD CellPipeServerEvidence::Open(HANDLE pipe) noexcept {
   if (process_ || pipe_) return ERROR_ALREADY_INITIALIZED;
@@ -223,6 +231,63 @@ void CellPipeServerEvidence::Close() noexcept {
   if (process_) CloseHandle(process_);
   process_ = pipe_ = nullptr; process_id_ = 0; creation_time_ = 0; primary_ = {};
 }
+DWORD CellPipeServerEvidence::VerifySameProcess(CellPipeServerEvidence& other) noexcept {
+  DWORD error = Verify();
+  if (!error) error = other.Verify();
+  if (!error && (ProcessId() != other.ProcessId() || CreationTime() != other.CreationTime() ||
+      !CompareObjectHandles(Process(), other.Process()))) error = ERROR_ACCESS_DENIED;
+  return error ? error : Verify();
+}
+CellPipeParentEvidence::~CellPipeParentEvidence() { Close(); }
+DWORD CellPipeParentEvidence::Fail(DWORD error) noexcept {
+  if (!failure_) failure_ = error ? error : ERROR_ACCESS_DENIED;
+  return failure_;
+}
+DWORD CellPipeParentEvidence::Open(HANDLE input, HANDLE output, HANDLE runtime) noexcept {
+  if (attempted_) return failure_ ? failure_ : ERROR_ALREADY_INITIALIZED;
+  attempted_ = true;
+  const auto refuse = [&](DWORD error) { Fail(error); Close(); return failure_; };
+  if (!NoThreadToken()) return refuse(ERROR_ACCESS_DENIED);
+  const std::array<HANDLE, 3> sources{input, output, runtime};
+  for (std::size_t index = 0; index < sources.size(); ++index) {
+    ULONG client = 0;
+    if (!sources[index] || sources[index] == INVALID_HANDLE_VALUE ||
+        (index == 2 && (!GetNamedPipeClientProcessId(sources[index], &client) || client != GetCurrentProcessId())))
+      return refuse(ERROR_INVALID_HANDLE);
+    for (std::size_t other = 0; other < index; ++other)
+      if (sources[index] == sources[other] || CompareObjectHandles(sources[index], sources[other]))
+        return refuse(ERROR_INVALID_HANDLE);
+    if (!DuplicateHandle(GetCurrentProcess(), sources[index], GetCurrentProcess(), &pipes_[index],
+        0, FALSE, DUPLICATE_SAME_ACCESS)) return refuse(Error());
+    const DWORD error = evidence_[index].Open(pipes_[index]);
+    if (error) return refuse(error);
+  }
+  open_ = true;
+  const DWORD error = Verify();
+  return error ? refuse(error) : ERROR_SUCCESS;
+}
+DWORD CellPipeParentEvidence::Verify() noexcept {
+  if (failure_) return failure_;
+  if (!open_) return ERROR_INVALID_STATE;
+  for (std::size_t index = 0; index < pipes_.size(); ++index) {
+    DWORD error = evidence_[index].Verify();
+    ULONG client = 0;
+    if (!error && index == 2 && (!GetNamedPipeClientProcessId(pipes_[index], &client) || client != GetCurrentProcessId()))
+      error = ERROR_ACCESS_DENIED;
+    if (!error && (evidence_[index].ProcessId() != evidence_[0].ProcessId() ||
+        evidence_[index].CreationTime() != evidence_[0].CreationTime() ||
+        !CompareObjectHandles(evidence_[index].Process(), evidence_[0].Process()))) error = ERROR_ACCESS_DENIED;
+    if (error) return Fail(error);
+  }
+  // The final observation also fences process death during the other checks.
+  const DWORD error = evidence_[0].Verify();
+  return error ? Fail(error) : ERROR_SUCCESS;
+}
+void CellPipeParentEvidence::Close() noexcept {
+  open_ = false;
+  for (auto& evidence : evidence_) evidence.Close();
+  for (auto& pipe : pipes_) { if (pipe) CloseHandle(pipe); pipe = nullptr; }
+}
 DWORD CellControllerPeer::Open(HANDLE pipe, CellControllerIdentity& controller) noexcept {
   if (controller_) return ERROR_ALREADY_INITIALIZED;
   DWORD error = controller.Verify(SERVICE_RUNNING);
@@ -241,7 +306,13 @@ DWORD CellControllerPeer::Verify() noexcept {
   if (!error && (!worker_host::CollectWorkerProcessToken(evidence_.Process(), &worker) || !worker_host::ValidateWorkerToken(worker)))
     error = ERROR_ACCESS_DENIED;
   if (!error) error = controller_->VerifyProvisioningProcess(evidence_.Process());
+  if (!error) error = controller_->VerifyWorkerHostProcess(evidence_.Process());
   return error;
 }
 void CellControllerPeer::Close() noexcept { evidence_.Close(); controller_ = nullptr; }
+DWORD CellControllerPeer::VerifyBoundPipe(CellPipeClientEvidence& additional) noexcept {
+  DWORD error = Verify();
+  if (!error) error = evidence_.VerifySameProcess(additional);
+  return error ? error : Verify();
+}
 }

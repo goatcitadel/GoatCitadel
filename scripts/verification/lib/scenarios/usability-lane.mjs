@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
-import { prepareVerificationRuntime, requestJson, startVerificationStack, stopVerificationStack } from "../runtime.mjs";
+import { requestJson, startVerificationStack, stopVerificationStack } from "../runtime.mjs";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { formatArtifactIssue, validateRequiredScenarioArtifacts } from "../scenario-artifact-evidence.mjs";
 import { runAccessibilitySmokeLane } from "./accessibility-smoke-lane.mjs";
 import {
   DETERMINISTIC_LLM_KEY_ENV,
   startDeterministicLlmStub,
-  writeDeterministicLlmProviderConfig,
 } from "./deterministic-llm-stub.mjs";
 import { runExternalSourcesBrowserFlow } from "./external-sources-browser-flow.mjs";
 import {
@@ -67,6 +67,7 @@ export function buildUsabilityFoundationStackOptions(runtimeRoot, secretEnvKeys)
       GOATCITADEL_AUTH_TOKEN: FOUNDATION_OPERATOR_TOKEN,
       GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
       GOATCITADEL_RATE_LIMIT_ENABLED: "false",
+      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
       [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
@@ -444,8 +445,7 @@ export async function runFoundationJourney(context, input) {
   };
 
   try {
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-foundation`);
-    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-foundation`, stub.baseUrl);
     stack = await startVerificationStack(context, buildUsabilityFoundationStackOptions(runtimeRoot, secretEnvKeys));
 
     await step(
@@ -753,6 +753,11 @@ async function runChatBrowserLeg(context, input) {
     );
     assertResponseOk(thread, "canonical Chat thread");
     assertCompletedChatTurns(thread.body, input.expectedReplyCount, FOUNDATION_REPLY);
+    // Completed transcript text alone does not prove that the streaming UI has
+    // released the composer for the next task. Capture the settled control.
+    await page.locator(".mc-next-composer-primary", { hasText: /^Send$/u }).waitFor({
+      state: "visible", timeout: 30_000,
+    });
     const activeWorkspaceId = await page.evaluate(() => window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"));
     if (activeWorkspaceId !== input.workspaceId) {
       throw new Error(`persisted workspace mismatch: expected ${input.workspaceId}, received ${activeWorkspaceId}`);

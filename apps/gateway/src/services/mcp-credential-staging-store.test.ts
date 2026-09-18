@@ -10,6 +10,7 @@ import { McpCredentialRetirementStore, type McpCredentialMetadataContext } from 
 import { McpCredentialStagingStore } from "./mcp-credential-staging-store.js";
 import { normalizeMcpPolicy } from "./mcp-server-policy.js";
 import { CredentialWriteUncertainError } from "./secret-store-service.js";
+import { decodeMcpCredentialReceipt, encodeMcpCredentialReceipt } from "./mcp-credential-receipt.js";
 
 const INDEX = "mcp_credential_staging_v1";
 const opened = new Set<AsyncStorage>();
@@ -20,6 +21,114 @@ afterEach(async () => {
 });
 
 describe("MCP unpublished credential custody", () => {
+  it("recovers only a completed receipt after acknowledgement loss and rejects late publication", async () => {
+    const f = await fixture(), ref = f.ref("environment:receipt-v1"), custody = "a".repeat(64);
+    let writeId: string | undefined;
+    await expect(f.store.stageCredentialVersions(f.serverId, [ref], (id) => {
+      writeId = id;
+      f.secrets.set(ref, encodeMcpCredentialReceipt("private-owned-value", id!));
+      throw new CredentialWriteUncertainError(new Error("helper output lost"));
+    }, custody)).rejects.toThrow("not acknowledged");
+    expect(await f.row(ref)).toMatchObject({ version: 3, status: "writing", writeId });
+    await f.reopen();
+    const probe = vi.fn((account: string, owner: string, id: string) => {
+      expect(account).toBe(ref.slice("keychain:goatcitadel:".length));
+      expect(owner).toBe(custody); expect(id).toBe(writeId);
+      return decodeMcpCredentialReceipt(f.secrets.get(ref)!).writeId === id;
+    });
+    expect(await f.staging.reconcile(32, probe)).toMatchObject({ writing: 1 });
+    expect(probe).not.toHaveBeenCalled();
+    f.expire();
+    expect(await f.staging.reconcile(32, probe)).toMatchObject({ retired: 1, remaining: 0 });
+    expect(await f.row(ref)).toMatchObject({ status: "retired", custodyId: custody, writeId });
+    expect(JSON.stringify(await f.row(ref))).not.toContain("private-owned-value");
+    await expect(f.store.writeEnvironmentBinding(await f.server(), undefined, { credentialRef: ref })).rejects.toThrow("retired");
+    const remove = vi.fn((_account: string, _custody: string | null, _id?: string | null) => true);
+    expect(await f.store.reconcileCredentialRetirements(remove)).toMatchObject({ deleted: 1 });
+    expect(remove).toHaveBeenCalledWith(ref.slice("keychain:goatcitadel:".length), custody, writeId);
+  });
+
+  it("retains missing, mismatched, foreign-custody and legacy writers without inferring ownership from age", async () => {
+    const f = await fixture(), ref = f.ref("environment:receipt-v1"), legacy = f.ref("environment"), owner = "a".repeat(64);
+    for (const value of [ref, legacy]) await expect(f.store.stageCredentialVersions(f.serverId, [value], () => {
+      throw new CredentialWriteUncertainError(new Error("unknown"));
+    }, owner)).rejects.toThrow();
+    f.expire();
+    for (const outcome of [false, "written", undefined]) {
+      const probe = vi.fn(() => outcome as boolean);
+      expect(await f.staging.reconcile(32, probe)).toMatchObject({ writing: 2, retired: 0 });
+      expect(probe).toHaveBeenCalledOnce();
+      expect(probe.mock.calls[0]).toEqual([ref.slice("keychain:goatcitadel:".length), owner, (await f.row(ref))!.writeId]);
+    }
+    const failed = vi.fn(() => { throw new Error("private-custody-error"); });
+    expect(await f.staging.reconcile(32, failed)).toMatchObject({ failed: 1, writing: 1, remaining: 2 });
+    const remove = vi.fn();
+    expect(await f.store.reconcileCredentialRetirements(remove)).toMatchObject({ deleted: 0 });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("rechecks canonical bindings after the OS probe and preserves an in-use credential", async () => {
+    const f = await fixture(), ref = f.ref("environment:receipt-v1");
+    await expect(f.store.stageCredentialVersions(f.serverId, [ref], () => {
+      throw new CredentialWriteUncertainError(new Error("unknown"));
+    }, "a".repeat(64))).rejects.toThrow();
+    f.expire();
+    expect(await f.staging.reconcile(32, async () => {
+      await f.storage.systemSettings.set("mcp_environment_bindings_v1", { foreign: { credentialRef: ref } });
+      return true;
+    })).toMatchObject({ blocked: 1, retired: 0, remaining: 1 });
+    expect(await f.row(ref)).toHaveProperty("status", "writing");
+  });
+
+  it("retains an unfinished sibling when only one OAuth receipt can be proved", async () => {
+    const f = await fixture(), refs = [f.ref("access-token:receipt-v1"), f.ref("refresh-token:receipt-v1")];
+    await expect(f.store.stageCredentialVersions(f.serverId, refs, () => {
+      throw new CredentialWriteUncertainError(new Error("second helper interrupted"));
+    }, "a".repeat(64))).rejects.toThrow();
+    f.expire();
+    expect(await f.staging.reconcile(32, (account) => account === refs[0]!.slice("keychain:goatcitadel:".length)))
+      .toMatchObject({ retired: 1, writing: 1, remaining: 1 });
+    expect(await f.row(refs[0]!)).toHaveProperty("status", "retired");
+    expect(await f.row(refs[1]!)).toHaveProperty("status", "writing");
+    expect((await f.row(refs[0]!))!.writeId).toBe((await f.row(refs[1]!))!.writeId);
+    await expect(f.store.writeAuthState({ server: await f.server(), expected: undefined,
+      next: { accessTokenRef: refs[0], refreshTokenRef: refs[1], updatedAt: new Date().toISOString() } })).rejects.toThrow("retired");
+    expect((await f.store.readAuthState())[f.serverId]).toBeUndefined();
+  });
+
+  it("rolls back recovered staging if permanent retirement cannot commit", async () => {
+    const f = await fixture(), ref = f.ref("environment:receipt-v1");
+    await expect(f.store.stageCredentialVersions(f.serverId, [ref], () => {
+      throw new CredentialWriteUncertainError(new Error("unknown"));
+    }, "a".repeat(64))).rejects.toThrow();
+    const before = await f.row(ref);
+    await f.storage.systemSettings.set("mcp_credential_retirements_v1", { version: "corrupt", keys: [] });
+    f.expire();
+    expect(await f.staging.reconcile(32, () => true)).toMatchObject({ failed: 1, remaining: 1 });
+    expect(await f.row(ref)).toEqual(before);
+  });
+
+  it("requires supported custody and a uniform receipt batch before writing", async () => {
+    const f = await fixture(), ref = f.ref("environment:receipt-v1"), write = vi.fn(() => undefined);
+    await expect(f.store.stageCredentialVersions(f.serverId, [ref], write)).rejects.toThrow("custody-bound");
+    await expect(f.store.stageCredentialVersions(f.serverId, [ref, f.ref("access-token")], write, "a".repeat(64)))
+      .rejects.toThrow("custody-bound");
+    expect(write).not.toHaveBeenCalled();
+    expect(await f.row(ref)).toBeUndefined();
+  });
+
+  it("requires a positive receipt deletion acknowledgement and preserves mismatched slots", async () => {
+    const f = await fixture(), ref = f.ref("environment:receipt-v1"), owner = "a".repeat(64);
+    await f.store.stageCredentialVersions(f.serverId, [ref], () => undefined, owner);
+    f.expire();
+    expect(await f.staging.reconcile()).toMatchObject({ retired: 1 });
+    for (const outcome of [false, undefined]) {
+      expect(await f.store.reconcileCredentialRetirements(() => outcome)).toMatchObject({ blocked: 1, deleted: 0, remaining: 1 });
+    }
+    await f.reopen();
+    expect(await f.store.reconcileCredentialRetirements(() => true)).toMatchObject({ deleted: 1, remaining: 0 });
+  });
+
   it("quarantines occupied or unacknowledged OS slots without authorizing retirement", async () => {
     const f = await fixture(), ref = f.ref("environment");
     f.secrets.set(ref, "preexisting-slot");
@@ -343,7 +452,8 @@ async function fixture() {
     runImmediateTransaction: (callback) => storage.runImmediateTransaction(callback) });
   let store = new McpServerStore(ctx());
   const makeStaging = (): McpCredentialStagingStore => new McpCredentialStagingStore(ctx(),
-    new McpCredentialRetirementStore(ctx(), (serverId, ref) => staging.readCustody(serverId, ref)), () => clock);
+    new McpCredentialRetirementStore(ctx(), (serverId, ref) => staging.readCustody(serverId, ref),
+      (serverId, ref) => staging.readWriteId(serverId, ref)), () => clock);
   let staging: McpCredentialStagingStore = makeStaging();
   const serverId = "staging-fixture", secrets = new Map<string, string>();
   const record: McpServerRecord = { serverId, label: "Staging fixture", transport: "stdio", command: "node", args: [],

@@ -279,6 +279,10 @@ export interface McpServerAuthState {
 
 export interface McpServerRecord {
   serverId: string;
+  /** Opaque registry-owned edit revision; inventory projects one for legacy rows without writing them. */
+  revision?: string;
+  /** Registry-owned connection attempt. Status changes do not advance the edit revision. */
+  connectionRevision?: string;
   label: string;
   transport: McpTransport;
   /** Missing on legacy rows means `static`. */
@@ -374,6 +378,13 @@ export interface McpServerUpdateInput {
   policy?: Partial<McpServerPolicy>;
   verifiedAt?: string;
 }
+
+export interface McpServerRevisionPrecondition {
+  expectedRevision: string;
+}
+
+export type McpServerUpdateRequest = McpServerUpdateInput & McpServerRevisionPrecondition;
+export type McpServerPolicyUpdateRequest = Partial<McpServerPolicy> & McpServerRevisionPrecondition;
 
 export interface McpServerConnectionConfiguration {
   transport: McpTransport;

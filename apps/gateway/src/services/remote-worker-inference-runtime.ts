@@ -16,7 +16,7 @@ import { resolveRemoteWorkerChatProfile, type RemoteWorkerChatAuthorityDependenc
 import { buildRemoteWorkerChatSequenceContext, readCanonicalWorkerChatInput } from "./remote-worker-chat-output-service.js";
 import type { LlmService } from "./llm-service.js";
 import { RemoteWorkerInferenceLlmServiceAdapter } from "./remote-worker-inference-llm-service-adapter.js";
-import { createGovernedChatCompletion, type GovernedLlmCompletionHost } from "./llm-completion-service.js";
+import { createGovernedChatCompletion, type GovernedLlmCompletionHost } from "./governed-llm-completion-service.js";
 import {
   RemoteWorkerInferenceService,
   routeReceiptFor,
@@ -69,8 +69,12 @@ export class RemoteWorkerInferenceRuntime {
     const fence = input.protectedAuthority;
     if (!fence) throw new Error("Worker inference requires protected native admission authority.");
     const { storage, llm } = this.dependencies;
-    const load = async (ref: ExecutionRef) =>
-      await storage.remoteWorkerAssignments.resolveActiveChatExecution(ref, fence);
+    const load = async (ref: ExecutionRef) => {
+      const execution = await storage.remoteWorkerAssignments.resolveActiveChatExecution(ref, fence);
+      if (execution.workload.nativeContinuation && !execution.workload.nativeChatContext)
+        throw new Error("Native continuation must finish through its canonical owner before Chat inference.");
+      return execution;
+    };
     const readProfile = async (execution: Execution) =>
       (await resolveRemoteWorkerChatProfile(this.dependencies, execution)).profile;
     const selectRoute = async (execution: Execution, profile: ChatTurnCapabilityProfileRecord) => {
@@ -290,8 +294,9 @@ async function assertCanonicalInput(
 ): Promise<void> {
   const request = execution.workload.payload.request as Record<string, unknown> | undefined;
   const content = request?.content;
+  const sequence = buildRemoteWorkerChatSequenceContext(storage, profile, execution);
   const messages = await readCanonicalWorkerChatInput(storage.remoteWorkerInference, submission,
-    remoteWorkerChatInferenceStepIndex(submission), buildRemoteWorkerChatSequenceContext(storage, profile, execution));
+    remoteWorkerChatInferenceStepIndex({ ...submission, continuationSha256: sequence.continuationSha256 }), sequence);
   if (
     typeof content !== "string" ||
     remoteWorkerInferenceCanonicalSha256(content) !== profile.selection.contentHash ||

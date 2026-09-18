@@ -7,6 +7,28 @@ export interface ProviderReadinessDependencies {
   listModelsWithSource: LlmService["listModelsWithSource"];
 }
 
+export interface TemporaryProviderReadinessDependencies {
+  readSecret(): string | undefined;
+  exportConfigFile: LlmService["exportConfigFile"];
+  previewModels: LlmService["previewModels"];
+}
+
+/** Uses staged custody for a catalog probe only. It never promotes the secret
+ * or claims a successful inference from a successful catalog response. */
+export async function verifyTemporaryProviderCredential(
+  dependencies: TemporaryProviderReadinessDependencies, providerId: string,
+): Promise<readonly string[]> {
+  const secret = dependencies.readSecret();
+  if (!secret?.trim()) throw new ValidationError({ message: "Temporary provider credential is unavailable." });
+  const provider = dependencies.exportConfigFile().providers.find(candidate => candidate.providerId === providerId);
+  if (!provider) throw new NotFoundError({ entity: "LLM provider", id: providerId });
+  const preview = await dependencies.previewModels({ providerId, baseUrl: provider.baseUrl,
+    apiStyle: provider.apiStyle, apiKey: secret, ...(provider.request ? { request: provider.request } : {}) });
+  if (preview.source !== "live" || preview.items.length === 0)
+    throw new ValidationError({ message: `Unable to verify ${providerId} against its live model catalog.` });
+  return [`provider:${providerId}:temporary_credential_validated`];
+}
+
 /** Connection evidence proves authentication/catalog access, never a completed inference. */
 export async function verifyProviderConnection(
   dependencies: ProviderReadinessDependencies,

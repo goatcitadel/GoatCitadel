@@ -9,6 +9,7 @@ import type {
   ChannelRuntimeStatus,
   ChannelSendInput,
   ChannelSetupDefinition,
+  ChannelSetupConnectionReviewInput,
   ChannelSetupDraft,
   ChannelSetupDraftCreateInput,
   ChannelSetupDraftUpdateInput,
@@ -94,6 +95,16 @@ export async function createChannelSetupDraft(input: ChannelSetupDraftCreateInpu
   return request<ChannelSetupDraft>("/api/v1/channels/drafts", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function fetchChannelSetupDraft(draftId: string): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
+}
+
+export async function reviewChannelSetupConnection(draftId: string, input: ChannelSetupConnectionReviewInput): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/connection-review`, {
+    method: "POST", cache: "no-store", body: JSON.stringify(input),
   });
 }
 
@@ -468,6 +479,7 @@ export async function createIntegrationConnection(input: {
 export async function updateIntegrationConnection(
   connectionId: string,
   input: {
+    expectedRevision: string;
     label?: string;
     enabled?: boolean;
     status?: IntegrationConnection["status"];
@@ -482,10 +494,14 @@ export async function updateIntegrationConnection(
   });
 }
 
-export async function deleteIntegrationConnection(connectionId: string): Promise<{ deleted: boolean }> {
+export async function fetchIntegrationConnection(connectionId: string): Promise<IntegrationConnection> {
+  return request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`);
+}
+
+export async function deleteIntegrationConnection(connectionId: string, expectedRevision: string): Promise<{ deleted: boolean }> {
   return request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`, {
     method: "DELETE",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 

@@ -11,6 +11,7 @@ const apiMocks = vi.hoisted(() => ({
   exportCitadelBlueprint: vi.fn(),
   validateCitadelBlueprint: vi.fn(),
   importCitadelBlueprint: vi.fn(),
+  getCitadelStructureSnapshot: vi.fn(),
   isApiRequestError: vi.fn(),
   listCitadels: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   exportCitadelBlueprint: apiMocks.exportCitadelBlueprint,
   validateCitadelBlueprint: apiMocks.validateCitadelBlueprint,
   importCitadelBlueprint: apiMocks.importCitadelBlueprint,
+  getCitadelStructureSnapshot: apiMocks.getCitadelStructureSnapshot,
   isApiRequestError: apiMocks.isApiRequestError,
   listCitadels: apiMocks.listCitadels,
 }));
@@ -60,6 +62,7 @@ describe("CitadelBlueprintRoutePage", () => {
     apiMocks.exportCitadelBlueprint.mockResolvedValue({ schemaVersion: "goatcitadel.blueprint.v1", name: "Acme" });
     apiMocks.validateCitadelBlueprint.mockResolvedValue({ ok: true, errors: [] });
     apiMocks.importCitadelBlueprint.mockResolvedValue({ citadelId: "default" });
+    apiMocks.getCitadelStructureSnapshot.mockReset().mockResolvedValue({ citadelId: "default", revision: "a".repeat(64), charter: null, chambers: [] });
     apiMocks.listCitadels.mockResolvedValue({
       items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: true }],
     });
@@ -100,7 +103,7 @@ describe("CitadelBlueprintRoutePage", () => {
       buttonByLabel(renderer!, "Validate").props.onClick();
     });
     expect(apiMocks.validateCitadelBlueprint).toHaveBeenCalledWith({ schemaVersion: "goatcitadel.blueprint.v1" });
-    expect(treeString(renderer!)).toContain("Valid");
+    expect(treeString(renderer!)).toContain("Blueprint valid");
 
     await act(async () => {
       buttonByLabel(renderer!, "Review import").props.onClick();
@@ -109,7 +112,7 @@ describe("CitadelBlueprintRoutePage", () => {
     await act(async () => { renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
     expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledWith("default", {
       schemaVersion: "goatcitadel.blueprint.v1",
-    });
+    }, "a".repeat(64));
   });
 
   it("loads the staged export into the governed import flow", async () => {
@@ -140,7 +143,47 @@ describe("CitadelBlueprintRoutePage", () => {
     expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledWith("default", {
       schemaVersion: "goatcitadel.blueprint.v1",
       name: "Acme",
-    });
+    }, "a".repeat(64));
+  });
+
+  it("preserves a rejected Blueprint and requires fresh validation and confirmation before retry", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />); });
+    await act(async () => { buttonByLabel(renderer, "Import").props.onClick(); });
+    const input = '{"schemaVersion":"goatcitadel.blueprint.v1"}';
+    await act(async () => { renderer.root.findByType("textarea").props.onChange({ target: { value: input } }); });
+    await act(async () => { await buttonByLabel(renderer, "Validate").props.onClick(); });
+    await act(async () => { buttonByLabel(renderer, "Review import").props.onClick(); });
+    apiMocks.importCitadelBlueprint.mockRejectedValueOnce({ status: 409 });
+    await act(async () => { await renderer.root.findByType(ConfirmModal).props.onConfirm(); });
+    expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledExactlyOnceWith("default", JSON.parse(input), "a".repeat(64));
+    expect(renderer.root.findByType("textarea").props.value).toBe(input);
+    expect(renderer.root.findByType(ConfirmModal).props.open).toBe(false);
+    expect(buttonByLabel(renderer, "Review import").props.disabled).toBe(true);
+    expect(treeString(renderer)).toContain("Validate again");
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValueOnce({ citadelId: "default", revision: "b".repeat(64), charter: { purpose: "Peer Charter" }, chambers: [] });
+    await act(async () => { await buttonByLabel(renderer, "Validate").props.onClick(); });
+    expect(treeString(renderer)).toContain("Peer Charter");
+    expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledTimes(1);
+    await act(async () => { buttonByLabel(renderer, "Review import").props.onClick(); });
+    await act(async () => { await renderer.root.findByType(ConfirmModal).props.onConfirm(); });
+    expect(apiMocks.importCitadelBlueprint).toHaveBeenNthCalledWith(2, "default", JSON.parse(input), "b".repeat(64));
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("does not apply validation from a different Citadel after scope changes", async () => {
+    let release!: (value: unknown) => void;
+    apiMocks.validateCitadelBlueprint.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />); });
+    await act(async () => { buttonByLabel(renderer, "Import").props.onClick(); });
+    await act(async () => { renderer.root.findByType("textarea").props.onChange({ target: { value: "{}" } }); });
+    await act(async () => { buttonByLabel(renderer, "Validate").props.onClick(); });
+    await act(async () => { renderer.update(<CitadelBlueprintRoutePage {...makeProps()} activeCitadelId="other" />); });
+    await act(async () => { release({ ok: true, errors: [] }); });
+    expect(buttonByLabel(renderer, "Review import").props.disabled).toBe(true);
+    expect(apiMocks.importCitadelBlueprint).not.toHaveBeenCalled();
+    await act(async () => { renderer.unmount(); });
   });
 
   it("downloads a secret-free Blueprint with a safe filename", () => {

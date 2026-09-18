@@ -62,21 +62,31 @@ bool HasSignerServiceSid(HANDLE token) noexcept {
 
 bool ComposeSignerInspectionAcl(PSID owner, PACL original,
     SignerInspectionObject object, SignerInspectionAcl* output) noexcept {
-  return worker_host::ComposeWorkerInspectionAcl(owner, original, object, output);
+  return worker_host::ComposeWorkerInspectionAcl(
+      worker_host::WorkerInspectionService::Provisioner, owner, original, object, output);
 }
 
-bool GrantCurrentSignerInspectionAccess() noexcept {
+bool GrantCurrentSignerInspectionAccess(SignerInspectionDiagnostic* diagnostic) noexcept {
+  using Stage = worker_host::WorkerInspectionStage;
+  using Failure = worker_host::WorkerInspectionFailure;
+  if (diagnostic) *diagnostic = {};
+  const auto refuse = [diagnostic](Stage stage, Failure failure, DWORD error = ERROR_SUCCESS) noexcept {
+    if (diagnostic) *diagnostic = {stage, failure, error};
+    return false;
+  };
   Handle ambient;
   SetLastError(NO_ERROR);
   if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, FALSE, &ambient.value) ||
-      GetLastError() != ERROR_NO_TOKEN) return false;
+      GetLastError() != ERROR_NO_TOKEN) return refuse(Stage::AmbientToken, Failure::Identity);
   Handle token;
-  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | READ_CONTROL | WRITE_DAC, &token.value)) return false;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | READ_CONTROL | WRITE_DAC, &token.value)) {
+    return refuse(Stage::TokenOpen, Failure::WindowsApi, GetLastError());
+  }
   alignas(16) std::array<BYTE, 128U> bytes{};
   DWORD returned = 0U, session = UINT32_MAX, appcontainer = 1U;
   TOKEN_TYPE type = TokenImpersonation;
   if (!GetTokenInformation(token.value, TokenUser, bytes.data(), static_cast<DWORD>(bytes.size()), &returned) ||
-      returned < sizeof(TOKEN_USER) || returned > bytes.size()) return false;
+      returned < sizeof(TOKEN_USER) || returned > bytes.size()) return refuse(Stage::TokenIdentity, Failure::Identity);
   const auto user = reinterpret_cast<TOKEN_USER*>(bytes.data());
   const auto first = reinterpret_cast<std::uintptr_t>(bytes.data());
   const auto sid = reinterpret_cast<std::uintptr_t>(user->User.Sid);
@@ -88,8 +98,10 @@ bool GrantCurrentSignerInspectionAccess() noexcept {
       !GetTokenInformation(token.value, TokenSessionId, &session, sizeof(session), &returned) ||
       returned != sizeof(session) || session != 0U || IsTokenRestricted(token.value) ||
       !GetTokenInformation(token.value, TokenIsAppContainer, &appcontainer, sizeof(appcontainer), &returned) ||
-      returned != sizeof(appcontainer) || appcontainer != 0U || !HasSignerServiceSid(token.value)) return false;
-  return worker_host::GrantCurrentSystemWorkerInspectionAccess();
+      returned != sizeof(appcontainer) || appcontainer != 0U) return refuse(Stage::TokenIdentity, Failure::Identity);
+  if (!HasSignerServiceSid(token.value)) return refuse(Stage::SignerServiceSid, Failure::Identity);
+  return worker_host::GrantCurrentSystemWorkerInspectionAccess(
+      worker_host::WorkerInspectionService::Provisioner, diagnostic);
 }
 
 #if defined(GOATCITADEL_PROVISIONER_TESTING)

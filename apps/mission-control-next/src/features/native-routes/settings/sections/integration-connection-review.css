@@ -1,0 +1,6 @@
+.mc-next-integration-review { display: grid; gap: 1rem; min-width: 0; }
+.mc-next-integration-review dl { display: grid; grid-template-columns: minmax(5rem, .4fr) minmax(0, 1fr); gap: .5rem 1rem; margin: 0; }
+.mc-next-integration-review dl > div { grid-column: 1 / -1; }
+.mc-next-integration-review dt { font-weight: 600; }
+.mc-next-integration-review dd { margin: 0 0 .5rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.mc-next-integration-review button.gc-button { min-height: 44px; white-space: normal; }

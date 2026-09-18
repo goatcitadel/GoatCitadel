@@ -13,7 +13,7 @@ import type {
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { LlmService } from "./llm-service.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
-import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
+import { recordOnboardingCompletion } from "./onboarding-completion-service.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 
 const log = logger.child("onboarding-state-service");
@@ -250,16 +250,7 @@ export async function markOnboardingComplete(
   runtime: OnboardingStateHost,
   completedBy = "operator",
 ): Promise<OnboardingState> {
-  runtime.onboardingMarker = {
-    completedAt: runtime.onboardingMarker.completedAt ?? new Date().toISOString(),
-    completedBy: runtime.onboardingMarker.completedBy ?? (completedBy.trim() || "operator"),
-  };
-  onboardingMarkerHelpers.persistOnboardingMarker(runtime);
-  await runtime.publishRealtime("system", "onboarding", {
-    type: "onboarding_completed",
-    completedAt: runtime.onboardingMarker.completedAt,
-    completedBy: runtime.onboardingMarker.completedBy,
-  });
+  await recordOnboardingCompletion(runtime, completedBy);
   return getOnboardingState(runtime);
 }
 

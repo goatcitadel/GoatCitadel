@@ -4,6 +4,7 @@ export async function runArchitectureMetricsLane(context, deps) {
     compareArchitectureMetrics,
     path,
     readArchitectureMetricsBaseline,
+    readArchitectureServiceAllowances,
     relativeToRun,
     runScenario,
     writeJson,
@@ -20,13 +21,16 @@ export async function runArchitectureMetricsLane(context, deps) {
     async () => {
       const metrics = await collectArchitectureMetrics();
       const baseline = await readArchitectureMetricsBaseline();
-      const comparison = compareArchitectureMetrics(metrics, baseline);
+      const allowances = await readArchitectureServiceAllowances();
+      const comparison = compareArchitectureMetrics(metrics, baseline, allowances);
       const outPath = path.join(context.artifactRoot, "diagnostics", "architecture-metrics.json");
       const baselinePath = path.join(context.artifactRoot, "diagnostics", "architecture-metrics-baseline.json");
       const comparePath = path.join(context.artifactRoot, "diagnostics", "architecture-metrics-compare.json");
+      const allowancesPath = path.join(context.artifactRoot, "diagnostics", "architecture-new-service-allowances.json");
       await writeJson(outPath, metrics);
       await writeJson(baselinePath, baseline);
       await writeJson(comparePath, comparison);
+      await writeJson(allowancesPath, allowances);
       return {
         status: comparison.status,
         notes: [...comparison.debtNotes, ...comparison.improvements, ...comparison.regressions],
@@ -57,6 +61,7 @@ export async function runArchitectureMetricsLane(context, deps) {
             relativeToRun(context, outPath),
             relativeToRun(context, baselinePath),
             relativeToRun(context, comparePath),
+            relativeToRun(context, allowancesPath),
           ],
           screenshots: [],
           traces: [],

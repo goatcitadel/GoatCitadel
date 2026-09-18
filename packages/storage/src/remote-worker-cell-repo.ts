@@ -667,6 +667,30 @@ export class RemoteWorkerCellRepository {
     return row ? mapCell(row) : undefined;
   }
 
+  /** Internal complete-pool lookup. The caller must already authorize this
+   * registry/worker and retain that fence through consumption. Include all
+   * retained generations and states: an incomplete or quarantined cell must
+   * not disappear from physical membership. This is not a worker RPC. */
+  public listRetainedNativeCellsForWorker(input: { registryWorkspaceId: string; workerId: string }): readonly RemoteWorkerCellRecord[] {
+    const registryWorkspaceId = input.registryWorkspaceId, workerId = input.workerId;
+    if (typeof registryWorkspaceId !== "string" || !registryWorkspaceId.trim() || typeof workerId !== "string" || !workerId.trim())
+      throw new RemoteWorkerCellConflictError("Native pool lookup requires an exact registry and worker.");
+    return this.db.transaction("deferred", () => {
+      const rows = this.db.prepare(`SELECT * FROM remote_worker_cells
+        WHERE registry_workspace_id = @registryWorkspaceId AND worker_id = @workerId AND backend = 'windows_native'
+        ORDER BY assignment_id, assignment_generation LIMIT 65`).all<CellRow>({ registryWorkspaceId, workerId });
+      if (rows.length > 64) throw new RemoteWorkerCellConflictError("Retained native pool exceeds the complete collection bound.");
+      // Database collations differ; use one ordinal order for subsequent hashes.
+      return Object.freeze(rows.map(row => Object.freeze(mapCell(row))).sort((a, b) =>
+        a.assignmentId < b.assignmentId ? -1 : a.assignmentId > b.assignmentId ? 1 : a.assignmentGeneration - b.assignmentGeneration));
+    });
+  }
+
+  /** Read the immutable name-only policy. This does not authorize a launch. */
+  public getEnvironmentAllowlistSha256(key: RemoteWorkerCellKey): string | undefined {
+    return (this.selectStmt().get({ ...keyOf(key) }) as CellRow | undefined)?.env_allowlist_sha256;
+  }
+
   private provisioningDatabaseClockSql(): string {
     return this.db.dialect === "postgres"
       ? `to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
@@ -830,6 +854,7 @@ export class RemoteWorkerCellRepository {
 }
 
 interface CellRow {
+  env_allowlist_sha256: string;
   registry_workspace_id: string;
   assignment_id: string;
   assignment_generation: number | bigint | string;

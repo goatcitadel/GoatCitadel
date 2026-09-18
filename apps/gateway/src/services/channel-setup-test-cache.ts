@@ -17,6 +17,7 @@ export function buildChannelSetupRecentTestSignature(
     .update(
       stableStringifyForCache({
         catalogId: draft.catalogId,
+        connectionRevision: draft.connectionRevision,
         lifecycleMode: draft.lifecycleMode,
         contentVersion: draft.contentVersion,
         validationVersion: draft.validationVersion,

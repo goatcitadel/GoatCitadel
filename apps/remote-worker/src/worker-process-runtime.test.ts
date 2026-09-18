@@ -13,6 +13,13 @@ const report = (outcome: "completed" | "stopped", awaiting?: string): ConnectedW
 });
 
 describe("connected worker foreground lifecycle", () => {
+  it.each(["native_runtime_owner", "native_parent_continuation"])("does not retry unresolved %s work", async awaiting => {
+    const nativeRuntime = { run: vi.fn() }, runOnce = vi.fn(async () => report("stopped", awaiting)), waitForOffer = vi.fn();
+    await expect(runWorkerProcess(config, { signal: new AbortController().signal, nativeRuntime, runOnce, publishReport: vi.fn(), waitForOffer }))
+      .rejects.toThrow("operator reconciliation");
+    expect(runOnce).toHaveBeenCalledWith(config, expect.objectContaining({ nativeRuntime }));
+    expect(runOnce).toHaveBeenCalledTimes(1); expect(waitForOffer).not.toHaveBeenCalled();
+  });
   it.each(["approval_resolution", "parent_recovery"])("polls serially through %s waits and stops cleanly without abandoning retained work", async (awaiting) => {
     const shutdown = new AbortController();
     const runOnce = vi.fn(async () => report("stopped", awaiting));

@@ -1,0 +1,80 @@
+.mc-dialog-content.mc-next-citadel-confirmation {
+  gap: 1.25rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface-1);
+  color: var(--fg-primary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-citadel-confirmation .gc-modal-title {
+  margin: 0;
+  padding-inline-end: 2.5rem;
+  font-size: var(--text-xl);
+}
+
+.mc-next-citadel-confirmation .gc-modal-description {
+  margin: 0.75rem 0 0;
+  color: var(--fg-secondary);
+}
+
+.mc-next-citadel-confirmation .gc-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 1rem 0 0;
+  border-top: 1px solid var(--border-subtle);
+  background: transparent;
+}
+
+.mc-next-citadel-confirmation button {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-3);
+  color: var(--fg-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mc-next-citadel-confirmation button[data-variant="default"] {
+  border-color: var(--accent);
+}
+
+.mc-next-citadel-confirmation button[data-variant="destructive"] {
+  border-color: var(--danger);
+}
+
+.mc-next-citadel-confirmation button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.mc-next-citadel-confirmation button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mc-next-citadel-confirmation [data-slot="dialog-close"] {
+  position: absolute;
+  inset-block-start: 0.6rem;
+  inset-inline-end: 0.6rem;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  padding: 0.5rem;
+}
+
+.mc-next-citadel-confirmation [data-slot="dialog-close"] .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

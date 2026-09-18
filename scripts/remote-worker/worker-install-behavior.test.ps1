@@ -68,6 +68,15 @@ try {
   Check-Case ($custodyBytes.Length -eq 120 -and [Text.Encoding]::ASCII.GetString($custodyBytes,0,8) -ceq 'GCCUST01') 'controller-custody-native-record'
   $custodyFile=Join-Path $FixtureRoot 'cell-controller.identity'
   [IO.File]::WriteAllBytes($custodyFile,$custodyBytes)
+  $runtimePaths=[pscustomobject]@{RuntimeDirectory=(Join-Path $packageInfo.root 'app\runtime')}
+  $runtimeCustodyBytes=Get-WorkerCellRuntimeCustodyBytes $runtimePaths $inventory
+  $runtimeCustodyFile=Join-Path $FixtureRoot 'cell-runtime.identity'
+  [IO.File]::WriteAllBytes($runtimeCustodyFile,$runtimeCustodyBytes)
+  Check-Case ($runtimeCustodyBytes.Length -eq 96 -and [Text.Encoding]::ASCII.GetString($runtimeCustodyBytes,0,8) -ceq 'GCRTCS01') 'runtime-custody-native-record'
+  $missingRuntime=[pscustomobject]@{Files=@($inventory.Files | Where-Object { $_.path -cne 'app/runtime/node.exe' });ManifestBytes=$inventory.ManifestBytes}
+  Check-Refusal 'runtime-custody-missing-node-refused' { Get-WorkerCellRuntimeCustodyBytes $runtimePaths $missingRuntime }
+  $duplicateRuntime=[pscustomobject]@{Files=@($inventory.Files)+@($inventory.Files | Where-Object { $_.path -ceq 'app/runtime/node.exe' });ManifestBytes=$inventory.ManifestBytes}
+  Check-Refusal 'runtime-custody-duplicate-node-refused' { Get-WorkerCellRuntimeCustodyBytes $runtimePaths $duplicateRuntime }
   [IO.File]::WriteAllText((Join-Path $FixtureRoot 'cell-parent.sddl'),$script:CellControllerParentSddl,[Text.UTF8Encoding]::new($false))
   $directoryLease=[GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::PinDirectory($cellsFixture)
   try {
@@ -153,7 +162,8 @@ try {
   Check-Case ((Get-WorkerMeshSelection $meshConfiguration $sddl) -ceq 'disabled') 'registry-corruption-never-reactivates-tools'
   $result=[ordered]@{passed=$true;cases=@($cases.ToArray());settingsFile=(Join-Path $FixtureRoot 'worker.environment');installRoot=$paths.Root;
     powershell=$PSVersionTable.PSVersion.ToString();scmMutated=$false;systemOwnershipClaimed=$false;
-    custodyFile=$custodyFile;nativeDirectory=$custodyPaths.NativeDirectory;cellsDirectory=$cellsFixture;parentSddlFile=(Join-Path $FixtureRoot 'cell-parent.sddl')}
+    custodyFile=$custodyFile;nativeDirectory=$custodyPaths.NativeDirectory;cellsDirectory=$cellsFixture;parentSddlFile=(Join-Path $FixtureRoot 'cell-parent.sddl')
+    runtimeCustodyFile=$runtimeCustodyFile;runtimeDirectory=$runtimePaths.RuntimeDirectory}
   [IO.File]::WriteAllText((Join-Path $FixtureRoot 'acceptance.json'),($result | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
   $result | ConvertTo-Json -Depth 5
 } catch { Write-Output $_.ScriptStackTrace; throw }

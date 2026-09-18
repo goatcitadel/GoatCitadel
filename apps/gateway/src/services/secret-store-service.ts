@@ -3,6 +3,8 @@ import { GoatError } from "@goatcitadel/contracts";
 import { WINDOWS_CREDENTIAL_DELETE_SCRIPT } from "./windows-credential-delete.js";
 import { WINDOWS_CREDENTIAL_CUSTODY_READ_SCRIPT, WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT,
   WINDOWS_CREDENTIAL_CUSTODY_DELETE_SCRIPT } from "./windows-credential-custody.js";
+import { decodeMcpCredentialReceipt, encodeMcpCredentialReceipt, isMcpCredentialWriteId, isMcpReceiptAccount } from "./mcp-credential-receipt.js";
+import { WINDOWS_CREDENTIAL_RECEIPT_SCRIPT } from "./windows-credential-write-receipt.js";
 
 const SECRET_SERVICE = "goatcitadel";
 const DISABLE_SECRET_STORE_ENV = "GOATCITADEL_DISABLE_SECRET_STORE";
@@ -90,6 +92,7 @@ export class SecretStoreService {
 
   public setSecret(account: string, secret: string): void {
     assertSecretAccount(account);
+    if (isMcpReceiptAccount(account)) throw new Error("MCP receipt slots require their staged custody writer.");
     if (!secret.trim()) {
       throw new Error("secret must not be empty");
     }
@@ -108,17 +111,14 @@ export class SecretStoreService {
   public getSecret(account: string): string | undefined {
     assertSecretAccount(account);
     this.assertAvailable();
-    if (process.platform === "win32") {
-      return this.getWindowsCredential(account);
-    }
-    if (process.platform === "darwin") {
-      return this.getMacCredential(account);
-    }
-    return this.getLinuxCredential(account);
+    const value = process.platform === "win32" ? this.getWindowsCredential(account)
+      : process.platform === "darwin" ? this.getMacCredential(account) : this.getLinuxCredential(account);
+    return value !== undefined && isMcpReceiptAccount(account) ? decodeMcpCredentialReceipt(value).secret : value;
   }
 
   public deleteSecret(account: string): void {
     assertSecretAccount(account);
+    if (isMcpReceiptAccount(account)) throw new Error("MCP receipt slots require their canonical retirement owner.");
     this.assertAvailable();
     if (process.platform === "win32") {
       this.deleteWindowsCredential(account);
@@ -144,16 +144,20 @@ export class SecretStoreService {
   }
 
   /** Immutable MCP slots are written only by their captured OS custodian. */
-  public setSecretForCustody(account: string, secret: string, custodyId: string): void {
+  public supportsCredentialWriteReceipts(): boolean { return process.platform === "win32"; }
+
+  public setSecretForCustody(account: string, secret: string, custodyId: string, writeId?: string): void {
     assertSecretAccount(account);
     if (!secret.trim()) throw new Error("secret must not be empty");
     try {
       if (process.platform !== "win32" || !/^[a-f0-9]{64}$/u.test(custodyId))
         throw new SecretStoreUnavailableError("Credential write requires its supported OS custodian.");
       this.assertAvailable();
+      const input = isMcpReceiptAccount(account) ? encodeMcpCredentialReceipt(secret, writeId!) : secret;
+      if (!isMcpReceiptAccount(account) && writeId !== undefined) throw new Error("Credential write receipt requires a versioned slot.");
       const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT],
         { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
-        { stdin: secret, timeoutMs: 10000, allowExitCodes: [4] });
+        { stdin: input, timeoutMs: 10000, allowExitCodes: [4] });
       if (result.status !== 0 || result.stdout.trim() !== "ok")
         throw new SecretStoreUnavailableError("Credential write custody changed or was not acknowledged.");
     } catch (error) {
@@ -164,8 +168,28 @@ export class SecretStoreService {
   }
 
   /** Absence in another keychain cannot acknowledge deletion in the owner. */
-  public deleteSecretForCustody(account: string, custodyId: string | null): boolean {
+  public hasCredentialWriteReceipt(account: string, custodyId: string, writeId: string): boolean {
+    return this.credentialReceiptAction(account, custodyId, writeId, "inspect") === "written";
+  }
+
+  private credentialReceiptAction(account: string, custodyId: string | null, writeId: string | null | undefined, action: "inspect" | "remove"): string {
     assertSecretAccount(account);
+    if (process.platform !== "win32" || custodyId === null || !isMcpCredentialWriteId(writeId)) return "unavailable";
+    if (!isMcpReceiptAccount(account) || !/^[a-f0-9]{64}$/u.test(custodyId)) throw new Error("Invalid credential receipt binding.");
+    this.assertAvailable();
+    const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_RECEIPT_SCRIPT],
+      { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId,
+        GOATCITADEL_SECRET_WRITE_ID: writeId, GOATCITADEL_SECRET_RECEIPT_ACTION: action }, { timeoutMs: 10000, allowExitCodes: [4] });
+    const status = result.stdout.trim();
+    if (result.status === 4 && status === "custody_mismatch") return "unavailable";
+    if (result.status !== 0 || !(action === "inspect" ? ["written", "absent", "mismatch"] : ["ok", "absent", "mismatch"]).includes(status))
+      throw new Error("Credential receipt was not acknowledged by its OS custodian.");
+    return status;
+  }
+
+  public deleteSecretForCustody(account: string, custodyId: string | null, writeId?: string | null): boolean {
+    assertSecretAccount(account);
+    if (isMcpReceiptAccount(account)) return ["ok", "absent"].includes(this.credentialReceiptAction(account, custodyId, writeId, "remove"));
     if (custodyId === null || process.platform !== "win32") return false;
     if (!/^[a-f0-9]{64}$/u.test(custodyId)) throw new Error("Invalid credential custody binding.");
     this.assertAvailable();

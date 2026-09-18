@@ -110,7 +110,7 @@ describe("McpServerStore configuration authority", () => {
     expect(await callers()).toHaveLength(1);
   });
 
-  it("retries a storage race caused only by status and preserves the newer status", async () => {
+  it("retries a storage race caused only by status and disconnects the edited configuration", async () => {
     await store.writeServers([server()], []);
     const previous = await callers();
     let raced = false;
@@ -128,7 +128,7 @@ describe("McpServerStore configuration authority", () => {
     };
     const racing = createStore(storage, settings);
     await racing.writeServers([{ ...previous[0]!, enabled: false }], previous);
-    expect(await store.requireServer("server-1")).toMatchObject({ enabled: false, status: "connected" });
+    expect(await store.requireServer("server-1")).toMatchObject({ enabled: false, status: "disconnected" });
   });
 
   it("preserves normalized legacy defaults in a status update response", async () => {
@@ -355,7 +355,7 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
       await b.patchServerState(saved[0]!.serverId, { status: "connected" });
       await a.writeServers([{ ...saved[0]!, enabled: false }], saved);
       const current = (await a.readServers()).filter((item) => !GATEWAY_OWNED_MCP_SERVER_IDS.has(item.serverId));
-      expect(current[0]).toMatchObject({ enabled: false, status: "connected" });
+      expect(current[0]).toMatchObject({ enabled: false, status: "disconnected" });
       await expect(b.writeServers([], saved)).rejects.toThrow(/configuration changed/);
       const beforeRollback = await left.systemSettings.get(KEY);
       await expect(

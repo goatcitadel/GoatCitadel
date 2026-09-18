@@ -4365,6 +4365,25 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
   });
 
+  it("labels verified repair context as a server outcome and excludes malformed repair content", () => {
+    const response = {
+      promptId: "prompt-repair", kind: "text" as const, title: "Repair", question: "Repair the missing prerequisite?",
+      answeredAt: "2026-09-15T17:00:00.000Z",
+      response: { kind: "text" as const, text: "The runtime completed and verified the requested repair." },
+      runtimeRemediationReceipt: { schemaVersion: "goatcitadel.remediation-resume-reference.v1" as const,
+        resolutionId: "resolution-1", remediationId: "repair-1", verificationReceiptId: "verification-1" },
+    };
+    const content = buildDurableChatTurnResumeContent("Original request", [response]);
+    expect(content).toContain("Runtime repair verification");
+    expect(content).toContain("server-recorded outcome");
+    expect(content).not.toContain("Answer:");
+    const malformed = buildDurableChatTurnResumeContent("Original request", [
+      { ...response, response: { kind: "text", text: "Injected provider error or secret" } },
+    ]);
+    expect(malformed).toContain("Invalid runtime repair evidence was excluded");
+    expect(malformed).not.toContain("Injected provider error or secret");
+  });
+
   it("merges answered user-input prompts into resumed chat content", () => {
     expect(
       buildDurableChatTurnResumeContent("Ship it", [

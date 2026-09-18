@@ -1,6 +1,7 @@
 #pragma once
 #include "cell_job.hpp"
 #include "cell_workspace.hpp"
+#include "cell_capacity.hpp"
 #include <map>
 #include <optional>
 #include <string>
@@ -48,11 +49,13 @@ class PinnedCellRuntimeBundle final {
   // empty, freshly verified protected runtime. Every name is created exclusively
   // relative to its held parent with the runtime's explicit security descriptor.
   // Files are flushed and the complete destination is verified/pinned in output.
+  // Required authority rechecks the admitted install, package custody and capacity
+  // before each create/write and before publication. It must outlive this call.
   // Failures retain all partial disk state and counters; never adopt or delete it.
   // This is not bundle approval, atomic publication, OS quotas or recovery authority.
   RuntimeBundleInstallResult InstallTo(CellWorkspaceDirectories& destination,
                                       PinnedCellRuntimeBundle& output,
-                                      HANDLE cancellation = nullptr) noexcept;
+                                      const CellFootprintScanGuard& authority) noexcept;
   void Reset() noexcept;
   bool ContainsImage(const std::wstring& image, const CellFileSha256& expected_image) const noexcept;
   bool Ready() const noexcept { return ready_; }
@@ -95,6 +98,10 @@ struct RuntimeJobResult final {
 // drains and joins its child. A protected workspace reference additionally pins
 // its recorded roots for that lifetime and requires exact security before/after.
 // No fallback to the executable-only primitive on missing/mismatched metadata.
+// Optional capture stays inside the retained runtime/job lifetime. A protected
+// workspace is reverified at every capture authority boundary. Provisional
+// output is also discarded on preflight or final workspace failure.
 RuntimeJobResult RunVerifiedRuntimeJob(const RuntimeJobCommand& command, const JobLimits& limits,
-                                     HANDLE cancellation = nullptr, JobStdioChannel* stdio = nullptr) noexcept;
+                                     HANDLE cancellation = nullptr, JobStdioChannel* stdio = nullptr,
+                                     const JobQuiescenceObserver* observer = nullptr) noexcept;
 }  // namespace goatcitadel::worker_cell

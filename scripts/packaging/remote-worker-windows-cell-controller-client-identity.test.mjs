@@ -3,14 +3,53 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import { test } from "node:test";
 import { CELL_CONTROLLER_SERVICE_INPUTS, snapshotCellControllerSources } from "./build-remote-worker-windows-cell-controller.mjs";
 import { compileTlsNative } from "./build-remote-worker-windows-tls.mjs";
 import { resolveExactWindowsToolchain } from "./lib/remote-worker-windows-toolchain.mjs";
 import { decodeWindowsWorkerCellControllerCustody } from "../../apps/remote-worker/dist/worker-windows-cell-provisioning.js";
 
-test("worker inspects a retained pipe server without acquiring controller privileges", { skip: process.platform !== "win32" }, () => {
+async function inheritedParentExchange(image, environment, name) {
+  const server = createServer();
+  let socket, child, stdout = "", stderr = "", received = Buffer.alloc(0), failure;
+  const refuse = (error) => { failure ??= error; socket?.destroy(); child?.kill(); };
+  server.on("error", refuse);
+  server.on("connection", (connected) => {
+    if (socket) { connected.destroy(); refuse(new Error("Unexpected second parent connection.")); return; }
+    socket = connected;
+    socket.on("error", refuse);
+    socket.on("data", (chunk) => {
+      received = Buffer.concat([received, chunk]);
+      if (received.length > 2) refuse(new Error("Unexpected parent response tail."));
+    });
+    socket.write(Buffer.from([0x11]));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject); server.listen(name, () => { server.off("error", reject); resolve(); });
+  });
+  const timer = setTimeout(() => refuse(new Error("Inherited parent exchange timed out.")), 10000);
+  try {
+    child = spawn(image, ["--parent-stdio", name], { windowsHide: true, shell: false, env: environment, stdio: ["pipe", "pipe", "pipe"] });
+    child.on("error", refuse); child.stdin.on("error", refuse);
+    child.stdout.on("data", (chunk) => { stdout += chunk; if (stdout.length > 4096) refuse(new Error("Unbounded child stdout.")); });
+    child.stderr.on("data", (chunk) => { stderr += chunk; if (stderr.length > 4096) refuse(new Error("Unbounded child stderr.")); });
+    const code = await new Promise((resolve) => child.once("close", resolve));
+    if (failure) throw failure;
+    assert.equal(code, 0, `${stdout}${stderr}`); assert.equal(stderr, "");
+    assert.deepEqual(received, Buffer.from([0x12, 0x13]));
+    const evidence = JSON.parse(stdout);
+    assert.equal(evidence.passed, true); assert.equal(evidence.parentProcessId, process.pid);
+    assert.equal(evidence.borrowedPipePreserved, true);
+    return evidence;
+  } finally {
+    clearTimeout(timer); socket?.destroy(); child?.stdin.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test("worker inspects a retained pipe server without acquiring controller privileges", { skip: process.platform !== "win32" }, async () => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), "Goat Cell Controller Client Identity "));
   console.log(`Retained controller client identity evidence: ${output}`);
   const cell = "apps/remote-worker-windows-cell-native", host = "apps/remote-worker-windows-host-native";
@@ -25,6 +64,7 @@ test("worker inspects a retained pipe server without acquiring controller privil
     const suffix = asan ? "asan" : "normal";
     const build = (name, sources, defines = []) => compileTlsNative({
       target: "windows-x64", outputDirectory: output, outputName: `${name}-${suffix}.exe`, asan,
+      sourceBatchSize: 8,
       sources: sources.map((source) => path.join(snapshot.root, source)),
       includes: [path.join(snapshot.root, cell, "src"), path.join(snapshot.root, host, "src")], defines,
     });
@@ -40,10 +80,14 @@ test("worker inspects a retained pipe server without acquiring controller privil
       .filter((source) => source.endsWith(".cpp") && !source.endsWith("/cell_controller_main.cpp")));
     const client = run(clientImage, "client");
     assert.equal(client.passed, true);
-    assert.ok(client.checks >= 70);
+    assert.ok(client.checks >= 115);
     assert.equal(client.serverProcesses, 2);
     assert.equal(client.privilegesUnchanged, true);
     assert.equal(client.installedService, false);
+    const inheritedParent = await inheritedParentExchange(clientImage,
+      { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" },
+      `\\\\.\\pipe\\LOCAL\\GoatCellParent-${process.pid}-${path.basename(output)}-${suffix}`);
+    fs.writeFileSync(path.join(output, `inherited-parent-${suffix}.json`), JSON.stringify(inheritedParent, null, 2), { flag: "wx" });
     const encoded = spawnSync(clientImage, ["--custody-fixture"], { windowsHide: true, timeout: 10000,
       env: { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" } });
     assert.equal(encoded.error, undefined); assert.equal(encoded.status, 0); assert.equal(encoded.stderr.length, 0);
@@ -59,7 +103,7 @@ test("worker inspects a retained pipe server without acquiring controller privil
     assert.equal(inspection.failures, 0);
     assert.ok(inspection.signerInspectionChecks >= 50);
     assert.equal(inspection.installedService, false);
-    outcomes.push({ asan, client, inspection, custodyCodecMatched: true });
+    outcomes.push({ asan, client, inspection, inheritedParent, custodyCodecMatched: true });
   }
   const repository = path.resolve(import.meta.dirname, "../..");
   for (const item of snapshot.sourceManifest) assert.equal(

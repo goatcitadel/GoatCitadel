@@ -9,6 +9,7 @@ import {
   canonicalJsonString,
   remoteWorkerArtifactBlobRelPath,
   remoteWorkerArtifactWorkspaceShard,
+  remoteWorkerChatInferenceIdentity,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
@@ -163,6 +164,14 @@ export const remoteWorkerRuntimeReadCases = [
     f.usage.markDispatchUnknown(uncertain.usageEventId, "related-owner", f.now, "transport outcome unavailable");
     const foreign = f.begin("unattributed");
     f.finish(foreign.usageEventId, 99);
+    const events = f.usage;
+    const allAttempts = events.listRemoteWorkerAssignment(key.registryWorkspaceId, key.assignmentId, f.assignmentGeneration);
+    assert.deepEqual(allAttempts.map(event => event.eventId).sort(),
+      [primary, known, unknown, uncertain].map(attempt => attempt.usageEventId).sort());
+    assert.equal(allAttempts.find(event => event.eventId === uncertain.usageEventId)!.transportStatus, "dispatch_unknown");
+    assert.deepEqual(events.listRemoteWorkerAssignment("foreign", key.assignmentId, f.assignmentGeneration), []);
+    assert.deepEqual(events.listRemoteWorkerAssignment(key.registryWorkspaceId, key.assignmentId, f.assignmentGeneration + 1), []);
+    assert.throws(() => events.listRemoteWorkerAssignment(key.registryWorkspaceId, key.assignmentId, 0));
     const projection = reader.findAssignmentRuntime(key)!.usageAndCost.value!;
     assert.equal(projection.usage.attemptCount, 3);
     assert.equal(projection.usage.trackedAttemptCount, 2);
@@ -176,6 +185,26 @@ export const remoteWorkerRuntimeReadCases = [
     assert.equal(projection.reservedRequests, 5);
     f.budget.reconcileRelatedAttempts(f.reservation);
     assert.equal(reader.findAssignmentRuntime(key)!.usageAndCost.value!.pendingReservations, 3);
+  } },
+  { name: "distinguishes the current native model sequence from earlier history without writes", run(db: DatabaseClient) {
+    const f = workerBudgetFixture(db, "native-history");
+    const scope = { registryWorkspaceId: "default", assignmentId: f.assignmentId,
+      assignmentGeneration: f.assignmentGeneration, continuationSha256: D("native-wake") };
+    assert.equal(f.repo.hasInferenceOutsideChatSequence(scope), false);
+    assert.deepEqual(f.repo.listAssignmentChatRequests(scope), []);
+    f.admit("current", f.route, remoteWorkerChatInferenceIdentity(scope, 0));
+    f.admit("current-next", f.route, remoteWorkerChatInferenceIdentity(scope, 1));
+    assert.equal(f.repo.hasInferenceOutsideChatSequence(scope), false);
+    assert.equal(f.repo.hasInferenceOutsideChatSequence({ ...scope, continuationSha256: D("another-wake") }), true);
+    f.admit("older", f.route, remoteWorkerChatInferenceIdentity({ ...scope, continuationSha256: undefined }, 0));
+    assert.equal(f.repo.listAssignmentChatRequests(scope).length, 3);
+    assert.deepEqual(f.repo.listAssignmentChatRequests({ ...scope, registryWorkspaceId: "foreign" }), []);
+    assert.deepEqual(f.repo.listAssignmentChatRequests({ ...scope, assignmentGeneration: scope.assignmentGeneration + 1 }), []);
+    assert.equal(f.repo.hasInferenceOutsideChatSequence(scope), true);
+    assert.equal(f.repo.hasInferenceOutsideChatSequence({ ...scope, registryWorkspaceId: "foreign" }), false);
+    assert.equal(f.repo.hasInferenceOutsideChatSequence({ ...scope, assignmentGeneration: scope.assignmentGeneration + 1 }), false);
+    for (let i = 0; i < 14; i++) f.admit(`overflow-${i}`);
+    assert.throws(() => f.repo.listAssignmentChatRequests(scope), /assignment-wide model step limit/u);
   } },
   { name: "projects cell capacity and committed artifacts without raw paths, profiles or effect arguments", run(db: DatabaseClient) {
     const f = workerBudgetFixture(db, "read-owners");

@@ -17,6 +17,8 @@ import {
 } from "@goatcitadel/contracts";
 import { callProtectedRoute } from "./worker-protected-route-client.js";
 import { sha256Utf8, type RouteContext, type LeaseBinding } from "./connected-worker-routes.js";
+import { normalizeRemoteWorkerNativeChatContext, appendRemoteWorkerNativeChatContext, remoteWorkerNativeChatContextSha256,
+  remoteWorkerChatInferenceIdentity, normalizeRemoteWorkerNativeChatHistory, REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS } from "@goatcitadel/contracts";
 
 export interface WorkerInferenceResult {
   readonly status: "completed" | "requires_tools" | "waiting" | "blocked";
@@ -37,6 +39,17 @@ export function buildWorkerInferenceSubmission(
   workload: Record<string, unknown>,
   lease: LeaseBinding,
 ): RemoteWorkerInferenceRequestSubmission {
+  if (Object.hasOwn(workload, "nativeContinuation") && !workload.nativeChatContext)
+    throw new Error("Native continuation must finish through its canonical owner before Chat inference.");
+  const native = workload.nativeChatContext ? normalizeRemoteWorkerNativeChatContext(workload.nativeChatContext) : undefined;
+  const history = Object.hasOwn(workload, "nativeChatHistory") ? normalizeRemoteWorkerNativeChatHistory(workload.nativeChatHistory) : undefined;
+  if (history && (!native || history.nativeContextSha256 !== remoteWorkerNativeChatContextSha256(native) ||
+    history.contextSnapshotSha256 !== workload.contextSnapshotSha256 || history.priorModelSteps >= REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS))
+    throw new Error("Native Chat history is unbound or its model step limit is exhausted.");
+  if (native && native.continuation.assignmentGeneration !== lease.assignmentGeneration)
+    throw new Error("Native Chat context belongs to another assignment generation.");
+  if (native && canonicalJsonString(native.continuation) !== canonicalJsonString(workload.nativeContinuation))
+    throw new Error("Native Chat context differs from its continuation.");
   const payload = record(workload.payload, "workload payload");
   const request = record(payload.request, "Chat request");
   const identity = {
@@ -50,6 +63,8 @@ export function buildWorkerInferenceSubmission(
     capabilityProfileId: workload.capabilityProfileId,
     capabilityProfileSha256: workload.capabilityProfileSha256,
     contextSnapshotSha256: workload.contextSnapshotSha256,
+    ...(native ? { nativeContinuation: native.continuation, nativeChatContext: native } : {}),
+    ...(history ? { nativeChatHistory: history } : {}),
   };
   if (
     identity.schemaVersion !== REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION ||
@@ -90,16 +105,17 @@ export function buildWorkerInferenceSubmission(
       chatContext.capabilityProfileId !== workload.capabilityProfileId)
   )
     throw new Error("Worker Chat context differs from its workload identity.");
-  const messages = chatContext
+  const baseMessages = chatContext
     ? remoteWorkerChatInferenceMessages(chatContext)
     : [{ role: "user" as const, text: request.content }];
+  if (history && canonicalJsonString(history.messages.slice(0, baseMessages.length)) !== canonicalJsonString(baseMessages))
+    throw new Error("Native Chat history lost its original frozen context.");
+  const messages = native ? appendRemoteWorkerNativeChatContext(history?.messages ?? baseMessages, native) : baseMessages;
   return {
     registryWorkspaceId: lease.registryWorkspaceId,
     assignmentId: lease.assignmentId,
     assignmentGeneration: lease.assignmentGeneration,
-    inferenceRequestId: `worker-${lease.assignmentId}`,
-    attempt: 1,
-    idempotencyKey: `inference:${lease.assignmentId}:${lease.assignmentGeneration}`,
+    ...remoteWorkerChatInferenceIdentity({ ...lease, ...(native ? { continuationSha256: remoteWorkerNativeChatContextSha256(native) } : {}) }, 0),
     leaseToken: lease.leaseToken,
     messages,
     inputSha256: sha256Utf8(canonicalJsonString(messages)),

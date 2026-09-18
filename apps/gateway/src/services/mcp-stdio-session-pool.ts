@@ -96,6 +96,12 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     }
   }
 
+  /** Capture before a configuration write; delayed cleanup must leave replacement sessions alone. */
+  public captureServerCloser(serverId: string): () => void {
+    const owned = [...this.sessions].filter(([, session]) => session.serverId === serverId);
+    return () => { for (const [key, session] of owned) this.invalidate(key, session); };
+  }
+
   public closeSession(serverId: string, scopeKey: string): void {
     const key = JSON.stringify([serverId, scopeKey]);
     const session = this.sessions.get(key);

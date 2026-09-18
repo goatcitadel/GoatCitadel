@@ -62,28 +62,30 @@ describe("CitadelsRouteService vault", () => {
     const store = new Map<string, CitadelVaultSecretRecord>();
     let lastSealed: unknown;
     const repo = repoStub({
-      storeVaultSecret: vi.fn((input) => {
-        lastSealed = input.sealedValue;
+      mutateVault: vi.fn((input) => {
+        if (input.change.type !== "store") throw new Error("Expected a sealed store");
+        expect(input.expectedRevision).toBe("a".repeat(64));
+        lastSealed = input.change.sealedValue;
         const record: CitadelVaultSecretRecord = {
           secretId: "s1",
           citadelId: input.citadelId,
-          secretName: input.secretName,
-          sealedValue: input.sealedValue,
+          secretName: input.change.secretName,
+          sealedValue: input.change.sealedValue,
           createdAt: "t",
           updatedAt: "t",
         };
         store.set("s1", record);
-        return record;
+        return { citadelId: "c1", revision: "b".repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] };
       }),
       getVaultSecret: vi.fn((_cid: string, sid: string) => store.get(sid)),
-      listVaultSecrets: vi.fn(() => [...store.values()]),
+      getVaultSnapshot: vi.fn(() => ({ citadelId: "c1", revision: "b".repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] })),
     });
     const service = new CitadelsRouteService(repo, undefined, () => key);
 
-    const stored = await service.storeVaultSecret("c1", "stripe", "sk-live-SECRET-123");
+    const stored = await service.storeVaultSecret("c1", "stripe", "sk-live-SECRET-123", "a".repeat(64));
     expect(stored).toEqual({
       ok: true,
-      secret: { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
+      snapshot: { citadelId: "c1", revision: "b".repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] },
     });
     // The persisted envelope is ciphertext, not the plaintext.
     expect(JSON.stringify(lastSealed)).not.toContain("sk-live-SECRET-123");
@@ -98,7 +100,7 @@ describe("CitadelsRouteService vault", () => {
 
   it("fails closed (unavailable) when no vault key is configured", async () => {
     const service = new CitadelsRouteService(repoStub({}));
-    await expect(service.storeVaultSecret("c1", "k", "v")).resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(service.storeVaultSecret("c1", "k", "v", "a".repeat(64))).resolves.toEqual({ ok: false, reason: "unavailable" });
     await expect(service.revealVaultSecret("c1", "s1")).resolves.toEqual({ ok: false, reason: "unavailable" });
   });
 

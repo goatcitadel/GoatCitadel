@@ -1,8 +1,8 @@
 import type {
   McpInvokeRequest,
   McpServerCreateInput,
-  McpServerPolicy,
-  McpServerUpdateInput,
+  McpServerPolicyUpdateRequest,
+  McpServerUpdateRequest,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
@@ -10,31 +10,33 @@ import { buildLlmProviderAdvice } from "./llm-provider-advice-service.js";
 import { inferRuntimeEngineKind, LlmRuntimeTruthService } from "./llm-runtime-truth-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
+import type { McpServerStore } from "./mcp-server-store.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { DEFAULT_WORKSPACE_ID, getLlmConfigForGateway } from "./gateway-route-composition-shared.js";
+
+export function composeMcpAdministration(
+  store: Pick<McpServerStore, "readServers" | "writeServers" | "patchServerState" | "completeConnection" | "readTools" |
+    "writeTools" | "requireServer" | "readAuthState" | "writeAuthState">,
+  callbacks: Pick<mcpServerAdminService.McpServerAdminHost, "storage" | "captureMcpServerSessionCloser" |
+    "prepareMcpStaticEnvironment" | "resolveMcpOAuthClientId" | "resolveConnectedMcpTools" | "exchangeMcpOAuthCode" | "publishRealtime">,
+): mcpServerAdminService.McpServerAdminHost {
+  return { ...callbacks,
+    readMcpServers: () => store.readServers(),
+    writeMcpServers: (...args) => store.writeServers(...args),
+    patchMcpServerState: (...args) => store.patchServerState(...args),
+    completeMcpServerConnection: (...args) => store.completeConnection(...args),
+    readMcpTools: () => store.readTools(),
+    writeMcpTools: (tools) => store.writeTools(tools),
+    requireMcpServer: (serverId) => store.requireServer(serverId),
+    readMcpAuthState: () => store.readAuthState(),
+    writeMcpAuthState: (update) => store.writeAuthState(update),
+  };
+}
 
 export function composeToolsMcpRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<"llm" | "mcp" | "secrets" | "tools" | "toolsInvoke"> {
-  const mcpAdminDeps: mcpServerAdminService.McpServerAdminHost = {
-    storage: {
-      approvalInbox: gateway.storage.approvalInbox,
-    },
-    readMcpServers: async () => await gateway.readMcpServers(),
-    writeMcpServers: async (servers, expectedServers) => await gateway.writeMcpServers(servers, expectedServers),
-    patchMcpServerState: async (serverId, patch) => await gateway.patchMcpServerState(serverId, patch),
-    prepareMcpStaticEnvironment: (server) => gateway.prepareMcpStaticEnvironment(server),
-    resolveMcpOAuthClientId: (server) => gateway.resolveMcpOAuthClientId(server),
-    readMcpTools: async () => await gateway.readMcpTools(),
-    writeMcpTools: async (tools) => await gateway.writeMcpTools(tools),
-    resolveConnectedMcpTools: async (server, existing) => await gateway.resolveConnectedMcpTools(server, existing),
-    exchangeMcpOAuthCode: (server, code, stateRecord) =>
-      gateway.mcpOAuth.exchangeAuthorizationCode(server, code, stateRecord),
-    requireMcpServer: async (serverId) => await gateway.requireMcpServer(serverId),
-    readMcpAuthState: async () => await gateway.readMcpAuthState(),
-    writeMcpAuthState: async (state) => await gateway.writeMcpAuthState(state),
-    publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
-  };
+  const mcpAdminDeps = gateway.mcpAdministration;
   const mcpDiagnosticsDeps: mcpDiagnosticsService.McpDiagnosticsHost = {
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
     listMcpTemplates: async () => await gateway.listMcpTemplates(),
@@ -99,9 +101,10 @@ export function composeToolsMcpRouteDependencies(
         await mcpServerAdminService.completeMcpOAuth(mcpAdminDeps, serverId, code, state),
       connectMcpServer: async (serverId: string) =>
         await mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId),
-      createMcpServer: async (input: McpServerCreateInput) =>
-        await mcpServerAdminService.createMcpServer(mcpAdminDeps, input),
-      deleteMcpServer: async (serverId: string) => await mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId),
+      createMcpServer: async (input: McpServerCreateInput, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.createMcpServer(mcpAdminDeps, input, undefined, undefined, onCommitted),
+      deleteMcpServer: async (serverId: string, expectedRevision: string, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId, { expectedRevision, onCommitted }),
       disconnectMcpServer: async (serverId: string) =>
         await mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId),
       // Route through the guarded public method (enrich → capability-scope assert → coordinator)
@@ -115,10 +118,12 @@ export function composeToolsMcpRouteDependencies(
       runMcpServerHealthCheck: async (serverId: string) =>
         await mcpDiagnosticsService.runMcpServerHealthCheck(mcpDiagnosticsDeps, serverId),
       startMcpOAuth: async (serverId: string) => await mcpServerAdminService.startMcpOAuth(mcpAdminDeps, serverId),
-      updateMcpServer: async (serverId: string, input: McpServerUpdateInput) =>
-        await mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input),
-      updateMcpServerPolicy: async (serverId: string, policy: Partial<McpServerPolicy>) =>
-        await mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy),
+      updateMcpServer: async (serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input, undefined, { expectedRevision: input.expectedRevision, onCommitted }),
+      updateMcpServerPolicy: async (serverId: string, input: McpServerPolicyUpdateRequest, onCommitted?: () => void | Promise<void>) => {
+        const { expectedRevision, ...policy } = input;
+        return await mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy, { expectedRevision, onCommitted });
+      },
     },
     secrets: {
       deleteProviderSecret: (providerId, expectedRevision, storage) =>

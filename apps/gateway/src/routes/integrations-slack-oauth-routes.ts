@@ -115,6 +115,7 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
       );
       const connection = existingConnection
         ? await fastify.services.integrations.updateIntegrationConnection(existingConnection.connectionId, {
+            expectedRevision: existingConnection.revision,
             label: connectionInput.label,
             enabled: true,
             status: "connected",
@@ -146,6 +147,7 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
         return reply.code(400).send({ error: "Connection is not a Slack OAuth install." });
       }
       const connection = await fastify.services.integrations.updateIntegrationConnection(parsed.data.connectionId, {
+        expectedRevision: current.revision,
         enabled: false,
         status: "disconnected",
         lastError: undefined,

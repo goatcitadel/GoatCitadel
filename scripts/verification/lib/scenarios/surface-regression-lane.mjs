@@ -1,4 +1,6 @@
 import { resolveReleaseSurfaceHref } from "../release-surface-manifest.mjs";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
+import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 
 const INITIAL_ROUTE_NAVIGATION_MAX_ATTEMPTS = 2;
 const INITIAL_ROUTE_READINESS_GRACE_MS = 5_000;
@@ -40,12 +42,14 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
     installMissionControlNextBrowserState,
     NATIVE_SCROLL_HANDOFF_ROUTE_SLUGS,
     performVerificationInteraction,
+    prepareCleanRuntime = prepareUsabilityRuntime,
     resolveVerificationTargetContext,
     runMissionControlNextMobileShellProof,
     runScenario,
     seedMissionControlNextFixture,
     setBrowserCorrelation,
     startBrowserTrace,
+    startLocalProvider = startDeterministicLlmStub,
     startVerificationStack,
     stopVerificationStack,
     waitForMissionControlShell,
@@ -53,27 +57,34 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
   } = deps;
   const verificationTarget = resolveVerificationTargetContext();
   const surfaceOperatorToken = "verification-surface-regression-operator-token";
-  const stack = await startVerificationStack(context, {
-    includeUi: true,
-    gatewayMode: "built",
-    uiMode: "preview",
-    processLogPrefix: options.processLogPrefix,
-    gatewayEnvOmit: options.secretEnvKeys,
-    uiEnvOmit: options.secretEnvKeys,
-    gatewayEnv: {
-      GOATCITADEL_AUTH_MODE: "token",
-      GOATCITADEL_AUTH_TOKEN: surfaceOperatorToken,
-      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
-      GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
-      GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
-      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
-      GOATCITADEL_MESH_NODE_ID: "build-main",
-    },
-    uiEnv: {
-      VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
-    },
-  });
+  let stack;
+  let runtimeRoot;
+  let stub;
   try {
+    stub = await startLocalProvider({ replyText: "Surface verification response." });
+    runtimeRoot = await prepareCleanRuntime(`${context.runId}-surface-regression`, stub.baseUrl);
+    stack = await startVerificationStack(context, {
+      runtimeRoot,
+      includeUi: true,
+      gatewayMode: "built",
+      uiMode: "preview",
+      processLogPrefix: options.processLogPrefix,
+      gatewayEnvOmit: options.secretEnvKeys,
+      uiEnvOmit: options.secretEnvKeys,
+      gatewayEnv: {
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: surfaceOperatorToken,
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+        GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
+        GOATCITADEL_MESH_NODE_ID: "build-main",
+        GOATCITADEL_VERIFY_STUB_LLM_KEY: "verification-stub-key",
+      },
+      uiEnv: {
+        VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
+      },
+    });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-surface-regression");
     const fixture = verificationTarget.isNext
       ? await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot })
@@ -320,7 +331,11 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
       await browser.close();
     }
   } finally {
-    await stopVerificationStack(stack);
+    try {
+      if (stack || runtimeRoot) await stopVerificationStack(stack ?? { runtimeRoot });
+    } finally {
+      await stub?.close();
+    }
   }
 }
 

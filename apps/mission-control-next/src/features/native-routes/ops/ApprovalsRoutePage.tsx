@@ -17,6 +17,7 @@ import { DetailInspector } from "../../../components/DetailInspector";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import { ShellExplanationList } from "./ShellExplanationList";
+import { NativeRuntimeApprovalReview, nativeRuntimeReviewForApproval } from "./NativeRuntimeApprovalReview";
 import "../native-routes.css";
 
 const APPROVAL_COUNT_FLASH_MS = 1500;
@@ -567,6 +568,8 @@ function ApprovalInspectorCard(props: {
   const effectiveStatus = expired ? "expired" : approval.status;
   const decisionCopy = buildApprovalDecisionCopy(approval, effectiveStatus);
   const evidence = buildApprovalEvidenceModel(approval.preview, replay?.pendingAction?.request);
+  const nativeReviewRequired = approval.kind === "remote_worker.native_runtime";
+  const nativeReview = nativeRuntimeReviewForApproval(approval, replay);
   const traceMetadata =
     approval.linkage?.correlationId || approval.linkage?.traceId
       ? {
@@ -633,6 +636,7 @@ function ApprovalInspectorCard(props: {
           <h3>{decisionCopy.title}</h3>
           {approval.explanation?.riskExplanation ? <p>{approval.explanation.riskExplanation}</p> : null}
           <ApprovalDecisionContextStrip approval={approval} />
+          {nativeReviewRequired ? <NativeRuntimeApprovalReview review={nativeReview} /> : null}
           {evidence ? (
             <div className="mc-next-approval-evidence">
               <h3>Operator evidence</h3>
@@ -673,7 +677,7 @@ function ApprovalInspectorCard(props: {
           ) : null}
           {approval.status === "pending" && !expired ? (
             <>
-              <NativeButton variant="outline" disabled={resolvePending} onClick={onApprove}>
+              <NativeButton variant="outline" disabled={resolvePending || (nativeReviewRequired && !nativeReview)} onClick={onApprove}>
                 Approve now
               </NativeButton>
               <NativeButton variant="outline" className="danger" disabled={resolvePending} onClick={onReject}>

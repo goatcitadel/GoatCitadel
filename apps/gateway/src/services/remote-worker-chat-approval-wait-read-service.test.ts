@@ -82,6 +82,29 @@ function fixture() {
 }
 
 describe("read-only worker approval wait", () => {
+  it.each(["waiting", "renew"] as const)("projects a native %s handoff without pending tool state", async phase => {
+    const f = fixture();
+    f.approval.kind = "remote_worker.native_runtime";
+    const nativeRuntime = { requestSha256: digest("retained-native-request") };
+    Object.assign(f.approval, { payload: { nativeRuntime } });
+    const original = f.retainResume(phase);
+    const { pendingActionSha256: _toolHash, ...common } = original.material;
+    const material = { ...common, schemaVersion: "goatcitadel.remote-worker-native-runtime-resume.v1",
+      nativeRuntimeBindingSha256: digest(nativeRuntime) };
+    f.pendingRead.mockResolvedValue(undefined!);
+    const resume = { material, materialSha256: digest(material) };
+    f.resumeRead.mockResolvedValue({ ...f.records, resume, phase });
+    expect(await f.read()).toMatchObject({ phase, resume: { resumeSha256: resume.materialSha256 } });
+    const recoveryMaterial = { schemaVersion: "goatcitadel.remote-worker-native-runtime-resume-recovery.v1",
+      nativeRuntimeBindingSha256: material.nativeRuntimeBindingSha256 };
+    const recovery = { material: recoveryMaterial, materialSha256: digest(recoveryMaterial) };
+    f.resumeRead.mockResolvedValue({ ...f.records, resume: { ...resume, recovery }, phase });
+    expect(await f.read()).toMatchObject({ phase, resume: { resumeSha256: recovery.materialSha256 } });
+    recoveryMaterial.nativeRuntimeBindingSha256 = digest("substituted");
+    await expect(f.read()).rejects.toThrow("retained handoff");
+    expect(f.writes).not.toHaveBeenCalled();
+  });
+
   it("projects the anchored wait without renewing a lease, changing Chat state or returning tool arguments", async () => {
     const f = fixture();
     const before = structuredClone({ run: f.run, tool: f.tool, inline: f.inline, trace: f.trace });
@@ -147,7 +170,7 @@ describe("read-only worker approval wait", () => {
     const f = fixture();
     const original = f.retainResume("renew");
     f.pending.resolutionStatus = "executed";
-    const material = { pendingActionSha256: digest(f.pending) };
+    const material = { schemaVersion: "goatcitadel.remote-worker-chat-resume-recovery.v1", pendingActionSha256: digest(f.pending) };
     const recovery = { material, materialSha256: digest(material) };
     const resume = { ...original, recovery };
     f.resumeRead.mockResolvedValue({ ...f.records, resume, phase: "renew", pendingRecovery: false });
@@ -169,7 +192,7 @@ describe("read-only worker approval wait", () => {
   it("accepts an approved action settling after recovery binding and before worker renewal", async () => {
     const f = fixture();
     const original = f.retainResume("renew");
-    const material = { pendingActionSha256: digest(f.pending) };
+    const material = { schemaVersion: "goatcitadel.remote-worker-chat-resume-recovery.v1", pendingActionSha256: digest(f.pending) };
     const recovery = { material, materialSha256: digest(material) };
     f.resumeRead.mockResolvedValue({ ...f.records, resume: { ...original, recovery }, phase: "renew", pendingRecovery: false });
     Object.assign(f.pending, { resolutionStatus: "executed", resolvedAt: "2026-09-09T01:00:00.000Z",

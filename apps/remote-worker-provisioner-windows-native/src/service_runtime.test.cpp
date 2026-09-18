@@ -168,7 +168,7 @@ gc::ServiceIdentitySnapshot Baseline(
       ACCESS_ALLOWED_ACE_TYPE,
       0U,
       SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG |
-          SERVICE_QUERY_STATUS | READ_CONTROL | SYNCHRONIZE,
+          SERVICE_QUERY_STATUS | READ_CONTROL,
       AdministratorsSid(),
   };
   snapshot.service_aces[2] = {
@@ -276,10 +276,9 @@ void ExpectIdentityFailure(
     const gc::ServiceIdentitySnapshot& snapshot,
     const gc::FixedWideString& expected_path,
     const char* message) noexcept {
-  Expect(
-      gc::ValidateServiceIdentitySnapshot(snapshot, expected_path) ==
-          gc::ServiceIdentityValidation::ServiceIdentity,
-      message);
+  const auto result = gc::ValidateServiceIdentitySnapshot(snapshot, expected_path);
+  const auto code = static_cast<std::uint32_t>(result);
+  Expect(code >= 2040U && code <= 2053U, message);
 }
 
 void TestIdentityNegativeMatrix() noexcept {
@@ -369,6 +368,7 @@ void TestIdentityNegativeMatrix() noexcept {
   EXPECT_FIELD_FAILURE(changed.service_aces[0].flags = INHERITED_ACE, "inherited ACE");
   EXPECT_FIELD_FAILURE(changed.service_aces[0].mask ^= SERVICE_CHANGE_CONFIG, "wrong SYSTEM mask");
   EXPECT_FIELD_FAILURE(changed.service_aces[1].mask |= SERVICE_PAUSE_CONTINUE, "excess administrator authority");
+  EXPECT_FIELD_FAILURE(changed.service_aces[1].mask |= SYNCHRONIZE, "unsupported service synchronize bit");
   EXPECT_FIELD_FAILURE(changed.service_aces[0].sid = AdministratorsSid(), "wrong ACE order");
   EXPECT_FIELD_FAILURE(changed.service_aces[2].sid = ProvisionerServiceSid(), "substituted worker query principal");
   EXPECT_FIELD_FAILURE(changed.service_aces[2].type = ACCESS_DENIED_ACE_TYPE, "worker deny ACE");
@@ -380,6 +380,77 @@ void TestIdentityNegativeMatrix() noexcept {
   }
 
   #undef EXPECT_FIELD_FAILURE
+}
+
+void TestIdentityFailureDiagnostics() noexcept {
+  const auto expected_path = Wide(
+      L"\"C:\\ProgramData\\GoatCitadel\\RemoteWorkerProvisioner\\bin\\"
+      L"GoatCitadelRemoteWorkerProvisioner.exe\"");
+  const auto baseline = Baseline(expected_path);
+  auto changed = baseline;
+#define EXPECT_IDENTITY_DIAGNOSTIC(statement, reason, number) \
+  do { \
+    changed = baseline; \
+    statement; \
+    const auto result = gc::ValidateServiceIdentitySnapshot(changed, expected_path); \
+    Expect(result == gc::ServiceIdentityValidation::reason, #reason); \
+    Expect(static_cast<std::uint32_t>(result) == number, #reason " stable SCM code"); \
+  } while (false)
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.current_process_id = 0U, ProcessIdentity, 2040U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.triggers_empty = false, ConfigurationIdentity, 2041U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.required_privileges[0] = L'X', RequiredPrivilegesIdentity, 2042U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_session_id = 1U, TokenExecutionIdentity, 2043U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_unrestricted = false, TokenRestricted, 2044U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_group_count = changed.token_groups.size() + 1U, TokenBounds, 2045U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.service_dacl_present = false, ServiceDaclIdentity, 2046U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_user = AdministratorsSid(), SystemIdentity, 2047U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_groups[0].attributes = 0U, SignerGroupIdentity, 2048U);
+  EXPECT_IDENTITY_DIAGNOSTIC((changed.token_groups[2] = {ProhibitedSid(4U), SE_GROUP_ENABLED}); changed.token_group_count = 3U, ProhibitedLogon, 2049U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_group_count = 0U, ServiceGroupCount, 2050U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.token_privilege_count = 0U, TokenPrivilegeIdentity, 2051U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.service_ace_count = 2U, ServiceAceCount, 2052U);
+  EXPECT_IDENTITY_DIAGNOSTIC(changed.service_aces[1].mask |= SYNCHRONIZE, ServiceAceIdentity, 2053U);
+#undef EXPECT_IDENTITY_DIAGNOSTIC
+
+  gc::ServiceIdentitySnapshot current{};
+  // An elevated test runner may legitimately exceed the signer's privilege
+  // bound. Expect that refusal instead of assuming this runner is unprivileged.
+  HANDLE token = nullptr;
+  alignas(16) std::array<std::uint8_t, 16384U> token_bytes{};
+  DWORD returned = 0U;
+  DWORD group_count = 0U;
+  DWORD privilege_count = 0U;
+  const bool opened = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE;
+  const bool groups_queried = opened && GetTokenInformation(token, TokenGroups,
+      token_bytes.data(), static_cast<DWORD>(token_bytes.size()), &returned) != FALSE &&
+      returned >= sizeof(TOKEN_GROUPS);
+  if (groups_queried) {
+    group_count = reinterpret_cast<const TOKEN_GROUPS*>(token_bytes.data())->GroupCount;
+  }
+  const bool privileges_queried = opened && GetTokenInformation(token, TokenPrivileges,
+      token_bytes.data(), static_cast<DWORD>(token_bytes.size()), &returned) != FALSE &&
+      returned >= sizeof(TOKEN_PRIVILEGES);
+  if (privileges_queried) {
+    privilege_count = reinterpret_cast<const TOKEN_PRIVILEGES*>(token_bytes.data())->PrivilegeCount;
+  }
+  Expect(groups_queried && privileges_queried, "test runner token counts are readable");
+  if (token != nullptr) CloseHandle(token);
+  const auto expected_collection = group_count > current.token_groups.size()
+      ? gc::ServiceIdentityValidation::TokenGroupsCollection
+      : privilege_count > current.token_privileges.size()
+          ? gc::ServiceIdentityValidation::TokenPrivilegesCollection
+          : gc::ServiceIdentityValidation::Valid;
+  const auto collected = gc::CollectCurrentProcessTokenForTest(&current);
+  Expect(collected == expected_collection,
+      "production token collector accepts Win32 query shapes within signer bounds");
+  Expect(current.token_type == static_cast<std::uint32_t>(TokenPrimary),
+      "real process token collection records primary type");
+  Expect(gc::ValidateServiceIdentitySnapshot(current, expected_path) !=
+      gc::ServiceIdentityValidation::Valid,
+      "token collection alone never authorizes an interactive process as the signer");
+  Expect(gc::CollectCurrentProcessTokenForTest(nullptr) ==
+      gc::ServiceIdentityValidation::ServiceIdentity,
+      "invalid collection output remains a failure");
 }
 
 void TestRunningServiceStatusMatrix() noexcept {
@@ -602,56 +673,90 @@ void TestEmbeddedDigestShape() noexcept {
   Expect(&digest == &gc::EmbeddedExpectedClientSha256(), "embedded digest has stable storage");
 }
 
-void TestTokenHasRestrictionsContract() noexcept {
-  bool unrestricted = false;
-  const std::uint8_t clear = 0U;
-  const std::uint8_t set = 1U;
-  const std::uint8_t non_boolean = 2U;
-  Expect(
-      gc::DecodeTokenHasRestrictions(&clear, sizeof(clear), &unrestricted) &&
-          unrestricted,
-      "one-byte FALSE TokenHasRestrictions means unrestricted");
-  Expect(
-      gc::DecodeTokenHasRestrictions(&set, sizeof(set), &unrestricted) &&
-          !unrestricted,
-      "one-byte TRUE TokenHasRestrictions means restricted");
-  Expect(
-      !gc::DecodeTokenHasRestrictions(
-          &clear, sizeof(DWORD), &unrestricted),
-      "DWORD-sized TokenHasRestrictions projection is rejected");
-  Expect(
-      !gc::DecodeTokenHasRestrictions(
-          &non_boolean, sizeof(non_boolean), &unrestricted),
-      "non-BOOLEAN TokenHasRestrictions projection is rejected");
+void TestTokenRestrictionContract() noexcept {
+  struct OwnedToken final {
+    HANDLE value = nullptr;
+    ~OwnedToken() { if (value != nullptr) CloseHandle(value); }
+  } original, filtered, sid_restricted;
+  const bool opened = OpenProcessToken(GetCurrentProcess(),
+      TOKEN_QUERY | TOKEN_DUPLICATE, &original.value) != FALSE;
+  Expect(opened, "current token opens for an isolated reduced-privilege fixture");
+  if (!opened) return;
+  const bool created = CreateRestrictedToken(original.value, DISABLE_MAX_PRIVILEGE,
+      0U, nullptr, 0U, nullptr, 0U, nullptr, &filtered.value) != FALSE;
+  Expect(created, "privilege-only filtered token is created without changing the process token");
+  if (!created) return;
 
-  HANDLE token = nullptr;
-  std::array<std::uint8_t, sizeof(DWORD)> actual = {
-      0xCCU,
-      0xCCU,
-      0xCCU,
-      0xCCU,
-  };
-  DWORD returned = 0U;
-  const bool queried =
-      OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE &&
-      GetTokenInformation(
-          token,
-          TokenHasRestrictions,
-          actual.data(),
-          static_cast<DWORD>(actual.size()),
-          &returned) != FALSE;
-  bool actual_unrestricted = false;
-  Expect(queried, "host TokenHasRestrictions query succeeds");
-  Expect(
-      queried && returned == sizeof(BOOLEAN),
-      "host TokenHasRestrictions returns one BOOLEAN byte");
-  Expect(
-      queried && gc::DecodeTokenHasRestrictions(
-                     actual.data(), returned, &actual_unrestricted),
-      "host TokenHasRestrictions bytes decode under the collector contract");
-  if (token != nullptr) {
-    Expect(CloseHandle(token) != FALSE, "host token handle closes");
+  DWORD history = 0U, returned = 0U;
+  const bool history_queried = GetTokenInformation(filtered.value, TokenHasRestrictions,
+      &history, sizeof(history), &returned) != FALSE;
+  Expect(history_queried && (returned == sizeof(BOOLEAN) || returned == sizeof(DWORD)) && history != 0U,
+      "real privilege-only filtering sets TokenHasRestrictions history");
+  bool unrestricted = false;
+  SetLastError(ERROR_ACCESS_DENIED);
+  Expect(gc::QueryTokenRestrictionStateForTest(filtered.value, &unrestricted) && unrestricted,
+      "privilege filtering is not a restricting-SID token and stale last-error is ignored");
+
+  alignas(16) std::array<std::uint8_t, 16384U> bytes{};
+  const bool sids_queried = GetTokenInformation(filtered.value, TokenRestrictedSids,
+      bytes.data(), static_cast<DWORD>(bytes.size()), &returned) != FALSE &&
+      returned >= offsetof(TOKEN_GROUPS, Groups);
+  const DWORD restricted_count = sids_queried
+      ? reinterpret_cast<const TOKEN_GROUPS*>(bytes.data())->GroupCount : UINT32_MAX;
+  Expect(sids_queried && restricted_count == 0U, "privilege-only filtering has no restricting SIDs");
+  const bool privileges_queried = GetTokenInformation(filtered.value, TokenPrivileges,
+      bytes.data(), static_cast<DWORD>(bytes.size()), &returned) != FALSE &&
+      returned >= sizeof(TOKEN_PRIVILEGES);
+  const auto* privileges = reinterpret_cast<const TOKEN_PRIVILEGES*>(bytes.data());
+  Expect(privileges_queried && privileges->PrivilegeCount == 1U,
+      "the reduced token retains exactly one privilege");
+  if (privileges_queried && privileges->PrivilegeCount == 1U) {
+    const auto expected_path = Wide(
+        L"\"C:\\ProgramData\\GoatCitadel\\RemoteWorkerProvisioner\\bin\\"
+        L"GoatCitadelRemoteWorkerProvisioner.exe\"");
+    auto identity = Baseline(expected_path);
+    // Supply real restriction/privilege results to the otherwise pinned service
+    // fixture. This does not authorize the interactive fixture token as SYSTEM.
+    identity.token_unrestricted = unrestricted;
+    identity.restricted_sid_count = restricted_count;
+    identity.token_privilege_count = privileges->PrivilegeCount;
+    const auto& privilege = privileges->Privileges[0];
+    identity.token_privileges[0] = {
+        privilege.Luid.LowPart, privilege.Luid.HighPart, privilege.Attributes};
+    LUID change_notify{};
+    Expect(LookupPrivilegeValueW(nullptr, SE_CHANGE_NOTIFY_NAME, &change_notify) != FALSE,
+        "real change-notify privilege identity resolves");
+    identity.change_notify_luid_low_part = change_notify.LowPart;
+    identity.change_notify_luid_high_part = change_notify.HighPart;
+    Expect(gc::ValidateServiceIdentitySnapshot(identity, expected_path) ==
+        gc::ServiceIdentityValidation::Valid,
+        "exact service identity accepts actual least-privilege filtering");
+    identity.token_privilege_count = 2U;
+    ExpectIdentityFailure(identity, expected_path, "filtered history cannot excuse extra privileges");
+    identity.token_privilege_count = 1U;
+    identity.token_groups[0].attributes |= SE_GROUP_USE_FOR_DENY_ONLY;
+    ExpectIdentityFailure(identity, expected_path, "filtered history cannot excuse a deny-only service SID");
   }
+
+  alignas(DWORD) std::array<BYTE, 12U> world_sid = {
+      1U, 1U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U};
+  SID_AND_ATTRIBUTES restricting{world_sid.data(), 0U};
+  const bool restricted_created = CreateRestrictedToken(original.value, DISABLE_MAX_PRIVILEGE,
+      0U, nullptr, 0U, nullptr, 1U, &restricting, &sid_restricted.value) != FALSE;
+  Expect(restricted_created, "restricting-SID token fixture is created");
+  if (restricted_created) {
+    unrestricted = true;
+    Expect(gc::QueryTokenRestrictionStateForTest(sid_restricted.value, &unrestricted) && !unrestricted,
+        "actual restricting-SID tokens remain restricted");
+  }
+  unrestricted = true;
+  Expect(!gc::QueryTokenRestrictionStateForTest(INVALID_HANDLE_VALUE, &unrestricted) && !unrestricted,
+      "failed Win32 restriction query cannot be accepted as unrestricted");
+  unrestricted = true;
+  Expect(!gc::QueryTokenRestrictionStateForTest(nullptr, &unrestricted) && !unrestricted,
+      "null token fails closed");
+  Expect(!gc::QueryTokenRestrictionStateForTest(filtered.value, nullptr),
+      "missing output fails closed");
 }
 
 void TestProtectedTransportResultLabels() noexcept {
@@ -693,10 +798,11 @@ int RunServiceRuntimeTests() noexcept {
   TestCommandDispositions();
   TestStatusMatrix();
   TestIdentityNegativeMatrix();
+  TestIdentityFailureDiagnostics();
   TestRunningServiceStatusMatrix();
   TestStartupOrderingAndBounds();
   TestEmbeddedDigestShape();
-  TestTokenHasRestrictionsContract();
+  TestTokenRestrictionContract();
   TestProtectedTransportResultLabels();
   g_failures += RunSignerInspectionTests();
   return g_failures - initial_failures;

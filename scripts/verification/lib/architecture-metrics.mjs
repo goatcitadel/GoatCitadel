@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
 import { repoRoot } from "./shared.mjs";
+import { applyArchitectureServiceAllowances } from "./architecture-service-allowances.mjs";
 
 function getArchitectureBaselinePath(rootDir = repoRoot) {
   return path.join(rootDir, "scripts", "verification", "baselines", "architecture-metrics.json");
@@ -987,8 +988,9 @@ export function validateArchitectureMetricsBaseline(baseline) {
   return baseline;
 }
 
-export function compareArchitectureMetrics(metrics, baseline) {
+export function compareArchitectureMetrics(metrics, baseline, newServiceAllowances) {
   validateArchitectureMetricsBaseline(baseline);
+  const serviceBaseline = applyArchitectureServiceAllowances(baseline, newServiceAllowances);
   const regressions = [];
   const improvements = [];
   const largeServiceDebt = Array.isArray(metrics.largeServiceDebt) ? metrics.largeServiceDebt : [];
@@ -1252,7 +1254,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
   });
   compareNonIncreasingMetric({
     metrics,
-    baseline,
+    baseline: serviceBaseline,
     key: "chatHostCallbackCount",
     label: "chat typed host callback count",
     regressions,
@@ -1260,7 +1262,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
   });
   compareNonIncreasingMetric({
     metrics,
-    baseline,
+    baseline: serviceBaseline,
     key: "totalHostCallbacks",
     label: "Extracted-service typed host callbacks",
     regressions,
@@ -1268,14 +1270,14 @@ export function compareArchitectureMetrics(metrics, baseline) {
   });
   comparePerFileNonIncreasingMetric({
     metricsByFile: metrics.hostCallbacksByFile,
-    baselineByFile: baseline.hostCallbacksByFile,
+    baselineByFile: serviceBaseline.hostCallbacksByFile,
     label: "Extracted-service typed host callbacks",
     regressions,
     improvements,
   });
   compareNonIncreasingMetric({
     metrics,
-    baseline,
+    baseline: serviceBaseline,
     key: "totalDependencyMemberAccesses",
     label: "Extracted-service typed dependency member accesses",
     regressions,
@@ -1283,7 +1285,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
   });
   comparePerFileNonIncreasingMetric({
     metricsByFile: metrics.dependencyMemberAccessesByFile,
-    baselineByFile: baseline.dependencyMemberAccessesByFile,
+    baselineByFile: serviceBaseline.dependencyMemberAccessesByFile,
     label: "Extracted-service typed dependency member accesses",
     regressions,
     improvements,
@@ -1301,6 +1303,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
 
   return {
     baselinePath: ARCHITECTURE_BASELINE_PATH,
+    newServiceAllowances: newServiceAllowances?.entries ?? [],
     deltas,
     largeServiceDebt,
     debtNotes,

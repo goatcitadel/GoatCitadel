@@ -23,6 +23,7 @@ function createConfig(): ToolPolicyConfig {
 
 function createStorage(): Storage & AsyncStorage {
   return {
+    runImmediateTransaction: vi.fn(async <T>(work: () => T | Promise<T>): Promise<T> => await work()),
     audit: {
       append: vi.fn(async () => undefined),
     },

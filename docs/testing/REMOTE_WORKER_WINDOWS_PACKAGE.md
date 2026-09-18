@@ -28,6 +28,14 @@ paths and stale staged workspace metadata. The source dependency lock is retaine
 The unrelated workspace image-size patch is allowed to remain unused by this
 worker-only deployment; applicable patch failures are not ignored.
 
+Dependency staging uses a fresh `.tmp/worker-package-dependencies-*` directory
+inside the checkout, including when the requested output is on another Windows
+drive. This avoids pnpm legacy deploy's cross-drive `modulesDir` path failure.
+`dependency-staging.json` beside the payload records that retained staging path;
+the final build receipt also includes it. Logs and native build outputs remain in
+the requested output directory. Successful and failed staging directories are
+retained, and existing directories or linked scratch roots are never reused.
+
 The builder creates the native adapter/guard and dedicated cell controller, and uses the existing provisioner
 builder for the reproducible service/client/availability trio and its native checks.
 It retains build logs, native receipts and failed partial outputs. A successful
@@ -85,11 +93,12 @@ variables are omitted. Keep tickets, certificates, state and reports outside the
 package directory.
 
 The foreground worker can load a digest-pinned local registry for the compiled-in
-filesystem reader, Windows NTFS writer and destination MCP HTTP client. The image
-guard pins the writer's fixed sibling executable before launch. See
+filesystem reader, Windows NTFS writer and directory lister, and destination MCP
+HTTP client. The image guard pins the filesystem helper before launch. See
 [destination tool setup](REMOTE_WORKER_MESH_TOOLS.md) for the exact fields,
 permission envelopes and installed-service configuration. Package probing
-exercises create/edit/stale-content refusal in a fresh sibling fixture directory
+exercises create/edit/stale-content refusal and exact registry-backed directory
+listing in a fresh sibling fixture directory
 and an actual bearer-authenticated loopback MCP file-read using the packaged
 transport and validator. The probe verifies authentication on all five session
 requests, credential exclusion from the native writer's root, and refusal after
@@ -201,8 +210,139 @@ that directory. `configuration/cell-controller.identity` is a protected 120-byte
 record containing controller/helper image hashes and the actual native/cells
 directory identities. The image hashes come from the independently pinned package;
 the directory IDs come from retained NTFS handles. Native readers verify this
-record again before serving or forwarding a request. The build receipt under
-`controller-build` describes reproducible source/images, not installed custody.
+record again before serving or forwarding a request.
+
+Fresh-install source now creates `configuration/cell-capacity.identity`, a protected
+320-byte GCCAPS01 record binding `cells` and twelve distinct state-area directory
+identities. The `state` container is read-only to the worker; its recorded children
+have the existing worker-state permissions. Runtime state and enrollment credentials
+go to `state/retained-outbox`, and service reports go to
+`state/diagnostic/service-report.json`. Startup pins the exact area directories;
+enrollment checks the capacity-record hash against the protected installation
+receipt before credential handoff. Legacy settings keep their original state and
+report paths without automatic migration. Mixed old/new paths are refused.
+
+`pnpm verify:remote-worker:windows-state-layout` checks both layouts and receipt
+refusals using ordinary local fixtures, PowerShell 5.1/7 and native normal/ASAN
+binaries. It does not install services. The controller now opens the fixed capacity
+record and state paths through retained no-follow handles, verifies the exact
+read-only/container and worker-state ACLs, and matches all thirteen IDs against the
+independently admitted cells parent. Every controller identity check rereads that
+binding. Missing records or changed roots refuse controller startup or further
+verification; legacy worker settings support does not bypass this controller
+requirement. Exported root handles remain borrowed from the admitted controller.
+Cross-process writer coordination, complete pool accounting and successful physical
+installation acceptance remain outstanding; this metadata does not enable capacity
+measurement callbacks or establish execution readiness.
+
+Fresh installations also create an empty protected
+`configuration/state-writers.guard`. The worker host and controller retain shared
+read handles before admitting work; enrollment holds an exclusive existing-file
+handle before changing its private state or publishing a credential. Sharing
+conflicts refuse the operation, so enrollment and service startup cannot pass each
+other during a stopped-service check. Stop both services before enrolling a fresh
+installation. The guard is not recreated if missing and its contents are never
+used as authority. Legacy layouts retain their previous enrollment behavior.
+This excludes enrollment only; it does not coordinate Node/helper writers or prove
+that workloads from a previous lifetime have finished.
+
+Fresh-layout installations also precreate a fixed 32-byte
+`configuration/host-run.guard`. The host holds exclusive write custody and flushes
+its process identity before creating the worker. It clears the marker only after
+observing zero processes in the original child job. A missing, malformed or
+uncertain marker refuses the next host launch; it is never silently recreated or
+reset. This preserves uncertainty after host loss even if kernel kill-on-close
+has been requested. The marker is fixed installed control metadata, outside the
+workload-scanned roots. It does not prove that a currently running worker is
+quiescent, and installed crash/recovery acceptance remains unverified.
+
+Controller peer admission also checks the current running worker service, its
+protected configured host image, and the marker's live host process identity.
+The helper must belong to the same service logon and must not predate that host.
+These checks are repeated with existing pipe and controller custody checks;
+they do not replace canonical assignment authority or current writer quiescence.
+
+`configuration/cell-runtime.identity` is a separate protected 96-byte GCRTCS01
+record containing the actual packaged runtime-directory identity, the exact
+runtime-bundle manifest hash, and the independently verified package-manifest
+hash. The installed controller pins both custody records and the runtime directory,
+checks their read-only security descriptors, and rereads the runtime binding during
+custody verification. Missing records or mismatched identities fail closed. Older
+installations without this record do not satisfy the new controller's custody
+contract; do not generate a replacement from an unverified live directory.
+This read-only binding does not yet copy a runtime into a cell or establish
+installed execution acceptance.
+
+The installed source owner also retains read-only handles for `node.exe` and
+`worker-host-receipt.json`. Its `OpenRuntimeBundle` API accepts only that fixed
+inventory and verifies the complete source tree against the installer-bound
+manifest hash. The controller wrapper checks its running service identity before
+and after opening the bundle. These pins supply source verification, not approval
+to copy: the coordinator must retain the owner and recheck it through the copy
+authority callback along with destination and capacity authority.
+
+The native runtime-copy primitive requires a current-authority callback before
+creating directories/files, each write, and final verification. It rechecks the
+protected destination after callbacks and retains partial files and byte counts
+on refusal. It never adopts an incomplete directory on retry. The controller
+build composes this primitive through combined controller operation 21, with
+package custody, approved installation and signed complete-pool capacity.
+The local `node --test scripts/packaging/remote-worker-runtime-install-authority.test.mjs`
+lane exercises revocation against temporary files without volume or service operations.
+
+`CellMountedWorkspace::InstallRuntime` supplies the recorded guest destination to
+that primitive. It freezes the mounted binding, identities and checkpoints,
+rechecks mounted custody after authorization, and retains partial-copy counters
+without marking the runtime verified. It does not create or repair a mount,
+advance provisioning checkpoints, or establish complete-pool capacity authority.
+`CellProvisioningJournal::InstallRuntime` adds the complete recorded journal,
+independently retained anchor/head, plan identity and journal lifetime to that
+boundary. It rejects recursive installation and defers native-owner destruction
+if a callback closes the journal. Copies do not advance the provisioning history
+or imply execution readiness. Controller coordination and complete-pool authority
+are wired in source; installed acceptance remains unverified.
+
+`GCRINST1` is a separate 272-byte runtime-installation request contract. The
+TypeScript encoder and native `DecodeCellRuntimeInstall` bind the nonce, journal
+identity, prepared/head hashes, package hash and exact current Node runtime
+inventory. Both require an independently supplied request binding and recompute
+the bundle digest. Controller operation 18 receives the independent binding and
+installation frame after all 21 recovery checkpoints. It validates their anchor
+and head agreement before entering the installation owner. The owner remains
+unconnected in the installed service, which refuses the operation. A valid frame
+grants no copying, capacity, execution or readiness authority. Run
+`pnpm verify:remote-worker:windows-runtime-install-wire` for the cross-language
+normal/AddressSanitizer decoder fixture; it performs no volume or service actions.
+
+`InstallCellControllerRuntime` composes that decoder with the installed identity,
+fixed source pins and `CellProvisioningJournal::InstallRuntime`. It checks the
+admitted package and bundle against installer custody and rechecks the running
+service, cancellation, deadline and caller authority before/after source pinning,
+each journal-controlled write and final verification. Before copying, the adapter
+flushes an exclusive local installation intent in the original journal's protected
+control directory. It retains a sealed outcome, including partial-copy counters,
+before returning success. Remote revocation does not suppress local retention;
+loss of original host custody still refuses it. Installation records use distinct
+magic, hash domains and `.runtime-install` names; they cannot become workload
+records. Uncertain attempts remain for read-only recovery, never implicit replay.
+The caller still supplies complete-pool reservation/current authorization.
+The dedicated 136-byte installation authorization challenge binds connection
+nonce, installation nonce/request hash, journal head, monotonic check number and
+version. Every effect check needs an exact reply of the separate installation
+message kind; volume authorization cannot satisfy it. Checks share a 60-second
+operation deadline with a five-second per-exchange bound and 65,536-check ceiling.
+The native client requires a dedicated installation authority owner, sends the
+frozen request separately from its binding, and refuses mismatched/replayed/early
+challenges or unearned success receipts. It cannot substitute a volume callback.
+`pnpm verify:remote-worker:windows-install-client` exercises the real private-pipe
+client with controlled server responses; it does not install a runtime.
+The installed worker now selects the canonical reviewed request and uses combined
+operation 21 through a bounded protected Gateway session. Signed capacity admission
+and terminal-result persistence are wired; successful installed-host acceptance
+and resulting readiness still require proof on the target machine.
+
+The build receipt under `controller-build` describes reproducible source/images,
+not installed custody.
 Once the protected parent exists, installation failure preserves it and the
 staged installation for recovery. Cleanup removes only an invocation-owned,
 matching, stopped service; it never removes unknown cell resources.
@@ -296,3 +436,50 @@ first-boot status handling or worker hosting. Those installed-host checks remain
 required; package contents alone do not make a mini PC ready for protected work. The
 [comparison status](COMPARISON_IMPLEMENTATION_STATUS.md#portable-windows-worker-package)
 records the current local proof and the remaining installation/live gates.
+
+Measurement cleanup metadata travels in two ordered phases on the authenticated
+controller connection. The primary admission frame supplies the independent
+challenge, digest and retained installation request. After replaying the complete
+journal and checking current canonical authority, the controller invites the
+separately framed cleanup data. The helper accepts that invitation only for the
+exact connection and retained head. Receipt of cleanup data alone never grants
+measurement authority: the controller also requires a retained writer-exclusion
+hold and verifies sealed runtime and installation histories before scanning.
+The native-host worker holds a shared byte-range lock on the precreated empty
+`configuration/state-writers.guard` during normal activity. Its drained writer
+pause releases that lock temporarily; the controller's exclusive lock provides
+the measurement hold. Node mutations resume only after shared custody returns,
+and pause/resume failure refuses further writes in that worker lifetime. The
+separate host-run marker still protects against forgotten cleanup after a crash.
+Ordinary protected-TLS workers outside the native host do not require this
+installed gate. The controller now composes complete-pool observation and combined
+capture/installation owners in source. The authenticated Gateway session adapter
+and installed worker startup now select that combined path. The controller keeps
+its signing key and measurement hold alive through terminal verification and
+joined shutdown. Uncertain attempts enter read-only recovery, without recopying.
+Installed acceptance remains unverified; source wiring does not establish a ready
+installed worker. See [GOATBOX installation](GOATBOX_WORKER_INSTALL.md).
+
+## Runtime installation review API
+
+Protected operator routes expose the existing canonical installation-review owner:
+
+- `POST /api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-installation-reviews`
+  accepts `assignmentGeneration`, `packageSha256` and a normalized versioned
+  `runtimeBundle` manifest, plus `controllerEnrollment` containing the independently
+  collected `publicPointHex` and `keySha256` from the controller installer report.
+  Controller-signed installation requires this approved pin; worker RPC cannot
+  enroll or replace it. It creates a pending review and returns its approval
+  identifier, status, expiry and request hash.
+- `POST /api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-installation-reviews/:approvalId/retention`
+  accepts only `assignmentGeneration`. After the existing approval lifecycle has
+  approved that review, retention resolves its exact canonical request and
+  rechecks the assignment and reviewed revisions. It returns the retained review
+  identifier and request hash.
+
+Both routes require operator access and an `Idempotency-Key`. Workspace and
+assignment come from the URL; lease authority comes from recent protected worker
+contact. Missing or expired contact refuses the operation. Callers cannot supply
+lease tokens, approval status or replacement request bytes. A review or retained
+request does not register a native capture, admit copying, retry an uncertain
+installation or publish readiness. Those remain separate governed operations.

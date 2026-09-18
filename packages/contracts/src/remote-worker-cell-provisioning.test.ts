@@ -5,6 +5,13 @@ import { formatExchangeFixture } from "./remote-worker-cell-format-test-fixture.
 import { protectionExchangeFixture } from "./remote-worker-cell-protection-test-fixture.js";
 import { mountExchangeFixture } from "./remote-worker-cell-mount-test-fixture.js";
 import { mountedWorkspaceExchangeFixture } from "./remote-worker-cell-mounted-workspace-test-fixture.js";
+import { capacityObservationFixture } from "./remote-worker-cell-capacity-test-fixture.js";
+import { backingCapacityObservationFixture } from "./remote-worker-cell-backing-capacity-test-fixture.js";
+import { readRemoteWorkerCellBackingCapacityObservation, normalizeRemoteWorkerCellBackingCapacityExchange,
+  normalizeRemoteWorkerCellBackingCapacitySubmission, REMOTE_WORKER_CELL_BACKING_CAPACITY_EXCHANGE_SCHEMA_VERSION } from "./remote-worker-cell-backing-capacity.js";
+import { normalizeRemoteWorkerCellCapacityExchange, normalizeRemoteWorkerCellCapacitySubmission,
+  readRemoteWorkerCellCapacityObservation, REMOTE_WORKER_CELL_CAPACITY_EXCHANGE_SCHEMA_VERSION,
+  REMOTE_WORKER_CELL_CAPACITY_SUCCESS_RECEIPT } from "./remote-worker-cell-capacity-observation.js";
 import { normalizeRemoteWorkerCellMountedWorkspaceAnchor, readRemoteWorkerCellMountedWorkspaceCheckpoint,
   assertRemoteWorkerCellMountedWorkspaceSuccessor } from "./remote-worker-cell-mounted-workspace.js";
 import { rehashVolumeFixture } from "./remote-worker-cell-volume-test-fixture.js";
@@ -57,6 +64,120 @@ describe("native provisioning record contract", () => {
       registryWorkspaceId: "default", assignmentId: "workspace", assignmentGeneration: 1, leaseRevision: 1,
       plan: larger, planSha256: remoteWorkerCellProvisioningPlanSha256(larger), records });
   }
+  it("decodes distinct host-file charges against the original disk and complete mounted history", () => {
+    const history = mountedWorkspace(), bytes = backingCapacityObservationFixture(history);
+    const observed = readRemoteWorkerCellBackingCapacityObservation(bytes.toString("hex"), history);
+    expect(observed).toMatchObject({ assignmentId: history.assignmentId, leaseRevision: history.leaseRevision,
+      hostParentIdentityHex: history.plan.parentIdentityHex, diskIdentifierHex: history.plan.diskIdentifierHex,
+      backingFileBytes: 66 * 1024 ** 2, backingAllocatedBytes: 66 * 1024 ** 2,
+      journalBytes: 21504, journalAllocatedBytes: 24576, hostFileAllocatedBytes: 66 * 1024 ** 2 + 24576 });
+    expect(Object.isFrozen(observed) && Object.isFrozen(observed.hostDirectoryIdentityHex)).toBe(true);
+    expect(observed).not.toHaveProperty("allocatedBytes");
+    expect(() => readRemoteWorkerCellCapacityObservation(bytes.toString("hex"), history)).toThrow();
+    expect(() => readRemoteWorkerCellBackingCapacityObservation(capacityObservationFixture(history).toString("hex"), history)).toThrow();
+    expect(readRemoteWorkerCellBackingCapacityObservation(bytes.toString("hex"), { ...history, leaseRevision: 2 }).leaseRevision).toBe(2);
+  });
+  it.each([32, 55, 56, 87, 88, 119, 120, 151, 152, 183, 184, 207, 208, 231, 232, 255, 256, 279, 280, 303, 304, 319, 320, 328, 336, 359, 360, 383])(
+    "rejects changed host backing identity or disk specification at byte %s", (offset) => {
+      const history = mountedWorkspace(), bytes = backingCapacityObservationFixture(history);
+      bytes[offset] = bytes[offset]! ^ 1;
+      expect(() => readRemoteWorkerCellBackingCapacityObservation(bytes.toString("hex"), history)).toThrow();
+    });
+  it("rejects partial history, malformed frames, unsafe totals and impossible host charges", () => {
+    const history = mountedWorkspace(), bytes = backingCapacityObservationFixture(history), frame = bytes.toString("hex");
+    for (const field of ["records", "volumeRecords", "formatRecords", "protectionRecords", "mountRecords", "mountedWorkspaceRecords"])
+      expect(() => readRemoteWorkerCellBackingCapacityObservation(frame, { ...history, [field]: [] })).toThrow();
+    for (const input of [null, {}, bytes, frame.slice(2), frame + "00", frame.toUpperCase(), "0".repeat(64) + frame.slice(64)])
+      expect(() => readRemoteWorkerCellBackingCapacityObservation(input, history)).toThrow();
+    for (const [offset, value] of [[384, 63 * 1024 ** 2], [392, 65 * 1024 ** 2], [392, 129 * 1024 ** 2],
+      [400, 5 * 1024], [408, 21503], [408, 65537], [416, 66 * 1024 ** 2]] as const) {
+      const changed = Buffer.from(bytes); changed.writeBigUInt64LE(BigInt(value), offset);
+      expect(() => readRemoteWorkerCellBackingCapacityObservation(changed.toString("hex"), history)).toThrow();
+    }
+    for (const offset of [320, 328, 384, 392, 400, 408, 416]) {
+      const changed = Buffer.from(bytes); changed.writeBigUInt64LE(2n ** 53n, offset);
+      expect(() => readRemoteWorkerCellBackingCapacityObservation(changed.toString("hex"), history)).toThrow();
+    }
+  });
+  it("retains only exact host observation envelopes and rejects mounted stream substitution", () => {
+    const history = mountedWorkspace(), observationHex = backingCapacityObservationFixture(history).toString("hex");
+    const submission = { kind: "cell.backing_capacity.observation", expectedRevision: 0, observationHex,
+      nativeReceiptHex: REMOTE_WORKER_CELL_CAPACITY_SUCCESS_RECEIPT };
+    expect(normalizeRemoteWorkerCellBackingCapacitySubmission(submission)).toEqual(submission);
+    for (const patch of [{ extra: true }, { expectedRevision: -1 }, { expectedRevision: 0.5 }, { expectedRevision: 2147483648 },
+      { nativeReceiptHex: "00".repeat(16) }, { observationHex: observationHex.toUpperCase() }, { observationHex: observationHex + "00" },
+      { kind: "cell.capacity.observation" }, { observationHex: capacityObservationFixture(history).toString("hex") }])
+      expect(() => normalizeRemoteWorkerCellBackingCapacitySubmission({ ...submission, ...patch })).toThrow();
+    expect(() => normalizeRemoteWorkerCellBackingCapacitySubmission({ kind: "cell.backing_capacity.snapshot", extra: true })).toThrow();
+    let called = false;
+    expect(() => normalizeRemoteWorkerCellBackingCapacitySubmission({ get kind() { called = true; return "cell.backing_capacity.snapshot"; } })).toThrow();
+    expect(() => normalizeRemoteWorkerCellBackingCapacitySubmission({ ...submission, get expectedRevision() { called = true; return 0; } })).toThrow();
+    expect(called).toBe(false);
+    const record = { revision: 1, leaseRevision: 1, recordedAt: "2026-09-13T00:00:00.000Z", observationHex,
+      nativeReceiptHex: REMOTE_WORKER_CELL_CAPACITY_SUCCESS_RECEIPT };
+    const exchange = { schemaVersion: REMOTE_WORKER_CELL_BACKING_CAPACITY_EXCHANGE_SCHEMA_VERSION, history, record };
+    for (const patch of [{ revision: 0 }, { leaseRevision: 2 }, { recordedAt: "2026-02-30T00:00:00.000Z" },
+      { nativeReceiptHex: "00".repeat(16) }, { extra: true }, { observationHex: capacityObservationFixture(history).toString("hex") }])
+      expect(() => normalizeRemoteWorkerCellBackingCapacityExchange({ ...exchange, record: { ...record, ...patch } })).toThrow();
+    expect(() => normalizeRemoteWorkerCellCapacityExchange(exchange)).toThrow();
+    expect(() => normalizeRemoteWorkerCellBackingCapacityExchange({ ...exchange, schemaVersion: REMOTE_WORKER_CELL_CAPACITY_EXCHANGE_SCHEMA_VERSION })).toThrow();
+    expect(() => normalizeRemoteWorkerCellBackingCapacityExchange({ ...exchange, history: { ...history, mountedWorkspaceRecords: [] } })).toThrow();
+    const retained = normalizeRemoteWorkerCellBackingCapacityExchange({ ...exchange, history: { ...history, leaseRevision: 2 } });
+    expect(retained.record?.leaseRevision).toBe(1);
+    expect(Object.isFrozen(retained) && Object.isFrozen(retained.record)).toBe(true);
+    expect(normalizeRemoteWorkerCellBackingCapacityExchange({ ...exchange, record: null }).record).toBeNull();
+  });
+  it("decodes an independently encoded partial capacity observation with the complete history", () => {
+    const history = mountedWorkspace(), bytes = capacityObservationFixture(history);
+    const observation = readRemoteWorkerCellCapacityObservation(bytes.toString("hex"), history);
+    expect(observation).toMatchObject({ logicalFileBytes: 9000, allocatedBytes: 4096, fileCount: 2, directoryCount: 4,
+      observationHex: bytes.toString("hex"), assignmentId: history.assignmentId });
+    expect(Object.isFrozen(observation)).toBe(true);
+    expect(Object.isFrozen(observation.directoryIdentityHex)).toBe(true);
+    const empty = normalizeRemoteWorkerCellCapacityExchange({ schemaVersion: REMOTE_WORKER_CELL_CAPACITY_EXCHANGE_SCHEMA_VERSION, history, record: null });
+    expect(empty.record).toBeNull();
+    const record = { revision: 1, leaseRevision: history.leaseRevision, recordedAt: "2026-09-13T00:00:00.000Z",
+      observationHex: bytes.toString("hex"), nativeReceiptHex: REMOTE_WORKER_CELL_CAPACITY_SUCCESS_RECEIPT };
+    expect(normalizeRemoteWorkerCellCapacityExchange({ ...empty, record }).record).toEqual(record);
+  });
+  it.each([32, 40, 56, 88, 120, 152, 184, 192, 208, 216, 232, 240, 256, 264, 280, 288, 304, 312])(
+    "rejects a capacity identity or history mismatch at byte %s", (offset) => {
+      const history = mountedWorkspace(), bytes = capacityObservationFixture(history);
+      bytes[offset] = bytes[offset]! ^ 1;
+      expect(() => readRemoteWorkerCellCapacityObservation(bytes.toString("hex"), history)).toThrow();
+    });
+  it("rejects unsafe capacity totals, missing roots, incomplete history and a zero nonce", () => {
+    const history = mountedWorkspace(), original = capacityObservationFixture(history);
+    for (const mutate of [
+      (bytes: Buffer) => bytes.fill(0, 0, 32),
+      (bytes: Buffer) => bytes.writeBigUInt64LE(2n ** 53n, 328),
+      (bytes: Buffer) => bytes.writeBigUInt64LE(2n ** 53n, 336),
+      (bytes: Buffer) => bytes.writeUInt32LE(3, 348),
+      (bytes: Buffer) => bytes.writeUInt32LE(20001, 348),
+      (bytes: Buffer) => bytes.writeUInt32LE(19997, 344),
+      (bytes: Buffer) => bytes.writeUInt32LE(0, 344),
+    ]) { const bytes = Buffer.from(original); mutate(bytes); expect(() => readRemoteWorkerCellCapacityObservation(bytes.toString("hex"), history)).toThrow(); }
+    for (const field of ["records", "volumeRecords", "formatRecords", "protectionRecords", "mountRecords", "mountedWorkspaceRecords"])
+      expect(() => readRemoteWorkerCellCapacityObservation(original.toString("hex"), { ...history, [field]: [] })).toThrow();
+  });
+  it("requires exact capacity submission/receipt shape and canonical record metadata", () => {
+    const history = mountedWorkspace(), observationHex = capacityObservationFixture(history).toString("hex");
+    const submission = { kind: "cell.capacity.observation", expectedRevision: 0, observationHex, nativeReceiptHex: REMOTE_WORKER_CELL_CAPACITY_SUCCESS_RECEIPT };
+    expect(normalizeRemoteWorkerCellCapacitySubmission(submission)).toEqual(submission);
+    for (const patch of [{ extra: true }, { expectedRevision: -1 }, { expectedRevision: 0.5 }, { expectedRevision: 2147483648 },
+      { nativeReceiptHex: "00".repeat(16) }, { observationHex: observationHex.toUpperCase() }, { observationHex: observationHex + "00" }])
+      expect(() => normalizeRemoteWorkerCellCapacitySubmission({ ...submission, ...patch })).toThrow();
+    expect(() => normalizeRemoteWorkerCellCapacitySubmission({ kind: "cell.capacity.snapshot", extra: true })).toThrow();
+    let called = false;
+    expect(() => normalizeRemoteWorkerCellCapacitySubmission({ get kind() { called = true; return "cell.capacity.snapshot"; } })).toThrow();
+    expect(called).toBe(false);
+    const record = { revision: 1, leaseRevision: 1, recordedAt: "2026-09-13T00:00:00.000Z", observationHex,
+      nativeReceiptHex: REMOTE_WORKER_CELL_CAPACITY_SUCCESS_RECEIPT };
+    for (const patch of [{ revision: 0 }, { leaseRevision: 2 }, { recordedAt: "2026-02-30T00:00:00.000Z" }, { nativeReceiptHex: "00".repeat(16) }, { extra: true }])
+      expect(() => normalizeRemoteWorkerCellCapacityExchange({ schemaVersion: REMOTE_WORKER_CELL_CAPACITY_EXCHANGE_SCHEMA_VERSION, history, record: { ...record, ...patch } })).toThrow();
+    expect(normalizeRemoteWorkerCellCapacityExchange({ schemaVersion: REMOTE_WORKER_CELL_CAPACITY_EXCHANGE_SCHEMA_VERSION,
+      history: { ...history, leaseRevision: 2 }, record }).record?.leaseRevision).toBe(1);
+  });
   it("retains workspace intent and completion after all nineteen prior records on v7 only", () => {
     const full = mountedWorkspace(), anchor = remoteWorkerCellProvisioningMountedWorkspaceAnchor(full);
     const records = full.mountedWorkspaceRecords!;

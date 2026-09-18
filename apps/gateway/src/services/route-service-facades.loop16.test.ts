@@ -95,7 +95,7 @@ describe("gateway route service facades", () => {
       deleteMcpServer: fn(async (serverId: string) => ({ serverId, deleted: true })),
       disconnectMcpServer: fn(async (serverId: string) => ({ serverId, status: "disconnected" })),
       invokeMcpTool: fn(async (input: unknown) => ({ ok: true, input })),
-      listMcpServers: fn(async () => [{ serverId: "server-1" }]),
+      listMcpServers: fn(async () => [{ serverId: "server-1", revision: "a".repeat(64) }]),
       listMcpTemplateDiscovery: fn(async () => [{ templateId: "template-1" }]),
       listMcpTemplates: fn(async () => [{ serverId: "template-1", installed: false }]),
       listMcpTools: fn(async (serverId: string) => [{ serverId, toolName: "tool-1" }]),
@@ -106,18 +106,18 @@ describe("gateway route service facades", () => {
     };
     const service = new McpRouteService(mcp as never);
 
-    await expect(service.listMcpServers()).resolves.toEqual([{ serverId: "server-1" }]);
+    await expect(service.listMcpServers()).resolves.toEqual([{ serverId: "server-1", revision: "a".repeat(64) }]);
     await expect(service.listMcpTemplates()).resolves.toEqual([{ serverId: "template-1", installed: false }]);
     await expect(service.listMcpTemplateDiscovery()).resolves.toEqual([{ templateId: "template-1" }]);
     await expect(service.createMcpServer({ label: "Local" })).resolves.toEqual({
       serverId: "server-1",
       input: { label: "Local" },
     });
-    await expect(service.updateMcpServer("server-1", { label: "Renamed" })).resolves.toEqual({
+    await expect(service.updateMcpServer("server-1", { label: "Renamed", expectedRevision: "a".repeat(64) })).resolves.toEqual({
       serverId: "server-1",
-      input: { label: "Renamed" },
+      input: { label: "Renamed", expectedRevision: "a".repeat(64) },
     });
-    await expect(service.deleteMcpServer("server-1")).resolves.toEqual({ serverId: "server-1", deleted: true });
+    await expect(service.deleteMcpServer("server-1", "a".repeat(64))).resolves.toEqual({ serverId: "server-1", deleted: true });
     await expect(service.connectMcpServer("server-1")).resolves.toEqual({ serverId: "server-1", status: "connected" });
     await expect(service.disconnectMcpServer("server-1")).resolves.toEqual({
       serverId: "server-1",
@@ -137,9 +137,9 @@ describe("gateway route service facades", () => {
       ok: true,
       input: { serverId: "server-1", toolName: "tool-1" },
     });
-    await expect(service.updateMcpServerPolicy("server-1", { grants: [] })).resolves.toEqual({
+    await expect(service.updateMcpServerPolicy("server-1", { grants: [], expectedRevision: "a".repeat(64) } as never)).resolves.toEqual({
       serverId: "server-1",
-      policy: { grants: [] },
+      policy: { grants: [], expectedRevision: "a".repeat(64) },
     });
     await expect(service.runMcpServerHealthCheck("server-1")).resolves.toEqual({ serverId: "server-1", status: "ok" });
   });
@@ -147,6 +147,7 @@ describe("gateway route service facades", () => {
   it("reconciles redacted MCP public updates before calling the raw admin port", async () => {
     const rawServer = {
       serverId: "server-secret",
+      revision: "a".repeat(64),
       label: "Secret server",
       transport: "stdio",
       command: "node",
@@ -184,6 +185,7 @@ describe("gateway route service facades", () => {
     const projected = (await service.listMcpServers())[0]!;
 
     await service.updateMcpServer(rawServer.serverId, {
+      expectedRevision: rawServer.revision,
       label: "Renamed server",
       args: projected.args?.map((entry) => (entry === "3000" ? "4000" : entry)),
       url: projected.url?.replace("mode=safe", "mode=fast"),
@@ -196,10 +198,12 @@ describe("gateway route service facades", () => {
         args: ["server.mjs", "--password", "short-pass", "--api-key=short-key", "--port", "4000"],
         url: "https://mcp.example.test/token/path-secret?token=query-secret&mode=fast",
       }),
+      undefined,
     );
     expect(rawServer.args[2]).toBe("short-pass");
 
     await service.updateMcpServerPolicy(rawServer.serverId, {
+      expectedRevision: rawServer.revision,
       ...projected.policy,
       redactionMode: "basic",
     });
@@ -210,6 +214,7 @@ describe("gateway route service facades", () => {
         notes: rawServer.policy.notes,
         redactionMode: "basic",
       }),
+      undefined,
     );
   });
 

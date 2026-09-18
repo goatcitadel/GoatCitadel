@@ -25,6 +25,7 @@ import {
   type ApprovalBulkResolveResult,
   type ApprovalCreateInput,
   type ApprovalRequest,
+  type ApprovalNativeRuntimeReview,
   type ApprovalResolveInput,
   type DurableWakeResult,
   type RealtimeEvent,
@@ -99,6 +100,7 @@ function isApprovalCreateCommitFinalizer(
  * explicit contract enables future extraction and testability.
  */
 export interface ApprovalLifecycleHost {
+  readNativeRuntimeReview?(approval: ApprovalRequest): ApprovalNativeRuntimeReview | undefined;
   // ── storage ────────────────────────────────────────────────────────
   readonly storage: Pick<
     Storage,

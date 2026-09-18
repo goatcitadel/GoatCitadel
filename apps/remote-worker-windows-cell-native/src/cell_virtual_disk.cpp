@@ -1,11 +1,13 @@
 #include "cell_virtual_disk.hpp"
 #include "cell_security.hpp"
+#include "cell_capacity.hpp"
 #include <initguid.h>
 #include <virtdisk.h>
 #include <aclapi.h>
 #include <algorithm>
 #include <cstring>
 #include <string_view>
+#include <limits>
 #pragma comment(lib, "virtdisk.lib")
 #pragma comment(lib, "advapi32.lib")
 
@@ -195,6 +197,68 @@ DWORD CellVirtualDiskFile::RecordIdentity(CellWorkspaceDirectories& workspace, C
   return ERROR_SUCCESS;
 }
 
+DWORD CellVirtualDiskFile::ObserveCapacity(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& expected,
+  DWORD wall_limit_ms, const CellFootprintScanGuard& guard, CellVirtualDiskCapacity* output) noexcept {
+  return ObserveCapacityExpected(workspace, expected, wall_limit_ms, guard, false, output);
+}
+DWORD CellVirtualDiskFile::ObserveCapacityExpected(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& supplied,
+  DWORD wall_limit_ms, const CellFootprintScanGuard& supplied_guard, bool attached, CellVirtualDiskCapacity* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto expected = supplied;
+  const auto guard = supplied_guard;
+  *output = {};
+  if (!guard.authorize || !wall_limit_ms || wall_limit_ms > 60000 || !IsValidCellVirtualDiskSpec(expected.spec))
+    return ERROR_INVALID_PARAMETER;
+  const auto started = GetTickCount64();
+  const auto lifetime = lifetime_revision_;
+  if (lifetime == std::numeric_limits<std::uint64_t>::max()) return ERROR_INVALID_STATE;
+  try {
+    const auto file = file_, disk = disk_;
+    const auto path = path_;
+    const auto descriptor = descriptor_;
+    CellWorkspaceIdentities roots;
+    auto error = Control(guard.cancellation, started, wall_limit_ms);
+    if (!error) error = workspace.RecordIdentities(&roots);
+    if (error) return error;
+    const auto matches = [&]() noexcept {
+      return lifetime_revision_ == lifetime && file_ == file && disk_ == disk && path_ == path && descriptor_ == descriptor &&
+        created_ && IsEqualGUID(spec_.identifier, expected.spec.identifier) && spec_.virtual_bytes == expected.spec.virtual_bytes &&
+        spec_.reserved_file_bytes == expected.spec.reserved_file_bytes && control_identity_ == expected.control && identity_ == expected.backing;
+    };
+    const auto verify = [&]() noexcept -> DWORD {
+      auto checked = Control(guard.cancellation, started, wall_limit_ms);
+      if (checked) return checked;
+      if (!matches()) return ERROR_FILE_INVALID;
+      CellWorkspaceIdentities current;
+      checked = workspace.RecordIdentities(&current);
+      if (!checked && current != roots) checked = ERROR_FILE_INVALID;
+      if (!checked) checked = VerifyExpected(workspace, attached);
+      return checked ? checked : Control(guard.cancellation, started, wall_limit_ms);
+    };
+    const auto authorize = [&]() noexcept -> DWORD {
+      auto checked = verify();
+      if (!checked) checked = guard.authorize(guard.context);
+      return checked ? checked : verify();
+    };
+    error = authorize();
+    if (error) return error;
+    const CellVirtualDiskCapacity observed{expected, physical_bytes_, allocated_bytes_};
+    FILE_BASIC_INFO before{}, after{};
+    if (!GetFileInformationByHandleEx(file_, FileBasicInfo, &before, sizeof(before))) return Error();
+    error = authorize();
+    if (error) return error;
+    // No owner callback follows this final native readback. The held original
+    // file remains pinned, and Close/reopen cannot reuse this owner's lifetime.
+    if (!GetFileInformationByHandleEx(file_, FileBasicInfo, &after, sizeof(after))) return Error();
+    if (observed.file_bytes != physical_bytes_ || observed.allocated_bytes != allocated_bytes_ ||
+        before.ChangeTime.QuadPart != after.ChangeTime.QuadPart || before.LastWriteTime.QuadPart != after.LastWriteTime.QuadPart ||
+        before.FileAttributes != after.FileAttributes) return ERROR_FILE_INVALID;
+    error = Control(guard.cancellation, started, wall_limit_ms);
+    if (!error) *output = observed;
+    return error;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+
 DWORD CellVirtualDiskFile::InspectBackingFile(CellFileIdentity* identity) noexcept {
   FILE_ATTRIBUTE_TAG_INFO attributes{};
   FILE_STANDARD_INFO standard{};
@@ -264,6 +328,7 @@ DWORD CellVirtualDiskFile::VerifyExpected(CellWorkspaceDirectories& workspace, b
   return ERROR_SUCCESS;
 }
 void CellVirtualDiskFile::Close() noexcept {
+  if (lifetime_revision_ != std::numeric_limits<std::uint64_t>::max()) ++lifetime_revision_;
   ready_ = false;
   if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_);
   if (disk_) CloseHandle(disk_);
@@ -410,6 +475,36 @@ DWORD CellVirtualDiskAttachment::Verify(CellWorkspaceDirectories& workspace) noe
     if (error) state_ = CellAttachmentState::unknown;
     return error;
   } catch (...) { state_ = CellAttachmentState::unknown; return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD CellVirtualDiskAttachment::ObserveCapacity(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& supplied,
+  DWORD wall_limit_ms, const CellFootprintScanGuard& supplied_guard, CellVirtualDiskCapacity* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto expected = supplied;
+  const auto guard = supplied_guard;
+  *output = {};
+  if (!guard.authorize || !wall_limit_ms || wall_limit_ms > 60000) return ERROR_INVALID_PARAMETER;
+  try {
+    struct Context final {
+      CellVirtualDiskAttachment* owner;
+      CellWorkspaceDirectories* workspace;
+      CellFootprintScanGuard guard;
+      ULONGLONG started;
+      DWORD wall_ms;
+      std::wstring device_path;
+      static DWORD Authorize(void* raw) noexcept {
+        auto& context = *static_cast<Context*>(raw);
+        auto error = Control(context.guard.cancellation, context.started, context.wall_ms);
+        if (!error) error = context.owner->Verify(*context.workspace);
+        if (!error && context.owner->device_path_ != context.device_path) error = ERROR_FILE_INVALID;
+        if (!error) error = context.guard.authorize(context.guard.context);
+        if (!error) error = context.owner->Verify(*context.workspace);
+        if (!error && context.owner->device_path_ != context.device_path) error = ERROR_FILE_INVALID;
+        return error ? error : Control(context.guard.cancellation, context.started, context.wall_ms);
+      }
+    } context{this, &workspace, guard, GetTickCount64(), wall_limit_ms, device_path_};
+    return retained_.ObserveCapacityExpected(workspace, expected, wall_limit_ms,
+      {Context::Authorize, &context, guard.cancellation}, true, output);
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
 DWORD CellVirtualDiskAttachment::Detach(CellWorkspaceDirectories& workspace, DWORD wall_limit_ms, HANDLE cancellation) noexcept {
   if (state_ != CellAttachmentState::attached) return ERROR_INVALID_STATE;

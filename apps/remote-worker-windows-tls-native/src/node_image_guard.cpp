@@ -1,6 +1,7 @@
 #include "tls_key.hpp"
 #include "node_image_guard_api.hpp"
 #include "tls_adapter_pin.hpp"
+#include "service_identity.hpp"
 #include <cstring>
 #include <cwchar>
 #include <memory>
@@ -28,6 +29,7 @@ BOOL CALLBACK Initialize(PINIT_ONCE, PVOID, PVOID*) noexcept {
   NAPI_BIND(throw_error); NAPI_BIND(get_cb_info); NAPI_BIND(get_value_string_utf8);
   NAPI_BIND(create_object); NAPI_BIND(create_string_utf16); NAPI_BIND(create_function);
   NAPI_BIND(create_external); NAPI_BIND(set_named_property); NAPI_BIND(object_freeze);
+  NAPI_BIND(get_boolean);
 #undef NAPI_BIND
   // External-value finalizers can outlive a require() cache entry.
   ready = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -137,11 +139,71 @@ napi_value __cdecl PinStdioExecutor(napi_env env, napi_callback_info info) noexc
 napi_value __cdecl PinCellProvisioningExecutor(napi_env env, napi_callback_info info) noexcept {
   return PinOwnedExecutor(env, info, InstalledComponent::cell_provisioning);
 }
+struct StateWriterGate final {
+  RuntimeImageLeases images;
+  HANDLE directory = INVALID_HANDLE_VALUE, file = INVALID_HANDLE_VALUE;
+  worker_host::WorkerStateGateLock lock;
+  DWORD thread = GetCurrentThreadId();
+  bool paused = false, failed = false;
+  ~StateWriterGate() {
+    lock.Release();
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
+  }
+};
+std::unique_ptr<StateWriterGate> state_gate;
+bool NoArguments(napi_env env, napi_callback_info info) noexcept {
+  napi_value argument = nullptr; std::size_t count = 1;
+  return ready && api.get_cb_info(env, info, &count, &argument, nullptr, nullptr) == kNapiOk && count == 0;
+}
+napi_value Boolean(napi_env env, bool value) noexcept {
+  napi_value result = nullptr;
+  return api.get_boolean(env, value, &result) == kNapiOk ? result : Refuse(env);
+}
+napi_value __cdecl StartStateWriterGate(napi_env env, napi_callback_info info) noexcept {
+  if (!NoArguments(env, info) || state_gate) return Refuse(env);
+  try {
+    KeyAuthority executor{}; worker_host::TokenIdentity token;
+    if (!InstalledAuthority(&executor, InstalledComponent::cell_provisioning) ||
+        !worker_host::CollectWorkerToken(&token) || !worker_host::ValidateWorkerToken(token)) return Refuse(env);
+    const std::wstring path(executor.helper_path.data());
+    const std::wstring suffix = L"\\payload\\app\\native\\GoatCitadelRemoteWorkerCellProvisioning.exe";
+    if (path.size() <= suffix.size() || CompareStringOrdinal(path.c_str() + path.size() - suffix.size(), -1, suffix.c_str(), -1, TRUE) != CSTR_EQUAL) return Refuse(env);
+    auto gate = std::make_unique<StateWriterGate>();
+    gate->images.helper = RetainPinnedImage(executor);
+    if (!gate->images.helper) return Refuse(env);
+    const auto directory = path.substr(0, path.size() - suffix.size()) + L"\\configuration";
+    gate->directory = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    FILE_ATTRIBUTE_TAG_INFO directory_info{};
+    if (gate->directory == INVALID_HANDLE_VALUE || GetFileType(gate->directory) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandleEx(gate->directory, FileAttributeTagInfo, &directory_info, sizeof(directory_info)) ||
+        !(directory_info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (directory_info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+        !worker_host::VerifyWorkerFileHandle(gate->directory)) return Refuse(env);
+    gate->file = CreateFileW((directory + L"\\state-writers.guard").c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (gate->file == INVALID_HANDLE_VALUE || !worker_host::VerifyWorkerFileHandle(gate->file) || gate->lock.Acquire(gate->file, false)) return Refuse(env);
+    state_gate = std::move(gate); return Boolean(env, true);
+  } catch (...) { return Refuse(env); }
+}
+napi_value __cdecl PauseStateWriterGate(napi_env env, napi_callback_info info) noexcept {
+  if (!NoArguments(env, info) || !state_gate || state_gate->thread != GetCurrentThreadId() || state_gate->paused || state_gate->failed) return Refuse(env);
+  if (state_gate->lock.Check() || state_gate->lock.Release()) { state_gate->failed = true; return Refuse(env); }
+  state_gate->paused = true; return Boolean(env, true);
+}
+napi_value __cdecl ResumeStateWriterGate(napi_env env, napi_callback_info info) noexcept {
+  if (!NoArguments(env, info) || !state_gate || state_gate->thread != GetCurrentThreadId() || !state_gate->paused || state_gate->failed) return Refuse(env);
+  const auto error = state_gate->lock.Acquire(state_gate->file, false);
+  if (error == ERROR_LOCK_VIOLATION) return Boolean(env, false);
+  if (error) { state_gate->failed = true; return Refuse(env); }
+  state_gate->paused = false; return Boolean(env, true);
+}
 }
 
 napi_value RegisterImageGuard(napi_env env, napi_value exports) noexcept {
   if (!InitOnceExecuteOnce(&initialization, Initialize, nullptr, nullptr) || !ready) return Refuse(env);
   napi_value pin = nullptr, pin_file_executor = nullptr, pin_stdio_executor = nullptr, pin_cell_provisioning = nullptr;
+  napi_value start_gate = nullptr, pause_gate = nullptr, resume_gate = nullptr;
   if (api.create_function(env, "pin", 3, Pin, nullptr, &pin) != kNapiOk ||
       api.set_named_property(env, exports, "pin", pin) != kNapiOk ||
       api.create_function(env, "pinFileExecutor", 15, PinFileExecutor, nullptr, &pin_file_executor) != kNapiOk ||
@@ -150,6 +212,12 @@ napi_value RegisterImageGuard(napi_env env, napi_value exports) noexcept {
       api.set_named_property(env, exports, "pinStdioExecutor", pin_stdio_executor) != kNapiOk ||
       api.create_function(env, "pinCellProvisioningExecutor", 27, PinCellProvisioningExecutor, nullptr, &pin_cell_provisioning) != kNapiOk ||
       api.set_named_property(env, exports, "pinCellProvisioningExecutor", pin_cell_provisioning) != kNapiOk ||
+      api.create_function(env, "startStateWriterGate", 20, StartStateWriterGate, nullptr, &start_gate) != kNapiOk ||
+      api.set_named_property(env, exports, "startStateWriterGate", start_gate) != kNapiOk ||
+      api.create_function(env, "pauseStateWriterGate", 20, PauseStateWriterGate, nullptr, &pause_gate) != kNapiOk ||
+      api.set_named_property(env, exports, "pauseStateWriterGate", pause_gate) != kNapiOk ||
+      api.create_function(env, "resumeStateWriterGate", 21, ResumeStateWriterGate, nullptr, &resume_gate) != kNapiOk ||
+      api.set_named_property(env, exports, "resumeStateWriterGate", resume_gate) != kNapiOk ||
       api.object_freeze(env, exports) != kNapiOk) return Refuse(env);
   return exports;
 }

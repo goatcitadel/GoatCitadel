@@ -23,7 +23,13 @@ export function ChatTurnActivityRows({
     return null;
   }
 
-  const visibleRuns = mode === "chat" ? toolRuns.slice(0, 3) : toolRuns.slice(0, 6);
+  const limit = mode === "chat" ? 3 : 6;
+  // Keep failed/blocked evidence visible even when later successful steps finish.
+  const prioritized = [...toolRuns].sort((a, b) =>
+    Number(getChatToolRunDiagnostics(b).hasFailureSignal || b.status === "failed" || b.status === "blocked")
+    - Number(getChatToolRunDiagnostics(a).hasFailureSignal || a.status === "failed" || a.status === "blocked"));
+  const visibleIds = new Set(prioritized.slice(0, limit).map((run) => run.toolRunId));
+  const visibleRuns = toolRuns.filter((run) => visibleIds.has(run.toolRunId));
   const hiddenCount = toolRuns.length - visibleRuns.length;
 
   return (
@@ -307,12 +313,14 @@ export function ChatLiveActivityRail({
   onOpenRunDetails,
   onStopStreamingTurn,
   maxVisible = 4,
+  hidePhase = false,
 }: {
   turn: ChatThreadTurnRecord;
   hasVisibleAssistantText: boolean;
   onOpenRunDetails: (turnId: string) => void;
   onStopStreamingTurn?: () => void;
   maxVisible?: number;
+  hidePhase?: boolean;
 }) {
   const hasRunningTool = turn.toolRuns.some((run) => run.status === "started");
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -337,7 +345,7 @@ export function ChatLiveActivityRail({
     return () => clearInterval(intervalId);
   }, [hasRunningTool]);
 
-  const phase = deriveLiveActivityPhase({
+  const phase = hidePhase ? null : deriveLiveActivityPhase({
     traceStatus: turn.trace.status,
     toolRuns: turn.toolRuns,
     hasVisibleAssistantText,

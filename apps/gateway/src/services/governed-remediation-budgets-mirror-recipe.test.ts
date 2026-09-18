@@ -251,7 +251,7 @@ class FakeDurableParent implements GovernedRemediationDurableParentPort {
     this.resumeCalls += 1;
     const existing = this.resumes.get(request.idempotencyKey);
     if (existing !== undefined) return { status: "resumed" as const, resumedRunVersion: existing, replayed: true };
-    const resumedRunVersion = request.expectedWaitingRunVersion + 1;
+    const resumedRunVersion = request.expectedWaitingRunVersion + 2;
     this.resumes.set(request.idempotencyKey, resumedRunVersion);
     return { status: "resumed" as const, resumedRunVersion, replayed: false };
   }
@@ -298,7 +298,7 @@ async function createHarness(
   const root = await fs.mkdtemp(path.join(scratchParent, "goat-budgets-mirror-recipe-"));
   cleanupRoots.push(root);
   const payload = JSON.parse(
-    await fs.readFile(path.resolve(process.cwd(), "../../config/goatcitadel.example.json"), "utf8"),
+    await fs.readFile(new URL("../../../../config/goatcitadel.example.json", import.meta.url), "utf8"),
   ) as CompleteUnifiedConfigPayload;
   delete payload.generation;
   if (options.llmCanary) {
@@ -473,7 +473,7 @@ describe("governed budgets mirror recipe", () => {
 
   it("stays side-effect free until the explicit pre-effect approval arrives", async () => {
     const harness = await createHarness();
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     const awaiting = await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     expect(awaiting.record.state).toBe("awaiting_preapproval");
     expect(harness.port.publishCalls).toBe(0);
@@ -490,7 +490,7 @@ describe("governed budgets mirror recipe", () => {
       expect(entries).toHaveLength(1);
       journalAtPublish = readJournalEntrySync(path.join(harness.journal.directory(), entries[0] as string));
     };
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const completed = await continueRemediation(
       harness,
@@ -525,7 +525,7 @@ describe("governed budgets mirror recipe", () => {
     // Completion callback retired the journal boundedly. Delivery is
     // fire-and-forget in-process, so the assertion polls briefly.
     await vi.waitFor(async () => expect(await harness.journal.list()).toEqual([]), { timeout: 5_000, interval: 25 });
-    expect(harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
       terminalState: "completed",
       effectDisposition: "effect_applied",
     });
@@ -535,7 +535,7 @@ describe("governed budgets mirror recipe", () => {
     // No in-process completion callback: boot replay must retire on its own.
     const harness = await createHarness({ registerCompletionPort: false });
     harness.port.failPublish = "uncertain_after_write";
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const quarantined = await continueRemediation(
       harness,
@@ -544,7 +544,7 @@ describe("governed budgets mirror recipe", () => {
     );
     expect(quarantined.record.state).toBe("failed");
     await expect(harness.journal.list()).resolves.toEqual(["remediation-mirror-1"]);
-    expect(harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
       effectDisposition: "effect_unknown",
     });
 
@@ -552,7 +552,7 @@ describe("governed budgets mirror recipe", () => {
     harness.port.failPublish = null;
     const recovered = await harness.coordinator.recoverReconciliations({ limit: 10, pageSize: 1 });
     expect(recovered.reconciliations[0]).toMatchObject({ state: "resolved_verified" });
-    expect(harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
       terminalState: "failed",
       effectDisposition: "effect_applied",
     });
@@ -570,7 +570,7 @@ describe("governed budgets mirror recipe", () => {
     // No in-process completion callback: boot replay must retire on its own.
     const harness = await createHarness({ registerCompletionPort: false });
     harness.port.failPublish = "uncertain_no_write";
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const quarantined = await continueRemediation(
       harness,
@@ -583,7 +583,7 @@ describe("governed budgets mirror recipe", () => {
     harness.port.failPublish = null;
     const recovered = await harness.coordinator.recoverReconciliations({ limit: 10, pageSize: 1 });
     expect(recovered.reconciliations[0]).toMatchObject({ state: "resolved_no_effect" });
-    expect(harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
       effectDisposition: "no_effect",
     });
     const summary = await harness.owner.replayJournalOnBoot(harness.coordinator);
@@ -629,7 +629,7 @@ describe("governed budgets mirror recipe", () => {
   it("rolls the mirror back to the exact captured bytes when post-apply authority collapses", async () => {
     const harness = await createHarness();
     harness.authority.denyPhases.add("probe");
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const rolledBack = await continueRemediation(
       harness,
@@ -640,7 +640,7 @@ describe("governed budgets mirror recipe", () => {
     await expect(fs.readFile(harness.mirrorPath, "utf8")).resolves.toBe(DRIFTED_MIRROR);
     const receipts = harness.repository.listReceipts("remediation-mirror-1");
     expect(receipts.map((receipt) => receipt.kind)).toEqual(["application", "rollback"]);
-    expect(harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
       terminalState: "rolled_back",
       effectDisposition: "effect_rolled_back",
     });
@@ -682,7 +682,7 @@ describe("governed budgets mirror recipe", () => {
   it("fails closed with no effect when the native port is unavailable", async () => {
     const harness = await createHarness();
     harness.port.availableFlag = false;
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const failed = await continueRemediation(
       harness,
@@ -695,7 +695,7 @@ describe("governed budgets mirror recipe", () => {
     ]);
     await expect(fs.readFile(harness.mirrorPath, "utf8")).resolves.toBe(DRIFTED_MIRROR);
     await expect(harness.journal.list()).resolves.toEqual([]);
-    expect(harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
+    expect(await harness.coordinator.completionNoticeFor("remediation-mirror-1")).toMatchObject({
       effectDisposition: "no_effect",
     });
   });
@@ -708,7 +708,7 @@ describe("governed budgets mirror recipe", () => {
       const entries = fsSync.readdirSync(harness.journal.directory()).filter((name) => name.endsWith(".journal.json"));
       journalBytesAtPublish = fsSync.readFileSync(path.join(harness.journal.directory(), entries[0] as string), "utf8");
     };
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const completed = await continueRemediation(
       harness,
@@ -719,13 +719,13 @@ describe("governed budgets mirror recipe", () => {
     expect(journalBytesAtPublish.length).toBeGreaterThan(0);
     expect(journalBytesAtPublish).not.toContain(canary);
     expect(JSON.stringify(harness.repository.listReceipts("remediation-mirror-1"))).not.toContain(canary);
-    expect(JSON.stringify(harness.coordinator.completionNoticeFor("remediation-mirror-1"))).not.toContain(canary);
+    expect(JSON.stringify(await harness.coordinator.completionNoticeFor("remediation-mirror-1"))).not.toContain(canary);
     await expect(fs.readFile(harness.mirrorPath, "utf8")).resolves.not.toContain(canary);
   });
 
   it("retires settled journals on boot replay and retains active or corrupt custody", async () => {
     const harness = await createHarness({ registerCompletionPort: false });
-    harness.coordinator.start(startInput(harness));
+    await harness.coordinator.start(startInput(harness));
     await continueRemediation(harness, { kind: "proceed" }, "proceed-1");
     const completed = await continueRemediation(
       harness,
@@ -798,7 +798,7 @@ describe.runIf(process.platform === "win32")("governed budgets mirror recipe ove
       return { owner, coordinator, expectedOwnerRevision };
     })();
 
-    nativeHarness.coordinator.start(
+    await nativeHarness.coordinator.start(
       startInput(harness, {
         remediationId: "remediation-mirror-native",
         creationIdempotencyKey: "create-remediation-mirror-native",

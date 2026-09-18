@@ -62,11 +62,11 @@ describe("citadel api client", () => {
   });
 
   it("upsertCitadelCharter PUTs the charter body without an id field", async () => {
-    await citadels.upsertCitadelCharter("c1", { mission: "Ship" } as never);
+    await citadels.upsertCitadelCharter("c1", { purpose: "Ship", kind: "custom", expectedRevision: "reviewed" });
     const [path, init] = lastCall();
     expect(path).toBe("/api/v1/citadels/c1/charter");
     expect(init?.method).toBe("PUT");
-    expect(body(init)).toEqual({ mission: "Ship" });
+    expect(body(init)).toEqual({ purpose: "Ship", kind: "custom", expectedRevision: "reviewed" });
   });
 
   it("listCitadelChambers unwraps the items envelope", async () => {
@@ -83,11 +83,21 @@ describe("citadel api client", () => {
   });
 
   it("createCitadelFromTemplate POSTs the templateId", async () => {
-    await citadels.createCitadelFromTemplate("c1", "founder");
+    await citadels.createCitadelFromTemplate("c1", "founder", "target-review", "template-review");
     const [path, init] = lastCall();
     expect(path).toBe("/api/v1/citadels/c1/from-template");
     expect(init?.method).toBe("POST");
-    expect(body(init)).toEqual({ templateId: "founder" });
+    expect(body(init)).toEqual({ templateId: "founder", expectedRevision: "target-review", expectedTemplateRevision: "template-review" });
+  });
+
+  it("reads empty structures and binds Chamber and Blueprint writes to their reviewed target", async () => {
+    await citadels.getCitadelStructureSnapshot("c/1");
+    expect(lastCall()[0]).toBe("/api/v1/citadels/c%2F1/structure");
+    await citadels.createCitadelChamber("c/1", { name: "Reviewed", expectedRevision: "chamber-review" });
+    expect(body(lastCall()[1])).toEqual({ name: "Reviewed", expectedRevision: "chamber-review" });
+    await citadels.importCitadelBlueprint("c/1", { schemaVersion: "blueprint" } as never, "import-review");
+    expect(lastCall()[0]).toBe("/api/v1/citadels/c%2F1/from-blueprint");
+    expect(body(lastCall()[1])).toEqual({ blueprint: { schemaVersion: "blueprint" }, expectedRevision: "import-review" });
   });
 
   it("evaluateCitadelGatehouseAction POSTs the action", async () => {
@@ -98,10 +108,25 @@ describe("citadel api client", () => {
   });
 
   it("removeCitadelWard DELETEs the encoded Ward resource", async () => {
-    await citadels.removeCitadelWard("c/1", "ward/9");
+    await citadels.removeCitadelWard("c/1", "ward/9", "review");
     const [path, init] = lastCall();
     expect(path).toBe("/api/v1/citadels/c%2F1/wards/ward%2F9");
+    expect(body(init)).toEqual({ expectedRevision: "review" });
     expect(init?.method).toBe("DELETE");
+  });
+
+  it("binds Council and Ward writes to a review and returns the complete owner acknowledgement", async () => {
+    const saved = { citadelId: "c/1", revision: "saved", wards: [], council: [] };
+    apiMocks.request.mockResolvedValue(saved);
+    expect(await citadels.getCitadelAccessSnapshot("c/1")).toEqual(saved);
+    expect(lastCall()[0]).toBe("/api/v1/citadels/c%2F1/access");
+    expect(await citadels.assignCitadelCouncilAgent("c/1", "agent/1", "review")).toEqual(saved);
+    expect(body(lastCall()[1])).toEqual({ agentId: "agent/1", expectedRevision: "review" });
+    expect(await citadels.unassignCitadelCouncilAgent("c/1", "agent/1", "review")).toEqual(saved);
+    expect(lastCall()[0]).toBe("/api/v1/citadels/c%2F1/council/agent%2F1");
+    expect(body(lastCall()[1])).toEqual({ expectedRevision: "review" });
+    expect(await citadels.addCitadelWard("c/1", { name: "Deny", actionPattern: "*", effect: "deny", expectedRevision: "review" })).toEqual(saved);
+    expect(body(lastCall()[1])).toEqual({ name: "Deny", actionPattern: "*", effect: "deny", expectedRevision: "review" });
   });
 
   it("validateCitadelBlueprint posts to the shared validate endpoint", async () => {
@@ -132,11 +157,11 @@ describe("citadel api client", () => {
   });
 
   it("storeCitadelVaultSecret POSTs the name and value", async () => {
-    await citadels.storeCitadelVaultSecret("c1", "stripe", "sk-live-123");
+    await citadels.storeCitadelVaultSecret("c1", "stripe", "sk-live-123", "a".repeat(64));
     const [path, init] = lastCall();
     expect(path).toBe("/api/v1/citadels/c1/vault-secrets");
     expect(init?.method).toBe("POST");
-    expect(body(init)).toEqual({ name: "stripe", value: "sk-live-123" });
+    expect(body(init)).toEqual({ name: "stripe", value: "sk-live-123", expectedRevision: "a".repeat(64) });
   });
 
   it("revealCitadelVaultSecret GETs the reveal endpoint and returns the value", async () => {
@@ -146,9 +171,10 @@ describe("citadel api client", () => {
   });
 
   it("deleteCitadelVaultSecret DELETEs the secret", async () => {
-    await citadels.deleteCitadelVaultSecret("c1", "s1");
+    await citadels.deleteCitadelVaultSecret("c1", "s1", "a".repeat(64));
     const [path, init] = lastCall();
     expect(path).toBe("/api/v1/citadels/c1/vault-secrets/s1");
     expect(init?.method).toBe("DELETE");
+    expect(body(init)).toEqual({ expectedRevision: "a".repeat(64) });
   });
 });

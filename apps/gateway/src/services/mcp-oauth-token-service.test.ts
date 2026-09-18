@@ -18,6 +18,25 @@ describe("McpOAuthTokenService", () => {
     vi.useRealTimers();
   });
 
+  it("uses distinct receipt slots and the same registered write identity for both OAuth tokens", async () => {
+    const custodyId = "e".repeat(64), writeId = "11111111-2222-4333-8444-555555555555";
+    const secretStore = createMemorySecretStore(), guarded = vi.fn();
+    const generic = vi.spyOn(secretStore, "setSecret");
+    await withTokenEndpoint(() => ({ access_token: "private-owned-access", refresh_token: "private-owned-refresh" }), async ({ url }) => {
+      const service = new McpOAuthTokenService({ secretStore: { ...secretStore, setSecretForCustody: guarded,
+        supportsCredentialWriteReceipts: () => true }, networkAllowlist: [new URL(url).host],
+        stageCredentials: async (_server, refs, write) => {
+          expect(refs).toHaveLength(2); expect(refs.every((ref) => ref.includes(":receipt-v1:"))).toBe(true);
+          write(custodyId, writeId);
+        } });
+      const result = await service.exchangeAuthorizationCode(createOAuthServer(url), "private-code", { updatedAt: new Date().toISOString() }, fixtureBoundary);
+      expect(result.accessTokenRef).toContain(":access-token:receipt-v1:");
+      expect(result.refreshTokenRef).toContain(":refresh-token:receipt-v1:");
+      expect(guarded.mock.calls.map((args) => args.slice(2))).toEqual([[custodyId, writeId], [custodyId, writeId]]);
+      expect(generic).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([true, false])("requires the captured custody adapter for staged OAuth writes: %s", async (available) => {
     const custodyId = "e".repeat(64), secretStore = createMemorySecretStore();
     const generic = vi.spyOn(secretStore, "setSecret"), guarded = vi.fn();

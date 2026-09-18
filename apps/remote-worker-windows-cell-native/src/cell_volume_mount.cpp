@@ -350,7 +350,76 @@ DWORD CellVolumeMount::RecordCheckpoints(std::vector<CellVolumeMountCheckpoint>*
   if (records_.empty()) return ERROR_INVALID_STATE;
   try { *output = records_; return ERROR_SUCCESS; } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
+DWORD CellVolumeMount::WithCapacityLeaf(CellVolumeProtection& source, CellWorkspaceDirectories& workspace,
+  DWORD wall_limit_ms, const CellFootprintScanGuard& guard, const CellCapacityMountObserver& observer) noexcept {
+  NativeContext context{this, &source, &workspace, GetTickCount64() + wall_limit_ms, guard.cancellation};
+  return ReadCapacityLeaf(NativeOperations(context), wall_limit_ms, guard, observer);
+}
+DWORD CellVolumeMount::ReadCapacityLeaf(const Operations& supplied_operations, DWORD wall_limit_ms,
+  const CellFootprintScanGuard& supplied_guard, const CellCapacityMountObserver& supplied_observer) noexcept {
+  if (capacity_reading_) { capacity_interrupted_ = true; return ERROR_INVALID_STATE; }
+  const auto operations = supplied_operations; const auto guard = supplied_guard; const auto observer = supplied_observer;
+  if (!wall_limit_ms || wall_limit_ms > 60000 || !guard.authorize || !observer.capture || !observer.discard ||
+      !operations.verify || !operations.inspect) return ERROR_INVALID_PARAMETER;
+  const auto deadline = GetTickCount64() + wall_limit_ms;
+  auto error = Control(deadline, guard.cancellation); if (error) return error;
+  if (state_ != CellVolumeMountState::mounted || !directory_ || directory_ == INVALID_HANDLE_VALUE) return ERROR_INVALID_STATE;
+  capacity_reading_ = true; capacity_interrupted_ = false;
+  struct Scope final {
+    CellVolumeMount& owner; const CellCapacityMountObserver& observer;
+    bool attempted = false, complete = false;
+    ~Scope() {
+      if (attempted && !complete) observer.discard(observer.context);
+      owner.capacity_reading_ = false;
+    }
+  } scope{*this, observer};
+  try {
+    CellFileIdentity recorded;
+    error = DecodeCellVolumeMountCheckpoints(binding_, records_, &recorded);
+    if (error) return error;
+    if (recorded != directory_identity_) return ERROR_FILE_INVALID;
+    Handle held;
+    if (!DuplicateHandle(GetCurrentProcess(), directory_, GetCurrentProcess(), &held.value, 0, FALSE, DUPLICATE_SAME_ACCESS)) return Error();
+    struct Context final {
+      CellVolumeMount& owner; const Operations& operations; ULONGLONG deadline; HANDLE cancellation;
+      CellVolumeMountBinding binding; CellFileIdentity directory; HANDLE original;
+      std::vector<CellVolumeMountCheckpoint> records; std::vector<std::uint8_t> descriptor;
+      std::wstring folder, volume_path;
+      bool Matches() const noexcept {
+        return !owner.capacity_interrupted_ && owner.state_ == CellVolumeMountState::mounted && owner.directory_ == original &&
+          owner.directory_identity_ == directory && owner.records_ == records && owner.descriptor_ == descriptor &&
+          owner.folder_ == folder && owner.volume_path_ == volume_path &&
+          owner.binding_.protection_sha256 == binding.protection_sha256 && owner.binding_.security_sha256 == binding.security_sha256 &&
+          owner.binding_.parent == binding.parent && owner.binding_.volume_root == binding.volume_root &&
+          IsEqualGUID(owner.binding_.volume_id, binding.volume_id);
+      }
+      static DWORD Check(void* raw) noexcept {
+        const auto& self = *static_cast<Context*>(raw);
+        auto checked = Control(self.deadline, self.cancellation); if (checked) return checked;
+        if (!self.Matches()) return ERROR_FILE_INVALID;
+        checked = self.owner.Check(self.operations, self.deadline, self.cancellation, false, true, true);
+        if (!checked && !self.Matches()) checked = ERROR_FILE_INVALID;
+        return checked ? checked : Control(self.deadline, self.cancellation);
+      }
+    } context{*this, operations, deadline, guard.cancellation, binding_, directory_identity_, directory_,
+      records_, descriptor_, folder_, volume_path_};
+    const auto authorize = [&]() noexcept -> DWORD {
+      auto checked = Control(deadline, guard.cancellation);
+      if (!checked) checked = guard.authorize(guard.context);
+      return checked ? checked : Context::Check(&context);
+    };
+    error = authorize(); if (error) return error;
+    const CellCapacityMountLeaf leaf(Target(context.binding, context.directory), held.value, &context, Context::Check);
+    scope.attempted = true;
+    error = observer.capture(observer.context, leaf);
+    if (!error) error = authorize();
+    if (!error) error = leaf.Check();
+    if (!error) scope.complete = true;
+    return error;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
 void CellVolumeMount::Close() noexcept {
+  if (capacity_reading_) capacity_interrupted_ = true;
   state_ = CellVolumeMountState::unknown; freshly_mounted_ = false;
   if (directory_ && directory_ != INVALID_HANDLE_VALUE) CloseHandle(directory_);
   directory_ = nullptr;

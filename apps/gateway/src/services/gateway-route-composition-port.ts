@@ -9,7 +9,6 @@ import type * as chatSessionService from "./chat-session-service.js";
 import type * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import type * as mcpServerAdminService from "./mcp-server-admin-service.js";
-import type { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
 import type * as onboardingStateService from "./onboarding-state-service.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
@@ -72,6 +71,8 @@ type RouteDependencyMethod<
 > = GatewayRouteServiceDependencies[TDomain][TMethod];
 
 export interface GatewayRouteCompositionPort {
+  createRemoteWorkerExecutionOwners(): { readonly operatorNativeFiles: import("./remote-worker-native-file-operator.js").RemoteWorkerNativeFileOperator;
+    readonly operatorNativeRuntime: import("./remote-worker-native-review-operator.js").RemoteWorkerNativeReviewOperator };
   resolveChatRunVariableInput(
     sessionId: string,
     input: import("@goatcitadel/contracts").ChatSendMessageRequest,
@@ -216,10 +217,6 @@ export interface GatewayRouteCompositionPort {
   prepareSkillHubRollbackReview: RouteDependencyMethod<"skills", "prepareSkillHubRollbackReview">;
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
-  patchMcpServerState: mcpServerAdminService.McpServerAdminHost["patchMcpServerState"];
-  prepareMcpStaticEnvironment: NonNullable<mcpServerAdminService.McpServerAdminHost["prepareMcpStaticEnvironment"]>;
-  resolveMcpOAuthClientId: NonNullable<mcpServerAdminService.McpServerAdminHost["resolveMcpOAuthClientId"]>;
-  mcpOAuth: Pick<GatewayMcpOAuthService, "exchangeAuthorizationCode">;
   patchSessionAutonomyPrefs: chatSessionService.ChatSessionDependencies["patchSessionAutonomyPrefs"];
   publishRealtime: RouteDependencyMethod<"devVerification", "publishRealtime">;
   reconcileGeneralChatPostCommit(runId: string): Promise<boolean>;
@@ -230,7 +227,7 @@ export interface GatewayRouteCompositionPort {
   getConfigGenerationHealthSnapshot(): ConfigGenerationHealthSnapshot;
   saveProviderSecret(input: SaveProviderSecretInput): Promise<ProviderSecretMutationResponse>;
   deleteProviderSecret(input: DeleteProviderSecretInput): Promise<ProviderSecretMutationResponse>;
-  readMcpAuthState: mcpServerAdminService.McpServerAdminHost["readMcpAuthState"];
+  mcpAdministration: mcpServerAdminService.McpServerAdminHost;
   readMcpServers: mcpServerAdminService.McpServerAdminHost["readMcpServers"];
   readMcpTools: mcpServerAdminService.McpServerAdminHost["readMcpTools"];
   recordDevDiagnostic(input: Parameters<GatewayDevDiagnosticsService["record"]>[0]): void;
@@ -243,7 +240,6 @@ export interface GatewayRouteCompositionPort {
   resolveApprovalWithRemoteTokenId: RouteDependencyMethod<"integrationWebhooks", "resolveApprovalWithRemoteTokenId">;
   awaitInboundChannelCommandResult: RouteDependencyMethod<"integrationWebhooks", "awaitInboundChannelCommandResult">;
   findRemoteActionTokenId: RouteDependencyMethod<"integrationWebhooks", "findRemoteActionTokenId">;
-  resolveConnectedMcpTools: mcpServerAdminService.McpServerAdminHost["resolveConnectedMcpTools"];
   resolveConnectionSecret: IntegrationChannelServicePort["resolveConnectionSecret"];
   resolveGatewayInstallToken: RouteDependencyMethod<"authAdmin", "resolveGatewayInstallToken">;
   resolveSkillActivation: RouteDependencyMethod<"skills", "resolveSkillActivation">;
@@ -268,13 +264,11 @@ export interface GatewayRouteCompositionPort {
   verifyBackup: RouteDependencyMethod<"authAdmin", "verifyBackup">;
   verifyDatabaseCutover: RouteDependencyMethod<"authAdmin", "verifyDatabaseCutover">;
   writeDiscordPairings: IntegrationChannelServicePort["writeDiscordPairings"];
-  writeMcpAuthState: mcpServerAdminService.McpServerAdminHost["writeMcpAuthState"];
-  writeMcpServers: mcpServerAdminService.McpServerAdminHost["writeMcpServers"];
-  writeMcpTools: mcpServerAdminService.McpServerAdminHost["writeMcpTools"];
 }
 
 export type GatewayRouteCompositionPrivateDependencies = Pick<
   GatewayRouteCompositionPort,
+  | "mcpAdministration"
   | "addonsService"
   | "addonSlotService"
   | "approvalRuntime"
@@ -315,6 +309,8 @@ export function createGatewayRouteCompositionPort(
   privateDependencies: GatewayRouteCompositionPrivateDependencies,
 ): GatewayRouteCompositionPort {
   return {
+    createRemoteWorkerExecutionOwners: () => gateway.createRemoteWorkerExecutionOwners(),
+    mcpAdministration: privateDependencies.mcpAdministration,
     addonsService: privateDependencies.addonsService,
     addonSlotService: privateDependencies.addonSlotService,
     approvalRuntime: privateDependencies.approvalRuntime,
@@ -448,10 +444,6 @@ export function createGatewayRouteCompositionPort(
     previewSkillExport: gateway.previewSkillExport.bind(gateway),
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
-    patchMcpServerState: gateway.patchMcpServerState.bind(gateway),
-    prepareMcpStaticEnvironment: gateway.prepareMcpStaticEnvironment.bind(gateway),
-    resolveMcpOAuthClientId: gateway.resolveMcpOAuthClientId.bind(gateway),
-    mcpOAuth: gateway.mcpOAuth,
     patchSessionAutonomyPrefs: gateway.patchSessionAutonomyPrefs.bind(gateway),
     publishRealtime: gateway.publishRealtime.bind(gateway),
     reconcileGeneralChatPostCommit: gateway.reconcileGeneralChatPostCommit.bind(gateway),
@@ -462,7 +454,6 @@ export function createGatewayRouteCompositionPort(
     getConfigGenerationHealthSnapshot: gateway.getConfigGenerationHealthSnapshot.bind(gateway),
     saveProviderSecret: gateway.saveProviderSecret.bind(gateway),
     deleteProviderSecret: gateway.deleteProviderSecret.bind(gateway),
-    readMcpAuthState: gateway.readMcpAuthState.bind(gateway),
     readMcpServers: gateway.readMcpServers.bind(gateway),
     readMcpTools: gateway.readMcpTools.bind(gateway),
     recordDevDiagnostic: gateway.recordDevDiagnostic.bind(gateway),
@@ -475,7 +466,6 @@ export function createGatewayRouteCompositionPort(
     resolveApprovalWithRemoteTokenId: gateway.resolveApprovalWithRemoteTokenId.bind(gateway),
     awaitInboundChannelCommandResult: gateway.awaitInboundChannelCommandResult.bind(gateway),
     findRemoteActionTokenId: gateway.findRemoteActionTokenId.bind(gateway),
-    resolveConnectedMcpTools: gateway.resolveConnectedMcpTools.bind(gateway),
     resolveConnectionSecret: gateway.resolveConnectionSecret.bind(gateway),
     resolveGatewayInstallToken: gateway.resolveGatewayInstallToken.bind(gateway),
     resolveSkillActivation: gateway.resolveSkillActivation.bind(gateway),
@@ -500,9 +490,6 @@ export function createGatewayRouteCompositionPort(
     verifyBackup: gateway.verifyBackup.bind(gateway),
     verifyDatabaseCutover: gateway.verifyDatabaseCutover.bind(gateway),
     writeDiscordPairings: gateway.writeDiscordPairings.bind(gateway),
-    writeMcpAuthState: gateway.writeMcpAuthState.bind(gateway),
-    writeMcpServers: gateway.writeMcpServers.bind(gateway),
-    writeMcpTools: gateway.writeMcpTools.bind(gateway),
   };
 }
 

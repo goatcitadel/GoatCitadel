@@ -1,6 +1,7 @@
 #pragma once
 #include "cell_volume_protection.hpp"
 #include "cell_volume_mount_target.hpp"
+#include "cell_capacity.hpp"
 
 namespace goatcitadel::worker_cell {
 struct CellVolumeMountBinding final {
@@ -21,6 +22,34 @@ DWORD ValidateCellVolumeMountCheckpointPrefix(const CellVolumeMountBinding& bind
   std::span<const CellVolumeMountCheckpoint> records, CellFileIdentity* directory) noexcept;
 DWORD DecodeCellVolumeMountCheckpoints(const CellVolumeMountBinding& binding,
   std::span<const CellVolumeMountCheckpoint> records, CellFileIdentity* directory) noexcept;
+
+// Borrowed only during the synchronous native owner's capacity callback.
+// Construction is private: paths, reparse tags and peer claims cannot mint an
+// admitted mount leaf. Check repeats read-only native mount/protection checks
+// without invoking the caller's execution-authority callback. The owner and its
+// dependencies must remain alive and quiescent; this is not execution authority.
+class CellCapacityMountLeaf final {
+ public:
+  CellCapacityMountLeaf(const CellCapacityMountLeaf&) = delete;
+  CellCapacityMountLeaf& operator=(const CellCapacityMountLeaf&) = delete;
+  const CellVolumeMountTarget& Target() const noexcept { return target_; }
+  HANDLE DirectoryHandle() const noexcept { return directory_; }
+  DWORD Check() const noexcept { return check_(context_); }
+ private:
+  friend class CellVolumeMount;
+  friend struct CellCapacityMountLeafTestPeer;
+  CellCapacityMountLeaf(CellVolumeMountTarget target, HANDLE directory, void* context,
+    DWORD (*check)(void*) noexcept) : target_(target), directory_(directory), context_(context), check_(check) {}
+  const CellVolumeMountTarget target_;
+  HANDLE const directory_;
+  void* const context_;
+  DWORD (*const check_)(void*) noexcept;
+};
+struct CellCapacityMountObserver final {
+  void* context = nullptr;
+  DWORD (*capture)(void*, const CellCapacityMountLeaf&) noexcept = nullptr;
+  void (*discard)(void*) noexcept = nullptr;
+};
 
 // One-shot mount of the original protected volume at the literal "volume"
 // child of its recorded host cell root. No caller path, drive letter, disk
@@ -44,6 +73,8 @@ class CellVolumeMount final {
   DWORD Verify(CellVolumeProtection& source, CellWorkspaceDirectories& workspace,
     DWORD wall_limit_ms, HANDLE cancellation = nullptr) noexcept;
   DWORD RecordCheckpoints(std::vector<CellVolumeMountCheckpoint>* output) const noexcept;
+  DWORD WithCapacityLeaf(CellVolumeProtection& source, CellWorkspaceDirectories& workspace,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard, const CellCapacityMountObserver& observer) noexcept;
   CellVolumeMountState State() const noexcept { return state_; }
   void Close() noexcept;
  private:
@@ -68,6 +99,8 @@ class CellVolumeMount final {
   DWORD Commit(CellVolumeMountPhase phase, ULONGLONG deadline, HANDLE cancellation) noexcept;
   DWORD Run(const Operations& operations, ULONGLONG deadline, HANDLE cancellation) noexcept;
   DWORD Recover(const Operations& operations, ULONGLONG deadline, HANDLE cancellation) noexcept;
+  DWORD ReadCapacityLeaf(const Operations& operations, DWORD wall_limit_ms,
+    const CellFootprintScanGuard& guard, const CellCapacityMountObserver& observer) noexcept;
   CellVolumeMountBinding binding_{};
   CellFileIdentity directory_identity_{};
   CellVolumeMountCommitter committer_{};
@@ -78,5 +111,6 @@ class CellVolumeMount final {
   CellVolumeMountState state_ = CellVolumeMountState::not_started;
   bool attempted_ = false;
   bool freshly_mounted_ = false, workspace_attempted_ = false;
+  bool capacity_reading_ = false, capacity_interrupted_ = false;
 };
 }

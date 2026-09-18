@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { normalizeRemoteWorkerCellProtectionAnchor, type RemoteWorkerCellProtectionAnchor } from "./remote-worker-cell-protection.js";
 import { normalizeRemoteWorkerCellProvisioningExchange, remoteWorkerCellProvisioningProtectionAnchor } from "./remote-worker-cell-provisioning.js";
-import { formatExchangeFixture } from "./remote-worker-cell-format-test-fixture.js";
+import { formatExchangeFixture, type CellVolumeFixtureIdentity } from "./remote-worker-cell-format-test-fixture.js";
 import { rehashVolumeFixture } from "./remote-worker-cell-volume-test-fixture.js";
 
 /** Independent encoder; fixture code never authorizes native operations. */
@@ -24,8 +24,8 @@ export function protectionCheckpointFixture(input: RemoteWorkerCellProtectionAnc
   ntfs.subarray(184, 192).copy(inner, 160); inner.fill(0xd6, 168, 184);
   rehashVolumeFixture(inner); return rehashVolumeFixture(bytes);
 }
-export function protectionExchangeFixture(input: unknown) {
-  const exchange = formatExchangeFixture(input), anchor = remoteWorkerCellProvisioningProtectionAnchor(exchange);
+export function protectionExchangeFixture(input: unknown, identity: CellVolumeFixtureIdentity = {}) {
+  const exchange = formatExchangeFixture(input, identity), anchor = remoteWorkerCellProvisioningProtectionAnchor(exchange);
   const intent = protectionCheckpointFixture(anchor, 1);
   const completion = protectionCheckpointFixture(anchor, 2, intent.slice(-64), intent.slice(1520, 1584));
   return normalizeRemoteWorkerCellProvisioningExchange({ ...exchange, protectionRecords: [intent, completion] });

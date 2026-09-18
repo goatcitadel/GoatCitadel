@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Delivery claims, reconciliation, retry, hydration, and diagnostics remain one auditable runtime owner. */
 import { createHash, randomUUID } from "node:crypto";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { ChannelDeliveryApprovalPendingError } from "./channel-delivery-approval-pending.js";
+import { hasResumableChannelDeliveryParts, parkChannelDeliveryApproval } from "./channel-delivery-approval-recovery.js";
 import type {
   ChannelAttachmentInput,
   ChannelDeliveryDiagnostics,
@@ -446,8 +446,7 @@ export class ChannelDeliveryRuntimeService {
       updatedAt: persisted.updatedAt,
     };
     const hydratedAt = this.now();
-    const parts = record.attempts > 0 ? (await this.deps.parts?.list(record.deliveryId, record.attempts)) ?? [] : [];
-    const resumeAttempt = parts.length > 0 && parts.every((part, index) => part.partIndex === index && part.status !== "prepared");
+    const resumeAttempt = await hasResumableChannelDeliveryParts(this.deps, record.deliveryId, record.attempts);
     const recoveryQuarantineOnDue = isActiveStatus(record.status) && record.attempts > 0 && !resumeAttempt;
     const delivery = {
       record,
@@ -517,17 +516,18 @@ export class ChannelDeliveryRuntimeService {
     try {
       result = await this.deps.send({ ...copyRecord(delivery.record), payload: delivery.payload });
     } catch (error) {
-      if (error instanceof ChannelDeliveryApprovalPendingError && this.deps.parts) {
-        const now = this.now();
-        const nextAttemptAt = new Date(Date.parse(now) + Math.max(1_000, delivery.baseBackoffMs)).toISOString();
-        if (!(await this.deps.parts.park(error.partId, claimExpiresAt, nextAttemptAt, now))) {
+      const pause = await parkChannelDeliveryApproval(this.deps, error, {
+        claimExpiresAt, baseBackoffMs: delivery.baseBackoffMs, now: () => this.now(),
+      });
+      if (pause.status !== "not_applicable") {
+        if (pause.status === "claim_lost") {
           this.evictDelivery(delivery);
           return undefined;
         }
         delivery.record.status = "waiting_approval";
         delivery.record.deliveryStatus = "waiting_approval";
-        delivery.record.nextAttemptAt = nextAttemptAt;
-        delivery.record.updatedAt = now;
+        delivery.record.nextAttemptAt = pause.nextAttemptAt;
+        delivery.record.updatedAt = pause.updatedAt;
         delivery.record.error = undefined;
         delivery.record.fallbackReason = undefined;
         delivery.resumeAttempt = true;

@@ -94,6 +94,7 @@ describe("integrations control routes", () => {
           webhookUrl: "https://hooks.example.test/new?token=created-hook",
         }),
       }),
+      expect.any(Function),
     );
     expect(created.json().config).toEqual({
       botToken: "[REDACTED]",
@@ -123,6 +124,7 @@ describe("integrations control routes", () => {
       method: "PATCH",
       url: `/api/v1/integrations/connections/${connectionId}`,
       payload: {
+        expectedRevision: rawConnection.revision,
         config: {
           botToken: "[REDACTED]",
           webhookUrl: "[REDACTED]",
@@ -149,6 +151,7 @@ describe("integrations control routes", () => {
           channelId: "C-GUIDED",
         }),
       }),
+      expect.any(Function),
     );
     expect(JSON.stringify(guided.json())).not.toContain("bot-short");
     expect(JSON.stringify(guided.json())).not.toContain("hook-short");
@@ -158,6 +161,7 @@ describe("integrations control routes", () => {
       method: "PATCH",
       url: `/api/v1/integrations/connections/${connectionId}`,
       payload: {
+        expectedRevision: rawConnection.revision,
         config: {
           botTokenEnv: "SLACK_BOT_TOKEN_V2",
           secretRef: "keychain:slack-bot-token",
@@ -184,6 +188,7 @@ describe("integrations control routes", () => {
           channelId: "C-ADVANCED",
         },
       }),
+      expect.any(Function),
     );
     expect(advanced.json().config).toMatchObject({
       botToken: "[REDACTED]",
@@ -953,6 +958,7 @@ describe("integrations control routes", () => {
 function createSecretBearingConnection(connectionId: string): IntegrationConnection {
   return {
     connectionId,
+    revision: "a".repeat(64),
     catalogId: "channel.slack",
     kind: "channel",
     key: "slack",

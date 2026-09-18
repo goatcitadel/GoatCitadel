@@ -77,7 +77,7 @@ describe("shipped worker file tool and local registry", () => {
     await expect(f.binding.owner.execute(f.request({ path: "note.txt", rootPath: f.root }))).rejects.toThrow();
   });
 
-  it.each(["fs.write", "mcp.invoke", "shell.exec"])("does not turn a read-only publication into a %s executor", async (name) => {
+  it.each(["fs.write", "fs.list", "mcp.invoke", "shell.exec"])("does not turn a read-only publication into a %s executor", async (name) => {
     const f = await fixture();
     f.registry.bindings[0]!.toolName = name;
     await expect(loadWorkerMeshToolRegistry(await f.persist(), f.scope, signal())).rejects.toThrow();

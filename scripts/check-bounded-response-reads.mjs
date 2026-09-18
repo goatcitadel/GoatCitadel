@@ -13,7 +13,7 @@ export const approvedRawResponseReads = new Map(
     "apps/gateway/src/services/llama-cpp-runtime-service.ts": new Set(["body.getReader"]),
     "apps/gateway/src/services/llm-provider-anthropic.ts": new Set(["body.getReader"]),
     "apps/gateway/src/services/llm-service.ts": new Set(["body.getReader"]),
-    "apps/gateway/src/services/mcp-runtime.ts": new Set(["body.getReader"]),
+    "apps/gateway/src/services/mcp-http-transport.ts": new Set(["body.getReader"]),
     // policy-engine's own bounded reader (the analogue of bounded-response-reader.ts).
     // The `body.getReader()` call there is split across statements
     // (`const body = response.body;` then `body.getReader()`), which the two-dot

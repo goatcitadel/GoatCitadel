@@ -79,6 +79,21 @@ function input() {
 }
 
 describe("worker model/tool loop boundaries", () => {
+  it("keeps earlier native-history usage and spends only the remaining model step", async () => {
+    const f = input();
+    f.workload = { nativeChatHistory: { schemaVersion: "goatcitadel.remote-worker-native-chat-history.v1",
+      nativeContextSha256: digest("native"), contextSnapshotSha256: digest("context"), priorModelSteps: 15,
+      priorRequestSha256s: Array.from({ length: 15 }, (_, i) => digest(`request-${i}`)),
+      usageEventIds: Array.from({ length: 15 }, (_, i) => `prior-usage-${i}`), messages: base.messages } };
+    const result = await runWorkerChatWorkflow(f);
+    expect(result.completed).toBe(false);
+    expect(result.usageEventIds).toHaveLength(16);
+    expect(f.observed.inferenceStepCount).toBe(16);
+    expect(f.observed.awaiting).toBe("model_step_limit");
+    expect(exchangeWorkerInference).toHaveBeenCalledOnce();
+    expect(exchangeWorkerChatTool).not.toHaveBeenCalled();
+  });
+
   it("stops at the model-step ceiling before starting tools it cannot continue", async () => {
     const f = input();
     const result = await runWorkerChatWorkflow(f);

@@ -12,6 +12,7 @@ export interface TelegramInboundCommandHost {
     integrationConnections: {
       get(connectionId: string): Promise<{
         connectionId: string;
+        revision: string;
         label: string;
         enabled: boolean;
         status: "connected" | "disconnected" | "error" | "paused";
@@ -147,6 +148,7 @@ export async function executeTelegramInboundCommand(
   }
   if (result.configPatch) {
     await host.storage.integrationConnections.update(input.connectionId, {
+      expectedRevision: connection.revision,
       config: { ...connection.config, ...result.configPatch },
       lastSyncAt: new Date().toISOString(),
       lastError: null,

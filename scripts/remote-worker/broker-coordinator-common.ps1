@@ -94,17 +94,17 @@ $script:ServiceNeverStartedExitCode = 1077
 # exactly two ACEs in this order:
 #   1. LocalSystem (SY)             -> SERVICE_ALL_ACCESS               0x000F01FF
 #   2. BUILTIN\Administrators (BA)  -> SERVICE_START | SERVICE_STOP |
-#      SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL |
-#      SYNCHRONIZE                                                     0x00120035
+#      SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL      0x00020035
+# Service objects do not support SYNCHRONIZE; require the exact SCM mask.
 # The worker receives no ACE on the broker. Start authority over the broker is
 # SYSTEM plus elevated Administrators only; the shipped coordinator principal
 # (the broker's own unrestricted service SID, running from the LocalSystem
 # account) is the only shipped identity that starts the signer.
-$script:ServiceObjectSddl = "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00120035;;;BA)"
+$script:ServiceObjectSddl = "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00020035;;;BA)"
 # The signer adds one non-inherited worker ACE: SERVICE_QUERY_CONFIG |
 # SERVICE_QUERY_STATUS | READ_CONTROL (0x00020005). It grants no service
 # start/stop/change rights; service_runtime and the broker validate it exactly.
-$script:SignerServiceObjectSddl = "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00120035;;;BA)(A;;0x00020005;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)"
+$script:SignerServiceObjectSddl = "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00020035;;;BA)(A;;0x00020005;;;S-1-5-80-1804173726-3601835665-1843708740-3959121232-3866049905)"
 
 # --- Frozen protected image and directory ACLs -------------------------------
 # availability_broker_runtime.cpp ValidateExactProtectedDacl: the signer image
@@ -587,7 +587,13 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
             }
         }
 
-        public static void CreateCoordinatorService(string serviceName, string displayName, string quotedBinaryPath)
+        private sealed class CreatedServiceLease : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
+        {
+            public CreatedServiceLease(IntPtr service) : base(true) { SetHandle(service); }
+            protected override bool ReleaseHandle() { return CloseServiceHandle(handle); }
+        }
+
+        public static IDisposable CreateCoordinatorService(string serviceName, string displayName, string quotedBinaryPath)
         {
             IntPtr manager = OpenManager(ScManagerConnect | ScManagerCreateService);
             try
@@ -610,11 +616,38 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
-                CloseServiceHandle(service);
+                return new CreatedServiceLease(service);
             }
             finally
             {
                 CloseServiceHandle(manager);
+            }
+        }
+
+        public static void RemoveCreatedService(IDisposable createdService)
+        {
+            CreatedServiceLease lease = createdService as CreatedServiceLease;
+            if (lease == null) throw new InvalidOperationException("Only a service created by this invocation can be rolled back.");
+            bool retained = false;
+            IntPtr status = Marshal.AllocHGlobal(64);
+            try
+            {
+                lease.DangerousAddRef(ref retained);
+                uint needed;
+                if (!QueryServiceStatusEx(lease.DangerousGetHandle(), ScStatusProcessInfo, status, 64u, out needed))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (Marshal.ReadInt32(status, 4) != 1 || Marshal.ReadInt32(status, 28) != 0)
+                    throw new InvalidOperationException("Rollback requires the created service to remain stopped.");
+                if (!DeleteService(lease.DangerousGetHandle()))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error != ErrorServiceMarkedForDelete) throw new Win32Exception(error);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(status);
+                if (retained) lease.DangerousRelease();
             }
         }
 
@@ -1008,6 +1041,99 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
             {
                 CloseServiceHandle(manager);
             }
+        }
+
+        private static void ApplyServiceDescriptor(IntPtr service, string sddl, uint information)
+        {
+            IntPtr descriptor;
+            uint size;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SddlRevision1, out descriptor, out size))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            try
+            {
+                if (!SetServiceObjectSecurity(service, information, descriptor))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally { LocalFree(descriptor); }
+        }
+
+        public static void RemoveVerifiedCoordinatorService(string serviceName, string quotedBinaryPath, string expectedSddl)
+        {
+            if (serviceName != "GoatCitadelRemoteWorkerProvisioner" && serviceName != "GoatCitadelRemoteWorkerProvisionerAvailability")
+                throw new InvalidOperationException("Only the two fixed coordinator services can be removed.");
+            string drive = System.IO.Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.Windows));
+            string fixedPath = "\"" + drive + "ProgramData\\GoatCitadel\\RemoteWorkerProvisioner\\bin\\" + serviceName + ".exe\"";
+            if (!String.Equals(quotedBinaryPath, fixedPath, StringComparison.Ordinal))
+                throw new InvalidOperationException("The removal path is not the fixed installed coordinator image.");
+            string temporarySddl = expectedSddl.Replace("O:SY", "O:BA").Replace("0x00020035;;;BA", "0x00030035;;;BA");
+            if (temporarySddl == expectedSddl || !expectedSddl.StartsWith("O:SYD:P", StringComparison.Ordinal))
+                throw new InvalidOperationException("The expected coordinator descriptor is not the protected recipe.");
+            string expectedConfig = "16|3|1|" + quotedBinaryPath + "|LocalSystem||1";
+            EnablePrivilege("SeTakeOwnershipPrivilege");
+            EnablePrivilege("SeRestorePrivilege");
+            IntPtr manager = OpenManager(ScManagerConnect);
+            IntPtr retained = IntPtr.Zero, writable = IntPtr.Zero, removable = IntPtr.Zero;
+            bool descriptorChanged = false;
+            try
+            {
+                // Retain the verified SCM object across ownership changes so its
+                // name cannot be deleted/recreated underneath the later opens.
+                retained = OpenServiceHandle(manager, serviceName,
+                    StandardReadControl | StandardWriteOwner | ServiceQueryConfigAccess | ServiceQueryStatusAccess);
+                if (GetServiceConfigLine(serviceName) != expectedConfig ||
+                    GetServiceSddl(serviceName) != CanonicalizeSddl(expectedSddl))
+                    throw new InvalidOperationException("Coordinator identity changed before removal.");
+                AssertServiceStopped(retained);
+                ApplyServiceDescriptor(retained, "O:BA", OwnerSecurityInformation);
+                descriptorChanged = true;
+                writable = OpenServiceHandle(manager, serviceName,
+                    StandardReadControl | StandardWriteDac | StandardWriteOwner);
+                ApplyServiceDescriptor(writable, temporarySddl, OwnerAndDacl);
+                removable = OpenServiceHandle(manager, serviceName, StandardDelete | ServiceQueryStatusAccess);
+                // Restore the exact protected descriptor before attempting DELETE.
+                // Access already granted to the retained removal handle survives.
+                ApplyServiceDescriptor(writable, expectedSddl, OwnerAndDacl);
+                descriptorChanged = false;
+                if (GetServiceConfigLine(serviceName) != expectedConfig ||
+                    GetServiceSddl(serviceName) != CanonicalizeSddl(expectedSddl))
+                    throw new InvalidOperationException("Coordinator identity changed during removal.");
+                AssertServiceStopped(removable);
+                if (!DeleteService(removable))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error != ErrorServiceMarkedForDelete) throw new Win32Exception(error);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (descriptorChanged)
+                        ApplyServiceDescriptor(writable != IntPtr.Zero ? writable : retained,
+                            expectedSddl, writable != IntPtr.Zero ? OwnerAndDacl : OwnerSecurityInformation);
+                }
+                finally
+                {
+                    if (removable != IntPtr.Zero) CloseServiceHandle(removable);
+                    if (writable != IntPtr.Zero) CloseServiceHandle(writable);
+                    if (retained != IntPtr.Zero) CloseServiceHandle(retained);
+                    CloseServiceHandle(manager);
+                }
+            }
+        }
+
+        private static void AssertServiceStopped(IntPtr service)
+        {
+            IntPtr status = Marshal.AllocHGlobal(64);
+            try
+            {
+                uint needed;
+                if (!QueryServiceStatusEx(service, ScStatusProcessInfo, status, 64u, out needed))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (Marshal.ReadInt32(status, 4) != 1 || Marshal.ReadInt32(status, 28) != 0)
+                    throw new InvalidOperationException("Coordinator removal requires a stopped service without a process.");
+            }
+            finally { Marshal.FreeHGlobal(status); }
         }
 
         public static void RemoveService(string serviceName)

@@ -663,23 +663,7 @@ export interface IntegrationCatalogEntry {
   };
 }
 
-export interface IntegrationConnection {
-  connectionId: string;
-  catalogId: string;
-  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform" | "external_connector";
-  key: string;
-  label: string;
-  enabled: boolean;
-  status: "connected" | "disconnected" | "error" | "paused";
-  config: Record<string, unknown>;
-  pluginId?: string;
-  pluginVersion?: string;
-  pluginEnabled?: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastSyncAt?: string;
-  lastError?: string;
-}
+export type IntegrationConnection = import("@goatcitadel/contracts").IntegrationConnection;
 
 export type { IntegrationActionInvokeInput, IntegrationActionInvokeResult, IntegrationOperatorAction };
 

@@ -56,6 +56,8 @@ export interface RemoteWorkerCellRuntimeProjection {
   readonly updatedAt: string;
 }
 export interface RemoteWorkerArtifactsAndEffectsProjection {
+  readonly nativeOutputArtifacts?: { readonly nonces: readonly string[]; readonly truncated: boolean };
+  readonly nativeFileArtifacts?: { readonly nonces: readonly string[]; readonly truncated: boolean };
   readonly uploadCount: number;
   readonly committedUploadCount: number;
   readonly quarantinedUploadCount: number;
@@ -183,7 +185,23 @@ export function normalizeRemoteWorkerCellRuntimeProjection(input: unknown): Remo
 }
 export function normalizeRemoteWorkerArtifactsAndEffectsProjection(input: unknown): RemoteWorkerArtifactsAndEffectsProjection {
   const value = object(input, ["uploadCount", "committedUploadCount", "quarantinedUploadCount", "cleanupPendingCount",
-    "manifestFileCount", "manifestTotalBytes", "verificationState", "effectIntentCount", "effectReceiptCount", "effectReconciliationCount"]);
+    "manifestFileCount", "manifestTotalBytes", "verificationState", "effectIntentCount", "effectReceiptCount", "effectReconciliationCount"], ["nativeOutputArtifacts", "nativeFileArtifacts"]);
+  let nativeOutputArtifacts: RemoteWorkerArtifactsAndEffectsProjection["nativeOutputArtifacts"];
+  if (value.nativeOutputArtifacts !== undefined) {
+    const summary = object(value.nativeOutputArtifacts, ["nonces", "truncated"]);
+    if (!Array.isArray(summary.nonces) || summary.nonces.length > 32 || typeof summary.truncated !== "boolean" ||
+        summary.nonces.some(nonce => typeof nonce !== "string" || !/^[0-9a-f]{64}$/u.test(nonce) || /^0+$/u.test(nonce)) ||
+        new Set(summary.nonces).size !== summary.nonces.length || (summary.truncated && summary.nonces.length !== 32)) throw invalid();
+    nativeOutputArtifacts = Object.freeze({ nonces: Object.freeze([...summary.nonces]), truncated: summary.truncated });
+  }
+  let nativeFileArtifacts: RemoteWorkerArtifactsAndEffectsProjection["nativeFileArtifacts"];
+  if (value.nativeFileArtifacts !== undefined) {
+    const summary = object(value.nativeFileArtifacts, ["nonces", "truncated"]);
+    if (!Array.isArray(summary.nonces) || summary.nonces.length > 32 || typeof summary.truncated !== "boolean" ||
+        summary.nonces.some(nonce => typeof nonce !== "string" || !/^[0-9a-f]{64}$/u.test(nonce) || /^0+$/u.test(nonce)) ||
+        new Set(summary.nonces).size !== summary.nonces.length || (summary.truncated && summary.nonces.length !== 32)) throw invalid();
+    nativeFileArtifacts = Object.freeze({ nonces: Object.freeze([...summary.nonces]), truncated: summary.truncated });
+  }
   const uploadCount = number(value.uploadCount), committedUploadCount = number(value.committedUploadCount);
   const quarantinedUploadCount = number(value.quarantinedUploadCount), cleanupPendingCount = number(value.cleanupPendingCount);
   const effectIntentCount = number(value.effectIntentCount), effectReceiptCount = number(value.effectReceiptCount);
@@ -196,7 +214,8 @@ export function normalizeRemoteWorkerArtifactsAndEffectsProjection(input: unknow
     (manifestFileCount === null) !== (manifestTotalBytes === null) || (manifestFileCount === null) !== (verificationState === null) ||
     (manifestFileCount !== null && !committedUploadCount)) throw invalid();
   return Object.freeze({ uploadCount, committedUploadCount, quarantinedUploadCount, cleanupPendingCount,
-    manifestFileCount, manifestTotalBytes, verificationState, effectIntentCount, effectReceiptCount, effectReconciliationCount });
+    manifestFileCount, manifestTotalBytes, verificationState, effectIntentCount, effectReceiptCount, effectReconciliationCount,
+    ...(nativeOutputArtifacts ? { nativeOutputArtifacts } : {}), ...(nativeFileArtifacts ? { nativeFileArtifacts } : {}) });
 }
 export function normalizeRemoteWorkerAssignmentRuntime(input: unknown): RemoteWorkerAssignmentRuntime {
   const value = object(input, ["schemaVersion", "readOnly", "mutationSemantics", "workspaceId", "assignmentId", "assignmentGeneration",

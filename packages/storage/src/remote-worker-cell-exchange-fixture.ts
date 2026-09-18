@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import {
   REMOTE_WORKER_CELL_CAPACITY_SCHEMA_VERSION, REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION,
   REMOTE_WORKER_CELL_PROVISIONING_PLAN_SCHEMA_VERSION, remoteWorkerCellProvisioningBindingSha256,
-  type RemoteWorkerCellProfile,
+  type RemoteWorkerCellProfile, type RemoteWorkerCellProvisioningExchange,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { RemoteWorkerAssignmentRepository, type RemoteWorkerAssignmentProtectedCommitFence } from "./remote-worker-assignment-repo.js";
 import { RemoteWorkerCellRepository } from "./remote-worker-cell-repo.js";
-import { RemoteWorkerCellProvisioningRepository } from "./remote-worker-cell-provisioning-repo.js";
+import { REMOTE_WORKER_NATIVE_ENVIRONMENT_SHA256 } from "./remote-worker-cell-native-profile.js";
+import { RemoteWorkerCellProvisioningRepository, type RemoteWorkerCellProvisioningAssignmentInput } from "./remote-worker-cell-provisioning-repo.js";
 import { checkpointFixture } from "./remote-worker-cell-checkpoint-test-helpers.js";
 import { volumeExchangeFixture, rehashVolumeFixture } from "../../contracts/src/remote-worker-cell-volume-test-fixture.js";
 import { formatExchangeFixture } from "../../contracts/src/remote-worker-cell-format-test-fixture.js";
@@ -25,6 +26,9 @@ export function verifyCellProvisioningExchange(
   leaseTokenSha256: string,
   fence: RemoteWorkerAssignmentProtectedCommitFence,
   revoke: () => void,
+  onComplete?: (input: RemoteWorkerCellProvisioningAssignmentInput, exchange: RemoteWorkerCellProvisioningExchange) => (() => void),
+  provisioningLeaseMs = 120_000,
+  retainFixture = false,
 ): void {
   const digest = (value: string) => createHash("sha256").update(value).digest("hex");
   const assignments = new RemoteWorkerAssignmentRepository(db);
@@ -44,7 +48,7 @@ export function verifyCellProvisioningExchange(
     pathJailSha256: manifest.pathJailSha256, capabilityProfileSha256: manifest.capabilityProfileSha256,
     contextSnapshotSha256: manifest.contextSnapshotSha256, toolEffectPostureSha256: manifest.toolEffectPostureSha256,
     runtimeAttestationSha256: digest("runtime-attestation"), launcherAttestationSha256: digest("launcher-attestation"),
-    egressPosture: "deny_all", egressPolicySha256: digest("egress-policy"), egressDnsRevision: 1, envAllowlistSha256: digest("env"),
+    egressPosture: "deny_all", egressPolicySha256: digest("egress-policy"), egressDnsRevision: 1, envAllowlistSha256: REMOTE_WORKER_NATIVE_ENVIRONMENT_SHA256,
     capacity: { schemaVersion: REMOTE_WORKER_CELL_CAPACITY_SCHEMA_VERSION,
       logicalDiskBytes: 64 * 1024 * 1024, allocatedDiskBytes: 130 * 1024 * 1024, fileLimit: 100, inodeLimit: 200,
       processLimit: 2, cpuLimitMilli: 1000, wallLimitMs: 60_000, memoryLimitBytes: 64 * 1024 * 1024,
@@ -53,7 +57,7 @@ export function verifyCellProvisioningExchange(
   };
   cells.profileOrReplay({ profile, idempotencyKey: "cell-exchange-profile", createdAt: clock.readDatabaseNow() });
   const claim = { ...key, provisioningOwner: "gateway-cell-owner",
-    provisioningLeaseExpiresAt: new Date(Date.parse(clock.readDatabaseNow()) + 120_000).toISOString() };
+    provisioningLeaseExpiresAt: new Date(Date.parse(clock.readDatabaseNow()) + provisioningLeaseMs).toISOString() };
   const cell = cells.claimProvisioning({ ...claim, leaseExpiresAt: claim.provisioningLeaseExpiresAt,
     detailSha256: digest("claim"), now: clock.readDatabaseNow() })!;
   const plan = { schemaVersion: REMOTE_WORKER_CELL_PROVISIONING_PLAN_SCHEMA_VERSION,
@@ -350,7 +354,10 @@ export function verifyCellProvisioningExchange(
   assert.throws(() => db.prepare("DELETE FROM remote_worker_cell_mounted_workspace_checkpoints WHERE assignment_id = @assignmentId")
     .run({ assignmentId: key.assignmentId }), /retained/u);
   assert.equal(cells.getCell(key)?.executionState, "provisioning");
+  const afterRevoke = onComplete?.(current, withWorkspace);
+  if (retainFixture) return;
   revoke();
+  afterRevoke?.();
   assert.throws(() => repo.exchangeWithAssignment(current));
   assert.throws(() => repo.exchangeWithAssignment({ ...write, ...current, submission: write.submission }));
   assert.throws(() => repo.exchangeWithAssignment(volumeWrite));

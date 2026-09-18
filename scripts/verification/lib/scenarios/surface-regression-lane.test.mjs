@@ -155,6 +155,13 @@ test("surface regression returns failure evidence when a browser assertion throw
       async ensureOnboardingComplete() {},
       async installMissionControlNextBrowserState() {},
       async performVerificationInteraction() {},
+      async prepareCleanRuntime(_runId, baseUrl) {
+        assert.equal(baseUrl, "http://127.0.0.1:4321/v1");
+        return "clean-runtime-root";
+      },
+      async startLocalProvider() {
+        return { baseUrl: "http://127.0.0.1:4321/v1", async close() {} };
+      },
       resolveVerificationTargetContext: () => ({
         isNext: false,
         packageName: "@goatcitadel/mission-control-next",
@@ -187,6 +194,8 @@ test("surface regression returns failure evidence when a browser assertion throw
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER, "true");
   assert.equal(stackOptions.gatewayMode, "built");
+  assert.equal(stackOptions.runtimeRoot, "clean-runtime-root");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_VERIFY_STUB_LLM_KEY, "verification-stub-key");
   assert.equal(stackOptions.uiMode, "preview");
   assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);

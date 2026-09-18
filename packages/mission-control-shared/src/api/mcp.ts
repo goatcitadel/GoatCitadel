@@ -10,6 +10,8 @@ import type {
   McpServerModeCallResponse,
   McpServerModeManifestResponse,
   McpServerRecord,
+  McpServerUpdateRequest,
+  McpServerPolicyUpdateRequest,
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
   McpToolRecord,
@@ -17,7 +19,11 @@ import type {
 import { request } from "./client-core.js";
 
 export async function fetchMcpServers(): Promise<{ items: McpServerRecord[] }> {
-  return request<{ items: McpServerRecord[] }>("/api/v1/mcp/servers");
+  return request<{ items: McpServerRecord[] }>("/api/v1/mcp/servers", { cache: "no-store" });
+}
+
+export async function fetchMcpServer(serverId: string): Promise<McpServerRecord> {
+  return request<McpServerRecord>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, { cache: "no-store" });
 }
 
 export async function fetchMcpTemplates(): Promise<{ items: Array<McpServerTemplateRecord & { installed: boolean }> }> {
@@ -109,20 +115,7 @@ export async function createMcpServer(input: {
 
 export async function updateMcpServer(
   serverId: string,
-  input: {
-    label?: string;
-    command?: string;
-    args?: string[];
-    url?: string;
-    authType?: "none" | "token" | "oauth2";
-    oauth?: McpServerRecord["oauth"];
-    enabled?: boolean;
-    category?: McpServerRecord["category"];
-    trustTier?: McpServerRecord["trustTier"];
-    costTier?: McpServerRecord["costTier"];
-    policy?: Partial<McpServerRecord["policy"]>;
-    verifiedAt?: string;
-  },
+  input: McpServerUpdateRequest,
 ): Promise<McpServerRecord> {
   return request<McpServerRecord>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
     method: "PATCH",
@@ -132,7 +125,7 @@ export async function updateMcpServer(
 
 export async function updateMcpServerPolicy(
   serverId: string,
-  policy: Partial<McpServerRecord["policy"]>,
+  policy: McpServerPolicyUpdateRequest,
 ): Promise<McpServerRecord> {
   return request<McpServerRecord>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/policy`, {
     method: "PATCH",
@@ -140,10 +133,10 @@ export async function updateMcpServerPolicy(
   });
 }
 
-export async function deleteMcpServer(serverId: string): Promise<{ deleted: boolean }> {
+export async function deleteMcpServer(serverId: string, expectedRevision: string): Promise<{ deleted: boolean }> {
   return request<{ deleted: boolean }>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
     method: "DELETE",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 

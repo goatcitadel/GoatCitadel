@@ -1,7 +1,6 @@
 /* eslint-disable max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
-import { loadApprovedCandidateSkill } from "./candidate-runtime-skills.js";
 import path from "node:path";
 import process from "node:process";
 import { createHash, randomUUID } from "node:crypto";
@@ -52,7 +51,6 @@ import type {
   PendingApprovalAction,
   SkillLifecycleRecord,
   SkillListItem,
-  SkillRuntimeState,
   SkillStateRecord,
   ToolCatalogEntry,
   LocalOperatorOverrideRecord,
@@ -127,7 +125,7 @@ import {
 } from "./skill-content-integrity.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import { CodeModeVerificationService } from "./code-mode-verification-service.js";
-import { readCandidateSkillArtifacts } from "./candidate-skill-artifact-review.js";
+import { listWorkspaceCandidateSkills, readCandidateCatalogArtifacts, skillLifecycleProjectionMatches, isSkillCallable } from "./candidate-skill-catalog-service.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
@@ -456,7 +454,7 @@ export class CapabilitySystemService {
   public async listSkills(effectiveSkills: EffectiveCapabilitySet = "ALL", workspaceId?: string): Promise<SkillListItem[]> {
     await this.ensureSkillLifecycleBackfill();
     const stateMap = await this.options.readSkillStates();
-    const all = await Promise.all(
+    const all: SkillListItem[] = await Promise.all(
       this.options.listLoadedSkills().map(async (skill) => {
         const state = stateMap.get(skill.skillId);
         const lifecycle = await this.resolveSkillLifecycle(skill);
@@ -480,40 +478,8 @@ export class CapabilitySystemService {
         };
       }),
     );
-    // Candidate authority stays in its version ledger. A global catalog must
-    // never make a workspace's reviewed instructions available elsewhere.
     if (workspaceId) {
-      for (const version of await this.options.storage.candidateSkillVersions.listApprovedInstructions(workspaceId, 200)) {
-        const loaded = await loadApprovedCandidateSkill({
-          rootDir: this.options.rootDir,
-          candidateRoot: this.candidateRoot,
-          version,
-          workspaceId,
-        });
-        if (!loaded) continue;
-        const existing = await this.options.storage.skillLifecycle.find(loaded.skill.skillId);
-        if (!existing || !skillLifecycleProjectionMatches(existing, loaded.lifecycle)) {
-          await this.options.storage.skillLifecycle.upsert(loaded.lifecycle);
-        }
-        const state = stateMap.get(loaded.skill.skillId);
-        all.push({
-          ...loaded.skill,
-          lifecycle: loaded.lifecycle,
-          lifecycleState: loaded.lifecycle.lifecycleState,
-          capabilityCategory: loaded.lifecycle.category,
-          trustLabel: loaded.lifecycle.trustLabel,
-          reviewWarning: loaded.lifecycle.reviewWarning,
-          state: state?.state ?? "enabled",
-          revision: state?.revision ??
-            (await this.options.storage.skillAggregateRevisions.ensure("runtime_skill", loaded.skill.skillId)).revision,
-          callable: isSkillCallable(loaded.lifecycle, state?.state ?? "enabled"),
-          note: state?.note,
-          stateUpdatedAt: state?.updatedAt,
-          pinned: state?.pinned,
-          usageCount: state?.usageCount,
-          lastUsedAt: state?.lastUsedAt,
-        });
-      }
+      all.push(...await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap));
     }
     return filterSkillItemsByEffectiveSet(all, effectiveSkills);
   }
@@ -791,7 +757,7 @@ export class CapabilitySystemService {
     const version = await this.requireCandidateVersion(candidateId, versionId);
     if (version.workspaceId !== workspaceId) throw new ConflictError({ message: "Candidate is outside this workspace." });
     const detail = await this.buildCandidateDetail(candidateId);
-    return readCandidateSkillArtifacts(this.options.rootDir, this.candidateRoot, version, detail.revision);
+    return readCandidateCatalogArtifacts(this.options, this.candidateRoot, version, detail.revision);
   }
 
   public async listProposals(limit = 100): Promise<CapabilityProposalRecord[]> {
@@ -4979,17 +4945,6 @@ function buildSkillLifecycleRecord(skill: LoadedSkill, existingCreatedAt?: strin
   };
 }
 
-function skillLifecycleProjectionMatches(left: SkillLifecycleRecord, right: SkillLifecycleRecord): boolean {
-  return (
-    left.skillId === right.skillId &&
-    left.category === right.category &&
-    left.lifecycleState === right.lifecycleState &&
-    left.trustLabel === right.trustLabel &&
-    left.reviewWarning === right.reviewWarning &&
-    JSON.stringify(left.provenance) === JSON.stringify(right.provenance)
-  );
-}
-
 function durableImportedActivationMatches(
   existing: SkillLifecycleRecord | undefined,
   projected: SkillLifecycleRecord,
@@ -5174,13 +5129,6 @@ function mapSkillSource(
               : "Imported skill remains inspectable only until governed durable activation is recorded.",
       };
   }
-}
-
-function isSkillCallable(lifecycle: SkillLifecycleRecord, state: SkillRuntimeState): boolean {
-  if (state === "disabled") {
-    return false;
-  }
-  return lifecycle.lifecycleState === "approved" || lifecycle.lifecycleState === "trusted";
 }
 
 function summarizeInstructionBody(body: string): string {

@@ -1,3 +1,5 @@
+import type { CitadelRecord } from "./citadels.js";
+
 export interface SealedValue {
   iv: string; // base64
   ciphertext: string; // base64
@@ -31,6 +33,21 @@ export interface CitadelVaultSecretMetadata {
   secretName: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Reviews metadata and lifecycle only. No secret value or value-derived digest is returned. */
+export interface CitadelVaultSnapshot {
+  citadelId: string;
+  revision: string;
+  record?: CitadelRecord;
+  items: CitadelVaultSecretMetadata[];
+}
+
+/** Sealing happens in the dedicated credential owner before this storage command. */
+export interface CitadelVaultMutation {
+  citadelId: string;
+  expectedRevision: string;
+  change: { type: "store"; secretName: string; sealedValue: SealedValue } | { type: "delete"; secretId: string };
 }
 
 export function toVaultSecretMetadata(record: CitadelVaultSecretRecord): CitadelVaultSecretMetadata {

@@ -17,15 +17,19 @@ export function ChatThinkingSection({
   thinking: string | undefined;
   turnStatus: ChatTurnLifecycleStatus;
 }) {
-  const [open, setOpen] = useState(false);
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? isChatTurnActiveStatus(turnStatus);
   const thinkingId = useId();
   if (!thinking) {
     return null;
   }
   const label = isChatTurnActiveStatus(turnStatus) ? "Thinking…" : "Thought process";
   return (
-    <details className="mc-next-thread-thinking" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary aria-expanded={open} aria-controls={thinkingId}>
+    <details className="mc-next-thread-thinking" open={open}>
+      <summary aria-expanded={open} aria-controls={thinkingId} onClick={(event) => {
+        event.preventDefault();
+        setUserOpen(!open);
+      }}>
         {label}
       </summary>
       <div id={thinkingId} className="mc-next-thread-thinking-body">

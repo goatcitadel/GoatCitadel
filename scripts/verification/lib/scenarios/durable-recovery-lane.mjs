@@ -1,3 +1,6 @@
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
+import { startDeterministicLlmStub, DETERMINISTIC_LLM_KEY_ENV } from "./deterministic-llm-stub.mjs";
+
 export async function runDurableRecoveryLane(context, _options = {}, deps) {
   const {
     clampString,
@@ -16,14 +19,18 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
     waitForDurableRunStatus,
     writeJson,
   } = deps;
-  let stack = await startVerificationStack(context, {
-    includeUi: false,
-    gatewayEnv: {
-      GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
-      GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
-    },
-  });
+  let stack;
+  let runtimeRoot;
+  const stub = await startDeterministicLlmStub({ replyText: "Recovery fixture response." });
+  const gatewayEnv = {
+    GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
+    GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+    GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
+    [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
+  };
   try {
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-durable-recovery`, stub.baseUrl);
+    stack = await startVerificationStack(context, { runtimeRoot, includeUi: false, gatewayEnv });
     await runScenario(
       context,
       {
@@ -56,10 +63,7 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
         stack = await startVerificationStack(context, {
           runtimeRoot: stack.runtimeRoot,
           includeUi: false,
-          gatewayEnv: {
-            GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
-            GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
-          },
+          gatewayEnv,
         });
 
         const orphanAfterRestart = await waitForDurableRunStatus(stack.gatewayUrl, orphanRunId, ["completed"]);
@@ -125,7 +129,11 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
       },
     );
   } finally {
-    await stopVerificationStack(stack);
+    try {
+      if (stack || runtimeRoot) await stopVerificationStack(stack ?? { runtimeRoot });
+    } finally {
+      await stub.close();
+    }
   }
 
   const commands = [

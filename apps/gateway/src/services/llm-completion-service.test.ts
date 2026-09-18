@@ -4,11 +4,7 @@ import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } 
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT } from "./llm-completion-helpers.js";
 import { createChatCompletion, createChatCompletionStream, type LlmCompletionHost } from "./llm-completion-service.js";
-import {
-  createGovernedChatCompletion,
-  createGovernedChatCompletionStream,
-  type GovernedLlmCompletionHost,
-} from "./llm-completion-service.js";
+import { createGovernedChatCompletion, createGovernedChatCompletionStream, type GovernedLlmCompletionHost } from "./governed-llm-completion-service.js";
 import {
   LlmDispatchGuardScope,
   LlmDispatchGuardRejectedError,
@@ -385,6 +381,11 @@ describe("createChatCompletionStream", () => {
     expect(calls).toBe(2);
     expect(result.error).toBeUndefined();
     expect(result.chunks[0]).toEqual({ choices: [{ delta: { content: "recovered" } }] });
+    const attemptEvents = vi.mocked(host.recordDevDiagnostic).mock.calls.map(([event]) => event);
+    expect(attemptEvents.filter((event) => event.event === "chat.completion_stream.provider_attempt.start")
+      .map((event) => event.context?.attempt)).toEqual([1, 2]);
+    expect(attemptEvents.filter((event) => event.event === "chat.completion_stream.provider_attempt.first_chunk")
+      .map((event) => event.context?.attempt)).toEqual([2]);
     expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "chat.completion_stream.attempt_failed",
@@ -539,6 +540,40 @@ describe("createChatCompletionStream", () => {
     );
   });
 
+  it("separates preparation time from attempt latency and records only the first chunk", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const host = createHost(async function* () {
+      clock.mockReturnValue(1800);
+      yield { choices: [{ delta: { role: "assistant" } }] };
+      clock.mockReturnValue(2000);
+      yield { choices: [{ delta: { content: "hello" } }] };
+    });
+    vi.mocked(host.persistContextManifestForCompletionRequest).mockImplementation(async () => {
+      expect(host.llmService.chatCompletionsStream).not.toHaveBeenCalled();
+      expect(vi.mocked(host.recordDevDiagnostic).mock.calls.some(([event]) =>
+        event.event === "chat.completion_stream.provider_attempt.start")).toBe(false);
+      clock.mockReturnValue(1500);
+    });
+    try {
+      const result = await collectStream(createChatCompletionStream(host, createRequest()));
+      expect(result.error).toBeUndefined();
+      expect(host.recordDevDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+        event: "chat.completion_stream.start",
+        context: expect.objectContaining({ timingBoundary: "preparation_start" }),
+      }));
+      expect(host.recordDevDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+        event: "chat.completion_stream.provider_attempt.start",
+        context: expect.objectContaining({ attempt: 1, elapsedSinceCompletionStartMs: 500 }),
+      }));
+      const chunks = vi.mocked(host.recordDevDiagnostic).mock.calls.filter(([event]) =>
+        event.event === "chat.completion_stream.provider_attempt.first_chunk");
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]?.[0].context).toMatchObject({ attempt: 1, elapsedSinceAttemptStartMs: 300 });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("streams from a fallback provider when the primary fails before emitting output", async () => {
     const calls: string[] = [];
     const host = createHost(async function* (request) {
@@ -557,6 +592,11 @@ describe("createChatCompletionStream", () => {
 
     expect(result.error).toBeUndefined();
     expect(calls).toContain("backup:backup-model");
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      event: "chat.completion_stream.provider_attempt.start",
+      providerId: "backup", modelId: "backup-model",
+      context: expect.objectContaining({ fallback: true, attempt: 2 }),
+    }));
     expect(result.chunks).toEqual([
       {
         choices: [{ delta: { content: "fallback stream" } }],

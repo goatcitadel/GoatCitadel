@@ -1,20 +1,22 @@
 import type {
   BlueprintReviewSummary,
   Citadel,
+  CitadelAccessSnapshot,
   CitadelBlueprint,
   CitadelBrief,
   CitadelBlueprintValidationResult,
   CitadelChamber,
   CitadelChamberInput,
-  CitadelCharter,
   CitadelCharterInput,
   CitadelCreateInput,
   CitadelCouncilAssignment,
   CitadelGatehouseSummary,
   CitadelRecord,
-  CitadelTemplate,
+  CitadelTemplateSnapshot,
+  CitadelStructureSnapshot,
   CitadelUpdateInput,
   CitadelVaultSecretMetadata,
+  CitadelVaultSnapshot,
   CitadelWardInput,
   CitadelWardRecord,
   MasonAnswers,
@@ -23,9 +25,9 @@ import type {
 import { request } from "./client-core.js";
 
 // Inputs whose citadelId is supplied via the URL path, not the body.
-type ChamberBody = Omit<CitadelChamberInput, "citadelId">;
-type CharterBody = Omit<CitadelCharterInput, "citadelId">;
-type WardBody = Omit<CitadelWardInput, "citadelId">;
+type ChamberBody = Omit<CitadelChamberInput, "citadelId"> & { expectedRevision: string };
+type CharterBody = Omit<CitadelCharterInput, "citadelId"> & { expectedRevision: string };
+type WardBody = Omit<CitadelWardInput, "citadelId"> & { expectedRevision: string };
 
 export interface CitadelsResponse {
   items: CitadelRecord[];
@@ -99,8 +101,12 @@ export async function getCitadel(citadelId: string): Promise<Citadel> {
   return request<Citadel>(`/api/v1/citadels/${id(citadelId)}`);
 }
 
-export async function upsertCitadelCharter(citadelId: string, charter: CharterBody): Promise<CitadelCharter> {
-  return request<CitadelCharter>(`/api/v1/citadels/${id(citadelId)}/charter`, {
+export async function getCitadelStructureSnapshot(citadelId: string): Promise<CitadelStructureSnapshot> {
+  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/structure`);
+}
+
+export async function upsertCitadelCharter(citadelId: string, charter: CharterBody): Promise<CitadelStructureSnapshot> {
+  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/charter`, {
     method: "PUT",
     body: JSON.stringify(charter),
   });
@@ -111,8 +117,8 @@ export async function listCitadelChambers(citadelId: string): Promise<CitadelCha
   return items;
 }
 
-export async function createCitadelChamber(citadelId: string, chamber: ChamberBody): Promise<CitadelChamber> {
-  return request<CitadelChamber>(`/api/v1/citadels/${id(citadelId)}/chambers`, {
+export async function createCitadelChamber(citadelId: string, chamber: ChamberBody): Promise<CitadelStructureSnapshot> {
+  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/chambers`, {
     method: "POST",
     body: JSON.stringify(chamber),
   });
@@ -120,21 +126,26 @@ export async function createCitadelChamber(citadelId: string, chamber: ChamberBo
 
 // --- Council, Gatehouse, Wards ---
 
+export async function getCitadelAccessSnapshot(citadelId: string): Promise<CitadelAccessSnapshot> {
+  return request<CitadelAccessSnapshot>(`/api/v1/citadels/${id(citadelId)}/access`);
+}
+
 export async function listCitadelCouncil(citadelId: string): Promise<CitadelCouncilAssignment[]> {
   const { items } = await request<{ items: CitadelCouncilAssignment[] }>(`/api/v1/citadels/${id(citadelId)}/council`);
   return items;
 }
 
-export async function assignCitadelCouncilAgent(citadelId: string, agentId: string): Promise<CitadelCouncilAssignment> {
-  return request<CitadelCouncilAssignment>(`/api/v1/citadels/${id(citadelId)}/council`, {
+export async function assignCitadelCouncilAgent(citadelId: string, agentId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+  return request<CitadelAccessSnapshot>(`/api/v1/citadels/${id(citadelId)}/council`, {
     method: "POST",
-    body: JSON.stringify({ agentId }),
+    body: JSON.stringify({ agentId, expectedRevision }),
   });
 }
 
-export async function unassignCitadelCouncilAgent(citadelId: string, agentId: string): Promise<void> {
-  await request<void>(`/api/v1/citadels/${id(citadelId)}/council/${id(agentId)}`, {
+export async function unassignCitadelCouncilAgent(citadelId: string, agentId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+  return request<CitadelAccessSnapshot>(`/api/v1/citadels/${id(citadelId)}/council/${id(agentId)}`, {
     method: "DELETE",
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
@@ -147,16 +158,17 @@ export async function listCitadelWards(citadelId: string): Promise<CitadelWardRe
   return items;
 }
 
-export async function addCitadelWard(citadelId: string, ward: WardBody): Promise<CitadelWardRecord> {
-  return request<CitadelWardRecord>(`/api/v1/citadels/${id(citadelId)}/wards`, {
+export async function addCitadelWard(citadelId: string, ward: WardBody): Promise<CitadelAccessSnapshot> {
+  return request<CitadelAccessSnapshot>(`/api/v1/citadels/${id(citadelId)}/wards`, {
     method: "POST",
     body: JSON.stringify(ward),
   });
 }
 
-export async function removeCitadelWard(citadelId: string, wardId: string): Promise<void> {
-  await request<void>(`/api/v1/citadels/${id(citadelId)}/wards/${id(wardId)}`, {
+export async function removeCitadelWard(citadelId: string, wardId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+  return request<CitadelAccessSnapshot>(`/api/v1/citadels/${id(citadelId)}/wards/${id(wardId)}`, {
     method: "DELETE",
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
@@ -172,15 +184,15 @@ export async function evaluateCitadelGatehouseAction(
 
 // --- Templates & Blueprints ---
 
-export async function listCitadelTemplates(): Promise<CitadelTemplate[]> {
-  const { items } = await request<{ items: CitadelTemplate[] }>("/api/v1/citadel-templates");
+export async function listCitadelTemplates(): Promise<CitadelTemplateSnapshot[]> {
+  const { items } = await request<{ items: CitadelTemplateSnapshot[] }>("/api/v1/citadel-templates");
   return items;
 }
 
-export async function createCitadelFromTemplate(citadelId: string, templateId: string): Promise<Citadel> {
-  return request<Citadel>(`/api/v1/citadels/${id(citadelId)}/from-template`, {
+export async function createCitadelFromTemplate(citadelId: string, templateId: string, expectedRevision: string, expectedTemplateRevision: string): Promise<CitadelStructureSnapshot> {
+  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/from-template`, {
     method: "POST",
-    body: JSON.stringify({ templateId }),
+    body: JSON.stringify({ templateId, expectedRevision, expectedTemplateRevision }),
   });
 }
 
@@ -195,10 +207,10 @@ export async function validateCitadelBlueprint(blueprint: unknown): Promise<Cita
   });
 }
 
-export async function importCitadelBlueprint(citadelId: string, blueprint: CitadelBlueprint): Promise<Citadel> {
-  return request<Citadel>(`/api/v1/citadels/${id(citadelId)}/from-blueprint`, {
+export async function importCitadelBlueprint(citadelId: string, blueprint: CitadelBlueprint, expectedRevision: string): Promise<CitadelStructureSnapshot> {
+  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/from-blueprint`, {
     method: "POST",
-    body: JSON.stringify(blueprint),
+    body: JSON.stringify({ blueprint, expectedRevision }),
   });
 }
 
@@ -248,21 +260,23 @@ export async function draftBlueprintFromMasonSession(sessionId: string): Promise
 
 // --- The Vault (§13) ---
 
+export async function getCitadelVaultSnapshot(citadelId: string): Promise<CitadelVaultSnapshot> {
+  return request(`/api/v1/citadels/${id(citadelId)}/vault-secrets`);
+}
+
 export async function listCitadelVaultSecrets(citadelId: string): Promise<CitadelVaultSecretMetadata[]> {
-  const { items } = await request<{ items: CitadelVaultSecretMetadata[] }>(
-    `/api/v1/citadels/${id(citadelId)}/vault-secrets`,
-  );
-  return items;
+  return (await getCitadelVaultSnapshot(citadelId)).items;
 }
 
 export async function storeCitadelVaultSecret(
   citadelId: string,
   name: string,
   value: string,
-): Promise<CitadelVaultSecretMetadata> {
-  return request<CitadelVaultSecretMetadata>(`/api/v1/citadels/${id(citadelId)}/vault-secrets`, {
+  expectedRevision: string,
+): Promise<CitadelVaultSnapshot> {
+  return request(`/api/v1/citadels/${id(citadelId)}/vault-secrets`, {
     method: "POST",
-    body: JSON.stringify({ name, value }),
+    body: JSON.stringify({ name, value, expectedRevision }),
   });
 }
 
@@ -274,6 +288,6 @@ export async function revealCitadelVaultSecret(citadelId: string, secretId: stri
   return value;
 }
 
-export async function deleteCitadelVaultSecret(citadelId: string, secretId: string): Promise<void> {
-  await request<void>(`/api/v1/citadels/${id(citadelId)}/vault-secrets/${id(secretId)}`, { method: "DELETE" });
+export async function deleteCitadelVaultSecret(citadelId: string, secretId: string, expectedRevision: string): Promise<CitadelVaultSnapshot> {
+  return request(`/api/v1/citadels/${id(citadelId)}/vault-secrets/${id(secretId)}`, { method: "DELETE", body: JSON.stringify({ expectedRevision }) });
 }

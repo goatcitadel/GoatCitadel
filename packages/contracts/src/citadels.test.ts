@@ -1,10 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type {
-  Citadel,
-  CitadelChamber,
-  CitadelChamberInput,
-  CitadelCharter,
-  CitadelCharterInput,
+  CitadelStructureSnapshot,
   CitadelTemplateTarget,
 } from "./citadels.js";
 import {
@@ -114,30 +110,18 @@ describe("citadel templates", () => {
     expect(findCitadelTemplate("nope")).toBeUndefined();
   });
 
-  it("applies a template by upserting a charter and creating its chambers", () => {
-    const charters: CitadelCharterInput[] = [];
-    const chambers: CitadelChamberInput[] = [];
-    const target: CitadelTemplateTarget = {
-      upsertCharter: (input) => {
-        charters.push(input);
-        return { citadelId: input.citadelId } as CitadelCharter;
-      },
-      createChamber: (input) => {
-        chambers.push(input);
-        return { chamberId: `ch-${chambers.length}`, citadelId: input.citadelId } as CitadelChamber;
-      },
-      getCitadel: (citadelId) => ({ citadelId }) as Citadel,
-    };
+  it("submits the reviewed template as one atomic structure command", () => {
+    const saved: CitadelStructureSnapshot = { citadelId: "ws-1", revision: "saved", charter: null, chambers: [] };
+    const target: CitadelTemplateTarget = { mutateStructure: vi.fn(() => saved) };
 
     const template = findCitadelTemplate("project-command");
     expect(template).toBeDefined();
-    applyCitadelTemplate(target, "ws-1", template!);
-
-    expect(charters).toHaveLength(1);
-    expect(charters[0]?.citadelId).toBe("ws-1");
-    expect(charters[0]?.kind).toBe("project");
-    expect(chambers).toHaveLength(template!.chambers.length);
-    expect(chambers.every((chamber) => chamber.citadelId === "ws-1")).toBe(true);
+    expect(applyCitadelTemplate(target, "ws-1", template!, "reviewed")).toBe(saved);
+    expect(target.mutateStructure).toHaveBeenCalledTimes(1);
+    expect(target.mutateStructure).toHaveBeenCalledWith({ citadelId: "ws-1", expectedRevision: "reviewed", change: {
+      type: "setup", charter: expect.objectContaining({ purpose: template!.purpose, kind: "project" }),
+      chambers: template!.chambers,
+    } });
   });
 });
 

@@ -47,7 +47,7 @@ import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
 import { verifySettledChatWaitingAuthority } from "./chat-durable-waiting-authority.js";
-import { recordRemoteWorkerChatApprovalWake } from "./remote-worker-chat-approval-resume.js";
+import { commitDurableWakeTransition } from "./durable-wake-transition-service.js";
 import {
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
   HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
@@ -3973,26 +3973,10 @@ export class DurableRunService {
     const now = new Date().toISOString();
     let next!: DurableRunRecord;
     try {
-      await this.ctx.storage.runImmediateTransaction(async () => {
-        await recordRemoteWorkerChatApprovalWake(this.ctx.storage, current, event);
-        const metadata = await this.prepareQueuedTransitionMetadata(current, "wake");
-        next = await this.ctx.storage.durableRuns.updateRun({
-          runId,
-          status: "queued",
-          updatedAt: now,
-          startedAt: current.startedAt ?? now,
-          clearFinishedAt: true,
-          clearLease: true,
-          clearLastError: true,
-          metadata,
-          expectedVersion: current.version,
-        });
-        await this.recordDurableTimelineEvent(runId, "run_woken", {
-          eventKey: event.eventKey,
-          correlationId: event.correlationId,
-          payload: event.payload ?? {},
-        });
-      });
+      next = await commitDurableWakeTransition(this.ctx.storage, {
+        prepareMetadata: (run) => this.prepareQueuedTransitionMetadata(run, "wake"),
+        recordTimeline: (id, payload) => this.recordDurableTimelineEvent(id, "run_woken", payload),
+      }, current, runId, event, now);
     } catch (error) {
       return {
         runId,

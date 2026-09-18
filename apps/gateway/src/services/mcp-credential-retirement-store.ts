@@ -4,6 +4,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { isMcpOAuthTokenRefForServer } from "./mcp-oauth-token-service.js";
 import { isMcpEnvironmentRefForServer } from "./mcp-static-environment-service.js";
+import { isMcpCredentialWriteId, isMcpReceiptAccount } from "./mcp-credential-receipt.js";
 
 const INDEX = "mcp_credential_retirements_v1";
 const PREFIX = "mcp_credential_retired_v1:";
@@ -11,7 +12,8 @@ const SECRET_PREFIX = "keychain:goatcitadel:";
 const MAX_PENDING = 4096;
 const KEY = /^mcp_credential_retired_v1:[a-f0-9]{64}$/u;
 type Retirement = {
-  version: 2;
+  version: 2 | 3;
+  writeId?: string | null;
   custodyId: string | null;
   serverId: string;
   credentialRef: string;
@@ -28,13 +30,15 @@ export interface McpCredentialReconciliationResult {
   failed: number;
   remaining: number;
 }
+export type McpCredentialDelete = (account: string, custodyId: string | null, writeId?: string | null) => void | boolean | Promise<void | boolean>;
 
 /** Private credential metadata only. Publication and retirement share the
  * registry's transaction; immutable tombstones prevent a deleted version from
  * being published again. No provider request or credential value belongs here. */
 export class McpCredentialRetirementStore {
   constructor(private readonly ctx: McpCredentialMetadataContext,
-    private readonly resolveCustody: (serverId: string, ref: string) => Promise<string | null> = async () => null) {}
+    private readonly resolveCustody: (serverId: string, ref: string) => Promise<string | null> = async () => null,
+    private readonly resolveWriteId: (serverId: string, ref: string) => Promise<string | null> = async () => null) {}
 
   async assertPublishable(serverId: string, refs: readonly (string | undefined)[]): Promise<void> {
     for (const ref of unique(refs)) {
@@ -68,7 +72,10 @@ export class McpCredentialRetirementStore {
       }
       const custodyId = await this.resolveCustody(serverId, ref);
       if (custodyId !== null && (typeof custodyId !== "string" || !/^[a-f0-9]{64}$/u.test(custodyId))) throw conflict();
-      const entry: Retirement = { version: 2, custodyId, serverId, credentialRef: ref,
+      const receipt = isMcpReceiptAccount(ref.slice(SECRET_PREFIX.length));
+      const writeId = receipt ? await this.resolveWriteId(serverId, ref) : null;
+      if (writeId !== null && !isMcpCredentialWriteId(writeId)) throw conflict();
+      const entry: Retirement = { version: receipt ? 3 : 2, ...(receipt ? { writeId } : {}), custodyId, serverId, credentialRef: ref,
         retiredAt: new Date().toISOString(), status: "pending" };
       if (!(await this.ctx.systemSettings.compareAndSet(key, undefined, entry))) throw conflict();
       const index = await this.ctx.systemSettings.get(INDEX);
@@ -80,7 +87,7 @@ export class McpCredentialRetirementStore {
 
   /** Deletion is idempotent for these permanently retired slots. A lost delete
    * acknowledgement retains its tombstone and can never restore callability. */
-  async reconcile(deleteSecret: (account: string, custodyId: string | null) => void | boolean | Promise<void | boolean>, limit = 32): Promise<McpCredentialReconciliationResult> {
+  async reconcile(deleteSecret: McpCredentialDelete, limit = 32): Promise<McpCredentialReconciliationResult> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new TypeError("Invalid MCP cleanup limit.");
     const result = { deleted: 0, blocked: 0, failed: 0, remaining: 0 };
     const keys = requireIndex((await this.ctx.systemSettings.get(INDEX))?.value).slice(0, limit);
@@ -88,7 +95,10 @@ export class McpCredentialRetirementStore {
       try {
         const entry = await this.claim(key);
         if (!entry) { result.blocked += 1; continue; }
-        if (entry.status !== "deleted" && await deleteSecret(entry.credentialRef.slice(SECRET_PREFIX.length), entry.custodyId) === false) {
+        const account = entry.credentialRef.slice(SECRET_PREFIX.length);
+        if (entry.status !== "deleted" && (entry.version === 3
+          ? entry.writeId === null || entry.writeId === undefined || await deleteSecret(account, entry.custodyId, entry.writeId) !== true
+          : await deleteSecret(account, entry.custodyId) === false)) {
           result.blocked += 1; continue;
         }
         await this.complete(key);
@@ -171,13 +181,16 @@ function requireIndex(value: unknown): string[] {
 function requireRetirement(key: string, input: unknown): Retirement {
   const value = input as Retirement;
   const legacy = (input as { version?: number })?.version === 1;
-  if (!value || typeof value !== "object" || Object.keys(value).length !== (legacy ? 5 : 6) || (!legacy && value.version !== 2) ||
+  if (!value || typeof value !== "object" || Object.keys(value).length !== (legacy ? 5 : value.version === 3 ? 7 : 6) || (!legacy && value.version !== 2 && value.version !== 3) ||
     (!legacy && value.custodyId !== null && (typeof value.custodyId !== "string" || !/^[a-f0-9]{64}$/u.test(value.custodyId))) ||
     !["pending", "deleting", "deleted"].includes(value.status) || typeof value.retiredAt !== "string" ||
     !Number.isFinite(Date.parse(value.retiredAt))) throw new Error("Invalid MCP retirement record.");
   assertOwned(value.serverId, value.credentialRef);
+  const receipt = isMcpReceiptAccount(value.credentialRef.slice(SECRET_PREFIX.length));
+  if (receipt !== (value.version === 3) || (receipt && value.writeId !== null && !isMcpCredentialWriteId(value.writeId)))
+    throw new Error("Invalid MCP credential retirement receipt.");
   if (key !== keyFor(value.credentialRef)) throw new Error("MCP retirement identity mismatch.");
-  return { ...value, version: 2, custodyId: legacy ? null : value.custodyId };
+  return { ...value, version: value.version === 3 ? 3 : 2, custodyId: legacy ? null : value.custodyId };
 }
 function requireRows(value: unknown): Record<string, unknown>[] {
   if (value === undefined) return [];

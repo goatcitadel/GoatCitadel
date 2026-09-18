@@ -5,7 +5,8 @@
 .DESCRIPTION
   Preflight reads the candidate, input files, ACLs and SCM without installing.
   Install creates a fresh protected payload/configuration tree and a separate
-  worker-writable state directory, then creates and verifies the demand-start
+  read-only state container with separate worker-writable capacity areas, then
+  creates and verifies the demand-start
   virtual-account service and its separate SYSTEM cell controller. The protected
   cells parent and custody record bind both images and directory identities.
   It never starts a service or contacts a provider.
@@ -32,6 +33,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'worker-install-common.ps1')
 Initialize-WorkerInstallNative
 $paths = Get-WorkerServicePaths
+$capacityAreas = Get-WorkerCellCapacityPaths $paths.Root
+$workerCapacityDirectories = @($capacityAreas.Values | Where-Object { $_ -cne $paths.Cells })
 $PackageRoot = [IO.Path]::GetFullPath($PackageRoot).TrimEnd('\')
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
 foreach ($forbidden in @($PackageRoot, $paths.Root)) {
@@ -109,7 +112,7 @@ try {
     throw 'REFUSED: ticket must reference the public protected signing key.'
   }
   $null = ConvertFrom-WorkerJson $inputs['protected-key.json']
-  $settings = Get-WorkerSettingsBytes $paths $GatewayHost $GatewayPort ('service-' + $installationId)
+  $settings = Get-WorkerSettingsBytes $paths $GatewayHost $GatewayPort ('service-' + $installationId) -CapacityLayout
   $settingsHash = Get-WorkerBytesHash $settings
   if ($refusals.Count -gt 0) { $verdict = 'refused' }
   elseif ($Preflight) { $verdict = 'passed'; $detail = 'Preflight passed; no installation was performed.' }
@@ -129,7 +132,8 @@ try {
       }
     }
     foreach ($directory in @($paths.Root, $paths.Payload, $paths.Configuration)) { Add-WorkerDirectory $directory $script:WorkerReadOnlySddl }
-    Add-WorkerDirectory $paths.State $script:WorkerStateSddl
+    Add-WorkerDirectory $paths.State $script:WorkerReadOnlySddl
+    foreach ($directory in $workerCapacityDirectories) { Add-WorkerDirectory $directory $script:WorkerStateSddl }
     foreach ($relative in @($inventory.Directories | Sort-Object { $_.Split('/').Count }, { $_ })) {
       $directory = Assert-WorkerContainedPath $paths.Payload (Join-Path $paths.Payload $relative.Replace('/', '\'))
       Add-WorkerDirectory $directory $script:WorkerReadOnlySddl
@@ -144,15 +148,36 @@ try {
       Write-WorkerProtectedBytes (Join-Path $paths.Configuration $name) $inputs[$name] $script:WorkerReadOnlySddl $ownedFiles $leases
     }
     Write-WorkerProtectedBytes (Join-Path $paths.Configuration 'worker.environment') $settings $script:WorkerReadOnlySddl $ownedFiles $leases
+    Write-WorkerProtectedBytes $paths.StateWriterGate ([byte[]]@()) $script:WorkerReadOnlySddl $ownedFiles $leases
+    Write-WorkerProtectedBytes $paths.HostRunGuard ([byte[]]::new(32)) $script:WorkerStateSddl $ownedFiles $leases
     $native::CreateProtectedDirectory($paths.Cells, $script:CellControllerParentSddl)
     $createdCells = $true
     $leases.Add($native::PinDirectory($paths.Cells))
     $custodyBytes = Get-WorkerCellControllerCustodyBytes $paths $inventory
     $custodyHash = Get-WorkerBytesHash $custodyBytes
     Write-WorkerProtectedBytes $paths.ControllerCustody $custodyBytes $script:WorkerReadOnlySddl $ownedFiles $leases
+    $runtimeCustodyBytes = Get-WorkerCellRuntimeCustodyBytes $paths $inventory
+    $runtimeCustodyHash = Get-WorkerBytesHash $runtimeCustodyBytes
+    Write-WorkerProtectedBytes $paths.RuntimeCustody $runtimeCustodyBytes $script:WorkerReadOnlySddl $ownedFiles $leases
+    $capacityCustodyBytes = Get-WorkerCellCapacityCustodyBytes $paths.Root
+    $capacityCustodyHash = Get-WorkerBytesHash $capacityCustodyBytes
+    Write-WorkerProtectedBytes $paths.CapacityCustody $capacityCustodyBytes $script:WorkerReadOnlySddl $ownedFiles $leases
+    # A separate non-exportable machine key belongs only to SYSTEM and the
+    # controller service. Never reuse the worker TLS/admission signing key.
+    $controllerPoint = [GoatCitadel.RemoteWorker.Install.ControllerKey]::CreateMachineKey()
+    $controllerPointBytes = [byte[]]::new(65)
+    for ($index = 0; $index -lt 65; $index++) { $controllerPointBytes[$index] = [Convert]::ToByte($controllerPoint.Substring($index * 2, 2), 16) }
+    $controllerKeyHash = Get-WorkerBytesHash ([byte[]]([Text.Encoding]::UTF8.GetBytes("goatcitadel.controller-attestation-key.v1`0") + $controllerPointBytes))
+    $controllerEnrollment = [ordered]@{ schemaVersion='goatcitadel.controller-signing-enrollment.v1';
+      keyName=[GoatCitadel.RemoteWorker.Install.ControllerKey]::Name; publicPointHex=$controllerPoint;
+      keySha256=$controllerKeyHash; controllerCustodySha256=$custodyHash; installationId=$installationId }
+    $controllerEnrollmentBytes = [Text.UTF8Encoding]::new($false).GetBytes(($controllerEnrollment | ConvertTo-Json -Depth 4))
+    Write-WorkerProtectedBytes (Join-Path $paths.Configuration 'controller-signing-enrollment.json') $controllerEnrollmentBytes $script:WorkerReadOnlySddl $ownedFiles $leases
+    [IO.File]::WriteAllBytes((Join-Path $OutputRoot 'controller-signing-enrollment.json'), $controllerEnrollmentBytes)
     $receipt = [ordered]@{ schemaVersion='goatcitadel.remote-worker.service-install.v1'; installationId=$installationId;
       target=$Target; manifestSha256=$ManifestSha256; settingsSha256=$settingsHash; serviceName=$script:WorkerServiceName;
-      controllerServiceName=$script:CellControllerServiceName; controllerCustodySha256=$custodyHash }
+      controllerServiceName=$script:CellControllerServiceName; controllerCustodySha256=$custodyHash; runtimeCustodySha256=$runtimeCustodyHash;
+      capacityCustodySha256=$capacityCustodyHash; controllerKeySha256=$controllerKeyHash }
     $receiptBytes = [Text.UTF8Encoding]::new($false).GetBytes(($receipt | ConvertTo-Json -Depth 4))
     Write-WorkerProtectedBytes (Join-Path $paths.Configuration 'install-receipt.json') $receiptBytes $script:WorkerReadOnlySddl $ownedFiles $leases
     $null = Get-WorkerPackage -Root $paths.Payload -ManifestSha256 $ManifestSha256 -Target $Target
@@ -163,12 +188,14 @@ try {
     }
     foreach ($directory in $ownedDirectories) {
       $expectedSddl = $script:WorkerReadOnlySddl
-      if ($directory -eq $paths.State) { $expectedSddl = $script:WorkerStateSddl }
+      if ($workerCapacityDirectories -ccontains $directory) { $expectedSddl = $script:WorkerStateSddl }
       if ((ConvertTo-CanonicalFileSddl ($native::GetFileSddl($directory))) -cne (ConvertTo-CanonicalFileSddl $expectedSddl)) {
         throw 'REFUSED: installed directory security differs.'
       }
     }
     Assert-WorkerCellControllerCustody $paths $inventory
+    Assert-WorkerCellRuntimeCustody $paths $inventory
+    Assert-WorkerCellCapacityCustody $paths
     $controllerLease = [GoatCitadel.RemoteWorker.Install.NativeFiles]::CreateStoppedCellControllerService($paths.ControllerImage)
     $createdController = $true
     [GoatCitadel.RemoteWorker.Install.NativeFiles]::ConfigureCellControllerPrivileges($controllerLease)
@@ -183,6 +210,7 @@ try {
     Assert-WorkerServiceReadBack $paths
     Assert-WorkerCellControllerServiceReadBack $paths
     Assert-WorkerCellControllerCustody $paths $inventory
+    Assert-WorkerCellRuntimeCustody $paths $inventory
     $verdict = 'passed'; $detail = 'Verified package and custody installed; worker and cell controller services are stopped.'
   }
 } catch {

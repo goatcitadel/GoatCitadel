@@ -457,12 +457,7 @@ export async function runChatSessionWorkbenchCommand(
   await deps.requireChatSession(sessionId);
   const state = await syncWorkbenchState(deps, sessionId);
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
-  assertExistingPathRealpathAllowed(
-    context.projectRoot,
-    deps.config.toolPolicy.sandbox.writeJailRoots,
-    deps.config.toolPolicy.sandbox.readOnlyRoots,
-  );
-  assertWritePathInJail(context.projectRoot, deps.config.toolPolicy.sandbox.writeJailRoots);
+  assertWorkbenchWritableProjectScope(deps, context.projectRoot);
 
   const command = normalizeWorkbenchCommand(input.command);
   const args = normalizeWorkbenchCommandArgs(input.args ?? []);
@@ -2151,13 +2146,20 @@ function assertWorkbenchMutationScope(
   deps: ChatWorkbenchDependencies,
   context: { projectRoot: string; worktreePath: string },
 ): void {
+  assertWorkbenchWritableProjectScope(deps, context.projectRoot);
+  assertWritePathInJail(context.worktreePath, deps.config.toolPolicy.sandbox.writeJailRoots);
+}
+
+function assertWorkbenchWritableProjectScope(
+  deps: ChatWorkbenchDependencies,
+  projectRoot: string,
+): void {
   assertExistingPathRealpathAllowed(
-    context.projectRoot,
+    projectRoot,
     deps.config.toolPolicy.sandbox.writeJailRoots,
     deps.config.toolPolicy.sandbox.readOnlyRoots,
   );
-  assertWritePathInJail(context.projectRoot, deps.config.toolPolicy.sandbox.writeJailRoots);
-  assertWritePathInJail(context.worktreePath, deps.config.toolPolicy.sandbox.writeJailRoots);
+  assertWritePathInJail(projectRoot, deps.config.toolPolicy.sandbox.writeJailRoots);
 }
 
 function assertPathInsideRoot(targetPath: string, rootDir: string, label: string): void {

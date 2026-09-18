@@ -80,7 +80,7 @@ after(() => {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
-test("W1B1A freezes the exact 54-file fence and canonical current-byte source manifest", () => {
+test("W1B1A freezes the exact 55-file fence and canonical current-byte source manifest", () => {
   const expected = [
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj",
@@ -114,6 +114,7 @@ test("W1B1A freezes the exact 54-file fence and canonical current-byte source ma
     "apps/remote-worker-provisioner-windows-native/src/protocol.cpp",
     "apps/remote-worker-provisioner-windows-native/src/protocol.hpp",
     "apps/remote-worker-provisioner-windows-native/src/protocol.test.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/service_configuration_query.hpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.cpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.hpp",
     "apps/remote-worker-provisioner-windows-native/src/service_runtime.test.cpp",
@@ -139,14 +140,14 @@ test("W1B1A freezes the exact 54-file fence and canonical current-byte source ma
   ];
   assert.deepEqual(REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS, expected);
   assert.deepEqual(expected, [...expected].sort(asciiCompare));
-  assert.equal(new Set(expected).size, 54);
+  assert.equal(new Set(expected).size, 55);
   const manifest = computeW1B1aCanonicalSourceManifest();
   assert.equal(manifest.schema, "goatcitadel.remote-worker.provisioner.w1b1a-source-manifest.v2");
-  assert.equal(manifest.fileCount, 54);
-  assert.equal(manifest.entries.length, 54);
+  assert.equal(manifest.fileCount, 55);
+  assert.equal(manifest.entries.length, 55);
   assert.equal(manifest.bytes.toString("utf8").endsWith("\n"), false);
   const lines = manifest.bytes.toString("utf8").split("\n");
-  assert.equal(lines.length, 54);
+  assert.equal(lines.length, 55);
   for (let index = 0; index < lines.length; index += 1) {
     assert.match(lines[index], /^[a-f0-9]{64}  [a-zA-Z0-9_./-]+$/u);
     assert.equal(lines[index], `${manifest.entries[index].sha256}  ${expected[index]}`);
@@ -298,7 +299,7 @@ test("availability broker exposes one fixed no-operand SCM start authority and r
   assert.match(runtime, /StartServiceW\(target, 0U, nullptr\)/u);
   assert.match(
     runtime,
-    /OpenServiceW\([\s\S]*?kTargetServiceName,[\s\S]*?SERVICE_START \| SERVICE_QUERY_CONFIG \| SERVICE_QUERY_STATUS \|[\s\S]*?READ_CONTROL \| SYNCHRONIZE/u,
+    /OpenServiceW\([\s\S]*?kTargetServiceName,[\s\S]*?SERVICE_START \| SERVICE_QUERY_CONFIG \| SERVICE_QUERY_STATUS \|[\s\S]*?READ_CONTROL\)\)/u,
   );
   assert.equal(runtime.includes("RehashHeldImage(*held_image)"), true);
   assert.equal([...runtime.matchAll(/RehashHeldImage\(\*held_image\)/gu)].length, 3);
@@ -360,7 +361,7 @@ test("service completes protected-state recovery before arming any live transpor
   assert.notEqual(workerEnd, -1, "StartupWorker has a bounded source body");
   const worker = source.slice(workerStart, workerEnd);
   const identity = worker.indexOf("if (validation != ServiceIdentityValidation::Valid)");
-  const inspection = worker.indexOf("if (!GrantCurrentSignerInspectionAccess())");
+  const inspection = worker.indexOf("if (!GrantCurrentSignerInspectionAccess(&inspection))");
   const recovery = worker.indexOf("RecoverProtectedServiceState(");
   const recoveryFailure = worker.indexOf("if (recovery_result != ServiceTransportResult::Success)", recovery);
   const arm = worker.indexOf("ArmServiceTransport(", recovery);
@@ -384,12 +385,13 @@ test("signer inspection grants stay on its own process and token with read-only 
   assert.match(source, /PROCESS_QUERY_LIMITED_INFORMATION \| SYNCHRONIZE/u);
   assert.match(source, /WorkerInspectionObject::Token \? TOKEN_QUERY : 0U/u);
   assert.match(signer, /HasSignerServiceSid\(token\.value\)/u);
-  assert.match(signer, /return worker_host::GrantCurrentSystemWorkerInspectionAccess\(\)/u);
+  assert.match(signer, /return worker_host::GrantCurrentSystemWorkerInspectionAccess\(\s*worker_host::WorkerInspectionService::Provisioner, diagnostic\)/u);
   assert.equal([...source.matchAll(/SetKernelObjectSecurity\(/gu)].length, 1);
   assert.match(source, /SetKernelObjectSecurity\(handle, DACL_SECURITY_INFORMATION \| protection, &descriptor\)/u);
-  assert.match(source, /PrepareGrant\(GetCurrentProcess\(\), SystemSid\(\), WorkerInspectionObject::Process/u);
-  assert.match(source, /PrepareGrant\(token\.value, SystemSid\(\), WorkerInspectionObject::Token/u);
-  assert.doesNotMatch(source, /\b(?:OpenProcess|SetTokenInformation|AdjustTokenPrivileges|CreateProcessW)\(/u);
+  assert.match(source, /HasInspectionServiceSid\(token\.value, service, &owner_identity\)/u);
+  assert.match(source, /PrepareGrant\(GetCurrentProcess\(\), service_sid, WorkerInspectionObject::Process/u);
+  assert.match(source, /PrepareGrant\(token\.value, service_sid, WorkerInspectionObject::Token/u);
+  assert.doesNotMatch(source, /\b(?:OpenProcess|SetTokenInformation|SetSecurityDescriptorOwner|AdjustTokenPrivileges|CreateProcessW)\(/u);
   for (const target of ["windows-x64", "windows-arm64"]) {
     const imported = (kind) => REMOTE_WORKER_WINDOWS_PROVISIONER_IMPORTS[kind][target].flatMap((entry) => entry.functions);
     assert.ok(imported("service").includes("SetKernelObjectSecurity"));
@@ -2202,11 +2204,12 @@ test("native projects freeze separate service, client, availability, and paired 
     "src/protected_filesystem.hpp",
     "src/protected_operations.hpp",
     "src/protocol.hpp",
+    "src/service_configuration_query.hpp",
     "src/service_runtime.hpp",
     "src/signer_inspection.hpp",
   ]);
   assert.deepEqual(extractIncludeIncludes(clientProject), ["src/local_transport.hpp", "src/protocol.hpp"]);
-  assert.deepEqual(extractIncludeIncludes(availabilityProject), ["src/availability_broker.hpp"]);
+  assert.deepEqual(extractIncludeIncludes(availabilityProject), ["src/availability_broker.hpp", "src/service_configuration_query.hpp"]);
   assert.deepEqual(extractIncludeIncludes(testProject), [
     "../remote-worker-windows-host-native/src/service_inspection.hpp",
     "src/availability_broker.hpp",
@@ -2218,6 +2221,7 @@ test("native projects freeze separate service, client, availability, and paired 
     "src/protected_filesystem.hpp",
     "src/protected_operations.hpp",
     "src/protocol.hpp",
+    "src/service_configuration_query.hpp",
     "src/service_runtime.hpp",
     "src/signer_inspection.hpp",
   ]);

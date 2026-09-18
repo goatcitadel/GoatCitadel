@@ -27,6 +27,28 @@ struct CellVolumeMountTestPeer final {
     return owner.Recover({verify, inspect, nullptr, nullptr, context}, deadline, cancellation);
   }
   static DWORD EmptyDirectory(HANDLE directory) { return CellVolumeMount::EmptyDirectory(directory); }
+  static bool Pin(CellVolumeMount& owner, HANDLE directory) {
+    return DuplicateHandle(GetCurrentProcess(), directory, GetCurrentProcess(), &owner.directory_, 0, FALSE, DUPLICATE_SAME_ACCESS);
+  }
+  static DWORD Capture(CellVolumeMount& owner, DWORD (*verify)(void*) noexcept,
+    DWORD (*inspect)(void*, bool, bool) noexcept, void* context, DWORD limit,
+    const CellFootprintScanGuard& guard, const CellCapacityMountObserver& observer) {
+    return owner.ReadCapacityLeaf({verify, inspect, nullptr, nullptr, context}, limit, guard, observer);
+  }
+  static void Drift(CellVolumeMount& owner, unsigned kind) {
+    switch (kind) {
+      case 1: owner.binding_.parent.file_id[0] ^= 1; break;
+      case 2: owner.binding_.volume_root.file_id[0] ^= 1; break;
+      case 3: owner.binding_.volume_id.Data1 ^= 1; break;
+      case 4: owner.binding_.security_sha256[0] ^= 1; break;
+      case 5: owner.binding_.protection_sha256[0] ^= 1; break;
+      case 6: owner.directory_identity_.file_id[0] ^= 1; break;
+      case 7: owner.records_.back()[100] ^= 1; break;
+      case 8: owner.folder_ += L"changed"; break;
+      case 9: owner.volume_path_ += L"changed"; break;
+      case 10: owner.descriptor_.push_back(1); break;
+    }
+  }
   // Deliberately incomplete sources contain no physical disk/volume handles;
   // native Create must fail before any directory or mount SDK call.
   static void Incomplete(CellVolumeProtection& source, bool fresh, bool attempted = false) {
@@ -309,6 +331,92 @@ HANDLE Open(const std::wstring& path) {
   return CreateFileW(path.c_str(), FILE_GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
     nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 }
+void CapacityLeaf(HANDLE directory) {
+  struct Capture final {
+    Fixture& fixture;
+    unsigned calls = 0, discards = 0, drift = 0;
+    DWORD callback_error = 0;
+    bool provisional = false, close = false, reenter = false;
+    HANDLE cancel = nullptr;
+    CellCapacityMountObserver* mutate = nullptr;
+    static DWORD Read(void* raw, const CellCapacityMountLeaf& leaf) noexcept {
+      auto& self = *static_cast<Capture*>(raw); ++self.calls; self.provisional = true;
+      const auto before = self.fixture.authorizations;
+      auto error = leaf.Check();
+      if (!error && (self.fixture.authorizations != before || leaf.Target().directory != Directory() ||
+          leaf.Target().parent != Binding().parent || leaf.Target().volume_root != Binding().volume_root ||
+          !IsEqualGUID(leaf.Target().volume_id, Binding().volume_id))) return ERROR_INVALID_DATA;
+      FILE_ID_INFO info{};
+      if (!error && !GetFileInformationByHandleEx(leaf.DirectoryHandle(), FileIdInfo, &info, sizeof(info))) return ERROR_INVALID_HANDLE;
+      if (self.mutate) *self.mutate = {};
+      if (self.cancel) SetEvent(self.cancel);
+      if (self.drift) CellVolumeMountTestPeer::Drift(self.fixture.owner, self.drift);
+      if (self.close) self.fixture.owner.Close();
+      if (self.reenter) {
+        const CellCapacityMountObserver nested{&self, Read, Discard};
+        if (CellVolumeMountTestPeer::Capture(self.fixture.owner, Fixture::Verify, Fixture::Inspect, &self.fixture,
+            10000, {Fixture::Authorize, &self.fixture}, nested) != ERROR_INVALID_STATE) return ERROR_INVALID_DATA;
+      }
+      return error ? error : self.callback_error;
+    }
+    static void Discard(void* raw) noexcept {
+      auto& self = *static_cast<Capture*>(raw); ++self.discards; self.provisional = false;
+    }
+    DWORD Run(DWORD limit = 10000, HANDLE cancellation = nullptr) {
+      CellCapacityMountObserver observer{this, Read, Discard}; mutate = &observer;
+      return CellVolumeMountTestPeer::Capture(fixture.owner, Fixture::Verify, Fixture::Inspect, &fixture,
+        limit, {Fixture::Authorize, &fixture, cancellation}, observer);
+    }
+  };
+  const auto prepare = [&](Fixture& fixture) {
+    Check(fixture.Run() == 0 && CellVolumeMountTestPeer::Pin(fixture.owner, directory),
+      "capacity fixture combines controlled mount history with a real retained ordinary-directory handle");
+    fixture.authorizations = fixture.verifies = fixture.inspections = 0;
+  };
+  Fixture success; prepare(success); Capture capture{success};
+  std::vector<CellVolumeMountCheckpoint> before, after;
+  Check(success.owner.RecordCheckpoints(&before) == 0, "capture records original history");
+  Check(capture.Run() == 0 && capture.calls == 1 && !capture.discards && capture.provisional && success.authorizations == 2,
+    "capacity leaf checks read-only custody, freezes callbacks and bounds publication by current authority");
+  Check(success.owner.RecordCheckpoints(&after) == 0 && before == after && success.creates == 1 && success.mounts == 1,
+    "capacity observation appends no record and invokes no create or mount callback");
+  for (unsigned at : {1U, 2U}) {
+    Fixture denied; prepare(denied); denied.fail_authorize = at; Capture reading{denied};
+    Check(reading.Run() == ERROR_ACCESS_DENIED && reading.calls == at - 1 && reading.discards == at - 1 && !reading.provisional,
+      "revoked authority refuses early or discards once after the callback");
+  }
+  for (unsigned at : {1U, 2U, 3U, 4U}) {
+    Fixture failed; prepare(failed); failed.fail_verify = at; Capture reading{failed};
+    Check(reading.Run() == ERROR_FILE_INVALID && reading.calls == (at == 1 ? 0U : 1U) &&
+      reading.discards == reading.calls && !reading.provisional, "every native readback failure withholds provisional leaf evidence");
+  }
+  for (unsigned kind = 1; kind <= 10; ++kind) {
+    Fixture drifted; prepare(drifted); Capture reading{drifted}; reading.drift = kind;
+    Check(reading.Run() == ERROR_FILE_INVALID && reading.discards == 1 && !reading.provisional,
+      "binding, history, target and security drift after the callback refuses publication");
+  }
+  for (unsigned kind = 0; kind < 3; ++kind) {
+    Fixture changed; prepare(changed); Capture reading{changed};
+    reading.close = kind == 0; reading.reenter = kind == 1; reading.callback_error = kind == 2 ? ERROR_IO_INCOMPLETE : 0;
+    Check(reading.Run() != 0 && reading.calls == 1 && reading.discards == 1 && !reading.provisional,
+      "close, nested capture and reader errors discard exactly once");
+  }
+  Handle cancelled{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  Check(cancelled.value != nullptr, "owned capacity cancellation event");
+  Fixture stopped; prepare(stopped); Capture reading{stopped}; reading.cancel = cancelled.value;
+  Check(reading.Run(10000, cancelled.value) == ERROR_CANCELLED && reading.discards == 1 && !reading.provisional,
+    "late cancellation discards provisional capacity evidence");
+  Fixture timed; prepare(timed); Capture slow{timed}; timed.authorizing = [](unsigned) { Sleep(25); };
+  Check(slow.Run(10) == ERROR_TIMEOUT && !slow.calls && !slow.discards,
+    "authority consumes the same bounded leaf lifetime");
+  Fixture absent; Capture missing{absent}; CellVolumeProtection source; CellWorkspaceDirectories workspace;
+  Check(absent.owner.WithCapacityLeaf(source, workspace, 10000, {Fixture::Authorize, &absent},
+    {&missing, Capture::Read, Capture::Discard}) == ERROR_INVALID_STATE && !missing.calls,
+    "production entry cannot mint a leaf from missing mounted owners");
+  Check(success.owner.WithCapacityLeaf(source, workspace, 10000, {Fixture::Authorize, &success},
+    {&missing, Capture::Read, Capture::Discard}) != 0 && !missing.calls,
+    "controlled history and an ordinary directory cannot pass production volume verification");
+}
 void Native(const std::wstring& root) {
   const auto before = checks;
   Check(CreateDirectoryW(root.c_str(), nullptr), "exclusive task-owned fixture directory");
@@ -324,6 +432,7 @@ void Native(const std::wstring& root) {
   Check(CellVolumeMountTestPeer::EmptyDirectory(directory.value) == ERROR_DIR_NOT_EMPTY, "hidden and system files are not an empty mount directory");
   Check(CellVolumeMountTestPeer::EmptyDirectory(directory.value) == ERROR_DIR_NOT_EMPTY, "repeated inspection cannot overlook consumed enumeration");
   Check(CellVolumeMountTestPeer::EmptyDirectory(hidden.value) != 0, "ordinary file cannot stand in for directory handle");
+  CapacityLeaf(directory.value);
   native_checks = checks - before;
 }
 }

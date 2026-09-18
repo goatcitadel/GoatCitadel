@@ -1,3 +1,4 @@
+import type { CitadelAccessSnapshot } from "@goatcitadel/contracts";
 import { __resetSessionDraftsForTests } from "./session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -8,6 +9,7 @@ import type { NativeRoutePagesProps } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
   listCitadelWards: vi.fn(),
+  getCitadelAccessSnapshot: vi.fn(),
   addCitadelWard: vi.fn(),
   evaluateCitadelGatehouseAction: vi.fn(),
   removeCitadelWard: vi.fn(),
@@ -15,6 +17,8 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   listCitadelWards: apiMocks.listCitadelWards,
+  getCitadelAccessSnapshot: apiMocks.getCitadelAccessSnapshot,
+  isApiRequestError: (error: { status?: number }) => typeof error?.status === "number",
   addCitadelWard: apiMocks.addCitadelWard,
   evaluateCitadelGatehouseAction: apiMocks.evaluateCitadelGatehouseAction,
   removeCitadelWard: apiMocks.removeCitadelWard,
@@ -31,6 +35,11 @@ vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
       </div>
     ) : null,
 }));
+
+const revision = "a".repeat(64);
+function snapshot(items: CitadelAccessSnapshot["wards"] = [], rev = revision, citadelId = "default"): CitadelAccessSnapshot {
+  return { citadelId, revision: rev, structure: { citadelId, revision: "s".repeat(64), charter: null, chambers: [] }, council: [], passages: [], members: [], integrations: [], wards: items };
+}
 
 function makeProps(): NativeRoutePagesProps {
   return {
@@ -75,16 +84,17 @@ describe("CitadelWardsRoutePage", () => {
     vi.clearAllMocks();
     __resetSessionDraftsForTests();
     apiMocks.listCitadelWards.mockResolvedValue([]);
-    apiMocks.addCitadelWard.mockResolvedValue({
+    apiMocks.getCitadelAccessSnapshot.mockImplementation(async (id: string) => snapshot(await apiMocks.listCitadelWards(id), revision, id));
+    apiMocks.addCitadelWard.mockResolvedValue(snapshot([{
       wardId: "w1",
       citadelId: "default",
       name: "Block shell",
       actionPattern: "shell.*",
       effect: "deny",
       createdAt: "t",
-    });
+    }], "b".repeat(64)));
     apiMocks.evaluateCitadelGatehouseAction.mockResolvedValue({ action: "shell.run", effect: "deny" });
-    apiMocks.removeCitadelWard.mockResolvedValue(undefined);
+    apiMocks.removeCitadelWard.mockResolvedValue(snapshot([], "b".repeat(64)));
   });
 
   it("renders the Wards header", () => {
@@ -130,6 +140,7 @@ describe("CitadelWardsRoutePage", () => {
       buttonByLabel(renderer!, "Add Ward").props.onClick();
     });
     expect(apiMocks.addCitadelWard).toHaveBeenCalledWith("default", {
+      expectedRevision: revision,
       name: "Block shell",
       actionPattern: "shell.*",
       effect: "deny",
@@ -180,7 +191,71 @@ describe("CitadelWardsRoutePage", () => {
       confirmButtons.at(-1)?.props.onClick();
       await Promise.resolve();
     });
-    expect(apiMocks.removeCitadelWard).toHaveBeenCalledWith("default", "w0");
+    expect(apiMocks.removeCitadelWard).toHaveBeenCalledWith("default", "w0", revision);
     expect(treeString(renderer!)).not.toContain("Seal finance");
+  });
+
+  it("retains the Ward draft on conflict and requires current-rule review before an explicit retry", async () => {
+    const peer = snapshot([{ wardId: "peer", citadelId: "default", name: "Peer deny", actionPattern: "file.*", effect: "deny", createdAt: "t" }], "b".repeat(64));
+    apiMocks.getCitadelAccessSnapshot.mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(peer);
+    apiMocks.addCitadelWard.mockRejectedValueOnce(Object.assign(new Error("Changed"), { status: 409 }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelWardsRoutePage {...makeProps()} />); });
+    await act(async () => { buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    await act(async () => {
+      inputByPlaceholder(renderer, "Block destructive shell").props.onChange({ target: { value: "Keep draft" } });
+      inputByPlaceholder(renderer, "shell.*").props.onChange({ target: { value: "shell.*" } });
+    });
+    await act(async () => { await buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    expect(inputByPlaceholder(renderer, "Block destructive shell").props.value).toBe("Keep draft");
+    expect(treeString(renderer)).toContain("Peer deny");
+    expect(buttonByLabel(renderer, "Add Ward").props.disabled).toBe(true);
+    await act(async () => { await buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    expect(apiMocks.addCitadelWard).toHaveBeenCalledTimes(1);
+    await act(async () => { buttonByLabel(renderer, "Use current access review").props.onClick(); });
+    expect(buttonByLabel(renderer, "Add Ward").props.disabled).toBe(false);
+    expect(apiMocks.addCitadelWard).toHaveBeenCalledTimes(1);
+    await act(async () => { await buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    expect(apiMocks.addCitadelWard).toHaveBeenLastCalledWith("default", { name: "Keep draft", actionPattern: "shell.*", effect: "deny", expectedRevision: peer.revision });
+    expect(apiMocks.getCitadelAccessSnapshot).toHaveBeenCalledTimes(2);
+    act(() => renderer.unmount());
+  });
+
+  it("keeps edits made during a save and accepts only its own acknowledgement", async () => {
+    let resolve!: (value: CitadelAccessSnapshot) => void;
+    apiMocks.addCitadelWard.mockReturnValueOnce(new Promise<CitadelAccessSnapshot>((done) => { resolve = done; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelWardsRoutePage {...makeProps()} />); });
+    await act(async () => { buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    await act(async () => {
+      inputByPlaceholder(renderer, "Block destructive shell").props.onChange({ target: { value: "Submitted" } });
+      inputByPlaceholder(renderer, "shell.*").props.onChange({ target: { value: "shell.*" } });
+    });
+    await act(async () => { void buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    await act(async () => { inputByPlaceholder(renderer, "Block destructive shell").props.onChange({ target: { value: "Keep newer draft" } }); });
+    const saved = snapshot([{ wardId: "own", citadelId: "default", name: "Submitted", actionPattern: "shell.*", effect: "deny", createdAt: "t" }], "b".repeat(64));
+    await act(async () => { resolve(saved); });
+    expect(inputByPlaceholder(renderer, "Block destructive shell").props.value).toBe("Keep newer draft");
+    expect(apiMocks.getCitadelAccessSnapshot).toHaveBeenCalledTimes(1);
+    expect(treeString(renderer)).toContain("Submitted");
+    act(() => renderer.unmount());
+  });
+
+  it("ignores a late write acknowledgement after the Citadel changes", async () => {
+    let resolve!: (value: CitadelAccessSnapshot) => void;
+    apiMocks.addCitadelWard.mockReturnValueOnce(new Promise<CitadelAccessSnapshot>((done) => { resolve = done; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelWardsRoutePage {...makeProps()} />); });
+    await act(async () => { buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    await act(async () => {
+      inputByPlaceholder(renderer, "Block destructive shell").props.onChange({ target: { value: "Old scope" } });
+      inputByPlaceholder(renderer, "shell.*").props.onChange({ target: { value: "shell.*" } });
+    });
+    await act(async () => { void buttonByLabel(renderer, "Add Ward").props.onClick(); });
+    await act(async () => { renderer.update(<CitadelWardsRoutePage {...makeProps()} activeCitadelId="foreign" />); });
+    await act(async () => { resolve(snapshot([{ wardId: "old", citadelId: "default", name: "Old scope", actionPattern: "shell.*", effect: "deny", createdAt: "t" }], "b".repeat(64))); });
+    expect(treeString(renderer)).not.toContain("Old scope");
+    expect(apiMocks.getCitadelAccessSnapshot).toHaveBeenLastCalledWith("foreign");
+    act(() => renderer.unmount());
   });
 });

@@ -97,6 +97,27 @@ export interface Citadel {
   chambers: CitadelChamber[];
 }
 
+/** One reviewed snapshot, including the valid state before a Charter exists. */
+export interface CitadelStructureSnapshot {
+  citadelId: string;
+  revision: string;
+  record?: CitadelRecord;
+  charter: CitadelCharter | null;
+  chambers: CitadelChamber[];
+}
+
+export type CitadelStructureChange =
+  | { type: "charter"; charter: Omit<CitadelCharterInput, "citadelId"> }
+  | { type: "chamber"; chamber: Omit<CitadelChamberInput, "citadelId"> }
+  | { type: "setup"; charter: Omit<CitadelCharterInput, "citadelId">; chambers: Array<Omit<CitadelChamberInput, "citadelId">> };
+
+/** Data-only command executed atomically by the persistence owner. */
+export interface CitadelStructureMutation {
+  citadelId: string;
+  expectedRevision: string;
+  change: CitadelStructureChange;
+}
+
 export interface CitadelBriefApprovalEntry {
   approvalId: string;
   workspaceId: string;
@@ -371,6 +392,11 @@ export interface CitadelTemplate {
   modelPolicyDefault?: CitadelModelPolicy;
 }
 
+export interface CitadelTemplateSnapshot extends CitadelTemplate {
+  /** Binds the template contents shown during review, separately from the target. */
+  revision: string;
+}
+
 export const CITADEL_TEMPLATES: CitadelTemplate[] = [
   {
     id: "personal-chief-of-staff",
@@ -447,43 +473,29 @@ export function findCitadelTemplate(id: string): CitadelTemplate | undefined {
   return CITADEL_TEMPLATES.find((template) => template.id === id);
 }
 
-/** The subset of Citadel persistence a template needs to instantiate itself. */
+/** The owner must compare the revision and commit all structure changes atomically. */
 export interface CitadelTemplateTarget {
-  upsertCharter(input: CitadelCharterInput): CitadelCharter;
-  createChamber(input: CitadelChamberInput): CitadelChamber;
-  getCitadel(citadelId: string): Citadel | undefined;
+  mutateStructure(input: CitadelStructureMutation): CitadelStructureSnapshot;
 }
 
-/**
- * Instantiate a Citadel (= workspace) from a template: upsert the Charter and
- * create the default Chambers, then return the assembled Citadel.
- */
+/** Translate a reviewed template into one data-only persistence command. */
+export function createCitadelTemplateMutation(citadelId: string, expectedRevision: string, template: CitadelTemplate): CitadelStructureMutation {
+  return { citadelId, expectedRevision, change: {
+    type: "setup",
+    charter: {
+      purpose: template.purpose, kind: template.kind, goals: template.goals,
+      boundaries: template.boundaries, successDefinition: template.successDefinition,
+      riskPosture: template.riskPosture, modelPolicyDefault: template.modelPolicyDefault,
+    },
+    chambers: template.chambers.map((chamber) => ({ name: chamber.name, sensitivity: chamber.sensitivity, sealed: chamber.sealed })),
+  } };
+}
+
 export function applyCitadelTemplate(
   target: CitadelTemplateTarget,
   citadelId: string,
   template: CitadelTemplate,
-): Citadel {
-  target.upsertCharter({
-    citadelId,
-    purpose: template.purpose,
-    kind: template.kind,
-    goals: template.goals,
-    boundaries: template.boundaries,
-    successDefinition: template.successDefinition,
-    riskPosture: template.riskPosture,
-    modelPolicyDefault: template.modelPolicyDefault,
-  });
-  for (const chamber of template.chambers) {
-    target.createChamber({
-      citadelId,
-      name: chamber.name,
-      sensitivity: chamber.sensitivity,
-      sealed: chamber.sealed,
-    });
-  }
-  const citadel = target.getCitadel(citadelId);
-  if (!citadel) {
-    throw new Error(`Failed to instantiate citadel ${citadelId} from template ${template.id}`);
-  }
-  return citadel;
+  expectedRevision: string,
+): CitadelStructureSnapshot {
+  return target.mutateStructure(createCitadelTemplateMutation(citadelId, expectedRevision, template));
 }

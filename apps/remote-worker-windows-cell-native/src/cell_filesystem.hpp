@@ -42,6 +42,7 @@ class PinnedCellLaunchFiles final {
  private:
   friend class PinnedCellRuntimeBundle;
   friend class CellWorkspaceDirectories;
+  friend class CellCapacityLayout;
   friend class PinnedCellToolDirectory;
   friend class CellControllerIdentity;
   friend class CellControllerInstalledFiles;
@@ -63,6 +64,17 @@ struct CellToolWriteResult final {
   CellFileSha256 sha256{};
 };
 
+struct CellToolDirectoryEntry final {
+  std::string name;  // Strict UTF-8, one literal name; never a host path.
+  std::uint32_t kind = 0;  // 1 file, 2 directory, 3 unavailable (never followed).
+};
+struct CellToolDirectoryResult final {
+  std::vector<CellToolDirectoryEntry> entries;
+  bool truncated = false;
+};
+constexpr std::size_t kCellToolDirectoryEntries = 128;
+constexpr std::size_t kCellToolDirectoryPayloadBytes = 32768;
+
 // An operator-selected local NTFS directory, not an execution sandbox. Ancestor
 // handles exclude replacement while a tool uses canonical volume-GUID paths.
 // The caller retains the first identity and supplies it on subsequent opens.
@@ -73,6 +85,9 @@ class PinnedCellToolDirectory final {
   DWORD Write(const std::wstring& relative_path, const std::vector<std::uint8_t>& content,
               const std::optional<std::vector<std::uint8_t>>& expected_content,
               CellToolWriteResult* result) noexcept;
+  // Empty relative path lists the admitted root. Descendants remain literal and
+  // pinned against replacement throughout this bounded, nonrecursive observation.
+  DWORD List(const std::wstring& relative_path, CellToolDirectoryResult* result) noexcept;
  private:
   PinnedCellLaunchFiles pins_;
   std::wstring path_;

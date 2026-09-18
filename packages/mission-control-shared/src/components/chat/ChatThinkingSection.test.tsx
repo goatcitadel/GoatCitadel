@@ -1,4 +1,4 @@
-import { create } from "react-test-renderer";
+import { act, create } from "react-test-renderer";
 import { describe, expect, it } from "vitest";
 
 import { ChatThinkingSection } from "./ChatThinkingSection";
@@ -14,17 +14,29 @@ describe("ChatThinkingSection", () => {
     expect(renderer.toJSON()).toBeNull();
   });
 
-  it("renders a collapsed details with 'Thinking…' while the turn is active", () => {
+  it("opens available thinking while active and collapses it after completion", () => {
     const renderer = create(<ChatThinkingSection thinking="Weighing the options." turnStatus="running" />);
     const details = renderer.root.findByType("details");
     expect(details.props.className).toBe("mc-next-thread-thinking");
-    expect(details.props.open).toBeFalsy();
+    expect(details.props.open).toBe(true);
 
     const summary = renderer.root.findByType("summary");
     expect(summary.children.join("")).toBe("Thinking…");
 
     const body = renderer.root.findByProps({ className: "mc-next-thread-thinking-body" });
     expect(body.children.join("")).toBe("Weighing the options.");
+    act(() => renderer.update(<ChatThinkingSection thinking="Done." turnStatus="completed" />));
+    expect(renderer.root.findByType("details").props.open).toBe(false);
+  });
+
+  it("preserves explicit disclosure choices across deltas and completion", () => {
+    const renderer = create(<ChatThinkingSection thinking="First" turnStatus="running" />);
+    act(() => renderer.root.findByType("summary").props.onClick({ preventDefault() {} }));
+    act(() => renderer.update(<ChatThinkingSection thinking="First, second" turnStatus="running" />));
+    expect(renderer.root.findByType("details").props.open).toBe(false);
+    act(() => renderer.root.findByType("summary").props.onClick({ preventDefault() {} }));
+    act(() => renderer.update(<ChatThinkingSection thinking="Done" turnStatus="completed" />));
+    expect(renderer.root.findByType("details").props.open).toBe(true);
   });
 
   it("renders 'Thought process' once the turn has settled", () => {

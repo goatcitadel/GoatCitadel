@@ -40,7 +40,11 @@ struct ServiceObjectSecurity final {
 
 // These projections come only from the local OS, never package/config JSON.
 bool ValidateWorkerToken(const TokenIdentity& token) noexcept;
-bool ValidateServiceConfiguration(const ServiceConfiguration& config, const std::wstring& quoted_image) noexcept;
+bool ValidateServiceConfiguration(const ServiceConfiguration& config, const std::wstring& quoted_image,
+  DWORD expected_state = SERVICE_START_PENDING) noexcept;
+// Read fixed marker bytes against a retained live OS process. The caller must
+// separately retain the protected path/ACL and current SCM/worker authority.
+bool VerifyWorkerHostRunMarker(HANDLE marker, HANDLE host_process) noexcept;
 bool ValidateServiceObject(const ServiceObjectSecurity& security) noexcept;
 bool CollectWorkerToken(TokenIdentity* token) noexcept;
 // Read an OS process held by the caller; this does not authorize it or acquire
@@ -52,4 +56,21 @@ bool ValidateWorkerFileSecurity(const ServiceObjectSecurity& security, bool writ
 bool VerifyWorkerFileHandle(HANDLE file, bool writable_state = false) noexcept;
 bool VerifyWorkerAncestorHandle(HANDLE directory, bool shared_root) noexcept;
 DWORD VerifyWorkerServiceIdentity(DWORD argument_count, wchar_t** arguments) noexcept;
+// Nonblocking coordination on the precreated empty local guard. The caller pins
+// its path, ACL and borrowed handle throughout this object's lifetime. Shared
+// worker locks and exclusive controller locks always use distinct file handles.
+class WorkerStateGateLock final {
+ public:
+  ~WorkerStateGateLock() { Release(); }
+  WorkerStateGateLock() = default;
+  WorkerStateGateLock(const WorkerStateGateLock&) = delete;
+  WorkerStateGateLock& operator=(const WorkerStateGateLock&) = delete;
+  DWORD Acquire(HANDLE file, bool exclusive) noexcept;
+  DWORD Check() const noexcept;
+  DWORD Release() noexcept;
+ private:
+  HANDLE file_ = nullptr;
+  BY_HANDLE_FILE_INFORMATION identity_{};
+  OVERLAPPED range_{};
+};
 }  // namespace goatcitadel::worker_host

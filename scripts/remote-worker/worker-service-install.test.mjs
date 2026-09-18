@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { remoteWorkerRuntimeBundleManifestSha256 } from "../../packages/contracts/dist/remote-worker-runtime-bundle.js";
 import { compileTlsNative } from "../packaging/build-remote-worker-windows-tls.mjs";
 import { snapshotCellControllerSources, buildWindowsCellController } from "../packaging/build-remote-worker-windows-cell-controller.mjs";
 import { resolveExactWindowsToolchain } from "../packaging/lib/remote-worker-windows-toolchain.mjs";
@@ -23,6 +24,7 @@ const names = [
   "app/install/worker-enrollment-common.ps1",
   "app/install/worker-install-common.ps1",
   "app/install/worker-install-native.cs",
+  "app/install/worker-controller-key.cs",
   "app/install/configure-worker-mesh-registry.ps1",
   "app/install/worker-mesh-registry-common.ps1",
   "app/install/broker-coordinator-common.ps1",
@@ -89,7 +91,7 @@ test(
     const custodyFixture = "apps/remote-worker-windows-cell-native/tests/cell_controller_custody_install_test.cpp";
     const custodySnapshot = snapshotCellControllerSources(compile, [custodyFixture]);
     const custodyBinaries = [false, true].map((asan) => buildWindowsCellController({
-      outputDirectory: compile, snapshot: custodySnapshot, asan, fixture: custodyFixture,
+      outputDirectory: compile, snapshot: custodySnapshot, asan, fixture: custodyFixture, sourceBatchSize: 8,
     }));
     const binaries = [false, true].map((asan) =>
       compileTlsNative({
@@ -140,9 +142,22 @@ test(
       assert.equal(result.status, 0, `${output}\n${result.stdout}${result.stderr}`);
       const behavior = JSON.parse(fs.readFileSync(path.join(temporary, "acceptance.json")));
       assert.equal(behavior.scmMutated, false);
+      const runtimeCustody = fs.readFileSync(behavior.runtimeCustodyFile);
+      assert.equal(runtimeCustody.length, 96);
+      assert.equal(runtimeCustody.subarray(0, 8).toString("ascii"), "GCRTCS01");
+      assert.equal(runtimeCustody.subarray(64).toString("hex"), complete.sha256);
+      const runtimeFiles = fs.readdirSync(behavior.runtimeDirectory, { withFileTypes: true })
+        .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+        .map(file => {
+          assert.ok(file.isFile(), "Runtime fixture must contain only regular files");
+          const bytes = fs.readFileSync(path.join(behavior.runtimeDirectory, file.name));
+          return { relativePath: file.name, bytes: bytes.length, sha256: workerPackageSha256(bytes) };
+        });
+      assert.equal(runtimeCustody.subarray(32, 64).toString("hex"), remoteWorkerRuntimeBundleManifestSha256({ schemaVersion: "goatcitadel.worker-runtime-bundle.v1", files: runtimeFiles }));
       for (const missing of missingHelpers) assert.ok(behavior.cases.includes(`required-native-helper-${missing.helper}`));
       const custody = custodyBinaries.map((binary) => {
-        const run = spawnSync(binary, [behavior.custodyFile, behavior.nativeDirectory, behavior.cellsDirectory, behavior.parentSddlFile], {
+        const run = spawnSync(binary, [behavior.custodyFile, behavior.nativeDirectory, behavior.cellsDirectory, behavior.parentSddlFile,
+          behavior.runtimeCustodyFile, behavior.runtimeDirectory], {
           windowsHide: true, encoding: "utf8", timeout: 10000,
           env: { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" },
         });

@@ -6,7 +6,7 @@ import {
 import type { AsyncStorage, RemoteWorkerAssignmentAggregate } from "@goatcitadel/storage";
 
 type ApprovalStorage = Pick<AsyncStorage,
-  "remoteWorkerEffects" | "chatToolRuns" | "approvals" | "chatInlineApprovals" | "chatTurnTraces">;
+  "remoteWorkerEffects" | "chatToolRuns" | "approvals" | "approvalWaitRuns" | "chatInlineApprovals" | "chatTurnTraces">;
 
 /** Called inside the parent Chat write fence. The canonical stream/finalizer
  * owns the subsequent durable wait and checkpoint; this is not an executor. */
@@ -92,5 +92,32 @@ export async function findRemoteWorkerChatApprovalWait(
     };
     return { summary, inline, inlineStatus, approvalStatus: approval.status };
   }
-  return undefined;
+  const scope = { registryWorkspaceId: assignment.registryWorkspaceId, assignmentId: assignment.assignmentId,
+    assignmentGeneration: generation.assignmentGeneration, workspaceId: manifest.executionWorkspaceId,
+    taskId: manifest.taskId, durableRunId: manifest.durableRunId, sessionId: manifest.sessionId!, turnId: manifest.turnId! };
+  const nativeWait = await storage.approvalWaitRuns.findUnresolvedNativeForAssignment(scope);
+  if (!nativeWait) return undefined;
+  const approval = await storage.approvals.get(nativeWait.approvalId);
+  const binding = approval.payload.nativeRuntime as Record<string, unknown> | undefined;
+  if (approval.kind !== "remote_worker.native_runtime" || approval.linkage?.actionType !== approval.kind ||
+      ["workspaceId", "taskId", "durableRunId", "sessionId", "turnId"].some(key =>
+        approval.linkage?.[key as keyof typeof approval.linkage] !== scope[key as keyof typeof scope]) ||
+      ["registryWorkspaceId", "assignmentId", "assignmentGeneration"].some(key => binding?.[key] !== scope[key as keyof typeof scope]) ||
+      nativeWait.runId === manifest.durableRunId || approval.status === "edited") {
+    throw new Error("Native review lost its exact assignment or parent linkage.");
+  }
+  if (approval.status !== "pending" && !options.allowResolvedContinuation) return undefined;
+  const trace = await storage.chatTurnTraces.get(manifest.turnId!);
+  if (trace.sessionId !== manifest.sessionId || trace.durable?.runId !== manifest.durableRunId)
+    throw new Error("Native review has no canonical parent Chat trace.");
+  const inline = await storage.chatInlineApprovals.get(approval.approvalId);
+  const inlineStatus = approval.status === "pending" ? "pending" as const : approval.status === "rejected" ? "denied" as const : "approved" as const;
+  if (inline && (inline.sessionId !== manifest.sessionId || inline.turnId !== manifest.turnId ||
+      (inline.status !== "pending" && !(options.allowResolvedContinuation && inline.status === inlineStatus))))
+    throw new Error("Native review projection changed its scope or resolution.");
+  const summary: ChatStreamApprovalRecord = { approvalId: approval.approvalId, kind: approval.kind,
+    toolName: "remote_worker.native_runtime", taskId: manifest.taskId, riskLevel: approval.riskLevel,
+    reason: approval.status === "pending" ? "Review the native runtime launch." : "Waiting for native runtime approval continuation.",
+    expiresAt: approval.expiresAt };
+  return { summary, inline, inlineStatus, approvalStatus: approval.status };
 }

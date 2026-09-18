@@ -1,4 +1,5 @@
 import type { McpElicitationRequest } from "./mcp.js";
+import type { RemoteWorkerNativeFileStaging } from "./remote-worker-native-file-staging.js";
 
 export const APPROVAL_EXPIRY_ACTOR_ID = "system:approval-expiry" as const;
 
@@ -285,12 +286,26 @@ export interface PendingApprovalAction {
   result?: Record<string, unknown>;
 }
 
+/** Ephemeral operator review only; never persisted as approval/event payload. */
+export interface ApprovalNativeRuntimeReview {
+  fileStaging?: RemoteWorkerNativeFileStaging;
+  fileDisclosure?: Readonly<{ destination: "gateway_artifacts"; workspaceId: string }>;
+  requestSha256: string;
+  imagePath: string;
+  commandLine: string;
+  workingDirectory: string;
+  environment: Readonly<Record<string, string>>;
+  limits: Readonly<{ processLimit: number; memoryBytes: number; cpuMilli: number; wallMs: number;
+    rawOutputBytes: number; diagnosticBytes: number; inputBytes: number }>;
+}
+
 export interface ApprovalReplaySnapshot {
   approval: ApprovalRequest;
   events: ApprovalReplayEvent[];
   pendingAction?: PendingApprovalAction;
   durableRunId?: string;
   effects: ApprovalEffectRecord[];
+  nativeRuntimeReview?: ApprovalNativeRuntimeReview;
 }
 
 export type RemoteActionTokenState = "pending" | "consumed" | "expired";

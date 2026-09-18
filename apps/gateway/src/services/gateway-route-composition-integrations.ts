@@ -50,7 +50,7 @@ import {
 } from "./notification-routing-service.js";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
-import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
@@ -81,8 +81,10 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.createChannelSetupRepairDraft(channelSetupDeps, connectionId),
     createChannelSetupRotateSecretDraft: (connectionId) =>
       channelSetupService.createChannelSetupRotateSecretDraft(channelSetupDeps, connectionId),
-    finalizeChannelSetupDraft: (draftId, expectedRevision) =>
-      channelSetupService.finalizeChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
+    finalizeChannelSetupDraft: (draftId, expectedRevision, onCommitted) =>
+      channelSetupService.finalizeChannelSetupDraft(channelSetupDeps, draftId, expectedRevision, onCommitted),
+    reviewChannelSetupConnection: (draftId, input) =>
+      channelSetupService.reviewChannelSetupConnection(channelSetupDeps, draftId, input),
     setChannelSetupDraftSecrets: (draftId, input) =>
       channelSetupService.setChannelSetupDraftSecrets(channelSetupDeps, draftId, input),
     discardChannelSetupDraft: (draftId, expectedRevision) =>
@@ -91,6 +93,7 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.getChannelSetupDefinition(channelSetupDeps, catalogId),
     listChannelSetupDefinitions: () => channelSetupService.listChannelSetupDefinitions(channelSetupDeps),
     listChannelSetupDrafts: (options) => channelSetupService.listChannelSetupDrafts(channelSetupDeps, options),
+    getChannelSetupDraft: (draftId) => channelSetupService.getChannelSetupDraft(channelSetupDeps, draftId),
     retestChannelConnection: (connectionId) =>
       channelSetupService.retestChannelConnection(channelSetupDeps, connectionId),
     testChannelSetupDraft: (draftId, expectedRevision) =>
@@ -141,8 +144,8 @@ export function composeIntegrationChannelRouteDependencies(
   const integrations = createIntegrationRoutePort({
     approveDiscordPairing: (connectionId, pairingId) =>
       integrationChannel.approveDiscordPairing(connectionId, pairingId),
-    createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),
-    deleteIntegrationConnection: (connectionId) => integrationChannel.deleteIntegrationConnection(connectionId),
+    createIntegrationConnection: (input, onCommitted) => integrationChannel.createIntegrationConnection(input, onCommitted),
+    deleteIntegrationConnection: (connectionId, expectedRevision, onCommitted) => integrationChannel.deleteIntegrationConnection(connectionId, expectedRevision, onCommitted),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     getIntegrationFormSchema: (catalogId) => {
       if (catalogId.startsWith("external_connector.")) {
@@ -234,8 +237,8 @@ export function composeIntegrationChannelRouteDependencies(
     updateExternalConnectorReviewState: (lookup, patch) => externalConnectorCatalog.updateReviewState(lookup, patch),
     setIntegrationPluginEnabled: (pluginId, enabled) =>
       integrationChannel.setIntegrationPluginEnabled(pluginId, enabled),
-    updateIntegrationConnection: (connectionId, input) =>
-      integrationChannel.updateIntegrationConnection(connectionId, input),
+    updateIntegrationConnection: (connectionId, input, onCommitted) =>
+      integrationChannel.updateIntegrationConnection(connectionId, input, onCommitted),
   });
   const obsidian = createObsidianRoutePort({
     appendObsidianNote: (relativePath, markdownBlock) =>
@@ -514,20 +517,7 @@ export function createChannelSetupHostForGateway(
   integrationDiagnostics = createIntegrationDiagnosticsServiceForGateway(gateway),
   integrationChannel = createIntegrationChannelServiceForGateway(gateway, integrationDiagnostics),
 ): channelSetupService.ChannelSetupHost {
-  return {
-    storage: gateway.storage,
-    recentChannelSetupTests: gateway.recentChannelSetupTests,
-    ...(gateway.secretStore ? { channelSecrets: new ChannelSecretCustodyService(gateway.secretStore) } : {}),
-    buildIntegrationConnectionChecks: (connection) =>
-      integrationDiagnostics.buildIntegrationConnectionChecks(connection),
-    createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),
-    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
-    recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
-    runIntegrationConnectionLiveChecks: (connection, options) =>
-      integrationDiagnostics.runIntegrationConnectionLiveChecks(connection, options),
-    updateIntegrationConnection: (connectionId, patch) =>
-      integrationChannel.updateIntegrationConnection(connectionId, patch),
-  };
+  return composeChannelSetupHost(gateway, integrationDiagnostics, integrationChannel);
 }
 
 export function createIntegrationChannelServiceForGateway(

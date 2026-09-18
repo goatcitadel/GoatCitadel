@@ -1,0 +1,29 @@
+.mc-next-citadel-access-review {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-1);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-citadel-access-review :is(h3, h4, p, ul) {
+  margin-block: 0.25rem;
+}
+
+.mc-next-citadel-access-review ul {
+  padding-inline-start: 1.25rem;
+}
+
+.mc-next-citadel-access-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.75rem;
+}
+
+.mc-next-citadel-access-review button.gc-button {
+  min-height: 44px;
+  justify-self: start;
+}

@@ -214,6 +214,17 @@ unsigned RunCellRuntimeStdioTests(RuntimeJobCommand request, const std::function
   request.launch.standard_input.clear();
   JobStdioChannel channel;
   RuntimeJobResult result;
+  struct CaptureState final {
+    unsigned captures = 0, authorizations = 0, discards = 0;
+    CellDirectoryInventory inventory;
+    static DWORD Authorize(void* context) noexcept { ++static_cast<CaptureState*>(context)->authorizations; return ERROR_SUCCESS; }
+    static DWORD Capture(void* context, const JobQuiescence& job) noexcept {
+      auto& state = *static_cast<CaptureState*>(context); ++state.captures;
+      return job.ObserveDirectoryInventory({}, &state.inventory);
+    }
+    static void Discard(void* context) noexcept { auto& state = *static_cast<CaptureState*>(context); ++state.discards; state.inventory = {}; }
+  } capture;
+  const JobQuiescenceObserver observer{&capture, CaptureState::Authorize, CaptureState::Capture, CaptureState::Discard, 10000};
   HANDLE cancellation = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   Require(cancellation != nullptr, "Create bundle stdio cancellation event failed.");
   std::thread owner;
@@ -224,7 +235,7 @@ unsigned RunCellRuntimeStdioTests(RuntimeJobCommand request, const std::function
   };
   try {
     owner = std::thread([&] {
-      result = RunVerifiedRuntimeJob(request, {3, 64ULL * 1024 * 1024, 1000, 5000, 8192, 1024, 4096}, cancellation, &channel);
+      result = RunVerifiedRuntimeJob(request, {3, 64ULL * 1024 * 1024, 1000, 5000, 8192, 1024, 4096}, cancellation, &channel, &observer);
     });
     std::string pending;
     const auto challenge = Line(channel, JobOutputStream::standard_output, pending);
@@ -241,11 +252,16 @@ unsigned RunCellRuntimeStdioTests(RuntimeJobCommand request, const std::function
       Check(request.protected_workspace && result.job.end == JobEnd::control_failed && result.job.error == ERROR_INVALID_SECURITY_DESCR &&
         !result.protected_workspace_verified && result.job.process_id && result.job.process_exit_code == 0 && result.job.standard_input_complete,
         "root drift after verified launch refuses success despite a complete zero-exit child");
+      Check(!result.job.quiescent_capture_verified && !capture.captures && capture.inventory.entries.empty() && capture.discards > 0,
+        "workspace drift refuses the capture owner and clears provisional output");
     } else {
       Check(result.job.end == JobEnd::exited && !result.job.error && result.job.process_exit_code == 0 && result.job.standard_input_complete,
         "verified bundle finishes successfully with explicit input completion");
       Check(result.protected_workspace_verified == request.protected_workspace.has_value(),
         "protected workspace proof requires the recorded roots for the complete exchange");
+      Check(result.job.quiescent_capture_verified && capture.captures == 1 && capture.authorizations > 2 && !capture.inventory.entries.empty() &&
+        capture.inventory.footprint.root == request.launch.expected_directory_identity,
+        "runtime bundle and optional protected roots remain held through actual quiescent inventory capture");
     }
     Clean(result.job);
   } catch (...) { close(); throw; }

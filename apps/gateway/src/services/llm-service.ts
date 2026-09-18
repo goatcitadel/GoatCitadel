@@ -1,3 +1,4 @@
+import { dispatchTrackedMultipartRequest } from "./llm-multipart-dispatch.js";
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
 import { createHash, randomUUID } from "node:crypto";
 import { lookup as nodeDnsLookup, type LookupAddress, type LookupOptions } from "node:dns";
@@ -1291,67 +1292,26 @@ export class LlmService {
     timeoutMs: number;
     signal?: AbortSignal;
   }): Promise<{ response: Response; usage?: ModelUsageAttemptHandle }> {
-    const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
-    const dispatchAbort = new AbortController();
-    const signal = input.signal
-      ? AbortSignal.any([timeoutSignal, input.signal, dispatchAbort.signal])
-      : AbortSignal.any([timeoutSignal, dispatchAbort.signal]);
-    const requestInit: FetchRequestInitWithDispatcher = {
-      method: "POST",
-      headers: input.target.headers,
-      body: input.formData,
-      signal,
-      redirect: "manual",
-      dispatcher: input.target.dispatcher,
-    };
-    const reservation = await this.modelUsageAccounting?.prepareDispatch({
-      source: "llm_service",
-      attribution: input.attribution,
-      requestedProviderId: input.requestedProviderId,
-      requestedModelId: input.requestedModelId,
-      effectiveProviderId: input.resolved.provider.providerId,
-      effectiveModelId: input.model,
-      effectiveApiStyle: resolveProviderExecutionApiStyle(input.resolved.provider, input.model),
-      transportAttemptIndex: input.transportAttemptIndex,
-      credential: this.resolveModelUsageCredentialLineage(input.resolved),
-      pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
+    return await dispatchTrackedMultipartRequest(input, {
+      prepare: async () => await this.modelUsageAccounting?.prepareDispatch({
+        source: "llm_service",
+        attribution: input.attribution,
+        requestedProviderId: input.requestedProviderId,
+        requestedModelId: input.requestedModelId,
+        effectiveProviderId: input.resolved.provider.providerId,
+        effectiveModelId: input.model,
+        effectiveApiStyle: resolveProviderExecutionApiStyle(input.resolved.provider, input.model),
+        transportAttemptIndex: input.transportAttemptIndex,
+        credential: this.resolveModelUsageCredentialLineage(input.resolved),
+        pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
+      }),
+      authorize: async (reservation) => {
+        await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution,
+          this.dispatchRoute(input.resolved, input.model), input.transportAttemptIndex);
+      },
+      retainNoDispatchEvidence: () => this.dispatchGuardScope.get() !== undefined,
+      rethrowNetworkError: rethrowIfProviderNetworkBlocked,
     });
-    const guard = this.dispatchGuardScope.get();
-    let pending: Promise<Response>;
-    try {
-      await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution,
-        this.dispatchRoute(input.resolved, input.model), input.transportAttemptIndex);
-      signal.throwIfAborted();
-      pending = fetch(input.target.url, requestInit);
-      // Keep the transport observed while durable usage acceptance is pending.
-      // The original promise remains rejected and is handled below after the
-      // accounting owner has accepted the attempt.
-      void pending.catch(() => undefined);
-    } catch (error) {
-      await reservation?.abandon({ retainNoDispatchEvidence: guard !== undefined });
-      rethrowIfProviderNetworkBlocked(error);
-      throw error;
-    }
-    let usage: ModelUsageAttemptHandle | undefined;
-    try {
-      usage = await reservation?.accept();
-    } catch (cause) {
-      dispatchAbort.abort();
-      await reservation?.markDispatchUnknown();
-      const error = new ModelUsageDispatchUncertainError(
-        "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
-        { eventId: reservation?.eventId, cause },
-      );
-      throw error;
-    }
-    try {
-      return { response: await pending, usage };
-    } catch (error) {
-      if (error instanceof ModelUsageSettlementError) throw error;
-      await usage?.fail(error);
-      rethrowIfProviderNetworkBlocked(error);
-      throw error;
-    }
   }
 
   private resolveModelUsageCredentialLineage(resolved: ResolvedProvider): {

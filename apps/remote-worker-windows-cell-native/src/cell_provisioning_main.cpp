@@ -1,9 +1,14 @@
 #include "cell_provisioning_journal.hpp"
 #include "cell_controller_client_identity.hpp"
 #include "cell_controller_client_protocol.hpp"
+#include "cell_runtime_client_session.hpp"
+#include "cell_runtime_result.hpp"
+#include "cell_joined_capacity_wire.hpp"
+#include "cell_install_capacity_stdio.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <mutex>
 
 using namespace goatcitadel::worker_cell;
 namespace {
@@ -129,11 +134,150 @@ DWORD ConnectController(ControllerConnection& connection, Deadline& deadline) no
     }
   }
 }
+struct RuntimeHelper final {
+  CellRuntimeHelperBootstrap bootstrap;
+  std::vector<std::uint8_t> request;
+  CellRuntimeDispatch dispatch;
+  Handle endpoint;
+  Handle control_endpoint;
+  CellPipeParentEvidence parent;
+  CellPipeParentEvidence control_parent;
+  std::mutex custody_mutex;
+  ControllerConnection* controller = nullptr;
+  bool attempted = false, control_open = false, control_authenticated = false;
+  // Declared last so forwarding joins before any borrowed custody/pipe owner
+  // is destroyed, including an outer protocol failure after runtime retention.
+  CellRuntimeHelperForwardingSession forwarding;
+  static DWORD Peer(void* context) noexcept {
+    auto& self = *static_cast<RuntimeHelper*>(context);
+    try {
+      std::lock_guard<std::mutex> lock(self.custody_mutex);
+      if (!self.controller) return ERROR_INVALID_STATE;
+      DWORD error = self.controller->identity.Verify();
+      if (!error) error = self.parent.Verify();
+      if (!error && self.control_open) error = self.control_parent.Verify();
+      if (!error && self.control_open && (!CompareObjectHandles(self.parent.Process(), self.control_parent.Process()) ||
+          CompareObjectHandles(self.parent.RuntimePipe(), self.control_parent.RuntimePipe()))) error = ERROR_ACCESS_DENIED;
+      return error;
+    } catch (...) { return ERROR_GEN_FAILURE; }
+  }
+  static DWORD ControllerControlPeer(void* context, CellPipeServerEvidence& additional) noexcept {
+    auto& self = *static_cast<RuntimeHelper*>(context);
+    try {
+      std::lock_guard<std::mutex> lock(self.custody_mutex);
+      return self.controller ? self.controller->identity.VerifyBoundPipe(additional) : ERROR_INVALID_STATE;
+    } catch (...) { return ERROR_GEN_FAILURE; }
+  }
+  DWORD Verify() noexcept { return attempted ? forwarding.Verify() : Peer(this); }
+  DWORD ReadRequest(DWORD wall) {
+    CellRuntimeHelperBootstrapBytes bytes{};
+    const bool read = Read(bytes.data(), static_cast<DWORD>(bytes.size()));
+    DWORD error = read ? DecodeCellRuntimeHelperBootstrap(bytes, &bootstrap) : ERROR_BROKEN_PIPE;
+    SecureZeroMemory(bytes.data(), bytes.size());
+    if (error) return error;
+    request.resize(bootstrap.request_bytes);
+    if (!Read(request.data(), static_cast<DWORD>(request.size()))) {
+      SecureZeroMemory(bootstrap.secret.data(), bootstrap.secret.size()); return ERROR_BROKEN_PIPE;
+    }
+    error = DecodeCellRuntimeDispatch(request, {bootstrap.binding.nonce, bootstrap.binding.request_sha256}, &dispatch);
+    if (!error && (dispatch.reference.checkpoint_sha256 != bootstrap.binding.checkpoint_sha256 || dispatch.limits.wall_ms > wall))
+      error = ERROR_INVALID_DATA;
+    if (error) SecureZeroMemory(bootstrap.secret.data(), bootstrap.secret.size());
+    return error;
+  }
+  DWORD ConnectParent(ControllerConnection& connection, HANDLE stop, ULONGLONG deadline) {
+    controller = &connection;
+    // Each role authenticates once. Keep a separate wiped copy because the
+    // first exchange erases its bootstrap secret before performing I/O.
+    auto control_bootstrap = bootstrap;
+    const auto name = CellRuntimeHelperPipeName(bootstrap.pipe_nonce);
+    if (name.empty()) return ERROR_INVALID_DATA;
+    endpoint.value = CreateFileW(name.c_str(), kCellControllerPipeClientAccess, 0, nullptr, OPEN_EXISTING,
+      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    DWORD error = endpoint.value == INVALID_HANDLE_VALUE ? GetLastError() :
+      parent.Open(GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE), endpoint.value);
+    if (!error) error = AuthenticateCellRuntimeHelperParent(parent, bootstrap, {Peer, this, stop}, deadline);
+    else SecureZeroMemory(bootstrap.secret.data(), bootstrap.secret.size());
+    if (!error) {
+      const auto control_name = CellRuntimeHelperPipeName(bootstrap.pipe_nonce, true);
+      control_endpoint.value = CreateFileW(control_name.c_str(), kCellControllerPipeClientAccess, 0, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+      error = control_endpoint.value == INVALID_HANDLE_VALUE ? GetLastError() :
+        control_parent.Open(GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE), control_endpoint.value);
+      control_open = error == ERROR_SUCCESS;
+      if (!error) error = AuthenticateCellRuntimeHelperParent(control_parent, control_bootstrap, {Peer, this, stop}, deadline, true);
+      control_authenticated = error == ERROR_SUCCESS;
+    }
+    return error;
+  }
+  CellRuntimeClientSessionResult Run(HANDLE pipe, HANDLE stop, ULONGLONG deadline, const CellControllerRuntimeBinding& binding) noexcept {
+    CellRuntimeClientSessionResult result;
+    if (attempted || !control_authenticated || binding != bootstrap.binding || !controller || pipe != controller->pipe.value) {
+      result.error = ERROR_INVALID_STATE; return result;
+    }
+    attempted = true;
+    try {
+      result.error = Peer(this);
+      if (result.error) return result;
+      result = forwarding.Run(pipe, parent.RuntimePipe(), control_parent.RuntimePipe(), deadline, binding, request,
+        {{Peer, this, stop}, this, nullptr, ControllerControlPeer});
+    } catch (...) { result.error = ERROR_NOT_ENOUGH_MEMORY; }
+    return result;
+  }
+};
 struct ControllerSink final {
   ControllerConnection& connection;
   Sink sink;
+  RuntimeHelper* runtime = nullptr;
+  CellRuntimeInstallBinding installation;
+  std::uint32_t installation_checks = 0;
+  ULONGLONG installation_deadline = 0;
+  HANDLE installation_stop = nullptr;
+  std::unique_ptr<CellInstallCapacityStdio> installation_capacity;
+  static DWORD Attest(void* raw, std::span<const std::uint8_t> request, std::span<std::uint8_t> proof) noexcept {
+    auto& sink = *static_cast<ControllerSink*>(raw);
+    if (request.size() != 36 || proof.size() != 460) return ERROR_INVALID_PARAMETER;
+    auto error = Authorize(raw);
+    if (!error) error = WriteCellControllerMessage(sink.connection.pipe.value,
+      CellControllerMessage::controller_attestation_challenge, request.data(), 36, sink.installation_stop, sink.installation_deadline);
+    if (!error) error = Authorize(raw);
+    if (!error) error = ReadCellControllerMessage(sink.connection.pipe.value,
+      CellControllerMessage::controller_attestation_proof, proof.data(), 460, sink.installation_stop, sink.installation_deadline);
+    return error ? error : Authorize(raw);
+  }
+  static DWORD Connected(void* context, const CellControllerNonce& nonce) noexcept {
+    auto& owner = *static_cast<ControllerSink*>(context);
+    if (owner.installation_capacity || owner.sink.count || owner.installation_checks) return ERROR_INVALID_STATE;
+    try {
+      owner.installation_capacity = std::make_unique<CellInstallCapacityStdio>(nonce, owner.installation,
+        owner.installation_deadline, CellFootprintScanGuard{Authorize, context, owner.installation_stop},
+        CellInstallCapacityStdioTransport{context,
+          [](void*, std::uint8_t kind, std::span<const std::uint8_t> bytes) noexcept -> DWORD {
+            return Frame(kind, bytes.data(), static_cast<DWORD>(bytes.size())) ? ERROR_SUCCESS : ERROR_BROKEN_PIPE;
+          },
+          [](void*, std::span<std::uint8_t> bytes) noexcept -> DWORD {
+            return Read(bytes.data(), static_cast<DWORD>(bytes.size())) ? ERROR_SUCCESS : ERROR_BROKEN_PIPE;
+          },
+          Attest});
+      return Frame(15, nonce.data(), static_cast<DWORD>(nonce.size())) ? Authorize(context) : ERROR_BROKEN_PIPE;
+    } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
+  static DWORD ReserveInstallation(void* context, std::span<const std::uint8_t> bytes, const CellInstallCapacityBinding& binding,
+    ULONGLONG deadline, std::unique_ptr<CellInstallCapacityReservation>* output) noexcept {
+    auto& owner = *static_cast<ControllerSink*>(context);
+    if (!owner.installation_capacity || owner.sink.count != 21 || !owner.installation_checks) return ERROR_INVALID_STATE;
+    const auto admission = owner.installation_capacity->Admission();
+    return admission.reserve(admission.context, bytes, binding, deadline, output);
+  }
   static DWORD Authorize(void* context) noexcept {
-    return static_cast<ControllerSink*>(context)->connection.identity.Verify();
+    auto& owner = *static_cast<ControllerSink*>(context);
+    return owner.runtime ? owner.runtime->Verify() : owner.connection.identity.Verify();
+  }
+  static CellRuntimeClientSessionResult Runtime(void* context, HANDLE pipe, HANDLE stop, ULONGLONG deadline,
+      const CellControllerRuntimeBinding& binding) noexcept {
+    auto& owner = *static_cast<ControllerSink*>(context);
+    if (owner.runtime) return owner.runtime->Run(pipe, stop, deadline, binding);
+    CellRuntimeClientSessionResult result; result.error = ERROR_INVALID_STATE; return result;
   }
   static DWORD Checkpoint(void* context, const CellProvisioningRecord& record, bool acknowledge, CellFileSha256* digest) noexcept {
     auto& owner = *static_cast<ControllerSink*>(context);
@@ -160,10 +304,89 @@ struct ControllerSink final {
   }
   static DWORD Receipt(void* context, const std::array<std::uint8_t, 16>& receipt) noexcept {
     const auto& owner = *static_cast<ControllerSink*>(context);
+    if (owner.runtime && owner.runtime->attempted) {
+      const auto native_error = U32(receipt.data());
+      if (native_error) owner.runtime->forwarding.Cancel(native_error);
+      else {
+        const auto error = owner.runtime->forwarding.Finish();
+        if (error) return error;
+      }
+    }
     if (!Frame(2, receipt.data(), static_cast<DWORD>(receipt.size()))) return ERROR_BROKEN_PIPE;
     // Volume stages still perform current-authority checks after the final
     // checkpoint. The parent closes input only after seeing this receipt.
+    if (owner.installation_capacity && !U32(receipt.data())) {
+      for (std::uint32_t count = 0; count < 65536; ++count) {
+        std::array<std::uint8_t, 5> header{}; DWORD read = 0;
+        const bool ok = ReadFile(GetStdHandle(STD_INPUT_HANDLE), header.data(), 1, &read, nullptr) != FALSE;
+        if ((ok && !read) || (!ok && GetLastError() == ERROR_BROKEN_PIPE)) return Authorize(context);
+        if (!ok || read != 1 || !Read(header.data() + 1, 4) || header[0] != 20 || U32(header.data() + 1) != 36) return ERROR_INVALID_DATA;
+        std::array<std::uint8_t, 36> challenge{}; std::array<std::uint8_t, 460> proof{};
+        if (!Read(challenge.data(), 36)) return ERROR_BROKEN_PIPE;
+        const auto error = Attest(context, challenge, proof);
+        if (error) return error;
+        if (!Frame(21, proof.data(), 460)) return ERROR_BROKEN_PIPE;
+      }
+      return ERROR_INVALID_DATA;
+    }
     return owner.sink.maximum > 5 && !End() ? ERROR_INVALID_DATA : ERROR_SUCCESS;
+  }
+  static DWORD Installation(void* context, const CellRuntimeInstallRequest& request, std::uint32_t ordinal) noexcept {
+    auto& owner = *static_cast<ControllerSink*>(context);
+    if (owner.sink.maximum != 21 || owner.sink.count != 21 || ordinal != owner.installation_checks + 1 || ordinal > 65536 ||
+        request.binding.nonce != owner.installation.nonce || request.binding.request_sha256 != owner.installation.request_sha256) return ERROR_INVALID_DATA;
+    std::array<std::uint8_t, 100> challenge{};
+    std::copy(request.binding.nonce.begin(), request.binding.nonce.end(), challenge.begin());
+    std::copy(request.binding.request_sha256.begin(), request.binding.request_sha256.end(), challenge.begin() + 32);
+    std::copy(request.checkpoint_sha256.begin(), request.checkpoint_sha256.end(), challenge.begin() + 64);
+    Put32(challenge.data() + 96, ordinal);
+    if (!Frame(10, challenge.data(), static_cast<DWORD>(challenge.size()))) return ERROR_BROKEN_PIPE;
+    std::array<std::uint8_t, 105> reply{};
+    if (!Read(reply.data(), static_cast<DWORD>(reply.size()))) return ERROR_BROKEN_PIPE;
+    if (reply[0] != 11 || U32(reply.data() + 1) != challenge.size() || !std::equal(challenge.begin(), challenge.end(), reply.begin() + 5)) return ERROR_INVALID_DATA;
+    ++owner.installation_checks; return Authorize(context);
+  }
+  static DWORD InstallationOutcome(void* context, const std::array<std::uint8_t, 352>& bytes) noexcept {
+    auto& owner = *static_cast<ControllerSink*>(context);
+    if (owner.sink.count != 21 || owner.installation_checks < 2) return ERROR_INVALID_STATE;
+    if (!Frame(12, bytes.data(), static_cast<DWORD>(bytes.size()))) return ERROR_BROKEN_PIPE;
+    std::array<std::uint8_t, 37> reply{};
+    if (!Read(reply.data(), static_cast<DWORD>(reply.size()))) return ERROR_BROKEN_PIPE;
+    if (reply[0] != 13 || U32(reply.data() + 1) != 32 || !std::equal(bytes.begin() + 320, bytes.end(), reply.begin() + 5)) return ERROR_INVALID_DATA;
+    return Authorize(context);
+  }
+  static DWORD Capacity(void*, const CellControllerNonce& nonce, const CellProvisioningFootprint& observation) noexcept {
+    CellControllerCapacityBytes bytes{};
+    if (!EncodeCellControllerCapacity(nonce, observation, &bytes)) return ERROR_INVALID_DATA;
+    // The parent must retain this frame with the following successful receipt
+    // and helper completion; a partial stream never publishes capacity.
+    return Frame(6, bytes.data(), static_cast<DWORD>(bytes.size())) ? ERROR_SUCCESS : ERROR_BROKEN_PIPE;
+  }
+  static DWORD BackingCapacity(void*, const CellControllerNonce& nonce, const CellProvisioningBackingFootprint& observation) noexcept {
+    CellControllerBackingCapacityBytes bytes{};
+    if (!EncodeCellControllerBackingCapacity(nonce, observation, &bytes)) return ERROR_INVALID_DATA;
+    return Frame(7, bytes.data(), static_cast<DWORD>(bytes.size())) ? ERROR_SUCCESS : ERROR_BROKEN_PIPE;
+  }
+  static DWORD PoolCapacity(void*, const CellControllerNonce& nonce, std::span<const std::uint8_t> bytes) noexcept {
+    if (bytes.size() < 1312 || bytes.size() > kCellPoolCapacityResponseMaximumBytes ||
+        !std::equal(nonce.begin(), nonce.end(), bytes.begin() + 24)) return ERROR_INVALID_DATA;
+    // Released by the native client only after its successful terminal receipt.
+    // The parent still requires this frame, its own receipt and helper exit.
+    return Frame(14, bytes.data(), static_cast<DWORD>(bytes.size())) ? ERROR_SUCCESS : ERROR_BROKEN_PIPE;
+  }
+  static DWORD Inventory(void*, const CellControllerNonce& nonce, const CellProvisioningInventory& observation) noexcept {
+    if (!ValidateCellControllerInventory(observation)) return ERROR_INVALID_DATA;
+    CellControllerCapacityBytes summary{};
+    if (!EncodeCellControllerCapacity(nonce, {observation.anchor, observation.assignment_binding, observation.profile_sha256,
+        observation.checkpoint_sha256, observation.workspace, observation.inventory.footprint}, &summary)) return ERROR_INVALID_DATA;
+    if (!Frame(8, summary.data(), static_cast<DWORD>(summary.size()))) return ERROR_BROKEN_PIPE;
+    for (std::size_t start = 0; start < observation.inventory.entries.size(); start += kCellControllerInventoryChunkEntries) {
+      CellControllerInventoryChunkBytes chunk{};
+      if (!EncodeCellControllerInventoryChunk(nonce, static_cast<std::uint32_t>(start), std::span(observation.inventory.entries).subspan(start,
+          std::min(kCellControllerInventoryChunkEntries, observation.inventory.entries.size() - start)), &chunk)) return ERROR_INVALID_DATA;
+      if (!Frame(9, chunk.data(), static_cast<DWORD>(chunk.size()))) return ERROR_BROKEN_PIPE;
+    }
+    return ERROR_SUCCESS;
   }
 };
 int Run(Deadline& deadline, bool use_controller, bool read_custody) {
@@ -182,8 +405,9 @@ int Run(Deadline& deadline, bool use_controller, bool read_custody) {
   std::array<std::uint8_t, 20> header{};
   if (!Read(header.data(), static_cast<DWORD>(header.size())) || std::memcmp(header.data(), "GCPROV01", 8)) return 2;
   const auto operation = U32(header.data() + 8), wall = U32(header.data() + 12), path_bytes = U32(header.data() + 16);
-  if (operation < 1 || operation > 12 || (IsCellControllerVolume(operation) && !use_controller) ||
-      wall < 100 || wall > 600000 || !path_bytes || path_bytes > 8192) return 2;
+  if (!IsCellControllerOperation(operation) || (IsCellControllerVolume(operation) && !use_controller) ||
+      (IsCellControllerRuntime(operation) && !use_controller) ||
+      wall < 100 || wall > (IsCellControllerRuntime(operation) ? 86400000u : (IsCellControllerCapacity(operation) || IsCellControllerInstall(operation)) ? 60000u : 600000u) || !path_bytes || path_bytes > 8192) return 2;
   deadline.until.store(GetTickCount64() + wall);
   std::array<std::uint8_t, 528> bytes{};
   std::vector<char> encoded(path_bytes);
@@ -220,8 +444,58 @@ int Run(Deadline& deadline, bool use_controller, bool read_custody) {
     if (IsCellControllerMount(operation) && (!Read(creation_history.data(), static_cast<DWORD>(sizeof(creation_history))) ||
         !Read(mount_history.data(), static_cast<DWORD>(sizeof(mount_history))))) return 2;
     if (IsCellControllerMountedWorkspace(operation) && !Read(workspace_history.data(), static_cast<DWORD>(sizeof(workspace_history)))) return 2;
-    if (!End()) return 2;
+    if (!IsCellControllerCapacity(operation) && !IsCellControllerRuntime(operation) && !IsCellControllerInstall(operation) && !End()) return 2;
   }
+  std::array<std::uint8_t, 416> cleanup_admission{};
+  std::vector<std::uint8_t> cleanup_bytes;
+  std::vector<std::uint8_t> pool_history;
+  std::vector<std::uint8_t> pool_cleanup;
+  CellFileSha256 capture_nonce{};
+  CellFileSha256 references_sha256{};
+  if (IsCellControllerCapacity(operation)) {
+    if (!Read(cleanup_admission.data(), 80)) return 2;
+    const auto installations = U32(cleanup_admission.data() + 72);
+    if (installations > 1 || (installations && !Read(cleanup_admission.data() + 80, 336))) return 2;
+    CellRuntimeCleanupAdmission decoded;
+    if (DecodeCellRuntimeCleanupAdmission(std::span(cleanup_admission).first(80 + installations * 336), &decoded)) return 2;
+    cleanup_bytes.resize(252);
+    if (!Read(cleanup_bytes.data(), 252)) return 2;
+    const auto count = U32(cleanup_bytes.data() + 248);
+    if (count > 1000) return 2;
+    cleanup_bytes.resize(252 + count * 108);
+    if (count && !Read(cleanup_bytes.data() + 252, count * 108)) return 2;
+    CellRuntimeCleanupSet cleanup;
+    if (DecodeCellRuntimeCleanup(cleanup_bytes, decoded.binding, &cleanup)) return 2;
+    pool_history.resize(kCellControllerPoolHeaderBytes);
+    if (!Read(pool_history.data(), static_cast<DWORD>(pool_history.size())) || std::memcmp(pool_history.data(), "GCPPOOL1", 8) ||
+        U32(pool_history.data() + 12) != 1) return 2;
+    const auto members = U32(pool_history.data() + 8);
+    if (!members || members > 64) return 2;
+    pool_history.resize(kCellControllerPoolHeaderBytes + members * kCellControllerPoolMemberBytes);
+    if (!Read(pool_history.data() + kCellControllerPoolHeaderBytes, members * kCellControllerPoolMemberBytes)) return 2;
+    std::array<std::uint8_t, 4> cleanup_size{};
+    if (!Read(cleanup_size.data(), static_cast<DWORD>(cleanup_size.size()))) return 2;
+    const auto pool_cleanup_bytes = U32(cleanup_size.data());
+    if (pool_cleanup_bytes < kCellRuntimePoolCleanupHeaderBytes || pool_cleanup_bytes > kMaximumCellRuntimePoolCleanupBytes) return 2;
+    pool_cleanup.resize(pool_cleanup_bytes);
+    if (!Read(pool_cleanup.data(), pool_cleanup_bytes)) return 2;
+    if (IsCellControllerPoolCapacity(operation) && (!Read(capture_nonce.data(), 32) ||
+        std::none_of(capture_nonce.begin(), capture_nonce.end(), [](auto byte) { return byte != 0; }))) return 2;
+    if (IsCellControllerInstallCapacity(operation) && (!Read(references_sha256.data(), 32) ||
+        std::none_of(references_sha256.begin(), references_sha256.end(), [](auto byte) { return byte != 0; }))) return 2;
+  }
+  CellRuntimeInstallBinding installation_binding;
+  std::array<std::uint8_t, kCellRuntimeInstallBytes> installation_bytes{};
+  CellRuntimeInstallRequest installation;
+  if (IsCellControllerInstall(operation)) {
+    if (!Read(installation_binding.nonce.data(), 32) || !Read(installation_binding.request_sha256.data(), 32) ||
+        !Read(installation_bytes.data(), static_cast<DWORD>(installation_bytes.size())) ||
+        DecodeCellRuntimeInstall(installation_bytes, installation_binding, &installation) ||
+        installation.journal_identity != anchor.file || installation.prepared_sha256 != anchor.prepared_sha256 ||
+        !std::equal(installation.checkpoint_sha256.begin(), installation.checkpoint_sha256.end(), workspace_history.back().begin() + 992)) return 2;
+  }
+  RuntimeHelper runtime;
+  if (IsCellControllerRuntime(operation) && runtime.ReadRequest(wall)) return 2;
   if (use_controller) {
     // Paths/principals are fixed installation custody, never configurable
     // service requests. The restricted helper does not open the cells parent.
@@ -229,6 +503,10 @@ int Run(Deadline& deadline, bool use_controller, bool read_custody) {
         parent_identity != connection.identity.ParentIdentity() || owner != L"S-1-5-18" || controller != kCellControllerServiceSid) return 2;
     DWORD error = ConnectController(connection, deadline);
     if (error) return static_cast<int>(error);
+    if (IsCellControllerRuntime(operation)) {
+      error = runtime.ConnectParent(connection, deadline.finished, deadline.until.load());
+      if (error) return static_cast<int>(error);
+    }
     CellControllerRequest request;
     request.operation = operation; request.wall_ms = wall; request.cell_name = name;
     request.plan = plan; request.parent = parent_identity; request.anchor = anchor; request.volume_records = volume_history;
@@ -236,10 +514,37 @@ int Run(Deadline& deadline, bool use_controller, bool read_custody) {
     request.protection_records = protection_history;
     request.creation_records = creation_history; request.mount_records = mount_history;
     request.mounted_workspace_records = workspace_history;
+    request.cleanup_admission = cleanup_admission;
+    request.cleanup_bytes = std::move(cleanup_bytes);
+    request.pool_history = std::move(pool_history);
+    request.pool_cleanup = std::move(pool_cleanup);
+    request.capture_nonce = capture_nonce;
+    request.references_sha256 = references_sha256;
+    if (IsCellControllerRuntime(operation)) request.runtime = runtime.bootstrap.binding;
+    if (IsCellControllerInstall(operation)) {
+      request.installation = {installation_binding.nonce, installation_binding.request_sha256, installation.checkpoint_sha256};
+      request.installation_bytes = installation_bytes;
+    }
     ControllerSink context{connection, {}};
+    if (IsCellControllerRuntime(operation)) context.runtime = &runtime;
+    if (IsCellControllerInstall(operation)) context.installation = installation_binding;
     context.sink.maximum = CellControllerCheckpointLimit(operation);
     CellControllerClientOwner client{&context, ControllerSink::Authorize, ControllerSink::Checkpoint, ControllerSink::Receipt, ControllerSink::VolumeAuthority};
     client.owner_sid = owner; client.controller_sid = controller;
+    client.capacity = ControllerSink::Capacity;
+    client.backing_capacity = ControllerSink::BackingCapacity;
+    client.inventory = ControllerSink::Inventory;
+    client.pool_capacity = ControllerSink::PoolCapacity;
+    if (IsCellControllerRuntime(operation)) client.run_runtime = ControllerSink::Runtime;
+    if (IsCellControllerInstall(operation)) {
+      client.installation_authority = ControllerSink::Installation;
+      client.installation_outcome = ControllerSink::InstallationOutcome;
+    }
+    if (IsCellControllerInstallCapacity(operation)) {
+      context.installation_deadline = deadline.until.load(); context.installation_stop = deadline.finished;
+      client.connection = ControllerSink::Connected;
+      client.installation_capacity = {&context, ControllerSink::ReserveInstallation};
+    }
     error = RunCellControllerClientSession(connection.pipe.value, deadline.finished, deadline.until.load(), request, client);
     return error ? 3 : 0;
   }

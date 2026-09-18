@@ -95,6 +95,82 @@ int Server(const wchar_t* name) {
   if (ReadCellPipe(pipe.value, &value, 1, stop.value, deadline) || value != 1) return 23;
   return 0;
 }
+struct LocalPipe final {
+  Handle server, client, stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  explicit LocalPipe(const std::wstring& name) {
+    server.value = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 0, nullptr);
+    Check(server.value != INVALID_HANDLE_VALUE && stop.value, "create private parent evidence pipe");
+    client.value = CreateFileW(name.c_str(), kCellControllerPipeClientAccess, 0, nullptr, OPEN_EXISTING,
+      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    Check(client.value != INVALID_HANDLE_VALUE, "open private parent evidence client");
+    Code(ConnectCellPipe(server.value, stop.value, GetTickCount64() + 1000), ERROR_SUCCESS, "connect private parent evidence pipe");
+  }
+};
+void ParentEvidenceChecks(const std::wstring& name) {
+  LocalPipe input(name + L"-input"), output(name + L"-output"), runtime(name + L"-runtime");
+  CellPipeParentEvidence parent;
+  Code(parent.Verify(), ERROR_INVALID_STATE, "unopened parent has no evidence");
+  Check(SetHandleInformation(input.client.value, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "fixture stdio may be inherited");
+  Code(parent.Open(input.client.value, output.client.value, runtime.client.value), ERROR_SUCCESS, "three pipes retain one actual parent");
+  Check(parent.Process() && GetProcessId(parent.Process()) == GetCurrentProcessId(), "local parent process retained");
+  Check(parent.RuntimePipe() != runtime.client.value && CompareObjectHandles(parent.RuntimePipe(), runtime.client.value),
+    "owns a separate handle to the exact runtime endpoint");
+  DWORD flags = 0;
+  Check(GetHandleInformation(input.client.value, &flags) && (flags & HANDLE_FLAG_INHERIT), "borrowed inheritance unchanged");
+  Check(GetHandleInformation(parent.RuntimePipe(), &flags) && !(flags & HANDLE_FLAG_INHERIT), "retained runtime handle not inheritable");
+  Code(parent.Open(input.client.value, output.client.value, runtime.client.value), ERROR_ALREADY_INITIALIZED, "parent cannot be replaced");
+  Code(parent.Verify(), ERROR_SUCCESS, "parent verifies before I/O");
+  for (unsigned index = 0; index < 3; ++index) {
+    CellPipeParentEvidence alias;
+    Handle duplicate;
+    Check(DuplicateHandle(GetCurrentProcess(), input.client.value, GetCurrentProcess(), &duplicate.value,
+      0, FALSE, DUPLICATE_SAME_ACCESS), "duplicate fixture input for alias refusal");
+    const HANDLE second = index == 0 ? input.client.value : index == 1 ? duplicate.value : output.client.value;
+    const HANDLE third = index == 2 ? duplicate.value : runtime.client.value;
+    Code(alias.Open(input.client.value, second, third), ERROR_INVALID_HANDLE, "same object cannot play two parent roles");
+    Check(!alias.Process() && !alias.RuntimePipe(), "refused alias exposes no usable handles");
+    Code(alias.Open(input.client.value, output.client.value, runtime.client.value), ERROR_INVALID_HANDLE, "failed instance cannot reopen");
+  }
+  Check(ImpersonateSelf(SecurityIdentification), "parent refusal impersonation fixture");
+  const DWORD denied = parent.Verify();
+  if (!RevertToSelf()) TerminateProcess(GetCurrentProcess(), 99);
+  Code(denied, ERROR_ACCESS_DENIED, "ambient impersonation fences parent");
+  Code(parent.Verify(), ERROR_ACCESS_DENIED, "parent refusal remains sticky after reversion");
+  Check(!parent.Process() && !parent.RuntimePipe(), "fenced parent exposes no handles");
+  parent.Close(); parent.Close();
+  std::uint8_t value = 0x51;
+  Code(WriteCellPipe(runtime.client.value, &value, 1, runtime.stop.value, GetTickCount64() + 1000), ERROR_SUCCESS,
+    "closing evidence preserves borrowed runtime handle");
+  Code(ReadCellPipe(runtime.server.value, &value, 1, runtime.stop.value, GetTickCount64() + 1000), ERROR_SUCCESS,
+    "borrowed pipe still usable");
+  CellPipeParentEvidence disconnected;
+  Code(disconnected.Open(input.client.value, output.client.value, runtime.client.value), ERROR_SUCCESS, "separate parent lifetime");
+  Check(DisconnectNamedPipe(output.server.value), "disconnect only owned output fixture");
+  Check(disconnected.Verify() != ERROR_SUCCESS, "disconnected stdio fences runtime even while parent process lives");
+  Check(!disconnected.RuntimePipe(), "disconnected parent cannot supply runtime endpoint");
+}
+int ParentStdio(const wchar_t* name) {
+  Handle pipe{CreateFileW(name, kCellControllerPipeClientAccess, 0, nullptr, OPEN_EXISTING,
+    FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr)};
+  Handle stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  CellPipeParentEvidence parent;
+  DWORD error = parent.Open(GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE), pipe.value);
+  if (error) { std::fprintf(stderr, "stdio parent open: %lu\n", error); return 30; }
+  const DWORD pid = GetProcessId(parent.Process());
+  std::uint8_t value = 0;
+  const auto deadline = GetTickCount64() + 5000;
+  error = ReadCellPipe(parent.RuntimePipe(), &value, 1, stop.value, deadline);
+  if (error || value != 0x11 || parent.Verify()) return 31;
+  value = 0x12;
+  if (WriteCellPipe(parent.RuntimePipe(), &value, 1, stop.value, deadline) || parent.Verify()) return 32;
+  parent.Close();
+  if (parent.RuntimePipe() || parent.Process() || parent.Verify() != ERROR_INVALID_STATE) return 33;
+  value = 0x13;
+  if (WriteCellPipe(pipe.value, &value, 1, stop.value, deadline)) return 34;
+  std::printf("{\"passed\":true,\"parentProcessId\":%lu,\"borrowedPipePreserved\":true}\n", pid);
+  return 0;
+}
 ULONGLONG Exchange(const std::wstring& name) {
   Child child; child.Start(name);
   Handle pipe{INVALID_HANDLE_VALUE}, stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
@@ -119,6 +195,11 @@ ULONGLONG Exchange(const std::wstring& name) {
   std::uint8_t value = 0;
   Code(ReadCellPipe(pipe.value, &value, 1, stop.value, deadline), ERROR_SUCCESS, "receive from retained server");
   Check(value == 0x42, "exact server byte");
+  LocalPipe local_input(name + L"-local-input"), local_output(name + L"-local-output");
+  CellPipeParentEvidence wrong_parent;
+  Code(wrong_parent.Open(local_input.client.value, local_output.client.value, pipe.value), ERROR_ACCESS_DENIED,
+    "live different process cannot replace inherited parent on runtime pipe");
+  Check(!wrong_parent.Process() && !wrong_parent.RuntimePipe(), "different process exposes no retained endpoint");
   Code(evidence.Verify(), ERROR_SUCCESS, "server remains bound after I/O");
   Check(SetHandleInformation(pipe.value, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "set own client handle inheritance");
   Code(evidence.Verify(), ERROR_ACCESS_DENIED, "changed handle inheritance refused");
@@ -149,6 +230,7 @@ ULONGLONG Exchange(const std::wstring& name) {
 }
 int wmain(int count, wchar_t** arguments) {
   if (count == 3 && !wcscmp(arguments[1], L"--server")) return Server(arguments[2]);
+  if (count == 3 && !wcscmp(arguments[1], L"--parent-stdio")) return ParentStdio(arguments[2]);
   if (count == 2 && !wcscmp(arguments[1], L"--custody-fixture")) {
     std::vector<std::uint8_t> frame;
     if (EncodeCellControllerCustodySnapshot(custody_parent, CustodyFixture(), &frame)) return 3;
@@ -167,7 +249,8 @@ int wmain(int count, wchar_t** arguments) {
   Check(identity.ParentPath().empty() && identity.ParentIdentity().volume_serial == 0, "failed Prepare clears custody");
   Code(identity.Prepare(), ERROR_ACCESS_DENIED, "repeated refusal does not retain partial admission");
   Code(identity.ReadCustodySnapshot(&snapshot), ERROR_INVALID_STATE, "refused worker cannot read installed custody");
-  Check(!goatcitadel::worker_host::GrantCurrentSystemWorkerInspectionAccess(), "shared production grant refuses actual interactive process");
+  Check(!goatcitadel::worker_host::GrantCurrentSystemWorkerInspectionAccess(
+      goatcitadel::worker_host::WorkerInspectionService::CellController), "shared production grant refuses actual interactive process");
   CellControllerInstalledFiles custody;
   Code(custody.Verify(), ERROR_INVALID_STATE, "unopened installation has no authority");
   Code(custody.VerifyControllerProcess(GetCurrentProcess()), ERROR_INVALID_STATE, "no unverified controller image");
@@ -177,6 +260,7 @@ int wmain(int count, wchar_t** arguments) {
   Handle null_file{CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr)};
   Code(invalid.Open(null_file.value), ERROR_INVALID_HANDLE, "non-pipe handle refused");
   const auto name = L"\\\\.\\pipe\\LOCAL\\GoatCellClientIdentity-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+  ParentEvidenceChecks(name);
   const auto first_creation = Exchange(name);
   Check(Exchange(name) != first_creation, "replacement listener with the same name requires new process evidence");
   const auto wrong_end_name = name + L"-wrong-end";

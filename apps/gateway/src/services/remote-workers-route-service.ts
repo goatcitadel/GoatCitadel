@@ -1,10 +1,11 @@
 import { createHash, createPublicKey, randomBytes, timingSafeEqual } from "node:crypto";
+import { readWorkerAssignmentRuntime, readWorkerNativeOutputArtifact, type RemoteWorkerRuntimeReadStore } from "./remote-worker-runtime-read-service.js";
+export { RemoteWorkerRuntimeReadUnavailableError, type RemoteWorkerRuntimeReadStore } from "./remote-worker-runtime-read-service.js";
+import type { RemoteWorkerNativeFileOperator } from "./remote-worker-native-file-operator.js";
+import type { RemoteWorkerNativeReviewOperator } from "./remote-worker-native-review-operator.js";
 import {
   NotFoundError,
-  ConflictError,
-  normalizeRemoteWorkerAssignmentRuntime,
   type RemoteWorkerAssignmentRuntime,
-  type RemoteWorkerRuntimeReadKey,
   REMOTE_WORKER_ASSIGNMENT_CURSOR_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_DEFAULT_LIMIT,
   REMOTE_WORKER_ASSIGNMENT_EVENT_DEFAULT_LIMIT,
@@ -250,17 +251,6 @@ export class RemoteWorkerOperatorControlUnavailableError extends Error {
   }
 }
 
-export interface RemoteWorkerRuntimeReadStore {
-  findAssignmentRuntime(key: RemoteWorkerRuntimeReadKey): Promise<RemoteWorkerAssignmentRuntime | undefined>;
-}
-
-export class RemoteWorkerRuntimeReadUnavailableError extends Error {
-  public constructor() {
-    super("Remote worker runtime reads are unavailable.");
-    this.name = "RemoteWorkerRuntimeReadUnavailableError";
-  }
-}
-
 export class RemoteWorkersRouteService {
   public constructor(
     private readonly registry: RemoteWorkerRegistryStore,
@@ -268,19 +258,23 @@ export class RemoteWorkersRouteService {
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly operatorControl?: RemoteWorkerOperatorControlDependencies,
     private readonly runtimeReads?: RemoteWorkerRuntimeReadStore,
+    public readonly nativeFiles?: Pick<RemoteWorkerNativeFileOperator, "list" | "download">,
+    public readonly nativeRuntime?: Pick<RemoteWorkerNativeReviewOperator, "requestReview"> &
+      Partial<Pick<RemoteWorkerNativeReviewOperator, "requestInstallationReview" | "retainInstallationReview">>,
   ) {}
 
   public async getAssignmentRuntime(input: { workspaceId: string; assignmentId: string }): Promise<RemoteWorkerAssignmentRuntime> {
     const registryWorkspaceId = inputIdentifier(input.workspaceId);
     const assignmentId = inputIdentifier(input.assignmentId);
-    if (!this.runtimeReads) throw new RemoteWorkerRuntimeReadUnavailableError();
-    const record = await this.runtimeReads.findAssignmentRuntime({ registryWorkspaceId, assignmentId });
-    if (!record) throw new NotFoundError({ entity: "Remote worker assignment", id: assignmentId });
-    const projection = normalizeRemoteWorkerAssignmentRuntime(record);
-    if (projection.workspaceId !== registryWorkspaceId || projection.assignmentId !== assignmentId) {
-      throw new ConflictError({ message: "Remote worker runtime scope changed. Refresh the assignment." });
-    }
-    return projection;
+    return await readWorkerAssignmentRuntime(this.runtimeReads, { registryWorkspaceId, assignmentId });
+  }
+
+  public async getNativeOutputArtifact(input: { workspaceId: string; assignmentId: string; assignmentGeneration: number; nonce: string }) {
+    const registryWorkspaceId = inputIdentifier(input.workspaceId), assignmentId = inputIdentifier(input.assignmentId);
+    const assignmentGeneration = input.assignmentGeneration, nonce = input.nonce;
+    if (!Number.isSafeInteger(assignmentGeneration) || assignmentGeneration < 1 || assignmentGeneration > 2147483647 ||
+        typeof nonce !== "string" || !/^[0-9a-f]{64}$/u.test(nonce) || /^0+$/u.test(nonce)) throw new RemoteWorkerRegistryInputError();
+    return await readWorkerNativeOutputArtifact(this.runtimeReads, { registryWorkspaceId, assignmentId, assignmentGeneration, nonce });
   }
 
   public get budgetOperator(): RemoteWorkerBudgetOperatorService {

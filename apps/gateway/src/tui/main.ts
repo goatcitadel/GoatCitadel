@@ -1924,10 +1924,13 @@ async function viewIntegrations(client: TuiApiClient): Promise<void> {
     return;
   }
 
+  if (action === "back") return;
   const connectionId = await input({ message: "Connection ID" });
   if (!connectionId.trim()) {
     return;
   }
+  const reviewedConnection = await client.getIntegrationConnection(connectionId.trim());
+  console.log(`${reviewedConnection.label} · ${reviewedConnection.status} · ${reviewedConnection.enabled ? "enabled" : "disabled"} · Updated ${reviewedConnection.updatedAt}`);
   if (action === "toggle") {
     const next = await select({
       message: "Set status",
@@ -1944,6 +1947,7 @@ async function viewIntegrations(client: TuiApiClient): Promise<void> {
       return;
     }
     await client.updateIntegrationConnection(connectionId.trim(), {
+      expectedRevision: reviewedConnection.revision,
       status: next,
       enabled,
     });
@@ -1957,7 +1961,7 @@ async function viewIntegrations(client: TuiApiClient): Promise<void> {
     if (!confirmed) {
       return;
     }
-    await client.deleteIntegrationConnection(connectionId.trim());
+    await client.deleteIntegrationConnection(connectionId.trim(), reviewedConnection.revision);
     console.log("Connection deleted.");
     await pause();
   }

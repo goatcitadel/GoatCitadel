@@ -5,6 +5,13 @@ import {
   type RemoteWorkerGenerationRecord, type ResolvedRemoteWorkerAssignmentAuthority,
 } from "@goatcitadel/contracts";
 
+/** Closed native launch environment. Values are supplied separately and never
+ * included in the persisted profile; no ambient worker environment is inherited. */
+export const REMOTE_WORKER_NATIVE_ENVIRONMENT_NAMES = Object.freeze(["SystemRoot", "TEMP", "TMP"] as const);
+export const REMOTE_WORKER_NATIVE_ENVIRONMENT_SHA256 = remoteWorkerCellCanonicalSha256({
+  schemaVersion: "goatcitadel.native-cell-environment.v1", names: REMOTE_WORKER_NATIVE_ENVIRONMENT_NAMES,
+});
+
 /** Supplied by Gateway composition, never decoded from a worker request. */
 export interface RemoteWorkerNativeCellPolicy {
   readonly capacity: RemoteWorkerCellCapacityReservation;
@@ -62,8 +69,7 @@ export function buildRemoteWorkerNativeCellProfile(
       artifactCeilingBytes: Math.min(limits.artifactCeilingBytes, manifest.maxArtifactBytes) },
     egressPosture: "deny_all", egressDnsRevision: 1,
     egressPolicySha256: remoteWorkerCellCanonicalSha256({ schemaVersion: "goatcitadel.native-cell-egress.v1", posture: "deny_all" }),
-    envAllowlistSha256: remoteWorkerCellCanonicalSha256({ schemaVersion: "goatcitadel.native-cell-environment.v1",
-      names: ["SystemRoot", "TEMP", "TMP"] }),
+    envAllowlistSha256: REMOTE_WORKER_NATIVE_ENVIRONMENT_SHA256,
   });
   return Object.freeze({ profile, cellName,
     diskIdentifierHex: remoteWorkerCellCanonicalSha256({ schemaVersion: "goatcitadel.native-cell-disk.v1", ...key }).slice(0, 32),

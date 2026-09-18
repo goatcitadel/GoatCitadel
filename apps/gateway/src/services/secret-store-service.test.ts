@@ -6,6 +6,7 @@ import {
   isSecretStoreUnavailableLikeError,
   runCommand,
 } from "./secret-store-service.js";
+import { encodeMcpCredentialReceipt } from "./mcp-credential-receipt.js";
 
 vi.mock("node:child_process", () => ({
   spawnSync: vi.fn(),
@@ -28,6 +29,46 @@ afterEach(() => {
 });
 
 describe("SecretStoreService", () => {
+  it("keeps the completed-write receipt with its value in the original keychain slot", () => {
+    setPlatform("win32");
+    const id = "11111111-2222-4333-8444-555555555555", secret = "  private-receipt-value  ";
+    const account = `mcp:fixture:environment:receipt-v1:${id}`, service = new SecretStoreService();
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ status: 0, stdout: "ok", stderr: "" } as never);
+    service.setSecretForCustody(account, secret, "a".repeat(64), id);
+    const [, args, options] = spawnSyncMock.mock.calls[1]!;
+    expect(options?.input).toBe(encodeMcpCredentialReceipt(secret, id));
+    expect(JSON.stringify(args)).not.toContain(secret);
+    expect(JSON.stringify(options?.env)).not.toContain(secret);
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never)
+      .mockReturnValueOnce({ status: 0, stdout: encodeMcpCredentialReceipt(secret, id), stderr: "" } as never);
+    expect(service.getSecret(account)).toBe(secret);
+    spawnSyncMock.mockClear();
+    expect(() => service.setSecret(account, secret)).toThrow("staged custody writer");
+    expect(() => service.deleteSecret(account)).toThrow("canonical retirement owner");
+    expect(service.deleteSecretForCustody(account, "a".repeat(64))).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { stdout: "written", accepted: true }, { stdout: "absent", accepted: false }, { stdout: "mismatch", accepted: false },
+  ])("accepts only a completed custody-bound write receipt: $stdout", ({ stdout, accepted }) => {
+    setPlatform("win32");
+    const id = "11111111-2222-4333-8444-555555555555", account = `mcp:fixture:access-token:receipt-v1:${id}`;
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ status: 0, stdout, stderr: "" } as never);
+    expect(new SecretStoreService().hasCredentialWriteReceipt(account, "a".repeat(64), id)).toBe(accepted);
+    expect(spawnSyncMock.mock.calls[1]?.[2]?.env).toEqual(expect.objectContaining({
+      GOATCITADEL_SECRET_WRITE_ID: id, GOATCITADEL_SECRET_RECEIPT_ACTION: "inspect" }));
+  });
+
+  it.each(["ok", "absent", "mismatch"])("checks the exact receipt when deleting a retired slot: %s", (stdout) => {
+    setPlatform("win32");
+    const id = "11111111-2222-4333-8444-555555555555", account = `mcp:fixture:access-token:receipt-v1:${id}`;
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never).mockReturnValueOnce({ status: 0, stdout, stderr: "" } as never);
+    expect(new SecretStoreService().deleteSecretForCustody(account, "a".repeat(64), id)).toBe(stdout !== "mismatch");
+    expect(spawnSyncMock.mock.calls[1]?.[2]?.env).toEqual(expect.objectContaining({
+      GOATCITADEL_SECRET_WRITE_ID: id, GOATCITADEL_SECRET_RECEIPT_ACTION: "remove" }));
+  });
+
   it("detects unavailable keychain errors and respects the explicit disable flag", () => {
     process.env.GOATCITADEL_DISABLE_SECRET_STORE = "yes";
     setPlatform("linux");

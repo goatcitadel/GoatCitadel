@@ -9,6 +9,8 @@ import { McpServerStore, type McpServerStoreCtx } from "./mcp-server-store.js";
 import { McpCredentialRetirementStore, type McpCredentialMetadataContext } from "./mcp-credential-retirement-store.js";
 import { McpCredentialStagingStore } from "./mcp-credential-staging-store.js";
 import { normalizeMcpPolicy } from "./mcp-server-policy.js";
+import { CredentialWriteUncertainError } from "./secret-store-service.js";
+import { decodeMcpCredentialReceipt, encodeMcpCredentialReceipt } from "./mcp-credential-receipt.js";
 
 it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
   "reconciles staged credentials across PostgreSQL RPC owners, uncertain deletion and restart",
@@ -95,6 +97,50 @@ it.skipIf(!process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim())(
         .rejects.toThrow("unfinished");
       await expect(store.writeEnvironmentBinding(await store.requireServer(serverId), undefined, { credentialRef: orphan }))
         .rejects.toThrow("retired");
+
+      const receipt = ref("environment:receipt-v1");
+      let writeId: string | undefined;
+      await expect(store.stageCredentialVersions(serverId, [receipt], (id) => {
+        writeId = id; secrets.set(receipt, encodeMcpCredentialReceipt("private-receipt-value", id!));
+        throw new CredentialWriteUncertainError(new Error("helper acknowledgement lost"));
+      }, owner)).rejects.toThrow("not acknowledged");
+      const makeRecovery = (client: AsyncStorage): McpCredentialStagingStore => {
+        const recovery: McpCredentialStagingStore = new McpCredentialStagingStore(context(client),
+          new McpCredentialRetirementStore(context(client), (id, value) => recovery.readCustody(id, value),
+            (id, value) => recovery.readWriteId(id, value)), () => Date.now() + 11 * 60_000);
+        return recovery;
+      };
+      const peer = (await open()).client, recovery = makeRecovery(restarted), peerRecovery = makeRecovery(peer);
+      let enteredProbe!: () => void, releaseProbe!: () => void;
+      const probing = new Promise<void>((resolve) => { enteredProbe = resolve; });
+      const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve; });
+      const inFlight = recovery.reconcile(32, async () => { enteredProbe(); await probeGate; return true; });
+      await Promise.race([probing, inFlight.then(() => { throw new Error("Expected receipt probe was not reached."); })]);
+      try { await peer.systemSettings.set("mcp_environment_bindings_v1", { alias: { credentialRef: receipt } }); }
+      finally { releaseProbe(); }
+      expect(await inFlight).toMatchObject({ blocked: 1, writing: 1, retired: 0, remaining: 2 });
+      await peer.systemSettings.set("mcp_environment_bindings_v1", {});
+      const verify = (account: string, custodyId: string, id: string) => {
+        expect(account).toBe(receipt.slice("keychain:goatcitadel:".length));
+        expect(custodyId).toBe(owner); expect(id).toBe(writeId);
+        return decodeMcpCredentialReceipt(secrets.get(receipt)!).writeId === id;
+      };
+      const races = await Promise.all([recovery.reconcile(32, verify), peerRecovery.reconcile(32, verify)]);
+      expect(races.reduce((sum, result) => sum + result.retired, 0)).toBe(1);
+      expect(races.every((result) => result.failed === 0)).toBe(true);
+      await expect(store.writeEnvironmentBinding(await store.requireServer(serverId), undefined, { credentialRef: receipt }))
+        .rejects.toThrow("retired");
+      expect(await store.reconcileCredentialRetirements((_account, custodyId, id) => {
+        expect(custodyId).toBe(owner); expect(id).toBe(writeId);
+        secrets.delete(receipt); throw new Error("receipt deletion acknowledgement lost");
+      })).toMatchObject({ failed: 1, remaining: 1 });
+      await Promise.all([restarted.close(), peer.close()]); clients.delete(restarted); clients.delete(peer);
+      const finalClient = (await open()).client, finalStore = new McpServerStore(context(finalClient));
+      expect(await finalStore.reconcileCredentialRetirements((_account, custodyId, id) => {
+        expect(custodyId).toBe(owner); expect(id).toBe(writeId); expect(secrets.has(receipt)).toBe(false); return true;
+      })).toMatchObject({ deleted: 1, remaining: 0 });
+      expect((await finalStore.readAuthState())[serverId]).toEqual(published);
+      expect(await makeRecovery(finalClient).reconcile(32, verify)).toMatchObject({ writing: 1, retired: 0, remaining: 1 });
     } finally {
       const closed = await Promise.allSettled([...clients].map((client) => client.close()));
       try { if (created) await admin.query(`DROP SCHEMA ${schemaName} CASCADE`); }

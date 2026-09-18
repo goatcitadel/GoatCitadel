@@ -2,6 +2,7 @@ import type {
   ApprovalEffectRecord,
   ApprovalReplayEvent,
   ApprovalRequest,
+  ApprovalNativeRuntimeReview,
   PendingApprovalAction,
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
@@ -28,6 +29,7 @@ export interface ApprovalReplayResult {
   pendingAction?: PendingApprovalAction;
   durableRunId?: string;
   effects: ApprovalEffectRecord[];
+  nativeRuntimeReview?: ApprovalNativeRuntimeReview;
 }
 
 export interface RemoteApprovalActionTokenIssueResult extends RemoteActionTokenRecord {

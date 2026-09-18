@@ -1,3 +1,4 @@
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { installVisualLocalAiFixture } from "./visual-host-fixture.mjs";
 
 const VISUAL_STUB_KEY = "verification-visual-regression-stub-key";
@@ -22,7 +23,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     installMissionControlNextBrowserState,
     maybeParseBool,
     pinVisualRegressionProvider,
-    prepareVerificationRuntime,
+    prepareCleanRuntime = prepareUsabilityRuntime,
     resolveVerificationTargetContext,
     resolveVisualRouteHref,
     runScenario,
@@ -34,7 +35,6 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     startVerificationStack,
     stopVerificationStack,
     waitForVerificationRouteReady,
-    writeDeterministicLlmProviderConfig,
     writeMissionControlNextManualProofChecklist,
   } = deps;
   const verificationTarget = resolveVerificationTargetContext();
@@ -72,8 +72,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
       replyText: VISUAL_STUB_REPLY,
       expectedAuthorization: `Bearer ${VISUAL_STUB_KEY}`,
     });
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-visual-regression`);
-    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
+    runtimeRoot = await prepareCleanRuntime(`${context.runId}-visual-regression`, stub.baseUrl);
     stack = await startVerificationStack(context, {
       runtimeRoot,
       includeUi: true,

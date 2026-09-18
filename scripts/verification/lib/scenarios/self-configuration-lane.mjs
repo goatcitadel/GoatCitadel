@@ -1,4 +1,5 @@
 import { assertArtifactRedactionGate } from "../../../verify-artifact-redaction.mjs";
+import { collectVerificationSecretEnvKeys } from "./usability-coverage.mjs";
 
 export const SELF_CONFIGURATION_LANE = "self-configuration";
 
@@ -25,11 +26,16 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
     title: "Gateway secure-submit, authorization, settlement, and fault tests",
     subsystem: "gateway",
     cwd: "apps/gateway",
+    // These file-backed integration fixtures replay the full migration registry.
+    // Cold Windows setup measured 35s; preserve every assertion while allowing
+    // that bootstrap and reusing the existing per-process schema accelerator.
+    env: { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" },
     args: [
       "exec",
       "node",
       "../../node_modules/vitest/vitest.mjs",
       "run",
+      "--testTimeout", "60000",
       "src/services/runtime-configuration-service.test.ts",
       "src/services/evolution-control-plane-service.test.ts",
       "src/services/evolution-control-plane-governance.test.ts",
@@ -59,6 +65,22 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
     ],
   },
   {
+    id: "self-configuration.comparison-owner-tests",
+    title: "First-task evidence, workflow skill capture, and governed pack installation",
+    subsystem: "gateway",
+    cwd: "apps/gateway",
+    args: ["exec", "node", "../../node_modules/vitest/vitest.mjs", "run",
+      "src/services/onboarding-state-service.test.ts",
+      "src/services/onboarding-completion-service.test.ts",
+      "src/services/onboarding-first-task-service.test.ts",
+      "src/routes/onboarding.test.ts",
+      "src/services/workflow-skill-capture-service.test.ts",
+      "src/services/capability-pack-service.test.ts",
+      "src/services/capability-pack-change-plan-adapter.test.ts",
+      "src/services/capability-pack-compensation.test.ts",
+      "src/routes/capability-packs.test.ts"],
+  },
+  {
     id: "self-configuration.storage-durable-tests",
     title: "Durable secure-configuration reservation and schema-parity tests",
     subsystem: "storage",
@@ -75,6 +97,8 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/governed-remediation-schema-parity.test.ts",
       "src/postgres-migration-integrity.test.ts",
       "src/sqlite-migration-versioning.test.ts",
+      "src/chat-turn-trace-repo.test.ts",
+      "src/change-plan-pack-migration.test.ts",
     ],
   },
   {
@@ -90,6 +114,15 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/components/chat/ChatPendingBlockingPanels.test.tsx",
       "src/api/chat.test.ts",
     ],
+  },
+  {
+    id: "self-configuration.comparison-ui-tests",
+    title: "Canonical Chat workflow capture and pack execution controls",
+    subsystem: "mission-control",
+    cwd: "apps/mission-control-next",
+    args: ["exec", "node", "../../node_modules/vitest/vitest.mjs", "run",
+      "src/features/threaded-surface/WorkflowSkillCaptureControl.test.tsx",
+      "src/features/native-routes/settings/sections/PackExecutionPanel.test.tsx"],
   },
   {
     id: "self-configuration.threaded-prompt-tests",
@@ -135,6 +168,8 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "--filter",
       "@goatcitadel/mission-control-shared",
       "--filter",
+      "@goatcitadel/mission-control-next",
+      "--filter",
       "@goatcitadel/threaded-surface-core",
       "run",
       "typecheck",
@@ -161,6 +196,16 @@ export const SELF_CONFIGURATION_HELD_ROWS = Object.freeze([
     reason:
       "No retained browser evidence proved blank-profile secure entry, field clearing, live verification, and same-turn continuation.",
   },
+  {
+    id: "live-workflow-skill-reuse",
+    status: "held",
+    reason: "Owner tests do not prove the quality of a model-generated workflow skill or successful live reuse in another session.",
+  },
+  {
+    id: "fresh-workspace-browser-qa-pack",
+    status: "held",
+    reason: "Controlled owner and UI tests do not prove a fresh workspace's approved Browser QA pack producing real browser artifacts after restart or partial failure.",
+  },
 ]);
 
 export function buildSelfConfigurationProofMatrix(commandOutcomes = []) {
@@ -170,6 +215,12 @@ export function buildSelfConfigurationProofMatrix(commandOutcomes = []) {
     result: "foundation_only",
     secretMaterialAccepted: false,
     hermeticRows: [
+      {
+        id: "comparison-onboarding-capture-packs",
+        status: "exercised",
+        scenarioRefs: ["self-configuration.comparison-owner-tests", "self-configuration.storage-durable-tests", "self-configuration.comparison-ui-tests"],
+        notes: ["C1-C3 source-owner and component proof only; held live and fresh-workspace rows remain separate acceptance requirements."],
+      },
       {
         id: "typed-owner-policy",
         status: "exercised",
@@ -255,6 +306,10 @@ export async function runSelfConfigurationLane(context, _options = {}, deps) {
     writeJson,
   } = deps;
   const commandOutcomes = [];
+  const omitEnv = await (deps.collectVerificationSecretEnvKeys ?? collectVerificationSecretEnvKeys)(path.join(repoRoot, "config"));
+  if (!Array.isArray(omitEnv) || omitEnv.some(key => typeof key !== "string" || !/^[A-Z][A-Z0-9_]+$/u.test(key))) {
+    throw new Error("Self-configuration verification requires a valid secret environment scrub.");
+  }
 
   for (const command of SELF_CONFIGURATION_COMMANDS) {
     await runScenario(
@@ -270,6 +325,8 @@ export async function runSelfConfigurationLane(context, _options = {}, deps) {
           cwd: command.cwd ? path.join(repoRoot, command.cwd) : repoRoot,
           artifactRoot: path.join(context.artifactRoot, "diagnostics"),
           logName: command.id,
+          omitEnv,
+          env: command.env,
         });
         commandOutcomes.push({ scenarioId: command.id, exitCode: result.code });
         return {

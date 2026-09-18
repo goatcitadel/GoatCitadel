@@ -1,10 +1,14 @@
 #include "cell_provisioning_journal.hpp"
+#include "cell_runtime_bundle.hpp"
 #include "cell_security.hpp"
 #include <winternl.h>
 #include <bcrypt.h>
 #include <algorithm>
 #include <cstring>
 #include <string_view>
+#include <limits>
+#include <type_traits>
+#include <utility>
 #pragma comment(lib, "bcrypt.lib")
 
 namespace goatcitadel::worker_cell {
@@ -280,8 +284,10 @@ DWORD DecodeMount(std::span<const std::uint8_t> bytes, const CellProvisioningPla
 DWORD DecodeMountedWorkspace(std::span<const std::uint8_t> bytes, const CellProvisioningPlan& plan,
   const CellFileIdentity& journal, const CellVirtualDiskRecord& disk, const CellFileSha256& base,
   const std::wstring& name, const std::wstring& owner, const std::wstring& controller,
-  std::span<const CellVolumeMountCheckpoint> mounts, std::vector<CellMountedWorkspaceCheckpoint>* records) {
+  std::span<const CellVolumeMountCheckpoint> mounts, std::vector<CellMountedWorkspaceCheckpoint>* records,
+  CellWorkspaceIdentities* identities = nullptr) {
   records->clear();
+  if (identities) *identities = {};
   if (bytes.size() % record_bytes || bytes.size() > 2 * record_bytes) return ERROR_INVALID_DATA;
   if (bytes.empty()) return ERROR_SUCCESS;
   if (mounts.size() != 4) return ERROR_IO_INCOMPLETE;
@@ -295,13 +301,13 @@ DWORD DecodeMountedWorkspace(std::span<const std::uint8_t> bytes, const CellProv
   if (error) return error;
   records->reserve(2);
   CellFileSha256 previous = base;
+  CellWorkspaceIdentities captured;
   for (std::size_t position = 0; position < bytes.size(); position += record_bytes) {
     Record actual{}, expected{};
     std::copy_n(bytes.begin() + position, record_bytes, actual.begin());
     CellMountedWorkspaceCheckpoint checkpoint{};
     std::copy_n(actual.begin() + 280, checkpoint.size(), checkpoint.begin());
     records->push_back(checkpoint);
-    CellWorkspaceIdentities captured;
     error = ValidateCellMountedWorkspaceCheckpointPrefix(binding, *records, &captured);
     if (!error) error = EncodeStorageRecord(&expected, "GCCMWP01", static_cast<unsigned>(position / record_bytes) + 1,
       plan, journal, disk, base, previous, &checkpoint);
@@ -309,6 +315,7 @@ DWORD DecodeMountedWorkspace(std::span<const std::uint8_t> bytes, const CellProv
     if (actual != expected) return ERROR_CRC;
     std::copy_n(actual.begin() + digest_offset, previous.size(), previous.begin());
   }
+  if (identities) *identities = captured;
   return ERROR_SUCCESS;
 }
 DWORD VolumeControl(ULONGLONG deadline, HANDLE cancellation) noexcept {
@@ -466,8 +473,21 @@ DWORD ValidateCellMountedWorkspaceProvisioningPrefix(const CellProvisioningPlan&
 }
 
 CellProvisioningJournal::~CellProvisioningJournal() { Close(); }
+CellProvisioningJournal::CapacityReadScope::CapacityReadScope(CellProvisioningJournal& value) noexcept : owner(value) {
+  if (!owner.capacity_close_pending_ && owner.capacity_read_depth_ != std::numeric_limits<unsigned>::max()) {
+    ++owner.capacity_read_depth_; entered = true;
+  }
+}
+CellProvisioningJournal::CapacityReadScope::~CapacityReadScope() {
+  if (entered && --owner.capacity_read_depth_ == 0 && owner.capacity_close_pending_) owner.Close();
+}
 void CellProvisioningJournal::Close() noexcept {
+  if (lifetime_revision_ != std::numeric_limits<std::uint64_t>::max()) ++lifetime_revision_;
   healthy_ = false; creating_ = false;
+  // Revoke immediately, but do not destroy a native owner whose synchronous
+  // read/copy callback is still on the stack. The outermost borrower releases it.
+  if (capacity_read_depth_) { capacity_close_pending_ = true; return; }
+  capacity_close_pending_ = false;
   mounted_workspace_.reset(); mount_.reset(); protection_.reset(); formatter_.reset();
   layout_.Close(); device_.Close(); attachment_.Close(); disk_.Close(); workspace_.Close();
   if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_);
@@ -1583,6 +1603,87 @@ DWORD CellProvisioningJournal::RecordMountedWorkspace(CellWorkspaceIdentities* o
   error = mounted_workspace_->RecordIdentities(*mount_, *protection_, workspace_, output, 10000);
   return error ? Refuse(error) : ERROR_SUCCESS;
 }
+RuntimeBundleInstallResult CellProvisioningJournal::InstallRuntime(const CellProvisioningAnchor& supplied_anchor,
+    const CellFileSha256& supplied_head, PinnedCellRuntimeBundle& source, PinnedCellRuntimeBundle& output,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& supplied_guard) noexcept {
+  RuntimeBundleInstallResult result;
+  const auto anchor = supplied_anchor; const auto head = supplied_head; const auto guard = supplied_guard;
+  if (output.Ready()) { result.error = ERROR_ALREADY_INITIALIZED; return result; }
+  if (!source.Ready() || runtime_install_active_ || !healthy_ || lifetime_revision_ == std::numeric_limits<std::uint64_t>::max()) {
+    result.error = ERROR_INVALID_STATE; return result;
+  }
+  if (!guard.authorize || !wall_limit_ms || wall_limit_ms > 60000 || !Nonzero(head)) {
+    result.error = ERROR_INVALID_PARAMETER; return result;
+  }
+  CapacityReadScope borrowed(*this);
+  if (!borrowed.entered) { result.error = ERROR_INVALID_STATE; return result; }
+  struct Active final { bool& value; explicit Active(bool& flag) : value(flag) { value = true; } ~Active() { value = false; } } active(runtime_install_active_);
+  try {
+    const auto deadline = GetTickCount64() + wall_limit_ms;
+    result.error = VolumeControl(deadline, guard.cancellation);
+    if (!result.error && anchor_ != anchor) result.error = ERROR_FILE_INVALID;
+    if (!result.error) { result.error = ReadJournal(); if (result.error) Refuse(result.error); }
+    if (!result.error && (records_.size() != maximum_bytes || mounted_workspace_phase_ != CellMountedWorkspaceProvisioningPhase::recorded ||
+        !mounted_workspace_ || !mount_ || !protection_)) result.error = ERROR_IO_INCOMPLETE;
+    if (!result.error && !std::equal(head.begin(), head.end(), records_.end() - 32)) result.error = ERROR_CRC;
+    if (result.error) return result;
+    struct Context final {
+      CellProvisioningJournal& journal;
+      CellProvisioningAnchor anchor;
+      CellProvisioningPlan plan;
+      std::vector<std::uint8_t> records, descriptor;
+      std::vector<CellMountedWorkspaceCheckpoint> checkpoints;
+      std::wstring name, owner, controller;
+      HANDLE file;
+      std::uint64_t lifetime;
+      bool creating;
+      CellMountedWorkspace* mounted;
+      CellVolumeMount* mount;
+      CellVolumeProtection* protection;
+      CellFootprintScanGuard guard;
+      ULONGLONG deadline;
+      bool Matches() const noexcept {
+        return journal.healthy_ && journal.runtime_install_active_ && journal.lifetime_revision_ == lifetime && journal.creating_ == creating &&
+          journal.anchor_ == anchor && journal.file_ == file && journal.records_ == records && journal.descriptor_ == descriptor &&
+          journal.mounted_workspace_records_ == checkpoints && journal.name_ == name && journal.owner_ == owner && journal.controller_ == controller &&
+          journal.plan_.assignment_binding == plan.assignment_binding && journal.plan_.profile_sha256 == plan.profile_sha256 &&
+          IsEqualGUID(journal.plan_.disk.identifier, plan.disk.identifier) && journal.plan_.disk.virtual_bytes == plan.disk.virtual_bytes &&
+          journal.plan_.disk.reserved_file_bytes == plan.disk.reserved_file_bytes &&
+          journal.phase_ == CellProvisioningPhase::disk_recorded && journal.volume_phase_ == CellVolumeProvisioningPhase::partitioned &&
+          journal.format_phase_ == CellFormatProvisioningPhase::formatted && journal.protection_phase_ == CellProtectionProvisioningPhase::protected_root &&
+          journal.mount_phase_ == CellMountProvisioningPhase::mounted &&
+          journal.mounted_workspace_phase_ == CellMountedWorkspaceProvisioningPhase::recorded &&
+          journal.mounted_workspace_.get() == mounted && journal.mount_.get() == mount && journal.protection_.get() == protection;
+      }
+      DWORD Verify() const noexcept {
+        auto error = VolumeControl(deadline, guard.cancellation);
+        if (!error && !Matches()) error = ERROR_FILE_INVALID;
+        if (!error) { error = journal.ReadJournal(); if (error) journal.Refuse(error); }
+        if (!error && !Matches()) error = ERROR_FILE_INVALID;
+        std::vector<CellMountedWorkspaceCheckpoint> actual;
+        if (!error) error = mounted->RecordCheckpoints(&actual);
+        if (!error && actual != checkpoints) error = ERROR_CRC;
+        return error ? error : VolumeControl(deadline, guard.cancellation);
+      }
+      static DWORD Authorize(void* raw) noexcept {
+        const auto& self = *static_cast<Context*>(raw);
+        auto error = self.Verify();
+        if (!error) error = self.guard.authorize(self.guard.context);
+        return error ? error : self.Verify();
+      }
+    } context{*this, anchor, plan_, records_, descriptor_, mounted_workspace_records_, name_, owner_, controller_, file_,
+      lifetime_revision_, creating_, mounted_workspace_.get(), mount_.get(), protection_.get(), guard, deadline};
+    result.error = Context::Authorize(&context);
+    if (result.error) return result;
+    const auto remaining = Remaining(deadline);
+    if (!remaining) { result.error = ERROR_TIMEOUT; return result; }
+    result = context.mounted->InstallRuntime(*context.mount, *context.protection, workspace_, source, output, remaining,
+      {Context::Authorize, &context, guard.cancellation});
+    if (!result.error) result.error = Context::Authorize(&context);
+    if (result.error) { result.verified = false; output.Reset(); }
+    return result;
+  } catch (...) { result.error = ERROR_NOT_ENOUGH_MEMORY; result.verified = false; output.Reset(); return result; }
+}
 DWORD CellProvisioningJournal::RecordMountedWorkspaceCheckpoints(std::vector<CellMountedWorkspaceProvisioningRecord>* output) noexcept {
   if (!output) return ERROR_INVALID_PARAMETER;
   output->clear();
@@ -1594,6 +1695,510 @@ DWORD CellProvisioningJournal::RecordMountedWorkspaceCheckpoints(std::vector<Cel
     for (std::size_t index = 0; index < captured.size(); ++index)
       std::copy_n(records_.begin() + mount_end + index * record_bytes, record_bytes, captured[index].begin());
     *output = std::move(captured);
+    return ERROR_SUCCESS;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD CellProvisioningJournal::ObserveMountedInventory(const CellProvisioningAnchor& expected_anchor,
+  const CellFileSha256& expected_head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+  CellProvisioningInventory* output, const CellFootprintCellBinding* binding) noexcept {
+  return ReadMountedInventory([](void* raw, const CellFootprintScanLimits& frozen_limits,
+    const CellFootprintScanGuard& frozen_guard, CellDirectoryInventory* inventory) noexcept -> DWORD {
+    auto& journal = *static_cast<CellProvisioningJournal*>(raw);
+    if (!journal.mounted_workspace_ || !journal.mount_ || !journal.protection_) return ERROR_INVALID_STATE;
+    std::vector<CellMountedWorkspaceCheckpoint> records;
+    auto error = journal.mounted_workspace_->RecordCheckpoints(&records);
+    if (!error && records != journal.mounted_workspace_records_) error = ERROR_CRC;
+    return error ? error : journal.mounted_workspace_->ObserveInventory(*journal.mount_, *journal.protection_,
+      journal.workspace_, frozen_limits, frozen_guard, inventory);
+  }, this, expected_anchor, expected_head, limits, guard, output, binding);
+}
+DWORD CellProvisioningJournal::CaptureMountedInventory(const CellProvisioningAnchor& expected_anchor,
+  const CellFileSha256& expected_head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+  const CellFootprintCellBinding& binding, CellDirectoryInventoryPins& pins, CellProvisioningInventory* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto anchor = expected_anchor; const auto head = expected_head;
+  const auto captured_limits = limits; const auto captured_guard = guard; const auto captured_binding = binding;
+  *output = {};
+  if (pins.Ready()) return ERROR_ALREADY_INITIALIZED;
+  if (!captured_binding.authorize) return ERROR_INVALID_PARAMETER;
+  struct Context final { CellProvisioningJournal& journal; CellDirectoryInventoryPins& pins; } context{*this, pins};
+  auto error = ReadMountedInventory([](void* raw, const CellFootprintScanLimits& frozen_limits,
+    const CellFootprintScanGuard& frozen_guard, CellDirectoryInventory* inventory) noexcept -> DWORD {
+    auto& value = *static_cast<Context*>(raw); auto& journal = value.journal;
+    if (!journal.mounted_workspace_ || !journal.mount_ || !journal.protection_) return ERROR_INVALID_STATE;
+    std::vector<CellMountedWorkspaceCheckpoint> records;
+    auto checked = journal.mounted_workspace_->RecordCheckpoints(&records);
+    if (!checked && records != journal.mounted_workspace_records_) checked = ERROR_CRC;
+    return checked ? checked : journal.mounted_workspace_->CaptureInventory(*journal.mount_, *journal.protection_,
+      journal.workspace_, frozen_limits, frozen_guard, value.pins, inventory);
+  }, &context, anchor, head, captured_limits, captured_guard, output, &captured_binding);
+  if (!error) error = pins.Check();
+  if (error) { *output = {}; pins.Close(); }
+  return error;
+}
+DWORD CellProvisioningJournal::ObserveMountedFootprint(const CellProvisioningAnchor& expected_anchor,
+  const CellFileSha256& expected_head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+  CellProvisioningFootprint* output) noexcept {
+  return ReadMountedFootprint([](void* raw, const CellFootprintScanLimits& frozen_limits,
+    const CellFootprintScanGuard& frozen_guard, CellDirectoryFootprint* footprint) noexcept -> DWORD {
+    auto& journal = *static_cast<CellProvisioningJournal*>(raw);
+    if (!journal.mounted_workspace_ || !journal.mount_ || !journal.protection_) return ERROR_INVALID_STATE;
+    std::vector<CellMountedWorkspaceCheckpoint> records;
+    auto error = journal.mounted_workspace_->RecordCheckpoints(&records);
+    if (!error && records != journal.mounted_workspace_records_) error = ERROR_CRC;
+    return error ? error : journal.mounted_workspace_->ObserveFootprint(*journal.mount_, *journal.protection_,
+      journal.workspace_, frozen_limits, frozen_guard, footprint);
+  }, this, expected_anchor, expected_head, limits, guard, output);
+}
+DWORD CellProvisioningJournal::ObserveBackingFootprint(const CellProvisioningAnchor& supplied_anchor,
+  const CellFileSha256& supplied_head, DWORD wall_limit_ms, const CellFootprintScanGuard& supplied_guard,
+  CellProvisioningBackingFootprint* output) noexcept {
+  return ReadBackingFootprint(supplied_anchor, supplied_head, wall_limit_ms, supplied_guard, output, nullptr);
+}
+detail::CellProvisioningBackingObservation::CellProvisioningBackingObservation(
+  const CellProvisioningBackingObserver& observer) noexcept : observer_(observer), bridge_{this,
+    [](void* raw, const CellCapacityBorrowedFiles& files, const CellProvisioningBackingFootprint& footprint) noexcept -> DWORD {
+      auto& self = *static_cast<CellProvisioningBackingObservation*>(raw);
+      if (!self.Valid() || self.attempted_ || self.failed_) { self.failed_ = true; return ERROR_INVALID_STATE; }
+      self.attempted_ = true;
+      const auto guard = files.guard;
+      auto error = guard.authorize ? guard.authorize(guard.context) : ERROR_INVALID_PARAMETER;
+      if (!error) error = self.observer_.capture(self.observer_.context, files, footprint);
+      if (!error) error = guard.authorize(guard.context);
+      if (error) self.failed_ = true;
+      return error ? error : self.failed_ ? ERROR_INVALID_STATE : ERROR_SUCCESS;
+    }, [](void* raw) noexcept { static_cast<CellProvisioningBackingObservation*>(raw)->failed_ = true; }} {}
+detail::CellProvisioningBackingObservation::~CellProvisioningBackingObservation() {
+  if (attempted_ && (!complete_ || failed_) && observer_.discard) observer_.discard(observer_.context);
+}
+bool detail::CellProvisioningBackingObservation::Valid() const noexcept {
+  return observer_.capture && observer_.discard;
+}
+DWORD CellProvisioningJournal::WithBackingCapacity(const CellProvisioningAnchor& anchor, const CellFileSha256& head,
+  DWORD wall_ms, const CellFootprintScanGuard& guard, const CellProvisioningBackingObserver& observer,
+  CellProvisioningBackingFootprint* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto retained_anchor = anchor; const auto retained_head = head;
+  detail::CellProvisioningBackingObservation observation(observer);
+  *output = {};
+  if (!observation.Valid()) return ERROR_INVALID_PARAMETER;
+  const auto error = ReadBackingFootprint(retained_anchor, retained_head, wall_ms, guard, output, nullptr, &observation.Bridge());
+  if (!error) observation.Complete();
+  return error;
+}
+DWORD CellProvisioningJournal::ObserveHostCapacity(const CellProvisioningAnchor& anchor, const CellFileSha256& head,
+  CellCapacityLayout& layout, const CellCapacityLayoutRecord& record, const CellFootprintScanLimits& limits,
+  const CellFootprintScanGuard& guard, CellProvisioningHostCapacity* output,
+  const CellCapacityCaptureObserver* observer) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto expected_anchor = anchor; const auto expected_head = head;
+  *output = {};
+  detail::CellCapacityObservation observation(observer);
+  if (!observation.Valid()) return ERROR_INVALID_PARAMETER;
+  CellProvisioningHostCapacity result;
+  const HostCapacityInput input{&layout, record, limits, &result.areas, observation.Bridge()};
+  if (input.limits.max_entries < kCellCapacityAreaCount || input.limits.max_entries > 20000 || input.limits.max_depth > 64)
+    return ERROR_INVALID_PARAMETER;
+  const auto error = ReadBackingFootprint(expected_anchor, expected_head, input.limits.wall_limit_ms, guard, &result.backing, &input);
+  if (!error) { *output = std::move(result); observation.Complete(); }
+  return error;
+}
+DWORD CellProvisioningJournal::ObserveJoinedCapacity(const CellProvisioningAnchor& supplied_anchor, const CellFileSha256& supplied_head,
+  CellCapacityLayout& layout, const CellCapacityLayoutRecord& supplied_record, const CellFootprintScanLimits& supplied_limits,
+  const CellFootprintScanGuard& supplied_guard, const CellFootprintCellBinding& supplied_binding,
+  CellProvisioningJoinedCapacity* output) noexcept {
+  const JoinedCapacityReaders readers{this,
+    [](void* raw, const CellProvisioningAnchor& anchor, const CellFileSha256& head, CellCapacityLayout& layout,
+      const CellCapacityLayoutRecord& record, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+      CellProvisioningHostCapacity* output, const CellCapacityCaptureObserver* observer) noexcept -> DWORD {
+      return static_cast<CellProvisioningJournal*>(raw)->ObserveHostCapacity(anchor, head, layout, record, limits, guard, output, observer);
+    },
+    [](void* raw, const CellProvisioningAnchor& anchor, const CellFileSha256& head, const CellFootprintScanLimits& limits,
+      const CellFootprintScanGuard& guard, const CellFootprintCellBinding& binding, CellDirectoryInventoryPins& pins,
+      CellProvisioningInventory* output) noexcept -> DWORD {
+      return static_cast<CellProvisioningJournal*>(raw)->CaptureMountedInventory(anchor, head, limits, guard, binding, pins, output);
+    },
+  };
+  return ReadJoinedCapacity(supplied_anchor, supplied_head, layout, supplied_record, supplied_limits,
+    supplied_guard, supplied_binding, readers, output);
+}
+DWORD CellProvisioningJournal::ReadJoinedCapacity(const CellProvisioningAnchor& supplied_anchor, const CellFileSha256& supplied_head,
+  CellCapacityLayout& layout, const CellCapacityLayoutRecord& supplied_record, const CellFootprintScanLimits& supplied_limits,
+  const CellFootprintScanGuard& supplied_guard, const CellFootprintCellBinding& supplied_binding,
+  const JoinedCapacityReaders& supplied_readers, CellProvisioningJoinedCapacity* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto anchor = supplied_anchor; const auto head = supplied_head; const auto record = supplied_record;
+  const auto limits = supplied_limits; const auto guard = supplied_guard; const auto binding = supplied_binding;
+  const auto readers = supplied_readers;
+  *output = {};
+  CapacityReadScope read_scope(*this);
+  if (!read_scope.entered) return ERROR_INVALID_STATE;
+  if (!readers.host || !readers.guest || !guard.authorize || !binding.authorize || !limits.wall_limit_ms || limits.wall_limit_ms > 60000 ||
+      limits.max_entries < kCellCapacityAreaCount || limits.max_entries > 20000 || limits.max_depth > 64)
+    return ERROR_INVALID_PARAMETER;
+  try {
+    struct Context final {
+      CellProvisioningJournal& journal; CellProvisioningAnchor anchor; CellFileSha256 head;
+      CellFootprintScanLimits limits; CellFootprintScanGuard guard; CellFootprintCellBinding binding;
+      std::wstring name; JoinedCapacityReaders readers;
+      ULONGLONG deadline; CellDirectoryInventoryPins pins; CellProvisioningInventory guest;
+      bool captured = false;
+      static DWORD Authorize(void* raw) noexcept {
+        auto& self = *static_cast<Context*>(raw);
+        auto error = VolumeControl(self.deadline, self.guard.cancellation);
+        if (!error) error = self.guard.authorize(self.guard.context);
+        if (!error && self.captured) {
+          error = self.binding.authorize(self.binding.context, self.name,
+            self.guest.workspace.directories[static_cast<std::size_t>(CellDirectory::work)]);
+          if (!error) error = self.pins.Check();
+        }
+        return error ? error : VolumeControl(self.deadline, self.guard.cancellation);
+      }
+      static DWORD Capture(void* raw, const CellCapacityPinnedView& host) noexcept {
+        auto& self = *static_cast<Context*>(raw);
+        if (self.captured || self.pins.Ready()) return ERROR_ALREADY_INITIALIZED;
+        auto error = host.Check(); if (error) return error;
+        struct Guard final {
+          Context& context; const CellCapacityPinnedView& host;
+          static DWORD Check(void* raw) noexcept {
+            auto& self = *static_cast<Guard*>(raw);
+            auto error = self.host.Check();
+            if (!error) error = Context::Authorize(&self.context);
+            return error ? error : self.host.Check();
+          }
+        } guarded{self, host};
+        auto remaining = self.limits; remaining.wall_limit_ms = Remaining(self.deadline);
+        if (!remaining.wall_limit_ms) return ERROR_TIMEOUT;
+        error = self.readers.guest(self.readers.context, self.anchor, self.head, remaining,
+          {Guard::Check, &guarded, self.guard.cancellation}, self.binding, self.pins, &self.guest);
+        if (!error) { self.captured = true; error = host.Check(); }
+        return error;
+      }
+      static void Discard(void* raw) noexcept {
+        auto& self = *static_cast<Context*>(raw); self.pins.Close(); self.guest = {}; self.captured = false;
+      }
+    } context{*this, anchor, head, limits, guard, binding, name_, readers, GetTickCount64() + limits.wall_limit_ms};
+    CellProvisioningJoinedCapacity result;
+    const CellCapacityCaptureObserver observer{&context, Context::Capture, Context::Discard};
+    auto error = readers.host(readers.context, anchor, head, layout, record, limits,
+      {Context::Authorize, &context, guard.cancellation}, &result.host, &observer);
+    if (!error && !context.captured) error = ERROR_INVALID_STATE;
+    if (!error) error = context.pins.Check();
+    if (!error && (context.guest.anchor != anchor || context.guest.checkpoint_sha256 != head ||
+        context.guest.assignment_binding != record.assignment_binding || context.guest.profile_sha256 != record.profile_sha256 ||
+        result.host.backing.anchor != anchor || result.host.backing.checkpoint_sha256 != head ||
+        result.host.backing.assignment_binding != record.assignment_binding || result.host.backing.profile_sha256 != record.profile_sha256))
+      error = ERROR_FILE_INVALID;
+    std::size_t entries = context.guest.inventory.entries.size();
+    for (const auto& area : result.host.areas) entries += area.entries.size();
+    if (!error && entries > limits.max_entries) error = ERROR_BUFFER_OVERFLOW;
+    if (!error) error = VolumeControl(context.deadline, guard.cancellation);
+    if (!error) { result.guest = std::move(context.guest); *output = std::move(result); }
+    return error;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD CellProvisioningJournal::ReadBackingFootprint(const CellProvisioningAnchor& supplied_anchor,
+  const CellFileSha256& supplied_head, DWORD wall_limit_ms, const CellFootprintScanGuard& supplied_guard,
+  CellProvisioningBackingFootprint* output, const HostCapacityInput* host, const CellProvisioningBackingObserver* observer) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto expected_anchor = supplied_anchor;
+  const auto expected_head = supplied_head;
+  const auto guard = supplied_guard;
+  *output = {};
+  CapacityReadScope read_scope(*this);
+  if (!read_scope.entered) return ERROR_INVALID_STATE;
+  if (!guard.authorize || !wall_limit_ms || wall_limit_ms > 60000 || !Nonzero(expected_head)) return ERROR_INVALID_PARAMETER;
+  const auto deadline = GetTickCount64() + wall_limit_ms;
+  auto error = VolumeControl(deadline, guard.cancellation);
+  if (error) return error;
+  if (!healthy_ || lifetime_revision_ == std::numeric_limits<std::uint64_t>::max()) return ERROR_INVALID_STATE;
+  if (anchor_ != expected_anchor) return ERROR_FILE_INVALID;
+  error = Verify();
+  if (error) return error;
+  if (phase_ != CellProvisioningPhase::disk_recorded ||
+      !((records_.size() == core_bytes && volume_phase_ == CellVolumeProvisioningPhase::none) ||
+        (records_.size() == maximum_bytes && mounted_workspace_phase_ == CellMountedWorkspaceProvisioningPhase::recorded)))
+    return ERROR_IO_INCOMPLETE;
+  if (!std::equal(expected_head.begin(), expected_head.end(), records_.end() - 32)) return ERROR_CRC;
+  try {
+    struct Context final {
+      CellProvisioningJournal* owner;
+      CellProvisioningPlan plan;
+      CellProvisioningAnchor anchor;
+      CellWorkspaceIdentities workspace;
+      CellVirtualDiskRecord disk;
+      std::vector<std::uint8_t> records, descriptor;
+      std::wstring name, user, controller;
+      HANDLE file;
+      std::uint64_t lifetime;
+      CellFootprintScanGuard guard;
+      ULONGLONG deadline;
+      bool Matches() const noexcept {
+        const auto& value = *owner;
+        return value.healthy_ && value.lifetime_revision_ == lifetime && value.file_ == file && value.anchor_ == anchor &&
+          value.plan_.assignment_binding == plan.assignment_binding && value.plan_.profile_sha256 == plan.profile_sha256 &&
+          IsEqualGUID(value.plan_.disk.identifier, plan.disk.identifier) && value.plan_.disk.virtual_bytes == plan.disk.virtual_bytes &&
+          value.plan_.disk.reserved_file_bytes == plan.disk.reserved_file_bytes && value.workspace_record_ == workspace &&
+          IsEqualGUID(value.disk_record_.spec.identifier, disk.spec.identifier) && value.disk_record_.spec.virtual_bytes == disk.spec.virtual_bytes &&
+          value.disk_record_.spec.reserved_file_bytes == disk.spec.reserved_file_bytes && value.disk_record_.control == disk.control &&
+          value.disk_record_.backing == disk.backing && value.records_ == records && value.descriptor_ == descriptor &&
+          value.name_ == name && value.owner_ == user && value.controller_ == controller;
+      }
+      DWORD Verify() const noexcept {
+        auto error = VolumeControl(deadline, guard.cancellation);
+        if (error) return error;
+        if (!Matches()) return ERROR_FILE_INVALID;
+        error = owner->Verify();
+        if (!error && !Matches()) error = ERROR_FILE_INVALID;
+        return error ? error : VolumeControl(deadline, guard.cancellation);
+      }
+      static DWORD Authorize(void* raw) noexcept {
+        const auto& value = *static_cast<Context*>(raw);
+        auto error = value.Verify();
+        if (!error) error = value.guard.authorize(value.guard.context);
+        return error ? error : value.Verify();
+      }
+    } context{this, plan_, anchor_, workspace_record_, disk_record_, records_, descriptor_, name_, owner_, controller_,
+      file_, lifetime_revision_, guard, deadline};
+    if (host && (host->record.assignment_binding != context.plan.assignment_binding || host->record.profile_sha256 != context.plan.profile_sha256))
+      return ERROR_FILE_INVALID;
+    if (context.disk.backing == context.anchor.file || context.disk.backing.volume_serial != context.anchor.file.volume_serial ||
+        context.workspace.parent.volume_serial != context.anchor.file.volume_serial) return ERROR_FILE_INVALID;
+    error = Context::Authorize(&context);
+    if (error) return error;
+    FILE_STANDARD_INFO before{}, after{};
+    FILE_BASIC_INFO stamp{}, final_stamp{};
+    if (!GetFileInformationByHandleEx(file_, FileStandardInfo, &before, sizeof(before)) ||
+        !GetFileInformationByHandleEx(file_, FileBasicInfo, &stamp, sizeof(stamp))) return Error();
+    const auto remaining = Remaining(deadline);
+    if (!remaining) return ERROR_TIMEOUT;
+    const CellFootprintScanGuard guarded{Context::Authorize, &context, guard.cancellation};
+    CellVirtualDiskCapacity backing;
+    error = volume_phase_ == CellVolumeProvisioningPhase::none
+      ? disk_.ObserveCapacity(workspace_, context.disk, remaining, guarded, &backing)
+      : attachment_.ObserveCapacity(workspace_, context.disk, remaining, guarded, &backing);
+    // Backing-only reads preserve the reader's final readback. A joined host
+    // scan remeasures the exact borrowed files and withholds both on drift.
+    if (!error) error = context.Verify();
+    if (error) return error;
+    CellCapacityAreaInventories host_areas;
+    if (host || observer) {
+      if (before.EndOfFile.QuadPart != static_cast<LONGLONG>(context.records.size()) || before.AllocationSize.QuadPart < before.EndOfFile.QuadPart ||
+          before.AllocationSize.QuadPart > static_cast<LONGLONG>(kCellProvisioningJournalMaximumAllocatedBytes)) return ERROR_FILE_INVALID;
+      const auto backing_file = volume_phase_ == CellVolumeProvisioningPhase::none ? disk_.file_ : attachment_.retained_.file_;
+      const std::array<CellCapacityBorrowedFile, 2> files{{
+        {file_, context.workspace.parent, context.anchor.file, static_cast<std::uint64_t>(before.EndOfFile.QuadPart), static_cast<std::uint64_t>(before.AllocationSize.QuadPart)},
+        {backing_file, context.disk.control, context.disk.backing, backing.file_bytes, backing.allocated_bytes},
+      }};
+      const CellCapacityBorrowedFiles borrowed{files, guarded};
+      const CellProvisioningBackingFootprint provisional{expected_anchor, context.plan.assignment_binding,
+        context.plan.profile_sha256, expected_head, context.workspace, backing,
+        static_cast<std::uint64_t>(before.EndOfFile.QuadPart), static_cast<std::uint64_t>(before.AllocationSize.QuadPart),
+        backing.allocated_bytes + static_cast<std::uint64_t>(before.AllocationSize.QuadPart)};
+      auto remaining_limits = host ? host->limits : CellFootprintScanLimits{}; remaining_limits.wall_limit_ms = Remaining(deadline);
+      if (!remaining_limits.wall_limit_ms) return ERROR_TIMEOUT;
+      if (mount_phase_ == CellMountProvisioningPhase::none) {
+        error = observer ? observer->capture(observer->context, borrowed, provisional)
+          : host->layout->Scan(host->record, remaining_limits, guarded, &host_areas, &borrowed, host->observer);
+      } else {
+        if (mount_phase_ != CellMountProvisioningPhase::mounted || !mount_ || !protection_) return ERROR_INVALID_STATE;
+        std::vector<CellVolumeMountCheckpoint> mounted_records;
+        error = mount_->RecordCheckpoints(&mounted_records);
+        if (!error && mounted_records != mount_records_) error = ERROR_CRC;
+        if (error) return error;
+        struct MountCapture final {
+          const HostCapacityInput* host; CellFootprintScanLimits limits; CellCapacityBorrowedFiles borrowed;
+          CellFootprintScanGuard guard; CellFileIdentity parent; ULONGLONG deadline;
+          CellCapacityAreaInventories& output;
+          const CellProvisioningBackingObserver* observer;
+          const CellProvisioningBackingFootprint& provisional;
+          static DWORD Capture(void* raw, const CellCapacityMountLeaf& leaf) noexcept {
+            auto& self = *static_cast<MountCapture*>(raw);
+            if (leaf.Target().parent != self.parent) return ERROR_FILE_INVALID;
+            const std::array<const CellCapacityMountLeaf*, 1> mounts{&leaf};
+            auto borrowed = self.borrowed; borrowed.mounts = mounts;
+            auto limits = self.limits; limits.wall_limit_ms = Remaining(self.deadline);
+            if (!limits.wall_limit_ms) return ERROR_TIMEOUT;
+            return self.observer ? self.observer->capture(self.observer->context, borrowed, self.provisional)
+              : self.host->layout->Scan(self.host->record, limits, self.guard, &self.output, &borrowed, self.host->observer);
+          }
+          static void Discard(void* raw) noexcept {
+            auto& self = *static_cast<MountCapture*>(raw); self.output = {};
+            if (self.observer) self.observer->discard(self.observer->context);
+          }
+        } capture{host, remaining_limits, borrowed, guarded,
+          context.workspace.directories[static_cast<std::size_t>(CellDirectory::root)], deadline, host_areas, observer, provisional};
+        error = mount_->WithCapacityLeaf(*protection_, workspace_, remaining_limits.wall_limit_ms, guarded,
+          {&capture, MountCapture::Capture, MountCapture::Discard});
+      }
+      if (!error) error = context.Verify();
+      if (error) return error;
+    }
+    if (!GetFileInformationByHandleEx(file_, FileStandardInfo, &after, sizeof(after)) ||
+        !GetFileInformationByHandleEx(file_, FileBasicInfo, &final_stamp, sizeof(final_stamp))) return Error();
+    if (before.EndOfFile.QuadPart != after.EndOfFile.QuadPart || before.AllocationSize.QuadPart != after.AllocationSize.QuadPart ||
+        after.EndOfFile.QuadPart != static_cast<LONGLONG>(context.records.size()) || after.AllocationSize.QuadPart < after.EndOfFile.QuadPart ||
+        after.AllocationSize.QuadPart > static_cast<LONGLONG>(kCellProvisioningJournalMaximumAllocatedBytes) ||
+        stamp.ChangeTime.QuadPart != final_stamp.ChangeTime.QuadPart || stamp.LastWriteTime.QuadPart != final_stamp.LastWriteTime.QuadPart ||
+        stamp.FileAttributes != final_stamp.FileAttributes) return ERROR_FILE_INVALID;
+    error = VolumeControl(deadline, guard.cancellation);
+    if (!error) *output = {expected_anchor, context.plan.assignment_binding, context.plan.profile_sha256, expected_head,
+      context.workspace, backing, static_cast<std::uint64_t>(after.EndOfFile.QuadPart), static_cast<std::uint64_t>(after.AllocationSize.QuadPart),
+      backing.allocated_bytes + static_cast<std::uint64_t>(after.AllocationSize.QuadPart)};
+    if (!error && host) *host->output = std::move(host_areas);
+    return error;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD CellProvisioningJournal::ReadMountedFootprint(DWORD (*read)(void*, const CellFootprintScanLimits&,
+  const CellFootprintScanGuard&, CellDirectoryFootprint*) noexcept, void* read_context,
+  const CellProvisioningAnchor& supplied_anchor, const CellFileSha256& supplied_head,
+  const CellFootprintScanLimits& supplied_limits, const CellFootprintScanGuard& supplied_guard,
+  CellProvisioningFootprint* output) noexcept {
+  return ReadMountedCapacity(read, read_context, supplied_anchor, supplied_head, supplied_limits, supplied_guard, output, 65536, nullptr);
+}
+DWORD CellProvisioningJournal::ReadMountedInventory(DWORD (*read)(void*, const CellFootprintScanLimits&,
+  const CellFootprintScanGuard&, CellDirectoryInventory*) noexcept, void* read_context,
+  const CellProvisioningAnchor& supplied_anchor, const CellFileSha256& supplied_head,
+  const CellFootprintScanLimits& supplied_limits, const CellFootprintScanGuard& supplied_guard,
+  CellProvisioningInventory* output, const CellFootprintCellBinding* binding) noexcept {
+  return ReadMountedCapacity(read, read_context, supplied_anchor, supplied_head, supplied_limits, supplied_guard, output, 20000, binding);
+}
+template <typename Observation, typename Output>
+DWORD CellProvisioningJournal::ReadMountedCapacity(DWORD (*read)(void*, const CellFootprintScanLimits&,
+  const CellFootprintScanGuard&, Observation*) noexcept, void* read_context,
+  const CellProvisioningAnchor& supplied_anchor, const CellFileSha256& supplied_head,
+  const CellFootprintScanLimits& supplied_limits, const CellFootprintScanGuard& supplied_guard,
+  Output* output, std::uint32_t maximum_entries, const CellFootprintCellBinding* supplied_binding) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  const auto expected_anchor = supplied_anchor;
+  const auto expected_head = supplied_head;
+  const auto limits = supplied_limits;
+  const auto guard = supplied_guard;
+  const auto binding = supplied_binding ? *supplied_binding : CellFootprintCellBinding{};
+  const auto deadline = GetTickCount64() + limits.wall_limit_ms;
+  *output = {};
+  CapacityReadScope read_scope(*this);
+  if (!read_scope.entered) return ERROR_INVALID_STATE;
+  if (supplied_binding && !binding.authorize) return ERROR_INVALID_PARAMETER;
+  if (!read || !guard.authorize || !limits.max_entries || limits.max_entries > maximum_entries || limits.max_depth > 64 ||
+      !limits.wall_limit_ms || limits.wall_limit_ms > 60000 || !Nonzero(expected_head)) return ERROR_INVALID_PARAMETER;
+  auto error = VolumeControl(deadline, guard.cancellation);
+  if (error) return error;
+  if (!healthy_ || lifetime_revision_ == std::numeric_limits<std::uint64_t>::max()) return ERROR_INVALID_STATE;
+  if (anchor_ != expected_anchor) return ERROR_FILE_INVALID;
+  error = ReadJournal();
+  if (error) return Refuse(error);
+  if (records_.size() != maximum_bytes || mounted_workspace_phase_ != CellMountedWorkspaceProvisioningPhase::recorded)
+    return ERROR_IO_INCOMPLETE;
+  if (!std::equal(expected_head.begin(), expected_head.end(), records_.end() - 32)) return ERROR_CRC;
+  try {
+    CellFileSha256 mount_base{};
+    std::copy_n(records_.begin() + mount_end - 32, 32, mount_base.begin());
+    std::vector<CellMountedWorkspaceCheckpoint> checkpoints;
+    CellWorkspaceIdentities workspace;
+    error = DecodeMountedWorkspace(std::span(records_).subspan(mount_end), plan_, anchor_.file, disk_record_, mount_base,
+      name_, owner_, controller_, mount_records_, &checkpoints, &workspace);
+    if (error) return Refuse(error);
+    struct Context final {
+      CellProvisioningJournal* journal;
+      CellProvisioningPlan plan;
+      CellProvisioningAnchor anchor;
+      std::vector<std::uint8_t> records, descriptor;
+      std::vector<CellMountedWorkspaceCheckpoint> checkpoints;
+      std::wstring name, owner, controller;
+      CellFileIdentity work;
+      CellFootprintCellBinding binding;
+      HANDLE file;
+      CellMountedWorkspace* mounted;
+      CellVolumeMount* mount;
+      CellVolumeProtection* protection;
+      bool creating;
+      std::uint64_t lifetime_revision;
+      CellFootprintScanGuard guard;
+      ULONGLONG deadline;
+      bool Matches() const noexcept {
+        const auto& value = *journal;
+        return value.healthy_ && value.lifetime_revision_ == lifetime_revision && value.creating_ == creating &&
+          value.file_ == file && value.anchor_ == anchor &&
+          value.phase_ == CellProvisioningPhase::disk_recorded && value.volume_phase_ == CellVolumeProvisioningPhase::partitioned &&
+          value.format_phase_ == CellFormatProvisioningPhase::formatted && value.protection_phase_ == CellProtectionProvisioningPhase::protected_root &&
+          value.mount_phase_ == CellMountProvisioningPhase::mounted && value.mounted_workspace_phase_ == CellMountedWorkspaceProvisioningPhase::recorded &&
+          value.plan_.assignment_binding == plan.assignment_binding && value.plan_.profile_sha256 == plan.profile_sha256 &&
+          IsEqualGUID(value.plan_.disk.identifier, plan.disk.identifier) && value.plan_.disk.virtual_bytes == plan.disk.virtual_bytes &&
+          value.plan_.disk.reserved_file_bytes == plan.disk.reserved_file_bytes && value.name_ == name && value.owner_ == owner &&
+          value.controller_ == controller && value.records_ == records && value.descriptor_ == descriptor &&
+          value.mounted_workspace_records_ == checkpoints && value.mounted_workspace_.get() == mounted &&
+          value.mount_.get() == mount && value.protection_.get() == protection;
+      }
+      DWORD Verify() const noexcept {
+        auto error = VolumeControl(deadline, guard.cancellation);
+        if (error) return error;
+        if (!Matches()) return ERROR_FILE_INVALID;
+        error = journal->ReadJournal();
+        if (error) return journal->Refuse(error);
+        if (!Matches()) return ERROR_FILE_INVALID;
+        return VolumeControl(deadline, guard.cancellation);
+      }
+      static DWORD Authorize(void* raw) noexcept {
+        const auto& value = *static_cast<Context*>(raw);
+        auto error = value.Verify();
+        if (!error) error = value.guard.authorize(value.guard.context);
+        if (!error && value.binding.authorize) {
+          error = value.Verify();
+          if (!error) error = value.binding.authorize(value.binding.context, value.name, value.work);
+        }
+        return error ? error : value.Verify();
+      }
+    } context{this, plan_, expected_anchor, records_, descriptor_, checkpoints, name_, owner_, controller_,
+      workspace.directories[static_cast<std::size_t>(CellDirectory::work)], binding, file_,
+      mounted_workspace_.get(), mount_.get(), protection_.get(), creating_, lifetime_revision_, guard, deadline};
+    error = Context::Authorize(&context);
+    if (error) return error;
+    auto remaining_limits = limits;
+    remaining_limits.wall_limit_ms = Remaining(deadline);
+    if (!remaining_limits.wall_limit_ms) return ERROR_TIMEOUT;
+    Observation observation;
+    error = read(read_context, remaining_limits, {Context::Authorize, &context, guard.cancellation}, &observation);
+    // No caller code runs after the mounted reader's final tree readback. The
+    // canonical owner must still recheck current authority when using this input.
+    if (!error) error = context.Verify();
+    if (error) return error;
+    const CellDirectoryFootprint& footprint = [&]() -> const CellDirectoryFootprint& {
+      if constexpr (std::is_same_v<Observation, CellDirectoryFootprint>) return observation;
+      else return observation.footprint;
+    }();
+    if (footprint.root != workspace.directories[0] || footprint.directory_count < workspace.directories.size() ||
+        static_cast<std::uint64_t>(footprint.file_count) + footprint.directory_count > limits.max_entries ||
+        footprint.logical_file_bytes > 9007199254740991ULL || footprint.allocated_bytes > 9007199254740991ULL)
+      return ERROR_INVALID_DATA;
+    if constexpr (std::is_same_v<Observation, CellDirectoryInventory>) {
+      if (observation.entries.size() != static_cast<std::uint64_t>(footprint.file_count) + footprint.directory_count)
+        return ERROR_INVALID_DATA;
+      std::uint64_t logical = 0, allocated = 0;
+      std::uint32_t files = 0, directories = 0;
+      std::array<bool, 4> roots{};
+      const CellDirectoryInventoryEntry* previous = nullptr;
+      for (const auto& entry : observation.entries) {
+        if (!IdentityValid(entry.identity) || entry.identity.volume_serial != footprint.root.volume_serial ||
+            (previous && !(previous->identity.file_id < entry.identity.file_id)) ||
+            (entry.directory && entry.logical_file_bytes != 0) ||
+            entry.logical_file_bytes > 9007199254740991ULL - logical || entry.allocated_bytes > 9007199254740991ULL - allocated)
+          return ERROR_INVALID_DATA;
+        logical += entry.logical_file_bytes; allocated += entry.allocated_bytes;
+        if (entry.directory) {
+          ++directories;
+          for (std::size_t index = 0; index < workspace.directories.size(); ++index)
+            if (entry.identity == workspace.directories[index]) roots[index] = true;
+        } else ++files;
+        previous = &entry;
+      }
+      if (files != footprint.file_count || directories != footprint.directory_count ||
+          logical != footprint.logical_file_bytes || allocated != footprint.allocated_bytes ||
+          !std::all_of(roots.begin(), roots.end(), [](bool present) { return present; })) return ERROR_INVALID_DATA;
+    }
+    error = VolumeControl(deadline, guard.cancellation);
+    if (error) return error;
+    *output = {expected_anchor, context.plan.assignment_binding, context.plan.profile_sha256, expected_head, workspace, std::move(observation)};
     return ERROR_SUCCESS;
   } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }

@@ -1,7 +1,11 @@
+import { NotFoundError } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { installEmptyBodyTolerantJsonParser } from "../empty-json-body-parser.js";
 import { citadelsRoutes } from "./citadels.js";
+
+const expectedRevision = "a".repeat(64);
+const expectedTemplateRevision = "b".repeat(64);
 
 function buildApp(citadels: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
   const app = Fastify();
@@ -93,7 +97,7 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "PUT",
       url: "/api/v1/citadels/ws-1/charter",
-      payload: { purpose: "Run the company", kind: "company", goals: ["ship 1.0"] },
+      payload: { purpose: "Run the company", kind: "company", goals: ["ship 1.0"], expectedRevision },
     });
 
     expect(response.statusCode).toBe(200);
@@ -111,7 +115,7 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "PUT",
       url: "/api/v1/citadels/ws-1/charter",
-      payload: { purpose: "x", kind: "not-a-kind" },
+      payload: { purpose: "x", kind: "not-a-kind", expectedRevision },
     });
 
     expect(response.statusCode).toBe(400);
@@ -133,7 +137,7 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/chambers",
-      payload: { name: "Finance", sensitivity: "restricted", sealed: true },
+      payload: { name: "Finance", sensitivity: "restricted", sealed: true, expectedRevision },
     });
 
     expect(response.statusCode).toBe(201);
@@ -199,10 +203,10 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/from-template",
-      payload: { templateId: "company-co-founder" },
+      payload: { templateId: "company-co-founder", expectedRevision, expectedTemplateRevision },
     });
     expect(response.statusCode).toBe(201);
-    expect(createFromTemplate).toHaveBeenCalledWith("ws-1", "company-co-founder");
+    expect(createFromTemplate).toHaveBeenCalledWith("ws-1", "company-co-founder", expectedRevision, expectedTemplateRevision);
   });
 
   it("returns 404 for an unknown template", async () => {
@@ -214,7 +218,7 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/from-template",
-      payload: { templateId: "nope" },
+      payload: { templateId: "nope", expectedRevision, expectedTemplateRevision },
     });
     expect(response.statusCode).toBe(404);
   });
@@ -251,7 +255,7 @@ describe("citadels routes", () => {
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/from-blueprint", payload: {} });
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/from-blueprint", payload: { blueprint: {}, expectedRevision } });
     expect(response.statusCode).toBe(400);
   });
 
@@ -267,10 +271,10 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/from-blueprint",
-      payload: { schemaVersion: "goatcitadel.blueprint.v1" },
+      payload: { blueprint: { schemaVersion: "goatcitadel.blueprint.v1" }, expectedRevision },
     });
     expect(response.statusCode).toBe(201);
-    expect(createFromBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" });
+    expect(createFromBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" }, expectedRevision);
   });
 
   it("lists the council (agent assignments) for a citadel", async () => {
@@ -294,10 +298,10 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/council",
-      payload: { agentId: "agent-architect" },
+      payload: { expectedRevision, agentId: "agent-architect" },
     });
     expect(response.statusCode).toBe(201);
-    expect(assignAgent).toHaveBeenCalledWith({ citadelId: "ws-1", agentId: "agent-architect" });
+    expect(assignAgent).toHaveBeenCalledWith({ citadelId: "ws-1", agentId: "agent-architect", expectedRevision });
   });
 
   it("rejects a council assignment without an agentId", async () => {
@@ -306,20 +310,20 @@ describe("citadels routes", () => {
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/council", payload: {} });
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/council", payload: { expectedRevision,} });
     expect(response.statusCode).toBe(400);
     expect(assignAgent).not.toHaveBeenCalled();
   });
 
   it("returns 404 when unassigning an agent that is not on the council", async () => {
-    const unassignAgent = vi.fn(() => false);
+    const unassignAgent = vi.fn(() => { throw new NotFoundError({ entity: "Citadel access rule" }); });
     const built = buildApp({ unassignAgent });
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/council/agent-x" });
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/council/agent-x", payload: { expectedRevision } });
     expect(response.statusCode).toBe(404);
-    expect(unassignAgent).toHaveBeenCalledWith("ws-1", "agent-x");
+    expect(unassignAgent).toHaveBeenCalledWith("ws-1", "agent-x", expectedRevision);
   });
 
   it("lists and creates wards for a citadel", async () => {
@@ -336,7 +340,7 @@ describe("citadels routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/wards",
-      payload: { name: "No email", actionPattern: "email.send", effect: "deny" },
+      payload: { expectedRevision, name: "No email", actionPattern: "email.send", effect: "deny" },
     });
     expect(create.statusCode).toBe(201);
     expect(addWard).toHaveBeenCalledWith(
@@ -353,44 +357,45 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/wards",
-      payload: { name: "x", actionPattern: "y", effect: "bogus" },
+      payload: { expectedRevision, name: "x", actionPattern: "y", effect: "bogus" },
     });
     expect(response.statusCode).toBe(400);
     expect(addWard).not.toHaveBeenCalled();
   });
 
   it("returns 404 when removing a missing ward", async () => {
-    const removeWard = vi.fn(() => false);
+    const removeWard = vi.fn(() => { throw new NotFoundError({ entity: "Citadel access rule" }); });
     const built = buildApp({ removeWard });
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/wards/w9" });
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/wards/w9", payload: { expectedRevision } });
     expect(response.statusCode).toBe(404);
-    expect(removeWard).toHaveBeenCalledWith("ws-1", "w9");
+    expect(removeWard).toHaveBeenCalledWith("ws-1", "w9", expectedRevision);
   });
 
   it("stores and lists vault secrets (metadata only)", async () => {
-    const listVaultSecrets = vi.fn(() => [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }]);
+    const snapshot = { citadelId: "ws-1", revision: expectedRevision, items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] };
+    const getVaultSnapshot = vi.fn(() => snapshot);
     const storeVaultSecret = vi.fn(() => ({
       ok: true as const,
-      secret: { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" },
+      snapshot,
     }));
-    const built = buildApp({ listVaultSecrets, storeVaultSecret });
+    const built = buildApp({ getVaultSnapshot, storeVaultSecret });
     app = built.app;
     await app.register(citadelsRoutes);
 
     const list = await app.inject({ method: "GET", url: "/api/v1/citadels/ws-1/vault-secrets" });
     expect(list.statusCode).toBe(200);
-    expect(list.json()).toEqual({ items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] });
+    expect(list.json()).toEqual(snapshot);
 
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/vault-secrets",
-      payload: { name: "stripe", value: "sk-live-123" },
+      payload: { name: "stripe", value: "sk-live-123", expectedRevision },
     });
     expect(create.statusCode).toBe(201);
-    expect(storeVaultSecret).toHaveBeenCalledWith("ws-1", "stripe", "sk-live-123");
+    expect(storeVaultSecret).toHaveBeenCalledWith("ws-1", "stripe", "sk-live-123", expectedRevision);
     // The response never carries the value.
     expect(JSON.stringify(create.json())).not.toContain("sk-live-123");
   });
@@ -404,7 +409,7 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/vault-secrets",
-      payload: { name: "stripe", value: "sk-live-123" },
+      payload: { name: "stripe", value: "sk-live-123", expectedRevision },
     });
     expect(response.statusCode).toBe(503);
   });
@@ -428,16 +433,19 @@ describe("citadels routes", () => {
   });
 
   it("deletes a vault secret and 404s a missing one", async () => {
-    const deleteVaultSecret = vi.fn((_cid: string, secretId: string) => secretId === "s1");
+    const deleteVaultSecret = vi.fn((_cid: string, secretId: string) => {
+      if (secretId !== "s1") throw new NotFoundError({ entity: "Vault secret" });
+      return { citadelId: "ws-1", revision: expectedRevision, items: [] };
+    });
     const built = buildApp({ deleteVaultSecret });
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const ok = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/vault-secrets/s1" });
-    expect(ok.statusCode).toBe(204);
-    expect(deleteVaultSecret).toHaveBeenCalledWith("ws-1", "s1");
+    const ok = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/vault-secrets/s1", payload: { expectedRevision } });
+    expect(ok.statusCode).toBe(200);
+    expect(deleteVaultSecret).toHaveBeenCalledWith("ws-1", "s1", expectedRevision);
 
-    const missing = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/vault-secrets/nope" });
+    const missing = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/vault-secrets/nope", payload: { expectedRevision } });
     expect(missing.statusCode).toBe(404);
   });
 
@@ -455,7 +463,7 @@ describe("citadels routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/passages",
-      payload: { destinationCitadelId: "ws-2", allowedFields: ["availability"] },
+      payload: { expectedRevision, destinationCitadelId: "ws-2", allowedFields: ["availability"] },
     });
     expect(create.statusCode).toBe(201);
     expect(createPassage).toHaveBeenCalledWith(
@@ -476,21 +484,21 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/passages",
-      payload: { destinationCitadelId: "ws-2" },
+      payload: { expectedRevision, destinationCitadelId: "ws-2" },
     });
     expect(response.statusCode).toBe(400);
     expect(createPassage).not.toHaveBeenCalled();
   });
 
   it("returns 404 when removing a missing passage", async () => {
-    const removePassage = vi.fn(() => false);
+    const removePassage = vi.fn(() => { throw new NotFoundError({ entity: "Citadel access rule" }); });
     const built = buildApp({ removePassage });
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/passages/p9" });
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/passages/p9", payload: { expectedRevision } });
     expect(response.statusCode).toBe(404);
-    expect(removePassage).toHaveBeenCalledWith("ws-1", "p9");
+    expect(removePassage).toHaveBeenCalledWith("ws-1", "p9", expectedRevision);
   });
 
   it("lists and upserts members for a citadel", async () => {
@@ -507,7 +515,7 @@ describe("citadels routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/members",
-      payload: { subjectId: "alice", role: "operator" },
+      payload: { expectedRevision, subjectId: "alice", role: "operator" },
     });
     expect(create.statusCode).toBe(201);
     expect(upsertMember).toHaveBeenCalledWith(
@@ -524,21 +532,21 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/members",
-      payload: { subjectId: "x", role: "wizard" },
+      payload: { expectedRevision, subjectId: "x", role: "wizard" },
     });
     expect(response.statusCode).toBe(400);
     expect(upsertMember).not.toHaveBeenCalled();
   });
 
   it("returns 404 when removing a missing member", async () => {
-    const removeMember = vi.fn(() => false);
+    const removeMember = vi.fn(() => { throw new NotFoundError({ entity: "Citadel access rule" }); });
     const built = buildApp({ removeMember });
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/members/ghost" });
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/members/ghost", payload: { expectedRevision } });
     expect(response.statusCode).toBe(404);
-    expect(removeMember).toHaveBeenCalledWith("ws-1", "ghost");
+    expect(removeMember).toHaveBeenCalledWith("ws-1", "ghost", expectedRevision);
   });
 
   it("lists the Mason setup questions", async () => {
@@ -617,14 +625,14 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/mason/stage",
-      payload: { schemaVersion: "goatcitadel.blueprint.v1" },
+      payload: { blueprint: { schemaVersion: "goatcitadel.blueprint.v1" }, expectedRevision },
     });
     expect(response.statusCode).toBe(201);
     expect(response.json()).toEqual({
       citadel: { citadelId: "ws-1", charter: {}, chambers: [] },
       review: { name: "Co" },
     });
-    expect(stageBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" });
+    expect(stageBlueprint).toHaveBeenCalledWith("ws-1", { schemaVersion: "goatcitadel.blueprint.v1" }, expectedRevision);
   });
 
   it("rejects staging an invalid blueprint via the Mason", async () => {
@@ -633,7 +641,7 @@ describe("citadels routes", () => {
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/mason/stage", payload: {} });
+    const response = await app.inject({ method: "POST", url: "/api/v1/citadels/ws-1/mason/stage", payload: { blueprint: {}, expectedRevision } });
     expect(response.statusCode).toBe(400);
   });
 
@@ -766,7 +774,7 @@ describe("citadels routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/integrations",
-      payload: { provider: "google_calendar", capabilities: ["calendar.events.read"], mode: "read" },
+      payload: { expectedRevision, provider: "google_calendar", capabilities: ["calendar.events.read"], mode: "read" },
     });
     expect(create.statusCode).toBe(201);
     expect(addIntegration).toHaveBeenCalledWith(
@@ -783,21 +791,21 @@ describe("citadels routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/citadels/ws-1/integrations",
-      payload: { provider: "x", capabilities: ["y"], mode: "nuke" },
+      payload: { expectedRevision, provider: "x", capabilities: ["y"], mode: "nuke" },
     });
     expect(response.statusCode).toBe(400);
     expect(addIntegration).not.toHaveBeenCalled();
   });
 
   it("returns 404 when removing a missing integration grant", async () => {
-    const removeIntegration = vi.fn(() => false);
+    const removeIntegration = vi.fn(() => { throw new NotFoundError({ entity: "Citadel access rule" }); });
     const built = buildApp({ removeIntegration });
     app = built.app;
     await app.register(citadelsRoutes);
 
-    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/integrations/g9" });
+    const response = await app.inject({ method: "DELETE", url: "/api/v1/citadels/ws-1/integrations/g9", payload: { expectedRevision } });
     expect(response.statusCode).toBe(404);
-    expect(removeIntegration).toHaveBeenCalledWith("ws-1", "g9");
+    expect(removeIntegration).toHaveBeenCalledWith("ws-1", "g9", expectedRevision);
   });
 
   it("interprets a mason session message via the model", async () => {

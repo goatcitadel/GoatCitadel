@@ -158,6 +158,7 @@
     <ClInclude Include="src\protected_operations.hpp" />
     <ClInclude Include="src\protocol.hpp" />
     <ClInclude Include="src\service_runtime.hpp" />
+    <ClInclude Include="src\service_configuration_query.hpp" />
     <ClInclude Include="src\signer_inspection.hpp" />
     <ClInclude Include="..\remote-worker-windows-host-native\src\service_inspection.hpp" />
   </ItemGroup>

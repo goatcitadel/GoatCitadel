@@ -207,3 +207,30 @@ in `.tmp/comparison-ci-hook-docs-final.log`. Hosted artifacts are retained local
 
 The hosted retry is still required. Charter/template/blueprint atomicity and
 reviewed writes remain open alongside the rest of C1-C6. Formatting remains paused.
+
+## Follow-up: bound the concurrent UI and library test workers
+
+The `7ca337b4c` hosted Checks job passed, and all 15 accounting tests passed in
+the library partition. That partition then timed out the first event-ingestion
+case after 20.7 seconds. Its fresh SQLite initialization ran alongside the UI
+suite and recursive library packages whose Vitest pools were not capped.
+
+The concurrent stage now permits two UI test workers and one test worker for
+each of two concurrent library packages, for a combined limit of four. The ten
+package filters, coverage instrumentation, and behavior deadlines remain intact.
+The descriptor regression check verifies that the library worker option reaches
+the package test script and that the combined pool stays bounded.
+
+The named local command
+`pnpm verify:fast --commands=fast.test.mission-control-next,fast.test.libraries`
+passed both selected scenarios in 2m 6s: 1,142 canonical UI tests and 2,522 tests
+across all ten library/desktop packages. On PowerShell, quote the entire
+`--commands=...` argument to preserve the comma. The one focused descriptor test
+and strict script lint also pass.
+
+Evidence: `artifacts/verification/2026-09-13T19-14-30-955Z-fast-f6532d6f/`,
+`.tmp/comparison-ui-library-pool-lane-final.log`,
+`.tmp/comparison-fast-pool-contract-test.log`, and
+`.tmp/comparison-fast-pool-lint.log`. This is local proof of the selected stage;
+the scheduling change has not yet been exercised by GitHub. The full fast lane,
+remaining mutation owners, and C1-C6 acceptance are not claimed complete.

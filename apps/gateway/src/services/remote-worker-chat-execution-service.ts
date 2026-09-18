@@ -19,6 +19,8 @@ import { RemoteWorkerArtifactStore } from "./remote-worker-artifact-store.js";
 import { readCanonicalWorkerChatOutput, type RemoteWorkerChatSequenceContext } from "./remote-worker-chat-output-service.js";
 import { readCanonicalDurableChatTerminalOutput } from "./chat-durable-run-service.js";
 import { retainRemoteWorkerChatApprovalWait } from "./remote-worker-chat-approval-wait.js";
+import { normalizeRemoteWorkerNativeContinuation, appendRemoteWorkerNativeChatContext, remoteWorkerNativeChatContextSha256,
+  type RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
 import {
   hashChatTurnRuntimeAuthorityValue,
   verifyCheckpointAnchoredChatTurnRuntimeAuthority,
@@ -334,8 +336,24 @@ export class RemoteWorkerChatExecutionService {
       throw new Error("Worker Chat completion lost its admitted context or capability profile.");
     // Older text-only assignments did not retain a complete history snapshot.
     // Iterative tool workflows always require that immutable context.
+    const nativeResume = await this.storage.remoteWorkerAssignments.findChatApprovalResume(ref);
+    let nativeContext: RemoteWorkerNativeChatContext | undefined;
+    if (nativeResume?.material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1") {
+      const approval = await this.storage.approvals.get(nativeResume.material.approvalId);
+      const continuation = normalizeRemoteWorkerNativeContinuation({ schemaVersion: "goatcitadel.remote-worker-native-continuation.v1",
+        assignmentGeneration: ref.assignmentGeneration, resumeSha256: nativeResume.materialSha256,
+        approvalId: approval.approvalId, approvalSha256: nativeResume.material.approvalSha256,
+        nativeRuntimeBindingSha256: nativeResume.material.nativeRuntimeBindingSha256, decision: approval.status });
+      const retained = await this.storage.remoteWorkerRuntimeResults.readChatContextForParent({ ...ref,
+        durableRunId: assignment.manifest.durableRunId, continuation });
+      signal.throwIfAborted();
+      if (!retained || !context) throw new Error("Native Chat completion lacks its retained continuation context.");
+      nativeContext = retained;
+    }
     const sequence: RemoteWorkerChatSequenceContext | undefined = context ? {
-      profile, baseMessages: remoteWorkerChatInferenceMessages(context), contextSha256: context.contextSha256,
+      profile, baseMessages: nativeContext ? appendRemoteWorkerNativeChatContext(remoteWorkerChatInferenceMessages(context), nativeContext)
+        : remoteWorkerChatInferenceMessages(context), contextSha256: context.contextSha256,
+      ...(nativeContext ? { continuationSha256: remoteWorkerNativeChatContextSha256(nativeContext), nativeContext } : {}),
       taskId: assignment.manifest.taskId, workerId: generation.workerId,
       workerGeneration: generation.workerGeneration, toolStorage: this.storage,
     } : undefined;
@@ -366,43 +384,7 @@ export class RemoteWorkerChatExecutionService {
       createHash("sha256").update(bytes).digest("hex") !== settlement.resultSha256
     )
       throw new Error("Worker Chat artifact differs from its settled response.");
-    const usage: ModelUsageEventRecord[] = [];
-    for (const step of steps) {
-      const reservation = await this.storage.remoteWorkerBudgets.getReservationForOperation(
-        step.record.operationId, step.record.dispatchGeneration,
-      );
-      if (!reservation) throw new Error("Worker Chat completion lost its spending reservation.");
-      for (const id of step.usageEventIds) {
-        const event = await this.storage.modelUsageEvents.findByEventId(id);
-        if (!event || event.operationId !== step.record.operationId || event.dispatchGeneration !== step.record.dispatchGeneration)
-          throw new Error("Worker Chat completion lost its canonical usage event.");
-        usage.push(event);
-      }
-      usage.push(...(await this.storage.remoteWorkerBudgets.listRelatedAttempts(reservation)));
-    }
-    for (const intentId of toolIntentIds) {
-      const key = { ...ref, intentId };
-      await this.storage.remoteWorkerBudgets.reconcileToolAttempts(key);
-      usage.push(...(await this.storage.remoteWorkerBudgets.listToolAttempts(key)));
-    }
-    if (
-      new Set(usage.map((event) => event.eventId)).size !== usage.length ||
-      usage.some(
-        (event) =>
-          event.workspaceId !== record.executionWorkspaceId ||
-          event.sessionId !== record.sessionId ||
-          event.turnId !== record.turnId ||
-          event.durableRunId !== record.durableRunId ||
-          event.taskId !== record.taskId ||
-          event.workerId !== record.workerId ||
-          (!isModelUsageProvenNotDispatched(event) &&
-            (event.transportStatus !== "accepted" ||
-              !event.finishedAt ||
-              event.terminalOutcome === "in_flight" ||
-              event.costUsd === undefined)),
-      )
-    )
-      throw new Error("Worker Chat completion has unresolved or mismatched model usage.");
+    const usage = await readRemoteWorkerChatUsage(this.storage, ref, { record, steps, toolIntentIds }, Boolean(nativeContext));
     return { text, usage, settlement };
   }
 }
@@ -419,4 +401,62 @@ function summarizeUsage(events: ModelUsageEventRecord[]): ChatStreamUsageRecord 
     cachedInputTokens: sum("cachedInputTokens"),
     costUsd: sum("costUsd"),
   };
+}
+
+/** Parent accounting across the current model sequence and retained assignment attempts. */
+export async function readRemoteWorkerChatUsage(
+  storage: Pick<AsyncStorage, "modelUsageEvents" | "remoteWorkerBudgets">,
+  ref: { registryWorkspaceId: string; assignmentId: string; assignmentGeneration: number },
+  { record, steps, toolIntentIds }: Pick<Awaited<ReturnType<typeof readCanonicalWorkerChatOutput>>, "record" | "steps" | "toolIntentIds">,
+  includeAssignmentHistory: boolean,
+): Promise<ModelUsageEventRecord[]> {
+  const usage: ModelUsageEventRecord[] = [];
+  for (const step of steps) {
+    const reservation = await storage.remoteWorkerBudgets.getReservationForOperation(
+      step.record.operationId, step.record.dispatchGeneration,
+    );
+    if (!reservation) throw new Error("Worker Chat completion lost its spending reservation.");
+    for (const id of step.usageEventIds) {
+      const event = await storage.modelUsageEvents.findByEventId(id);
+      if (!event || event.operationId !== step.record.operationId || event.dispatchGeneration !== step.record.dispatchGeneration)
+        throw new Error("Worker Chat completion lost its canonical usage event.");
+      usage.push(event);
+    }
+    usage.push(...(await storage.remoteWorkerBudgets.listRelatedAttempts(reservation)));
+  }
+  for (const intentId of toolIntentIds) {
+    const key = { ...ref, intentId };
+    await storage.remoteWorkerBudgets.reconcileToolAttempts(key);
+    usage.push(...(await storage.remoteWorkerBudgets.listToolAttempts(key)));
+  }
+  if (includeAssignmentHistory) {
+    // Native continuation changes model request identities, not the assignment's
+    // spending scope. Retain earlier attempts, including unresolved dispatches.
+    const seen = new Set(usage.map((event) => event.eventId));
+    const assignmentUsage = await storage.modelUsageEvents.listRemoteWorkerAssignment(
+      ref.registryWorkspaceId, ref.assignmentId, ref.assignmentGeneration,
+    );
+    for (const event of assignmentUsage) {
+      if (!seen.has(event.eventId)) { usage.push(event); seen.add(event.eventId); }
+    }
+  }
+  if (
+    new Set(usage.map((event) => event.eventId)).size !== usage.length ||
+    usage.some(
+      (event) =>
+        event.workspaceId !== record.executionWorkspaceId ||
+        event.sessionId !== record.sessionId ||
+        event.turnId !== record.turnId ||
+        event.durableRunId !== record.durableRunId ||
+        event.taskId !== record.taskId ||
+        event.workerId !== record.workerId ||
+        (!isModelUsageProvenNotDispatched(event) &&
+          (event.transportStatus !== "accepted" ||
+            !event.finishedAt ||
+            event.terminalOutcome === "in_flight" ||
+            event.costUsd === undefined)),
+    )
+  )
+    throw new Error("Worker Chat completion has unresolved or mismatched model usage.");
+  return usage;
 }

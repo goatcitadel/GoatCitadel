@@ -23,16 +23,18 @@ test("controller service refuses interactive launch and protocol preserves exact
   const outcomes = [];
   const env = { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" };
   for (const asan of [false, true]) {
-    const service = buildWindowsCellController({ outputDirectory: output, snapshot, asan });
+    const service = buildWindowsCellController({ outputDirectory: output, snapshot, asan, sourceBatchSize: 8 });
     for (const args of [[], ["--foreground"]]) {
       const launch = spawnSync(service, args, { windowsHide: true, encoding: "utf8", timeout: 10000, env });
       assert.equal(launch.error, undefined);
       assert.equal(launch.status, args.length ? 160 : 5, `Service must refuse this interactive process: ${launch.stdout}${launch.stderr}`);
     }
-    const executable = buildWindowsCellController({ outputDirectory: output, snapshot, asan, fixture,
+    const executable = buildWindowsCellController({ outputDirectory: output, snapshot, asan, fixture, sourceBatchSize: 8,
       extraSources: [layoutFixture, formatFixture, protectionFixture, mountFixture, workspaceFixture, ...clientSources.filter((source) => source.endsWith(".cpp"))] });
     const run = spawnSync(executable, [path.join(output, asan ? "asan-data" : "normal-data")], {
-      windowsHide: true, encoding: "utf8", timeout: 40000, env,
+      // The full 122-session fixture flushes many independent NTFS files. Allow
+      // slower temporary volumes without changing any native operation deadline.
+      windowsHide: true, encoding: "utf8", timeout: 300000, env,
     });
     fs.writeFileSync(path.join(output, asan ? "asan.log" : "normal.log"), (run.stdout ?? "") + (run.stderr ?? ""), { flag: "wx" });
     assert.equal(run.error, undefined);
@@ -40,8 +42,8 @@ test("controller service refuses interactive launch and protocol preserves exact
     const report = JSON.parse(run.stdout);
     assert.equal(report.passed, true);
     assert.ok(report.checks >= 100);
-    assert.equal(report.sessions, 121);
-    assert.equal(report.nativeClientSessions, 108);
+    assert.equal(report.sessions, 122);
+    assert.equal(report.nativeClientSessions, 109);
     assert.equal(report.creationCheckpoints, 5);
     assert.equal(report.recoveryCheckpoints, 5);
     assert.equal(report.controlledVolumeCheckpoints, 6);
@@ -59,9 +61,11 @@ test("controller service refuses interactive launch and protocol preserves exact
     assert.equal(report.ntfsFormatted, false);
     assert.equal(report.volumeRootProtected, false);
     assert.equal(report.volumeMounted, false);
-    // Separate invocation preserves the existing per-process watchdog for both groups.
+    // The 27-session group flushes separate durable checkpoint fixtures. ASAN
+    // measured 39.84s on Windows, so allow aggregate fixture overhead while
+    // preserving every native per-operation/authority deadline.
     const workspaceRun = spawnSync(executable, ["--mounted-workspace", path.join(output, asan ? "asan-workspace-data" : "normal-workspace-data")], {
-      windowsHide: true, encoding: "utf8", timeout: 40000, env,
+      windowsHide: true, encoding: "utf8", timeout: 60000, env,
     });
     fs.writeFileSync(path.join(output, asan ? "asan-workspace.log" : "normal-workspace.log"), (workspaceRun.stdout ?? "") + (workspaceRun.stderr ?? ""), { flag: "wx" });
     assert.equal(workspaceRun.error, undefined);
@@ -74,7 +78,51 @@ test("controller service refuses interactive launch and protocol preserves exact
     assert.ok(workspaceReport.mountedWorkspaceAuthorityChecks <= 256);
     for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
       assert.equal(workspaceReport[key], false);
-    outcomes.push({ asan, ...report, workspaceReport });
+    const capacityRun = spawnSync(executable, ["--capacity", path.join(output, asan ? "asan-capacity-data" : "normal-capacity-data")], {
+      windowsHide: true, encoding: "utf8", timeout: 40000, env,
+    });
+    fs.writeFileSync(path.join(output, asan ? "asan-capacity.log" : "normal-capacity.log"), (capacityRun.stdout ?? "") + (capacityRun.stderr ?? ""), { flag: "wx" });
+    assert.equal(capacityRun.error, undefined);
+    assert.equal(capacityRun.status, 0, `Capacity protocol evidence: ${output}\n${capacityRun.stdout}${capacityRun.stderr}`);
+    const capacityReport = JSON.parse(capacityRun.stdout);
+    assert.equal(capacityReport.passed, true); assert.ok(capacityReport.checks >= 100);
+    assert.equal(capacityReport.sessions, 33); assert.equal(capacityReport.nativeClientSessions, 33);
+    for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
+      assert.equal(capacityReport[key], false);
+    const backingRun = spawnSync(executable, ["--backing-capacity", path.join(output, asan ? "asan-backing-capacity-data" : "normal-backing-capacity-data")], {
+      windowsHide: true, encoding: "utf8", timeout: 40000, env,
+    });
+    fs.writeFileSync(path.join(output, asan ? "asan-backing-capacity.log" : "normal-backing-capacity.log"), (backingRun.stdout ?? "") + (backingRun.stderr ?? ""), { flag: "wx" });
+    assert.equal(backingRun.error, undefined);
+    assert.equal(backingRun.status, 0, `Host capacity protocol evidence: ${output}\n${backingRun.stdout}${backingRun.stderr}`);
+    const backingCapacityReport = JSON.parse(backingRun.stdout);
+    assert.equal(backingCapacityReport.passed, true); assert.ok(backingCapacityReport.checks >= 100);
+    assert.equal(backingCapacityReport.sessions, 29); assert.equal(backingCapacityReport.nativeClientSessions, 29);
+    for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
+      assert.equal(backingCapacityReport[key], false);
+    const inventoryRun = spawnSync(executable, ["--inventory", path.join(output, asan ? "asan-inventory-data" : "normal-inventory-data")], {
+      windowsHide: true, encoding: "utf8", timeout: 40000, env,
+    });
+    fs.writeFileSync(path.join(output, asan ? "asan-inventory.log" : "normal-inventory.log"), (inventoryRun.stdout ?? "") + (inventoryRun.stderr ?? ""), { flag: "wx" });
+    assert.equal(inventoryRun.error, undefined);
+    assert.equal(inventoryRun.status, 0, `Inventory protocol evidence: ${output}\n${inventoryRun.stdout}${inventoryRun.stderr}`);
+    const inventoryReport = JSON.parse(inventoryRun.stdout);
+    assert.equal(inventoryReport.passed, true); assert.ok(inventoryReport.checks >= 100);
+    assert.equal(inventoryReport.sessions, 50); assert.equal(inventoryReport.nativeClientSessions, 50);
+    for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
+      assert.equal(inventoryReport[key], false);
+    const runtimeRun = spawnSync(executable, ["--runtime-handoff", path.join(output, asan ? "asan-runtime-data" : "normal-runtime-data")], {
+      windowsHide: true, encoding: "utf8", timeout: 40000, env,
+    });
+    fs.writeFileSync(path.join(output, asan ? "asan-runtime.log" : "normal-runtime.log"), (runtimeRun.stdout ?? "") + (runtimeRun.stderr ?? ""), { flag: "wx" });
+    assert.equal(runtimeRun.error, undefined);
+    assert.equal(runtimeRun.status, 0, `Runtime handoff evidence: ${output}\n${runtimeRun.stdout}${runtimeRun.stderr}`);
+    const runtimeReport = JSON.parse(runtimeRun.stdout);
+    assert.equal(runtimeReport.passed, true); assert.ok(runtimeReport.checks >= 100);
+    assert.equal(runtimeReport.sessions, 19); assert.equal(runtimeReport.nativeClientSessions, 19);
+    for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
+      assert.equal(runtimeReport[key], false);
+    outcomes.push({ asan, ...report, workspaceReport, capacityReport, backingCapacityReport, inventoryReport, runtimeReport });
   }
   const repository = path.resolve(import.meta.dirname, "../..");
   for (const item of snapshot.sourceManifest) assert.equal(
@@ -83,6 +131,6 @@ test("controller service refuses interactive launch and protocol preserves exact
   );
   fs.writeFileSync(path.join(output, "acceptance.json"), JSON.stringify({
     sourceManifest: snapshot.sourceManifest, outcomes,
-    boundary: "Compiled production service with interactive refusal; actual protocol/journal creation and legacy recovery under a current-user fixture with OS pipe identity and flushed acknowledgements. Volume/format/protection/mount/workspace composition uses controlled attachment/layout/NTFS/root-security/fixed-folder/directory driver responses; production client recovery is checked separately against exact recorded frames and real recovery refuses the unattached fixture. No SCM install/start, real installed custody, privileged volume operation or canonical Gateway storage.",
+    boundary: "Compiled production service with interactive refusal; actual protocol/journal creation and legacy recovery under a current-user fixture with OS pipe identity and flushed acknowledgements. Volume/format/protection/mount/workspace composition uses controlled physical-driver responses. Capacity uses independently retained native history, a controlled observation peer and the production client; the actual controller refuses missing quiescence ownership before filesystem access. Runtime handoff uses the production client with controlled server/runtime callbacks; the actual controller separately refuses absent owners and the unmounted fixture journal before runtime dispatch. No SCM install/start, real installed custody, privileged volume operation, actual mounted runtime, live capacity scan through the controller or canonical Gateway storage.",
   }, null, 2), { flag: "wx" });
 });

@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import fs from "node:fs";
+import { admitNativeRuntimeWithPolicy, type NativeRuntimePolicyAdmissionInput } from "./native-runtime-admission.js";
+import { NATIVE_INSTALLATION_POLICY, snapshotNativeInstallationPolicyRequest } from "./native-installation-policy.js";
 import { isDeepStrictEqual } from "node:util";
 import type {
   ApprovalCreateInput,
@@ -22,13 +24,14 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   evaluateWardsForActions,
+  remoteWorkerAssignmentCanonicalSha256,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   HEARTBEAT_RESTRICTED_PROFILE,
   splitUtf8HeadTail,
 } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
-import type { AsyncStorage } from "@goatcitadel/storage";
-import { channelDeliveryPartRequestHash, isChannelDeliveryPartId } from "@goatcitadel/storage";
+import type { AsyncStorage, NativePolicyReservationLookup } from "@goatcitadel/storage";
+import { channelDeliveryPartRequestHash, isChannelDeliveryPartId, snapshotRemoteWorkerCellCapacityAuthority } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ApprovalGate, type ApprovalCreateAuthority, type ApprovalCreateCommitPort } from "./approval-gate.js";
@@ -100,6 +103,8 @@ interface AccessEvaluation {
    */
   wardEffect?: WardEffect;
 }
+
+type NativeExecutionReservation = Awaited<ReturnType<AsyncStorage["remoteWorkerNativePolicyReservations"]["readForAssignment"]>>;
 
 function toToolAccessEvaluateResponse(toolName: string, evaluation: AccessEvaluation): ToolAccessEvaluateResponse {
   return {
@@ -388,6 +393,51 @@ export class ToolPolicyEngine {
     return toToolAccessEvaluateResponse(input.toolName, evaluation);
   }
 
+  public async admitNativeRuntime(request: ToolAccessEvaluateRequest, input: NativeRuntimePolicyAdmissionInput) {
+    return admitNativeRuntimeWithPolicy(this.storage, value => this.inspectAccess(value), request, input);
+  }
+
+  /** Read-only infrastructure inspection. Ordinary tool APIs cannot select this
+   * policy template. Tool grants never authorize privileged package installation;
+   * it requires explicit effective policy and its separate exact native review. */
+  public async inspectNativeInstallation(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    const request = snapshotNativeInstallationPolicyRequest(input);
+    const evaluation = await this.evaluateAccessInternal(request, {}, undefined, true);
+    return { ...toToolAccessEvaluateResponse(request.toolName, evaluation), requiresApproval: true };
+  }
+
+  public async inspectNativeRuntime(input: ToolAccessEvaluateRequest, authority: NativePolicyReservationLookup) {
+    const request = structuredClone(input), key = { ...snapshotRemoteWorkerCellCapacityAuthority(authority),
+      nonce: authority.nonce, requestSha256: authority.requestSha256 };
+    return this.storage.runImmediateTransaction(async () => {
+      const reservation = await this.storage.remoteWorkerNativePolicyReservations.readForAssignment(key);
+      if (remoteWorkerAssignmentCanonicalSha256(request) !== reservation.policyRequestSha256)
+        throw new ToolExecutionPreconditionError("Native policy request differs from its retained reservation");
+      const evaluation = await this.evaluateAccessInternal(request, {}, reservation);
+      const current = await this.storage.remoteWorkerNativePolicyReservations.readForAssignment(key);
+      if (remoteWorkerAssignmentCanonicalSha256(current) !== remoteWorkerAssignmentCanonicalSha256(reservation))
+        throw new ToolExecutionPreconditionError("Native policy reservation changed during authorization");
+      return toToolAccessEvaluateResponse(request.toolName, evaluation);
+    });
+  }
+
+  private async evaluateInvocationAccess(request: ToolInvokeRequest, options: ToolPolicyEvaluateOptions = {}, approved = false) {
+    const identity = this.resolveInvocationPolicy(request, options);
+    return this.storage.runImmediateTransaction(async () => {
+      const evaluation = await this.evaluateAccessInternal(request, options);
+      await this.storage.toolAccessDecisions.record({
+        toolName: identity.accountingToolName, policyToolName: identity.mappedTarget?.policyToolName,
+        agentId: request.agentId, sessionId: request.sessionId, workspaceId: request.workspaceId,
+        taskId: request.taskId, runId: request.runId, allowed: evaluation.allowed,
+        reasonCodes: evaluation.reasonCodes, matchedGrantId: evaluation.matchedGrantId,
+        requiresApproval: approved ? false : evaluation.requiresApproval, riskLevel: evaluation.riskLevel,
+        permissionProfileId: evaluation.permissionProfileId, localOperatorOverrideId: evaluation.localOperatorOverrideId,
+        countsTowardLimits: evaluation.allowed && (approved || (!evaluation.requiresApproval && request.dryRun !== true)),
+      });
+      return evaluation;
+    });
+  }
+
   public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {
     const identity = this.resolveInvocationPolicy(request, options);
     if (identity.binding && request.externalRuntime !== true) {
@@ -413,25 +463,7 @@ export class ToolPolicyEngine {
     const startedAt = new Date().toISOString();
     const { capabilityPolicy } = identity;
     const internalCall = buildInternalToolCall(request, capabilityPolicy, startedAt);
-    const evaluation = await this.evaluateAccessInternal(request, options);
-
-    await this.storage.toolAccessDecisions.record({
-      toolName: identity.accountingToolName,
-      policyToolName: identity.mappedTarget?.policyToolName,
-      agentId: request.agentId,
-      sessionId: request.sessionId,
-      workspaceId: request.workspaceId,
-      taskId: request.taskId,
-      runId: request.runId,
-      allowed: evaluation.allowed,
-      reasonCodes: evaluation.reasonCodes,
-      matchedGrantId: evaluation.matchedGrantId,
-      requiresApproval: evaluation.requiresApproval,
-      riskLevel: evaluation.riskLevel,
-      permissionProfileId: evaluation.permissionProfileId,
-      localOperatorOverrideId: evaluation.localOperatorOverrideId,
-      countsTowardLimits: evaluation.allowed && !evaluation.requiresApproval && request.dryRun !== true,
-    });
+    const evaluation = await this.evaluateInvocationAccess(request, options);
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
@@ -802,25 +834,7 @@ export class ToolPolicyEngine {
     }
     const approvedCapabilityPolicy = identity.capabilityPolicy;
     const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
-    const evaluation = await this.evaluateAccessInternal(executionRequest, options);
-
-    await this.storage.toolAccessDecisions.record({
-      toolName: identity.accountingToolName,
-      policyToolName: identity.mappedTarget?.policyToolName,
-      agentId: executionRequest.agentId,
-      sessionId: executionRequest.sessionId,
-      workspaceId: executionRequest.workspaceId,
-      taskId: executionRequest.taskId,
-      runId: executionRequest.runId,
-      allowed: evaluation.allowed,
-      reasonCodes: evaluation.reasonCodes,
-      matchedGrantId: evaluation.matchedGrantId,
-      requiresApproval: false,
-      riskLevel: evaluation.riskLevel,
-      permissionProfileId: evaluation.permissionProfileId,
-      localOperatorOverrideId: evaluation.localOperatorOverrideId,
-      countsTowardLimits: evaluation.allowed,
-    });
+    const evaluation = await this.evaluateInvocationAccess(executionRequest, options, true);
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
@@ -967,13 +981,17 @@ export class ToolPolicyEngine {
   private async evaluateAccessInternal(
     input: ToolAccessEvaluateRequest,
     options: ToolPolicyEvaluateOptions = {},
+    reservation?: NativeExecutionReservation,
+    nativeInstallation = false,
   ): Promise<AccessEvaluation> {
     const {
       mappedTarget,
       toolDef,
       capabilityPolicy,
       evaluationRequest: request,
-    } = this.resolveInvocationPolicy(input, options);
+    } = nativeInstallation ? { mappedTarget: undefined, toolDef: NATIVE_INSTALLATION_POLICY,
+      capabilityPolicy: deriveToolCapabilityPolicy(NATIVE_INSTALLATION_POLICY.name, NATIVE_INSTALLATION_POLICY), evaluationRequest: input }
+      : this.resolveInvocationPolicy(input, options);
     const toolNames = mappedTarget ? [request.toolName, mappedTarget.policyToolName] : [request.toolName];
     const riskLevel = toolDef?.riskLevel ?? "caution";
     const shellRisk = this.evaluateShellRisk(request);
@@ -1043,7 +1061,10 @@ export class ToolPolicyEngine {
     }
     const wardRequiresApproval = rawWardEffect === "require_approval";
 
-    const grantDecision = await this.resolveGrantDecision(request, toolDef, mappedTarget?.policyToolName);
+    const selectedGrant = await this.resolveGrantDecision(request, toolDef, mappedTarget?.policyToolName, reservation);
+    // Installation is infrastructure provisioning: ordinary allow grants cannot
+    // widen its effective policy. Scoped deny grants remain authoritative.
+    const grantDecision = nativeInstallation && selectedGrant?.decision === "allow" ? undefined : selectedGrant;
     if (grantDecision?.decision === "deny") {
       return withWard({
         allowed: false,
@@ -1382,6 +1403,7 @@ export class ToolPolicyEngine {
     request: ToolAccessEvaluateRequest,
     toolDef?: ToolDefinition,
     policyToolName?: string,
+    reservation?: NativeExecutionReservation,
   ): Promise<GrantDecision | undefined> {
     const scoped = buildScopeCandidates(request);
     // Scope reads are independent. Resolve them concurrently, then flatten in the
@@ -1399,6 +1421,12 @@ export class ToolPolicyEngine {
         ),
       ),
     );
+    const reservedGrant = reservation?.grant;
+    if (reservedGrant) {
+      const index = scoped.findIndex(candidate => candidate.scope === reservedGrant.scope && candidate.scopeRef === reservedGrant.scopeRef);
+      if (index >= 0 && matchesToolPattern(reservedGrant.toolPattern, request.toolName) &&
+          !grantsByScope[index]!.some(grant => grant.grantId === reservedGrant.grantId)) grantsByScope[index]!.push(reservedGrant);
+    }
     const matchingGrants = grantsByScope.flat();
 
     const denyGrant = matchingGrants.find((grant) => grant.decision === "deny");
@@ -1417,7 +1445,7 @@ export class ToolPolicyEngine {
       if (grant.decision !== "allow") {
         continue;
       }
-      const constraintsError = await this.applyGrantConstraints(request, grant, toolDef, policyToolName);
+      const constraintsError = await this.applyGrantConstraints(request, grant, toolDef, policyToolName, reservation);
       if (!constraintsError) {
         allowedGrants.push(grant);
         continue;
@@ -1451,6 +1479,7 @@ export class ToolPolicyEngine {
     grant: ToolGrantRecord,
     toolDef?: ToolDefinition,
     policyToolName?: string,
+    reservation?: NativeExecutionReservation,
   ): Promise<string | undefined> {
     const constraints = grant.constraints;
     if (!constraints) {
@@ -1463,6 +1492,7 @@ export class ToolPolicyEngine {
 
     if (typeof constraints.maxCallsPerHour === "number") {
       const count = await this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
+        ...(reservation ? { excludeDecisionId: reservation.decision.decisionId } : {}),
         toolName:
           policyToolName && matchesToolPattern(grant.toolPattern, policyToolName) ? policyToolName : request.toolName,
         scope: grant.scope,
@@ -1478,6 +1508,7 @@ export class ToolPolicyEngine {
 
     if (typeof constraints.maxWritesPerHour === "number" && isMutationTool(toolDef)) {
       const count = await this.storage.toolAccessDecisions.countWritesInLastHourInScope({
+        ...(reservation ? { excludeDecisionId: reservation.decision.decisionId } : {}),
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,

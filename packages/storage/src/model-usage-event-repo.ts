@@ -779,8 +779,24 @@ export class ModelUsageEventRepository {
   public static summarizeRemoteWorkerAssignment(db: DatabaseClient, registryWorkspaceId: string, assignmentId: string, assignmentGeneration: number): ModelUsageSummary {
     const key = normalizeRemoteWorkerRuntimeReadKey({ registryWorkspaceId, assignmentId });
     if (!Number.isSafeInteger(assignmentGeneration) || assignmentGeneration < 1) throw new TypeError("Remote worker assignment generation is invalid.");
+    return ModelUsageEventRepository.summarizeWhere(db, ModelUsageEventRepository.remoteWorkerAssignmentPredicate(), { ...key, assignmentGeneration });
+  }
+
+  /** Internal parent read across every inference sequence and governed tool.
+   * Include unresolved attempts so completion cannot hide uncertain spending. */
+  public listRemoteWorkerAssignment(registryWorkspaceId: string, assignmentId: string, assignmentGeneration: number): ModelUsageEventRecord[] {
+    const key = normalizeRemoteWorkerRuntimeReadKey({ registryWorkspaceId, assignmentId });
+    if (!Number.isSafeInteger(assignmentGeneration) || assignmentGeneration < 1) throw new TypeError("Remote worker assignment generation is invalid.");
+    const rows = this.db.prepare(`SELECT ${SELECT_COLUMNS} FROM model_usage_events
+      WHERE ${ModelUsageEventRepository.remoteWorkerAssignmentPredicate()}
+      ORDER BY started_at, event_id LIMIT 4097`).all<ModelUsageEventRow>({ ...key, assignmentGeneration });
+    if (rows.length > 4096) throw new Error("Remote worker assignment usage exceeds the bounded parent read.");
+    return rows.map(mapRow);
+  }
+
+  private static remoteWorkerAssignmentPredicate(): string {
     const scope = "i.registry_workspace_id = @registryWorkspaceId AND i.assignment_id = @assignmentId AND i.assignment_generation = @assignmentGeneration";
-    return ModelUsageEventRepository.summarizeWhere(db, `event_id IN (
+    return `event_id IN (
       SELECT u.event_id FROM remote_worker_inference_requests i
         JOIN model_usage_events u ON u.operation_id = i.operation_id AND u.dispatch_generation = i.dispatch_generation
         WHERE ${scope}
@@ -792,7 +808,7 @@ export class ModelUsageEventRepository {
       UNION
       SELECT usage_event_id FROM remote_worker_tool_budget_dispatches
         WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId AND assignment_generation = @assignmentGeneration
-    )`, { ...key, assignmentGeneration });
+    )`;
   }
 
   private static summarizeWhere(db: DatabaseClient, where: string, params: Record<string, unknown>): ModelUsageSummary {

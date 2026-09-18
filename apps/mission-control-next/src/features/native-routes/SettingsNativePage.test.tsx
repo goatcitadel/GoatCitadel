@@ -407,6 +407,7 @@ const mocks = vi.hoisted(() => ({
     ],
   })),
   fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
+  fetchIntegrationConnection: vi.fn(),
   fetchNotificationTargets: vi.fn(async () => ({ items: [] })),
   fetchNotificationRules: vi.fn(async () => ({ items: [] })),
   fetchNotificationDeliveries: vi.fn(async () => ({ items: [] })),
@@ -460,6 +461,7 @@ const mocks = vi.hoisted(() => ({
   })),
   createIntegrationConnection: vi.fn(async () => ({
     connectionId: "conn-1",
+    revision: "a".repeat(64),
     catalogId: "github",
     key: "github",
     label: "GitHub",
@@ -1085,6 +1087,7 @@ const mocks = vi.hoisted(() => ({
   fetchMcpTools: vi.fn(async () => ({ items: [] })),
   createMcpServer: vi.fn(async () => ({
     serverId: "srv-stdio",
+    revision: "b".repeat(64),
     label: "Local Files",
     transport: "stdio",
     command: "npx",
@@ -1202,6 +1205,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     bootstrapDemo: mocks.bootstrapDemo,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
+    fetchIntegrationConnection: mocks.fetchIntegrationConnection,
     fetchExternalSideEffectRuns: mocks.fetchExternalSideEffectRuns,
     fetchExternalConnectorServices: mocks.fetchExternalConnectorServices,
     updateExternalConnectorServiceReviewState: mocks.updateExternalConnectorServiceReviewState,
@@ -1220,7 +1224,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchIntegrationPlugins: mocks.fetchIntegrationPlugins,
     fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
-    fetchMcpServers: mocks.fetchMcpServers,
+    fetchMcpServers: async () => { const result = await mocks.fetchMcpServers(); return { ...result, items: result.items.map(server => ({ ...server, revision: "a".repeat(64) })) }; },
+    fetchMcpServer: vi.fn(async () => { const result = await mocks.fetchMcpServers(); return { ...result.items[0], revision: "a".repeat(64) }; }),
     fetchMcpRemotePreview: mocks.fetchMcpRemotePreview,
     fetchMcpServerModeManifest: mocks.fetchMcpServerModeManifest,
     fetchMcpElicitations: mocks.fetchMcpElicitations,
@@ -1709,6 +1714,7 @@ beforeEach(async () => {
   });
   mocks.createIntegrationConnection.mockResolvedValue({
     connectionId: "conn-1",
+    revision: "a".repeat(64),
     catalogId: "github",
     key: "github",
     label: "GitHub",

@@ -24,7 +24,7 @@ import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js"
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { DocumentEditingService } from "./document-editing-service.js";
-import { WorkflowSkillCaptureService } from "./workflow-skill-capture-service.js";
+import { createWorkflowSkillCaptureForGateway } from "./workflow-skill-capture-composition.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import { createSessionControlRouteService } from "./session-control-route-service.js";
 import { getSessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
@@ -399,11 +399,7 @@ export function composeChatRouteDependencies(
     resolveChatToolApproval: (sessionId, approvalId, decision, options) =>
       gateway.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options),
   };
-  const skillCapture = new WorkflowSkillCaptureService({
-    storage: gateway.storage,
-    rootDir: gateway.config.rootDir,
-    candidateRoot: gateway.config.assistant.capabilities.candidateRoot,
-  });
+  const skillCapture = createWorkflowSkillCaptureForGateway(gateway);
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
     prepareWorkflowSkillCapture: (sessionId, input, actor) => skillCapture.prepare(sessionId, input, actor),
     stageWorkflowSkillCapture: (sessionId, input, actor) => skillCapture.stage(sessionId, input, actor),

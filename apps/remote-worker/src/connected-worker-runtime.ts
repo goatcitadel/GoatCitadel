@@ -27,6 +27,7 @@ import { WorkerTerminalSettlement } from "./worker-terminal-settlement.js";
 import type { WorkerMeshCapabilityRuntime } from "./worker-mesh-capability-runtime.js";
 import { withWorkerMeshAssignmentPump } from "./worker-mesh-assignment-pump.js";
 import { renewWorkerLeaseControl } from "./worker-lease-control.js";
+import { routeWorkerNativeContinuation, type WorkerNativeContinuationOwner } from "./worker-native-continuation.js";
 
 /**
  * The connected worker's journey, expressed as resumable stages over durable
@@ -55,7 +56,7 @@ const PROTOCOL_PROBE_TRANSCRIPT = Object.freeze([
 export async function runConnectedWorker(
   config: WorkerRunConfig,
   options: { readonly signal?: AbortSignal; readonly protectedKeys?: WorkerProtectedKeyOwner;
-    readonly meshCapabilities?: WorkerMeshCapabilityRuntime } = {},
+    readonly meshCapabilities?: WorkerMeshCapabilityRuntime; readonly nativeRuntime?: WorkerNativeContinuationOwner } = {},
 ): Promise<ConnectedWorkerReport> {
   options.signal?.throwIfAborted();
   const state = createFileWorkerDurableState(config.stateDir);
@@ -120,14 +121,14 @@ export async function runConnectedWorker(
       return report(config, mesh.manualReconciliationRequired ? "stopped" : "completed", stages, admitted, observed, vault);
     }
   }
-  const assignment = (scope: RouteContext) => runConnectedAssignment(config, scope, state, vault, stages, observed);
+  const assignment = (scope: RouteContext, signal = options.signal) => runConnectedAssignment(config, scope, state, vault, stages, observed, options.nativeRuntime, signal);
   let outcome: ConnectedWorkerReport["outcome"];
   if (options.meshCapabilities) {
     const runtime = options.meshCapabilities;
     const scopedContext = (signal: AbortSignal): RouteContext => ({ ...context, client: new WorkerWireClient(config.transport, signal) });
     outcome = await withWorkerMeshAssignmentPump({
       signal: options.signal,
-      assignment: (signal) => assignment(scopedContext(signal)),
+      assignment: (signal) => assignment(scopedContext(signal), signal),
       mesh: (signal) => runtime.runNext({ context: scopedContext(signal), state, signal,
         workspaceId: config.ticket.executionWorkspaceId, nodeId: config.ticket.nodeId }),
       onSettlement: (mesh) => {
@@ -150,6 +151,8 @@ async function runConnectedAssignment(
   vault: WorkerCredentialVault,
   stages: ConnectedWorkerStage[],
   observed: Record<string, unknown>,
+  nativeRuntime?: WorkerNativeContinuationOwner,
+  signal?: AbortSignal,
 ): Promise<ConnectedWorkerReport["outcome"]> {
   const leaseOwner = new WorkerAssignmentLeaseOwner(context, state, vault, config.ticket.registryWorkspaceId);
   const terminal = new WorkerTerminalSettlement(state, context);
@@ -161,10 +164,17 @@ async function runConnectedAssignment(
   stages.push("claim");
   if (config.stopAfter === "claim") return "stopped";
 
-  const workload = await readWorkload(context, lease, `workload:${lease.assignmentId}:${String(lease.leaseRevision)}`);
+  let workload = await readWorkload(context, lease, `workload:${lease.assignmentId}:${String(lease.leaseRevision)}`);
   observed["workloadSha256"] = (workload.body["workload"] as Record<string, unknown> | undefined)?.["workloadSha256"];
   stages.push("workload");
   if (config.stopAfter === "workload") return "stopped";
+
+  const nativeRoute = await routeWorkerNativeContinuation({ workload: workload.body["workload"] as Record<string, unknown>, context,
+    lease, owner: leaseOwner, nativeRuntime: config.executionMode === "protocol_probe" ? undefined : nativeRuntime, signal, observed });
+  if (nativeRoute.kind === "waiting") return "stopped";
+  lease = nativeRoute.lease;
+  workload = { ...workload, body: { ...workload.body, workload: nativeRoute.workload } };
+  observed["workloadSha256"] = nativeRoute.workload.workloadSha256;
 
   let transcript: readonly string[] = PROTOCOL_PROBE_TRANSCRIPT;
   let usageEventIds: readonly string[] = [];

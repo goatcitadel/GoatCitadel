@@ -202,7 +202,7 @@ describe("GatewayService loop44 facade behavior", () => {
       (GatewayService.prototype as any).isMcpToolApproved.call(gateway, "server-2", "zeta.write"),
     ).resolves.toBe(false);
 
-    const patched = await GatewayService.prototype.patchMcpServerState.call(gateway, "server-2", {
+    const patched = await gateway.mcpServerStore.patchServerState("server-2", {
       status: "error",
       lastConnectedAt: undefined,
       lastError: "spawn failed",

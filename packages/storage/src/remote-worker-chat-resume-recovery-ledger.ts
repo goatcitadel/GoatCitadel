@@ -6,7 +6,7 @@ import { PendingApprovalActionRepository } from "./pending-approval-action-repo.
 import { DurableRunRepository } from "./durable-run-repo.js";
 import type { RemoteWorkerChatResumeRecord } from "./remote-worker-chat-resume-ledger.js";
 
-interface RecoveryMaterial {
+interface ToolRecoveryMaterial {
   schemaVersion: "goatcitadel.remote-worker-chat-resume-recovery.v1";
   resumeId: string;
   resumeSha256: string;
@@ -18,6 +18,13 @@ interface RecoveryMaterial {
   pendingActionSha256: string;
   dispatchAuthority: RemoteWorkerAssignmentDispatchAuthority;
 }
+
+interface NativeRecoveryMaterial extends Omit<ToolRecoveryMaterial, "schemaVersion" | "pendingActionSha256"> {
+  schemaVersion: "goatcitadel.remote-worker-native-runtime-resume-recovery.v1";
+  nativeRuntimeBindingSha256: string;
+  pendingActionSha256?: never;
+}
+type RecoveryMaterial = ToolRecoveryMaterial | NativeRecoveryMaterial;
 
 export interface RemoteWorkerChatResumeRecoveryRecord { material: RecoveryMaterial; materialSha256: string }
 interface Row { recovery_revision: number; material_json: string; material_sha256: string }
@@ -36,10 +43,13 @@ export class RemoteWorkerChatResumeRecoveryLedger {
     const records = rows.map(row => {
       const material = JSON.parse(row.material_json) as RecoveryMaterial;
       if (canonicalJsonString(material) !== row.material_json || digest(material) !== row.material_sha256 ||
-        material.schemaVersion !== "goatcitadel.remote-worker-chat-resume-recovery.v1" ||
+        (recorded.material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1"
+          ? material.schemaVersion !== "goatcitadel.remote-worker-native-runtime-resume-recovery.v1" ||
+            material.nativeRuntimeBindingSha256 !== recorded.material.nativeRuntimeBindingSha256 || Object.hasOwn(material, "pendingActionSha256")
+          : material.schemaVersion !== "goatcitadel.remote-worker-chat-resume-recovery.v1" || !/^[a-f0-9]{64}$/.test(material.pendingActionSha256)) ||
         material.resumeId !== recorded.resumeId || material.resumeSha256 !== recorded.materialSha256 ||
         material.approvalSha256 !== recorded.material.approvalSha256 ||
-        !/^[a-f0-9]{64}$/.test(material.pendingActionSha256) || !/^[a-f0-9]{64}$/.test(material.priorLeaseRequestSha256) ||
+        !/^[a-f0-9]{64}$/.test(material.priorLeaseRequestSha256) ||
         material.recoveryRevision !== Number(row.recovery_revision) ||
         !Number.isSafeInteger(material.priorLeaseRevision) || material.priorLeaseRevision < recorded.material.priorLeaseRevision ||
         material.dispatchAuthority.durableRunId !== recorded.material.durableRunId ||
@@ -71,25 +81,34 @@ export class RemoteWorkerChatResumeRecoveryLedger {
       lease.parentDispatchAuthority.durableRunAttempt !== previous.durableRunAttempt ||
       lease.parentDispatchAuthority.durableRunVersion < previous.durableRunVersion)) throw invalid();
     const approval = new ApprovalRepository(this.db).get(recorded.material.approvalId);
-    const pending = new PendingApprovalActionRepository(this.db).find(recorded.material.approvalId);
-    if (!pending || pending.actionType !== "tool.invoke" || approval.status === "pending" ||
-      digest(approval) !== recorded.material.approvalSha256) throw invalid();
-    // A completed approved action can change its terminal fields, but recovery
-    // must not bless different arguments, scope, or request metadata.
-    const originalPending = { ...pending };
-    if (approval.status === "approved") {
-      if (!["pending", "executed", "failed"].includes(pending.resolutionStatus ?? "")) throw invalid();
-      originalPending.resolutionStatus = "pending";
-      delete originalPending.resolvedAt;
-      delete originalPending.result;
+    if (approval.status === "pending" || digest(approval) !== recorded.material.approvalSha256) throw invalid();
+    let requestEvidence: Pick<ToolRecoveryMaterial, "schemaVersion" | "pendingActionSha256"> |
+      Pick<NativeRecoveryMaterial, "schemaVersion" | "nativeRuntimeBindingSha256">;
+    if (recorded.material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1") {
+      if (approval.kind !== "remote_worker.native_runtime" || approval.status === "edited" ||
+          digest(approval.payload.nativeRuntime) !== recorded.material.nativeRuntimeBindingSha256) throw invalid();
+      requestEvidence = { schemaVersion: "goatcitadel.remote-worker-native-runtime-resume-recovery.v1",
+        nativeRuntimeBindingSha256: recorded.material.nativeRuntimeBindingSha256 };
+    } else {
+      const pending = new PendingApprovalActionRepository(this.db).find(recorded.material.approvalId);
+      if (!pending || pending.actionType !== "tool.invoke") throw invalid();
+      // Tool terminal fields can change, but their original request cannot.
+      const originalPending = { ...pending };
+      if (approval.status === "approved") {
+        if (!["pending", "executed", "failed"].includes(pending.resolutionStatus ?? "")) throw invalid();
+        originalPending.resolutionStatus = "pending";
+        delete originalPending.resolvedAt;
+        delete originalPending.result;
+      }
+      if (digest(originalPending) !== recorded.material.pendingActionSha256) throw invalid();
+      requestEvidence = { schemaVersion: "goatcitadel.remote-worker-chat-resume-recovery.v1", pendingActionSha256: digest(pending) };
     }
-    if (digest(originalPending) !== recorded.material.pendingActionSha256) throw invalid();
     const material: RecoveryMaterial = {
-      schemaVersion: "goatcitadel.remote-worker-chat-resume-recovery.v1", resumeId: recorded.resumeId,
+      ...requestEvidence, resumeId: recorded.resumeId,
       resumeSha256: recorded.materialSha256, recoveryRevision: (recorded.recovery?.material.recoveryRevision ?? 0) + 1,
       priorAuthorityRecordSha256: recorded.recovery?.materialSha256 ?? digest(previous),
       priorLeaseRevision: lease.leaseRevision, priorLeaseRequestSha256: lease.requestSha256,
-      approvalSha256: digest(approval), pendingActionSha256: digest(pending), dispatchAuthority: authority,
+      approvalSha256: digest(approval), dispatchAuthority: authority,
     };
     this.db.prepare(`INSERT INTO remote_worker_chat_resume_recoveries
       (resume_id, recovery_revision, material_json, material_sha256, created_at) VALUES (?, ?, ?, ?, ?)`)

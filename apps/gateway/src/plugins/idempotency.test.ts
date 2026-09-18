@@ -375,6 +375,96 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it.each(["POST", "DELETE"] as const)("never fingerprints a Vault %s body and blocks completed duplicates", async (method) => {
+    let calls = 0;
+    const route = method === "POST" ? "/api/v1/citadels/:citadelId/vault-secrets" : "/api/v1/citadels/:citadelId/vault-secrets/:secretId";
+    const built = await buildApp((fastify) => {
+      fastify.route({ method, url: route, handler: async () => { calls += 1; return { items: [] }; } });
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const url = route.replace(":citadelId", "vault-one").replace(":secretId", "secret-one");
+    try {
+      for (const [index, key] of ["vault-attempt-1", "vault-attempt-2", "vault-attempt-1"].entries()) {
+        const response = await built.app.inject({ method, url, headers: { "Idempotency-Key": key },
+          payload: { name: `synthetic-name-${index}`, value: `synthetic-value-${index}`, extra: `synthetic-extra-${index}`, expectedRevision: String(index).repeat(64) } });
+        expect(response.statusCode).toBe(index === 2 ? 409 : 200);
+        expect(response.headers["cache-control"]).toBe("no-store");
+      }
+      expect(calls).toBe(2);
+      expect(new Set(claim.mock.calls.map(([input]) => input.payloadHash)).size).toBe(1);
+      await built.app.inject({ method, url: url.replace("vault-one", "vault-two"), headers: { "Idempotency-Key": "vault-attempt-3" }, payload: {} });
+      expect(claim.mock.calls[3]![0].payloadHash).not.toBe(claim.mock.calls[0]![0].payloadHash);
+      expect(JSON.stringify(claim.mock.calls)).not.toMatch(/synthetic-name|synthetic-value|synthetic-extra/);
+    } finally { await built.app.close(); }
+  });
+
+  it("disables caching of explicitly revealed Vault values", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.get("/api/v1/citadels/:citadelId/vault-secrets/:secretId/reveal", async () => ({ value: "synthetic-reveal" }));
+    });
+    try {
+      const response = await built.app.inject({ method: "GET", url: "/api/v1/citadels/one/vault-secrets/one/reveal" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+    } finally { await built.app.close(); }
+  });
+
+  it.each(["POST", "PATCH", "DELETE"] as const)("never fingerprints integration %s bodies and blocks completed duplicates", async (method) => {
+    let calls = 0;
+    const route = method === "POST" ? "/api/v1/integrations/connections" : "/api/v1/integrations/connections/:connectionId";
+    const built = await buildApp(fastify => { fastify.route({ method, url: route, handler: async () => { calls += 1; return { ok: true }; } }); });
+    const claim = vi.spyOn(built.store, "claim");
+    const url = route.replace(":connectionId", "one");
+    try {
+      for (const [index, key] of ["integration-attempt-1", "integration-attempt-2", "integration-attempt-1"].entries()) {
+        const response = await built.app.inject({ method, url: `${url}?extra=synthetic-query-${index}`, headers: { "Idempotency-Key": key },
+          payload: { config: { apiKey: `synthetic-value-${index}` }, extra: `synthetic-extra-${index}`, expectedRevision: String(index).repeat(64) } });
+        expect(response.statusCode).toBe(index === 2 ? 409 : 200);
+        expect(response.headers["cache-control"]).toBe("no-store");
+      }
+      expect(calls).toBe(2);
+      expect(new Set(claim.mock.calls.map(([input]) => input.payloadHash)).size).toBe(1);
+      if (method !== "POST") {
+        await built.app.inject({ method, url: url.replace("/one", "/two"), headers: { "Idempotency-Key": "integration-attempt-3" }, payload: {} });
+        expect(claim.mock.calls[3]![0].payloadHash).not.toBe(claim.mock.calls[0]![0].payloadHash);
+      }
+      expect(JSON.stringify(claim.mock.calls)).not.toMatch(/synthetic-value|synthetic-extra|synthetic-query/);
+    } finally { await built.app.close(); }
+  });
+
+  it.each(["/api/v1/channels/drafts/:draftId/secure-fields", "/api/v1/channels/drafts/:draftId/connection-review"])("keeps channel credential bodies out of durable retry identity at %s", async route => {
+    let calls = 0;
+    const built = await buildApp(fastify => { fastify.post(route, async () => { calls += 1; return { ok: true }; }); });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      for (const [index, key] of ["channel-attempt-1", "channel-attempt-2", "channel-attempt-1"].entries()) {
+        const response = await built.app.inject({ method: "POST", url: `${route.replace(":draftId", "one")}?extra=synthetic-query-${index}`, headers: { "Idempotency-Key": key }, payload: { values: { botToken: `synthetic-token-${index}` }, expectedRevision: index + 1, extra: `synthetic-extra-${index}` } });
+        expect(response.statusCode).toBe(index === 2 ? 409 : 200);
+      }
+      expect(calls).toBe(2);
+      expect(new Set(claim.mock.calls.map(([input]) => input.payloadHash)).size).toBe(1);
+      await built.app.inject({ method: "POST", url: route.replace(":draftId", "two"), headers: { "Idempotency-Key": "channel-attempt-3" }, payload: {} });
+      expect(claim.mock.calls[3]![0].payloadHash).not.toBe(claim.mock.calls[0]![0].payloadHash);
+      expect(JSON.stringify(claim.mock.calls)).not.toMatch(/synthetic-token|synthetic-extra|synthetic-query/);
+    } finally { await built.app.close(); }
+  });
+
+  it.each(["/api/v1/mcp/servers/:serverId", "/api/v1/mcp/servers/:serverId/policy", "/api/v1/mcp/servers/:serverId/oauth/complete"])("keeps MCP bodies out of retained retry fingerprints at %s", async route => {
+    const built = await buildApp(fastify => { fastify.post(route, async () => ({ ok: true })); });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      for (const [index, key] of ["mcp-attempt-1", "mcp-attempt-2", "mcp-attempt-1"].entries()) {
+        const response = await built.app.inject({ method: "POST", url: `${route.replace(":serverId", "one")}?extra=synthetic-query-${index}`, headers: { "Idempotency-Key": key }, payload: { args: ["--password", `synthetic-credential-${index}`], code: `synthetic-code-${index}`, expectedRevision: String(index).repeat(64) } });
+        expect(response.statusCode).toBe(index === 2 ? 409 : 200);
+      }
+      expect(new Set(claim.mock.calls.map(([input]) => input.payloadHash)).size).toBe(1);
+      await built.app.inject({ method: "POST", url: route.replace(":serverId", "two"), headers: { "Idempotency-Key": "mcp-attempt-3" }, payload: {} });
+      expect(claim.mock.calls[3]![0].payloadHash).not.toBe(claim.mock.calls[0]![0].payloadHash);
+      expect(JSON.stringify(claim.mock.calls)).not.toMatch(/synthetic-credential|synthetic-code|synthetic-query/);
+    } finally { await built.app.close(); }
+  });
+
   it("binds mobile push retries to a secret-free provider tuple", async () => {
     const built = await buildApp((fastify) => {
       fastify.put("/api/v1/mobile/current-device/push", async () => ({ ok: true }));

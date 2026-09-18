@@ -1,3 +1,4 @@
+import { createWorkerAssignmentPreflight } from "./remote-worker-assignment-preflight.js";
 import {
   RemoteWorkerAssignmentDispatchService,
   type RemoteWorkerAssignmentDispatchStorePort,
@@ -90,6 +91,7 @@ export interface RemoteWorkerAssignmentRuntimeComposition {
 }
 
 export interface RemoteWorkerAssignmentExecutionOwnerDependencies {
+  readonly projectWorkload?: ConstructorParameters<typeof RemoteWorkerAssignmentDispatchService>[2];
   /** The production-dark HX-503 inference owner (sole raw-lease hash boundary). */
   readonly inference: RemoteWorkerInferenceExchangeOwnerPort;
   /** The production-dark HX-506 artifact/effect settlement owners. */
@@ -144,6 +146,7 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
   const dispatchService = new RemoteWorkerAssignmentDispatchService(
     dependencies.assignments,
     dependencies.meshAdmissions,
+    dependencies.execution?.projectWorkload,
   );
   const dispatchProtocolService = new RemoteWorkerAssignmentDispatchProtocolService({
     credentialAuthority: currentAuthority,
@@ -163,21 +166,7 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
           settlement: dependencies.execution.settlement,
           clock,
         });
-  const preflight = async (): Promise<void> => {
-    await protectedAuthority.assertAvailable();
-    assertPort(dependencies.nonceConsumer, "consume", "durable nonce consumer");
-    assertPort(dependencies.meshAdmissions, "resolveCurrentForRuntimeCredential", "mesh admission authority");
-    assertPort(dependencies.assignments, "resolveActiveAuthorityByLeaseTokenHash", "assignment store");
-    assertPort(dependencies.assignments, "listTaskBoundChatOffers", "assignment offer store");
-  };
-  const executionPreflight = async (): Promise<void> => {
-    await preflight();
-    assertPort(dependencies.execution?.inference, "performInference", "inference exchange owner");
-    for (const method of ["openUpload", "appendPart", "commitArtifact"]) {
-      assertPort(dependencies.execution?.settlement.artifacts, method, "artifact settlement owner");
-    }
-    assertPort(dependencies.execution?.settlement.effects, "dispatchEffect", "effect settlement owner");
-  };
+  const { preflight, executionPreflight } = createWorkerAssignmentPreflight(dependencies, protectedAuthority);
   return Object.freeze({
     ...(meshCapabilities === undefined ? {} : { meshCapabilities }),
     assignmentProtocol: Object.freeze({
@@ -197,13 +186,4 @@ export function createGatewayRemoteWorkerAssignmentRuntimeComposition(
           }),
         }),
   });
-}
-
-function assertPort(value: unknown, method: string, label: string): void {
-  // AsyncStorage repositories are callable path proxies on both supported
-  // adapters. Require the method, without rejecting that canonical facade.
-  if (value === null || (typeof value !== "object" && typeof value !== "function")
-    || typeof (value as Record<string, unknown>)[method] !== "function") {
-    throw new TypeError(`Remote worker ${label} is unavailable.`);
-  }
 }

@@ -26,5 +26,6 @@ struct NodeImageGuardApi final {
   napi_status (__cdecl* set_named_property)(napi_env, napi_value, const char*, napi_value);
   napi_status (__cdecl* object_freeze)(napi_env, napi_value);
   napi_status (__cdecl* throw_error)(napi_env, const char*, const char*);
+  napi_status (__cdecl* get_boolean)(napi_env, bool, napi_value*);
 };
 }

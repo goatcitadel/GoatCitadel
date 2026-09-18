@@ -6,12 +6,22 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cstdio>
+#include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 namespace goatcitadel::worker_cell {
 // Fault injection through the already-held fixture handle. Opening another
 // writer is correctly excluded; NTFS trims spare allocation on writer cleanup.
 struct CellProvisioningJournalTestPeer final {
+  template <typename Host, typename Guest>
+  static DWORD Joined(CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor, const CellFileSha256& head,
+    CellCapacityLayout& layout, const CellCapacityLayoutRecord& record, const CellFootprintScanLimits& limits,
+    const CellFootprintScanGuard& guard, const CellFootprintCellBinding& binding, void* context, Host host, Guest guest,
+    CellProvisioningJoinedCapacity* output) {
+    return journal.ReadJoinedCapacity(anchor, head, layout, record, limits, guard, binding, {context, host, guest}, output);
+  }
   static HANDLE File(const CellProvisioningJournal& journal) { return journal.file_; }
   static DWORD RunVolume(CellProvisioningJournal& journal, const CellVolumeProvisioningCommitter& sink,
     DWORD (*verify)(void*) noexcept, DWORD (*attach)(void*) noexcept,
@@ -19,6 +29,35 @@ struct CellProvisioningJournalTestPeer final {
     return journal.RunVolume({verify, attach, layout, context}, sink, GetTickCount64() + 10000, nullptr);
   }
   static DWORD ReadMetadata(CellProvisioningJournal& journal) { return journal.ReadJournal(); }
+  static DWORD Observe(CellProvisioningJournal& journal, DWORD (*read)(void*, const CellFootprintScanLimits&,
+    const CellFootprintScanGuard&, CellDirectoryFootprint*) noexcept, void* context, const CellProvisioningAnchor& anchor,
+    const CellFileSha256& head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellProvisioningFootprint* output) {
+    return journal.ReadMountedFootprint(read, context, anchor, head, limits, guard, output);
+  }
+  static void DriftCapacityBinding(CellProvisioningJournal& journal, unsigned kind) {
+    if (kind == 1) journal.anchor_.file.file_id.back() ^= 1;
+    if (kind == 2) journal.anchor_.prepared_sha256.back() ^= 1;
+    if (kind == 3) journal.plan_.assignment_binding.back() ^= 1;
+    if (kind == 4) journal.plan_.profile_sha256.back() ^= 1;
+    if (kind == 5) journal.plan_.disk.virtual_bytes ^= 2 * 1024 * 1024;
+    if (kind == 6) journal.plan_.disk.reserved_file_bytes ^= 2 * 1024 * 1024;
+    if (kind == 7) journal.plan_.disk.identifier.Data1 ^= 1;
+    if (kind == 8) journal.name_.back() ^= 1;
+    if (kind == 9) journal.owner_.back() ^= 1;
+    if (kind == 10) journal.controller_.back() ^= 1;
+    if (kind == 11) journal.records_.back() ^= 1;
+    if (kind == 12) journal.mounted_workspace_records_.back().back() ^= 1;
+    if (kind == 13) journal.healthy_ = !journal.healthy_;
+    if (kind == 14) journal.creating_ = !journal.creating_;
+    if (kind == 15) journal.lifetime_revision_ ^= 1;
+  }
+  static DWORD Observe(CellProvisioningJournal& journal, DWORD (*read)(void*, const CellFootprintScanLimits&,
+    const CellFootprintScanGuard&, CellDirectoryInventory*) noexcept, void* context, const CellProvisioningAnchor& anchor,
+    const CellFileSha256& head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellProvisioningInventory* output, const CellFootprintCellBinding* binding = nullptr) {
+    return journal.ReadMountedInventory(read, context, anchor, head, limits, guard, output, binding);
+  }
   static DWORD RunFormat(CellProvisioningJournal& journal, const CellFormatProvisioningCommitter& sink,
     DWORD (*verify)(void*) noexcept, DWORD (*format)(void*, const CellNtfsFormatCommitter&) noexcept,
     void* context, HANDLE cancellation) {
@@ -313,6 +352,11 @@ struct Handle final {
 };
 void Check(bool condition, const char* message) {
   ++checks;
+  if (checks % 128 == 0) {
+    std::fprintf(stderr, "Native journal progress: checks=%u tick=%llu case=%s\n", checks,
+      static_cast<unsigned long long>(GetTickCount64()), message);
+    std::fflush(stderr);
+  }
   if (!condition) throw std::runtime_error(std::string(message) + " (provisioning journal check " + std::to_string(checks) +
     ", native error " + std::to_string(GetLastError()) + ")");
 }
@@ -510,6 +554,274 @@ int RunCellProvisioningRecoveryFixture(int argc, wchar_t** argv) {
   return 0;
 }
 
+unsigned RunCellHostCapacityJournalTests(HANDLE parent, const std::wstring& user) {
+  checks = 0; const auto parent_path = ParentPath(parent);
+  {
+    const auto base = parent_path + L"\\" + Name();
+    std::vector<std::uint8_t> descriptor;
+    Check(!BuildCellParentSecurity(user, user, &descriptor), "build owned host-layout security");
+    SECURITY_ATTRIBUTES security{sizeof(security), descriptor.data(), FALSE};
+    Check(CreateDirectoryW(base.c_str(), &security), "create an exclusive host-capacity fixture beneath the admitted test parent");
+    std::array<Handle, kCellCapacityAreaCount> roots;
+    CellCapacityAreaRoots areas; CellCapacityLayoutRecord layout_record;
+    const auto selected = Plan(); layout_record.assignment_binding = selected.assignment_binding; layout_record.profile_sha256 = selected.profile_sha256;
+    for (std::size_t i = 0; i < roots.size(); ++i) {
+      const auto area_path = base + L"\\area-" + std::to_wstring(i);
+      Check(CreateDirectoryW(area_path.c_str(), &security), "create a disjoint owned host-area root");
+      roots[i].value = CreateFileW(area_path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      FILE_ID_INFO id{};
+      Check(roots[i].value != INVALID_HANDLE_VALUE && GetFileInformationByHandleEx(roots[i].value, FileIdInfo, &id, sizeof(id)),
+        "retain independent host-area identities");
+      layout_record.roots[i].volume_serial = id.VolumeSerialNumber;
+      std::copy(std::begin(id.FileId.Identifier), std::end(id.FileId.Identifier), layout_record.roots[i].file_id.begin());
+      areas[i] = {roots[i].value, layout_record.roots[i]};
+    }
+    CellProvisioningJournal owned; CellProvisioningAnchor retained; CommitFixture commits;
+    const CellProvisioningCommitter committer{CommitFixture::Commit, &commits};
+    const auto cell_name = Name();
+    Check(!owned.Create(roots[0].value, areas[0].identity, cell_name, user, user, selected, &retained, &committer) &&
+      !owned.ProvisionWorkspace(retained) && !owned.ProvisionDisk(retained, 10000),
+      "create only the owned journal and unattached backing file for host-capacity composition");
+    std::vector<CellProvisioningRecord> records;
+    Check(!owned.RecordCheckpoints(&records) && records.size() == 5, "retain complete independent creation history for host capture");
+    CellFileSha256 head{}; std::copy_n(records.back().end() - 32, 32, head.begin());
+    CellCapacityLayout layout;
+    Check(!layout.OpenRecorded(layout_record, areas, user, user), "open the complete protected host layout without adopting replacements");
+    struct Current final {
+      unsigned calls = 0, deny_at = 0;
+      static DWORD Check(void* raw) noexcept {
+        auto& self = *static_cast<Current*>(raw);
+        return ++self.calls == self.deny_at ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
+      }
+    } current;
+    CellProvisioningHostCapacity observed;
+    const auto host_error = owned.ObserveHostCapacity(retained, head, layout, layout_record, {}, {Current::Check, &current}, &observed);
+    if (host_error) std::fprintf(stderr, "host capacity error=%lu current_checks=%u\n", host_error, current.calls);
+    Check(!host_error,
+      "journal owner joins actual retained journal/VHDX handles to the complete host-root scan");
+    CellVirtualDiskRecord disk;
+    Check(!owned.RecordDisk(&disk), "read independently retained backing identity after host capture");
+    unsigned files = 0, journal_matches = 0, backing_matches = 0;
+    for (const auto& area : observed.areas) for (const auto& entry : area.entries) {
+      if (!entry.directory) ++files;
+      if (entry.identity == retained.file) {
+        ++journal_matches;
+        Check(entry.logical_file_bytes == observed.backing.journal_bytes && entry.allocated_bytes == observed.backing.journal_allocated_bytes,
+          "journal contributes its independently measured counts exactly once");
+      }
+      if (entry.identity == disk.backing) {
+        ++backing_matches;
+        Check(entry.logical_file_bytes == observed.backing.backing.file_bytes && entry.allocated_bytes == observed.backing.backing.allocated_bytes,
+          "backing contributes host allocation without adding guest allocation");
+      }
+    }
+    Check(files == 2 && journal_matches == 1 && backing_matches == 1 && current.calls > 13,
+      "complete host collection contains both exclusive files exactly once under repeated current authority");
+    for (const auto at : {1U, current.calls / 2, current.calls}) {
+      Current revoked{0, at}; auto rejected = observed;
+      Check(owned.ObserveHostCapacity(retained, head, layout, layout_record, {}, {Current::Check, &revoked}, &rejected) == ERROR_ACCESS_DENIED &&
+        rejected.areas == CellCapacityAreaInventories{} && rejected.backing.anchor == CellProvisioningAnchor{},
+        "revocation at initial, middle or final custody check discards both joined observations");
+    }
+    auto changed = layout_record; changed.assignment_binding[0] ^= 1; auto rejected = observed;
+    Current unused;
+    Check(owned.ObserveHostCapacity(retained, head, layout, changed, {}, {Current::Check, &unused}, &rejected) == ERROR_FILE_INVALID &&
+      rejected.areas == CellCapacityAreaInventories{} && rejected.backing.anchor == CellProvisioningAnchor{} && !unused.calls,
+      "a host layout for another assignment cannot borrow this journal's files");
+    {
+      // Only the mounted-volume reader is controlled here. Host journal/VHDX
+      // collection and guest directory/file pinning use their actual owners.
+      const auto guest_parent_path = base + L"\\joined-guest-parent";
+      Check(CreateDirectoryW(guest_parent_path.c_str(), &security), "create isolated protected guest fixture parent outside host areas");
+      Handle guest_parent{CreateFileW(guest_parent_path.c_str(), FILE_GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+      FILE_ID_INFO guest_parent_id{}; CellFileIdentity guest_parent_identity;
+      Check(guest_parent.value != INVALID_HANDLE_VALUE && GetFileInformationByHandleEx(guest_parent.value, FileIdInfo,
+        &guest_parent_id, sizeof(guest_parent_id)), "retain actual guest fixture parent identity");
+      guest_parent_identity.volume_serial = guest_parent_id.VolumeSerialNumber;
+      std::copy(std::begin(guest_parent_id.FileId.Identifier), std::end(guest_parent_id.FileId.Identifier), guest_parent_identity.file_id.begin());
+      CellWorkspaceDirectories guest; CellWorkspaceIdentities guest_roots;
+      Check(guest.Create(guest_parent.value, guest_parent_identity, cell_name, user, user) == 0 && guest.RecordIdentities(&guest_roots) == 0,
+        "create real protected guest directories for the controlled mounted reader");
+      const auto guest_file = guest.DirectoryPath(CellDirectory::work) + L"\\data";
+      Write(guest_file, std::vector<std::uint8_t>(37, 0x61), false);
+      struct Joined final {
+        CellProvisioningJournal& journal; CellWorkspaceDirectories& guest; CellWorkspaceIdentities roots;
+        CellCapacityLayoutRecord layout; std::wstring name, host_path, guest_file;
+        unsigned mode = 0, guest_calls = 0, host_calls = 0, after_guest_checks = 0;
+        bool captured = false, host_pinned = false, guest_pinned = true;
+        HANDLE cancellation = nullptr;
+        static bool WriterRefused(const std::wstring& path, bool directory) noexcept {
+          Handle writer{CreateFileW(path.c_str(), directory ? FILE_ADD_FILE : GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0), nullptr)};
+          return writer.value == INVALID_HANDLE_VALUE && GetLastError() == ERROR_SHARING_VIOLATION;
+        }
+        static DWORD Authority(void* raw) noexcept {
+          auto& self = *static_cast<Joined*>(raw);
+          if (self.captured) {
+            ++self.after_guest_checks;
+            self.guest_pinned = self.guest_pinned && WriterRefused(self.guest_file, false);
+            if (!self.guest_pinned) return ERROR_INVALID_DATA;
+            if (self.mode == 11) return ERROR_ACCESS_DENIED;
+          }
+          return ERROR_SUCCESS;
+        }
+        static DWORD Binding(const void* raw, const std::wstring& name, const CellFileIdentity& work) noexcept {
+          const auto& self = *static_cast<const Joined*>(raw);
+          return name != self.name || work != self.roots.directories[static_cast<std::size_t>(CellDirectory::work)] ||
+            (self.mode == 12 && self.captured) ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
+        }
+        static DWORD Host(void* raw, const CellProvisioningAnchor& anchor, const CellFileSha256& head, CellCapacityLayout& layout,
+          const CellCapacityLayoutRecord& record, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+          CellProvisioningHostCapacity* output, const CellCapacityCaptureObserver* observer) noexcept {
+          auto& self = *static_cast<Joined*>(raw); ++self.host_calls;
+          const auto error = self.journal.ObserveHostCapacity(anchor, head, layout, record, limits, guard, output, self.mode == 10 ? nullptr : observer);
+          if (!error) {
+            if (self.mode == 6) output->backing.anchor.file.file_id[0] ^= 1;
+            if (self.mode == 7) output->backing.checkpoint_sha256[0] ^= 1;
+            if (self.mode == 8) output->backing.profile_sha256[0] ^= 1;
+            if (self.mode == 9) output->backing.assignment_binding[0] ^= 1;
+          }
+          return error;
+        }
+        static DWORD Guest(void* raw, const CellProvisioningAnchor& anchor, const CellFileSha256& head,
+          const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, const CellFootprintCellBinding& binding,
+          CellDirectoryInventoryPins& pins, CellProvisioningInventory* output) noexcept {
+          auto& self = *static_cast<Joined*>(raw); ++self.guest_calls;
+          self.host_pinned = WriterRefused(self.host_path, true);
+          if (!self.host_pinned) return ERROR_INVALID_DATA;
+          auto error = binding.authorize(binding.context, self.name, self.roots.directories[static_cast<std::size_t>(CellDirectory::work)]);
+          CellDirectoryInventory inventory;
+          if (!error) error = CaptureCellWorkspaceInventory(self.guest, self.roots, limits, guard, pins, &inventory);
+          if (error) return error;
+          self.captured = true;
+          *output = {anchor, self.layout.assignment_binding, self.layout.profile_sha256, head, self.roots, std::move(inventory)};
+          if (self.mode == 1) return ERROR_IO_INCOMPLETE;
+          if (self.mode == 2) output->anchor.file.file_id[0] ^= 1;
+          if (self.mode == 3) output->checkpoint_sha256[0] ^= 1;
+          if (self.mode == 4) output->profile_sha256[0] ^= 1;
+          if (self.mode == 5) output->assignment_binding[0] ^= 1;
+          if (self.mode == 13) SetEvent(self.cancellation);
+          if (self.mode == 15) Sleep(limits.wall_limit_ms + 1);
+          return ERROR_SUCCESS;
+        }
+      };
+      std::size_t combined_entries = 0;
+      CellProvisioningJoinedCapacity positive;
+      for (unsigned mode = 0; mode <= 15; ++mode) {
+        Handle cancellation{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+        Check(cancellation.value != nullptr, "owned joined-read cancellation event");
+        Joined fixture{owned, guest, guest_roots, layout_record, cell_name, base + L"\\area-1", guest_file};
+        fixture.mode = mode; fixture.cancellation = cancellation.value;
+        auto limits = CellFootprintScanLimits{};
+        if (mode == 14) limits.max_entries = static_cast<std::uint32_t>(combined_entries - 1);
+        if (mode == 15) limits.wall_limit_ms = 2000;
+        CellProvisioningJoinedCapacity joined; joined.host = observed; joined.guest.anchor = retained;
+        const auto error = CellProvisioningJournalTestPeer::Joined(owned, retained, head, layout, layout_record, limits,
+          {Joined::Authority, &fixture, cancellation.value}, {Joined::Binding, &fixture}, &fixture, Joined::Host, Joined::Guest, &joined);
+        if (!mode) {
+          Check(!error && fixture.guest_calls == 1 && fixture.host_calls == 1 && fixture.host_pinned && fixture.guest_pinned &&
+            fixture.after_guest_checks > 0 && joined.host.areas == observed.areas && joined.guest.inventory.entries.size() == 5 &&
+            joined.guest.inventory.footprint.logical_file_bytes == 37, "positive joined read holds real host and guest handles through final authority");
+          positive = joined; combined_entries = joined.guest.inventory.entries.size();
+          for (const auto& area : joined.host.areas) combined_entries += area.entries.size();
+        } else {
+          Check(error != 0 && joined.host.areas == CellCapacityAreaInventories{} && joined.host.backing.anchor == CellProvisioningAnchor{} &&
+            joined.guest == CellProvisioningInventory{}, "reader errors, substituted bindings, omitted capture, revocation and bounds clear both results");
+          if (mode == 14) Check(error == ERROR_BUFFER_OVERFLOW, "combined entry ceiling applies across host and guest inventories");
+          if (mode == 15) Check(error == ERROR_TIMEOUT && fixture.captured, "guest read consumes the original shared deadline");
+          if (mode == 13) Check(error == ERROR_CANCELLED, "cancellation after guest capture withholds host publication");
+        }
+        Handle released{CreateFileW(guest_file.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+          nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+        Check(released.value != INVALID_HANDLE_VALUE, "every joined return releases guest pins without changing guest data");
+      }
+      Joined alias{owned, guest, guest_roots, layout_record, cell_name, base + L"\\area-1", guest_file};
+      Check(CellProvisioningJournalTestPeer::Joined(owned, positive.host.backing.anchor, positive.host.backing.checkpoint_sha256,
+        layout, layout_record, {}, {Joined::Authority, &alias}, {Joined::Binding, &alias}, &alias, Joined::Host, Joined::Guest, &positive) == 0 &&
+        positive.host.areas == observed.areas && positive.guest.inventory.entries.size() == 5,
+        "positive combined capture freezes input aliases before clearing the prior output");
+    }
+    struct Observer final {
+      unsigned calls = 0, discards = 0;
+      DWORD failure = ERROR_SUCCESS;
+      CellCapacityLayout* close = nullptr;
+      CellProvisioningJournal* close_journal = nullptr;
+      std::wstring journal_path;
+      bool journal_retained = false;
+      static DWORD Capture(void* raw, const CellCapacityPinnedView& view) noexcept {
+        auto& self = *static_cast<Observer*>(raw); ++self.calls;
+        auto error = view.Check(); if (error) return error;
+        if (self.close) self.close->Close();
+        if (self.close_journal) {
+          self.close_journal->Close();
+          Handle held{CreateFileW(self.journal_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+          self.journal_retained = held.value == INVALID_HANDLE_VALUE && GetLastError() == ERROR_SHARING_VIOLATION &&
+            self.close_journal->Verify() == ERROR_INVALID_STATE;
+          if (!self.journal_retained) return ERROR_INVALID_DATA;
+        }
+        return self.failure;
+      }
+      static void Discard(void* raw) noexcept { ++static_cast<Observer*>(raw)->discards; }
+    };
+    {
+      CellProvisioningJoinedCapacity joined;
+      joined.host = observed; joined.guest.anchor = retained;
+      const CellFootprintCellBinding binding{[](const void*, const std::wstring&, const CellFileIdentity&) noexcept -> DWORD {
+        return ERROR_SUCCESS;
+      }, nullptr};
+      Current authority;
+      Check(owned.ObserveJoinedCapacity(retained, head, layout, layout_record, {}, {Current::Check, &authority},
+        {}, &joined) == ERROR_INVALID_PARAMETER && !authority.calls && joined.host.areas == CellCapacityAreaInventories{} &&
+        joined.guest == CellProvisioningInventory{}, "joined capture requires cell authority before starting host collection");
+      joined.host = observed; joined.guest.anchor = retained;
+      Check(owned.ObserveJoinedCapacity(retained, head, layout, layout_record, {}, {Current::Check, &authority},
+        binding, &joined) == ERROR_IO_INCOMPLETE && authority.calls > 13 && joined.host.areas == CellCapacityAreaInventories{} &&
+        joined.guest == CellProvisioningInventory{}, "guest refusal inside a real held host scan discards both inventories");
+      Check(owned.ObserveJoinedCapacity(retained, head, layout, layout_record, {}, {Current::Check, &authority},
+        binding, nullptr) == ERROR_INVALID_PARAMETER, "joined capture refuses a null output");
+      CellProvisioningHostCapacity retry;
+      Check(owned.ObserveHostCapacity(retained, head, layout, layout_record, {}, {Current::Check, &authority}, &retry) == 0 &&
+        retry.areas == observed.areas, "refused joined capture releases temporary pins and preserves the original journal and host layout");
+      Check(owned.ObserveHostCapacity(retry.backing.anchor, retry.backing.checkpoint_sha256, layout, layout_record, {},
+        {Current::Check, &authority}, &retry) == 0 && retry.areas == observed.areas,
+        "host capture freezes bindings aliased into its own output before clearing it");
+      joined.host = observed; joined.guest.anchor = retained;
+      Check(owned.ObserveJoinedCapacity(joined.host.backing.anchor, joined.host.backing.checkpoint_sha256, layout, layout_record, {},
+        {Current::Check, &authority}, binding, &joined) == ERROR_IO_INCOMPLETE && joined.host.areas == CellCapacityAreaInventories{} &&
+        joined.guest == CellProvisioningInventory{}, "joined capture preserves aliased bindings until the actual missing-guest refusal");
+    }
+    for (unsigned mode = 0; mode < 3; ++mode) {
+      Observer observer; if (mode == 1) observer.failure = ERROR_ACCESS_DENIED;
+      if (mode == 2) observer.close = &layout;
+      const CellCapacityCaptureObserver capture{&observer, Observer::Capture, Observer::Discard};
+      Current authority; auto joined = observed;
+      const auto error = owned.ObserveHostCapacity(retained, head, layout, layout_record, {},
+        {Current::Check, &authority}, &joined, &capture);
+      Check(mode == 0 ? !error && joined.areas == observed.areas : error &&
+        joined.areas == CellCapacityAreaInventories{} && joined.backing.anchor == CellProvisioningAnchor{},
+        "journal observer remains provisional across callback failure and layout custody loss");
+      Check(observer.calls == 1 && observer.discards == (mode ? 1U : 0U),
+        "journal, layout and scanner discard related evidence once across nested owners");
+    }
+    Check(layout.OpenRecorded(layout_record, areas, user, user) == 0, "reopen only the recorded test layout after its explicit close");
+    Observer closing; closing.close_journal = &owned; closing.journal_path = base + L"\\area-0\\" + cell_name + L".provisioning";
+    const CellCapacityCaptureObserver on_close{&closing, Observer::Capture, Observer::Discard};
+    Current last_authority; auto refused = observed;
+    Check(owned.ObserveHostCapacity(retained, head, layout, layout_record, {}, {Current::Check, &last_authority}, &refused, &on_close) != 0 &&
+      closing.calls == 1 && closing.discards == 1 && closing.journal_retained && refused.areas == CellCapacityAreaInventories{} &&
+      refused.backing.anchor == CellProvisioningAnchor{}, "close revokes immediately but retains journal custody until its active callback unwinds");
+    Handle released{CreateFileW(closing.journal_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+    Check(released.value != INVALID_HANDLE_VALUE && owned.Phase() == CellProvisioningPhase::none,
+      "outermost read performs deferred cleanup and releases the actual journal file");
+  }
+  return checks;
+}
+
 unsigned RunCellProvisioningJournalTests(HANDLE parent, const CellFileIdentity& parent_identity, const std::wstring& user) {
   checks = 0; recovery_verified = false; committed_records.clear(); committed_layout = {};
   committed_volume.clear(); committed_volume_base.clear();
@@ -564,6 +876,100 @@ unsigned RunCellProvisioningJournalTests(HANDLE parent, const CellFileIdentity& 
   CellVirtualDiskRecord disk;
   Check(journal.RecordDisk(&disk) == 0 && disk.control == workspace.directories[1] && disk.spec.virtual_bytes == plan.disk.virtual_bytes,
     "disk completion binds the frozen capacity and correct control directory");
+  {
+    std::vector<CellProvisioningRecord> checkpoints;
+    Check(journal.RecordCheckpoints(&checkpoints) == ERROR_SUCCESS && checkpoints.size() == 5,
+      "backing capacity uses an independently retained complete creation history");
+    CellFileSha256 head{}; std::copy_n(checkpoints.back().end() - 32, 32, head.begin());
+    const auto allow = [](void*) noexcept -> DWORD { return ERROR_SUCCESS; };
+    const auto empty = [](const CellProvisioningBackingFootprint& value) {
+      return value.anchor == CellProvisioningAnchor{} && value.assignment_binding == CellFileSha256{} &&
+        value.profile_sha256 == CellFileSha256{} && value.checkpoint_sha256 == CellFileSha256{} &&
+        value.workspace == CellWorkspaceIdentities{} && value.backing.record.control == CellFileIdentity{} &&
+        value.backing.record.backing == CellFileIdentity{} && IsEqualGUID(value.backing.record.spec.identifier, GUID{}) &&
+        !value.backing.record.spec.virtual_bytes && !value.backing.record.spec.reserved_file_bytes &&
+        !value.backing.file_bytes && !value.backing.allocated_bytes && !value.journal_bytes &&
+        !value.journal_allocated_bytes && !value.host_file_allocated_bytes;
+    };
+    CellProvisioningBackingFootprint observed;
+    Check(journal.ObserveBackingFootprint(anchor, head, 10000, {allow}, &observed) == ERROR_SUCCESS,
+      "actual journal and unattached VHDX produce bound host-file accounting");
+    FILE_STANDARD_INFO journal_info{};
+    Check(GetFileInformationByHandleEx(CellProvisioningJournalTestPeer::File(journal), FileStandardInfo, &journal_info, sizeof(journal_info)),
+      "read independent journal allocation control");
+    const auto image_path = parent_path + L"\\" + name + L"\\control\\cell.vhdx";
+    DWORD high = 0; SetLastError(ERROR_SUCCESS);
+    const auto low = GetCompressedFileSizeW(image_path.c_str(), &high);
+    Check(low != INVALID_FILE_SIZE || GetLastError() == ERROR_SUCCESS, "read independent image allocation control");
+    Check(observed.anchor == anchor && observed.assignment_binding == plan.assignment_binding && observed.profile_sha256 == plan.profile_sha256 &&
+      observed.checkpoint_sha256 == head && observed.workspace == workspace && observed.backing.record.backing == disk.backing &&
+      observed.backing.record.control == disk.control && IsEqualGUID(observed.backing.record.spec.identifier, disk.spec.identifier),
+      "host charges preserve assignment, profile, checkpoints and both file identities");
+    Check(observed.journal_bytes == 5120 && observed.journal_allocated_bytes == static_cast<std::uint64_t>(journal_info.AllocationSize.QuadPart) &&
+      observed.backing.allocated_bytes == ((static_cast<std::uint64_t>(high) << 32) | low) &&
+      observed.host_file_allocated_bytes == observed.journal_allocated_bytes + observed.backing.allocated_bytes,
+      "unique host files are charged once without adding the guest-volume allocation");
+    Check(journal.ObserveBackingFootprint(observed.anchor, observed.checkpoint_sha256, 10000, {allow}, &observed) == ERROR_SUCCESS &&
+      observed.anchor == anchor && observed.checkpoint_sha256 == head, "aliased journal capacity bindings survive output clearing");
+    for (unsigned kind = 0; kind < 4; ++kind) {
+      auto bad_anchor = anchor; auto bad_head = head;
+      if (kind == 0) ++bad_anchor.file.volume_serial;
+      if (kind == 1) bad_anchor.file.file_id[0] ^= 1;
+      if (kind == 2) bad_anchor.prepared_sha256[0] ^= 1;
+      if (kind == 3) bad_head[0] ^= 1;
+      auto refused = observed;
+      Check(journal.ObserveBackingFootprint(bad_anchor, bad_head, 10000, {allow}, &refused) != ERROR_SUCCESS && empty(refused),
+        "foreign journal anchors and heads cannot relabel host capacity");
+    }
+    struct Guard final {
+      CellProvisioningJournal* journal;
+      unsigned calls = 0, at = 1, drift = 0;
+      DWORD refusal = 0;
+      HANDLE cancellation = nullptr;
+      bool metadata = false;
+      static DWORD Check(void* raw) noexcept {
+        auto& value = *static_cast<Guard*>(raw);
+        if (++value.calls != value.at) return ERROR_SUCCESS;
+        if (value.refusal) return value.refusal;
+        if (value.cancellation && !SetEvent(value.cancellation)) return GetLastError();
+        if (value.drift) CellProvisioningJournalTestPeer::DriftCapacityBinding(*value.journal, value.drift);
+        if (value.metadata) {
+          FILETIME time{}; const auto file = CellProvisioningJournalTestPeer::File(*value.journal);
+          if (!GetFileTime(file, nullptr, nullptr, &time)) return GetLastError();
+          ULARGE_INTEGER next; next.LowPart = time.dwLowDateTime; next.HighPart = time.dwHighDateTime;
+          next.QuadPart += 10000000; time.dwLowDateTime = next.LowPart; time.dwHighDateTime = next.HighPart;
+          if (!SetFileTime(file, nullptr, nullptr, &time)) return GetLastError();
+        }
+        return ERROR_SUCCESS;
+      }
+    };
+    Guard count{&journal};
+    Check(journal.ObserveBackingFootprint(anchor, head, 10000, {Guard::Check, &count}, &observed) == ERROR_SUCCESS && count.calls == 3,
+      "journal and backing observations share three bounded current-authority boundaries");
+    for (unsigned at = 1; at <= count.calls; ++at) {
+      Guard denied{&journal}; denied.at = at; denied.refusal = ERROR_ACCESS_DENIED;
+      auto refused = observed;
+      Check(journal.ObserveBackingFootprint(anchor, head, 10000, {Guard::Check, &denied}, &refused) == ERROR_ACCESS_DENIED &&
+        empty(refused) && denied.calls == at, "authority loss withholds the entire joined footprint");
+      Handle stopped{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+      Guard cancel{&journal}; cancel.at = at; cancel.cancellation = stopped.value;
+      refused = observed;
+      Check(stopped.value && journal.ObserveBackingFootprint(anchor, head, 10000, {Guard::Check, &cancel, stopped.value}, &refused) == ERROR_CANCELLED &&
+        empty(refused) && cancel.calls == at, "joined footprint observes cancellation immediately after authority exchange");
+      for (unsigned kind = 1; kind <= 11; ++kind) {
+        Guard changed{&journal}; changed.at = at; changed.drift = kind; refused = observed;
+        const auto error = journal.ObserveBackingFootprint(anchor, head, 10000, {Guard::Check, &changed}, &refused);
+        CellProvisioningJournalTestPeer::DriftCapacityBinding(journal, kind);
+        Check(error != ERROR_SUCCESS && empty(refused) && changed.calls == at && journal.Verify() == ERROR_SUCCESS,
+          "changed journal assignment/profile/identity/policy cannot relabel retained backing bytes");
+      }
+    }
+    Guard metadata{&journal}; metadata.at = 3; metadata.metadata = true;
+    auto refused = observed;
+    Check(journal.ObserveBackingFootprint(anchor, head, 10000, {Guard::Check, &metadata}, &refused) == ERROR_FILE_INVALID && empty(refused),
+      "journal metadata drift invalidates a joined observation with unchanged file lengths");
+    Check(journal.Verify() == ERROR_SUCCESS, "read-only capacity failure never destroys journal authority or bytes");
+  }
   CellDiskLayoutPlan too_small;
   Check(journal.RecordDiskLayoutPlan(&too_small) == ERROR_INVALID_PARAMETER && IsEqualGUID(too_small.gpt_disk_id, GUID{}),
     "legacy small VHDX records remain recoverable without acquiring layout authority");
@@ -1275,13 +1681,252 @@ unsigned RunCellProvisioningJournalTests(HANDLE parent, const CellFileIdentity& 
   }
   return checks;
 }
+namespace {
+CellDirectoryFootprint& CapacitySummary(CellDirectoryFootprint& value) { return value; }
+CellDirectoryFootprint& CapacitySummary(CellDirectoryInventory& value) { return value.footprint; }
+const CellDirectoryFootprint& CapacityValue(const CellProvisioningFootprint& value) { return value.footprint; }
+const CellDirectoryInventory& CapacityValue(const CellProvisioningInventory& value) { return value.inventory; }
+template <typename Observation>
+struct CapacityFixture final {
+  using Bound = std::conditional_t<std::is_same_v<Observation, CellDirectoryFootprint>, CellProvisioningFootprint, CellProvisioningInventory>;
+  CellProvisioningJournal* journal;
+  Observation actual;
+  unsigned calls = 0, reads = 0, denied_at = 0, drift_at = 0, drift_kind = 0, after_read_drift = 0;
+  DWORD read_error = ERROR_SUCCESS, delay_ms = 0;
+  bool wrong_root = false;
+  CellFootprintScanLimits* change_limits = nullptr;
+  CellFileSha256* change_head = nullptr;
+  HANDLE cancellation = nullptr;
+  unsigned cancel_at = 0;
+  const CellFootprintCellBinding* binding = nullptr;
+  CellFootprintCellBinding* change_binding = nullptr;
+  static DWORD Authorize(void* raw) noexcept {
+    auto& value = *static_cast<CapacityFixture*>(raw); ++value.calls;
+    if (value.change_binding) *value.change_binding = {};
+    if (value.calls == value.denied_at) return ERROR_ACCESS_DENIED;
+    if (value.calls == value.drift_at) CellProvisioningJournalTestPeer::DriftCapacityBinding(*value.journal, value.drift_kind);
+    if (value.change_limits) value.change_limits->max_entries = 65536;
+    if (value.change_head) value.change_head->back() ^= 1;
+    if (value.calls == value.cancel_at && !SetEvent(value.cancellation)) return GetLastError();
+    if (value.delay_ms) Sleep(value.delay_ms);
+    return ERROR_SUCCESS;
+  }
+  static DWORD Read(void* raw, const CellFootprintScanLimits&, const CellFootprintScanGuard& guard,
+    Observation* output) noexcept {
+    try {
+    auto& value = *static_cast<CapacityFixture*>(raw); ++value.reads;
+    for (unsigned index = 0; index < 2; ++index) {
+      const auto error = guard.authorize(guard.context); if (error) return error;
+    }
+    *output = value.actual;
+    if (value.wrong_root) CapacitySummary(*output).root.file_id.back() ^= 1;
+    if (value.after_read_drift) CellProvisioningJournalTestPeer::DriftCapacityBinding(*value.journal, value.after_read_drift);
+    return value.read_error;
+    } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
+  DWORD Observe(const CellProvisioningAnchor& anchor, const CellFileSha256& head, Bound* output,
+    const CellFootprintScanLimits& limits = {}) {
+    if constexpr (std::is_same_v<Observation, CellDirectoryInventory>)
+      return CellProvisioningJournalTestPeer::Observe(*journal, Read, this, anchor, head, limits,
+        {Authorize, this, cancellation}, output, binding);
+    else return CellProvisioningJournalTestPeer::Observe(*journal, Read, this, anchor, head, limits,
+      {Authorize, this, cancellation}, output);
+  }
+};
+template <typename Observation>
+void CapacityJournalTests(CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+  const CellProvisioningPlan& plan, const CellMountedWorkspaceBinding& binding,
+  const std::vector<CellMountedWorkspaceProvisioningRecord>& records) {
+  const auto before = CellProvisioningJournalTestPeer::Bytes(journal);
+  CellFileSha256 head{}; std::copy_n(before.end() - 32, 32, head.begin());
+  std::array<CellMountedWorkspaceCheckpoint, 2> nested{};
+  for (std::size_t index = 0; index < nested.size(); ++index)
+    std::copy_n(records[index].begin() + 280, 512, nested[index].begin());
+  CellWorkspaceIdentities workspace;
+  Check(DecodeCellMountedWorkspaceCheckpoints(binding, nested, &workspace) == 0, "capacity fixture derives roots from the acknowledged native records");
+  using Fixture = CapacityFixture<Observation>;
+  using Output = typename Fixture::Bound;
+  const Observation actual = [&]() -> Observation {
+    const CellDirectoryFootprint footprint{workspace.directories[0], 17, 4096, 1, 4};
+    if constexpr (std::is_same_v<Observation, CellDirectoryFootprint>) return footprint;
+    else {
+      Observation inventory; inventory.footprint = footprint;
+      for (const auto& identity : workspace.directories) inventory.entries.push_back({identity, true, 0, 0});
+      auto file = workspace.directories[0]; file.file_id.back() ^= 0x40;
+      inventory.entries.push_back({file, false, 17, 4096});
+      std::sort(inventory.entries.begin(), inventory.entries.end(), [](const auto& a, const auto& b) { return a.identity.file_id < b.identity.file_id; });
+      return inventory;
+    }
+  }();
+  Fixture baseline{&journal, actual}; Output output;
+  Check(baseline.Observe(anchor, head, &output) == 0 && output.anchor == anchor && output.assignment_binding == plan.assignment_binding &&
+    output.profile_sha256 == plan.profile_sha256 && output.checkpoint_sha256 == head && output.workspace == workspace && CapacityValue(output) == actual,
+    "capacity observation binds exact anchor, assignment, profile, complete journal head and recorded workspace");
+  const auto poison = output; const auto calls = baseline.calls;
+  Check(calls == 3 && baseline.reads == 1, "one controlled reader is bounded by initial and in-reader authority checks");
+  Check(CellProvisioningJournalTestPeer::Bytes(journal) == before, "successful capacity observation appends no checkpoint");
+  for (unsigned at = 1; at <= calls; ++at) {
+    Fixture denied{&journal, actual}; denied.denied_at = at; output = poison;
+    Check(denied.Observe(anchor, head, &output) == ERROR_ACCESS_DENIED && denied.calls == at && output == Output{},
+      "revoked capacity authority clears bindings and numbers at every read boundary");
+  }
+  for (unsigned kind = 1; kind <= 15; ++kind) {
+    for (const auto at : {1U, calls}) {
+      Fixture drift{&journal, actual}; drift.drift_at = at; drift.drift_kind = kind; output = poison;
+      const auto error = drift.Observe(anchor, head, &output);
+      CellProvisioningJournalTestPeer::DriftCapacityBinding(journal, kind);
+      Check(error != 0 && drift.calls == at && output == Output{},
+        "binding or journal drift during authority cannot publish an earlier capacity reading");
+    }
+    Fixture late{&journal, actual}; late.after_read_drift = kind; output = poison;
+    const auto error = late.Observe(anchor, head, &output);
+    CellProvisioningJournalTestPeer::DriftCapacityBinding(journal, kind);
+    Check(error != 0 && output == Output{}, "post-reader binding drift is detected before any output publication");
+  }
+  Fixture mismatch{&journal, actual}; auto wrong_anchor = anchor; wrong_anchor.file.file_id.back() ^= 1;
+  output = poison;
+  Check(mismatch.Observe(wrong_anchor, head, &output) != 0 && !mismatch.calls && !mismatch.reads && output == Output{},
+    "independent anchor mismatch is refused before authority callbacks or inventory");
+  auto wrong_head = head; wrong_head.back() ^= 1; output = poison;
+  Check(mismatch.Observe(anchor, wrong_head, &output) != 0 && !mismatch.calls && !mismatch.reads && output == Output{},
+    "independent final head mismatch cannot be adopted from local history");
+  Fixture changed_input{&journal, actual}; auto caller_head = head; changed_input.change_head = &caller_head;
+  Check(changed_input.Observe(anchor, caller_head, &output) == 0 && output.checkpoint_sha256 == head,
+    "caller mutation cannot replace the independently frozen expected head");
+  Fixture wrong_tree{&journal, actual}; wrong_tree.wrong_root = true; output = poison;
+  Check(wrong_tree.Observe(anchor, head, &output) != 0 && output == Output{},
+    "a successful reader for another root cannot be labeled with this journal");
+  Fixture failed{&journal, actual}; failed.read_error = ERROR_IO_INCOMPLETE; output = poison;
+  Check(failed.Observe(anchor, head, &output) == ERROR_IO_INCOMPLETE && output == Output{},
+    "a reader error cannot leak a partial footprint or restore availability");
+  Fixture bounded{&journal, actual}; CellFootprintScanLimits limits{4, 64, 10000}; bounded.change_limits = &limits; output = poison;
+  Check(bounded.Observe(anchor, head, &output, limits) != 0 && output == Output{},
+    "the journal freezes limits and refuses counts beyond its original bound");
+  if constexpr (std::is_same_v<Observation, CellDirectoryInventory>) {
+    struct Binding final {
+      std::wstring name;
+      CellFileIdentity work;
+      mutable unsigned calls = 0;
+      unsigned denied_at = 0;
+      CellProvisioningJournal* journal = nullptr;
+      unsigned drift_kind = 0, drift_at = 0;
+      static DWORD Authorize(const void* raw, const std::wstring& name, const CellFileIdentity& work) noexcept {
+        const auto& self = *static_cast<const Binding*>(raw); ++self.calls;
+        if (self.journal && self.calls == self.drift_at) CellProvisioningJournalTestPeer::DriftCapacityBinding(*self.journal, self.drift_kind);
+        return self.calls == self.denied_at || name != self.name || work != self.work ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
+      }
+    } owned{binding.cell_name, workspace.directories[static_cast<std::size_t>(CellDirectory::work)]};
+    CellFootprintCellBinding cell_binding{Binding::Authorize, &owned};
+    Fixture bound{&journal, actual}; bound.binding = &cell_binding;
+    Check(bound.Observe(anchor, head, &output) == 0 && owned.calls == calls && output == poison,
+      "journal binding receives the decoded cell name and guest work identity at each scan boundary");
+    CellDirectoryInventoryPins retained;
+    output = poison;
+    Check(journal.CaptureMountedInventory(anchor, head, {}, {Fixture::Authorize, &baseline}, {}, retained, &output) ==
+      ERROR_INVALID_PARAMETER && output == Output{} && !retained.Ready(),
+      "retained journal capture requires independent cell authority and clears provisional evidence");
+    Check(journal.CaptureMountedInventory(anchor, head, {}, {Fixture::Authorize, &baseline}, cell_binding, retained, nullptr) ==
+      ERROR_INVALID_PARAMETER && !retained.Ready(), "retained journal capture refuses a null output before opening handles");
+    output = poison;
+    Check(journal.CaptureMountedInventory(anchor, head, {}, {Fixture::Authorize, &baseline}, cell_binding, retained, &output) ==
+      ERROR_INVALID_STATE && output == Output{} && !retained.Ready(),
+      "retained journal capture cannot substitute controlled history for absent physical mounted owners");
+    Binding capture_revoked{owned.name, owned.work, 0, 1};
+    const CellFootprintCellBinding refused_binding{Binding::Authorize, &capture_revoked};
+    output = poison;
+    Check(journal.CaptureMountedInventory(anchor, head, {}, {Fixture::Authorize, &baseline}, refused_binding, retained, &output) ==
+      ERROR_ACCESS_DENIED && capture_revoked.calls == 1 && output == Output{} && !retained.Ready(),
+      "retained journal capture checks current cell authority before entering the mounted reader");
+    for (unsigned at = 1; at <= calls; ++at) {
+      Binding revoked{owned.name, owned.work, 0, at}; cell_binding = {Binding::Authorize, &revoked};
+      Fixture refused{&journal, actual}; refused.binding = &cell_binding; output = poison;
+      Check(refused.Observe(anchor, head, &output) == ERROR_ACCESS_DENIED && revoked.calls == at && output == Output{} &&
+        (at != 1 || refused.reads == 0), "binding revocation clears inventory and early refusal never enters native reader");
+    }
+    for (unsigned kind = 0; kind < 2; ++kind) {
+      Binding wrong{owned.name, owned.work};
+      if (kind == 0) wrong.name.back() ^= 1; else wrong.work.file_id.back() ^= 1;
+      cell_binding = {Binding::Authorize, &wrong}; Fixture refused{&journal, actual}; refused.binding = &cell_binding; output = poison;
+      Check(refused.Observe(anchor, head, &output) == ERROR_ACCESS_DENIED && !refused.reads && output == Output{},
+        "another cell or mismatched work identity cannot authorize mounted guest inventory");
+    }
+    for (const unsigned kind : {8U, 15U}) for (const unsigned at : {1U, calls}) {
+      Binding drift{owned.name, owned.work, 0, 0, &journal, kind, at}; cell_binding = {Binding::Authorize, &drift};
+      Fixture refused{&journal, actual}; refused.binding = &cell_binding; output = poison;
+      const auto error = refused.Observe(anchor, head, &output);
+      CellProvisioningJournalTestPeer::DriftCapacityBinding(journal, kind);
+      Check(error == ERROR_FILE_INVALID && drift.calls == at && output == Output{} && (at != 1 || !refused.reads),
+        "journal identity or owner lifetime drift inside binding authorization withholds inventory");
+    }
+    cell_binding = {}; Fixture missing{&journal, actual}; missing.binding = &cell_binding; output = poison;
+    Check(missing.Observe(anchor, head, &output) == ERROR_INVALID_PARAMETER && !missing.calls && !missing.reads && output == Output{},
+      "explicit empty binding fails before caller callbacks");
+    owned.calls = 0; cell_binding = {Binding::Authorize, &owned};
+    Fixture changed_binding{&journal, actual}; changed_binding.binding = &cell_binding; changed_binding.change_binding = &cell_binding;
+    Check(changed_binding.Observe(anchor, head, &output) == 0 && owned.calls == calls && !cell_binding.authorize && output == poison,
+      "caller callback mutation cannot replace the frozen cell binding");
+    Fixture oversized{&journal, actual}; output = poison;
+    Check(oversized.Observe(anchor, head, &output, {20001, 64, 10000}) == ERROR_INVALID_PARAMETER &&
+      !oversized.calls && !oversized.reads && output == Output{}, "oversized identity capture is refused before caller code");
+    for (unsigned kind = 0; kind < 13; ++kind) {
+      Fixture malformed{&journal, actual};
+      auto& entries = malformed.actual.entries;
+      auto& summary = malformed.actual.footprint;
+      auto file = std::find_if(entries.begin(), entries.end(), [](const auto& entry) { return !entry.directory; });
+      auto directory = std::find_if(entries.begin(), entries.end(), [](const auto& entry) { return entry.directory; });
+      switch (kind) {
+        case 0: entries.pop_back(); break;
+        case 1: entries[1].identity = entries[0].identity; break;
+        case 2: std::swap(entries.front(), entries.back()); break;
+        case 3: file->identity.volume_serial ^= 1; break;
+        case 4: file->identity.file_id.fill(0); break;
+        case 5: directory->logical_file_bytes = 1; ++summary.logical_file_bytes; break;
+        case 6: ++file->logical_file_bytes; break;
+        case 7: ++file->allocated_bytes; break;
+        case 8: ++summary.file_count; --summary.directory_count; break;
+        case 9:
+          directory->identity.file_id.back() ^= 0x80;
+          std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.identity.file_id < b.identity.file_id; });
+          break;
+        case 10: file->logical_file_bytes = std::numeric_limits<std::uint64_t>::max(); break;
+        case 11: file->allocated_bytes = std::numeric_limits<std::uint64_t>::max(); break;
+        case 12: entries.push_back(*file); break;
+      }
+      output = poison;
+      Check(malformed.Observe(anchor, head, &output) == ERROR_INVALID_DATA && output == Output{},
+        "malformed object identities, membership, ordering or byte totals cannot be bound to a valid journal");
+    }
+  }
+  Handle cancelled{CreateEventW(nullptr, TRUE, FALSE, nullptr)}; Check(cancelled.value != nullptr, "owned journal capacity cancellation event");
+  Fixture cancel{&journal, actual}; cancel.cancellation = cancelled.value; cancel.cancel_at = calls; output = poison;
+  Check(cancel.Observe(anchor, head, &output) == ERROR_CANCELLED && output == Output{},
+    "cancellation during the final authority callback clears all capacity evidence");
+  Fixture timed{&journal, actual}; timed.delay_ms = 30; output = poison;
+  Check(timed.Observe(anchor, head, &output, {20000, 64, 20}) == ERROR_TIMEOUT && output == Output{},
+    "authority callbacks consume the same bounded observation deadline");
+  output = poison;
+  const auto missing = [&]() {
+    if constexpr (std::is_same_v<Observation, CellDirectoryFootprint>)
+      return journal.ObserveMountedFootprint(anchor, head, {}, {Fixture::Authorize, &baseline}, &output);
+    else return journal.ObserveMountedInventory(anchor, head, {}, {Fixture::Authorize, &baseline}, &output);
+  }();
+  Check(missing == ERROR_INVALID_STATE && output == Output{}, "production reader refuses the controlled journal's absent physical mounted owners");
+  Fixture retry{&journal, actual};
+  Check(retry.Observe(anchor, head, &output) == 0 && CellProvisioningJournalTestPeer::Bytes(journal) == before,
+    "independent successful observation preserves all twenty-one records after refused reads");
+}
+}
 unsigned RunCellMountedWorkspaceProvisioningJournalTests(HANDLE parent, const CellFileIdentity& parent_identity, const std::wstring& user) {
   checks = 0; committed_mounted_workspace_history.clear();
   const auto parent_path = ParentPath(parent);
   const auto plan = Plan();
   CellProvisioningJournal journal;
   for (unsigned mode = 0; mode <= 18; ++mode) {
-    const auto workspace_name = Name(), file = parent_path + L"\\" + workspace_name + L".provisioning";
+    auto workspace_name = Name();
+    // Exercise the formerly intermittent case: assigning 'f' again is not a
+    // substitution when the random admitted name already starts with 'f'.
+    if (mode == 13) workspace_name[8] = L'f';
+    const auto file = parent_path + L"\\" + workspace_name + L".provisioning";
     auto workspace_plan = plan;
     workspace_plan.disk.virtual_bytes = 64ULL * 1024 * 1024; workspace_plan.disk.reserved_file_bytes = 128ULL * 1024 * 1024;
     CommitFixture core; CellProvisioningCommitter core_sink{CommitFixture::Commit, &core}; CellProvisioningAnchor reference;
@@ -1341,7 +1986,7 @@ unsigned RunCellMountedWorkspaceProvisioningJournalTests(HANDLE parent, const Ce
       fixture.cancellation = cancel.value; fixture.cancel_after_commit = mode - 9;
     }
     if (mode == 12) fixture.revoke_after_verify = true;
-    if (mode == 13) fixture.binding.cell_name[8] = L'f';
+    if (mode == 13) fixture.binding.cell_name[8] = fixture.binding.cell_name[8] == L'f' ? L'e' : L'f';
     if (mode == 14) fixture.binding.volume_root.file_id.back() ^= 0x80;
     if (mode == 15) fixture.fail_verify = 3;
     if (mode == 16) fixture.cancellation = INVALID_HANDLE_VALUE;
@@ -1360,6 +2005,10 @@ unsigned RunCellMountedWorkspaceProvisioningJournalTests(HANDLE parent, const Ce
     if (mode == 16) Check(result == ERROR_INVALID_HANDLE && !fixture.authorizations, "invalid cancellation is refused before journal callbacks");
     if (mode == 17) Check(result == ERROR_CRC && fixture.corrupted && !fixture.creates, "held-journal drift during authority callback prevents directory writes");
     auto captured = CellProvisioningJournalTestPeer::Bytes(journal);
+    if (mode == 0) {
+      CapacityJournalTests<CellDirectoryFootprint>(journal, reference, workspace_plan, binding, fixture.committed);
+      CapacityJournalTests<CellDirectoryInventory>(journal, reference, workspace_plan, binding, fixture.committed);
+    }
     Check(captured.size() == 19456 + attempted * 1024 && std::equal(before.begin(), before.end(), captured.begin()),
       "mounted workspace appends only its own records and preserves all nineteen predecessors");
     Check(journal.MountPhase() == CellMountProvisioningPhase::mounted && static_cast<unsigned>(journal.MountedWorkspacePhase()) == attempted,

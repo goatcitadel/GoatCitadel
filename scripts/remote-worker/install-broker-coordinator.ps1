@@ -26,7 +26,12 @@
                               size, single-hard-link and single-stream
                               closure at the destination, then applies the
                               frozen owner+protected-DACL descriptors.
-    3. install-services     - Creates the signer and broker services with the
+    3. initialize-state     - Exclusively creates state-v1 and its four empty
+                              children: journal, keysets, controls, quarantine.
+                              Reads back exact SYSTEM owner/group, protected
+                              SYSTEM+signer DACL and directory-only attributes.
+                              Existing state is never adopted or overwritten.
+    4. install-services     - Creates the signer and broker services with the
                               exact demand-start configuration the broker
                               validates (own process, demand start, error
                               normal, quoted DOS binary path, LocalSystem),
@@ -34,24 +39,25 @@
                               materializes the distinct coordinator principal
                               NT SERVICE\GoatCitadelRemoteWorkerProvisionerAvailability),
                               the exact SeChangeNotifyPrivilege-only required
-                              privilege list, and the frozen two-ACE
-                              protected SCM DACL on both service objects.
-    4. verify               - Reads back configuration, SID type, privileges,
+                              privilege list, and the frozen protected SCM
+                              DACL on each service object.
+    5. verify               - Reads back configuration, SID type, privileges,
                               SCM security descriptor, service state
                               (stopped, pid 0), file security descriptors and
                               hashes, and the OS translation of the
                               coordinator principal, and fails closed on any
                               drift. The services are left STOPPED; this
                               recipe never calls a service start.
-    5. evidence             - Always writes the machine-readable bundle
+    6. evidence             - Always writes the machine-readable bundle
                               broker-coordinator-install-evidence.json
                               (schema goatcitadel.remote-worker.broker-coordinator-install/1),
                               including on refusal and failure. The bundle is
                               never deleted.
 
-  On a mid-install failure the script rolls back everything it created in
-  this run (services, files, directories), in reverse order, and records any
-  rollback failure in the evidence bundle.
+  On a mid-install failure the script rolls back its own services, files and
+  empty directories in reverse order, recording any rollback failure. State
+  cleanup uses retained creation handles; nonempty state and uncertain service
+  removal preserve the install footprint for investigation.
 
   Production-dark guarantees: no service is ever started; the untrusted
   helper/client is installed without service-control rights; the broker and
@@ -103,6 +109,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "broker-coordinator-common.ps1")
+. (Join-Path $PSScriptRoot "broker-state-common.ps1")
 
 # --- Run state ---
 $script:StartedAt = (Get-Date).ToUniversalTime()
@@ -110,10 +117,12 @@ $script:Steps = New-Object System.Collections.Generic.List[object]
 $script:Refusals = New-Object System.Collections.Generic.List[string]
 $script:CleanupFailures = New-Object System.Collections.Generic.List[string]
 $script:CreatedServices = New-Object System.Collections.Generic.List[string]
+$script:CreatedServiceLeases = New-Object System.Collections.Generic.List[System.IDisposable]
 $script:CreatedDirectories = New-Object System.Collections.Generic.List[string]
 $script:CopiedFiles = New-Object System.Collections.Generic.List[string]
 $script:DirectoryLeases = New-Object System.Collections.Generic.List[System.IDisposable]
 $script:ImageLeases = New-Object System.Collections.Generic.List[System.IDisposable]
+$script:StateLeases = New-Object System.Collections.Generic.List[object]
 $script:GoatCitadelRootWasPresent = $false
 $script:ReadBack = $null
 $script:Pins = $null
@@ -456,6 +465,10 @@ function Close-RecipeLeases {
   foreach ($lease in $script:ImageLeases) { $lease.Dispose() }
   $script:ImageLeases.Clear()
   if (-not $ImagesOnly) {
+    for ($index = $script:StateLeases.Count - 1; $index -ge 0; $index--) { $script:StateLeases[$index].Dispose() }
+    $script:StateLeases.Clear()
+    foreach ($lease in $script:CreatedServiceLeases) { $lease.Dispose() }
+    $script:CreatedServiceLeases.Clear()
     for ($index = $script:DirectoryLeases.Count - 1; $index -ge 0; $index--) {
       $script:DirectoryLeases[$index].Dispose()
     }
@@ -519,18 +532,26 @@ function Invoke-RecipeInstallServices {
   $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
   # Signer first so a mid-failure can never leave a broker installed without
   # its validated target.
-  $native::CreateCoordinatorService($script:SignerServiceName, $script:SignerDisplayName, $script:Paths.SignerQuotedBinaryPath)
+  $script:CreatedServiceLeases.Add($native::CreateCoordinatorService($script:SignerServiceName, $script:SignerDisplayName, $script:Paths.SignerQuotedBinaryPath))
   $script:CreatedServices.Add($script:SignerServiceName)
   $native::SetServiceSidTypeUnrestricted($script:SignerServiceName)
   $native::SetServiceRequiredPrivilegesChangeNotify($script:SignerServiceName)
   $native::SetServiceSddl($script:SignerServiceName, $script:SignerServiceObjectSddl)
 
-  $native::CreateCoordinatorService($script:BrokerServiceName, $script:BrokerDisplayName, $script:Paths.BrokerQuotedBinaryPath)
+  $script:CreatedServiceLeases.Add($native::CreateCoordinatorService($script:BrokerServiceName, $script:BrokerDisplayName, $script:Paths.BrokerQuotedBinaryPath))
   $script:CreatedServices.Add($script:BrokerServiceName)
   $native::SetServiceSidTypeUnrestricted($script:BrokerServiceName)
   $native::SetServiceRequiredPrivilegesChangeNotify($script:BrokerServiceName)
   $native::SetServiceSddl($script:BrokerServiceName, $script:ServiceObjectSddl)
   return "coordinator principal materialized as " + $script:CoordinatorPrincipalName
+}
+
+function Invoke-RecipeInitializeState {
+  $native = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]
+  $native::EnablePrivilege("SeBackupPrivilege")
+  $native::EnablePrivilege("SeRestorePrivilege")
+  $null = New-BrokerCoordinatorStateLayout -ProvisionerDirectory $script:Paths.ProvisionerDirectory -Leases $script:StateLeases
+  return "created and verified empty state-v1, journal, keysets, controls and quarantine with the signer's exact owner, group, DACL and attributes"
 }
 
 function Get-ServiceReadBack {
@@ -633,6 +654,7 @@ function Invoke-RecipeVerify {
     broker = [pscustomobject]$brokerReadBack
     signer = [pscustomobject]$signerReadBack
     files = $fileReadBack.ToArray()
+    protectedState = Get-BrokerCoordinatorStateReadBack -Leases $script:StateLeases
   }
   return "read-back matched the frozen recipe; both services left SERVICE_STOPPED"
 }
@@ -643,11 +665,20 @@ function Invoke-RecipeRollback {
   for ($index = $script:CreatedServices.Count - 1; $index -ge 0; $index--) {
     $serviceName = $script:CreatedServices[$index]
     try {
-      $native::RemoveService($serviceName)
+      $native::RemoveCreatedService($script:CreatedServiceLeases[$index])
     }
     catch {
       $script:CleanupFailures.Add(("rollback: failed to delete service '{0}': {1}" -f $serviceName, $_.Exception.Message))
     }
+  }
+  if ($script:CleanupFailures.Count -gt 0) {
+    $script:CleanupFailures.Add('rollback: preserving installed files because service removal is uncertain')
+    return
+  }
+  Undo-BrokerCoordinatorCreatedState -Leases $script:StateLeases -Failures $script:CleanupFailures
+  if ($script:CleanupFailures.Count -gt 0) {
+    $script:CleanupFailures.Add('rollback: preserving the install footprint because protected state cleanup is uncertain')
+    return
   }
   try {
     $native::EnablePrivilege("SeRestorePrivilege")
@@ -725,10 +756,13 @@ function Write-InstallEvidence {
       clientServiceControlRights = "none"
       runtimeWorkerSignerQueryRights = "SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL"
       runtimeWorkerBrokerRights = "none"
+      protectedStateSddl = $script:ProtectedStateSddl
+      protectedStateChildren = $script:ProtectedStateChildren
     }
     paths = $(if ($null -ne $script:Paths) {
       [ordered]@{
         binDirectory = $script:Paths.BinDirectory
+        stateDirectory = Join-Path $script:Paths.ProvisionerDirectory 'state-v1'
         brokerImagePath = $script:Paths.BrokerImagePath
         signerImagePath = $script:Paths.SignerImagePath
         clientImagePath = $script:Paths.ClientImagePath
@@ -788,6 +822,7 @@ try {
       }
       else {
         Invoke-RecipeStep -Name "stage" -Body { Invoke-RecipeStage }
+        Invoke-RecipeStep -Name "initialize-protected-state" -Body { Invoke-RecipeInitializeState }
         Invoke-RecipeStep -Name "install-services" -Body { Invoke-RecipeInstallServices }
         Invoke-RecipeStep -Name "verify" -Body { Invoke-RecipeVerify }
         $script:Verdict = "passed"

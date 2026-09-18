@@ -570,7 +570,7 @@ test("fast verification split tests preserve recursive package coverage", () => 
     "--filter",
     "@goatcitadel/mission-control-next",
     "test:coverage",
-    "--maxWorkers=4",
+    "--maxWorkers=2",
   ]);
   assert.deepEqual(commandById.get("fast.test.policy-engine")?.args, [
     "--filter",
@@ -594,6 +594,14 @@ test("fast verification split tests preserve recursive package coverage", () => 
     assert.ok(libraryArgs.includes(expectedPackage), `library test group should include ${expectedPackage}`);
   }
   assert.ok(libraryArgs.includes("--workspace-concurrency=2"));
+  const workerOption = libraryArgs.find((argument) => argument.startsWith("--maxWorkers="));
+  assert.ok(workerOption, "recursive library tests must cap every package's Vitest pool");
+  assert.ok(libraryArgs.indexOf(workerOption) > libraryArgs.indexOf("test:coverage"), "the worker limit must reach the test script");
+  const libraryWorkers = Number(workerOption.split("=")[1]);
+  const uiWorkerOption = commandById.get("fast.test.mission-control-next").args.find((argument) => argument.startsWith("--maxWorkers="));
+  const uiWorkers = Number(uiWorkerOption.split("=")[1]);
+  assert.ok(libraryWorkers > 0 && uiWorkers > 0);
+  assert.ok(uiWorkers + 2 * libraryWorkers <= 4, "the concurrent UI/library stage must stay within four test workers");
 
   assert.equal(commandById.get("fast.test.gateway.shard1")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
   assert.deepEqual(commandById.get("fast.smoke")?.args, ["smoke", "--", "--profile", "fast"]);

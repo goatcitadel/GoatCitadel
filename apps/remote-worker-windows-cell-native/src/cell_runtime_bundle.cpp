@@ -1,10 +1,42 @@
 #include "cell_runtime_bundle.hpp"
 
 namespace goatcitadel::worker_cell {
+namespace {
+struct RuntimeCapture final {
+  const JobQuiescenceObserver& observer;
+  CellWorkspaceDirectories* workspace;
+  static DWORD Authorize(void* context) noexcept {
+    auto& value = *static_cast<RuntimeCapture*>(context);
+    const DWORD error = value.observer.authorize(value.observer.context);
+    return error ? error : value.workspace ? value.workspace->Verify() : ERROR_SUCCESS;
+  }
+  static DWORD Capture(void* context, const JobQuiescence& job) noexcept {
+    auto& value = *static_cast<RuntimeCapture*>(context);
+    return value.observer.capture(value.observer.context, job);
+  }
+  static DWORD AuthorizeExecution(void* context) noexcept {
+    auto& value = *static_cast<RuntimeCapture*>(context);
+    const DWORD error = value.observer.authorize_execution(value.observer.context);
+    return error ? error : value.workspace ? value.workspace->Verify() : ERROR_SUCCESS;
+  }
+  static void Discard(void* context) noexcept {
+    auto& value = *static_cast<RuntimeCapture*>(context); value.observer.discard(value.observer.context);
+  }
+};
+}
 RuntimeJobResult RunVerifiedRuntimeJob(const RuntimeJobCommand& input, const JobLimits& limits,
-                                     HANDLE cancellation, JobStdioChannel* stdio) noexcept {
+                                     HANDLE cancellation, JobStdioChannel* stdio, const JobQuiescenceObserver* observer_input) noexcept {
   RuntimeJobResult result;
+  const JobQuiescenceObserver observer = observer_input ? *observer_input : JobQuiescenceObserver{};
+  struct CaptureLifetime final {
+    const JobQuiescenceObserver& observer;
+    const RuntimeJobResult& result;
+    ~CaptureLifetime() { if (observer.discard && !result.job.quiescent_capture_verified) observer.discard(observer.context); }
+  } capture_lifetime{observer, result};
   try {
+    if (observer_input && (!observer.authorize || !observer.capture || !observer.discard || !observer.wall_ms || observer.wall_ms > 60000)) {
+      result.job.error = ERROR_INVALID_PARAMETER; return result;
+    }
     if (input.runtime_files.empty() || input.runtime_files.size() > 4096 ||
         limits.input_bytes > kMaximumCellJobInputBytes ||
         input.launch.standard_input.size() > limits.input_bytes ||
@@ -52,10 +84,17 @@ RuntimeJobResult RunVerifiedRuntimeJob(const RuntimeJobCommand& input, const Job
       result.job.error = workspace.Verify();
       if (result.job.error) return result;
     }
-    result.job = RunBoundedJob(command.launch, limits, cancellation, stdio);
+    RuntimeCapture capture{observer, command.protected_workspace ? &workspace : nullptr};
+    const JobQuiescenceObserver wrapped{&capture, RuntimeCapture::Authorize, RuntimeCapture::Capture, RuntimeCapture::Discard, observer.wall_ms,
+      observer.authorize_execution ? RuntimeCapture::AuthorizeExecution : nullptr};
+    result.job = RunBoundedJob(command.launch, limits, cancellation, stdio, observer_input ? &wrapped : nullptr);
     if (command.protected_workspace) {
       const DWORD workspace_error = workspace.Verify();
       result.protected_workspace_verified = workspace_error == ERROR_SUCCESS;
+      if (workspace_error && observer_input) {
+        result.job.quiescent_capture_verified = false;
+        if (!result.job.quiescent_capture_error) result.job.quiescent_capture_error = workspace_error;
+      }
       if (workspace_error && !result.job.error) {
         result.job.error = workspace_error;
         result.job.end = JobEnd::control_failed;

@@ -21,7 +21,7 @@ afterEach(() => { for (const close of cleanups.splice(0)) close(); });
 
 // Real admitted Chat, assignment, approval/effect, checkpoint and resume stores.
 // Execution transport and native credential authority are proved separately.
-function fixture(options: { decision?: "approve" | "reject" | "edit"; park?: boolean; resolvePending?: boolean } = {}) {
+function fixture(options: { decision?: "approve" | "reject" | "edit"; park?: boolean; resolvePending?: boolean; native?: boolean } = {}) {
   const decision = options.decision ?? "approve";
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
   cleanups.push(() => storage.close());
@@ -41,10 +41,22 @@ function fixture(options: { decision?: "approve" | "reject" | "edit"; park?: boo
   const manifest = assignment.manifest;
   const ref = { registryWorkspaceId: "default", assignmentId: assignment.assignmentId,
     assignmentGeneration: started.generation.assignmentGeneration };
+  let approval: import("@goatcitadel/contracts").ApprovalRequest;
+  if (options.native) {
+    approval = storage.approvals.create({ kind: "remote_worker.native_runtime", riskLevel: "danger", preview: {},
+      payload: { nativeRuntime: { schemaVersion: "goatcitadel.native-runtime-approval.v1", ...ref,
+        profileSha256: digest("native-profile"), expectedCapacityRevision: 1, expectedExecutionRevision: 1,
+        expectedCleanupRevision: 0, expectedBackupRevision: 0, expectation: { nonce: digest("native-nonce"),
+          requestSha256: digest("native-request"), checkpointSha256: digest("native-checkpoint"), runtimeBundleSha256: digest("native-bundle"),
+          maxInputBytes: 100, maxOutputBytes: 100, maxInventoryEntries: 100 } } },
+      linkage: { workspaceId: manifest.executionWorkspaceId, taskId: manifest.taskId, durableRunId: manifest.durableRunId,
+        sessionId: manifest.sessionId, turnId: manifest.turnId, actionType: "remote_worker.native_runtime" } });
+    storage.approvalWaitRuns.createOrGet({ approvalId: approval.approvalId, runId: "native-review-wait" });
+  } else {
   const args = { path: "handoff-fixture.txt" };
   const intent = storage.remoteWorkerEffects.recordNextIntent({ ...ref, effectSelector: "fs.read", canonicalArgs: args,
     workerIdempotencyKey: "handoff-tool", idempotencyKey: "handoff-intent" });
-  const approval = storage.approvals.create({ kind: "tool.invoke", riskLevel: "caution", payload: {}, preview: {},
+  approval = storage.approvals.create({ kind: "tool.invoke", riskLevel: "caution", payload: {}, preview: {},
     linkage: { workspaceId: manifest.executionWorkspaceId, sessionId: manifest.sessionId,
       turnId: manifest.turnId, runId: manifest.durableRunId, toolName: "fs.read" } });
   const approvalId = approval.approvalId;
@@ -60,11 +72,13 @@ function fixture(options: { decision?: "approve" | "reject" | "edit"; park?: boo
   storage.pendingApprovalActions.upsertPending({ approvalId, actionType: "tool.invoke", request: {
     toolName: "fs.read", args, agentId: "assistant", workspaceId: manifest.executionWorkspaceId,
     sessionId: manifest.sessionId, turnId: manifest.turnId, runId: manifest.durableRunId } });
+  }
+  const approvalId = approval.approvalId;
   const resolved = storage.approvals.resolve(approvalId, { decision, resolvedBy: "operator" });
-  if (decision !== "approve" && options.resolvePending !== false)
+  if (!options.native && decision !== "approve" && options.resolvePending !== false)
     storage.pendingApprovalActions.markResolved(approvalId, "rejected", { decision });
   storage.chatInlineApprovals.upsert({ approvalId, sessionId: manifest.sessionId!, turnId: manifest.turnId!,
-    kind: "tool.invoke", toolName: "fs.read", status: resolved.status === "rejected" ? "denied" : "approved" });
+    kind: approval.kind, toolName: options.native ? "remote_worker.native_runtime" : "fs.read", status: resolved.status === "rejected" ? "denied" : "approved" });
   storage.chatTurnTraces.patch(manifest.turnId!, { durable: { runId: manifest.durableRunId, status: "running" } });
   const before = storage.pendingApprovalActions.find(approvalId)!;
   const run = storage.durableRuns.getRun(manifest.durableRunId);
@@ -106,7 +120,7 @@ function fixture(options: { decision?: "approve" | "reject" | "edit"; park?: boo
   }) as unknown as { workerId: string; handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void>;
     handleLinkedChatTurnWake(effect: ApprovalEffectRecord): Promise<void> };
   const processor = makeProcessor();
-  const action = decision === "approve"
+  const action = decision === "approve" && !options.native
     ? storage.approvalEffects.upsert({ approvalId, effectKind: "pending_action_execute", targetKind: "pending_action",
       targetId: approvalId, payload: {} })
     : storage.approvalEffects.upsert({ approvalId, effectKind: "linked_chat_turn_wake", targetKind: "chat_turn",
@@ -125,6 +139,53 @@ function fixture(options: { decision?: "approve" | "reject" | "edit"; park?: boo
 }
 
 describe("worker approval handoff through canonical Gateway owners", () => {
+  it.each(["approve", "reject"] as const)("records and binds a native %s wake without a fake tool action", async decision => {
+    const f = fixture({ decision, native: true });
+    await f.processor.handleLinkedChatTurnWake(f.claim);
+    expect(f.storage.durableRuns.getRun(f.runId).status).toBe("queued");
+    const retained = f.readWake()!;
+    expect(retained.material).toMatchObject({ schemaVersion: "goatcitadel.remote-worker-native-runtime-resume.v1",
+      approvalId: f.approvalId, waitingCheckpointId: f.checkpoint.checkpointId,
+      nativeRuntimeBindingSha256: digest(f.storage.approvals.get(f.approvalId).payload.nativeRuntime) });
+    expect(retained.material).not.toHaveProperty("intentId");
+    expect(retained.material).not.toHaveProperty("pendingActionSha256");
+    expect(f.storage.pendingApprovalActions.find(f.approvalId)).toBeUndefined();
+    expect(f.executeLocal).not.toHaveBeenCalled();
+    const run = f.storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({ runId: f.runId, workerId: "native-parent-resume", leaseDurationMs: 60_000 })!;
+    const bound = f.storage.remoteWorkerAssignments.bindChatApprovalResumeDispatch({ ...f.ref,
+      durableRunId: f.runId, leaseOwnerId: run.leaseOwnerId!, attemptCount: run.attemptCount });
+    expect(bound?.binding?.dispatchOwnerId).toBe(run.leaseOwnerId);
+    expect(f.readWake()?.materialSha256).toBe(retained.materialSha256);
+    for (let restart = 1; restart <= 2; restart += 1) {
+      const prior = f.storage.durableRuns.getRun(f.runId);
+      f.storage.durableRuns.updateRun({ runId: f.runId, status: "running", expectedVersion: prior.version,
+        leaseExpiresAt: "2000-01-01T00:00:00.000Z" });
+      expect(await (f.durable as unknown as { reconcileRecoverableRuns(): Promise<number> }).reconcileRecoverableRuns()).toBe(1);
+      const next = f.storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({ runId: f.runId,
+        workerId: `native-parent-recovery:${restart}`, leaseDurationMs: 60_000 })!;
+      f.storage.remoteWorkerAssignments.bindChatApprovalResumeDispatch({ ...f.ref, durableRunId: f.runId,
+        leaseOwnerId: next.leaseOwnerId!, attemptCount: next.attemptCount });
+      expect(f.readWake()?.recovery?.material).toMatchObject({ schemaVersion: "goatcitadel.remote-worker-native-runtime-resume-recovery.v1",
+        recoveryRevision: restart, nativeRuntimeBindingSha256: digest(f.storage.approvals.get(f.approvalId).payload.nativeRuntime) });
+      expect(f.readWake()?.recovery?.material).not.toHaveProperty("pendingActionSha256");
+      expect(f.readWake()?.binding?.dispatchOwnerId).toBe(next.leaseOwnerId);
+    }
+    const prior = f.storage.durableRuns.getRun(f.runId);
+    f.storage.durableRuns.updateRun({ runId: f.runId, status: "running", expectedVersion: prior.version,
+      leaseExpiresAt: "2000-01-01T00:00:00.000Z" });
+    expect(await (f.durable as unknown as { reconcileRecoverableRuns(): Promise<number> }).reconcileRecoverableRuns()).toBe(1);
+    const substituted = f.storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({ runId: f.runId,
+      workerId: "native-substitution-proof", leaseDurationMs: 60_000 })!;
+    // Controlled database corruption in this isolated fixture, never an API edit.
+    const approval = f.storage.approvals.get(f.approvalId);
+    f.storage.db.prepare("UPDATE approvals SET payload_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ ...approval.payload, nativeRuntime: { ...(approval.payload.nativeRuntime as Record<string, unknown>),
+        profileSha256: digest("substituted-profile") } }), f.approvalId);
+    expect(() => f.storage.remoteWorkerAssignments.bindChatApprovalResumeDispatch({ ...f.ref, durableRunId: f.runId,
+      leaseOwnerId: substituted.leaseOwnerId!, attemptCount: substituted.attemptCount })).toThrow("remote worker native continuation decision");
+    expect(f.readWake()?.recovery?.material.recoveryRevision).toBe(2);
+  });
+
   it.each(["approve", "reject", "edit"] as const)("keeps the Chat dispatcher running across repeated recovery of its handed-off %s decision", async (decision) => {
     const f = fixture({ decision });
     if (decision === "approve") {
@@ -278,8 +339,15 @@ describe("worker approval handoff through canonical Gateway owners", () => {
     const metadata = structuredClone(run.metadata!);
     if (drift === "pending-finalizer") metadata.generalChatPostCommitPending = { generationId: "unfinished" };
     else if (drift === "settlement-generation") (metadata.generalChatPostCommit as Record<string, unknown>).generationId = "another";
-    else f.storage.durableRuns.createCheckpoint({ runId: f.runId, checkpointKind: "run_waiting",
-      state: { ...f.checkpoint.state, chatTurnRuntimeAuthority: { materialSha256: digest("different") } } });
+    else {
+      const previous = f.checkpoint;
+      // Equal millisecond timestamps use checkpoint identity as the tie-break,
+      // so insertion order alone does not establish the replacement as latest.
+      const replacement = f.storage.durableRuns.createCheckpoint({ runId: f.runId, checkpointKind: "run_waiting",
+        createdAt: new Date(Date.parse(previous.createdAt) + 1).toISOString(),
+        state: { ...previous.state, chatTurnRuntimeAuthority: { materialSha256: digest("different") } } });
+      expect(f.checkpoint.checkpointId).toBe(replacement.checkpointId);
+    }
     f.storage.durableRuns.updateRun({ runId: f.runId, status: "waiting", metadata, expectedVersion: run.version });
     await f.processor.handlePendingActionExecute(f.claim);
     expect(f.storage.approvalEffects.get(f.action.effectId)).toMatchObject({ status: "running",

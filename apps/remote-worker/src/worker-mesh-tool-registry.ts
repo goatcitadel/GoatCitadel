@@ -5,6 +5,7 @@ import { assertMeshCapabilityManifestDigests } from "@goatcitadel/contracts";
 import { readWorkerLocalFile } from "./worker-local-file-reader.js";
 import { createWorkerMeshFileReadBinding } from "./worker-mesh-file-read.js";
 import { createWorkerMeshFileWriteBinding } from "./worker-mesh-file-write.js";
+import { createWorkerMeshDirectoryListBinding } from "./worker-mesh-directory-list.js";
 import { createWorkerMeshMcpHttpBinding, type WorkerMcpNativeTool } from "./worker-mesh-mcp-http.js";
 import { WorkerMeshCapabilityRuntime, type WorkerMeshCapabilityBinding } from "./worker-mesh-capability-runtime.js";
 import { snapshotWorkerMeshValue, workerMeshRecord, workerMeshRejected } from "./worker-mesh-capability-data.js";
@@ -58,9 +59,10 @@ export async function loadWorkerMeshToolRegistry(
         continue;
       }
       workerMeshRecord(value, ["toolName", "manifest", "localId", "rootId", "rootPath"]);
-      if ((binding.toolName !== "fs.read" && binding.toolName !== "fs.write") ||
+      if ((binding.toolName !== "fs.read" && binding.toolName !== "fs.write" && binding.toolName !== "fs.list") ||
         typeof binding.rootId !== "string" || typeof binding.rootPath !== "string") throw workerMeshRejected();
-      const createBinding = binding.toolName === "fs.read" ? createWorkerMeshFileReadBinding : createWorkerMeshFileWriteBinding;
+      const createBinding = binding.toolName === "fs.read" ? createWorkerMeshFileReadBinding
+        : binding.toolName === "fs.list" ? createWorkerMeshDirectoryListBinding : createWorkerMeshFileWriteBinding;
       filesystemRoots.push(binding.rootPath);
       bindings.push(await createBinding({ manifest, localId: binding.localId,
         rootId: binding.rootId, rootPath: binding.rootPath, signal,

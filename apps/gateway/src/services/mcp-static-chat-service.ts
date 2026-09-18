@@ -404,6 +404,8 @@ function isConnectedStaticServer(server: McpServerRecord): boolean {
 function configurationMaterial(server: McpServerRecord): unknown {
   const value = { ...server };
   for (const key of [
+    "revision",
+    "connectionRevision",
     "configurationBindingId",
     "authState",
     "status",

@@ -1,3 +1,23 @@
+import { createGovernedRemediationParentReservationSchema } from "./governed-remediation-parent-reservation-schema.js";
+import { upgradeGovernedRemediationResumeVersion } from "./governed-remediation-resume-version.js";
+import { createGovernedRemediationParentResolutionSchema } from "./governed-remediation-parent-resolution-schema.js";
+import { createChannelSetupConnectionReviewSchema } from "./channel-setup-connection-review-schema.js";
+import { createRemoteWorkerCellCapacityObservationSchema } from "./remote-worker-cell-capacity-observation-schema.js";
+import { createRemoteWorkerCellBackingCapacitySchema } from "./remote-worker-cell-backing-capacity-schema.js";
+import { createRemoteWorkerCellCapacityInventorySchema } from "./remote-worker-cell-capacity-inventory-schema.js";
+import { createRemoteWorkerNativeCapacityDeliverySchema } from "./remote-worker-native-capacity-delivery-schema.js";
+import { createRemoteWorkerNativeCapacityPagesSchema } from "./remote-worker-native-capacity-pages-schema.js";
+import { createRemoteWorkerCellObjectInventorySchema } from "./remote-worker-cell-object-inventory-schema.js";
+import { createRemoteWorkerCellObjectInventoryPagesSchema } from "./remote-worker-cell-object-inventory-pages-schema.js";
+import { createRemoteWorkerRuntimeResultSchema } from "./remote-worker-runtime-result-schema.js";
+import { createRemoteWorkerRuntimeOutputSchema } from "./remote-worker-runtime-output-schema.js";
+import { createRemoteWorkerNativeFileReceiptSchema } from "./remote-worker-native-file-receipt-schema.js";
+import { createRemoteWorkerNativeFileTransferSchema } from "./remote-worker-native-file-transfer-schema.js";
+import { createRemoteWorkerNativePolicyReservationSchema } from "./remote-worker-native-policy-reservation-schema.js";
+import { createRemoteWorkerRuntimeInstallSchema } from "./remote-worker-runtime-install-schema.js";
+import { createRemoteWorkerRuntimeResultPagesSchema } from "./remote-worker-runtime-result-pages-schema.js";
+import { addRemoteWorkerRuntimeApprovalSchema } from "./remote-worker-runtime-approval-schema.js";
+import { createIntegrationConnectionRevisionSchema } from "./integration-connection-revision-schema.js";
 /* eslint-disable max-lines */
 import fs from "node:fs";
 import os from "node:os";
@@ -40,6 +60,8 @@ import { createRemoteWorkerCellMountSchema } from "./remote-worker-cell-mount-sc
 import { createRemoteWorkerCellMountedWorkspaceSchema } from "./remote-worker-cell-mounted-workspace-schema.js";
 import { createMemoryItemEnumerationSchema } from "./memory-item-enumeration-schema.js";
 import { createPermissionProfileSelectionSchema } from "./permission-profile-selection-schema.js";
+import { createCitadelAccessRevisionSchema } from "./citadel-access-revision-schema.js";
+import { createCitadelVaultRevisionSchema } from "./citadel-vault-revision-schema.js";
 import { upgradeRemoteWorkerCancellationSettlement } from "./remote-worker-cancellation-settlement-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "./managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL } from "./product-source-update-repo.js";
@@ -7227,6 +7249,28 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       { version: 226, name: "remote_worker_cell_mounted_workspace_checkpoints", up: createRemoteWorkerCellMountedWorkspaceSchema },
       { version: 227, name: "memory_item_enumeration", up: createMemoryItemEnumerationSchema },
       { version: 228, name: "permission_profile_selection", up: createPermissionProfileSelectionSchema },
+      { version: 229, name: "citadel_access_revisions", up: createCitadelAccessRevisionSchema },
+      { version: 230, name: "citadel_vault_revisions", up: createCitadelVaultRevisionSchema },
+      { version: 231, name: "integration_connection_revisions", up: createIntegrationConnectionRevisionSchema },
+      { version: 232, name: "channel_setup_connection_review", up: createChannelSetupConnectionReviewSchema },
+      { version: 233, name: "remote_worker_cell_capacity_observations", up: createRemoteWorkerCellCapacityObservationSchema },
+      { version: 234, name: "remote_worker_cell_backing_capacity_observations", up: createRemoteWorkerCellBackingCapacitySchema },
+      { version: 235, name: "remote_worker_cell_capacity_inventories", up: createRemoteWorkerCellCapacityInventorySchema },
+      { version: 236, name: "remote_worker_cell_object_inventory_observations", up: createRemoteWorkerCellObjectInventorySchema },
+      { version: 237, name: "remote_worker_cell_object_inventory_staging", up: createRemoteWorkerCellObjectInventoryPagesSchema },
+      { version: 238, name: "remote_worker_runtime_results", up: createRemoteWorkerRuntimeResultSchema },
+      { version: 239, name: "remote_worker_runtime_result_staging", up: createRemoteWorkerRuntimeResultPagesSchema },
+      { version: 240, name: "remote_worker_runtime_approval_binding", up: addRemoteWorkerRuntimeApprovalSchema },
+      { version: 241, name: "remote_worker_native_capacity_deliveries", up: createRemoteWorkerNativeCapacityDeliverySchema },
+      { version: 242, name: "remote_worker_native_capacity_staging", up: createRemoteWorkerNativeCapacityPagesSchema },
+      { version: 243, name: "governed_remediation_parent_reservations", up: createGovernedRemediationParentReservationSchema },
+      { version: 244, name: "governed_remediation_resume_version", up: upgradeGovernedRemediationResumeVersion },
+      { version: 245, name: "governed_remediation_parent_resolutions", up: createGovernedRemediationParentResolutionSchema },
+      { version: 246, name: "remote_worker_runtime_output_evidence", up: createRemoteWorkerRuntimeOutputSchema },
+      { version: 247, name: "remote_worker_native_file_receipts", up: createRemoteWorkerNativeFileReceiptSchema },
+      { version: 248, name: "remote_worker_native_file_transfers", up: createRemoteWorkerNativeFileTransferSchema },
+      { version: 249, name: "remote_worker_native_policy_reservations", up: createRemoteWorkerNativePolicyReservationSchema },
+      { version: 250, name: "remote_worker_runtime_install_evidence", up: createRemoteWorkerRuntimeInstallSchema },
     ],
   },
 ];

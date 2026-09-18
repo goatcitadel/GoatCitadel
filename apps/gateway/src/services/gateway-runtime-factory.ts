@@ -1,3 +1,4 @@
+import { composeGatewayNativeWorkerHandler } from "./remote-worker-gateway-handler-composition.js";
 import type { CompanionPrincipalPurpose, DatabaseCutoverRequest, LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
@@ -11,15 +12,8 @@ import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import type { WorkPassportService } from "./work-passport-service.js";
 import type { EngineeringLearningService } from "./engineering-learning-service.js";
-import { createGatewayRemoteWorkerAdmissionNativeRequestHandler } from "./remote-worker-admission-composition.js";
-import {
-  createGatewayRemoteWorkerAssignmentRuntimeComposition,
-  remoteWorkerAssignmentRuntimeActivated,
-} from "./remote-worker-assignment-runtime-composition.js";
 import type { RemoteWorkerNativeRequestHandler } from "./remote-worker-native-tls-listener.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
-import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
-import { RemoteWorkerChatApprovalWaitReadService } from "./remote-worker-chat-approval-wait-read-service.js";
 
 type GatewayLogger = {
   debug: (...args: unknown[]) => void;
@@ -152,41 +146,7 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     get routeServices() {
       return gateway.routeServices;
     },
-    createRemoteWorkerAdmissionNativeRequestHandler: async (config) => {
-      // Explicit activation composes all native execution owners. Listener,
-      // protected admission, current capability and spending checks still apply.
-      const activated = remoteWorkerAssignmentRuntimeActivated();
-      const { meshCapabilityPublication: publication, meshCapabilityInvocation: invocation } = gateway.routeServices;
-      const meshCapabilities = publication && invocation ? { publication, invocation } : undefined;
-      if (activated && !meshCapabilities) throw new Error("Remote worker mesh capability owners are unavailable.");
-      const assignmentRuntime = activated
-        ? createGatewayRemoteWorkerAssignmentRuntimeComposition({
-            admissionStore: gateway.storage.remoteWorkerAdmissions,
-            meshAdmissions: gateway.storage.remoteWorkerMeshNodeAdmissions,
-            assignments: gateway.storage.remoteWorkerAssignments,
-            nonceConsumer: gateway.storage.remoteWorkerNonces,
-            execution: gateway.createRemoteWorkerExecutionOwners(),
-            meshCapabilities,
-            approvalWait: new RemoteWorkerChatApprovalWaitReadService(gateway.storage),
-          })
-        : undefined;
-      return await createGatewayRemoteWorkerAdmissionNativeRequestHandler({
-        config,
-        admissionStore: gateway.storage.remoteWorkerAdmissions,
-        meshNodeAdmissionStore: gateway.storage.remoteWorkerMeshNodeAdmissions,
-        ...(assignmentRuntime === undefined
-          ? {}
-          : {
-              assignmentProtocol: assignmentRuntime.assignmentProtocol,
-              assignmentDispatch: assignmentRuntime.assignmentDispatch,
-              meshCapabilities: assignmentRuntime.meshCapabilities,
-              ...(assignmentRuntime.assignmentExecution === undefined
-                ? {}
-                : { assignmentExecution: assignmentRuntime.assignmentExecution }),
-            }),
-        createEvidenceVerifier: () => new RemoteWorkerProtectedAdmissionEvidenceVerifier(),
-      });
-    },
+    createRemoteWorkerAdmissionNativeRequestHandler: (config) => composeGatewayNativeWorkerHandler(gateway, config),
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
     close: () => gateway.close(),
     getOnboardingStartupState: () => gateway.getOnboardingStartupState(),

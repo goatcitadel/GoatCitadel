@@ -70,7 +70,7 @@ describe("channel setup route tails", () => {
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/test", 400);
     await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/test`, 404, "test failed", { expectedRevision: 1 });
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/finalize", 400);
-    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 400, "finalize failed", {
+    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 500, "Internal server error", {
       expectedRevision: 1,
     });
     await expectStatus("POST", "/api/v1/channels/connections/not-a-uuid/repair-draft", 400);

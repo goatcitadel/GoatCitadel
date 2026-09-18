@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { RequestAttribution, AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { buildApprovalRealtimeLinks } from "./approval-observability.js";
+import { isNativeExecutionApproval, requireNativeApprovalParent } from "./approval-native-runtime-parent.js";
 
 export interface ApprovalWaitRunServiceDeps {
   createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord>;
@@ -66,7 +67,7 @@ export class ApprovalWaitRunService {
       approval = await this.reserveApprovalWaitRun(approval);
     }
     const waitRun = await this.ensureApprovalWaitDurableRun(approval);
-    if (waitRun?.runId && approval.linkage?.durableRunId !== waitRun.runId) {
+    if (!isNativeExecutionApproval(approval) && waitRun?.runId && approval.linkage?.durableRunId !== waitRun.runId) {
       approval = await this.ctx.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: waitRun.runId });
     }
     return approval;
@@ -81,12 +82,22 @@ export class ApprovalWaitRunService {
     if (!(await this.ctx.isFeatureEnabled("durableKernelV1Enabled")) || approval.status !== "pending") {
       return approval;
     }
-    const preferredRunId =
-      approval.linkage?.durableRunId?.trim() || this.deps.createApprovalWaitRunId?.() || randomUUID();
+    const nativeParent = isNativeExecutionApproval(approval)
+      ? await requireNativeApprovalParent(this.deps, approval) : undefined;
+    const preferredRunId = (!nativeParent && approval.linkage?.durableRunId?.trim()) || this.deps.createApprovalWaitRunId?.() || randomUUID();
+    if (nativeParent?.runId === preferredRunId) {
+      throw new Error("Native runtime approval requires a separate wait run.");
+    }
     const reservation = await this.ctx.storage.approvalWaitRuns.createOrGet({
       approvalId: approval.approvalId,
       runId: preferredRunId,
     });
+    if (nativeParent) {
+      if (reservation.runId === nativeParent.runId) throw new Error("Native runtime approval requires a separate wait run.");
+      // Native linkage names the immutable execution parent. The approval's
+      // separate wait identity belongs exclusively to approvalWaitRuns.
+      return approval;
+    }
     if (approval.linkage?.durableRunId === reservation.runId) {
       return approval;
     }
@@ -105,9 +116,21 @@ export class ApprovalWaitRunService {
     if (!reservation?.runId) {
       return undefined;
     }
+    if (isNativeExecutionApproval(approval)) {
+      const parent = await requireNativeApprovalParent(this.deps, approval);
+      if (parent.runId === reservation.runId) throw new Error("Native runtime approval requires a separate wait run.");
+    }
+    const validateWait = (run: DurableRunRecord) => {
+      if (isNativeExecutionApproval(approval) &&
+          (run.runId !== reservation.runId || run.workflowKey !== "approval.wait" ||
+            run.payload.approvalId !== approval.approvalId || run.payload.approvalKind !== approval.kind)) {
+        throw new Error("Native runtime approval wait belongs to another review.");
+      }
+      return run;
+    };
     if (reservation.runId) {
       try {
-        return await this.deps.getDurableRun(reservation.runId);
+        return validateWait(await this.deps.getDurableRun(reservation.runId));
       } catch (error) {
         if (!(error instanceof NotFoundError)) {
           throw error;
@@ -117,7 +140,7 @@ export class ApprovalWaitRunService {
     }
     const requestAttribution = this.getCurrentRequestAttribution();
     try {
-      return await this.deps.createDurableRun({
+      return validateWait(await this.deps.createDurableRun({
         runId: reservation.runId,
         workflowKey: "approval.wait",
         payload: approvalWaitPayloadToRecord({
@@ -137,10 +160,10 @@ export class ApprovalWaitRunService {
           eventKey: "approval.resolved",
           correlationId: approval.approvalId,
         },
-      });
+      }));
     } catch (error) {
       try {
-        return await this.deps.getDurableRun(reservation.runId);
+        return validateWait(await this.deps.getDurableRun(reservation.runId));
       } catch {
         throw error;
       }

@@ -13,7 +13,7 @@ import {
   type RemoteWorkerLlmServiceAdapterDependencies,
 } from "./remote-worker-inference-llm-service-adapter.js";
 import type { RemoteWorkerInferenceDispatchRequest } from "./remote-worker-inference-llm-adapter.js";
-import { createGovernedChatCompletion, type GovernedLlmCompletionHost } from "./llm-completion-service.js";
+import { createGovernedChatCompletion, type GovernedLlmCompletionHost } from "./governed-llm-completion-service.js";
 import type { ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import { readRemoteWorkerModelToolCalls } from "./remote-worker-model-tool-calls.js";
 
@@ -149,6 +149,25 @@ function response(usage = true): Response {
 }
 
 describe("remote worker existing provider integration", () => {
+  it.each([20, 21])("enforces the combined reasoning/output ceiling before HTTP (attempt=%s)", async attemptCap => {
+    const h = await fixture();
+    const fetch = vi.fn(async () => response());
+    vi.stubGlobal("fetch", fetch);
+    let completionFailure: unknown;
+    const complete: NonNullable<RemoteWorkerLlmServiceAdapterDependencies["complete"]> = (request, attribution, guard) => {
+      expect(request.max_tokens).toBe(20);
+      return h.llm.chatCompletionsWithDispatchGuard({ ...request, max_tokens: attemptCap }, attribution, guard)
+        .catch(error => { completionFailure = error; throw error; });
+    };
+    const adapter = new RemoteWorkerInferenceLlmServiceAdapter({ ...h.dependencies, complete });
+    const result = await adapter.dispatch({ ...h.request, effectiveOutputTokenCap: 100, reasoningTokenCeiling: 20 })
+      .catch(error => { throw completionFailure ?? error; });
+    expect(result.terminalState).toBe(attemptCap === 20 ? "completed" : "failed");
+    expect(fetch).toHaveBeenCalledTimes(attemptCap === 20 ? 1 : 0);
+    expect(h.attempts()).toHaveLength(1);
+    if (attemptCap > 20) expect(h.attempts()[0]).toMatchObject({ dispatchReconciliation: "confirmed_not_dispatched" });
+  }, 60_000);
+
   it("retains complete provider tool calls under the same dispatch and spending owners", async () => {
     const h = await fixture();
     const argumentsJson = ' {"path":"note.txt"} ';

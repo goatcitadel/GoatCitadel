@@ -69,3 +69,57 @@
   outline: 2px solid var(--accent, #6b8afd);
   outline-offset: 2px;
 }
+
+.mc-next-remote-activity__runtime {
+  min-width: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mc-next-remote-activity__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 0.6rem 1rem;
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.mc-next-remote-activity__metrics > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-remote-activity__metrics dt {
+  color: var(--muted-foreground);
+}
+
+.mc-next-remote-activity__metrics dd {
+  margin: 0.15rem 0 0;
+  color: var(--foreground);
+}
+
+.mc-next-remote-activity__details {
+  min-width: 0;
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-remote-activity__details > summary {
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.mc-next-remote-activity__details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mc-next-remote-activity__details p {
+  color: var(--muted-foreground);
+}
+
+.mc-next-remote-activity__runtime > button {
+  justify-self: start;
+}

@@ -143,7 +143,7 @@ describe("StreamingMarkdown incremental wiring", () => {
   }
 
   it("renders the same settled markup whether streamed incrementally or rendered whole", () => {
-    const full = "Para one.\n\n```ts\nconst v = 1;\n```\n\nPara two closing.";
+    const full = "## Heading\n\n- First\n- Second\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |\n\n```ts\nconst v = 1;\n```\n\n[Safe](https://example.com) and [unsafe](javascript:alert(1)).\n\n<script>alert(1)</script>\n\nPara two closing.";
 
     // Stream it token-by-token through the running renderer with a stable turn id.
     renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-stream" />);
@@ -167,6 +167,9 @@ describe("StreamingMarkdown incremental wiring", () => {
     const directFinal = renderedShape(renderer);
 
     expect(streamedFinal).toBe(directFinal);
+    expect(renderer.root.findAllByType("table")).toHaveLength(1);
+    expect(renderer.root.findAllByType("script")).toHaveLength(0);
+    expect(renderer.root.findAllByType("a").some((link) => String(link.props.href).startsWith("javascript:"))).toBe(false);
   });
 
   it("does not leak fence parsing across a turn-id change while running", () => {

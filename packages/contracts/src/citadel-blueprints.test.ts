@@ -1,10 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type {
   Citadel,
   CitadelChamber,
-  CitadelChamberInput,
   CitadelCharter,
-  CitadelCharterInput,
+  CitadelStructureSnapshot,
   CitadelTemplateTarget,
 } from "./citadels.js";
 import {
@@ -143,28 +142,15 @@ describe("validateCitadelBlueprint", () => {
 });
 
 describe("applyCitadelBlueprint", () => {
-  it("imports a blueprint by upserting a charter and creating its chambers", () => {
-    const charters: CitadelCharterInput[] = [];
-    const chambers: CitadelChamberInput[] = [];
-    const target: CitadelTemplateTarget = {
-      upsertCharter: (input) => {
-        charters.push(input);
-        return { citadelId: input.citadelId } as CitadelCharter;
-      },
-      createChamber: (input) => {
-        chambers.push(input);
-        return { chamberId: `c-${chambers.length}`, citadelId: input.citadelId } as CitadelChamber;
-      },
-      getCitadel: (citadelId) => ({ citadelId }) as Citadel,
-    };
+  it("imports all blueprint content through one scoped and reviewed structure command", () => {
+    const saved: CitadelStructureSnapshot = { citadelId: "ws-2", revision: "saved", charter: null, chambers: [] };
+    const target: CitadelTemplateTarget = { mutateStructure: vi.fn(() => saved) };
 
     const blueprint = exportCitadelBlueprint(sampleCitadel());
-    applyCitadelBlueprint(target, "ws-2", blueprint);
-
-    expect(charters).toHaveLength(1);
-    expect(charters[0]?.citadelId).toBe("ws-2");
-    expect(charters[0]?.kind).toBe("company");
-    expect(chambers.map((chamber) => chamber.name)).toEqual(["General", "Finance"]);
-    expect(chambers.every((chamber) => chamber.citadelId === "ws-2")).toBe(true);
+    expect(applyCitadelBlueprint(target, "ws-2", blueprint, "reviewed")).toBe(saved);
+    expect(target.mutateStructure).toHaveBeenCalledTimes(1);
+    expect(target.mutateStructure).toHaveBeenCalledWith({ citadelId: "ws-2", expectedRevision: "reviewed", change: {
+      type: "setup", charter: blueprint.charter, chambers: blueprint.chambers,
+    } });
   });
 });

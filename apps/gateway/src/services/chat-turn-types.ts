@@ -188,6 +188,7 @@ export interface DurableChatTurnExecutionPayload {
 }
 
 export interface DurableChatTurnUserInputResumeRecord {
+  runtimeRemediationReceipt?: import("@goatcitadel/contracts").GovernedRemediationResumeReference;
   promptId: string;
   kind: "single_select" | "text";
   title?: string;

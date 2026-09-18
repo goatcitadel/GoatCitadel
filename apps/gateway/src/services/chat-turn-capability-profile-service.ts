@@ -1,3 +1,5 @@
+import { resolveChatMeshProfileToolSchemas, resolveFrozenMeshPublicationBinding } from "./chat-mesh-profile-binding-service.js";
+import { discoverChatMcpProfileCandidates, bindChatMcpProfileCandidates, isMcpRequesterScopeAuthActorSource } from "./chat-mcp-profile-binding-service.js";
 import { createHash } from "node:crypto";
 import {
   CHAT_TURN_CAPABILITY_PROFILE_VERSION,
@@ -23,7 +25,6 @@ import {
   type ChatWebMode,
   type McpRequesterResolutionBinding,
   type McpNormalizedRequesterDiscoveryCatalog,
-  type McpRequesterScopeAuthActorSource,
   type ToolPolicyActorContext,
   type WorkPassportRecord,
 } from "@goatcitadel/contracts";
@@ -37,9 +38,6 @@ import {
 import type { ResolvedChatTurnToolSchema } from "./chat-turn-agent-runner.js";
 import type { ChatTurnRoute } from "./chat-turn-prep-service.js";
 import {
-  collectNativeMcpChatCatalogCandidates,
-  bindNativeStaticMcpChatToolSchema,
-  resolveNativeMcpChatToolSchemas,
   type NativeMcpChatToolSchema,
 } from "./gateway/native-mcp-chat-catalog.js";
 import type {
@@ -311,13 +309,9 @@ export async function resolveChatTurnCapabilityProfile(
   const nativeAdmissionAllowed = Boolean(requesterScopeSha256 &&
     input.toolAutonomy !== "manual" &&
     baseCallableEntries.some((entry) => entry.kind === "tool" && entry.toolName === "mcp.invoke" && entry.callable));
-  const [requesterCatalogs, staticCatalogs] = await Promise.all([
-    nativeAdmissionAllowed && deps.discoverMcpRequesterCatalogs && deps.resolveMcpRequesterCatalogBindings
-      ? deps.discoverMcpRequesterCatalogs(discoveryHook) : [],
-    nativeAdmissionAllowed && deps.discoverStaticMcpCatalogs && deps.assertStaticMcpCatalogCurrent
-      ? deps.discoverStaticMcpCatalogs(discoveryHook) : [],
-  ]);
-  const nativeCandidates = collectNativeMcpChatCatalogCandidates(requesterCatalogs, baseInspectableEntries, staticCatalogs);
+  const nativeCandidates = await discoverChatMcpProfileCandidates(
+    deps, nativeAdmissionAllowed, discoveryHook, baseInspectableEntries,
+  );
   const inspectableEntries = sortCatalogEntries([
     ...baseInspectableEntries,
     ...nativeCandidates.map(({ entry }) => entry),
@@ -333,28 +327,9 @@ export async function resolveChatTurnCapabilityProfile(
     callableEntries,
     createdAt,
   };
-  const nativeTools =
-    nativeCandidates.length > 0 && deps.resolveMcpRequesterCatalogBindings
-      ? await resolveNativeMcpChatToolSchemas(
-          nativeCandidates.filter((candidate) => !candidate.staticCatalog),
-          {
-            ...discoveryHook,
-            catalogSnapshotId: snapshotId,
-            callableCatalogSha256: callableHash,
-          },
-          deps.resolveMcpRequesterCatalogBindings,
-        )
-      : [];
-  for (const candidate of nativeCandidates) {
-    if (!candidate.staticCatalog) continue;
-    if (!deps.assertStaticMcpCatalogCurrent || !policyContext.authActorId ||
-      !isMcpRequesterScopeAuthActorSource(policyContext.authActorSource)) throw new Error("Static MCP admission has no current actor authority.");
-    await deps.assertStaticMcpCatalogCurrent(candidate.staticCatalog, discoveryHook);
-    nativeTools.push(bindNativeStaticMcpChatToolSchema(candidate, {
-      profileId: capabilityProfileId, turnId: input.turnId, sessionId: input.sessionId, workspaceId: input.workspaceId,
-      authActorId: policyContext.authActorId, authActorSource: policyContext.authActorSource,
-    }, { snapshotId, callableHash }));
-  }
+  const nativeTools = await bindChatMcpProfileCandidates(
+    deps, nativeCandidates, discoveryHook, input, policyContext, capabilityProfileId, snapshotId, callableHash,
+  );
   const nativeToolsByName = new Map(nativeTools.map((tool) => [tool.canonicalName, tool]));
   const schemaInput = {
     sessionId: input.sessionId,
@@ -384,9 +359,7 @@ export async function resolveChatTurnCapabilityProfile(
     policyContext,
     historyMessages: input.historyMessages,
   };
-  const meshTools = input.toolAutonomy !== "manual" && deps.resolveMeshToolSchemas &&
-    callableEntries.some((entry) => entry.kind === "mesh_tool" || entry.kind === "mesh_mcp_server")
-    ? await deps.resolveMeshToolSchemas({ workspaceId: input.workspaceId, entries: callableEntries }) : [];
+  const meshTools = await resolveChatMeshProfileToolSchemas(deps, input, callableEntries);
   const meshToolsByName = new Map<string, MeshChatToolSchema>();
   for (const tool of meshTools) {
     assertMeshChatToolSchema(tool);
@@ -847,57 +820,11 @@ function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJsonString(value)).digest("hex");
 }
 
-function isMcpRequesterScopeAuthActorSource(
-  value: ToolPolicyActorContext["authActorSource"],
-): value is McpRequesterScopeAuthActorSource {
-  return value === "token" || value === "basic" || value === "loopback" || value === "device" || value === "companion";
-}
-
 function copyAndFreezeMcpRequesterResolutionBinding(
   input: McpRequesterResolutionBinding,
 ): McpRequesterResolutionBinding {
   const copied = structuredClone(input);
   if (copied.meshActivation) Object.freeze(copied.meshActivation);
-  return Object.freeze(copied);
-}
-
-/**
- * HX-408 M2 freeze gate: a mesh-published callable may enter the profile only
- * with a server-verified activation snapshot whose immutable identity matches
- * the exact catalog entry being selected. A missing seam, a failed
- * revalidation, or any identity divergence blocks the turn fail-closed with a
- * content-free reason.
- */
-async function resolveFrozenMeshPublicationBinding(
-  deps: ChatTurnCapabilityProfileResolveDeps,
-  workspaceId: string,
-  canonicalName: string,
-  catalogEntry: CapabilityCatalogEntry,
-): Promise<ChatTurnCapabilityToolMeshPublicationBinding> {
-  const projection = catalogEntry.mesh;
-  const blocked = () =>
-    new Error(`Mesh-published tool ${canonicalName} is blocked because mesh_capability_freeze_drift.`);
-  if (!projection || !deps.resolveMeshPublicationBinding) {
-    throw blocked();
-  }
-  const binding = await deps.resolveMeshPublicationBinding({
-    workspaceId,
-    capabilityId: catalogEntry.capabilityId,
-    entrySha256: projection.entrySha256,
-    manifestSha256: projection.manifestSha256,
-    publisherGeneration: projection.publisherGeneration,
-  });
-  if (
-    !binding ||
-    binding.nodeId !== projection.nodeId ||
-    binding.publisherGeneration !== projection.publisherGeneration ||
-    binding.manifestSha256 !== projection.manifestSha256 ||
-    binding.entrySha256 !== projection.entrySha256 ||
-    binding.effectPosture !== projection.effectPosture
-  ) {
-    throw blocked();
-  }
-  const copied = structuredClone(binding);
   return Object.freeze(copied);
 }
 

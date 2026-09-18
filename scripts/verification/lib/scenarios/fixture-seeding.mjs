@@ -150,10 +150,21 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
   // routes avoid 404 console errors while Projects/Sessions/Artifacts keep a
   // matching workspace + citadel scope.
   const citadelId = "personal";
+  const readCitadelRevision = async () => {
+    const result = await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/structure`);
+    assertOk(result, "review mission-control-next Citadel structure");
+    return result.body.revision;
+  };
+  const readAccessRevision = async () => {
+    const result = await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/access`);
+    assertOk(result, "review mission-control-next Citadel access rules");
+    return result.body.revision;
+  };
   assertOk(
     await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/charter`, {
       method: "PUT",
       body: {
+        expectedRevision: await readCitadelRevision(),
         purpose: "Coordinate Mission Control verification work under explicit, reviewable governance.",
         kind: "personal",
         goals: ["Keep operator work legible", "Prove governance surfaces render real content"],
@@ -172,7 +183,7 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     assertOk(
       await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/chambers`, {
         method: "POST",
-        body: chamber,
+        body: { ...chamber, expectedRevision: await readCitadelRevision() },
       }),
       `create mission-control-next citadel chamber ${chamber.name}`,
     );
@@ -184,7 +195,7 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     assertOk(
       await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/wards`, {
         method: "POST",
-        body: ward,
+        body: { ...ward, expectedRevision: await readAccessRevision() },
       }),
       `add mission-control-next citadel ward ${ward.name}`,
     );
@@ -196,7 +207,7 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     assertOk(
       await requestJson(gatewayUrl, `/api/v1/citadels/${encodeURIComponent(citadelId)}/council`, {
         method: "POST",
-        body: { agentId: councilAgent.agentId },
+        body: { agentId: councilAgent.agentId, expectedRevision: await readAccessRevision() },
       }),
       `seat mission-control-next citadel council agent ${councilAgent.agentId}`,
     );

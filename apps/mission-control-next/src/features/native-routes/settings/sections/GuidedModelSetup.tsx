@@ -155,6 +155,9 @@ export function GuidedModelSetup({
   useEffect(() => {
     let cancelled = false;
     const generation = ++planLoadGeneration.current;
+    busyRef.current = false;
+    setBusy(false);
+    setActionError(null);
     setLatestPlan(null);
     setDialogPlan(null);
     void fetchChangePlans({ workspaceId }, { limit: 25 })
@@ -169,10 +172,11 @@ export function GuidedModelSetup({
         if (pending && generation === planLoadGeneration.current) setLatestPlan(pending);
       })
       .catch((error) => {
-        if (!cancelled) setActionError(getErrorMessage(error));
+        if (!cancelled && generation === planLoadGeneration.current) setActionError(getErrorMessage(error));
       });
     return () => {
       cancelled = true;
+      planLoadGeneration.current += 1;
     };
   }, [workspaceId]);
 
@@ -205,16 +209,20 @@ export function GuidedModelSetup({
     async (operation: () => Promise<ChangePlanRecord>) => {
       if (busyRef.current) return;
       busyRef.current = true;
-      planLoadGeneration.current += 1;
+      const generation = ++planLoadGeneration.current;
       setBusy(true);
       setActionError(null);
       try {
-        await recordPlan(await operation());
+        const updated = await operation();
+        if (generation !== planLoadGeneration.current) return;
+        await recordPlan(updated);
       } catch (error) {
-        setActionError(getErrorMessage(error));
+        if (generation === planLoadGeneration.current) setActionError(getErrorMessage(error));
       } finally {
-        busyRef.current = false;
-        setBusy(false);
+        if (generation === planLoadGeneration.current) {
+          busyRef.current = false;
+          setBusy(false);
+        }
       }
     },
     [recordPlan],
@@ -264,16 +272,21 @@ export function GuidedModelSetup({
     }
     if (busyRef.current) return;
     busyRef.current = true;
+    const generation = ++planLoadGeneration.current;
     setBusy(true);
     try {
       await completeOnboarding("operator");
+      if (generation !== planLoadGeneration.current) return;
       await reloadOnboarding();
+      if (generation !== planLoadGeneration.current) return;
       navigate({ area: "chat", theme: route.theme });
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (generation === planLoadGeneration.current) setNotice({ tone: "error", message: getErrorMessage(error) });
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      if (generation === planLoadGeneration.current) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   };
 

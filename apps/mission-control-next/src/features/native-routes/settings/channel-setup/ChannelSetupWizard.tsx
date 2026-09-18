@@ -34,6 +34,7 @@ interface ChannelSetupWizardProps {
   label: string;
   enabled: boolean;
   dirty: boolean;
+  reviewRequired?: boolean;
   busyAction?: "save" | "validate" | "test" | "finalize" | null;
   feedback?: ChannelSetupWizardFeedback | null;
   supplementaryActions?: ReactNode;
@@ -57,6 +58,7 @@ export function ChannelSetupWizard({
   label,
   enabled,
   dirty,
+  reviewRequired = false,
   busyAction = null,
   feedback,
   supplementaryActions,
@@ -182,6 +184,7 @@ export function ChannelSetupWizard({
   };
 
   const handleValidate = async () => {
+    if (reviewRequired) return;
     const next = prepareValues();
     if (next) {
       await onValidate(next);
@@ -189,6 +192,7 @@ export function ChannelSetupWizard({
   };
 
   const handleTest = async () => {
+    if (reviewRequired) return;
     const next = prepareValues();
     if (next) {
       await onTest(next);
@@ -196,6 +200,7 @@ export function ChannelSetupWizard({
   };
 
   const handleFinalize = async () => {
+    if (reviewRequired) return;
     const next = prepareValues();
     if (next) {
       await onFinalize(next);
@@ -311,6 +316,7 @@ export function ChannelSetupWizard({
           localError={localError}
           feedback={feedback}
           dirty={dirty}
+          reviewRequired={reviewRequired}
           onChange={(next) => {
             setAdvancedJson(next);
             setLocalError(null);
@@ -411,11 +417,11 @@ export function ChannelSetupWizard({
                 </NativeButton>
                 {activeStep.kind === "test" ? (
                   <>
-                    <NativeButton variant="secondary" disabled={anyBusy} onClick={() => void handleValidate()}>
+                    <NativeButton variant="secondary" disabled={anyBusy || reviewRequired} onClick={() => void handleValidate()}>
                       <ShieldCheck size={16} />
                       {busyAction === "validate" ? "Validating…" : "Validate"}
                     </NativeButton>
-                    <NativeButton variant="outline" disabled={anyBusy} onClick={() => void handleTest()}>
+                    <NativeButton variant="outline" disabled={anyBusy || reviewRequired} onClick={() => void handleTest()}>
                       <Play size={16} />
                       {busyAction === "test" ? "Testing…" : "Run live test"}
                     </NativeButton>
@@ -424,7 +430,7 @@ export function ChannelSetupWizard({
                 {activeStep.kind === "confirm" ? (
                   <NativeButton
                     variant="default"
-                    disabled={anyBusy || dirty || feedback?.kind !== "test" || feedback.status !== "ok"}
+                    disabled={anyBusy || reviewRequired || dirty || feedback?.kind !== "test" || feedback.status !== "ok"}
                     title={finalizeDisabledReason(dirty, feedback)}
                     onClick={() => void handleFinalize()}
                   >
@@ -452,6 +458,7 @@ function AdvancedJsonEditor({
   localError,
   feedback,
   dirty,
+  reviewRequired,
   busyAction,
   onChange,
   onSave,
@@ -464,6 +471,7 @@ function AdvancedJsonEditor({
   localError: string | null;
   feedback?: ChannelSetupWizardFeedback | null;
   dirty: boolean;
+  reviewRequired: boolean;
   busyAction?: ChannelSetupWizardProps["busyAction"];
   onChange: (next: string) => void;
   onSave: () => void;
@@ -484,6 +492,7 @@ function AdvancedJsonEditor({
         <span>Draft JSON</span>
         <textarea
           className="mc-next-settings-textarea mc-next-settings-code"
+          aria-label="Draft JSON"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled}
@@ -497,17 +506,17 @@ function AdvancedJsonEditor({
           <Save size={16} />
           {busyAction === "save" ? "Saving…" : "Save draft"}
         </NativeButton>
-        <NativeButton variant="secondary" disabled={disabled} onClick={onValidate}>
+        <NativeButton variant="secondary" disabled={disabled || reviewRequired} onClick={onValidate}>
           <ShieldCheck size={16} />
           {busyAction === "validate" ? "Validating…" : "Validate"}
         </NativeButton>
-        <NativeButton variant="outline" disabled={disabled} onClick={onTest}>
+        <NativeButton variant="outline" disabled={disabled || reviewRequired} onClick={onTest}>
           <Play size={16} />
           {busyAction === "test" ? "Testing…" : "Run live test"}
         </NativeButton>
         <NativeButton
           variant="default"
-          disabled={disabled || dirty || feedback?.kind !== "test" || feedback.status !== "ok"}
+          disabled={disabled || reviewRequired || dirty || feedback?.kind !== "test" || feedback.status !== "ok"}
           title={finalizeDisabledReason(dirty, feedback)}
           onClick={onFinalize}
         >

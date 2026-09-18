@@ -14,6 +14,6 @@ inline constexpr char kWorkerProtectedStdioMagic[] = "GCSTDIO2";
 // recorded parent/root identities. It cannot fall back to an unprotected launch.
 DWORD DecodeWorkerStdioConfiguration(const std::vector<std::uint8_t>& bytes,
                                     RuntimeJobCommand* command, JobLimits* limits,
-                                    bool protected_workspace = false) noexcept;
+                                    bool protected_workspace = false, DWORD maximum_wall_ms = 25000) noexcept;
 std::string WorkerStdioCompletion(const RuntimeJobResult& result, DWORD bridge_error);
 }  // namespace goatcitadel::worker_cell

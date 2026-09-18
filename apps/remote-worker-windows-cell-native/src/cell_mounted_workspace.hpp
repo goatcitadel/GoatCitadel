@@ -2,6 +2,13 @@
 #include "cell_volume_mount.hpp"
 
 namespace goatcitadel::worker_cell {
+struct CellDirectoryFootprint;
+struct CellDirectoryInventory;
+class CellDirectoryInventoryPins;
+struct CellFootprintScanLimits;
+struct CellFootprintScanGuard;
+class PinnedCellRuntimeBundle;
+struct RuntimeBundleInstallResult;
 struct CellMountedWorkspaceBinding final {
   CellFileSha256 mount_sha256{}, security_sha256{};
   CellFileIdentity volume_root{};
@@ -46,6 +53,27 @@ class CellMountedWorkspace final {
   DWORD RecordIdentities(CellVolumeMount& mount, CellVolumeProtection& protection, CellWorkspaceDirectories& host,
     CellWorkspaceIdentities* output, DWORD wall_limit_ms, HANDLE cancellation = nullptr) noexcept;
   DWORD RecordCheckpoints(std::vector<CellMountedWorkspaceCheckpoint>* output) const noexcept;
+  // Copy only into the recorded guest contents, never the host mount alias.
+  // The guard must retain current install/package/capacity authority and workload
+  // quiescence. Each callback is followed by complete mounted custody checks.
+  // Partial files and counts remain on failure; no checkpoint or readiness is advanced.
+  RuntimeBundleInstallResult InstallRuntime(CellVolumeMount& mount, CellVolumeProtection& protection,
+    CellWorkspaceDirectories& host, PinnedCellRuntimeBundle& source, PinnedCellRuntimeBundle& output,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard) noexcept;
+  // Read-only inventory of the recorded mounted tree. Every authority callback
+  // is followed by mount/protection/host/workspace verification before reading.
+  // Workload quiescence remains the caller's responsibility. No missing object
+  // is recreated, and no provisioning checkpoint or quota readiness is changed.
+  DWORD ObserveFootprint(CellVolumeMount& mount, CellVolumeProtection& protection, CellWorkspaceDirectories& host,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, CellDirectoryFootprint* output) noexcept;
+  DWORD ObserveInventory(CellVolumeMount& mount, CellVolumeProtection& protection, CellWorkspaceDirectories& host,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, CellDirectoryInventory* output) noexcept;
+  // Retains all inventory handles for a joined observation. The caller supplies
+  // an unopened pin owner and retains this mounted owner and its dependencies.
+  // Failure withholds output and closes newly captured pins.
+  DWORD CaptureInventory(CellVolumeMount& mount, CellVolumeProtection& protection, CellWorkspaceDirectories& host,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellDirectoryInventoryPins& pins, CellDirectoryInventory* output) noexcept;
   CellMountedWorkspaceState State() const noexcept { return state_; }
   void Close() noexcept;
  private:
@@ -64,6 +92,22 @@ class CellMountedWorkspace final {
   DWORD Commit(CellMountedWorkspacePhase phase, ULONGLONG deadline, HANDLE cancellation) noexcept;
   DWORD Run(const Operations& operations, ULONGLONG deadline, HANDLE cancellation) noexcept;
   DWORD Recover(const Operations& operations, ULONGLONG deadline, HANDLE cancellation, bool reopen) noexcept;
+  DWORD ReadFootprint(DWORD (*verify)(void*, DWORD, HANDLE) noexcept, void* context,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, CellDirectoryFootprint* output) noexcept;
+  DWORD ReadInventory(DWORD (*verify)(void*, DWORD, HANDLE) noexcept, void* context,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, CellDirectoryInventory* output) noexcept;
+  DWORD ReadRetainedInventory(DWORD (*verify)(void*, DWORD, HANDLE) noexcept, void* context,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellDirectoryInventoryPins& pins, CellDirectoryInventory* output) noexcept;
+  template <typename Output, typename Scan>
+  DWORD ReadCapacity(DWORD (*verify)(void*, DWORD, HANDLE) noexcept, void* context,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, Output* output,
+    Scan scan, std::uint32_t maximum_entries) noexcept;
+  template <typename Output, typename Operation>
+  DWORD OperateRecordedWorkspace(DWORD (*verify)(void*, DWORD, HANDLE) noexcept, void* context,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard, Output* output, Operation operation, bool mutating) noexcept;
+  RuntimeBundleInstallResult InstallRuntimeOwned(DWORD (*verify)(void*, DWORD, HANDLE) noexcept, void* context,
+    PinnedCellRuntimeBundle& source, PinnedCellRuntimeBundle& output, DWORD wall_limit_ms, const CellFootprintScanGuard& guard) noexcept;
   CellMountedWorkspaceBinding binding_;
   CellWorkspaceIdentities identities_;
   CellMountedWorkspaceCommitter committer_;

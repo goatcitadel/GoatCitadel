@@ -1,3 +1,4 @@
+import { createRemoteWorkerRouteService } from "./remote-worker-route-composition.js";
 import { AuthAdminRouteService, type AuthAdminRoutePort } from "./auth-admin-route-service.js";
 import { createAddonsRouteService, type AddonsRoutePort, type AddonsRouteService } from "./addons-route-service.js";
 import { createAgentsRouteService, type AgentsRoutePort, type AgentsRouteService } from "./agents-route-service.js";
@@ -433,6 +434,8 @@ export interface GatewayRouteServiceDependencies {
     assignments: RemoteWorkerAssignmentStore;
     operatorControl: RemoteWorkerOperatorControlDependencies;
     runtimeReads?: RemoteWorkerRuntimeReadStore;
+    nativeFiles?: RemoteWorkersRouteService["nativeFiles"];
+    nativeRuntime?: RemoteWorkersRouteService["nativeRuntime"];
   };
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
@@ -508,13 +511,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     promptPacks: new PromptPacksRouteService(deps.promptPacks),
     realtimeEvents: createRealtimeEventsRouteService(deps.realtimeEvents),
     researchSearch: new ResearchSearchRouteService(deps.researchSearch),
-    remoteWorkers: new RemoteWorkersRouteService(
-      deps.remoteWorkers.registry,
-      deps.remoteWorkers.assignments,
-      () => new Date().toISOString(),
-      deps.remoteWorkers.operatorControl,
-      deps.remoteWorkers.runtimeReads,
-    ),
+    remoteWorkers: createRemoteWorkerRouteService(deps.remoteWorkers),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),
     sessionControl: deps.sessionControl,

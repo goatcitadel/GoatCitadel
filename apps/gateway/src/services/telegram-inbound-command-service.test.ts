@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ConflictError } from "@goatcitadel/contracts";
 import type { InboundChannelCommandExecutionInput } from "./inbound-channel-event-service.js";
 import {
   executeTelegramInboundCommand,
@@ -23,6 +24,19 @@ describe("executeTelegramInboundCommand", () => {
         }),
       }),
     );
+  });
+
+  it("rejects a sethome draft if the connection changes while command context loads", async () => {
+    const { host, update } = createHost({ telegramOperatorActors: ["777"], botToken: "synthetic-original" });
+    let revision = "a".repeat(64);
+    let persisted: Record<string, unknown> = { telegramOperatorActors: ["777"], botToken: "synthetic-original" };
+    host.getPersonalityCatalog = async () => { revision = "b".repeat(64); persisted = { telegramOperatorActors: [], botToken: "synthetic-peer" }; return { items: [], defaultPersonalityId: "default" }; };
+    update.mockImplementation((_id, input) => {
+      if (input.expectedRevision !== undefined && input.expectedRevision !== revision) throw new ConflictError({ code: "WRITE_CONFLICT", message: "Connection changed" });
+      persisted = input.config;
+    });
+    await expect(executeTelegramInboundCommand(host, createInput({ content: "/sethome" }))).rejects.toThrow("Connection changed");
+    expect(persisted).toEqual({ telegramOperatorActors: [], botToken: "synthetic-peer" });
   });
 
   it("resolves approval callbacks by opaque action id without a bearer token", async () => {
@@ -138,6 +152,7 @@ function createHost(config: Record<string, unknown> = {}) {
       integrationConnections: {
         get: () => ({
           connectionId: CONNECTION_ID,
+          revision: "a".repeat(64),
           label: "Telegram",
           enabled: true,
           status: "connected",

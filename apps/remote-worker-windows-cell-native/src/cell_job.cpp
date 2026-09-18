@@ -337,9 +337,66 @@ DWORD CpuRateForMilliCores(DWORD cpu_milli, DWORD active_processors) noexcept {
   return static_cast<DWORD>(std::min<std::uint64_t>(10000, static_cast<std::uint64_t>(cpu_milli) * 10 / active_processors));
 }
 
+DWORD JobQuiescence::Check() const noexcept {
+  auto current = [&]() noexcept -> DWORD {
+    if (GetTickCount64() >= deadline_) return ERROR_TIMEOUT;
+    if (!cancellation_) return ERROR_SUCCESS;
+    const DWORD state = WaitForSingleObject(cancellation_, 0);
+    return state == WAIT_OBJECT_0 ? ERROR_CANCELLED : state == WAIT_TIMEOUT ? ERROR_SUCCESS : ERROR_INVALID_HANDLE;
+  };
+  DWORD error = current();
+  if (error) return error;
+  if (!authorize_) return ERROR_ACCESS_DENIED;
+  error = authorize_(context_);
+  if (error) return error;
+  error = current();
+  if (error) return error;
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+  if (!QueryInformationJobObject(job_, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr)) return Error();
+  return accounting.ActiveProcesses == 0 ? ERROR_SUCCESS : ERROR_BUSY;
+}
+
+CellFootprintCellBinding JobQuiescence::CellBinding() const noexcept {
+  return {[](const void* raw, const std::wstring& name, const CellFileIdentity& work) noexcept -> DWORD {
+    const auto& job = *static_cast<const JobQuiescence*>(raw);
+    if (name != job.JobName() || work != job.DirectoryIdentity()) return ERROR_ACCESS_DENIED;
+    return job.Check();
+  }, this};
+}
+
+DWORD JobQuiescence::ObserveDirectoryInventory(const CellFootprintScanLimits& input, CellDirectoryInventory* output) const noexcept {
+  const CellFootprintScanLimits requested = input;
+  if (!output) return ERROR_INVALID_PARAMETER;
+  *output = {};
+  DWORD error = Check();
+  if (error) return error;
+  const auto now = GetTickCount64();
+  if (now >= deadline_) return ERROR_TIMEOUT;
+  const CellFootprintScanLimits limits{requested.max_entries, requested.max_depth,
+    static_cast<DWORD>(std::min<ULONGLONG>(requested.wall_limit_ms, deadline_ - now))};
+  Handle root(CreateFileW(directory_.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL, FILE_SHARE_READ,
+    nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (root.Get() == INVALID_HANDLE_VALUE) return Error();
+  CellFootprintScanGuard guard;
+  guard.context = const_cast<JobQuiescence*>(this);
+  guard.authorize = [](void* context) noexcept { return static_cast<const JobQuiescence*>(context)->Check(); };
+  guard.cancellation = cancellation_;
+  error = ScanCellDirectoryInventory(root.Get(), command_.expected_directory_identity, limits, guard, output);
+  if (!error) error = Check();
+  if (error) *output = {};
+  return error;
+}
+
 JobResult RunBoundedJob(const JobCommand& command_input, const JobLimits& limits_input,
-                        HANDLE cancellation, JobStdioChannel* stdio) noexcept {
+                        HANDLE cancellation, JobStdioChannel* stdio, const JobQuiescenceObserver* observer_input) noexcept {
   JobResult result;
+  const JobQuiescenceObserver observer = observer_input ? *observer_input : JobQuiescenceObserver{};
+  if (observer_input) {
+    if (observer.discard) observer.discard(observer.context);
+    if (!observer.authorize || !observer.capture || !observer.discard || !observer.wall_ms || observer.wall_ms > 60000) {
+      result.error = ERROR_INVALID_PARAMETER; return result;
+    }
+  }
   struct StdioLifetime final {
     JobStdioChannel* channel = nullptr;
     JobResult& result;
@@ -421,6 +478,26 @@ JobResult RunBoundedJob(const JobCommand& command_input, const JobLimits& limits
     auto environment = command.environment;
     PROCESS_INFORMATION created{};
     const ULONGLONG started = GetTickCount64();
+    const auto execution_control = [&]() noexcept -> DWORD {
+      if (cancellation) {
+        const auto state = WaitForSingleObject(cancellation, 0);
+        if (state != WAIT_TIMEOUT) return state == WAIT_OBJECT_0 ? ERROR_OPERATION_ABORTED : ERROR_INVALID_HANDLE;
+      }
+      return GetTickCount64() - started >= limits.wall_ms ? ERROR_TIMEOUT : ERROR_SUCCESS;
+    };
+    const auto authorize_execution = [&]() noexcept -> DWORD {
+      auto error = execution_control();
+      if (!error) error = observer.authorize_execution(observer.context);
+      return error ? error : execution_control();
+    };
+    if (observer.authorize_execution) {
+      result.error = authorize_execution();
+      if (result.error) {
+        result.end = result.error == ERROR_OPERATION_ABORTED || result.error == ERROR_CANCELLED ? JobEnd::cancelled :
+          result.error == ERROR_TIMEOUT ? JobEnd::wall_limit : JobEnd::control_failed;
+        return result;
+      }
+    }
     if (!CreateProcessW(launch_files.ProcessImagePath().c_str(), command_line.data(), nullptr, nullptr, TRUE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
         environment.data(), launch_files.DirectoryPath().c_str(), &startup.StartupInfo, &created)) {
@@ -435,6 +512,7 @@ JobResult RunBoundedJob(const JobCommand& command_input, const JobLimits& limits
     BOOL contained = FALSE;
     DWORD active = 0;
     bool stopped = false;
+    ULONGLONG next_execution_check = 0;
     ULONGLONG draining_started = 0;
     auto stop = [&](JobEnd end, DWORD error) {
       if (stopped) return;
@@ -459,6 +537,15 @@ JobResult RunBoundedJob(const JobCommand& command_input, const JobLimits& limits
         else if (cancelled != WAIT_TIMEOUT) stop(JobEnd::control_failed, ERROR_INVALID_HANDLE);
       }
       if (GetTickCount64() - started >= limits.wall_ms) stop(JobEnd::wall_limit, ERROR_SUCCESS);
+      // The first check is immediately before ResumeThread, after suspended
+      // process/token/image validation. Subsequent checks never use capture's
+      // empty-job capability to authorize a running process.
+      if (!stopped && observer.authorize_execution && GetTickCount64() >= next_execution_check) {
+        const auto error = authorize_execution();
+        next_execution_check = GetTickCount64() + 250;
+        if (error) stop(error == ERROR_OPERATION_ABORTED || error == ERROR_CANCELLED ? JobEnd::cancelled :
+          error == ERROR_TIMEOUT ? JobEnd::wall_limit : JobEnd::control_failed, error);
+      }
     };
     const DWORD identity_error = VerifyAppContainer(process.Get(), app_container.value);
     result.app_container_verified = identity_error == ERROR_SUCCESS;
@@ -512,7 +599,32 @@ JobResult RunBoundedJob(const JobCommand& command_input, const JobLimits& limits
       if (!observed && active == 0) {
         result.zero_processes_verified = true;
         if (!draining_started) draining_started = GetTickCount64();
-        if (process_state == WAIT_OBJECT_0 && output_ended && error_ended) { result.output_drained = true; return result; }
+        if (process_state == WAIT_OBJECT_0 && output_ended && error_ended) {
+          result.output_drained = true;
+          if (observer_input) {
+            const JobQuiescence quiescence(job.Get(), cancellation, GetTickCount64() + observer.wall_ms,
+              command, launch_files.DirectoryPath(), observer.authorize, observer.context);
+            DWORD capture_error = quiescence.Check();
+            if (!capture_error) {
+              result.quiescent_capture_attempted = true;
+              capture_error = observer.capture(observer.context, quiescence);
+            }
+            if (!capture_error) capture_error = quiescence.Check();
+            result.quiescent_capture_error = capture_error;
+            result.quiescent_capture_verified = capture_error == ERROR_SUCCESS;
+            if (capture_error) {
+              observer.discard(observer.context);
+              // Capture authorization and physical process cleanup are separate
+              // facts. Re-query the held job after discarding provisional output.
+              DWORD final_active = 0;
+              result.zero_processes_verified = Observe(job.Get(), &result, &final_active) == ERROR_SUCCESS && final_active == 0;
+              if (result.end == JobEnd::exited && result.error == ERROR_SUCCESS) {
+                result.end = JobEnd::control_failed; result.error = capture_error;
+              }
+            }
+          }
+          return result;
+        }
       }
       if (draining_started && GetTickCount64() - draining_started >= kDrainDeadlineMs) {
         result.end = JobEnd::control_failed;

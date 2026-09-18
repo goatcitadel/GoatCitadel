@@ -5,6 +5,7 @@
 #include "cell_volume_protection.hpp"
 #include "cell_volume_mount.hpp"
 #include "cell_mounted_workspace.hpp"
+#include "cell_capacity.hpp"
 #include <memory>
 
 namespace goatcitadel::worker_cell {
@@ -25,6 +26,59 @@ struct CellProvisioningAnchor final {
   CellFileIdentity file;
   CellFileSha256 prepared_sha256{};
   bool operator==(const CellProvisioningAnchor&) const = default;
+};
+struct CellProvisioningFootprint final {
+  CellProvisioningAnchor anchor;
+  CellFileSha256 assignment_binding{}, profile_sha256{}, checkpoint_sha256{};
+  CellWorkspaceIdentities workspace;
+  CellDirectoryFootprint footprint;
+  bool operator==(const CellProvisioningFootprint&) const = default;
+};
+struct CellProvisioningInventory final {
+  CellProvisioningAnchor anchor;
+  CellFileSha256 assignment_binding{}, profile_sha256{}, checkpoint_sha256{};
+  CellWorkspaceIdentities workspace;
+  CellDirectoryInventory inventory;
+  bool operator==(const CellProvisioningInventory&) const = default;
+};
+struct CellProvisioningBackingFootprint final {
+  CellProvisioningAnchor anchor;
+  CellFileSha256 assignment_binding{}, profile_sha256{}, checkpoint_sha256{};
+  CellWorkspaceIdentities workspace;
+  CellVirtualDiskCapacity backing;
+  std::uint64_t journal_bytes = 0, journal_allocated_bytes = 0, host_file_allocated_bytes = 0;
+};
+struct CellProvisioningHostCapacity final {
+  CellProvisioningBackingFootprint backing;
+  CellCapacityAreaInventories areas;
+};
+// Synchronous borrowed custody, not a transferable file/mount capability.
+// The callback may nest other journals before one complete-pool scan. All
+// pointers, handles and guard contexts expire on return. Evidence is provisional
+// until the enclosing call succeeds; discard runs after any attempted failure.
+struct CellProvisioningBackingObserver final {
+  void* context = nullptr;
+  DWORD (*capture)(void*, const CellCapacityBorrowedFiles&, const CellProvisioningBackingFootprint&) noexcept = nullptr;
+  void (*discard)(void*) noexcept = nullptr;
+};
+namespace detail {
+class CellProvisioningBackingObservation final {
+ public:
+  explicit CellProvisioningBackingObservation(const CellProvisioningBackingObserver&) noexcept;
+  ~CellProvisioningBackingObservation();
+  CellProvisioningBackingObservation(const CellProvisioningBackingObservation&) = delete;
+  CellProvisioningBackingObservation& operator=(const CellProvisioningBackingObservation&) = delete;
+  bool Valid() const noexcept;
+  const CellProvisioningBackingObserver& Bridge() const noexcept { return bridge_; }
+  void Complete() noexcept { complete_ = attempted_ && !failed_; }
+ private:
+  CellProvisioningBackingObserver observer_, bridge_;
+  bool attempted_ = false, failed_ = false, complete_ = false;
+};
+}
+struct CellProvisioningJoinedCapacity final {
+  CellProvisioningInventory guest;
+  CellProvisioningHostCapacity host;
 };
 enum class CellProvisioningPhase : unsigned {
   none, prepared, workspace_started, workspace_recorded, disk_started, disk_recorded,
@@ -182,6 +236,57 @@ class CellProvisioningJournal final {
   DWORD Verify() noexcept;
   DWORD RecordWorkspace(CellWorkspaceIdentities* output) noexcept;
   DWORD RecordMountedWorkspace(CellWorkspaceIdentities* output) noexcept;
+  // Serialized, explicit runtime installation into the fully recorded guest.
+  // The guard supplies current install, source-custody and complete-pool authority.
+  // Anchor/head/lifetime changes refuse; partial bytes remain for accounting.
+  // No provisioning checkpoint, retry or execution readiness is inferred.
+  RuntimeBundleInstallResult InstallRuntime(const CellProvisioningAnchor& expected_anchor,
+    const CellFileSha256& expected_head, PinnedCellRuntimeBundle& source, PinnedCellRuntimeBundle& output,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard) noexcept;
+  // Read-only observation bound to independently retained anchor/head bytes and
+  // the complete twenty-one-record journal. The caller must retain assignment
+  // authority, workload quiescence and an outer process watchdog. Errors clear
+  // output; this never provisions, resumes a partial journal or enforces quotas.
+  DWORD ObserveMountedFootprint(const CellProvisioningAnchor& expected_anchor, const CellFileSha256& expected_head,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, CellProvisioningFootprint* output) noexcept;
+  // An optional borrowed job binding checks the decoded cell name and guest
+  // work identity at each guard boundary. An explicit empty binding refuses.
+  // It must outlive this call; the owning job runner still gates publication.
+  DWORD ObserveMountedInventory(const CellProvisioningAnchor& expected_anchor, const CellFileSha256& expected_head,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, CellProvisioningInventory* output,
+    const CellFootprintCellBinding* binding = nullptr) noexcept;
+  // The cell binding is mandatory for retained guest evidence. The caller
+  // retains journal/volume custody and quiescence through the joined capture.
+  DWORD CaptureMountedInventory(const CellProvisioningAnchor& expected_anchor, const CellFileSha256& expected_head,
+    const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard, const CellFootprintCellBinding& binding,
+    CellDirectoryInventoryPins& pins, CellProvisioningInventory* output) noexcept;
+  // Host-file accounting for a completely recorded creation or mounted workspace.
+  // Binds the journal and original VHDX to independent anchor/head bytes. Guest
+  // allocation must not be added to these backing-file charges. Other host
+  // roots, directory/volume metadata and retained owners still need inventory.
+  // Requires serialized quiescence/current authority and an outer watchdog;
+  // this observation never advances the journal, mounts or launches anything.
+  DWORD ObserveBackingFootprint(const CellProvisioningAnchor& expected_anchor, const CellFileSha256& expected_head,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard, CellProvisioningBackingFootprint* output) noexcept;
+  // Retain this original journal/backing and, when mounted, its exact mount leaf
+  // throughout the callback. Global writer exclusion and complete pool admission
+  // remain the caller's responsibility. No storage creation or repair occurs.
+  DWORD WithBackingCapacity(const CellProvisioningAnchor&, const CellFileSha256&, DWORD wall_limit_ms,
+    const CellFootprintScanGuard&, const CellProvisioningBackingObserver&, CellProvisioningBackingFootprint*) noexcept;
+  // Joins retained journal/backing handles to a separately recorded host layout.
+  // The caller owns global quiescence. No provisioning, path adoption, metadata
+  // repair, guest-volume traversal or quota authority is supplied by this read.
+  DWORD ObserveHostCapacity(const CellProvisioningAnchor& expected_anchor, const CellFileSha256& expected_head,
+    CellCapacityLayout& layout, const CellCapacityLayoutRecord& record, const CellFootprintScanLimits& limits,
+    const CellFootprintScanGuard& guard, CellProvisioningHostCapacity* output,
+    const CellCapacityCaptureObserver* observer = nullptr) noexcept;
+  // Captures guest handles inside the held host observation. Both outputs stay
+  // provisional through the final host/journal checks; failures clear both.
+  // The caller still owns complete pool coverage and global writer quiescence.
+  DWORD ObserveJoinedCapacity(const CellProvisioningAnchor& expected_anchor, const CellFileSha256& expected_head,
+    CellCapacityLayout& layout, const CellCapacityLayoutRecord& record, const CellFootprintScanLimits& limits,
+    const CellFootprintScanGuard& guard, const CellFootprintCellBinding& binding,
+    CellProvisioningJoinedCapacity* output) noexcept;
   DWORD RecordDisk(CellVirtualDiskRecord* output) noexcept;
   // Read-only derived plan, after fresh verification of disk_recorded. It is not
   // an attachment/partition permit and does not resume a recovered creator.
@@ -202,6 +307,15 @@ class CellProvisioningJournal final {
 
  private:
   friend struct CellProvisioningJournalTestPeer;
+  friend class CellJournalRuntimeRunner;
+  friend class CellRuntimeLocalOutcome;
+  friend class CellJoinedCapacityCollector;
+  struct CapacityReadScope final {
+    explicit CapacityReadScope(CellProvisioningJournal& owner) noexcept;
+    ~CapacityReadScope();
+    CellProvisioningJournal& owner;
+    bool entered = false;
+  };
   DWORD Initialize(HANDLE parent, const CellFileIdentity& expected_parent, const std::wstring& cell_name,
                    const std::wstring& owner_sid, const std::wstring& controller_sid,
                    const CellProvisioningPlan& plan) noexcept;
@@ -261,6 +375,40 @@ class CellProvisioningJournal final {
   DWORD RunMountedWorkspace(const MountedWorkspaceOperations& operations, const CellMountedWorkspaceProvisioningCommitter& committer,
     ULONGLONG deadline, HANDLE cancellation) noexcept;
   DWORD Refuse(DWORD error) noexcept;
+  DWORD ReadMountedFootprint(DWORD (*read)(void*, const CellFootprintScanLimits&, const CellFootprintScanGuard&,
+    CellDirectoryFootprint*) noexcept, void* context, const CellProvisioningAnchor& expected_anchor,
+    const CellFileSha256& expected_head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellProvisioningFootprint* output) noexcept;
+  DWORD ReadMountedInventory(DWORD (*read)(void*, const CellFootprintScanLimits&, const CellFootprintScanGuard&,
+    CellDirectoryInventory*) noexcept, void* context, const CellProvisioningAnchor& expected_anchor,
+    const CellFileSha256& expected_head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellProvisioningInventory* output, const CellFootprintCellBinding* binding = nullptr) noexcept;
+  template <typename Observation, typename Output>
+  DWORD ReadMountedCapacity(DWORD (*read)(void*, const CellFootprintScanLimits&, const CellFootprintScanGuard&,
+    Observation*) noexcept, void* context, const CellProvisioningAnchor& expected_anchor,
+    const CellFileSha256& expected_head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    Output* output, std::uint32_t maximum_entries, const CellFootprintCellBinding* binding) noexcept;
+  struct HostCapacityInput final {
+    CellCapacityLayout* layout;
+    CellCapacityLayoutRecord record;
+    CellFootprintScanLimits limits;
+    CellCapacityAreaInventories* output;
+    const CellCapacityCaptureObserver* observer;
+  };
+  struct JoinedCapacityReaders final {
+    void* context;
+    DWORD (*host)(void*, const CellProvisioningAnchor&, const CellFileSha256&, CellCapacityLayout&,
+      const CellCapacityLayoutRecord&, const CellFootprintScanLimits&, const CellFootprintScanGuard&,
+      CellProvisioningHostCapacity*, const CellCapacityCaptureObserver*) noexcept;
+    DWORD (*guest)(void*, const CellProvisioningAnchor&, const CellFileSha256&, const CellFootprintScanLimits&,
+      const CellFootprintScanGuard&, const CellFootprintCellBinding&, CellDirectoryInventoryPins&, CellProvisioningInventory*) noexcept;
+  };
+  DWORD ReadJoinedCapacity(const CellProvisioningAnchor&, const CellFileSha256&, CellCapacityLayout&,
+    const CellCapacityLayoutRecord&, const CellFootprintScanLimits&, const CellFootprintScanGuard&,
+    const CellFootprintCellBinding&, const JoinedCapacityReaders&, CellProvisioningJoinedCapacity*) noexcept;
+  DWORD ReadBackingFootprint(const CellProvisioningAnchor&, const CellFileSha256&, DWORD,
+    const CellFootprintScanGuard&, CellProvisioningBackingFootprint*, const HostCapacityInput*,
+    const CellProvisioningBackingObserver* = nullptr) noexcept;
   CellWorkspaceDirectories parent_guard_, workspace_;
   CellVirtualDiskFile disk_;
   CellVirtualDiskAttachment attachment_;
@@ -271,6 +419,7 @@ class CellProvisioningJournal final {
   std::unique_ptr<CellVolumeMount> mount_;
   std::unique_ptr<CellMountedWorkspace> mounted_workspace_;
   HANDLE file_ = INVALID_HANDLE_VALUE;
+  std::uint64_t lifetime_revision_ = 0;
   CellProvisioningPlan plan_;
   CellProvisioningAnchor anchor_;
   CellProvisioningCommitter committer_;
@@ -306,5 +455,8 @@ class CellProvisioningJournal final {
   HANDLE mounted_workspace_cancellation_ = nullptr;
   bool healthy_ = false;
   bool creating_ = false;
+  unsigned capacity_read_depth_ = 0;
+  bool capacity_close_pending_ = false;
+  bool runtime_install_active_ = false;
 };
 }

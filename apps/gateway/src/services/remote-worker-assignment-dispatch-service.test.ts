@@ -312,4 +312,19 @@ describe("RemoteWorkerAssignmentDispatchService", () => {
     expect(stale).toBeUndefined();
     expect(f.assignments.resolveTaskBoundChatWorkload).toHaveBeenCalledTimes(1);
   });
+
+  it("rechecks native workload authority after asynchronous history projection", async () => {
+    const f = dependencies();
+    const native = { ...f.workload, nativeChatContext: { marker: "canonical-context" } } as never;
+    const projected = { ...f.workload, workloadSha256: "e".repeat(64) };
+    const project = vi.fn(async () => projected);
+    const service = new RemoteWorkerAssignmentDispatchService(f.assignments, f.meshAdmissions, project);
+    const input = { authority: authority(), assignmentId: "assignment-a", expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1, rawLeaseToken: Buffer.alloc(32, 0x46).toString("base64url") };
+    vi.mocked(f.assignments.resolveTaskBoundChatWorkload).mockResolvedValue(native);
+    expect(await service.readWorkload(input)).toEqual(projected);
+    expect(f.assignments.resolveTaskBoundChatWorkload).toHaveBeenCalledTimes(2);
+    vi.mocked(f.assignments.resolveTaskBoundChatWorkload).mockResolvedValueOnce(native).mockResolvedValueOnce(undefined);
+    await expect(service.readWorkload(input)).rejects.toThrow("workload is unavailable");
+  });
 });

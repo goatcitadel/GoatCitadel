@@ -38,7 +38,7 @@ catch { [Console]::Error.WriteLine('Windows credential custody is unavailable.')
 `;
 
 // The guard must precede PasswordVault construction in both mutation scripts.
-const CUSTODY_GUARD = String.raw`
+export const WINDOWS_CREDENTIAL_CUSTODY_GUARD = String.raw`
 $ErrorActionPreference = 'Stop'
 ${WINDOWS_CREDENTIAL_CUSTODY_FUNCTIONS}
 try {
@@ -49,7 +49,7 @@ try {
 } catch { [Console]::Error.WriteLine('Windows credential custody is unavailable.'); exit 1 }
 `;
 
-export const WINDOWS_CREDENTIAL_CUSTODY_DELETE_SCRIPT = CUSTODY_GUARD + WINDOWS_CREDENTIAL_DELETE_SCRIPT;
+export const WINDOWS_CREDENTIAL_CUSTODY_DELETE_SCRIPT = WINDOWS_CREDENTIAL_CUSTODY_GUARD + WINDOWS_CREDENTIAL_DELETE_SCRIPT;
 
 export const WINDOWS_CREDENTIAL_CUSTODY_WRITE_FUNCTION = String.raw`
 function Add-GoatOwnedCredential($Vault, $Credential, [string]$Secret) {
@@ -68,7 +68,7 @@ function Add-GoatOwnedCredential($Vault, $Credential, [string]$Secret) {
 }
 `;
 
-export const WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT = CUSTODY_GUARD + String.raw`
+export const WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT = WINDOWS_CREDENTIAL_CUSTODY_GUARD + String.raw`
 ${WINDOWS_CREDENTIAL_CUSTODY_WRITE_FUNCTION}
 try {
   [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null

@@ -1,0 +1,5 @@
+.mc-next-mcp-review { display: grid; gap: 1rem; min-width: 0; }
+.mc-next-mcp-review dl { display: grid; grid-template-columns: minmax(5rem, .4fr) minmax(0, 1fr); gap: .5rem 1rem; margin: 0; }
+.mc-next-mcp-review dt { font-weight: 600; }
+.mc-next-mcp-review dd { margin: 0 0 .5rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.mc-next-mcp-review button.gc-button { min-height: 44px; white-space: normal; }

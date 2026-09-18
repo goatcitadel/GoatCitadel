@@ -201,6 +201,15 @@ function setScrollMetrics(
 }
 
 describe("ThreadedTimeline", () => {
+  it("shows one stopping summary while canonical cancellation is pending", () => {
+    const props = buildProps({ mode: "chat", streamStatus: "streaming", hasActiveStream: true, isStopPending: true });
+    props.thread.turns[0].trace.status = "running";
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
+    expect(renderedText(renderer)).toContain("Stopping…");
+    expect(renderedText(renderer)).toContain("Waiting for the Gateway to confirm cancellation.");
+    expect(renderer.root.findAllByProps({ "aria-label": "Current work" })).toHaveLength(1);
+    expect(renderer.root.findAllByType("button").filter((button) => button.children.join("") === "Stop")).toHaveLength(0);
+  });
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
 
@@ -260,6 +269,39 @@ describe("ThreadedTimeline", () => {
     expect(text).toContain("Sending");
     expect(text).toContain("Chat stream connecting.");
     expect(text).not.toContain("Start with a plain request");
+  });
+
+  it("does not read completed answer content again for streaming updates to another turn", () => {
+    const props = buildProps({ mode: "chat", streamStatus: "streaming", activeStreamingTurnId: "turn-2", hasActiveStream: true });
+    const completed = props.thread.turns[0];
+    const content = completed.assistantMessage.content;
+    const readContent = vi.fn(() => content);
+    Object.defineProperty(completed.assistantMessage, "content", { get: readContent });
+    props.thread.turns.push({ ...completed, turnId: "turn-2", assistantMessage: undefined,
+      userMessage: { ...completed.userMessage, messageId: "user-2" },
+      trace: { ...completed.trace, turnId: "turn-2", status: "running" },
+    });
+    props.thread.activeLeafTurnId = "turn-2";
+    props.thread.selectedTurnId = "turn-2";
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
+    const baselineReads = readContent.mock.calls.length;
+    expect(baselineReads).toBeGreaterThan(0);
+    TestRenderer.act(() => renderer.update(<ThreadedTimeline props={{ ...props,
+      streamingPreview: { turnId: "turn-2", sessionId: "session-1", visibleText: "A new delta", status: "streaming" },
+    }} />));
+    expect(readContent).toHaveBeenCalledTimes(baselineReads);
+    renderer.unmount();
+  });
+
+  it.each(["cancelled", "failed"])("shows new admission feedback after a %s turn", (status) => {
+    const props = buildProps({ mode: "chat", streamStatus: "connecting", hasActiveStream: true,
+      optimisticUserMessage: { queueItemId: "new", messageId: "local-new", sessionId: "session-1", content: "New request", timestamp: "2026-09-14T00:00:00.000Z" },
+    });
+    props.thread.turns[0].trace.status = status;
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
+    expect(renderer.root.findAllByProps({ "aria-label": "Current work" })).toHaveLength(1);
+    expect(renderedText(renderer)).toContain("Sending…");
+    renderer.unmount();
   });
 
   it("renders a notice-only conversation without a starter canvas or user bubble", () => {

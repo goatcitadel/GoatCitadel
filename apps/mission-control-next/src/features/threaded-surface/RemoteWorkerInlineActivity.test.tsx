@@ -5,6 +5,7 @@ import { RemoteWorkerInlineActivity } from "./RemoteWorkerInlineActivity";
 import { useRemoteWorkerInlineActivity } from "./useRemoteWorkerInlineActivity";
 
 vi.mock("./useRemoteWorkerInlineActivity", () => ({ useRemoteWorkerInlineActivity: vi.fn() }));
+vi.mock("./RemoteWorkerRuntimeSummary", () => ({ RemoteWorkerRuntimeSummary: () => <p>Runtime evidence</p> }));
 
 const mockedHook = vi.mocked(useRemoteWorkerInlineActivity);
 
@@ -53,7 +54,13 @@ describe("RemoteWorkerInlineActivity", () => {
   });
 
   it("renders read-only session/turn-bound worker facts without raw JSON or worker mutation controls", () => {
-    mockedHook.mockReturnValue({ assignments: [assignment()], loading: false, error: null, reload: vi.fn() });
+    mockedHook.mockReturnValue({
+      assignments: [assignment()],
+      revision: 1,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
     act(() => {
       renderer = create(<RemoteWorkerInlineActivity workspaceId="workspace-a" sessionId="session-a" turnId="turn-a" />);
     });
@@ -62,14 +69,14 @@ describe("RemoteWorkerInlineActivity", () => {
     expect(text).toContain("settled");
     expect(text).toContain("worker-a");
     expect(text).toMatch(/sent\s+3/u);
-    expect(text).toContain("unavailable");
+    expect(text).toContain("Runtime evidence");
     expect(text).not.toContain('"schemaVersion"');
     // No rotate/quarantine/revoke/recovery/cleanup management leaks into Chat.
     expect(text.toLowerCase()).not.toMatch(/quarantine|revoke|rotate|recovery|cleanup/u);
   });
 
   it("renders nothing when the turn is not bound or no remote work exists", () => {
-    mockedHook.mockReturnValue({ assignments: [], loading: false, error: null, reload: vi.fn() });
+    mockedHook.mockReturnValue({ assignments: [], revision: 1, loading: false, error: null, reload: vi.fn() });
     act(() => {
       renderer = create(<RemoteWorkerInlineActivity workspaceId="workspace-a" sessionId="session-a" turnId={null} />);
     });
@@ -83,7 +90,13 @@ describe("RemoteWorkerInlineActivity", () => {
 
   it("offers an Ops detail link only when a handler and worker identity are present", () => {
     const onOpenOps = vi.fn();
-    mockedHook.mockReturnValue({ assignments: [assignment()], loading: false, error: null, reload: vi.fn() });
+    mockedHook.mockReturnValue({
+      assignments: [assignment()],
+      revision: 1,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
     act(() => {
       renderer = create(
         <RemoteWorkerInlineActivity
@@ -98,5 +111,21 @@ describe("RemoteWorkerInlineActivity", () => {
     expect(opsButton).toBeDefined();
     act(() => opsButton!.props.onClick());
     expect(onOpenOps).toHaveBeenCalledWith("worker-a");
+  });
+
+  it("keeps missing lease freshness unknown", () => {
+    const record = assignment();
+    mockedHook.mockReturnValue({
+      assignments: [{ ...record, leaseFreshness: { ...record.leaseFreshness, value: null } }],
+      revision: 1,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    act(() => {
+      renderer = create(<RemoteWorkerInlineActivity workspaceId="workspace-a" sessionId="session-a" turnId="turn-a" />);
+    });
+    expect(textOf(renderer!.toJSON())).toContain("freshness unavailable");
+    expect(textOf(renderer!.toJSON())).not.toContain("expired");
   });
 });

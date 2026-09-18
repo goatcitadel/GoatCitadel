@@ -1,11 +1,13 @@
+import { createHash } from "node:crypto";
 import type {
   BlueprintReviewSummary,
   Citadel,
+  CitadelAccessMutation,
+  CitadelAccessSnapshot,
   CitadelBlueprint,
   CitadelBlueprintValidationResult,
   CitadelChamber,
   CitadelChamberInput,
-  CitadelCharter,
   CitadelCharterInput,
   CitadelCreateInput,
   CitadelCouncilAssignment,
@@ -22,9 +24,13 @@ import type {
   CitadelPassage,
   CitadelPassageInput,
   CitadelRecord,
+  CitadelStructureMutation,
+  CitadelStructureSnapshot,
   CitadelTemplate,
+  CitadelTemplateSnapshot,
   CitadelUpdateInput,
-  CitadelVaultSecretInput,
+  CitadelVaultMutation,
+  CitadelVaultSnapshot,
   CitadelVaultSecretMetadata,
   CitadelVaultSecretRecord,
   CitadelWardInput,
@@ -34,6 +40,9 @@ import type {
 import {
   buildMasonInterpretPrompt,
   CITADEL_TEMPLATES,
+  ConflictError,
+  createCitadelBlueprintMutation,
+  createCitadelTemplateMutation,
   draftBlueprintFromAnswers,
   evaluateWards,
   masonSessionCanDraft,
@@ -43,7 +52,6 @@ import {
   MASON_SETUP_QUESTIONS,
   parseMasonInterpretResponse,
   summarizeCitadelGatehouse,
-  toVaultSecretMetadata,
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
 import { openValue, sealValue } from "@goatcitadel/contracts/citadel-vault-node";
@@ -58,17 +66,17 @@ export type MasonInterpret = (prompt: string, attribution: ModelUsageAttribution
  */
 export type VaultKeyProvider = (citadelId: string) => Buffer | undefined;
 
-export type VaultStoreResult = { ok: false; reason: "unavailable" } | { ok: true; secret: CitadelVaultSecretMetadata };
+export type VaultStoreResult = { ok: false; reason: "unavailable" } | { ok: true; snapshot: CitadelVaultSnapshot };
 
 export type VaultRevealResult = { ok: false; reason: "unavailable" | "not_found" } | { ok: true; value: string };
 
-export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: Citadel };
+export type CitadelImportResult = { ok: false; errors: string[] } | { ok: true; citadel: CitadelStructureSnapshot };
 
 export type MasonReviewResult = { ok: false; errors: string[] } | { ok: true; review: BlueprintReviewSummary };
 
 export type MasonStageResult =
   | { ok: false; errors: string[] }
-  | { ok: true; citadel: Citadel; review: BlueprintReviewSummary };
+  | { ok: true; citadel: CitadelStructureSnapshot; review: BlueprintReviewSummary };
 
 export type MasonDraftResult =
   | { ok: false; reason: "not_found" | "incomplete" }
@@ -90,32 +98,23 @@ export interface CitadelsRoutePort {
   archiveRecord(citadelId: string, expectedRevision: string): Promise<CitadelRecord>;
   restoreRecord(citadelId: string, expectedRevision: string): Promise<CitadelRecord>;
   getCitadel(citadelId: string): Promise<Citadel | undefined>;
-  upsertCharter(input: CitadelCharterInput): Promise<CitadelCharter>;
-  createChamber(input: CitadelChamberInput): Promise<CitadelChamber>;
+  getStructureSnapshot(citadelId: string): Promise<CitadelStructureSnapshot>;
+  mutateStructure(input: CitadelStructureMutation): Promise<CitadelStructureSnapshot>;
+  getAccessSnapshot(citadelId: string): Promise<CitadelAccessSnapshot>;
+  mutateAccess(input: CitadelAccessMutation): Promise<CitadelAccessSnapshot>;
   listChambers(citadelId: string): Promise<CitadelChamber[]>;
-  assignAgent(input: CitadelCouncilAssignmentInput): Promise<CitadelCouncilAssignment>;
   listCouncilAssignments(citadelId: string): Promise<CitadelCouncilAssignment[]>;
-  unassignAgent(citadelId: string, agentId: string): Promise<boolean>;
-  addWard(input: CitadelWardInput): Promise<CitadelWardRecord>;
   listWards(citadelId: string): Promise<CitadelWardRecord[]>;
-  removeWard(citadelId: string, wardId: string): Promise<boolean>;
-  createPassage(input: CitadelPassageInput): Promise<CitadelPassage>;
   listPassages(sourceCitadelId: string): Promise<CitadelPassage[]>;
-  removePassage(sourceCitadelId: string, passageId: string): Promise<boolean>;
-  upsertMember(input: CitadelMemberInput): Promise<CitadelMember>;
   listMembers(citadelId: string): Promise<CitadelMember[]>;
-  removeMember(citadelId: string, subjectId: string): Promise<boolean>;
   createMasonSession(): Promise<MasonSession>;
   getMasonSession(sessionId: string): Promise<MasonSession | undefined>;
   updateMasonSessionAnswers(sessionId: string, patch: Partial<MasonAnswers>): Promise<MasonSession | undefined>;
   setMasonSessionStatus(sessionId: string, status: MasonSession["status"]): Promise<MasonSession | undefined>;
-  addIntegrationGrant(input: CitadelIntegrationGrantInput): Promise<CitadelIntegrationGrant>;
   listIntegrationGrants(citadelId: string): Promise<CitadelIntegrationGrant[]>;
-  removeIntegrationGrant(citadelId: string, grantId: string): Promise<boolean>;
-  storeVaultSecret(input: CitadelVaultSecretInput): Promise<CitadelVaultSecretRecord>;
+  getVaultSnapshot(citadelId: string): Promise<CitadelVaultSnapshot>;
+  mutateVault(input: CitadelVaultMutation): Promise<CitadelVaultSnapshot>;
   getVaultSecret(citadelId: string, secretId: string): Promise<CitadelVaultSecretRecord | undefined>;
-  listVaultSecrets(citadelId: string): Promise<CitadelVaultSecretRecord[]>;
-  deleteVaultSecret(citadelId: string, secretId: string): Promise<boolean>;
 }
 
 export class CitadelsRouteService {
@@ -153,28 +152,43 @@ export class CitadelsRouteService {
     return await this.citadels.getCitadel(citadelId);
   }
 
-  public async upsertCharter(input: CitadelCharterInput): Promise<CitadelCharter> {
-    return await this.citadels.upsertCharter(input);
+  public async getStructureSnapshot(citadelId: string): Promise<CitadelStructureSnapshot> {
+    return await this.citadels.getStructureSnapshot(citadelId);
   }
 
-  public async createChamber(input: CitadelChamberInput): Promise<CitadelChamber> {
-    return await this.citadels.createChamber(input);
+  public async getAccessSnapshot(citadelId: string): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.getAccessSnapshot(citadelId);
+  }
+
+  public async upsertCharter(input: CitadelCharterInput & { expectedRevision: string }): Promise<CitadelStructureSnapshot> {
+    const { citadelId, expectedRevision, ...charter } = input;
+    return await this.citadels.mutateStructure({ citadelId, expectedRevision, change: { type: "charter", charter } });
+  }
+
+  public async createChamber(input: CitadelChamberInput & { expectedRevision: string }): Promise<CitadelStructureSnapshot> {
+    const { citadelId, expectedRevision, ...chamber } = input;
+    return await this.citadels.mutateStructure({ citadelId, expectedRevision, change: { type: "chamber", chamber } });
   }
 
   public async listChambers(citadelId: string): Promise<CitadelChamber[]> {
     return await this.citadels.listChambers(citadelId);
   }
 
-  public listTemplates(): CitadelTemplate[] {
-    return CITADEL_TEMPLATES;
+  public listTemplates(): CitadelTemplateSnapshot[] {
+    return CITADEL_TEMPLATES.map(snapshotTemplate);
   }
 
-  public async createFromTemplate(citadelId: string, templateId: string): Promise<Citadel | undefined> {
+  public async createFromTemplate(citadelId: string, templateId: string, expectedRevision: string, expectedTemplateRevision: string): Promise<CitadelStructureSnapshot | undefined> {
     const template = findCitadelTemplate(templateId);
     if (!template) {
       return undefined;
     }
-    return await applyCitadelTemplateAsync(this.citadels, citadelId, template);
+    const reviewed = snapshotTemplate(template);
+    if (reviewed.revision !== expectedTemplateRevision) {
+      throw new ConflictError({ code: "WRITE_CONFLICT", message: "This template changed. Review its current contents before applying it.",
+        details: { reason: "CITADEL_TEMPLATE_REVISION_CONFLICT" } });
+    }
+    return await this.citadels.mutateStructure(createCitadelTemplateMutation(citadelId, expectedRevision, reviewed));
   }
 
   public async exportBlueprint(citadelId: string): Promise<CitadelBlueprint | undefined> {
@@ -189,12 +203,12 @@ export class CitadelsRouteService {
     return validateCitadelBlueprint(value);
   }
 
-  public async createFromBlueprint(citadelId: string, value: unknown): Promise<CitadelImportResult> {
+  public async createFromBlueprint(citadelId: string, value: unknown, expectedRevision: string): Promise<CitadelImportResult> {
     const validation = validateCitadelBlueprint(value);
     if (!validation.ok) {
       return { ok: false, errors: validation.errors };
     }
-    return { ok: true, citadel: await applyCitadelBlueprintAsync(this.citadels, citadelId, value as CitadelBlueprint) };
+    return { ok: true, citadel: await this.citadels.mutateStructure(createCitadelBlueprintMutation(citadelId, expectedRevision, value as CitadelBlueprint)) };
   }
 
   public async getGatehouse(citadelId: string): Promise<(CitadelGatehouseSummary & { wardCount: number }) | undefined> {
@@ -209,31 +223,35 @@ export class CitadelsRouteService {
     return await this.citadels.listWards(citadelId);
   }
 
-  public async addWard(input: CitadelWardInput): Promise<CitadelWardRecord> {
-    return await this.citadels.addWard(input);
+  public async addWard(input: CitadelWardInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+    const { citadelId, expectedRevision, ...ward } = input;
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "add_ward", ward } });
   }
 
-  public async removeWard(citadelId: string, wardId: string): Promise<boolean> {
-    return await this.citadels.removeWard(citadelId, wardId);
+  public async removeWard(citadelId: string, wardId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_ward", wardId } });
   }
 
   /** Vault secret names + provenance — never the sealed or opened value. */
   public async listVaultSecrets(citadelId: string): Promise<CitadelVaultSecretMetadata[]> {
-    return (await this.citadels.listVaultSecrets(citadelId)).map(toVaultSecretMetadata);
+    return (await this.citadels.getVaultSnapshot(citadelId)).items;
+  }
+
+  public async getVaultSnapshot(citadelId: string): Promise<CitadelVaultSnapshot> {
+    return await this.citadels.getVaultSnapshot(citadelId);
   }
 
   /** Seal a plaintext under the Citadel's master key and persist it. Fails closed if no key. */
-  public async storeVaultSecret(citadelId: string, secretName: string, plaintext: string): Promise<VaultStoreResult> {
+  public async storeVaultSecret(citadelId: string, secretName: string, plaintext: string, expectedRevision: string): Promise<VaultStoreResult> {
     const key = this.vaultKey?.(citadelId);
     if (!key) {
       return { ok: false, reason: "unavailable" };
     }
-    const record = await this.citadels.storeVaultSecret({
-      citadelId,
-      secretName,
-      sealedValue: sealValue(plaintext, key),
+    const snapshot = await this.citadels.mutateVault({
+      citadelId, expectedRevision,
+      change: { type: "store", secretName, sealedValue: sealValue(plaintext, key) },
     });
-    return { ok: true, secret: toVaultSecretMetadata(record) };
+    return { ok: true, snapshot };
   }
 
   /** Open a stored secret with the Citadel's master key. Fails closed if no key or undecryptable. */
@@ -254,8 +272,8 @@ export class CitadelsRouteService {
     }
   }
 
-  public async deleteVaultSecret(citadelId: string, secretId: string): Promise<boolean> {
-    return await this.citadels.deleteVaultSecret(citadelId, secretId);
+  public async deleteVaultSecret(citadelId: string, secretId: string, expectedRevision: string): Promise<CitadelVaultSnapshot> {
+    return await this.citadels.mutateVault({ citadelId, expectedRevision, change: { type: "delete", secretId } });
   }
 
   /** The Council is the set of existing agents assigned to this Citadel (by id). */
@@ -263,36 +281,39 @@ export class CitadelsRouteService {
     return await this.citadels.listCouncilAssignments(citadelId);
   }
 
-  public async assignAgent(input: CitadelCouncilAssignmentInput): Promise<CitadelCouncilAssignment> {
-    return await this.citadels.assignAgent(input);
+  public async assignAgent(input: CitadelCouncilAssignmentInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+    const { citadelId, expectedRevision, ...assignment } = input;
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "assign_agent", assignment } });
   }
 
-  public async unassignAgent(citadelId: string, agentId: string): Promise<boolean> {
-    return await this.citadels.unassignAgent(citadelId, agentId);
+  public async unassignAgent(citadelId: string, agentId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "unassign_agent", agentId } });
   }
 
   public async listPassages(sourceCitadelId: string): Promise<CitadelPassage[]> {
     return await this.citadels.listPassages(sourceCitadelId);
   }
 
-  public async createPassage(input: CitadelPassageInput): Promise<CitadelPassage> {
-    return await this.citadels.createPassage(input);
+  public async createPassage(input: CitadelPassageInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+    const { sourceCitadelId: citadelId, expectedRevision, ...passage } = input;
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "create_passage", passage } });
   }
 
-  public async removePassage(sourceCitadelId: string, passageId: string): Promise<boolean> {
-    return await this.citadels.removePassage(sourceCitadelId, passageId);
+  public async removePassage(citadelId: string, passageId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_passage", passageId } });
   }
 
   public async listMembers(citadelId: string): Promise<CitadelMember[]> {
     return await this.citadels.listMembers(citadelId);
   }
 
-  public async upsertMember(input: CitadelMemberInput): Promise<CitadelMember> {
-    return await this.citadels.upsertMember(input);
+  public async upsertMember(input: CitadelMemberInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+    const { citadelId, expectedRevision, ...member } = input;
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "upsert_member", member } });
   }
 
-  public async removeMember(citadelId: string, subjectId: string): Promise<boolean> {
-    return await this.citadels.removeMember(citadelId, subjectId);
+  public async removeMember(citadelId: string, subjectId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_member", subjectId } });
   }
 
   // --- The Mason: deterministic setup surface (§9/§10). Stages, never activates. ---
@@ -382,14 +403,15 @@ export class CitadelsRouteService {
    * (Charter + Chambers), and return it alongside a review summary. Staging never
    * connects accounts or opens Gates — the human does that afterwards.
    */
-  public async stageBlueprint(citadelId: string, value: unknown): Promise<MasonStageResult> {
+  public async stageBlueprint(citadelId: string, value: unknown, expectedRevision: string): Promise<MasonStageResult> {
     const validation = validateCitadelBlueprint(value);
     if (!validation.ok) {
       return { ok: false, errors: validation.errors };
     }
     const blueprint = value as CitadelBlueprint;
-    const citadel = await applyCitadelBlueprintAsync(this.citadels, citadelId, blueprint);
-    return { ok: true, citadel, review: generateBlueprintReviewSummary(blueprint) };
+    const review = generateBlueprintReviewSummary(blueprint);
+    const citadel = await this.citadels.mutateStructure(createCitadelBlueprintMutation(citadelId, expectedRevision, blueprint));
+    return { ok: true, citadel, review };
   }
 
   /**
@@ -407,71 +429,22 @@ export class CitadelsRouteService {
     return await this.citadels.listIntegrationGrants(citadelId);
   }
 
-  public async addIntegration(input: CitadelIntegrationGrantInput): Promise<CitadelIntegrationGrant> {
-    return await this.citadels.addIntegrationGrant(input);
+  public async addIntegration(input: CitadelIntegrationGrantInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+    const { citadelId, expectedRevision, ...integration } = input;
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "add_integration", integration } });
   }
 
-  public async removeIntegration(citadelId: string, grantId: string): Promise<boolean> {
-    return await this.citadels.removeIntegrationGrant(citadelId, grantId);
+  public async removeIntegration(citadelId: string, grantId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_integration", grantId } });
   }
 }
 
-async function applyCitadelTemplateAsync(
-  target: CitadelsRoutePort,
-  citadelId: string,
-  template: CitadelTemplate,
-): Promise<Citadel> {
-  await target.upsertCharter({
-    citadelId,
-    purpose: template.purpose,
-    kind: template.kind,
-    goals: template.goals,
-    boundaries: template.boundaries,
-    successDefinition: template.successDefinition,
-    riskPosture: template.riskPosture,
-    modelPolicyDefault: template.modelPolicyDefault,
-  });
-  for (const chamber of template.chambers) {
-    await target.createChamber({
-      citadelId,
-      name: chamber.name,
-      sensitivity: chamber.sensitivity,
-      sealed: chamber.sealed,
-    });
-  }
-  const citadel = await target.getCitadel(citadelId);
-  if (!citadel) {
-    throw new Error(`Failed to instantiate citadel ${citadelId} from template ${template.id}`);
-  }
-  return citadel;
-}
-
-async function applyCitadelBlueprintAsync(
-  target: CitadelsRoutePort,
-  citadelId: string,
-  blueprint: CitadelBlueprint,
-): Promise<Citadel> {
-  await target.upsertCharter({
-    citadelId,
-    purpose: blueprint.charter.purpose,
-    kind: blueprint.charter.kind,
-    goals: blueprint.charter.goals,
-    boundaries: blueprint.charter.boundaries,
-    successDefinition: blueprint.charter.successDefinition,
-    riskPosture: blueprint.charter.riskPosture,
-    modelPolicyDefault: blueprint.charter.modelPolicyDefault,
-  });
-  for (const chamber of blueprint.chambers) {
-    await target.createChamber({
-      citadelId,
-      name: chamber.name,
-      sensitivity: chamber.sensitivity,
-      sealed: chamber.sealed,
-    });
-  }
-  const citadel = await target.getCitadel(citadelId);
-  if (!citadel) {
-    throw new Error(`Failed to import Blueprint into citadel ${citadelId}`);
-  }
-  return citadel;
+function snapshotTemplate(template: CitadelTemplate): CitadelTemplateSnapshot {
+  // Review and apply the same effective settings, including otherwise implicit defaults.
+  const resolved: CitadelTemplate = { ...template, riskPosture: template.riskPosture ?? "balanced",
+    modelPolicyDefault: template.modelPolicyDefault ?? "hybrid_guarded",
+    chambers: template.chambers.map((chamber) => ({ ...chamber, sensitivity: chamber.sensitivity ?? "private", sealed: chamber.sealed ?? false })),
+  };
+  const revision = createHash("sha256").update(JSON.stringify({ schemaVersion: "citadel.template.v1", template: resolved })).digest("hex");
+  return { ...resolved, revision };
 }

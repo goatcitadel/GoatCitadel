@@ -71,11 +71,13 @@ export { WorkerMeshCapabilityRuntime, type WorkerMeshCapabilityBinding,
   type WorkerMeshCapabilityExecutionRequest, type WorkerMeshCapabilityCycleResult } from "./worker-mesh-capability-runtime.js";
 export { exchangeWorkerMeshCapability, type WorkerMeshCapabilityCall } from "./worker-mesh-capability-client.js";
 export { exchangeWorkerCellProvisioning, prepareWorkerCellProvisioning } from "./worker-cell-provisioning-client.js";
+export { exchangeWorkerCellObjectInventoryPage, uploadWorkerCellObjectInventory } from "./worker-cell-object-inventory-client.js";
 export { prepareWindowsWorkerAssignmentCell } from "./worker-windows-cell-startup.js";
 export { loadWorkerMeshToolRegistry, WORKER_MESH_TOOL_REGISTRY_SCHEMA_VERSION,
   type WorkerMeshToolRegistryReference } from "./worker-mesh-tool-registry.js";
 export { createWorkerMeshFileReadDescriptor } from "./worker-mesh-file-read.js";
 export { createWorkerMeshFileWriteDescriptor } from "./worker-mesh-file-write.js";
+export { createWorkerMeshDirectoryListDescriptor } from "./worker-mesh-directory-list.js";
 export { createWorkerMeshMcpHttpDescriptor, type WorkerMcpNativeTool } from "./worker-mesh-mcp-http.js";
 export {
   CONNECTED_WORKER_ENV,

@@ -23,7 +23,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelUsageAccountingService } from "@goatcitadel/gateway-core";
 import { LlmService } from "./llm-service.js";
-import type { GovernedLlmCompletionHost } from "./llm-completion-service.js";
+import type { GovernedLlmCompletionHost } from "./governed-llm-completion-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
 import { createRemoteWorkerExecutionOwners } from "./remote-worker-execution-owners.js";
 import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";

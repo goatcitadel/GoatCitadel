@@ -2,6 +2,7 @@
 #include "cell_workspace.hpp"
 
 namespace goatcitadel::worker_cell {
+struct CellFootprintScanGuard;
 struct CellVirtualDiskSpec final {
   GUID identifier{};
   std::uint64_t virtual_bytes = 0;
@@ -15,6 +16,14 @@ bool IsValidCellVirtualDiskSpec(const CellVirtualDiskSpec& spec) noexcept;
 struct CellVirtualDiskRecord final {
   CellVirtualDiskSpec spec;
   CellFileIdentity control, backing;
+};
+
+// Host-file charges, distinct from bytes allocated inside the mounted volume.
+// The record binds both counts to the original control directory and VHDX.
+struct CellVirtualDiskCapacity final {
+  CellVirtualDiskRecord record;
+  std::uint64_t file_bytes = 0;
+  std::uint64_t allocated_bytes = 0;
 };
 
 // Internal backing-file provisioning and inspection. The canonical owner supplies an
@@ -42,6 +51,13 @@ class CellVirtualDiskFile final {
                      DWORD wall_limit_ms, HANDLE cancellation = nullptr) noexcept;
   // Clears output on failure. A successful read freshly verifies the disk.
   DWORD RecordIdentity(CellWorkspaceDirectories& workspace, CellVirtualDiskRecord* output) noexcept;
+  // Read-only, current-authority observation of the exact recorded backing file.
+  // The caller serializes this owner and establishes workload quiescence. All
+  // output is withheld on authority, identity, security, allocation or time drift.
+  // An outer process watchdog must bound blocking OS calls/authority callbacks.
+  // This does not report complete pool usage, enforce quotas or authorize launch.
+  DWORD ObserveCapacity(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& expected,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard, CellVirtualDiskCapacity* output) noexcept;
   DWORD Verify(CellWorkspaceDirectories& workspace) noexcept;
   void Close() noexcept;
   bool Ready() const noexcept { return ready_; }
@@ -52,11 +68,14 @@ class CellVirtualDiskFile final {
   std::uint64_t AllocatedBytes() const noexcept { return allocated_bytes_; }
 
  private:
+  friend class CellProvisioningJournal;
   friend class CellVirtualDiskAttachment;
   friend class CellVirtualDiskDevice;
   DWORD OpenRecordedExpected(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& record,
                              DWORD wall_limit_ms, HANDLE cancellation, bool attached) noexcept;
   DWORD VerifyExpected(CellWorkspaceDirectories& workspace, bool attached) noexcept;
+  DWORD ObserveCapacityExpected(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& expected,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard, bool attached, CellVirtualDiskCapacity* output) noexcept;
   DWORD InspectBackingFile(CellFileIdentity* identity) noexcept;
   HANDLE disk_ = nullptr;
   HANDLE file_ = INVALID_HANDLE_VALUE;
@@ -66,6 +85,7 @@ class CellVirtualDiskFile final {
   std::vector<std::uint8_t> descriptor_;
   std::uint64_t physical_bytes_ = 0, allocated_bytes_ = 0;
   bool attempted_ = false, created_ = false, ready_ = false;
+  std::uint64_t lifetime_revision_ = 0;
 };
 
 enum class CellAttachmentState { not_started, attached, detached, unknown };
@@ -99,12 +119,17 @@ class CellVirtualDiskAttachment final {
   DWORD OpenRecorded(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& record,
                      DWORD wall_limit_ms, HANDLE cancellation = nullptr) noexcept;
   DWORD Verify(CellWorkspaceDirectories& workspace) noexcept;
+  // Uses the retained original backing file and revalidates attachment identity.
+  // No attach/detach, device open, formatting or permission mutation is performed.
+  DWORD ObserveCapacity(CellWorkspaceDirectories& workspace, const CellVirtualDiskRecord& expected,
+    DWORD wall_limit_ms, const CellFootprintScanGuard& guard, CellVirtualDiskCapacity* output) noexcept;
   DWORD Detach(CellWorkspaceDirectories& workspace, DWORD wall_limit_ms, HANDLE cancellation = nullptr) noexcept;
   void Close() noexcept;
   CellAttachmentState State() const noexcept { return state_; }
   const std::wstring& DevicePath() const noexcept { return device_path_; }
 
  private:
+  friend class CellProvisioningJournal;
   friend class CellVirtualDiskDevice;
   DWORD ReadDevicePath(std::wstring* path);
   CellVirtualDiskFile retained_;

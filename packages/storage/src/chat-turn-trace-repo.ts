@@ -225,7 +225,8 @@ export class ChatTurnTraceRepository {
     this.listCompletedSinceStmt = db.prepare(`
       SELECT * FROM chat_turn_traces
       WHERE status = 'completed' AND started_at > @sinceIso
-      ORDER BY started_at ASC
+        AND (started_at > @afterStartedAt OR (started_at = @afterStartedAt AND turn_id > @afterTurnId))
+      ORDER BY started_at ASC, turn_id ASC
       LIMIT @limit
     `);
     const activeStatusPlaceholders = CHAT_TURN_ACTIVE_STATUSES.map(() => "?").join(", ");
@@ -391,10 +392,12 @@ export class ChatTurnTraceRepository {
   }
 
   /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */
-  public listCompletedSince(sinceIso: string, limit = 200): ChatTurnTraceRecord[] {
+  public listCompletedSince(sinceIso: string, limit = 200, after?: { startedAt: string; turnId: string }): ChatTurnTraceRecord[] {
     const rows = toChatTurnTraceRows(
       this.listCompletedSinceStmt.all({
         sinceIso,
+        afterStartedAt: after?.startedAt ?? sinceIso,
+        afterTurnId: after?.turnId ?? "",
         limit: Math.max(1, Math.min(limit, 1000)),
       }),
     );

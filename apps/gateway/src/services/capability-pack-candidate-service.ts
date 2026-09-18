@@ -17,9 +17,14 @@ export function packCandidateIds(workspaceId: string, packId: string, binding: P
   return { candidateId, versionId, proposalId: `${versionId}-proposal` };
 }
 
+export type PackCandidateStorage = Pick<
+  AsyncStorage,
+  "candidateSkillVersions" | "capabilityProposals" | "runImmediateTransaction" | "skillAggregateRevisions"
+>;
+
 /** Publishes an immutable, inactive candidate. Activation stays with the capability lifecycle owner. */
 export async function stagePackSkillCandidate(
-  deps: { storage: AsyncStorage; rootDir: string; candidateRoot: string },
+  deps: { storage: PackCandidateStorage; rootDir: string; candidateRoot: string },
   plan: ChangePlanRecord,
   packId: string,
   binding: Extract<PackAssetBinding, { owner: "capability_candidate" }>,

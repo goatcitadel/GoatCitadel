@@ -326,7 +326,7 @@ describe("route composition loop 15 delegates", () => {
     mocks.getSettings.mockImplementationOnce((deps: any) => deps.settingsGateway.readSettingsRevision());
 
     const systemDeps = composeSystemRouteDependencies(gateway as never) as any;
-    const toolsDeps = composeToolsMcpRouteDependencies(gateway as never) as any;
+    const toolsDeps = composeToolsMcpRouteDependencies({ ...gateway, mcpAdministration: gateway } as never) as any;
 
     await expect(systemDeps.settings.getSettings()).rejects.toThrow(fence);
     expect(() => systemDeps.settings.getAuthRuntimeSettings()).toThrow(fence);
@@ -460,7 +460,7 @@ describe("route composition loop 15 delegates", () => {
 
   it("wires tools, MCP, LLM, secret, and tool-invocation route dependencies", async () => {
     const gateway = createGateway();
-    const deps = composeToolsMcpRouteDependencies(gateway as never) as any;
+    const deps = composeToolsMcpRouteDependencies({ ...gateway, mcpAdministration: gateway } as never) as any;
     const attribution = { workspaceId: "workspace-a", operationId: "route-operation-1" };
 
     expect(deps.llm.createChatCompletion({ messages: [] }, attribution)).toEqual({

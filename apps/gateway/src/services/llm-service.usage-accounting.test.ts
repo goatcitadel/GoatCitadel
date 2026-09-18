@@ -126,15 +126,23 @@ function failNextSettlement(storage: Storage) {
 }
 
 describe("worker tool model dispatch lifetime", () => {
-  it.each(["budget_denied", "tool_returned", "execution_revoked"] as const)("blocks HTTP when %s", async (scenario) => {
+  it.each(["budget_denied", "tool_returned", "execution_revoked", "tool_returned_during_authority", "tool_returned_during_budget"] as const)("blocks HTTP when %s", async (scenario) => {
     const { service, storage } = createHarness(openAiResponsesConfig());
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     let executionActive = true;
-    const checkExecution = async () => { if (!executionActive) throw new Error("Execution revoked."); };
+    let releaseCheck!: () => void, enteredCheck!: () => void, executionChecks = 0;
+    const released = new Promise<void>(resolve => { releaseCheck = resolve; });
+    const entered = new Promise<void>(resolve => { enteredCheck = resolve; });
+    const checkExecution = async () => {
+      if (!executionActive) throw new Error("Execution revoked.");
+      if (++executionChecks > 1 && scenario === "tool_returned_during_authority") { enteredCheck(); await released; }
+    };
     const reconcile = vi.fn(async () => {});
     const authorize = vi.fn(async (input: { usageEventId: string }) => {
       expect(storage.modelUsageEvents.findByEventId(input.usageEventId)?.transportStatus).toBe("intent");
+      if (scenario === "tool_returned_during_authority") return;
+      if (scenario === "tool_returned_during_budget") { enteredCheck(); await released; return; }
       throw new Error("Operator budget exhausted.");
     });
     const runtime = new RemoteWorkerToolModelBudgetRuntime({ llm: service,
@@ -157,6 +165,15 @@ describe("worker tool model dispatch lifetime", () => {
       const stream = await runtime.run(input, async () => service.chatCompletionsStream(request));
       await expect(stream.next()).rejects.toThrow("Worker tool execution has ended.");
       expect(authorize).not.toHaveBeenCalled();
+    } else if (scenario === "tool_returned_during_authority" || scenario === "tool_returned_during_budget") {
+      let failure!: Promise<unknown>;
+      await runtime.run(input, async () => {
+        failure = service.chatCompletions(request).then(() => undefined, error => error);
+        await entered;
+      });
+      releaseCheck();
+      await expect(failure).resolves.toMatchObject({ message: "Worker tool execution has ended." });
+      expect(authorize).toHaveBeenCalledTimes(scenario === "tool_returned_during_budget" ? 1 : 0);
     } else {
       await expect(runtime.run(input, async () => {
         executionActive = false;
@@ -168,7 +185,7 @@ describe("worker tool model dispatch lifetime", () => {
     expect(reconcile).toHaveBeenCalledTimes(2);
     expect(onlyUsageRecord(storage)).toMatchObject({ parentOperationId: "worker-tool:tool-intent", workerId: "worker-a",
       transportStatus: "dispatch_unknown", terminalOutcome: "failed_before_usage", dispatchReconciliation: "confirmed_not_dispatched" });
-  });
+  }, 60_000); // Includes fresh on-disk schema initialization for each case.
 });
 
 async function consume(stream: AsyncGenerator<Record<string, unknown>>): Promise<void> {

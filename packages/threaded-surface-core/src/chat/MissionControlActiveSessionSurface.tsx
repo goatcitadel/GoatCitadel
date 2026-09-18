@@ -369,6 +369,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
   onCloseGeneratedArtifact?: () => void;
   onStopActiveTurn: () => void;
+  isStopPending?: boolean;
   onSend: () => void;
   pinnedGoal?: string;
   midTurnDisposition?: MidTurnDisposition;

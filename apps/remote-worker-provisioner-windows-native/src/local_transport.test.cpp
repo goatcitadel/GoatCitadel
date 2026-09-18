@@ -666,10 +666,105 @@ void TestRuntimePopV2OperationAuthority() {
       "runtime PoP-v2 operation authority rejects wrong preimage length");
 }
 
+void TestOwnProcessImagePath() noexcept {
+  std::array<wchar_t, 512U> expected{}, actual{};
+  DWORD length = static_cast<DWORD>(expected.size());
+  const bool queried = QueryFullProcessImageNameW(
+      GetCurrentProcess(), 0U, expected.data(), &length) != FALSE &&
+      length != 0U && length < expected.size();
+  Expect(queried, "Windows accepts its current-process pseudo-handle for image queries");
+  if (!queried) return;
+  Expect(gc::QueryProcessImagePathForTest(GetCurrentProcess(), &actual) &&
+      CompareStringOrdinal(expected.data(), -1, actual.data(), -1, TRUE) == CSTR_EQUAL,
+      "own-process pseudo-handle resolves the exact image used by startup validation");
+
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, GetCurrentProcessId());
+  Expect(process != nullptr, "query-only real process handle opens");
+  if (process) {
+    Expect(gc::QueryProcessImagePathForTest(process, &actual) &&
+        CompareStringOrdinal(expected.data(), -1, actual.data(), -1, TRUE) == CSTR_EQUAL,
+        "retained real process handle keeps the same image-query behavior");
+    Expect(CloseHandle(process) != FALSE, "real process query handle closes");
+  }
+
+  actual.fill(L'x');
+  const auto unchanged = actual;
+  Expect(!gc::QueryProcessImagePathForTest(nullptr, &actual) && actual == unchanged,
+      "null process cannot publish an image path");
+  Expect(!gc::QueryProcessImagePathForTest(GetCurrentProcess(), nullptr),
+      "null image output is refused");
+  HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  Expect(event != nullptr, "non-process handle fixture opens");
+  if (event) {
+    Expect(!gc::QueryProcessImagePathForTest(event, &actual) && actual == unchanged,
+        "Windows still rejects non-process handles without publishing a path");
+    std::uint64_t invalid_time = UINT64_MAX;
+    Expect(!gc::QueryLiveProcessCreationTimeForTest(event, &invalid_time) && invalid_time == UINT64_MAX,
+        "a non-process handle cannot publish a process creation time");
+    Expect(CloseHandle(event) != FALSE, "non-process fixture closes");
+  }
+
+  FILETIME created{}, exited{}, kernel{}, user{};
+  Expect(GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) != FALSE,
+      "Windows reads the caller's actual process creation time");
+  const std::uint64_t expected_created =
+      (static_cast<std::uint64_t>(created.dwHighDateTime) << 32U) | created.dwLowDateTime;
+  std::uint64_t actual_created = 0U;
+  Expect(gc::QueryLiveProcessCreationTimeForTest(GetCurrentProcess(), &actual_created) &&
+      expected_created != 0U && actual_created == expected_created,
+      "own-process pseudo-handle proves liveness and exact creation time");
+  Expect(!gc::QueryLiveProcessCreationTimeForTest(nullptr, &actual_created) &&
+      !gc::QueryLiveProcessCreationTimeForTest(GetCurrentProcess(), nullptr),
+      "live-process creation query still refuses missing inputs");
+  HANDLE primary = nullptr;
+  alignas(16) std::array<BYTE, 1024U> token_user{};
+  DWORD returned = 0U;
+  PSID expected_user = nullptr;
+  TOKEN_ELEVATION_TYPE elevation_type = TokenElevationTypeDefault;
+  Expect(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &primary) != FALSE,
+      "the caller's primary token opens for an independent user comparison");
+  if (primary) {
+    Expect(gc::TokenHasNoRestrictedSidsForTest(primary),
+        "unrestricted Windows token accepts its header-only restricted SID list");
+    Expect(!gc::TokenHasNoRestrictedSidsForTest(nullptr) &&
+        !gc::TokenHasNoRestrictedSidsForTest(INVALID_HANDLE_VALUE),
+        "restricted SID query refuses invalid handles");
+    const bool read = GetTokenInformation(primary, TokenUser, token_user.data(),
+        static_cast<DWORD>(token_user.size()), &returned) != FALSE && returned <= token_user.size();
+    Expect(read, "Windows reads the caller's primary-token user");
+    if (read) expected_user = reinterpret_cast<TOKEN_USER*>(token_user.data())->User.Sid;
+    Expect(GetTokenInformation(primary, TokenElevationType, &elevation_type,
+        static_cast<DWORD>(sizeof(elevation_type)), &returned) != FALSE && returned == sizeof(elevation_type),
+        "Windows independently reports whether the test caller has full elevation");
+    Expect(CloseHandle(primary) != FALSE, "independent token query handle closes");
+  }
+  std::uint64_t captured_created = 0U;
+  gc::TokenProjection captured_token;
+  const bool captured = gc::CaptureCurrentClientProcessForTest(expected.data(), &captured_created, &captured_token);
+  if (elevation_type == TokenElevationTypeFull) {
+    Expect(captured && captured_created == expected_created &&
+        expected_user && captured_token.user.length == GetLengthSid(expected_user) &&
+        EqualSid(captured_token.user.bytes.data(), expected_user) != FALSE,
+        "fully elevated client captures its live process, exact image, creation time and primary user");
+  } else {
+    Expect(!captured && captured_created == 0U && captured_token.user.length == 0U,
+        "unelevated caller remains refused without publishing protected client identity");
+  }
+  captured_created = UINT64_MAX;
+  Expect(!gc::CaptureCurrentClientProcessForTest(L"C:\\not-the-current-image.exe", &captured_created, &captured_token) &&
+      captured_created == UINT64_MAX,
+      "client still refuses an image-path mismatch before publishing identity");
+  Expect(!gc::CaptureCurrentClientProcessForTest(nullptr, &captured_created, &captured_token) &&
+      !gc::CaptureCurrentClientProcessForTest(expected.data(), nullptr, &captured_token) &&
+      !gc::CaptureCurrentClientProcessForTest(expected.data(), &captured_created, nullptr),
+      "client identity capture refuses missing inputs");
+}
+
 }  // namespace
 
 int RunLocalTransportTests() noexcept {
   const int initial_failures = g_failures;
+  TestOwnProcessImagePath();
   g_failures += RunEd25519RuntimeTests();
   g_failures += RunProtectedCallerAuthorityTests();
   TestBindingFixture();

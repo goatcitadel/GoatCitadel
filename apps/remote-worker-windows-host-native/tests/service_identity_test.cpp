@@ -82,6 +82,12 @@ int main() {
 
   const auto expected_image = WorkerConfig().binary;
   Check(ValidateServiceConfiguration(WorkerConfig(), expected_image), "exact SCM configuration");
+  auto running = WorkerConfig(); running.status_state = SERVICE_RUNNING;
+  Check(ValidateServiceConfiguration(running, expected_image, SERVICE_RUNNING), "explicit running-host admission preserves SCM policy");
+  Check(!ValidateServiceConfiguration(running, expected_image), "startup admission does not accept a running host implicitly");
+  Check(!ValidateServiceConfiguration(WorkerConfig(), expected_image, SERVICE_RUNNING), "running admission refuses a starting host");
+  running.status_state = SERVICE_STOP_PENDING;
+  Check(!ValidateServiceConfiguration(running, expected_image, SERVICE_STOP_PENDING), "unsupported expected lifecycle cannot bypass policy");
   const auto reject_config = [&](auto mutate, const char* name) {
     auto config = WorkerConfig(); mutate(config); Check(!ValidateServiceConfiguration(config, expected_image), name);
   };

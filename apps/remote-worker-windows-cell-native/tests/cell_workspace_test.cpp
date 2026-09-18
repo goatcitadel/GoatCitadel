@@ -16,11 +16,16 @@
 
 using namespace goatcitadel::worker_cell;
 unsigned RunCellRuntimeStdioTests(RuntimeJobCommand request, const std::function<void()>& after_start = {});
+unsigned RunCellJournalRuntimeTests(const RuntimeJobCommand& command, const JobLimits& limits);
 unsigned RunCellVirtualDiskTests(CellWorkspaceDirectories& roots, HANDLE parent,
   const CellFileIdentity& parent_identity, const std::wstring& user, unsigned& attachment_checks, bool live_attachment);
 unsigned RunCellProvisioningJournalTests(HANDLE parent, const CellFileIdentity& parent_identity, const std::wstring& user);
+unsigned RunCellHostCapacityJournalTests(HANDLE parent, const std::wstring& user);
 unsigned RunCellMountedWorkspaceProvisioningJournalTests(HANDLE parent, const CellFileIdentity& parent_identity, const std::wstring& user);
 namespace {
+CellFootprintScanGuard FixtureInstallAuthority(HANDLE cancellation = nullptr) {
+  return {[](void*) noexcept -> DWORD { return ERROR_SUCCESS; }, nullptr, cancellation};
+}
 struct Handle final {
   HANDLE value = INVALID_HANDLE_VALUE;
   ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
@@ -290,7 +295,7 @@ void CheckInterruptedInstall(HANDLE parent, const CellFileIdentity& identity, co
     }
     SetEvent(cancelled.value);
   });
-  const auto interrupted = source.InstallTo(destination, output, cancelled.value);
+  const auto interrupted = source.InstallTo(destination, output, FixtureInstallAuthority(cancelled.value));
   watch.request_stop(); watch.join();
   if (!observed || cancellation_error || interrupted.error != ERROR_CANCELLED || interrupted.verified)
     std::fprintf(stderr, "Interrupted install observed=%d signal=%lu error=%lu files=%u bytes=%llu verified=%d\n",
@@ -314,14 +319,14 @@ void CheckInterruptedInstall(HANDLE parent, const CellFileIdentity& identity, co
   }
   Check(found == interrupted.files_created && bytes == interrupted.bytes_written && destination.Verify() == ERROR_SUCCESS,
     "partial file and byte counters match the retained disk footprint");
-  const auto retry = source.InstallTo(destination, output);
+  const auto retry = source.InstallTo(destination, output, FixtureInstallAuthority());
   Check(retry.error == ERROR_DIR_NOT_EMPTY && retry.files_created == 0 && retry.bytes_written == 0 && !output.Ready(),
     "retry refuses partial state rather than adopting or deleting it");
   auto complete_name = cell_name; complete_name[9] = complete_name[9] == L'0' ? L'1' : L'0';
   CellWorkspaceDirectories complete_destination;
   Check(complete_destination.Create(parent, identity, complete_name, user, user) == ERROR_SUCCESS,
     "create a fresh destination after retaining the partial installation");
-  const auto complete = source.InstallTo(complete_destination, output);
+  const auto complete = source.InstallTo(complete_destination, output, FixtureInstallAuthority());
   Check(complete.error == ERROR_SUCCESS && complete.verified && output.Ready() && complete.files_created == files.size() &&
     complete.bytes_written == marker_file.bytes * files.size(), "install a complete large runtime without adopting the partial tree");
   FILE_STANDARD_INFO directory_size{};
@@ -338,8 +343,29 @@ unsigned RunCellMountedWorkspaceJournalTests(const std::wstring& directory) {
   return RunCellMountedWorkspaceProvisioningJournalTests(parent.value, Identity(parent.value), user);
 }
 
+unsigned RunCellHostCapacityJournalFixture(const std::wstring& directory) {
+  const auto user = CurrentUser();
+  CreateParent(directory, ParentDescriptor(user));
+  Handle parent{OpenParent(directory)};
+  return RunCellHostCapacityJournalTests(parent.value, user);
+}
+
+unsigned RunCellProvisioningJournalFixture(const std::wstring& directory) {
+  const auto user = CurrentUser();
+  CreateParent(directory, ParentDescriptor(user));
+  Handle parent{OpenParent(directory)};
+  return RunCellProvisioningJournalTests(parent.value, Identity(parent.value), user);
+}
+
 unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create, DWORD& explicit_dacl,
-                              unsigned& disk_checks, unsigned& attachment_checks, unsigned& journal_checks, bool live_attachment) {
+                              unsigned& disk_checks, unsigned& attachment_checks, unsigned& journal_checks, bool live_attachment,
+                              bool include_journal) {
+  const auto started = GetTickCount64();
+  const auto phase = [&](const char* name) {
+    std::fprintf(stderr, "Native workspace phase: %s at %llu ms\n", name,
+      static_cast<unsigned long long>(GetTickCount64() - started)); std::fflush(stderr);
+  };
+  phase("parent");
   const std::wstring fixture_path = command.directory + L"\\workspace-" + std::to_wstring(GetCurrentProcessId());
   Require(CreateDirectoryW(fixture_path.c_str(), nullptr) != FALSE, "Create exclusive workspace fixture parent failed.");
   const auto user = CurrentUser();
@@ -358,7 +384,9 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
   const auto identity = Identity(parent.value);
   // Journal corruption/alias fixtures need all original controller pins closed.
   // Run them before this separate workspace owner pins the same parent.
-  journal_checks = RunCellProvisioningJournalTests(parent.value, identity, user);
+  phase("provisioning-journal");
+  journal_checks = include_journal ? RunCellProvisioningJournalTests(parent.value, identity, user) : 0;
+  phase("workspace-roots");
   CellWorkspaceDirectories roots;
   const DWORD created = roots.Create(parent.value, identity, command.job_name, user, user);
   if (created) std::fprintf(stderr, "Workspace create error: %lu (root=%p control=%p runtime=%p work=%p)\n", created,
@@ -368,7 +396,9 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
   Check(roots.Verify() == ERROR_SUCCESS, "verify newly created workspace roots");
   const auto recorded = CheckRecordedWorkspaceReopen(roots, parent.value, identity, command.job_name, user);
   CheckRecordedWorkspaceReplacement(fixture_path, command.job_name, user);
+  phase("virtual-disk");
   disk_checks = RunCellVirtualDiskTests(roots, parent.value, identity, user, attachment_checks, live_attachment);
+  phase("workspace-security");
   for (const auto& path : {parent_path, fixture_path}) {
     Handle writable;
     writable.value = CreateFileW(path.c_str(), FILE_ADD_FILE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -522,25 +552,25 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
   Check(HashRuntimeBundleManifest(runtime_files, &bundle_hash) == ERROR_SUCCESS, "freeze source runtime manifest");
   Handle source_directory{OpenParent(source_root)};
   PinnedCellRuntimeBundle source_bundle, installed_bundle;
-  auto installation = source_bundle.InstallTo(roots, installed_bundle);
+  auto installation = source_bundle.InstallTo(roots, installed_bundle, FixtureInstallAuthority());
   Check(installation.error == ERROR_INVALID_STATE && installation.files_created == 0 && !installed_bundle.Ready(),
     "an unverified source cannot write a runtime");
   Check(source_bundle.Open(source_root, Identity(source_directory.value), runtime_files, bundle_hash) == ERROR_SUCCESS,
     "pin the complete approved source before copying");
   CellWorkspaceDirectories missing_destination;
-  installation = source_bundle.InstallTo(missing_destination, installed_bundle);
+  installation = source_bundle.InstallTo(missing_destination, installed_bundle, FixtureInstallAuthority());
   Check(installation.error == ERROR_INVALID_HANDLE && installation.files_created == 0, "unverified destination refuses installation");
   Handle cancelled{CreateEventW(nullptr, TRUE, TRUE, nullptr)};
   Require(cancelled.value != nullptr, "Create install cancellation fixture failed.");
-  installation = source_bundle.InstallTo(roots, installed_bundle, cancelled.value);
+  installation = source_bundle.InstallTo(roots, installed_bundle, FixtureInstallAuthority(cancelled.value));
   Check(installation.error == ERROR_CANCELLED && installation.files_created == 0 && installation.directories_created == 0,
     "pre-cancelled installation has no disk effect");
   const auto occupied_file = sibling.DirectoryPath(CellDirectory::runtime) + L"\\existing.txt";
   WriteMarker(occupied_file);
-  installation = source_bundle.InstallTo(sibling, installed_bundle);
+  installation = source_bundle.InstallTo(sibling, installed_bundle, FixtureInstallAuthority());
   Check(installation.error == ERROR_DIR_NOT_EMPTY && installation.files_created == 0 && SameMarker(occupied_file),
     "nonempty runtime is refused without adopting or replacing its content");
-  installation = source_bundle.InstallTo(roots, installed_bundle);
+  installation = source_bundle.InstallTo(roots, installed_bundle, FixtureInstallAuthority());
   if (installation.error) std::fprintf(stderr, "Runtime install error=%lu files=%u directories=%u bytes=%llu\n", installation.error,
     installation.files_created, installation.directories_created, static_cast<unsigned long long>(installation.bytes_written));
   Check(installation.error == ERROR_SUCCESS && installation.verified && installed_bundle.Ready(),
@@ -550,10 +580,10 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
   Check(SameMarker(runtime_file), "installed nested dependency has the exact source bytes");
   const auto installed_image = roots.DirectoryPath(CellDirectory::runtime) + L"\\entry.exe";
   Check(installed_bundle.ContainsImage(installed_image, command.expected_image_sha256), "installed executable belongs to the exact verified tree");
-  Check(source_bundle.InstallTo(roots, installed_bundle).error == ERROR_INVALID_STATE,
+  Check(source_bundle.InstallTo(roots, installed_bundle, FixtureInstallAuthority()).error == ERROR_INVALID_STATE,
     "a live output pin cannot be replaced implicitly");
   PinnedCellRuntimeBundle refused_install;
-  Check(source_bundle.InstallTo(roots, refused_install).error == ERROR_DIR_NOT_EMPTY && !refused_install.Ready(),
+  Check(source_bundle.InstallTo(roots, refused_install, FixtureInstallAuthority()).error == ERROR_DIR_NOT_EMPTY && !refused_install.Ready(),
     "installation replay cannot adopt an existing runtime");
   {
     Handle write{CreateFileW(runtime_file.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -562,7 +592,9 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
       "installed output stays immutable while its verified pins are held");
   }
   installed_bundle.Reset(); // Exercise real ACL denials, not only retained sharing locks.
+  phase("interrupted-install");
   CheckInterruptedInstall(parent.value, identity, command.job_name, user, fixture_path, runtime_files.back());
+  phase("protected-runtime");
   WriteMarker(sibling.DirectoryPath(CellDirectory::work) + L"\\sibling.txt");
   auto child_command = command;
   child_command.image = installed_image;
@@ -588,6 +620,9 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
   Check(installed_run.runtime_bundle_verified && installed_run.runtime_bundle_sha256 == bundle_hash && installed_run.protected_workspace_verified,
     "installed runtime composes exact bundle and recorded protected workspace custody");
   checks += RunCellRuntimeStdioTests(protected_request);
+  phase("journal-runtime");
+  checks += RunCellJournalRuntimeTests(protected_request, protected_limits);
+  phase("runtime-security");
   const auto& result = installed_run.job;
   const std::string output(result.standard_output.prefix.begin(), result.standard_output.prefix.end());
   const std::string errors(result.standard_error.prefix.begin(), result.standard_error.prefix.end());
@@ -704,7 +739,7 @@ unsigned RunCellWorkspaceTests(const JobCommand& command, DWORD& explicit_create
   Check(recorded_reader.OpenRecorded(parent.value, recorded, command.job_name, user, user) == ERROR_ACCESS_DENIED,
     "recorded reopen refuses an unaccounted alternate stream");
   CheckClosedWorkspace(recorded_reader);
-  installation = source_bundle.InstallTo(roots, refused_install);
+  installation = source_bundle.InstallTo(roots, refused_install, FixtureInstallAuthority());
   Check(installation.error == ERROR_ACCESS_DENIED && installation.files_created == 0 && !refused_install.Ready(),
     "installer rechecks current protected workspace metadata before writing");
   Check(roots.DirectoryHandle(CellDirectory::work) != nullptr && SameMarker(stream_path),

@@ -15,6 +15,10 @@
       "types": "./dist/citadel-vault-node.d.ts",
       "default": "./dist/citadel-vault-node.js"
     },
+    "./remote-worker-runtime-node": {
+      "types": "./dist/remote-worker-runtime-node.d.ts",
+      "default": "./dist/remote-worker-runtime-node.js"
+    },
     "./mesh-schema-node": {
       "types": "./dist/mesh-schema-node.d.ts",
       "default": "./dist/mesh-schema-node.js"

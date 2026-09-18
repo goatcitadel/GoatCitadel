@@ -19,6 +19,12 @@ DWORD Error() noexcept { const DWORD error = GetLastError(); return error ? erro
 bool Cancelled(HANDLE cancellation) noexcept {
   return cancellation && WaitForSingleObject(cancellation, 0) != WAIT_TIMEOUT;
 }
+DWORD Authorize(const CellFootprintScanGuard& authority) noexcept {
+  if (!authority.authorize) return ERROR_ACCESS_DENIED;
+  if (Cancelled(authority.cancellation)) return ERROR_CANCELLED;
+  const auto error = authority.authorize(authority.context);
+  return error ? error : Cancelled(authority.cancellation) ? ERROR_CANCELLED : ERROR_SUCCESS;
+}
 DWORD Empty(HANDLE directory) noexcept {
   alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::uint8_t, 65536> bytes{};
   bool restart = true;
@@ -72,19 +78,19 @@ DWORD Create(HANDLE parent, const std::wstring& component, bool directory,
   *result = created;
   return io.Information == 2 ? ERROR_SUCCESS : ERROR_INVALID_STATE; // FILE_CREATED only
 }
-DWORD Copy(HANDLE source, HANDLE destination, std::uint64_t bytes, std::uint64_t* written, HANDLE cancellation) noexcept {
+DWORD Copy(HANDLE source, HANDLE destination, std::uint64_t bytes, std::uint64_t* written, const CellFootprintScanGuard& authority) noexcept {
   LARGE_INTEGER beginning{};
   if (!SetFilePointerEx(source, beginning, nullptr, FILE_BEGIN)) return Error();
   std::array<std::uint8_t, 65536> buffer{};
   for (std::uint64_t offset = 0; offset < bytes;) {
-    if (Cancelled(cancellation)) return ERROR_CANCELLED;
+    auto error = Authorize(authority); if (error) return error;
     const DWORD want = static_cast<DWORD>(std::min<std::uint64_t>(buffer.size(), bytes - offset));
     DWORD read = 0;
     if (!ReadFile(source, buffer.data(), want, &read, nullptr)) return Error();
     if (read != want) return ERROR_HANDLE_EOF;
     DWORD consumed = 0;
     while (consumed < read) {
-      if (Cancelled(cancellation)) return ERROR_CANCELLED;
+      error = Authorize(authority); if (error) return error;
       DWORD count = 0;
       if (!WriteFile(destination, buffer.data() + consumed, read - consumed, &count, nullptr)) return Error();
       if (!count) return ERROR_WRITE_FAULT;
@@ -92,17 +98,31 @@ DWORD Copy(HANDLE source, HANDLE destination, std::uint64_t bytes, std::uint64_t
     }
     offset += read;
   }
-  return FlushFileBuffers(destination) ? ERROR_SUCCESS : Error();
+  const auto error = Authorize(authority);
+  return error ? error : FlushFileBuffers(destination) ? ERROR_SUCCESS : Error();
 }
 }  // namespace
 
 RuntimeBundleInstallResult PinnedCellRuntimeBundle::InstallTo(CellWorkspaceDirectories& destination,
-    PinnedCellRuntimeBundle& output, HANDLE cancellation) noexcept {
+    PinnedCellRuntimeBundle& output, const CellFootprintScanGuard& supplied_authority) noexcept {
   RuntimeBundleInstallResult result;
+  struct InstallGuard final {
+    CellFootprintScanGuard supplied;
+    CellWorkspaceDirectories& destination;
+    static DWORD Check(void* raw) noexcept {
+      auto& self = *static_cast<InstallGuard*>(raw);
+      const auto error = Authorize(self.supplied);
+      // A callback may block or change permissions. Recheck the destination
+      // after it returns, immediately before each filesystem effect.
+      return error ? error : self.destination.Verify();
+    }
+  } guard{supplied_authority, destination};
+  const CellFootprintScanGuard authority{InstallGuard::Check, &guard, supplied_authority.cancellation};
   try {
     if (this == &output || !ready_ || output.ready_ || !output.handles_.empty() || !output.root_input_.empty() ||
         file_handles_.size() != files_.size()) { result.error = ERROR_INVALID_STATE; return result; }
-    if (Cancelled(cancellation)) { result.error = ERROR_CANCELLED; return result; }
+    result.error = Authorize(authority);
+    if (result.error) return result;
     result.error = destination.Verify();
     if (result.error) return result;
     if (destination.DirectoryPath(CellDirectory::runtime).size() + 513 >= 2048) {
@@ -117,7 +137,8 @@ RuntimeBundleInstallResult PinnedCellRuntimeBundle::InstallTo(CellWorkspaceDirec
     if (result.error) return result;
     Directories directories;
     for (const auto& file : files_) {
-      if (Cancelled(cancellation)) { result.error = ERROR_CANCELLED; return result; }
+      result.error = Authorize(authority);
+      if (result.error) return result;
       result.error = destination.Verify();
       if (result.error) return result;
       HANDLE parent = root;
@@ -128,6 +149,8 @@ RuntimeBundleInstallResult PinnedCellRuntimeBundle::InstallTo(CellWorkspaceDirec
         if (found != directories.values.end()) parent = found->second;
         else {
           Handle directory;
+          result.error = Authorize(authority);
+          if (result.error) return result;
           result.error = Create(parent, file.relative_path.substr(start, slash - start), true, descriptor.value, &directory.value);
           if (directory.value != INVALID_HANDLE_VALUE && directory.value != nullptr) ++result.directories_created;
           if (result.error) return result;
@@ -137,15 +160,21 @@ RuntimeBundleInstallResult PinnedCellRuntimeBundle::InstallTo(CellWorkspaceDirec
         start = slash + 1; slash = file.relative_path.find(L'/', start);
       }
       Handle created;
+      result.error = Authorize(authority);
+      if (result.error) return result;
       result.error = Create(parent, file.relative_path.substr(start), false, descriptor.value, &created.value);
       if (created.value != INVALID_HANDLE_VALUE && created.value != nullptr) ++result.files_created;
       if (result.error) return result;
-      result.error = Copy(file_handles_.at(file.relative_path), created.value, file.bytes, &result.bytes_written, cancellation);
+      result.error = Copy(file_handles_.at(file.relative_path), created.value, file.bytes, &result.bytes_written, authority);
       if (result.error) return result;
     }
-    result.error = destination.Verify();
+    result.error = Authorize(authority);
+    if (!result.error) result.error = destination.Verify();
     if (!result.error) result.error = output.Open(destination.DirectoryPath(CellDirectory::runtime),
-      destination.DirectoryIdentity(CellDirectory::runtime), files_, manifest_sha256_, cancellation);
+      destination.DirectoryIdentity(CellDirectory::runtime), files_, manifest_sha256_, authority.cancellation);
+    if (!result.error) result.error = Authorize(authority);
+    if (!result.error) result.error = destination.Verify();
+    if (result.error) output.Reset();
     result.verified = result.error == ERROR_SUCCESS && output.Ready();
     return result;
   } catch (...) { result.error = ERROR_NOT_ENOUGH_MEMORY; return result; }

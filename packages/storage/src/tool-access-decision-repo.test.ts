@@ -68,6 +68,23 @@ function recordDecision(
 }
 
 describe("ToolAccessDecisionRepository", () => {
+  it("excludes only an already-counted decision in the same window, tool and scope", () => {
+    const { repo, db } = createRepoWithDb();
+    try {
+      const own = recordDecision(repo), other = recordDecision(repo, { sessionId: "other-session" });
+      const old = recordDecision(repo, {}, new Date(Date.now() - 7_200_000).toISOString());
+      const advisory = recordDecision(repo, { countsTowardLimits: false });
+      const input = { toolName: "fs.write", scope: "session" as const, agentId: "agent-1", sessionId: "session-1" };
+      assert.equal(repo.get(own.decisionId)?.decisionId, own.decisionId);
+      assert.equal(repo.get(own.decisionId)?.countsTowardLimits, true);
+      assert.equal(repo.countToolCallsInLastHourInScope(input), 1);
+      assert.equal(repo.countToolCallsInLastHourInScope({ ...input, excludeDecisionId: own.decisionId }), 0);
+      assert.equal(repo.countWritesInLastHourInScope({ ...input, excludeDecisionId: own.decisionId }), 0);
+      for (const id of [other.decisionId, old.decisionId, advisory.decisionId, "missing"])
+        assert.equal(repo.countToolCallsInLastHourInScope({ ...input, excludeDecisionId: id }), 1);
+      assert.equal(repo.countToolCallsInLastHourInScope({ ...input, toolName: "fs.read", excludeDecisionId: own.decisionId }), 0);
+    } finally { db.close(); }
+  });
   it("records decisions and counts calls across every grant scope", () => {
     const { repo, db } = createRepoWithDb();
     insertSessionMeta(db, "session-1", "workspace-1");

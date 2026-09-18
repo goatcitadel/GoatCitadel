@@ -25,19 +25,27 @@ const packageReference = packageRoot === undefined ? undefined : { root: package
 if (process.env.GOATCITADEL_NATIVE_VHD_ATTACHMENT_PROOF !== undefined && !attachmentProof) {
   throw new Error("GOATCITADEL_NATIVE_VHD_ATTACHMENT_PROOF must be exactly 1 when supplied.");
 }
-function run(executable, args, env = {}, minimumChecks = 222) {
+function run(executable, args, env = {}, minimumChecks = 222, timeoutMs = 40000) {
   const result = spawnSync(executable, args, {
     encoding: "utf8",
     windowsHide: true,
-    timeout: 40000,
+    timeout: timeoutMs,
     env: { SystemRoot: process.env.SystemRoot, ...env },
   });
-  assert.equal(result.error, undefined, String(result.error));
+  assert.equal(result.error, undefined, `${String(result.error)}\n${result.stderr}`);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const receipt = JSON.parse(result.stdout.trim());
   assert.ok(receipt.checks >= minimumChecks, "Native resource and AppContainer checks must execute.");
   if ((args.length === 1 && !args[0].startsWith("--")) || args[0] === "--volume-attachment") {
+    verifyCompleteReceipt(receipt, args);
+  }
+  return receipt;
+}
+function verifyCompleteReceipt(receipt, args) {
     assert.ok(receipt.filesystemChecks >= 41, "Actual NTFS launch-file cases must execute.");
+    assert.ok(receipt.runtimeDispatchChecks >= 980, "Exact workload binding, protected configuration and independent admission must be checked before dispatch.");
+    assert.ok(receipt.quiescentCaptureChecks >= 87, "Capture and borrowed journal binding must use the held empty job, exact cell/directory and current authority, with failure withholding.");
+    assert.ok(receipt.executionAuthorityChecks >= 35, "Authority must be checked before creation/resume and during execution, with exact-job cleanup on revocation.");
     assert.ok(receipt.inputChecks >= 40, "Bounded input, duplex pressure and pending-write cancellation must execute.");
     assert.ok(
       receipt.stdioChecks >= 57,
@@ -228,9 +236,82 @@ function run(executable, args, env = {}, minimumChecks = 222) {
     assert.equal(receipt.controllerDescriptorControl, true);
     assert.ok([0, 5].includes(receipt.explicitDescriptorCreateError));
     assert.ok([0, 2, 5].includes(receipt.explicitDescriptorWriteDaclError));
-  }
-  return receipt;
 }
+const workspacePhaseFields = [
+  "workspaceChecks", "virtualDiskChecks", "volumeAttachmentChecks", "volumeAttachmentExercised",
+  "explicitDescriptorCreateError", "explicitDescriptorWriteDaclError", "virtualDiskRecoveryProcessVerified",
+  "volumeAttachmentRecoveryVerified", "volumeDeviceBindingVerified", "volumeDeviceMetadataChecks",
+  "provisioningJournalChecks", "provisioningRecoveryProcessVerified", "provisioningCheckpointRecords",
+  "provisioningDiskLayoutIdsHex", "volumeProvisioningCoreRecords", "volumeProvisioningRecords",
+  "formatProvisioningHistory", "protectionProvisioningHistory", "mountProvisioningHistory", "controllerDescriptorControl",
+];
+const provisioningPhaseFields = ["provisioningJournalChecks", "provisioningRecoveryProcessVerified", "provisioningCheckpointRecords",
+  "provisioningDiskLayoutIdsHex", "volumeProvisioningCoreRecords", "volumeProvisioningRecords", "formatProvisioningHistory",
+  "protectionProvisioningHistory", "mountProvisioningHistory"];
+function joinPhaseReceipts(core, workspace, provisioning) {
+  assert.equal(core.phase, "core"); assert.equal(workspace.phase, "workspace");
+  assert.equal(provisioning.phase, "provisioning"); assert.equal(provisioning.status, "passed");
+  assert.equal(core.status, "passed"); assert.equal(workspace.status, "passed");
+  assert.deepEqual(Object.keys(workspace).sort(), [...workspacePhaseFields, "phase", "status", "checks"].sort());
+  assert.deepEqual(Object.keys(provisioning).sort(), [...provisioningPhaseFields, "phase", "status", "checks"].sort());
+  assert.equal(core.provisioningJournalChecks, 0); assert.equal(workspace.provisioningJournalChecks, 0);
+  assert.ok(Number.isSafeInteger(provisioning.checks) && provisioning.checks > 0);
+  assert.equal(provisioning.checks, provisioning.provisioningJournalChecks);
+  let workspaceChecks = 0;
+  for (const key of ["workspaceChecks", "virtualDiskChecks", "volumeAttachmentChecks"]) {
+    assert.equal(core[key], 0, "Core phase must not duplicate the workspace proof");
+    assert.ok(Number.isSafeInteger(workspace[key]) && workspace[key] > 0);
+    workspaceChecks += workspace[key];
+  }
+  assert.equal(workspace.checks, workspaceChecks);
+  assert.ok(Number.isSafeInteger(core.checks) && core.checks > 0 && Number.isSafeInteger(core.checks + workspaceChecks + provisioning.checks));
+  assert.equal(core.volumeAttachmentExercised, false); assert.equal(workspace.volumeAttachmentExercised, false);
+  return { ...core, ...Object.fromEntries(workspacePhaseFields.map(key => [key, workspace[key]])),
+    ...Object.fromEntries(provisioningPhaseFields.map(key => [key, provisioning[key]])),
+    checks: core.checks + workspaceChecks + provisioning.checks, phase: "combined-proof" };
+}
+function runPhases(executable, fixture, environment, output, mode) {
+  const executableSha256 = createHash("sha256").update(fs.readFileSync(executable)).digest("hex");
+  const receipts = {};
+  for (const phase of ["core", "provisioning", "workspace"]) {
+    const started = performance.now();
+    const target = phase === "provisioning" ? path.join(output, `provisioning-${mode}`) : fixture;
+    // Thousands of journal fault assertions include durable flushes. Bound
+    // that whole test group separately; per-operation deadline assertions and
+    // the core/workspace process watchdogs remain unchanged.
+    const receipt = run(executable, [`--${phase}-phase`, target], environment, 222,
+      phase === "provisioning" ? 120000 : 40000);
+    receipts[phase] = receipt;
+    fs.writeFileSync(path.join(output, `${mode}-${phase}.json`), JSON.stringify({
+      executableSha256, elapsedMs: performance.now() - started, receipt,
+    }, null, 2), { flag: "wx" });
+    assert.equal(createHash("sha256").update(fs.readFileSync(executable)).digest("hex"), executableSha256);
+  }
+  const combined = joinPhaseReceipts(receipts.core, receipts.workspace, receipts.provisioning);
+  verifyCompleteReceipt(combined, [fixture]);
+  return { ...combined, phaseReceipts: { core: `${mode}-core.json`, workspace: `${mode}-workspace.json`,
+    provisioning: `${mode}-provisioning.json`, executableSha256 } };
+}
+test("phase receipts cannot omit workspace evidence or double-count native assertions", () => {
+  const workspace = { ...Object.fromEntries(workspacePhaseFields.map(key => [key, null])),
+    phase: "workspace", status: "passed", checks: 6, workspaceChecks: 1, virtualDiskChecks: 2,
+    volumeAttachmentChecks: 3, provisioningJournalChecks: 0, volumeAttachmentExercised: false };
+  const provisioning = { ...Object.fromEntries(provisioningPhaseFields.map(key => [key, null])),
+    phase: "provisioning", status: "passed", checks: 4, provisioningJournalChecks: 4 };
+  const core = { phase: "core", status: "passed", checks: 20, workspaceChecks: 0, virtualDiskChecks: 0,
+    volumeAttachmentChecks: 0, provisioningJournalChecks: 0, volumeAttachmentExercised: false, filesystemChecks: 41 };
+  const joined = joinPhaseReceipts(core, workspace, provisioning);
+  assert.equal(joined.checks, 30); assert.equal(joined.filesystemChecks, 41); assert.equal(joined.provisioningJournalChecks, 4);
+  const missing = { ...workspace }; delete missing.provisioningCheckpointRecords;
+  assert.throws(() => joinPhaseReceipts(core, missing, provisioning));
+  assert.throws(() => joinPhaseReceipts({ ...core, workspaceChecks: 1 }, workspace, provisioning));
+  assert.throws(() => joinPhaseReceipts(core, { ...workspace, checks: 11 }, provisioning));
+  assert.throws(() => joinPhaseReceipts(core, { ...workspace, phase: "core" }, provisioning));
+  assert.throws(() => joinPhaseReceipts(core, { ...workspace, volumeAttachmentExercised: true }, provisioning));
+  const incompleteJournal = { ...provisioning }; delete incompleteJournal.provisioningCheckpointRecords;
+  assert.throws(() => joinPhaseReceipts(core, workspace, incompleteJournal));
+  assert.throws(() => joinPhaseReceipts(core, workspace, { ...provisioning, checks: 5 }));
+});
 async function networkProof(controller, asan, fixture, asanEnvironment) {
   let accepted = 0;
   const listener = net.createServer((socket) => {
@@ -307,9 +388,16 @@ test(
     : "native per-assignment job enforces resources and owns descendants",
   {
     skip: process.platform !== "win32",
-    timeout: 240000,
+    timeout: 600000,
   },
   async (t) => {
+    const temporaryRoot = os.tmpdir();
+    const temporarySpace = fs.statfsSync(temporaryRoot, { bigint: true });
+    const availableBytes = temporarySpace.bavail * temporarySpace.bsize;
+    // The normal and ASAN fixture sets retain about 11.3 GB of fixed VHDX
+    // images together. Leave room for both sets, build outputs and metadata.
+    assert.ok(availableBytes >= 16n * 1024n ** 3n,
+      `Native cell fixtures require at least 16 GiB free before retaining fixed VHDX allocations. ${temporaryRoot} has ${availableBytes} bytes available. Set TEMP and TMP to an owned NTFS directory with sufficient space; no volume operation has started.`);
     const output = fs.mkdtempSync(path.join(os.tmpdir(), "Goat Worker Cell Job "));
     t.diagnostic(`Retained native cell job evidence: ${output}`);
     const prebuilt = packageReference ? stageWorkerCellAcceptance(packageReference, output) : undefined;
@@ -336,7 +424,7 @@ test(
       fs.writeFileSync(path.join(output, "volume-preflight.json"), JSON.stringify(preflight, null, 2), { flag: "wx" });
     }
     const proofArguments = attachmentProof ? ["--volume-attachment", fixture] : [fixture];
-    const normal = run(controller, proofArguments);
+    const normal = attachmentProof ? run(controller, proofArguments) : runPhases(controller, fixture, {}, output, "normal");
     fs.writeFileSync(path.join(output, "normal.json"), JSON.stringify(normal, null, 2), { flag: "wx" });
     const asan = prebuilt?.asan ?? compileTlsNative({ ...options, outputName: "cell-job-asan.exe", sources, asan: true, compilerTimeoutMs: 120000 });
     const toolchain = prebuilt ? undefined : resolveExactWindowsToolchain("windows-x64");
@@ -344,11 +432,15 @@ test(
       PATH: prebuilt?.runtimeDirectory ?? path.dirname(toolchain.compilerPath),
       ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0",
     };
-    const sanitized = run(asan, proofArguments, asanEnvironment);
+    const sanitized = attachmentProof ? run(asan, proofArguments, asanEnvironment) : runPhases(asan, fixture, asanEnvironment, output, "asan");
     fs.writeFileSync(path.join(output, "asan.json"), JSON.stringify(sanitized, null, 2), { flag: "wx" });
     // Keep each native invocation within its existing 40-second watchdog.
     // Journal fault cases run separately from the job/runtime regression suite.
     for (const [mode, image, environment] of [["normal", controller, {}], ["asan", asan, asanEnvironment]]) {
+      const hostCapacity = run(image, ["--host-capacity-journal", path.join(output, `host-capacity-${mode}`)], environment, 50);
+      assert.equal(hostCapacity.hostCapacityObserver, true);
+      assert.equal(hostCapacity.volumeAttachmentExercised, false);
+      fs.writeFileSync(path.join(output, `host-capacity-${mode}.json`), JSON.stringify(hostCapacity, null, 2), { flag: "wx" });
       const workspaceJournal = run(image, ["--mounted-workspace-journal", path.join(output, `workspace-journal-${mode}`)], environment, 600);
       verifyCellMountedWorkspaceJournalReceipt(workspaceJournal);
       fs.writeFileSync(path.join(output, `mounted-workspace-${mode}.json`), JSON.stringify(workspaceJournal, null, 2), { flag: "wx" });

@@ -1,4 +1,6 @@
-import { verifyProviderConnection } from "./provider-readiness-service.js";
+import { composeMcpRequesterScopedRuntime, type McpRequesterScopedComposedRuntime } from "./mcp-requester-runtime-composition.js";
+export { composeMcpRequesterScopedRuntime, type McpRequesterScopedCompositionHost, type McpRequesterScopedComposedRuntime } from "./mcp-requester-runtime-composition.js";
+import { verifyProviderConnection, verifyTemporaryProviderCredential } from "./provider-readiness-service.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
@@ -7,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { canonicalJsonString, type McpNormalizedRequesterDiscoveryCatalog } from "@goatcitadel/contracts";
+import { canonicalJsonString } from "@goatcitadel/contracts";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
 import { EventIngestService, logger, ModelUsageAccountingService } from "@goatcitadel/gateway-core";
 import { traceInitStep, toLogContext } from "./gateway/bootstrap-tracing.js";
@@ -41,20 +43,7 @@ import {
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
 } from "@goatcitadel/storage";
-import {
-  buildChatModePrefsPatch,
-  classifyToolEffectPotential,
-  ConflictError,
-  DEFAULT_CITADEL_ID,
-  inferProviderForModelId,
-  isChatTurnActiveStatus,
-  NotFoundError,
-  PolicyViolationError,
-  providerAllowsForeignModelIds,
-  providerRecognizesModelId,
-  resolveMcpServerConnectionMode,
-  ValidationError,
-} from "@goatcitadel/contracts";
+import { buildChatModePrefsPatch, classifyToolEffectPotential, ConflictError, DEFAULT_CITADEL_ID, inferProviderForModelId, isChatTurnActiveStatus, NotFoundError, PolicyViolationError, providerAllowsForeignModelIds, providerRecognizesModelId, ValidationError } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
@@ -210,7 +199,6 @@ import type {
   McpOAuthStartResponse,
   McpServerPolicy,
   McpServerTemplateRecord,
-  McpServerCreateInput,
   McpServerRecord,
   McpServerUpdateInput,
   McpToolRecord,
@@ -358,11 +346,7 @@ import type {
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
 import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
-import type {
-  ChatTurnCapabilityProfileRecord,
-  McpRequesterResolutionBinding,
-  McpRequesterScopeAuthActorSource,
-} from "@goatcitadel/contracts";
+import type { ChatTurnCapabilityProfileRecord, McpRequesterScopeAuthActorSource } from "@goatcitadel/contracts";
 import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
@@ -374,45 +358,11 @@ import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
 import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
-import {
-  collectMcpBrowserFallbackTargets,
-  discoverRequesterScopedMcpTools,
-  invokeMcpRuntimeTool,
-  invokeRequesterScopedMcpToolCall,
-  type StdioClient,
-} from "./mcp-runtime.js";
+import { collectMcpBrowserFallbackTargets, invokeMcpRuntimeTool, type StdioClient } from "./mcp-runtime.js";
 import { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
-import {
-  McpRequesterResolverRegistry,
-  McpRequesterResolutionError,
-  assertMcpRequesterResolutionBindingIntegrity,
-  assertMcpRequesterBindingServerCurrent,
-  snapshotMcpRequesterScopedServerSnapshot,
-  type McpRequesterResolverRegistryInput,
-  type McpRequesterScopedServerSnapshot,
-  type McpRequesterResolutionReasonCode,
-} from "./mcp-requester-resolution.js";
-import {
-  MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
-  McpProfileDiscoveryOutcomeRegistry,
-  McpRequesterResolutionService,
-  McpRequesterScopeLastOutcomeRecorder,
-  buildRequesterScopedPreDispatchFailure,
-  buildMcpRequesterScopedTurnContextFromCapabilityProfile,
-  deriveMcpRequesterScopeOutcomeClassFromInvocationResult,
-  discoverRequesterScopedCatalogForProfile,
-  dispatchRequesterScopedToolCall,
-  readMcpRequesterScopedTurnContext,
-  resolveRequesterScopedBindingForProfileFreeze,
-  resolveRequesterScopedCatalogBindingsForProfileFreeze,
-  type McpRequesterScopeLastOutcomeClass,
-  type McpRequesterScopedFreezeCurrentState,
-  type McpRequesterScopedProfileFreezeHookInput,
-  type McpRequesterScopedCatalogDiscoveryHookInput,
-  type McpRequesterScopedCatalogFreezeHookInput,
-  type McpRequesterScopedToolCallCurrentState,
-} from "./mcp-requester-resolution-service.js";
-import { createMcpRequesterDiscoverySecretScanner } from "./mcp-resolution-secret-guard.js";
+import { type McpRequesterResolverRegistryInput } from "./mcp-requester-resolution.js";
+import { buildMcpRequesterScopedTurnContextFromCapabilityProfile } from "./mcp-requester-resolution-service.js";
+
 import { readApprovedExternalChatProfile } from "./mcp-approved-chat-context.js";
 import { isNativeMcpToolName, resolveNativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
 import { createMeshChatTurnContext, isMeshChatToolName, resolveMeshChatToolBinding } from "./gateway/mesh-chat-binding.js";
@@ -576,11 +526,7 @@ import {
 } from "./provider-secret-persistence.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
-import type {
-  McpRequesterScopeDiagnosticsReadPort,
-  McpRequesterScopePosture,
-  McpRequesterScopeResolverRegistrationRef,
-} from "./mcp-diagnostics-service.js";
+import type { McpRequesterScopePosture } from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import { McpStaticEnvironmentService, readMcpStaticEnvironment } from "./mcp-static-environment-service.js";
@@ -597,6 +543,7 @@ import { GuidanceService } from "./guidance-service.js";
 import * as cronJobConfigHelpers from "./cron-job-config-helpers.js";
 import * as chatCommandService from "./chat-command-service.js";
 import { createChatCommandDependencies } from "./chat-command-dependencies.js";
+import { composeMcpAdministration } from "./gateway-route-composition-tools.js";
 import { ChatChangePlanCompatibilityService } from "./chat-change-plan-compatibility-service.js";
 import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
 import { EvolutionControlPlaneService, type EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
@@ -678,18 +625,11 @@ import {
 } from "./session-control-service.js";
 import { createChatCompactionBreakerActionServiceForGateway } from "./chat-compaction-breaker-runtime-service.js";
 import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
-import {
-  ToolInvocationCoordinatorService,
-  type RequesterScopedMcpDispatchInput,
-  type RequesterScopedMcpDispatchPort,
-  type ToolInvocationRuntimeOptions,
-} from "./tool-invocation-coordinator-service.js";
+import { ToolInvocationCoordinatorService, type ToolInvocationRuntimeOptions } from "./tool-invocation-coordinator-service.js";
 import { createRemoteWorkerExecutionOwners } from "./remote-worker-execution-owners.js";
-import {
-  RemoteWorkerChatOfferService,
-  type RemoteWorkerChatDispatchClaim,
-  type RemoteWorkerChatOfferDependencies,
-} from "./remote-worker-chat-offer-service.js";
+import { createRemoteWorkerNativeRuntimePolicy } from "./remote-worker-native-runtime-policy.js";
+import { createRemoteWorkerInstallationPolicy } from "./remote-worker-installation-policy.js";
+import type { RemoteWorkerChatOfferDependencies } from "./remote-worker-chat-offer-service.js";
 import type { RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat-authority.js";
 import { remoteWorkerAssignmentRuntimeActivated } from "./remote-worker-assignment-runtime-composition.js";
 import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";
@@ -703,6 +643,7 @@ import {
   shouldDeferRemoteWorkerChatApprovalWake,
 } from "./remote-worker-chat-approval-resume.js";
 import type { RemoteWorkerApprovedActionInput } from "./remote-worker-effect-runtime.js";
+import { executeApprovedRemoteWorkerAction } from "./remote-worker-approved-action-runtime.js";
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
 import { ChatWorkspaceSnapshotService } from "./chat-workspace-snapshot-service.js";
 import { buildDelegatedFilesystemScopeControl, DelegatedWorkResultService } from "./delegated-work-result-service.js";
@@ -992,627 +933,6 @@ async function transitionLlamaCppRuntimeConfig(
   await runtime.restoreLifecycleSnapshot(lifecycle);
 }
 
-/**
- * HX-415 slice 7d composition host. Every port reads LIVE server-owned state on
- * each call (drift/revocation detection); none of them ever receives
- * `McpInvokeRequest`/body-derived authority.
- */
-export interface McpRequesterScopedCompositionHost {
-  /**
-   * Fixed Gateway-owned resolver registry input. Default EMPTY: a stock
-   * deployment has no resolvers, so every requester-scoped server fails closed
-   * (`resolver_missing` at freeze, `requester_context_missing` at invoke).
-   * The packet authorizes no built-in resolver family in v1 and forbids
-   * per-requester credential storage without a new security review; tests and
-   * the proof lane inject resolvers through the Gateway-owned constructor
-   * boundary, which plugins/skills/bodies/Mission Control cannot reach.
-   */
-  resolvers?: McpRequesterResolverRegistryInput;
-  /** Live MCP server records (config owner); re-read on every state check. */
-  listMcpServers(): Promise<McpServerRecord[]>;
-  /** Metadata discovery is restricted to the canonical workspace/Citadel scope. */
-  assertMcpServerInScope?(request: McpInvokeRequest): Promise<void>;
-  /** Durable frozen capability-profile record (server-owned storage read); undefined when missing. */
-  getChatTurnCapabilityProfile(profileId: string): Promise<ChatTurnCapabilityProfileRecord | undefined>;
-  /** Live auth-owner read for the authenticated actor (device/companion grant revocation). */
-  readAuthConnectionState(actor: {
-    actorId: string;
-    actorSource: McpRequesterScopeAuthActorSource;
-  }): Promise<{ revoked: boolean }>;
-  getNetworkAllowlist(): readonly string[];
-  /** Content-free diagnostics; receives ONLY fixed taxonomy reason codes, never endpoint/header/cause text. */
-  recordDevDiagnostic(input: {
-    level: "warn";
-    category: "mcp";
-    event: string;
-    message: string;
-    context?: Record<string, unknown>;
-  }): void;
-  now?(): number;
-}
-
-export interface McpRequesterScopedComposedRuntime {
-  revalidateRequesterTool(profile: ChatTurnCapabilityProfileRecord, canonicalName: string): Promise<void>;
-  discoverMcpRequesterCatalogs(
-    input: McpRequesterScopedCatalogDiscoveryHookInput,
-  ): Promise<McpNormalizedRequesterDiscoveryCatalog[]>;
-  resolveMcpRequesterCatalogBindings(
-    input: McpRequesterScopedCatalogFreezeHookInput,
-    options: { signal: AbortSignal },
-  ): Promise<McpRequesterResolutionBinding[] | undefined>;
-  /** Profile-freeze hook body for `ChatTurnCapabilityProfileResolveDeps.resolveMcpRequesterResolutionBinding`. */
-  resolveMcpRequesterResolutionBinding(
-    input: McpRequesterScopedProfileFreezeHookInput,
-  ): Promise<McpRequesterResolutionBinding | undefined>;
-  /** App-private coordinator port for `ToolInvocationCoordinatorHost.requesterScopedMcpDispatch`. */
-  requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort;
-  /**
-   * Secret-free operator-diagnostics read port (HX-415 operator-diagnostics
-   * tranche): exact-resolver registration posture plus the process-local
-   * last-outcome recorder. Read-only; restart drops every recorded outcome.
-   */
-  requesterScopeDiagnostics: McpRequesterScopeDiagnosticsReadPort;
-}
-
-function isMcpRequesterScopeActorSourceValue(value: unknown): value is McpRequesterScopeAuthActorSource {
-  return value === "token" || value === "basic" || value === "loopback" || value === "device" || value === "companion";
-}
-
-/**
- * Read the LIVE requester-scoped snapshot for one server id. Returns
- * `undefined` — which every 7c reader treats as fail-closed
- * (`server_not_callable`) or "static behavior wins" at the freeze entry — when
- * the server is missing, disabled, quarantined, not `requester_scoped`, or has
- * incomplete resolver configuration. A server flipped to static/disabled
- * mid-flight therefore reads as drift on the next `assertCurrent`.
- */
-async function readLiveRequesterScopedServerSnapshot(
-  host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
-  serverId: string,
-): Promise<McpRequesterScopedServerSnapshot | undefined> {
-  let record: McpServerRecord | undefined;
-  try {
-    record = (await host.listMcpServers()).find((candidate) => candidate.serverId === serverId);
-  } catch {
-    return undefined;
-  }
-  if (!record || !record.enabled || record.trustTier === "quarantined") {
-    return undefined;
-  }
-  try {
-    if (resolveMcpServerConnectionMode(record) !== "requester_scoped") {
-      return undefined;
-    }
-    if (
-      (record.transport !== "http" && record.transport !== "sse") ||
-      typeof record.configurationRevision !== "number" ||
-      !record.requesterResolution
-    ) {
-      return undefined;
-    }
-    return snapshotMcpRequesterScopedServerSnapshot({
-      serverId: record.serverId,
-      transport: record.transport,
-      connectionMode: "requester_scoped",
-      configurationRevision: record.configurationRevision,
-      requesterResolution: {
-        resolverId: record.requesterResolution.resolverId,
-        resolverVersion: record.requesterResolution.resolverVersion,
-        configGeneration: record.requesterResolution.configGeneration,
-        transportPolicy: {
-          allowedSchemes: [...record.requesterResolution.transportPolicy.allowedSchemes],
-          allowedHosts: [...record.requesterResolution.transportPolicy.allowedHosts],
-          allowedPorts: [...record.requesterResolution.transportPolicy.allowedPorts],
-          allowedHeaderNames: [...record.requesterResolution.transportPolicy.allowedHeaderNames],
-        },
-      },
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-type RequesterScopedServerMatch = { kind: "none" } | { kind: "ambiguous" } | { kind: "match"; serverId: string };
-
-/**
- * Derive the owning requester-scoped server for one canonical
- * `mcp.<serverId>.<toolName>` name by matching against ACTUAL live server ids
- * (never by string parsing alone, which would be ambiguous for ids containing
- * dots). No requester-scoped match ⇒ static behavior wins silently — static
- * MCP canonical names flow through the same hook. More than one match is
- * unresolvable and fails closed.
- */
-async function matchRequesterScopedServerByCanonicalToolName(
-  host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
-  canonicalToolName: string,
-): Promise<RequesterScopedServerMatch> {
-  if (!canonicalToolName.startsWith("mcp.")) {
-    return { kind: "none" };
-  }
-  let matches: McpServerRecord[];
-  try {
-    matches = (await host.listMcpServers()).filter((record) => {
-      try {
-        const prefix = `mcp.${record.serverId}.`;
-        return (
-          resolveMcpServerConnectionMode(record) === "requester_scoped" &&
-          canonicalToolName.startsWith(prefix) &&
-          canonicalToolName.length > prefix.length
-        );
-      } catch {
-        return false;
-      }
-    });
-  } catch {
-    return { kind: "none" };
-  }
-  if (matches.length === 0) {
-    return { kind: "none" };
-  }
-  const first = matches[0];
-  if (matches.length > 1 || !first) {
-    return { kind: "ambiguous" };
-  }
-  return { kind: "match", serverId: first.serverId };
-}
-
-/**
- * HX-415 slice 7d composition root: build the ONE process-wide requester-scoped
- * MCP runtime — fixed resolver registry (default EMPTY), resolution service,
- * discovery secret scanner, process-local discovery-outcome registry — and wire
- * the 7c freeze/invoke orchestrators with the runtime transport drivers
- * injected as port values. `GatewayService` instantiates this exactly once and
- * supplies the returned hook to the capability-profile deps and the returned
- * dispatch port to the tool-invocation coordinator host. Exported so the
- * composed E2E suite can drive the REAL composition against narrow fake hosts.
- */
-export function composeMcpRequesterScopedRuntime(
-  host: McpRequesterScopedCompositionHost,
-): McpRequesterScopedComposedRuntime {
-  const resolverInput = host.resolvers ?? { profileDiscovery: [], toolCall: [] };
-  const registry = new McpRequesterResolverRegistry(resolverInput);
-  const service = new McpRequesterResolutionService(registry, host.now ? { now: host.now } : undefined);
-  const scanner = createMcpRequesterDiscoverySecretScanner();
-  const outcomes = new McpProfileDiscoveryOutcomeRegistry();
-  // HX-415 operator diagnostics: non-secret resolver identity keys derived
-  // from the SAME input the fixed registry validated (construction above threw
-  // on any malformed entry), plus the bounded process-local last-outcome
-  // recorder. Both feed the read-only diagnostics port; neither can resolve.
-  // NUL-separated registration key: the registry has already asserted canonical
-  // resolver identifiers and semver versions (no whitespace or control
-  // characters), so the separator keeps the boundary unambiguous — the same
-  // convention as the discovery-outcome registry map key.
-  const resolverRegistrationKey = (ref: McpRequesterScopeResolverRegistrationRef): string => {
-    const separator = String.fromCharCode(0);
-    return `${ref.resolverId}${separator}${ref.resolverVersion}${separator}${ref.configGeneration}`;
-  };
-  const registeredResolverIds = (resolvers: ReadonlyArray<{ resolverId: string }>): ReadonlySet<string> =>
-    new Set(resolvers.map((resolver) => resolver.resolverId));
-  const registeredResolverKeys = (
-    resolvers: ReadonlyArray<{ resolverId: string; resolverVersion: string; configGeneration: number }>,
-  ): ReadonlySet<string> => new Set(resolvers.map((resolver) => resolverRegistrationKey(resolver)));
-  const profileDiscoveryResolverIds = registeredResolverIds(resolverInput.profileDiscovery);
-  const toolCallResolverIds = registeredResolverIds(resolverInput.toolCall);
-  const profileDiscoveryResolverKeys = registeredResolverKeys(resolverInput.profileDiscovery);
-  const toolCallResolverKeys = registeredResolverKeys(resolverInput.toolCall);
-  const lastOutcomes = new McpRequesterScopeLastOutcomeRecorder();
-  const recordLastOutcome = (serverId: string, outcomeClass: McpRequesterScopeLastOutcomeClass): void => {
-    try {
-      lastOutcomes.recordLastOutcome({ serverId, outcomeClass, atMs: host.now ? host.now() : Date.now() });
-    } catch {
-      // The recorder is best-effort operator diagnostics and never masks the
-      // fail-closed resolution result.
-    }
-  };
-  const requesterScopeDiagnostics: McpRequesterScopeDiagnosticsReadPort = {
-    resolveRegistrationPosture: (ref: McpRequesterScopeResolverRegistrationRef) => {
-      if (!profileDiscoveryResolverIds.has(ref.resolverId) || !toolCallResolverIds.has(ref.resolverId)) {
-        return "resolver_missing";
-      }
-      const key = resolverRegistrationKey(ref);
-      return profileDiscoveryResolverKeys.has(key) && toolCallResolverKeys.has(key)
-        ? "registered"
-        : "resolver_binding_drift";
-    },
-    loadLastOutcome: (serverId: string) => lastOutcomes.loadLastOutcome(serverId),
-  };
-  const reportDiagnostic = (event: string, reasonCode: string): void => {
-    try {
-      host.recordDevDiagnostic({
-        level: "warn",
-        category: "mcp",
-        event,
-        message: "Requester-scoped MCP resolution failed closed.",
-        context: { reasonCode },
-      });
-    } catch {
-      // Diagnostics are best-effort and never mask the fail-closed result.
-    }
-  };
-
-  const readProfileDiscoveryState = async (
-    hook: McpRequesterScopedCatalogDiscoveryHookInput,
-    serverId: string,
-  ): Promise<McpRequesterScopedFreezeCurrentState | undefined> => {
-    const server = await readLiveRequesterScopedServerSnapshot(host, serverId);
-    if (!server) {
-      return undefined;
-    }
-    // The freeze orchestrator's identity gate runs before any state read, so
-    // these narrows only defend against malformed hook input.
-    if (!hook.authActorId || !isMcpRequesterScopeActorSourceValue(hook.authActorSource)) {
-      return undefined;
-    }
-    await host.assertMcpServerInScope?.({
-      serverId,
-      toolName: "__profile_discovery__",
-      agentId: "assistant",
-      workspaceId: hook.workspaceId,
-      sessionId: hook.sessionId,
-    });
-    const auth = await host.readAuthConnectionState({
-      actorId: hook.authActorId,
-      actorSource: hook.authActorSource,
-    });
-    return {
-      revoked: auth.revoked,
-      actorId: hook.authActorId,
-      actorSource: hook.authActorSource,
-      workspaceId: hook.workspaceId,
-      sessionId: hook.sessionId,
-      turnId: hook.turnId,
-      futureProfileId: hook.profileId,
-      // Enumeration uses the base catalog. Binding freeze runs a fresh
-      // discovery against the final catalog and retains only that outcome.
-      baseCallableCatalogSha256: hook.callableCatalogSha256,
-      server,
-      ...MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
-      connectionGenerationCurrent: true,
-      rotationGenerationCurrent: true,
-    };
-  };
-
-  const discoverMcpRequesterCatalogs = async (
-    hook: McpRequesterScopedCatalogDiscoveryHookInput,
-  ): Promise<McpNormalizedRequesterDiscoveryCatalog[]> => {
-    if (!host.assertMcpServerInScope || !hook.authActorId || !isMcpRequesterScopeActorSourceValue(hook.authActorSource))
-      return [];
-    const ids: string[] = [];
-    for (const server of await host.listMcpServers()) {
-      try {
-        if (
-          resolveMcpServerConnectionMode(server) !== "requester_scoped" ||
-          !server.enabled ||
-          server.trustTier === "quarantined" ||
-          !server.requesterResolution
-        )
-          continue;
-        const posture = requesterScopeDiagnostics.resolveRegistrationPosture(server.requesterResolution);
-        if (posture !== "registered") {
-          recordLastOutcome(server.serverId, posture);
-          continue;
-        }
-        ids.push(server.serverId);
-      } catch {
-        reportDiagnostic("mcp.requester_resolution.catalog_failed", "server_not_callable");
-      }
-    }
-    const uniqueIds = [...new Set(ids)].sort();
-    if (uniqueIds.length > 16)
-      reportDiagnostic("mcp.requester_resolution.catalog_limited", "native_catalog_server_limit");
-    const controller = new AbortController();
-    const deadline = setTimeout(() => controller.abort(), 30_000);
-    deadline.unref();
-    const catalogs: McpNormalizedRequesterDiscoveryCatalog[] = [];
-    try {
-      // Bound both total work and concurrent connections. Every attempt keeps
-      // its own resolver deadline and is disposed by the discovery owner.
-      const selectedIds = uniqueIds.slice(0, 16);
-      for (let offset = 0; offset < selectedIds.length && !controller.signal.aborted; offset += 4) {
-        const batch = await Promise.all(
-          selectedIds.slice(offset, offset + 4).map(async (serverId) => {
-            const catalog = await discoverRequesterScopedCatalogForProfile({
-              hook,
-              service,
-              scanner,
-              networkAllowlist: [...host.getNetworkAllowlist()],
-              readCurrentState: () => readProfileDiscoveryState(hook, serverId),
-              discoverTools: discoverRequesterScopedMcpTools,
-              createAttemptId: () => randomUUID(),
-              signal: controller.signal,
-              onDiagnostic: (reasonCode) => {
-                reportDiagnostic("mcp.requester_resolution.catalog_failed", reasonCode);
-                recordLastOutcome(serverId, reasonCode);
-              },
-              ...(host.now ? { now: host.now } : {}),
-            });
-            if (catalog) recordLastOutcome(serverId, "resolved_ok");
-            return catalog;
-          }),
-        );
-        for (const catalog of batch) if (catalog) catalogs.push(catalog);
-      }
-    } finally {
-      clearTimeout(deadline);
-    }
-    return catalogs;
-  };
-
-  const resolveMcpRequesterCatalogBindings = async (
-    hook: McpRequesterScopedCatalogFreezeHookInput,
-    options: { signal: AbortSignal },
-  ): Promise<McpRequesterResolutionBinding[] | undefined> => {
-    if (!host.assertMcpServerInScope) return undefined;
-    const bindings = await resolveRequesterScopedCatalogBindingsForProfileFreeze({
-      hook,
-      service,
-      outcomes,
-      scanner,
-      signal: options.signal,
-      networkAllowlist: [...host.getNetworkAllowlist()],
-      readCurrentState: () => readProfileDiscoveryState(hook, hook.serverId),
-      discoverTools: discoverRequesterScopedMcpTools,
-      createAttemptId: () => randomUUID(),
-      onDiagnostic: (reasonCode) => {
-        reportDiagnostic("mcp.requester_resolution.freeze_failed", reasonCode);
-        recordLastOutcome(hook.serverId, reasonCode);
-      },
-      ...(host.now ? { now: host.now } : {}),
-    });
-    if (bindings) recordLastOutcome(hook.serverId, "resolved_ok");
-    return bindings;
-  };
-
-  const resolveMcpRequesterResolutionBinding = async (
-    hook: McpRequesterScopedProfileFreezeHookInput,
-  ): Promise<McpRequesterResolutionBinding | undefined> => {
-    const match = await matchRequesterScopedServerByCanonicalToolName(host, hook.canonicalToolName);
-    if (match.kind === "none") return undefined;
-    if (match.kind === "ambiguous") {
-      reportDiagnostic("mcp.requester_resolution.freeze_failed", "requester_context_ambiguous");
-      return undefined;
-    }
-    const serverId = match.serverId;
-    const binding = await resolveRequesterScopedBindingForProfileFreeze({
-      hook,
-      service,
-      outcomes,
-      scanner,
-      networkAllowlist: [...host.getNetworkAllowlist()],
-      readCurrentState: () => readProfileDiscoveryState(hook, serverId),
-      discoverTools: discoverRequesterScopedMcpTools,
-      createAttemptId: () => randomUUID(),
-      onDiagnostic: (reasonCode) => {
-        reportDiagnostic("mcp.requester_resolution.freeze_failed", reasonCode);
-        // Operator diagnostics: the taxonomy code is the ONLY failure content
-        // that leaves the orchestrator; record it per exact server.
-        recordLastOutcome(serverId, reasonCode);
-      },
-      ...(host.now ? { now: host.now } : {}),
-    });
-    if (binding) recordLastOutcome(serverId, "resolved_ok");
-    return binding;
-  };
-
-  const revalidateRequesterTool = async (
-    profile: ChatTurnCapabilityProfileRecord,
-    canonicalName: string,
-  ): Promise<void> => {
-    const fail: () => never = () => {
-      throw new Error("Requester-scoped MCP capability is no longer current");
-    };
-    if (!host.assertMcpServerInScope) fail();
-    const stored = await host.getChatTurnCapabilityProfile(profile.profileId);
-    if (
-      !stored ||
-      stored.hashes.profileHash !== profile.hashes.profileHash ||
-      canonicalJsonString(stored.identity) !== canonicalJsonString(profile.identity)
-    )
-      fail();
-    const selected = stored.selection.tools.filter((tool) => tool.canonicalName === canonicalName);
-    const binding = selected.length === 1 ? selected[0]?.mcpRequesterResolution : undefined;
-    if (!binding) fail();
-    assertMcpRequesterResolutionBindingIntegrity(binding);
-    if (
-      binding.toolName !== canonicalName ||
-      binding.callableCatalogSnapshotId !== profile.catalog.snapshotId ||
-      binding.callableCatalogSha256 !== profile.catalog.callableHash
-    )
-      fail();
-    const current = await readProfileDiscoveryState(
-      {
-        profileId: stored.profileId,
-        turnId: stored.identity.turnId,
-        sessionId: stored.identity.sessionId,
-        workspaceId: stored.identity.workspaceId,
-        authActorId: stored.identity.authActorId,
-        authActorSource: stored.identity.authActorSource,
-        requesterScopeSha256: binding.requesterScopeSha256,
-        catalogSnapshotId: stored.catalog.snapshotId,
-        callableCatalogSha256: stored.catalog.callableHash,
-      },
-      binding.serverId,
-    );
-    if (
-      !current ||
-      current.revoked ||
-      requesterScopeDiagnostics.resolveRegistrationPosture(current.server.requesterResolution) !== "registered"
-    )
-      fail();
-    assertMcpRequesterBindingServerCurrent(binding, current.server);
-  };
-
-  const recoveringOutcomes = new Map<string, Promise<McpRequesterResolutionReasonCode | undefined>>();
-  const recoverDiscoveryOutcome = async (
-    input: RequesterScopedMcpDispatchInput,
-    context: NonNullable<ReturnType<typeof readMcpRequesterScopedTurnContext>>,
-    canonicalName: string,
-  ): Promise<McpRequesterResolutionReasonCode | undefined> => {
-    const key = `${context.profileId}\u0000${context.finalProfileSha256}\u0000${canonicalName}`;
-    const pending = recoveringOutcomes.get(key);
-    if (pending) return pending;
-    const recovery = (async (): Promise<McpRequesterResolutionReasonCode | undefined> => {
-      try {
-        const profile = await host.getChatTurnCapabilityProfile(context.profileId);
-        const rebuilt =
-          profile &&
-          readMcpRequesterScopedTurnContext(buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile));
-        if (!profile || !rebuilt || canonicalJsonString(rebuilt) !== canonicalJsonString(context))
-          return "requester_context_missing";
-        const selected = profile.selection?.tools?.find((tool) => tool.canonicalName === canonicalName);
-        const binding = selected?.mcpRequesterResolution;
-        if (!binding || !selected?.modelName || binding.serverId !== input.server.serverId)
-          return "requester_context_missing";
-        await revalidateRequesterTool(profile, canonicalName);
-        const hook: McpRequesterScopedProfileFreezeHookInput = {
-          profileId: profile.profileId,
-          turnId: profile.identity.turnId,
-          sessionId: profile.identity.sessionId,
-          workspaceId: profile.identity.workspaceId,
-          authActorId: profile.identity.authActorId,
-          authActorSource: profile.identity.authActorSource,
-          catalogSnapshotId: profile.catalog.snapshotId,
-          callableCatalogSha256: profile.catalog.callableHash,
-          requesterScopeSha256: binding.requesterScopeSha256,
-          canonicalToolName: canonicalName,
-          modelToolName: selected.modelName,
-          expectedBindingSha256: binding.bindingSha256,
-          expectedProviderAlias: selected.modelName,
-        };
-        let failure: McpRequesterResolutionReasonCode = "requester_context_missing";
-        const restored = await resolveRequesterScopedBindingForProfileFreeze({
-          hook,
-          service,
-          outcomes,
-          scanner,
-          signal: input.signal,
-          networkAllowlist: [...host.getNetworkAllowlist()],
-          readCurrentState: async () => {
-            const stored = await host.getChatTurnCapabilityProfile(context.profileId);
-            if (!stored || stored.hashes.profileHash !== context.finalProfileSha256) return undefined;
-            const state = await readProfileDiscoveryState(hook, binding.serverId);
-            if (state) assertMcpRequesterBindingServerCurrent(binding, state.server);
-            return state;
-          },
-          discoverTools: discoverRequesterScopedMcpTools,
-          createAttemptId: () => randomUUID(),
-          onDiagnostic: (reasonCode) => {
-            failure = reasonCode;
-            reportDiagnostic("mcp.requester_resolution.recovery_failed", reasonCode);
-            recordLastOutcome(binding.serverId, reasonCode);
-          },
-          ...(host.now ? { now: host.now } : {}),
-        });
-        return restored ? undefined : failure;
-      } catch (error) {
-        // No transport detail or credential-bearing cause escapes recovery.
-        const reasonCode = error instanceof McpRequesterResolutionError ? error.code : "capability_profile_invalid";
-        reportDiagnostic("mcp.requester_resolution.recovery_failed", reasonCode);
-        return reasonCode;
-      }
-    })();
-    recoveringOutcomes.set(key, recovery);
-    try {
-      return await recovery;
-    } finally {
-      recoveringOutcomes.delete(key);
-    }
-  };
-
-  const requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort = {
-    invoke: async (input: RequesterScopedMcpDispatchInput, options: { effectDispatch: () => Promise<void> }) => {
-      // Brand-assert the server-built turn context. A missing value (callers
-      // without a canonical Chat profile) or a forged plain
-      // object copied from any request DTO fails closed BEFORE any registry,
-      // profile, or resolver read — and before the effect fence can be touched.
-      const context = readMcpRequesterScopedTurnContext(input.mcpRequesterTurnContext);
-      if (!context) {
-        reportDiagnostic("mcp.requester_resolution.dispatch_failed", "requester_context_missing");
-        recordLastOutcome(input.server.serverId, "requester_context_missing");
-        return buildRequesterScopedPreDispatchFailure(input.toolName, "requester_context_missing");
-      }
-      const serverId = input.server.serverId;
-      const canonicalToolName = `mcp.${serverId}.${input.toolName}`;
-      if (!outcomes.loadProfileDiscoveryOutcome({ profileId: context.profileId, serverId, canonicalToolName })) {
-        const recoveryFailure = await recoverDiscoveryOutcome(input, context, canonicalToolName);
-        if (recoveryFailure) {
-          recordLastOutcome(serverId, recoveryFailure);
-          return buildRequesterScopedPreDispatchFailure(input.toolName, recoveryFailure);
-        }
-      }
-      const readCurrentState = async (): Promise<McpRequesterScopedToolCallCurrentState | undefined> => {
-        const server = await readLiveRequesterScopedServerSnapshot(host, serverId);
-        if (!server) {
-          return undefined;
-        }
-        // The DURABLE frozen profile record is the live owner for turn
-        // identity and profile hashes: re-read it from server-owned storage on
-        // every check so a deleted or replaced profile reads as drift.
-        const profile = await host.getChatTurnCapabilityProfile(context.profileId);
-        if (!profile) {
-          return undefined;
-        }
-        const identity = profile.identity;
-        if (!identity.authActorId || !isMcpRequesterScopeActorSourceValue(identity.authActorSource)) {
-          return undefined;
-        }
-        const auth = await host.readAuthConnectionState({
-          actorId: identity.authActorId,
-          actorSource: identity.authActorSource,
-        });
-        return {
-          revoked: auth.revoked,
-          actorId: identity.authActorId,
-          actorSource: identity.authActorSource,
-          workspaceId: identity.workspaceId,
-          sessionId: identity.sessionId,
-          turnId: identity.turnId,
-          finalProfileId: profile.profileId,
-          finalProfileSha256: profile.hashes.profileHash,
-          baseCallableCatalogSha256: profile.catalog.callableHash,
-          finalCallableCatalogSha256: profile.catalog.callableHash,
-          server,
-          ...MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
-          connectionGenerationCurrent: true,
-          rotationGenerationCurrent: true,
-        };
-      };
-      const result = await dispatchRequesterScopedToolCall({
-        context,
-        serverId,
-        // Canonical name convention pinned by extractMcpRequesterDiscoveryOutputInput.
-        canonicalToolName,
-        toolName: input.toolName,
-        ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-        effectDispatch: options.effectDispatch,
-        service,
-        outcomes,
-        scanner,
-        networkAllowlist: [...host.getNetworkAllowlist()],
-        invokeToolCall: invokeRequesterScopedMcpToolCall,
-        readCurrentState,
-        createAttemptId: () => randomUUID(),
-        ...(host.now ? { now: host.now } : {}),
-      });
-      // Operator diagnostics: derive the last-outcome class from the result's
-      // fixed taxonomy code and ok/failurePhase booleans only — the result is
-      // already content-free by the orchestrator/runtime contract.
-      recordLastOutcome(serverId, deriveMcpRequesterScopeOutcomeClassFromInvocationResult(result));
-      return result;
-    },
-  };
-
-  return {
-    revalidateRequesterTool,
-    discoverMcpRequesterCatalogs,
-    resolveMcpRequesterCatalogBindings,
-    resolveMcpRequesterResolutionBinding,
-    requesterScopedMcpDispatch,
-    requesterScopeDiagnostics,
-  };
-}
-
 export class GatewayService {
   public config: GatewayRuntimeConfig;
   public readonly storage: Storage;
@@ -1667,6 +987,7 @@ export class GatewayService {
   private readonly durableOperatorService: DurableOperatorService;
   private readonly skillStateService: SkillStateService;
   private readonly mcpServerStore: McpServerStore;
+  private readonly mcpAdministration: mcpServerAdminService.McpServerAdminHost;
   private readonly mcpStdioSessions = new McpStdioSessionPool<StdioClient>();
   private readonly durableWorkflowRegistry: durableExecutionService.DurableWorkflowExecutorRegistry;
   public readonly hooksService: HooksService;
@@ -2766,6 +2087,7 @@ export class GatewayService {
     });
     this.approvalRuntime = new ApprovalRuntimeService({
       storage: this.storage,
+      readNativeRuntimeReview: (approval) => this.remoteWorkerExecutionOwnersCache?.nativeRuntimeRequests.readReview(approval),
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
       approvalWaitRunService: this.approvalWaitRunService,
@@ -3396,8 +2718,17 @@ export class GatewayService {
         publishRealtime: async (eventType, source, payload) => await this.publishRealtime(eventType, source, payload),
       },
     );
-    this.mcpServerStore = new McpServerStore({ systemSettings: this.storage.systemSettings,
+    this.mcpServerStore = new McpServerStore({ systemSettings: this.storage.systemSettings, approvalInbox: this.storage.approvalInbox,
       runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback) });
+    this.mcpAdministration = composeMcpAdministration(this.mcpServerStore, {
+      storage: { approvalInbox: this.storage.approvalInbox },
+      captureMcpServerSessionCloser: (serverId) => this.mcpStdioSessions.captureServerCloser(serverId),
+      prepareMcpStaticEnvironment: (server) => this.prepareMcpStaticEnvironment(server),
+      resolveMcpOAuthClientId: (server) => this.resolveMcpOAuthClientId(server),
+      resolveConnectedMcpTools: (server, existing) => this.resolveConnectedMcpTools(server, existing),
+      exchangeMcpOAuthCode: (server, code, state) => this.mcpOAuth.exchangeAuthorizationCode(server, code, state),
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+    });
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
       durableExecutionService.buildDurableWorkflowExecutors({
         memoryMaintenance: {
@@ -3579,14 +2910,14 @@ export class GatewayService {
         readMcpTools: () => this.readMcpTools(),
         createMcpServer: (input, serverId, planId) =>
           this.storage.runImmediateTransaction(() =>
-            mcpServerAdminService.createMcpServer(this, input, serverId, planId),
+            mcpServerAdminService.createMcpServer(this.mcpAdministration, input, serverId, planId),
           ),
         enableMcpServer: (serverId, planId) =>
           this.storage.runImmediateTransaction(() =>
-            mcpServerAdminService.updateMcpServer(this, serverId, { enabled: true }, { planId, phase: "apply" }),
+            mcpServerAdminService.updateMcpServer(this.mcpAdministration, serverId, { enabled: true }, { planId, phase: "apply" }),
           ),
-        compensateMcp: (input) => this.storage.runImmediateTransaction(() => compensatePackMcpServer(this, input)),
-        connectMcpServer: (serverId) => this.connectMcpServer(serverId),
+        compensateMcp: (input) => this.storage.runImmediateTransaction(() => compensatePackMcpServer(this.mcpAdministration, input)),
+        connectMcpServer: (serverId) => mcpServerAdminService.connectMcpServer(this.mcpAdministration, serverId),
         readFeatures: async () => ({ ...(await this.getSettings()).features }),
         readSettingsSnapshot: async () => {
           const settings = await this.getSettings();
@@ -3834,6 +3165,7 @@ export class GatewayService {
 
   private buildRouteCompositionPort() {
     return createGatewayRouteCompositionPort(this, {
+      mcpAdministration: this.mcpAdministration,
       addonsService: this.addonsService,
       addonSlotService: this.addonSlotService,
       approvalRuntime: this.approvalRuntime,
@@ -4378,20 +3710,21 @@ export class GatewayService {
     this.devDiagnostics.setLogger(logger as never);
   }
 
-  private async stageMcpCredentialVersions(serverId: string, refs: readonly string[], write: (custodyId?: string) => undefined): Promise<void> {
+  private async stageMcpCredentialVersions(serverId: string, refs: readonly string[], write: (custodyId?: string, writeId?: string) => undefined): Promise<void> {
     const custodyId = this.secretStore.getCredentialCustodyId();
-    await this.mcpServerStore.stageCredentialVersions(serverId, refs, () => write(custodyId), custodyId ?? null);
+    await this.mcpServerStore.stageCredentialVersions(serverId, refs, (writeId) => write(custodyId, writeId), custodyId ?? null);
   }
 
   private async reconcileMcpRetiredCredentials(): Promise<void> {
     try {
-      const staged = await this.mcpServerStore.reconcileCredentialStaging();
+      const staged = await this.mcpServerStore.reconcileCredentialStaging(32, (account, custodyId, writeId) =>
+        this.secretStore.hasCredentialWriteReceipt(account, custodyId, writeId));
       if (staged.writing || staged.blocked || staged.failed || staged.remaining)
         log.warn("MCP credential staging has retained reconciliation work.", { ...staged });
     } catch { log.warn("MCP credential staging requires reconciliation."); }
     try {
-      const result = await this.mcpServerStore.reconcileCredentialRetirements((account, custodyId) =>
-        this.secretStore.deleteSecretForCustody(account, custodyId));
+      const result = await this.mcpServerStore.reconcileCredentialRetirements((account, custodyId, writeId) =>
+        this.secretStore.deleteSecretForCustody(account, custodyId, writeId));
       if (result.blocked || result.failed || result.remaining)
         log.warn("MCP credential retirement has retained cleanup work.", { ...result });
     } catch {
@@ -6774,6 +6107,9 @@ export class GatewayService {
   ): Promise<chatCommandService.ChatCommandResult> {
     return chatCommandService.parseChatCommand(
       createChatCommandDependencies(this, {
+        createMcpServer: (input) => mcpServerAdminService.createMcpServer(this.mcpAdministration, input),
+        connectMcpServer: (serverId) => mcpServerAdminService.connectMcpServer(this.mcpAdministration, serverId),
+        disconnectMcpServer: (serverId) => mcpServerAdminService.disconnectMcpServer(this.mcpAdministration, serverId),
         createChatChangePlan: (targetSessionId, input) =>
           this.chatChangePlanCompatibilityService.create(targetSessionId, input),
         getSettings: async () => await this.getSettings(),
@@ -7208,23 +6544,11 @@ export class GatewayService {
   }
 
   private async verifyTemporaryProviderSecret(planId: string, providerId: string): Promise<readonly string[]> {
-    const secret = this.providerSecretStaging.read(providerTemporarySecretAccount(planId, providerId));
-    if (!secret?.trim()) throw new ValidationError({ message: "Temporary provider credential is unavailable." });
-    const provider = this.llmService
-      .exportConfigFile()
-      .providers.find((candidate) => candidate.providerId === providerId);
-    if (!provider) throw new NotFoundError({ entity: "LLM provider", id: providerId });
-    const preview = await this.llmService.previewModels({
-      providerId,
-      baseUrl: provider.baseUrl,
-      apiStyle: provider.apiStyle,
-      apiKey: secret,
-      ...(provider.request ? { request: provider.request } : {}),
-    });
-    if (preview.source !== "live" || preview.items.length === 0) {
-      throw new ValidationError({ message: `Unable to verify ${providerId} against its live model catalog.` });
-    }
-    return [`provider:${providerId}:temporary_credential_validated`];
+    return verifyTemporaryProviderCredential({
+      readSecret: () => this.providerSecretStaging.read(providerTemporarySecretAccount(planId, providerId)),
+      exportConfigFile: () => this.llmService.exportConfigFile(),
+      previewModels: (input) => this.llmService.previewModels(input),
+    }, providerId);
   }
 
   private async promoteTemporaryProviderSecret(
@@ -9318,10 +8642,18 @@ export class GatewayService {
     return this.toolInvocationCoordinator.invokeTool(request, options);
   }
 
+  private remoteWorkerExecutionOwnersCache?: ReturnType<typeof createRemoteWorkerExecutionOwners>;
+
   public createRemoteWorkerExecutionOwners() {
-    return createRemoteWorkerExecutionOwners({
+    return this.remoteWorkerExecutionOwnersCache ??= createRemoteWorkerExecutionOwners({
       ...this.remoteWorkerChatAuthorityDependencies(),
       storage: this.storage,
+      approvals: { createApproval: (input, onCreated, authority) => this.createApproval(input, onCreated, authority) },
+      nativeRuntimePolicy: createRemoteWorkerNativeRuntimePolicy({ ...this.remoteWorkerChatAuthorityDependencies(), storage: this.storage },
+        input => this.evaluateToolAccess(input), (request, input) => this.policyEngine.admitNativeRuntime(request, input),
+        (request, input) => this.policyEngine.inspectNativeRuntime(request, input)),
+      nativeInstallationPolicy: createRemoteWorkerInstallationPolicy({ ...this.remoteWorkerChatAuthorityDependencies(), storage: this.storage },
+        request => this.policyEngine.inspectNativeInstallation(request)),
       llm: this.llmService,
       completionHost: this,
       coordinator: this.toolInvocationCoordinator,
@@ -9334,12 +8666,6 @@ export class GatewayService {
       dispatchOwnerId: `remote-worker:${this.config.assistant.mesh.nodeId}:${randomUUID()}`,
       artifactRoot: path.resolve(this.config.rootDir, this.config.assistant.dataDir, "remote-worker-cas"),
     });
-  }
-
-  public async scheduleRemoteWorkerChatOffer(claim: RemoteWorkerChatDispatchClaim, registryWorkspaceId: string) {
-    return await new RemoteWorkerChatOfferService(this.remoteWorkerChatOfferDependencies(registryWorkspaceId)).schedule(
-      claim,
-    );
   }
 
   private remoteWorkerChatOfferDependencies(registryWorkspaceId: string): RemoteWorkerChatOfferDependencies {
@@ -9392,98 +8718,15 @@ export class GatewayService {
     };
   }
 
-  /** Internal native continuation. Its function-valued fence is created by the
-   * worker effect owner and is never accepted from a route or model request. */
+  /** Internal native continuation; the effect owner supplies its execution fence. */
   private async executeApprovedRemoteWorkerAction(input: RemoteWorkerApprovedActionInput): Promise<ToolInvokeResult> {
-    await input.checkExecution();
-    const request = toToolInvokeRequest(input.pending.request, input.signal);
-    const builtin = await this.toolInvocationCoordinator.prepareApprovedBuiltinBeforeExecute(request, {
-      invocationId: `approved-worker:${input.approvalId}`,
-      signal: input.signal,
-      runtimeOwner: input.runtimeOwner,
-    });
-    return await executeApprovedExternalRuntimePendingActionWithPort(
-      {
-        storage: this.storage,
-        resolveNativeMcpChatToolBinding: async (request) => {
-          await input.checkExecution();
-          return await resolveNativeMcpChatToolBinding(this.storage, request, input.mcpRequesterTurnContext);
-        },
-        resolveMeshChatToolBinding: async (request) => {
-          await input.checkExecution();
-          return await resolveMeshChatToolBinding({ storage: this.storage, activations: this.meshCapabilityActivationService },
-            request, input.meshTurnContext);
-        },
-        invokeApprovedMeshRuntime: async (request, policyResult, approvalId, markStarted) => {
-          await input.checkExecution();
-          return await this.toolInvocationCoordinator.invokeApprovedMeshRuntime(request, policyResult, {
-            meshTurnContext: input.meshTurnContext, approvalId, executionFence: input.checkExecution,
-            markExternalCallStarted: async () => {
-              await input.checkExecution();
-              await markStarted();
-            },
-          });
-        },
-        executeApprovedAction: async (id, signal, options) => {
-          await input.checkExecution();
-          return await this.policyEngine.executeApprovedAction(id, signal, {
-            ...options,
-            ...("externalSideEffect" in options
-              ? {
-                  externalSideEffect: {
-                    markStarted: async () => {
-                      await input.checkExecution();
-                      await options.externalSideEffect.markStarted();
-                    },
-                    markNotRequired: () => options.externalSideEffect.markNotRequired(),
-                  },
-                }
-              : {}),
-            beforeExecute: async (boundary) => {
-              await input.checkExecution();
-              await builtin?.(boundary);
-              await input.checkExecution();
-              // An approval-sensitive builtin read also has an unknown frozen
-              // effect bound. Retain its actual execution boundary before entry;
-              // a successful result alone cannot supply this receipt afterward.
-              if (input.effectPotential === "unknown" && "externalSideEffect" in options)
-                await options.externalSideEffect.markStarted();
-            },
-          });
-        },
-        enrichMcpInvokePolicyContext: async (mcp) => await this.enrichMcpInvokePolicyContext(mcp),
-        invokeApprovedMcpRuntime: async (mcp, markStarted, options) => {
-          await input.checkExecution();
-          return await this.toolInvocationCoordinator.invokeApprovedMcpRuntime(
-            mcp,
-            async () => {
-              await input.checkExecution();
-              await markStarted?.();
-            },
-            {
-              ...options,
-              mcpRequesterTurnContext: input.mcpRequesterTurnContext,
-              executionFence: input.checkExecution,
-              ...(isNativeMcpToolName(request.toolName) ? { nativeCanonicalToolName: request.toolName } : {}),
-            },
-          );
-        },
-        invokeApprovedExternalRuntimeTool: async (tool, markStarted, options) => {
-          await input.checkExecution();
-          return await this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(
-            tool,
-            async () => {
-              await input.checkExecution();
-              await markStarted?.();
-            },
-            { ...options, runtimeOwner: input.runtimeOwner },
-          );
-        },
-      },
-      input.approvalId,
-      input.pending,
-      input.signal,
-    );
+    return executeApprovedRemoteWorkerAction({
+      storage: this.storage,
+      activations: this.meshCapabilityActivationService,
+      coordinator: this.toolInvocationCoordinator,
+      policyEngine: this.policyEngine,
+      enrichMcpInvokePolicyContext: (request) => this.enrichMcpInvokePolicyContext(request),
+    }, input);
   }
 
   private async executeApprovedPendingAction(
@@ -11652,22 +10895,6 @@ export class GatewayService {
     }));
   }
 
-  public async createMcpServer(input: McpServerCreateInput): Promise<McpServerRecord> {
-    return await mcpServerAdminService.createMcpServer(this, input);
-  }
-
-  public async connectMcpServer(serverId: string): Promise<McpServerRecord> {
-    return mcpServerAdminService.connectMcpServer(this, serverId);
-  }
-
-  public async disconnectMcpServer(serverId: string): Promise<McpServerRecord> {
-    return await mcpServerAdminService.disconnectMcpServer(this, serverId);
-  }
-
-  public closeMcpServerSessions(serverId: string): void {
-    this.mcpStdioSessions.closeServer(serverId);
-  }
-
   public async listMcpTools(serverId: string): Promise<McpToolRecord[]> {
     await this.requireMcpServer(serverId);
     return (await this.readMcpTools())
@@ -12555,10 +11782,6 @@ export class GatewayService {
     return await this.mcpServerStore.readServers();
   }
 
-  /** @internal */ public async writeMcpServers(servers: McpServerRecord[], expectedServers: McpServerRecord[]): Promise<void> {
-    await this.mcpServerStore.writeServers(servers, expectedServers);
-  }
-
   /** @internal */ public async requireMcpServer(serverId: string): Promise<McpServerRecord> {
     return await this.mcpServerStore.requireServer(serverId);
   }
@@ -12593,13 +11816,6 @@ export class GatewayService {
     return key ? environment[key]?.trim() || undefined : undefined;
   }
 
-  /** @internal */ public async patchMcpServerState(
-    serverId: string,
-    patch: Partial<Pick<McpServerRecord, "status" | "lastConnectedAt" | "lastError">>,
-  ): Promise<McpServerRecord> {
-    return await this.mcpServerStore.patchServerState(serverId, patch);
-  }
-
   /** @internal */ public async resolveConnectedMcpTools(
     server: McpServerRecord,
     existingTools: McpToolRecord[],
@@ -12620,18 +11836,6 @@ export class GatewayService {
 
   /** @internal */ public async readMcpTools(): Promise<McpToolRecord[]> {
     return await this.mcpServerStore.readTools();
-  }
-
-  /** @internal */ public async writeMcpTools(tools: McpToolRecord[]): Promise<void> {
-    await this.mcpServerStore.writeTools(tools);
-  }
-
-  /** @internal */ public async readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>> {
-    return await this.mcpServerStore.readAuthState();
-  }
-
-  /** @internal */ public async writeMcpAuthState(update: mcpServerAdminService.McpAuthStateUpdate): Promise<void> {
-    await this.mcpServerStore.writeAuthState(update);
   }
 
   private async isMcpToolApproved(serverId: string, toolName: string): Promise<boolean> {
@@ -13725,18 +12929,6 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord | undefi
     parts: chatMessageHistoryService.parseMessageParts(message.parts),
     attachments: chatMessageHistoryService.parseMessageAttachments(message.attachments),
   };
-}
-
-interface McpAuthStateRecord {
-  accessTokenRef?: string;
-  refreshTokenRef?: string;
-  tokenExpiresAt?: string;
-  oauthState?: string;
-  scopes?: string[];
-  updatedAt: string;
-  lastRefreshedAt?: string;
-  error?: string;
-  lastCodePreview?: string;
 }
 
 function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean): number {

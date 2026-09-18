@@ -38,6 +38,9 @@ export class RemoteWorkerInferenceLlmServiceAdapter {
   public async dispatch(request: RemoteWorkerInferenceDispatchRequest): Promise<RemoteWorkerInferenceDispatchOutcome> {
     const { operationId, dispatchGeneration } = request.attribution;
     if (!operationId || !dispatchGeneration) throw new Error("Worker inference requires canonical dispatch identity.");
+    const outputTokenCap = request.reasoningTokenCeiling > 0
+      ? Math.min(request.effectiveOutputTokenCap, request.reasoningTokenCeiling)
+      : request.effectiveOutputTokenCap;
     const reservation = await this.dependencies.budgets.getReservationForOperation(operationId, dispatchGeneration);
     if (!reservation) throw new Error("Worker inference has no budget reservation.");
     let output: string | undefined;
@@ -61,11 +64,10 @@ export class RemoteWorkerInferenceLlmServiceAdapter {
               function: { name: call.modelToolName, arguments: call.argumentsJson },
             })) } : {}),
           })),
-          max_tokens:
-            request.reasoningTokenCeiling > 0
-              ? Math.min(request.effectiveOutputTokenCap, request.reasoningTokenCeiling)
-              : request.effectiveOutputTokenCap,
-          temperature: request.temperatureMilli / 1000,
+          max_tokens: outputTokenCap,
+          // Reasoning requests use provider-default sampling; several reasoning
+          // transports reject temperature even when its value is zero.
+          ...(request.reasoningTokenCeiling === 0 ? { temperature: request.temperatureMilli / 1000 } : {}),
           reasoning: { effort: request.reasoningTokenCeiling === 0 ? "none" : "low" },
           // A provider without a separate numeric reasoning limit gets a total-output ceiling
           // no larger than the reasoning allowance. Zero allowance explicitly disables it.
@@ -92,7 +94,7 @@ export class RemoteWorkerInferenceLlmServiceAdapter {
             canonicalJsonString(attempt.route) !== canonicalJsonString(request.resolution) ||
             attempt.transportAttemptIndex >= REMOTE_WORKER_BUDGET_MAX_ATTEMPTS ||
             attempt.effectiveOutputTokenCap === undefined ||
-            attempt.effectiveOutputTokenCap > request.effectiveOutputTokenCap ||
+            attempt.effectiveOutputTokenCap > outputTokenCap ||
             (request.reasoningTokenCeiling === 0 && attempt.attribution.dispatchedReasoningEffort !== "none") ||
             attempt.attribution.operationId !== operationId ||
             attempt.attribution.dispatchGeneration !== dispatchGeneration

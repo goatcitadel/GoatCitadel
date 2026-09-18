@@ -91,6 +91,22 @@ describe("remote worker admission production composition", () => {
     expect(handler).toBeTypeOf("function");
   });
 
+  it("withholds the entire handler when optional mesh capability preflight fails", async () => {
+    const failure = new Error("mesh capability owner unavailable");
+    const execute = vi.fn();
+    await expect(createGatewayRemoteWorkerAdmissionNativeRequestHandler({
+      config: enabledConfig(),
+      admissionStore: unusedAdmissionStore() as never,
+      meshNodeAdmissionStore: unusedMeshAdmissionStore(),
+      assignmentProtocol: unusedAssignmentProtocol(),
+      assignmentDispatch: unusedAssignmentDispatch(),
+      assignmentExecution: unusedAssignmentExecution(),
+      meshCapabilities: { assertAvailable: async () => { throw failure; }, execute },
+      createEvidenceVerifier: () => ({ assertAvailable: async () => undefined, verify: vi.fn() }),
+    })).rejects.toBe(failure);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("propagates an execution owner preflight failure instead of exposing a live handler", async () => {
     const preflightError = new Error("execution owner unavailable");
     await expect(

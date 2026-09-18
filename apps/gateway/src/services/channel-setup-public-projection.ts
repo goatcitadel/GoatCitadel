@@ -15,7 +15,7 @@ export function projectChannelSetupDraftForPublicResponse(draft: ChannelSetupDra
   const publicSecretState = Object.fromEntries(
     Object.entries(draft.secretState ?? {}).map(([fieldKey, state]) => {
       if (state.configured) publicDraft[fieldKey] = SECRET_REDACTION_MARKER;
-      return [fieldKey, { configured: state.configured, custody: state.custody }];
+      return [fieldKey, { configured: state.configured, custody: state.custody, ...(state.source ? { source: state.source } : {}) }];
     }),
   );
   return { ...projected, draft: publicDraft, secretState: publicSecretState };

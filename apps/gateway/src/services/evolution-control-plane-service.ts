@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { settleRefusedChangePlanApproval } from "./evolution-control-plane-approval-reconciliation.js";
+import { reconcileChangePlanApproval, reconcileAwaitingChangePlanApproval, settleRefusedChangePlanApproval } from "./evolution-control-plane-approval-reconciliation.js";
 import {
   ConflictError,
   NotFoundError,
@@ -498,20 +498,7 @@ export class EvolutionControlPlaneService {
   /** Durable approval signal delivery; rejection never invokes a mutation adapter. */
   public async reconcileApproval(approvalId: string): Promise<number> {
     const id = requireIdentifier(approvalId, "approvalId");
-    if (!this.deps.getApprovalDisposition) throw new ServiceUnavailableError("The canonical approval owner is unavailable.");
-    const disposition = await this.deps.getApprovalDisposition(id);
-    if (disposition !== "denied" && disposition !== "expired") return 0;
-    if (!this.deps.repository.listAwaitingApproval) throw new ServiceUnavailableError("The Change Plan approval lookup is unavailable.");
-    const plans = await this.deps.repository.listAwaitingApproval(id, 100);
-    for (const plan of plans) {
-      if (plan.status !== "awaiting_approval" || plan.requiredAction?.kind !== "approval" || plan.requiredAction.approvalId !== id)
-        throw new ConflictError({ message: "The current Change Plan approval binding is inconsistent." });
-      await this.settleRefusedApproval(plan, disposition, "gateway-approval-resolution");
-    }
-    // The durable signal retries a full batch instead of silently losing waits
-    // beyond the bounded read. Already committed transitions are not repeated.
-    if (plans.length === 100) throw new ServiceUnavailableError("Another Change Plan approval reconciliation batch is required.");
-    return plans.length;
+    return reconcileChangePlanApproval(this.deps, id, (plan, disposition, actorId) => this.settleRefusedApproval(plan, disposition, actorId));
   }
 
   /**
@@ -726,13 +713,11 @@ export class EvolutionControlPlaneService {
   }
 
   private async reconcileAwaitingApproval(plan: ChangePlanRecord, actorId: string): Promise<ChangePlanRecord> {
-    if (plan.requiredAction?.kind !== "approval" || !plan.requiredAction.approvalId || !this.deps.getApprovalDisposition) return plan;
-    const disposition = await this.deps.getApprovalDisposition(plan.requiredAction.approvalId);
-    return disposition === "denied" || disposition === "expired" ? this.settleRefusedApproval(plan, disposition, actorId) : plan;
+    return reconcileAwaitingChangePlanApproval(this.deps, plan, actorId, (waiting, disposition, actor) => this.settleRefusedApproval(waiting, disposition, actor));
   }
 
   private async settleRefusedApproval(plan: ChangePlanRecord, disposition: "denied" | "expired", actorId: string): Promise<ChangePlanRecord> {
-    return settleRefusedChangePlanApproval(this.deps.repository, (event, settled) => this.signal(event, settled), plan, disposition, actorId, async () => {
+    return settleRefusedChangePlanApproval(this.deps, (event, settled) => this.signal(event, settled), plan, disposition, actorId, async () => {
       await this.requireMatchingAdapter(plan).discard?.(this.context(plan.origin), plan);
     });
   }

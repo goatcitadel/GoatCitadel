@@ -10,7 +10,7 @@ import { packCandidateIds } from "./capability-pack-candidate-service.js";
 import { packMcpConfigurationHash, type PackMcpCompensationInput } from "./capability-pack-mcp-owner.js";
 
 export interface PackCompensationDependencies {
-  storage: AsyncStorage;
+  storage: Pick<AsyncStorage, "changePlans">;
   readMcpServers(): Promise<McpServerRecord[]>;
   readSettingsSnapshot(): Promise<{ revision: number; features: Record<string, boolean> }>;
   getCandidateDetail(candidateId: string): Promise<CandidateSkillDetailRecord>;

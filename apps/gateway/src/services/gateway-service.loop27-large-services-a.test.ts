@@ -424,7 +424,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       ]),
     );
     expect(
-      await GatewayService.prototype.patchMcpServerState.call(gateway, "server-1", { status: "connected" }),
+      await gateway.mcpServerStore.patchServerState("server-1", { status: "connected" }),
     ).toMatchObject({
       serverId: "server-1",
       status: "connected",

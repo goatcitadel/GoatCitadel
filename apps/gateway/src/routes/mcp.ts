@@ -7,7 +7,7 @@ import type {
   McpServerTemplateRecord,
   McpToolRecord,
 } from "@goatcitadel/contracts";
-import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
+import { isGoatError, resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   areExperimentalRemoteMcpTransportsEnabled,
@@ -40,6 +40,8 @@ import {
   isServerModeDescriptorCallablePreview,
 } from "./mcp-server-mode.js";
 import { withRouteAccess } from "./route-access.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
+import { sendRouteError } from "./_error-handler.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -92,6 +94,7 @@ const createServerSchema = z.object({
 });
 
 const updateServerSchema = z.object({
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/u),
   label: z.string().min(1).optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
@@ -104,7 +107,10 @@ const updateServerSchema = z.object({
   costTier: costTierSchema.optional(),
   policy: policySchema.optional(),
   verifiedAt: z.string().optional(),
-});
+}).strict();
+
+const revisionSchema = updateServerSchema.pick({ expectedRevision: true }).strict();
+const updatePolicySchema = policySchema.extend({ expectedRevision: revisionSchema.shape.expectedRevision }).strict();
 
 const oauthCompleteSchema = z.object({
   code: z.string().min(1),
@@ -211,7 +217,16 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorMutationRoute = withRouteAccess(fastify, "operator", MUTATION_ROUTE_OPTIONS);
 
   fastify.get("/api/v1/mcp/servers", operatorReadRoute, async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
     return reply.send(projectMcpPublicValue({ items: await fastify.services.mcp.listMcpServers() }));
+  });
+
+  fastify.get("/api/v1/mcp/servers/:serverId", operatorReadRoute, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const params = serverParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try { return reply.send(await fastify.services.mcp.getMcpServer(params.data.serverId)); }
+    catch (error) { return sendRouteError(reply, error, request.log); }
   });
 
   fastify.get("/api/v1/mcp/templates", operatorReadRoute, async (_request, reply) => {
@@ -407,9 +422,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error });
     }
     try {
-      return reply.code(201).send(projectMcpPublicValue(await fastify.services.mcp.createMcpServer(parsed.data)));
+      const created = await fastify.services.mcp.createMcpServer(parsed.data, () => markMutationCommitted(request));
+      await markMutationCommitted(request);
+      return reply.code(201).send(projectMcpPublicValue(created));
     } catch (error) {
-      return sendMcpPublicError(reply, 400, error);
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -425,20 +443,29 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectMcpPublicValue(await fastify.services.mcp.updateMcpServer(params.data.serverId, body.data)),
-      );
+      const saved = await fastify.services.mcp.updateMcpServer(params.data.serverId, body.data, () => markMutationCommitted(request));
+      await markMutationCommitted(request);
+      return reply.send(projectMcpPublicValue(saved));
     } catch (error) {
-      return sendMcpPublicError(reply, 400, error);
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.delete("/api/v1/mcp/servers/:serverId", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = revisionSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({ error: { params: params.success ? undefined : params.error.flatten(), body: body.success ? undefined : body.error.flatten() } });
     }
-    return reply.send(projectMcpPublicValue(await fastify.services.mcp.deleteMcpServer(params.data.serverId)));
+    try {
+      const saved = await fastify.services.mcp.deleteMcpServer(params.data.serverId, body.data.expectedRevision, () => markMutationCommitted(request));
+      if (saved.deleted) await markMutationCommitted(request);
+      return reply.send(projectMcpPublicValue(saved));
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/mcp/servers/:serverId/connect", operatorMutationRoute, async (request, reply) => {
@@ -584,7 +611,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.patch("/api/v1/mcp/servers/:serverId/policy", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
-    const body = policySchema.safeParse(request.body);
+    const body = updatePolicySchema.safeParse(request.body);
     if (!params.success || !body.success) {
       return reply.code(400).send({
         error: {
@@ -594,11 +621,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectMcpPublicValue(await fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data)),
-      );
+      const saved = await fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data, () => markMutationCommitted(request));
+      await markMutationCommitted(request);
+      return reply.send(projectMcpPublicValue(saved));
     } catch (error) {
-      return sendMcpPublicError(reply, 404, error);
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -641,6 +669,7 @@ function sendMcpElicitationError(reply: FastifyReply, error: unknown) {
 }
 
 function sendMcpPublicError(reply: FastifyReply, statusCode: number, error: unknown) {
+  if (isGoatError(error)) return reply.code(error.httpStatus).send(projectMcpPublicValue(error.toJSON()));
   const message = error instanceof Error ? error.message : String(error);
   return reply.code(statusCode).send(projectMcpPublicValue({ error: message }));
 }

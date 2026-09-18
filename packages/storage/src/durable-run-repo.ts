@@ -296,6 +296,12 @@ export class DurableRunRepository {
         updated_at = @updatedAt
       WHERE run_id = @runId
         AND version = @expectedVersion
+        AND (@status NOT IN ('queued', 'running') OR NOT EXISTS (
+          SELECT 1 FROM governed_remediation_parent_reservations reservation
+          WHERE reservation.durable_run_id = durable_runs.run_id
+            AND NOT EXISTS (SELECT 1 FROM governed_remediation_parent_resolutions resolution
+              WHERE resolution.reservation_id = reservation.reservation_id AND resolution.resolution_kind IN ('released', 'resumed'))
+        ))
     `);
     this.listRunsStmt = db.prepare(`
       SELECT * FROM durable_runs
@@ -563,6 +569,57 @@ export class DurableRunRepository {
       throw new NotFoundError({ entity: "Durable run", id: runId });
     }
     return this.mapRunRow(row);
+  }
+
+  /**
+   * Resolve an exact waiting checkpoint while holding the canonical parent-run
+   * lock. Call inside the same immediate storage transaction as the reservation
+   * write and waiting-version CAS. This read is not itself a reservation.
+   * Authority reads reject corrupt checkpoint state instead of using the
+   * diagnostic listing's sanitized empty-object fallback.
+   */
+  public lockWaitingCheckpointForUpdate(input: {
+    runId: string;
+    checkpointId: string;
+    expectedRunVersion: number;
+  }): { run: DurableRunRecord; checkpoint: DurableCheckpointRecord } | undefined {
+    if (!Number.isSafeInteger(input.expectedRunVersion) || input.expectedRunVersion < 1) {
+      throw new ValidationError({ message: "Waiting checkpoint requires an exact positive run version." });
+    }
+    const run = this.getRunForUpdate(input.runId);
+    if (run.status !== "waiting" || run.version !== input.expectedRunVersion) return undefined;
+    const raw = this.db.prepare(`
+      SELECT * FROM durable_checkpoints
+      WHERE run_id = @runId AND checkpoint_id = @checkpointId AND checkpoint_kind = 'run_waiting'
+        AND checkpoint_id = (
+          SELECT checkpoint_id FROM durable_checkpoints
+          WHERE run_id = @runId AND checkpoint_kind = 'run_waiting'
+          ORDER BY created_at DESC, checkpoint_id DESC LIMIT 1
+        )
+      ${this.db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `).get({ runId: input.runId, checkpointId: input.checkpointId });
+    if (!raw) return undefined;
+    const row = toDurableCheckpointRows([raw])[0];
+    if (!row) throw new ValidationError({ message: "Waiting checkpoint has malformed stored authority." });
+    let state: unknown;
+    try {
+      state = JSON.parse(row.state_json);
+    } catch {
+      throw new ValidationError({ message: "Waiting checkpoint has malformed stored state." });
+    }
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      throw new ValidationError({ message: "Waiting checkpoint state must be an object." });
+    }
+    return {
+      run,
+      checkpoint: {
+        checkpointId: row.checkpoint_id,
+        runId: row.run_id,
+        checkpointKind: row.checkpoint_kind,
+        state: state as Record<string, unknown>,
+        createdAt: row.created_at,
+      },
+    };
   }
 
   /**
@@ -1115,7 +1172,7 @@ export class DurableRunRepository {
     const orphanRows = this.db
       .prepare(
         `
-        SELECT cp.checkpoint_id AS checkpointId
+        SELECT cp.checkpoint_id AS "checkpointId"
         FROM durable_checkpoints cp
         LEFT JOIN durable_runs r ON r.run_id = cp.run_id
         WHERE r.run_id IS NULL
@@ -1123,7 +1180,11 @@ export class DurableRunRepository {
       )
       .all() as Array<{ checkpointId: string }>;
 
-    const deleteByIdStmt = this.db.prepare("DELETE FROM durable_checkpoints WHERE checkpoint_id = ?");
+    // Reservation evidence survives terminal-run and disk-budget pruning. Keep
+    // this guard on the deletion itself, rather than relying on a candidate snapshot.
+    const deleteByIdStmt = this.db.prepare(`DELETE FROM durable_checkpoints WHERE checkpoint_id = ?
+      AND NOT EXISTS (SELECT 1 FROM governed_remediation_parent_reservations reservation
+        WHERE reservation.blocked_checkpoint_id = durable_checkpoints.checkpoint_id)`);
     let prunedOrphans = 0;
     for (const row of orphanRows) {
       const result = deleteByIdStmt.run(row.checkpointId);
@@ -1133,10 +1194,10 @@ export class DurableRunRepository {
     const terminalCheckpoints = this.db
       .prepare(
         `
-        SELECT cp.checkpoint_id AS checkpointId,
-               cp.run_id AS runId,
-               cp.state_json AS stateJson,
-               cp.created_at AS createdAt
+        SELECT cp.checkpoint_id AS "checkpointId",
+               cp.run_id AS "runId",
+               cp.state_json AS "stateJson",
+               cp.created_at AS "createdAt"
         FROM durable_checkpoints cp
         INNER JOIN durable_runs r ON r.run_id = cp.run_id
         WHERE r.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')

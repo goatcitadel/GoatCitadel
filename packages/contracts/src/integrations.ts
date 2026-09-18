@@ -94,6 +94,8 @@ export interface IntegrationOperatorAction {
 
 export interface IntegrationConnection {
   connectionId: string;
+  /** Opaque storage generation; never derived from credential contents. */
+  revision: string;
   catalogId: string;
   kind: IntegrationKind;
   key: string;
@@ -129,6 +131,8 @@ export interface IntegrationConnectionCreateInput {
 }
 
 export interface IntegrationConnectionUpdateInput {
+  /** Required at the public API; internal patch writers may use their current read. */
+  expectedRevision?: string;
   label?: string;
   enabled?: boolean;
   status?: IntegrationConnectionStatus;

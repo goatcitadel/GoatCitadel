@@ -332,7 +332,8 @@ describe("RemoteWorkersRouteService HX-507A", () => {
   });
 
   it("composes read owners plus governed admission/audit/manifest-verification control and registers the route", () => {
-    const composition = readFileSync(new URL("./gateway-route-composition-runtime.ts", import.meta.url), "utf8");
+    const runtimeComposition = readFileSync(new URL("./gateway-route-composition-runtime.ts", import.meta.url), "utf8");
+    const composition = readFileSync(new URL("./remote-worker-route-composition.ts", import.meta.url), "utf8");
     const services = readFileSync(new URL("./gateway-route-services.ts", import.meta.url), "utf8");
     const app = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
     expect(composition).toMatch(/registry:\s*gateway\.storage\.remoteWorkerAdmissions/u);
@@ -342,7 +343,9 @@ describe("RemoteWorkersRouteService HX-507A", () => {
     expect(composition).toMatch(/manifestVerifier:\s*createConfiguredRemoteWorkerManifestVerifier\(\)/u);
     // No usage/resource-cell/artifact owner is composed into this visibility tranche.
     expect(composition).not.toMatch(/gateway\.storage\.remoteWorker(?:Usage|ResourceCells|Artifacts|Cells|Effects)/u);
-    expect(services).toMatch(/new RemoteWorkersRouteService\([\s\S]*?deps\.remoteWorkers\.operatorControl/u);
+    expect(runtimeComposition).toContain("remoteWorkers: composeRemoteWorkerRouteDependencies(gateway)");
+    expect(services).toContain("remoteWorkers: createRemoteWorkerRouteService(deps.remoteWorkers)");
+    expect(composition).toMatch(/new RemoteWorkersRouteService\([\s\S]*?deps\.operatorControl/u);
     expect(app).toMatch(/import \{ remoteWorkersRoutes \} from "\.\/routes\/remote-workers\.js"/u);
     expect(app).toMatch(/await app\.register\(remoteWorkersRoutes\)/u);
   });

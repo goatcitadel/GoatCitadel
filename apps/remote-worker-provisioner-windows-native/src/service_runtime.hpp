@@ -25,6 +25,38 @@ enum class ServiceIdentityValidation : std::uint32_t {
   Valid = 0U,
   LaunchContext = 1U,
   ServiceIdentity = 2U,
+  // Stable SCM service-specific exit codes. These identify the failed check;
+  // they never replace or relax the check itself and contain no token data.
+  ManagerOpen = 2001U,
+  ServiceOpen = 2002U,
+  ConfigurationCollection = 2010U,
+  ServiceSecurityCollection = 2011U,
+  TokenOpen = 2020U,
+  TokenUserCollection = 2021U,
+  TokenTypeCollection = 2022U,
+  TokenSessionCollection = 2023U,
+  TokenRestrictionsCollection = 2024U,
+  TokenAppContainerCollection = 2025U,
+  TokenRestrictedSidsCollection = 2026U,
+  TokenGroupsCollection = 2027U,
+  TokenPrivilegesCollection = 2028U,
+  TokenPrivilegeLookup = 2029U,
+  ThreadTokenCollection = 2030U,
+  ProcessIdentity = 2040U,
+  ConfigurationIdentity = 2041U,
+  RequiredPrivilegesIdentity = 2042U,
+  TokenExecutionIdentity = 2043U,
+  TokenRestricted = 2044U,
+  TokenBounds = 2045U,
+  ServiceDaclIdentity = 2046U,
+  SystemIdentity = 2047U,
+  SignerGroupIdentity = 2048U,
+  ProhibitedLogon = 2049U,
+  ServiceGroupCount = 2050U,
+  TokenPrivilegeIdentity = 2051U,
+  ServiceAceCount = 2052U,
+  ServiceAceIdentity = 2053U,
+  InspectionAccess = 2060U,
 };
 
 enum class ServiceStatusPhase : std::uint8_t {
@@ -125,6 +157,8 @@ struct ServiceIdentitySnapshot final {
   SidSnapshot token_user{};
   std::uint32_t token_type = 0U;
   std::uint32_t token_session_id = UINT32_MAX;
+  // No restricting SIDs. Privilege filtering history is not a restriction:
+  // SCM removes every privilege outside the exact required privilege list.
   bool token_unrestricted = false;
   bool token_non_appcontainer = false;
   bool current_thread_has_no_token = false;
@@ -236,14 +270,16 @@ RunningServiceStatusDisposition ClassifyRunningServiceStatus(
 
 const std::array<std::uint8_t, 32U>& EmbeddedExpectedClientSha256() noexcept;
 
-bool DecodeTokenHasRestrictions(
-    const std::uint8_t* bytes,
-    std::size_t returned_bytes,
-    bool* token_unrestricted) noexcept;
-
 const char* ServiceTransportResultLabel(
     ServiceTransportResult result) noexcept;
 
 int RunServiceDispatcher() noexcept;
+
+#if defined(GOATCITADEL_PROVISIONER_TESTING)
+ServiceIdentityValidation CollectCurrentProcessTokenForTest(
+    ServiceIdentitySnapshot* snapshot) noexcept;
+bool QueryTokenRestrictionStateForTest(
+    void* token, bool* token_unrestricted) noexcept;
+#endif
 
 }  // namespace goatcitadel::remote_worker_provisioner

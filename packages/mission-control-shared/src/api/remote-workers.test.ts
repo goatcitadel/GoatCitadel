@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nativeChatOutputContextFixture } from "../../../contracts/src/remote-worker-native-chat-context-test-fixture.js";
+import { remoteWorkerRuntimeOutputEvidenceSha256, REMOTE_WORKER_RUNTIME_OUTPUT_ARTIFACT_SCHEMA } from "@goatcitadel/contracts";
 import {
   fetchRemoteWorkerAssignmentRuntime,
+  fetchRemoteWorkerNativeOutputArtifact,
   fetchRemoteWorkerAssignmentEvents,
   fetchRemoteWorkerAssignments,
   fetchRemoteWorkerDetail,
@@ -14,6 +17,28 @@ vi.mock("./client-core.js", () => ({ request: apiMocks.request }));
 
 beforeEach(() => {
   apiMocks.request.mockReset();
+});
+
+it("downloads native evidence through operator transport and rejects scope substitution", async () => {
+  const context = nativeChatOutputContextFixture();
+  if (context.schemaVersion !== "goatcitadel.remote-worker-native-chat-context.v2" || !context.recorded) throw new Error("Expected output fixture");
+  const document = { schemaVersion: REMOTE_WORKER_RUNTIME_OUTPUT_ARTIFACT_SCHEMA, registryWorkspaceId: "workspace-a",
+    assignmentId: "assign-a", assignmentGeneration: 1, expectation: context.recorded.expectation,
+    resultReceipt: context.recorded.receipt, outcome: context.recorded.outcome, output: context.output,
+    evidenceSha256: remoteWorkerRuntimeOutputEvidenceSha256(context.output), recordedLeaseRevision: context.recorded.receipt.leaseRevision,
+    recordedAt: context.recorded.receipt.recordedAt };
+  apiMocks.request.mockResolvedValue(document);
+  const result = await fetchRemoteWorkerNativeOutputArtifact("workspace-a", "assign-a", 1, context.output.nonce);
+  expect(JSON.parse(result.content)).toEqual(document);
+  expect(capturedUrl()).toBe(`/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-output-artifacts/${context.output.nonce}?assignmentGeneration=1`);
+  for (const patch of [{ registryWorkspaceId: "foreign" }, { assignmentId: "foreign" }, { assignmentGeneration: 2 }]) {
+    apiMocks.request.mockResolvedValue({ ...document, ...patch });
+    await expect(fetchRemoteWorkerNativeOutputArtifact("workspace-a", "assign-a", 1, context.output.nonce)).rejects.toThrow("scope mismatch");
+  }
+  apiMocks.request.mockClear();
+  await expect(fetchRemoteWorkerNativeOutputArtifact("workspace-a", "assign-a", 0, context.output.nonce)).rejects.toThrow();
+  await expect(fetchRemoteWorkerNativeOutputArtifact("workspace-a", "assign-a", 1, "../unsafe")).rejects.toThrow();
+  expect(apiMocks.request).not.toHaveBeenCalled();
 });
 
 function capturedUrl(): string {

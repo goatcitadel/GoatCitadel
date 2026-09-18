@@ -34,6 +34,7 @@ function createDraftStore(): DraftStore {
         revision: 1,
         catalogId: input.catalogId,
         connectionId: input.connectionId,
+        connectionRevision: input.connectionRevision,
         lifecycleMode: input.lifecycleMode ?? "create",
         label: input.label ?? "Draft",
         enabled: input.enabled ?? true,
@@ -103,15 +104,17 @@ function createHost(): ChannelSetupHost & {
 
   const createConnectionMock = vi.fn(
     (input: {
+      connectionId?: string;
       catalogId: string;
       label: string;
       enabled: boolean;
       status: "connected";
       config: Record<string, unknown>;
     }) => {
-      const connectionId = `connection-${connections.size + 1}`;
+      const connectionId = input.connectionId ?? `connection-${connections.size + 1}`;
       const connection: IntegrationConnection = {
         connectionId,
+        revision: "a".repeat(64),
         catalogId: input.catalogId,
         kind: "channel",
         key: input.catalogId.replace("channel.", ""),
@@ -146,6 +149,14 @@ function createHost(): ChannelSetupHost & {
       channelSetupDrafts: draftStore as ChannelSetupHost["storage"]["channelSetupDrafts"],
     },
     recentChannelSetupTests: new Map(),
+    async commitChannelSetupConnection(draftId, expectedRevision, input, onCommitted) {
+      const draft = draftStore.get(draftId);
+      if (draft.revision !== expectedRevision) throw new Error("stale draft");
+      const connection = draft.connectionId ? updateConnectionMock(draft.connectionId, input) : createConnectionMock(input);
+      draftStore.delete(draftId, expectedRevision);
+      await onCommitted?.();
+      return connection;
+    },
     channelSecrets,
     getIntegrationConnection(connectionId: string) {
       const connection = connections.get(connectionId);
@@ -253,7 +264,7 @@ describe("channel-setup-service contract behavior", () => {
     expect(result.validation.status).toBe("ok");
     expect(result.test?.status).toBe("ok");
     expect(host.createConnectionMock).toHaveBeenCalledTimes(1);
-    expect(result.connection.connectionId).toBe("connection-1");
+    expect(result.connection.connectionId).toMatch(/^[a-f0-9-]{36}$/);
     expect(result.connection.status).toBe("connected");
     expect(result.connection.config).toMatchObject({
       botTokenEnv: "DISCORD_BOT_TOKEN",
@@ -303,7 +314,7 @@ describe("channel-setup-service contract behavior", () => {
       },
     );
     expect(result.test.status).toBe("ok");
-    expect(result.connection.connectionId).toBe("connection-1");
+    expect(result.connection.connectionId).toMatch(/^[a-f0-9-]{36}$/);
   });
 
   it("finalizes an outbound-only ntfy draft when its sandbox send and setup checks pass", async () => {

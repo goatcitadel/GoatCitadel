@@ -34,7 +34,7 @@ function Harness({
   onState,
 }: {
   loader: () => Promise<string>;
-  onState: (snapshot: LoadState<string> & { reload: () => Promise<void> }) => void;
+  onState: (snapshot: ReturnType<typeof useAsyncLoad<string>>) => void;
 }) {
   const result = useAsyncLoad(loader, [loader]);
   onState(result);
@@ -156,6 +156,31 @@ describe("useAsyncLoad (MCNEXT-001 stale-response guard)", () => {
     expect(latest!.loading).toBe(false);
     expect(latest!.error).toBeNull();
     expect(latest!.data).toBe("payload");
+  });
+
+  it("keeps an owner's acknowledgement when an earlier refresh resolves later", async () => {
+    const refresh = defer<string>();
+    let calls = 0;
+    const loader = () => ++calls === 1 ? Promise.resolve("original") : refresh.promise;
+    let latest!: ReturnType<typeof useAsyncLoad<string>>;
+    await act(async () => { root.render(<Harness loader={loader} onState={state => { latest = state; }} />); });
+    await act(async () => { void latest.reload(); });
+    await act(async () => { latest.updateData(() => "own acknowledgement"); });
+    expect(latest.data).toBe("own acknowledgement");
+    expect(latest.loading).toBe(false);
+    await act(async () => { refresh.resolve("stale refresh"); });
+    expect(latest.data).toBe("own acknowledgement");
+  });
+
+  it("does not cancel the initial read when there is no loaded data to update", async () => {
+    const read = defer<string>();
+    let latest!: ReturnType<typeof useAsyncLoad<string>>;
+    const loader = () => read.promise;
+    await act(async () => { root.render(<Harness loader={loader} onState={state => { latest = state; }} />); });
+    await act(async () => { latest.updateData(() => "ineligible"); });
+    await act(async () => { read.resolve("loaded"); });
+    expect(latest.data).toBe("loaded");
+    expect(latest.loading).toBe(false);
   });
 
   it("does not restart a load on unrelated rerenders when defaulting to loader identity", async () => {

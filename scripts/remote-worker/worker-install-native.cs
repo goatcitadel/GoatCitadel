@@ -139,6 +139,48 @@ namespace GoatCitadel.RemoteWorker.Install
             return record;
         }
 
+        // The installer retains every pinned directory through record publication.
+        // This encodes identities only; caller-owned ACL/path review is separate.
+        public static byte[] CreateCellCapacityCustody(SafeFileHandle[] directories)
+        {
+            if (directories == null || directories.Length != 13)
+                throw new InvalidOperationException("REFUSED: capacity custody requires all thirteen roots.");
+            SafeFileHandle[] snapshot = (SafeFileHandle[])directories.Clone();
+            byte[] record = new byte[320];
+            Encoding.ASCII.GetBytes("GCCAPS01").CopyTo(record, 0);
+            ulong volume = 0;
+            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < snapshot.Length; index++)
+            {
+                SafeFileHandle directory = snapshot[index];
+                if (directory == null || directory.IsClosed || directory.IsInvalid)
+                    throw new InvalidOperationException("REFUSED: capacity custody needs retained directory handles.");
+                byte[] identity = GetCellDirectoryIdentity(directory);
+                ulong currentVolume = BitConverter.ToUInt64(identity, 0);
+                if ((index != 0 && currentVolume != volume) || !seen.Add(Convert.ToBase64String(identity)))
+                    throw new InvalidOperationException("REFUSED: capacity roots must be distinct on one volume.");
+                volume = currentVolume; identity.CopyTo(record, 8 + index * 24);
+            }
+            return record;
+        }
+
+        public static byte[] CreateCellRuntimeCustody(string packageSha256, string bundleSha256, SafeFileHandle runtimeDirectory)
+        {
+            foreach (string pin in new string[] { packageSha256, bundleSha256 })
+                if (pin == null || !System.Text.RegularExpressions.Regex.IsMatch(pin, "\\A[a-f0-9]{64}\\z") || pin == new string('0', 64))
+                    throw new InvalidOperationException("REFUSED: independent package and runtime manifest pins are required.");
+            byte[] identity = GetCellDirectoryIdentity(runtimeDirectory);
+            byte[] record = new byte[96];
+            Encoding.ASCII.GetBytes("GCRTCS01").CopyTo(record, 0);
+            identity.CopyTo(record, 8);
+            for (int index = 0; index < 32; index++)
+            {
+                record[32 + index] = Convert.ToByte(bundleSha256.Substring(index * 2, 2), 16);
+                record[64 + index] = Convert.ToByte(packageSha256.Substring(index * 2, 2), 16);
+            }
+            return record;
+        }
+
         private static string CanonicalPath(string path)
         {
             string full = Path.GetFullPath(path);
@@ -264,6 +306,20 @@ namespace GoatCitadel.RemoteWorker.Install
                     throw new Win32Exception(Marshal.GetLastWin32Error());
             }
             finally { Marshal.FreeHGlobal(info); }
+        }
+        // Existing installer-owned empty file only. Exclusive sharing excludes
+        // both controller/host reader leases without changing file contents.
+        public static FileStream AcquireInstalledStateWriterGate(string path)
+        {
+            string full = CanonicalPath(path);
+            SafeFileHandle handle = CreateFileW(full, 0x80000000u, 0, IntPtr.Zero, 3, 0x00200000u, IntPtr.Zero);
+            try
+            {
+                if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                Validate(handle, full, 0);
+                return new FileStream(handle, FileAccess.Read, 1, false);
+            }
+            catch { handle.Dispose(); throw; }
         }
         public static FileStream AcquireEnrollmentLock(string path)
         {

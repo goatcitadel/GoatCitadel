@@ -94,9 +94,13 @@ function fixture() {
       }
       await authorize();
     });
-    return { create: legacyCreate, recover: legacyRecover, createVolume: legacyCreate, recoverVolume: legacyVolumeRecover,
+    return { installRuntimeWithCapacity: legacyCreate, recoverRuntimeInstallation: legacyCreate, installRuntime: legacyCreate, runRuntime: legacyCreate, create: legacyCreate, recover: legacyRecover, createVolume: legacyCreate, recoverVolume: legacyVolumeRecover,
       createFormat: legacyCreate, recoverFormat: legacyFormatRecover, createProtection: legacyCreate, recoverProtection: legacyProtectionRecover,
-      createMount: legacyCreate, recoverMount: legacyMountRecover, createMountedWorkspace: create, recoverMountedWorkspace: recover };
+      createMount: legacyCreate, recoverMount: legacyMountRecover, createMountedWorkspace: create, recoverMountedWorkspace: recover,
+      observeCapacity: async () => { throw new Error("Capacity remains unavailable during preparation."); },
+      observeBackingCapacity: async () => { throw new Error("Backing capacity remains unavailable during preparation."); },
+      observeInventory: async () => { throw new Error("Object inventory remains unavailable during preparation."); },
+      observePoolCapacity: async () => { throw new Error("Pool capacity remains unavailable during preparation."); } };
   });
   const state = createInMemoryWorkerDurableState();
   return { ...f, owner, context, controller, create, recover, complete, legacyCreate, legacyRecover, legacyVolumeRecover, legacyFormatRecover, legacyProtectionRecover, legacyMountRecover,
@@ -162,9 +166,13 @@ describe.skipIf(process.platform !== "win32")("protected Windows cell startup co
     let entered!: () => void;
     const started = new Promise<void>((resolve) => { entered = resolve; });
     vi.mocked(createWindowsWorkerCellProvisioning).mockImplementation((options) => ({
-      recover: f.legacyRecover, create: f.legacyCreate, recoverVolume: f.legacyVolumeRecover, createVolume: f.legacyCreate,
+      installRuntimeWithCapacity: f.legacyCreate, recoverRuntimeInstallation: f.legacyCreate, installRuntime: f.legacyCreate, runRuntime: f.legacyCreate, recover: f.legacyRecover, create: f.legacyCreate, recoverVolume: f.legacyVolumeRecover, createVolume: f.legacyCreate,
       recoverFormat: f.legacyFormatRecover, createFormat: f.legacyCreate, recoverProtection: f.legacyProtectionRecover, createProtection: f.legacyCreate,
       recoverMount: f.legacyMountRecover, createMount: f.legacyCreate,
+      observeCapacity: async () => { throw new Error("Capacity remains unavailable during preparation."); },
+      observeBackingCapacity: async () => { throw new Error("Backing capacity remains unavailable during preparation."); },
+      observeInventory: async () => { throw new Error("Object inventory remains unavailable during preparation."); },
+      observePoolCapacity: async () => { throw new Error("Pool capacity remains unavailable during preparation."); },
       recoverMountedWorkspace: f.recover, createMountedWorkspace: async () => {
         entered(); await new Promise<void>((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("native cancelled")), { once: true }));
       },

@@ -125,7 +125,8 @@ test("visual trace-retention probe forces one successful comparison to retain fa
       async installMissionControlNextBrowserState() {},
       maybeParseBool: () => false,
       async pinVisualRegressionProvider() {},
-      async prepareVerificationRuntime() {
+      async prepareCleanRuntime(_runId, baseUrl) {
+        assert.ok(baseUrl.startsWith("http://"));
         return "runtime-root";
       },
       pollSseConnectionRecoveryEvidence: async (input) => ({
@@ -346,7 +347,8 @@ test("visual regression returns failure evidence when a browser assertion throws
       async pinVisualRegressionProvider(_gatewayUrl, providerId) {
         pinnedProviderId = providerId;
       },
-      async prepareVerificationRuntime() {
+      async prepareCleanRuntime(_runId, baseUrl) {
+        assert.ok(baseUrl.startsWith("http://"));
         return "runtime-root";
       },
       pollSseConnectionRecoveryEvidence: async (input) => ({

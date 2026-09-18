@@ -1,6 +1,9 @@
 #include "installed_worker_files.hpp"
 #include "service_identity.hpp"
 #include <array>
+#include <algorithm>
+#include <cstring>
+#include <cstdint>
 #include <cwchar>
 #include <map>
 #include <utility>
@@ -12,10 +15,41 @@ bool EqualPath(const std::wstring& a, const std::wstring& b) noexcept {
 }
 struct Handle final { HANDLE value = INVALID_HANDLE_VALUE; ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); } };
 struct Search final { HANDLE value = INVALID_HANDLE_VALUE; ~Search() { if (value != INVALID_HANDLE_VALUE) FindClose(value); } };
+using HostRunBytes = std::array<std::uint8_t, 32>;
+bool Marker(HANDLE file, HostRunBytes& bytes, bool write) noexcept {
+  BY_HANDLE_FILE_INFORMATION info{}; LARGE_INTEGER start{}; DWORD count = 0;
+  if (!GetFileInformationByHandle(file, &info) || GetFileType(file) != FILE_TYPE_DISK ||
+      (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
+      info.nNumberOfLinks != 1 || info.nFileSizeHigh || info.nFileSizeLow != bytes.size() ||
+      !SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) return false;
+  return write ? WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) && count == bytes.size() && FlushFileBuffers(file) :
+    ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) && count == bytes.size();
 }
+bool CurrentHostRun(HostRunBytes& bytes) noexcept {
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return false;
+  bytes = {}; std::memcpy(bytes.data(), "GCHOST01", 8);
+  const DWORD pid = GetCurrentProcessId(); std::memcpy(bytes.data() + 8, &pid, sizeof(pid));
+  std::memcpy(bytes.data() + 16, &created, sizeof(created)); return true;
+}
+}
+bool BeginWorkerHostRun(HANDLE marker) noexcept {
+  HostRunBytes current{}, next{};
+  if (!Marker(marker, current, false) || std::any_of(current.begin(), current.end(), [](auto byte) { return byte != 0; }) ||
+      !CurrentHostRun(next)) return false;
+  return Marker(marker, next, true);
+}
+bool FinishWorkerHostRun(HANDLE marker, HANDLE job) noexcept {
+  HostRunBytes clear{}; JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info{};
+  if (!VerifyWorkerHostRunMarker(marker, GetCurrentProcess()) ||
+      !QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &info, sizeof(info), nullptr) || info.ActiveProcesses) return false;
+  return Marker(marker, clear, true);
+}
+bool InstalledWorkerFiles::BeginHostRun() noexcept { return host_run_ == INVALID_HANDLE_VALUE || BeginWorkerHostRun(host_run_); }
+bool InstalledWorkerFiles::FinishHostRun(HANDLE job) noexcept { return host_run_ == INVALID_HANDLE_VALUE || FinishWorkerHostRun(host_run_, job); }
 InstalledWorkerFiles::~InstalledWorkerFiles() { for (const auto handle : held_) CloseHandle(handle); }
-HANDLE InstalledWorkerFiles::Pin(const std::wstring& path, bool directory, int kind) {
-  Handle file{CreateFileW(path.c_str(), GENERIC_READ | READ_CONTROL,
+HANDLE InstalledWorkerFiles::Pin(const std::wstring& path, bool directory, int kind, bool writable) {
+  Handle file{CreateFileW(path.c_str(), GENERIC_READ | READ_CONTROL | (writable ? GENERIC_WRITE : 0),
     directory ? FILE_SHARE_READ | FILE_SHARE_WRITE : FILE_SHARE_READ, nullptr, OPEN_EXISTING,
     FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0), nullptr)};
   BY_HANDLE_FILE_INFORMATION info{};
@@ -53,7 +87,8 @@ bool InstalledWorkerFiles::Walk(const std::wstring& directory, unsigned depth) {
   } while (FindNextFileW(search.value, &entry));
   return GetLastError() == ERROR_NO_MORE_FILES;
 }
-bool ValidateInstalledEnvironment(const std::vector<wchar_t>& block, const std::wstring& root) noexcept {
+bool ValidateInstalledEnvironment(const std::vector<wchar_t>& block, const std::wstring& root, bool* capacity_layout) noexcept {
+  if (capacity_layout) *capacity_layout = false;
   try {
     if (block.size() < 2 || block.size() > 32767 || block.back() || block[block.size() - 2]) return false;
     std::map<std::wstring, std::wstring> settings;
@@ -81,10 +116,15 @@ bool ValidateInstalledEnvironment(const std::vector<wchar_t>& block, const std::
     const std::pair<const wchar_t*, const wchar_t*> paths[] = {
       {L"CLIENT_CERT_FILE", L"\\configuration\\client-cert.pem"}, {L"CA_FILE", L"\\configuration\\ca.pem"},
       {L"TICKET_FILE", L"\\configuration\\ticket.json"}, {L"PROTECTED_KEY_FILE", L"\\configuration\\protected-key.json"},
-      {L"STATE_DIR", L"\\state"}, {L"REPORT_FILE", L"\\state\\service-report.json"},
     };
     for (const auto& item : paths) if (!EqualPath(settings[item.first], root + item.second)) return false;
-    return settings.size() == 12;
+    const bool legacy = EqualPath(settings[L"STATE_DIR"], root + L"\\state") &&
+      EqualPath(settings[L"REPORT_FILE"], root + L"\\state\\service-report.json");
+    const bool capacity = EqualPath(settings[L"STATE_DIR"], root + L"\\state\\retained-outbox") &&
+      EqualPath(settings[L"REPORT_FILE"], root + L"\\state\\diagnostic\\service-report.json");
+    if ((!legacy && !capacity) || settings.size() != 12) return false;
+    if (capacity_layout) *capacity_layout = capacity;
+    return true;
   } catch (...) { return false; }
 }
 bool AddInstalledMeshRegistryEnvironment(const std::vector<char>& selection, const std::wstring& root,
@@ -139,7 +179,7 @@ bool InstalledWorkerFiles::Load(const std::wstring& package_root) noexcept {
     if (!EqualPath(package_root, root + L"\\payload") || Pin(drive, true, 0) == INVALID_HANDLE_VALUE ||
         Pin(program_data, true, 0) == INVALID_HANDLE_VALUE || Pin(shared, true, 1) == INVALID_HANDLE_VALUE ||
         Pin(root, true, 2) == INVALID_HANDLE_VALUE || Pin(package_root, true, 2) == INVALID_HANDLE_VALUE ||
-        Pin(root + L"\\configuration", true, 2) == INVALID_HANDLE_VALUE || Pin(root + L"\\state", true, 3) == INVALID_HANDLE_VALUE ||
+        Pin(root + L"\\configuration", true, 2) == INVALID_HANDLE_VALUE ||
         !Walk(package_root, 0)) return false;
     for (const auto* name : {L"client-cert.pem", L"ca.pem", L"ticket.json", L"protected-key.json", L"install-receipt.json"})
       if (Pin(root + L"\\configuration\\" + name, false, 2) == INVALID_HANDLE_VALUE) return false;
@@ -149,8 +189,27 @@ bool InstalledWorkerFiles::Load(const std::wstring& package_root) noexcept {
         size.QuadPart > 65534 || size.QuadPart % sizeof(wchar_t)) return false;
     environment_.resize(static_cast<std::size_t>(size.QuadPart / sizeof(wchar_t)));
     DWORD count = 0;
+    bool capacity_layout = false;
     if (!ReadFile(settings, environment_.data(), static_cast<DWORD>(size.QuadPart), &count, nullptr) || count != size.QuadPart ||
-        !ValidateInstalledEnvironment(environment_, root) || !LoadMeshRegistry(root)) { environment_.clear(); return false; }
+        !ValidateInstalledEnvironment(environment_, root, &capacity_layout)) { environment_.clear(); return false; }
+    // New installations keep the state container read-only and grant write access
+    // only within recorded areas. Legacy installations retain their exact layout.
+    if (Pin(root + L"\\state", true, capacity_layout ? 2 : 3) == INVALID_HANDLE_VALUE) return false;
+    if (capacity_layout) {
+      const HANDLE gate = Pin(root + L"\\configuration\\state-writers.guard", false, 2);
+      LARGE_INTEGER gate_size{};
+      if (gate == INVALID_HANDLE_VALUE || !GetFileSizeEx(gate, &gate_size) || gate_size.QuadPart != 0) return false;
+      for (const auto* area : {L"input-staging", L"backup-staging", L"artifact-staging", L"immutable-artifact",
+          L"retained-outbox", L"database-sidecar", L"backup-publication", L"manifest", L"proxy-sidecar",
+          L"diagnostic", L"failed-cleanup", L"quarantine-evidence"}) {
+        if (Pin(root + L"\\state\\" + area, true, 3) == INVALID_HANDLE_VALUE) return false;
+      }
+      if (Pin(root + L"\\configuration\\cell-capacity.identity", false, 2) == INVALID_HANDLE_VALUE) return false;
+      // Fixed installed control metadata, not a workload-scanned data file.
+      host_run_ = Pin(root + L"\\configuration\\host-run.guard", false, 3, true);
+      if (host_run_ == INVALID_HANDLE_VALUE) return false;
+    }
+    if (!LoadMeshRegistry(root)) { environment_.clear(); return false; }
     return true;
   } catch (...) { environment_.clear(); return false; }
 }

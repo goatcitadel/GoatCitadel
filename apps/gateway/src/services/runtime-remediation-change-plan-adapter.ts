@@ -180,6 +180,9 @@ function evidenceRefs(state: GovernedRemediationStoredState): string[] {
 }
 
 function assertOrigin(state: GovernedRemediationStoredState, context: EvolutionControlPlaneAdapterContext): void {
+  if (state.record.requesterActorId !== context.origin.actorId) {
+    throw new SemanticValidationError("The governed remediation belongs to a different requester.");
+  }
   if (state.record.workspaceId !== context.origin.workspaceId) {
     throw new SemanticValidationError("The governed remediation belongs to a different workspace.");
   }
@@ -190,6 +193,7 @@ function assertOrigin(state: GovernedRemediationStoredState, context: EvolutionC
 
 function assertTarget(plan: ChangePlanRecord, state: GovernedRemediationStoredState): void {
   if (
+    plan.target.ownerId !== "governed_remediation_coordinator" ||
     plan.target.resourceId !== state.record.remediationId ||
     plan.target.expectedRevision !== state.record.revision ||
     plan.target.expectedHash !== state.record.recipeSha256

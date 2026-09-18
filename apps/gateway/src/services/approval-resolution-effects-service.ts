@@ -1,10 +1,13 @@
 /* eslint-disable max-lines */
+import { runApprovalEffectTransaction, runClaimedApprovalEffectTransaction, lockApprovalMaterializationRun, lockApprovalMaterializationTrace, hasCanonicalAssistantMessage } from "./approval-effect-materialization-store.js";
+import { resolveLinkedTurnWakeTarget, markLinkedChatTurnResumed, buildAlreadyRunningWakeProof } from "./approval-chat-wake-owner.js";
 import { randomUUID } from "node:crypto";
 import {
   hasApprovedToolCompletionEvidence,
   hasApprovedToolPreDispatchEvidence,
 } from "./approved-tool-boundary-evidence.js";
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
+import { isNativeExecutionApproval, readPendingNativeApprovalParentWake } from "./approval-native-runtime-parent.js";
 import type {
   ApprovalEffectRecord,
   ApprovalInboxItemState,
@@ -811,7 +814,9 @@ export class ApprovalEffectsService {
                 delegatedScopeChildTurnId,
                 delegatedScopeDurableRunId: asOptionalString(approval.payload.durableRunId),
               }
-            : wakePayload,
+            : isNativeExecutionApproval(approval) && approval.linkage?.sessionId && approval.linkage.turnId
+              ? { ...wakePayload, nativeRuntimeParent: { runId: approval.linkage.durableRunId, turnId: approval.linkage.turnId } }
+              : wakePayload,
         }),
       );
     }
@@ -2295,6 +2300,9 @@ export class ApprovalEffectsService {
     if (resolveApprovalWait && (await this.settleDelegationScopeExpansionWakeDecision(effect))) {
       return;
     }
+    if (resolveApprovalWait && (await this.deferNativeRuntimeWaitUntilParentWakes(effect))) {
+      return;
+    }
     if (await this.deferOrchestrationParentWakeUntilChildTerminal(effect)) {
       return;
     }
@@ -2405,6 +2413,20 @@ export class ApprovalEffectsService {
         },
       },
     );
+  }
+
+  /** Keep native review discovery alive until the parent consumes its wake.
+   * Finishing the separate approval.wait run first would hide an early decision
+   * from the parent's first durable pause. No execution is authorized here. */
+  private async deferNativeRuntimeWaitUntilParentWakes(effect: ApprovalEffectRecord): Promise<boolean> {
+    const parent = await readPendingNativeApprovalParentWake(this.ctx.storage, effect);
+    if (!parent) return false;
+    await this.deferClaimedEffectForRetry(effect, this.workerId,
+      new Error("Native runtime review is waiting for its parent Chat wake."), {
+        deliveryState: "retry_scheduled", reason: "native_runtime_parent_wake_pending",
+        parentRunId: parent.runId, parentTurnId: parent.turnId,
+      }, APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS);
+    return true;
   }
 
   private async settleDelegationScopeExpansionWakeDecision(effect: ApprovalEffectRecord): Promise<boolean> {
@@ -2665,26 +2687,7 @@ export class ApprovalEffectsService {
   }
 
   private async markLinkedChatTurnResumed(turnId: string, runId: string): Promise<void> {
-    const observed = await this.ctx.storage.chatTurnTraces.get(turnId);
-    if (observed.turnId !== turnId || observed.durable?.runId !== runId) {
-      throw new Error(`Linked Chat wake ${runId} does not match turn ${turnId}.`);
-    }
-    if (observed.status === "running") {
-      return;
-    }
-    if (observed.status !== "waiting_for_approval") {
-      throw new Error(`Linked Chat wake ${runId} cannot resume turn ${turnId} from ${observed.status}.`);
-    }
-    const resumed = await this.ctx.storage.chatTurnTraces.patchIfStatus(turnId, ["waiting_for_approval"], {
-      status: "running",
-    });
-    if (resumed) {
-      return;
-    }
-    const canonical = await this.ctx.storage.chatTurnTraces.get(turnId);
-    if (canonical.status !== "running" || canonical.durable?.runId !== runId) {
-      throw new Error(`Linked Chat wake ${runId} lost the turn ${turnId} resume race.`);
-    }
+    return markLinkedChatTurnResumed(this.ctx.storage, turnId, runId);
   }
 
   /**
@@ -4504,34 +4507,7 @@ export class ApprovalEffectsService {
   private async resolveLinkedTurnWakeTarget(
     approval: ApprovalRequest,
   ): Promise<{ turnId: string; runId: string } | undefined> {
-    const linkageTurnId =
-      typeof approval.linkage?.turnId === "string" && approval.linkage.turnId.trim()
-        ? approval.linkage.turnId.trim()
-        : undefined;
-    const inlineApproval = await this.ctx.storage.chatInlineApprovals.get(approval.approvalId);
-    const inlineTurnId = inlineApproval?.turnId;
-    const turnId = linkageTurnId ?? inlineTurnId;
-    if (!turnId) {
-      return undefined;
-    }
-    const linkageSessionId =
-      typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
-        ? approval.linkage.sessionId.trim()
-        : undefined;
-    const expectedSessionId = linkageSessionId ?? inlineApproval?.sessionId;
-    try {
-      const trace = await this.ctx.storage.chatTurnTraces.get(turnId);
-      if (expectedSessionId && trace.sessionId !== expectedSessionId) {
-        return undefined;
-      }
-      const runId = trace.durable?.runId?.trim();
-      if (!runId) {
-        return undefined;
-      }
-      return { turnId, runId };
-    } catch {
-      return undefined;
-    }
+    return resolveLinkedTurnWakeTarget(this.ctx.storage, approval);
   }
 
   private async resolveDelegationParentWakeTargets(
@@ -4619,136 +4595,19 @@ export class ApprovalEffectsService {
   private async buildAlreadyRunningWakeProof(
     effect: ApprovalEffectRecord,
   ): Promise<Record<string, unknown> | undefined> {
-    const pendingAction = await this.ctx.storage.pendingApprovalActions?.find(effect.approvalId);
-    const executedOutcome =
-      typeof pendingAction?.result?.outcome === "string" ? pendingAction.result.outcome : undefined;
-    if (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") {
-      return {
-        proofSource: "pending_approval_action",
-        proofStatus: pendingAction?.resolutionStatus ?? executedOutcome ?? "executed",
-        actionType: pendingAction?.actionType,
-      };
-    }
-
-    try {
-      const trace = (await this.ctx.storage.chatTurnTraces?.get(effect.targetId)) as
-        | {
-            assistantMessageId?: string;
-            status?: string;
-            durable?: { status?: string; checkpointKind?: string };
-          }
-        | undefined;
-      if (
-        trace?.assistantMessageId ||
-        trace?.status === "completed" ||
-        trace?.durable?.status === "completed" ||
-        trace?.durable?.checkpointKind === "run_completed"
-      ) {
-        return {
-          proofSource: "chat_turn_trace",
-          proofStatus: trace?.durable?.status ?? trace?.status ?? "completed",
-          checkpointKind: trace?.durable?.checkpointKind,
-        };
-      }
-    } catch {
-      // no proof available from chat traces
-    }
-
-    return undefined;
+    return buildAlreadyRunningWakeProof(this.ctx.storage, effect);
   }
 }
 
-async function runApprovalEffectTransaction<T>(
-  storage: ApprovalEffectsServiceContext["storage"],
-  callback: () => T | Promise<T>,
-): Promise<Awaited<T>> {
-  const transaction = (
-    storage as {
-      runImmediateTransaction?: <R>(work: () => R | Promise<R>) => Promise<Awaited<R>>;
-    }
-  ).runImmediateTransaction;
-  if (transaction) {
-    return (await transaction.call(storage, callback)) as Awaited<T>;
-  }
-  if (process.env.NODE_ENV === "test") {
-    return await callback();
-  }
-  throw new Error("Approval effect durable completion is missing immediate transaction ownership");
-}
 
-async function runClaimedApprovalEffectTransaction<T>(
-  storage: ApprovalEffectsServiceContext["storage"],
-  effect: ApprovalEffectRecord,
-  workerId: string,
-  callback: () => T | Promise<T>,
-): Promise<Awaited<T>> {
-  return await runApprovalEffectTransaction(storage, async () => {
-    const approvalEffects = storage.approvalEffects;
-    const lockFreshClaim = approvalEffects?.lockFreshClaimForUpdate;
-    if (typeof lockFreshClaim !== "function") {
-      if (process.env.NODE_ENV === "test") {
-        return await callback();
-      }
-      throw new Error("Approval effect materialization is missing its database claim lock");
-    }
-    const locked = await lockFreshClaim.call(approvalEffects, effect.effectId, workerId, effect.version);
-    if (!locked) {
-      throw new Error(`Approval effect ${effect.effectId} lost its materialization lease.`);
-    }
-    return await callback();
-  });
-}
 
-async function lockApprovalMaterializationRun(
-  storage: ApprovalEffectsServiceContext["storage"],
-  runId: string,
-): Promise<DurableRunRecord> {
-  const durableRuns = storage.durableRuns as Storage["durableRuns"] & {
-    getRunForUpdate?: (currentRunId: string) => Promise<DurableRunRecord>;
-  };
-  if (typeof durableRuns.getRunForUpdate === "function") {
-    return await durableRuns.getRunForUpdate(runId);
-  }
-  if (process.env.NODE_ENV === "test") {
-    return await durableRuns.getRun(runId);
-  }
-  throw new Error("Approval materialization is missing durable-run row-lock ownership");
-}
 
-async function lockApprovalMaterializationTrace(
-  storage: ApprovalEffectsServiceContext["storage"],
-  turnId: string,
-): Promise<ChatTurnTraceRecord | undefined> {
-  const chatTurnTraces = storage.chatTurnTraces as
-    | (Storage["chatTurnTraces"] & {
-        getForUpdate?: (currentTurnId: string) => Promise<ChatTurnTraceRecord>;
-      })
-    | undefined;
-  if (typeof chatTurnTraces?.getForUpdate === "function") {
-    return await chatTurnTraces.getForUpdate(turnId);
-  }
-  if (process.env.NODE_ENV === "test") {
-    return await chatTurnTraces?.get(turnId);
-  }
-  throw new Error("Approval materialization is missing Chat-turn row-lock ownership");
-}
 
-async function hasCanonicalAssistantMessage(
-  storage: ApprovalEffectsServiceContext["storage"],
-  trace: ChatTurnTraceRecord,
-): Promise<boolean> {
-  if (!trace.assistantMessageId) {
-    return false;
-  }
-  const chatMessages = storage.chatMessages as Storage["chatMessages"] & {
-    get?: (messageId: string) => Promise<ChatMessageRecord | undefined>;
-  };
-  if (typeof chatMessages.get !== "function") {
-    return false;
-  }
-  const message = await chatMessages.get(trace.assistantMessageId);
-  return message?.role === "assistant" && message.sessionId === trace.sessionId;
-}
+
+
+
+
+
 
 function readApprovalMaterializedPostCommitReceipt(
   metadata: Record<string, unknown> | undefined,

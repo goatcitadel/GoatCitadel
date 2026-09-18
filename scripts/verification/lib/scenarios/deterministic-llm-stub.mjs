@@ -176,6 +176,7 @@ export async function startDeterministicLlmStub(options = {}) {
         return;
       }
       const isDispatchPlanRequest =
+        (!options.dispatchPlanStreamOnly || body.stream === true) &&
         (dispatchPlanModel === undefined || body.model === dispatchPlanModel) &&
         (dispatchPlanRequiredTool === undefined ||
           (Array.isArray(body.tools) &&

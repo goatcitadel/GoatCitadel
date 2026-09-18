@@ -75,6 +75,50 @@ describe("RuntimeRemediationChangePlanAdapter", () => {
 
     await expect(adapter.apply(context(), plan)).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
   });
+
+  it.each([
+    { actorId: "operator-other" },
+    { actorId: undefined },
+    { workspaceId: "workspace-other" },
+    { sessionId: "session-other" },
+  ])("refuses foreign origin at preparation, apply, and reconciliation: %j", async (foreignOrigin) => {
+    const stored = remediationState("blocked", 3);
+    const continueRemediation = vi.fn();
+    const adapter = new RuntimeRemediationChangePlanAdapter({ getState: () => stored, continueRemediation });
+    const originalContext = context();
+    const foreignContext = { ...originalContext, origin: { ...originalContext.origin, ...foreignOrigin } };
+    const request = { kind: "runtime_remediation", remediationId: "repair-1" } as const;
+    const prepared = await adapter.prepare(originalContext, request);
+    const plan = {
+      planId: "plan-1",
+      revision: 5,
+      request,
+      target: prepared.target,
+      approvalRefs: ["approval-1"],
+    } as unknown as ChangePlanRecord;
+
+    await expect(adapter.prepare(foreignContext, request)).rejects.toThrow(/different/u);
+    await expect(adapter.apply(foreignContext, plan)).rejects.toThrow(/different/u);
+    await expect(adapter.reconcile(foreignContext, plan)).rejects.toThrow(/different/u);
+    expect(continueRemediation).not.toHaveBeenCalled();
+  });
+
+  it("refuses a different target owner even when the remediation identity and revision match", async () => {
+    const stored = remediationState("blocked", 3);
+    const continueRemediation = vi.fn();
+    const adapter = new RuntimeRemediationChangePlanAdapter({ getState: () => stored, continueRemediation });
+    const prepared = await adapter.prepare(context(), { kind: "runtime_remediation", remediationId: "repair-1" });
+    const plan = {
+      planId: "plan-1",
+      revision: 5,
+      request: { kind: "runtime_remediation", remediationId: "repair-1" },
+      target: { ...prepared.target, ownerId: "different-owner" },
+      approvalRefs: ["approval-1"],
+    } as unknown as ChangePlanRecord;
+
+    await expect(adapter.apply(context(), plan)).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect(continueRemediation).not.toHaveBeenCalled();
+  });
 });
 
 function context(): EvolutionControlPlaneAdapterContext {

@@ -58,7 +58,7 @@ async function raw(executable, input, { acknowledgement, endInput = false, env =
 }
 
 test("native provisioning bridge joins canonical commits, image custody and bounded recovery", {
-  skip: process.platform !== "win32", timeout: 180000,
+  skip: process.platform !== "win32", timeout: 300000,
 }, async (t) => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), "Goat Worker Provisioning Bridge "));
   t.diagnostic(`Retained real native provisioning bridge evidence: ${output}`);
@@ -85,7 +85,7 @@ test("native provisioning bridge joins canonical commits, image custody and boun
     fs.writeFileSync(path.join(output, "gateway-tests.log"), `${result.stdout ?? ""}${result.stderr ?? ""}`, { flag: "wx" });
     assert.equal(result.error, undefined); assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     const report = JSON.parse(fs.readFileSync(resultFile, "utf8"));
-    assert.equal(report.numFailedTests, 0); assert.equal(report.numPendingTests, 0); assert.equal(report.numPassedTests, 17);
+    assert.equal(report.numFailedTests, 0); assert.equal(report.numPendingTests, 0); assert.equal(report.numPassedTests, 18);
     for (const [name, count] of [["real-native-complete", 5], ["real-native-lost-ack", 2], ["real-native-cancelled", 1]]) {
       const evidence = JSON.parse(fs.readFileSync(path.join(output, `${name}.json`), "utf8"));
       assert.equal(evidence.snapshot.checkpoints.length, count);
@@ -152,7 +152,7 @@ test("native provisioning bridge joins canonical commits, image custody and boun
   const asan = compileTlsNative({ target: "windows-x64", outputDirectory: asanDirectory, outputName: "cell-provisioning-asan.exe",
     sources: [...CELL_PROVISIONING_SOURCES, ...CELL_PROVISIONING_HOST_SOURCES]
       .filter((name) => name.endsWith(".cpp")).map((name) => path.join(output, "native/source", name)),
-    asan: true });
+    asan: true, sourceBatchSize: 8 });
   const toolchain = resolveExactWindowsToolchain("windows-x64");
   const receipts = [];
   await t.test("installed custody query refuses an interactive worker without returning metadata", async () => {
@@ -196,7 +196,7 @@ test("native provisioning bridge joins canonical commits, image custody and boun
       assert.equal(malformed.code, 2); assert.deepEqual(malformed.frames, []);
       const volumeInput = encodeWindowsWorkerCellProvisioning({ ...refused.plan,
         virtualDiskBytes: 64 * 1024 * 1024, reservedDiskBytes: 128 * 1024 * 1024 }, refused.parentPath, 2000, undefined, true);
-      for (const operation of [3, 4, 5, 6, 7, 8]) {
+      for (const operation of [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]) {
         volumeInput.writeUInt32LE(operation, 8);
         const directVolume = await raw(executable, volumeInput, { endInput: true, env });
         assert.equal(directVolume.code, 2); assert.deepEqual(directVolume.frames, []);

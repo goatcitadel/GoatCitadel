@@ -65,8 +65,9 @@ export class RemoteWorkerChatToolRuntime {
         await storage.remoteWorkerInference.getRequest(key),
       );
       const { record } = output;
+      const sequence = buildRemoteWorkerChatSequenceContext(storage, profile, execution);
       const messages = await readCanonicalWorkerChatInput(storage.remoteWorkerInference, record,
-        remoteWorkerChatInferenceStepIndex(record), buildRemoteWorkerChatSequenceContext(storage, profile, execution));
+        remoteWorkerChatInferenceStepIndex({ ...record, continuationSha256: sequence.continuationSha256 }), sequence);
       if (
         record.executionWorkspaceId !== profile.identity.workspaceId ||
         record.sessionId !== profile.identity.sessionId ||

@@ -1,15 +1,17 @@
+import { useCitadelAccessReview } from "./useCitadelAccessReview";
+import { CitadelAccessReview } from "./CitadelAccessReview";
+import "./citadel-confirmation.css";
 import { useEffect, useId, useState } from "react";
 import { Plus, Trash2, Users } from "lucide-react";
-import type { AgentProfileRecord, CitadelCouncilAssignment } from "@goatcitadel/contracts";
+import type { AgentProfileRecord } from "@goatcitadel/contracts";
 import {
   assignCitadelCouncilAgent,
   fetchAgents,
-  listCitadelCouncil,
   unassignCitadelCouncilAgent,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
 import { NativeCard, NativeDisclosureCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
-import { NativeButton } from "../primitives/NativeButton";
+import { NativeButton, NoticeBanner } from "../primitives";
 import { getErrorMessage } from "../shared/native-helpers";
 import { DetailInspector } from "../../../components/DetailInspector";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -19,7 +21,6 @@ import type { NativeRoutePagesProps } from "../types";
 interface CouncilState {
   loading: boolean;
   error: string | null;
-  items: CitadelCouncilAssignment[];
   agents: AgentProfileRecord[];
 }
 
@@ -37,10 +38,12 @@ export function CitadelCouncilRoutePage({
   activeCitadelId = activeWorkspaceId,
   activeCitadelName = activeWorkspaceName,
 }: NativeRoutePagesProps) {
-  const [council, setCouncil] = useState<CouncilState>({ loading: true, error: null, items: [], agents: [] });
+  const access = useCitadelAccessReview(activeCitadelId);
+  const [catalog, setCatalog] = useState<CouncilState>({ loading: true, error: null, agents: [] });
+  const council = { ...catalog, items: access.snapshot?.council ?? [] };
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedSeatId, setSelectedSeatId] = useState<string | null>(null);
-  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<{ agentId: string; revision: string; citadelId: string } | null>(null);
   const selectedSeat = council.items.find((item) => item.assignmentId === selectedSeatId);
   const selectedProfile = council.agents.find((agent) => agent.agentId === selectedSeat?.agentId);
   const [notice, setNotice] = useState<string | null>(null);
@@ -49,18 +52,13 @@ export function CitadelCouncilRoutePage({
 
   useEffect(() => {
     let cancelled = false;
-    setCouncil((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([listCitadelCouncil(activeCitadelId), fetchAgents("active", 300)])
-      .then(([items, agents]) => {
-        if (!cancelled) {
-          setCouncil({ loading: false, error: null, items, agents: agents.items });
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setCouncil({ loading: false, error: getErrorMessage(error), items: [], agents: [] });
-        }
-      });
+    setCatalog({ loading: true, error: null, agents: [] });
+    setPendingRemoval(null); setSelectedSeatId(null); setSelectedAgentId(""); setNotice(null);
+    void fetchAgents("active", 300).then((agents) => {
+      if (!cancelled) setCatalog({ loading: false, error: null, agents: agents.items });
+    }).catch((error: unknown) => {
+      if (!cancelled) setCatalog({ loading: false, error: getErrorMessage(error), agents: [] });
+    });
     return () => {
       cancelled = true;
     };
@@ -74,40 +72,25 @@ export function CitadelCouncilRoutePage({
     );
   }, [council.agents, council.items]);
 
-  const reloadCouncil = async () => {
-    const [items, agents] = await Promise.all([listCitadelCouncil(activeCitadelId), fetchAgents("active", 300)]);
-    setCouncil({ loading: false, error: null, items, agents: agents.items });
-  };
-
   const handleSeatAgent = async () => {
-    if (!selectedAgentId) {
-      return;
-    }
-    try {
-      await assignCitadelCouncilAgent(activeCitadelId, selectedAgentId);
-      setNotice("Agent seated in this Citadel.");
-      await reloadCouncil();
-    } catch (error) {
-      setNotice(getErrorMessage(error));
-    }
+    if (!selectedAgentId || !access.snapshot) return;
+    const expectedRevision = access.snapshot.revision;
+    setNotice(null);
+    const saved = await access.run(expectedRevision, () => assignCitadelCouncilAgent(activeCitadelId, selectedAgentId, expectedRevision));
+    if (saved) setNotice("Agent seated in this Citadel.");
   };
 
   const handleRemoveSeat = async () => {
-    if (!pendingRemoval) {
-      return;
-    }
-    try {
-      await unassignCitadelCouncilAgent(activeCitadelId, pendingRemoval);
-      setPendingRemoval(null);
-      setNotice("Agent removed from this Citadel Council.");
-      await reloadCouncil();
-    } catch (error) {
-      setNotice(getErrorMessage(error));
-    }
+    if (!pendingRemoval || pendingRemoval.citadelId !== activeCitadelId) return;
+    setNotice(null);
+    const saved = await access.run(pendingRemoval.revision, () => unassignCitadelCouncilAgent(activeCitadelId, pendingRemoval.agentId, pendingRemoval.revision));
+    if (!access.isCurrent()) return;
+    setPendingRemoval(null);
+    if (saved) setNotice("Agent removed from this Citadel Council.");
   };
 
   const seatedAgentIds = new Set(council.items.map((item) => item.agentId));
-  const removeDisabled = !selectedAgentId || !seatedAgentIds.has(selectedAgentId);
+  const removeDisabled = !access.ready || !selectedAgentId || !seatedAgentIds.has(selectedAgentId);
   const removeDisabledReason = !selectedAgentId
     ? "Select a seated agent before removing a Council seat."
     : "The selected agent is not currently seated in this Council.";
@@ -119,9 +102,12 @@ export function CitadelCouncilRoutePage({
       kicker={routeKicker(route)}
       title="Council"
       description={`Agents seated in the ${activeCitadelName} Citadel. Seats reference agents by id without duplicating their profiles.`}
-      loading={council.loading}
-      error={council.error}
+      loading={council.loading || (access.loading && !access.reviewRequired)}
+      error={council.error ?? (!access.snapshot && !access.reviewRequired ? access.error : null)}
     >
+      {access.error && (!access.reviewRequired || !access.snapshot) ? <NoticeBanner tone="error" message={access.error} /> : null}
+      {access.reviewRequired ? <CitadelAccessReview snapshot={access.snapshot} onAccept={access.acceptReview} /> : null}
+      {access.snapshot?.structure.record?.lifecycleStatus === "archived" ? <p>Restore this Citadel before changing access rules.</p> : null}
       <NativeGrid className="mc-next-calm-directory">
         <NativeCard
           title="Seated agents"
@@ -146,7 +132,7 @@ export function CitadelCouncilRoutePage({
                   ))}
                 </select>
               </label>
-              <NativeButton type="button" variant="secondary" onClick={handleSeatAgent} disabled={!selectedAgentId}>
+              <NativeButton type="button" variant="secondary" onClick={handleSeatAgent} disabled={!selectedAgentId || !access.ready || council.loading || Boolean(council.error) || seatedAgentIds.has(selectedAgentId)}>
                 <Plus size={16} aria-hidden="true" />
                 Seat
               </NativeButton>
@@ -154,7 +140,7 @@ export function CitadelCouncilRoutePage({
                 type="button"
                 variant="secondary"
                 className="mc-next-council-remove"
-                onClick={() => setPendingRemoval(selectedAgentId)}
+                onClick={() => { if (access.snapshot) setPendingRemoval({ agentId: selectedAgentId, revision: access.snapshot.revision, citadelId: activeCitadelId }); }}
                 disabled={removeDisabled}
                 aria-describedby={removeDisabled ? removeReasonId : undefined}
               >
@@ -191,7 +177,7 @@ export function CitadelCouncilRoutePage({
           <NativeButton variant="outline" onClick={() => navigate({ area: "library", section: "agents" })}>Open agent catalog</NativeButton>
         </> : null}
       </DetailInspector>
-      <ConfirmModal open={pendingRemoval !== null} title="Remove Council seat?" message={`Remove ${council.agents.find((agent) => agent.agentId === pendingRemoval)?.name ?? pendingRemoval} from ${activeCitadelName}? The agent profile will remain available.`} confirmLabel="Remove seat" danger onConfirm={() => void handleRemoveSeat()} onCancel={() => setPendingRemoval(null)} />
+      <ConfirmModal className="mc-next-citadel-confirmation" pending={access.busy} cancelDisabled={access.busy} disableDismiss={access.busy} open={pendingRemoval !== null} title="Remove Council seat?" message={`Remove ${council.agents.find((agent) => agent.agentId === pendingRemoval?.agentId)?.name ?? pendingRemoval?.agentId} from ${activeCitadelName}? The agent profile will remain available.`} confirmLabel="Remove seat" danger onConfirm={() => void handleRemoveSeat()} onCancel={() => setPendingRemoval(null)} />
       <p className="mc-next-citadel-footnote">
         <Users size={12} aria-hidden="true" />
         Seating an agent references it; it never copies the agent. Per-seat grant ceilings are enforced by the policy

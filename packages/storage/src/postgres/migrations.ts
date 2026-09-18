@@ -1,3 +1,23 @@
+import { GOVERNED_REMEDIATION_PARENT_RESERVATION_POSTGRES_SQL } from "../governed-remediation-parent-reservation-schema.js";
+import { GOVERNED_REMEDIATION_RESUME_VERSION_POSTGRES_SQL } from "../governed-remediation-resume-version.js";
+import { GOVERNED_REMEDIATION_PARENT_RESOLUTION_POSTGRES_SQL } from "../governed-remediation-parent-resolution-schema.js";
+import { CHANNEL_SETUP_CONNECTION_REVIEW_POSTGRES_SQL } from "../channel-setup-connection-review-schema.js";
+import { REMOTE_WORKER_RUNTIME_RESULT_POSTGRES_SQL } from "../remote-worker-runtime-result-schema.js";
+import { REMOTE_WORKER_RUNTIME_OUTPUT_POSTGRES_SQL } from "../remote-worker-runtime-output-schema.js";
+import { REMOTE_WORKER_NATIVE_FILE_RECEIPT_POSTGRES_SQL } from "../remote-worker-native-file-receipt-schema.js";
+import { REMOTE_WORKER_NATIVE_FILE_TRANSFER_POSTGRES_SQL } from "../remote-worker-native-file-transfer-schema.js";
+import { REMOTE_WORKER_NATIVE_POLICY_RESERVATION_POSTGRES_SQL } from "../remote-worker-native-policy-reservation-schema.js";
+import { REMOTE_WORKER_RUNTIME_INSTALL_POSTGRES_SQL } from "../remote-worker-runtime-install-schema.js";
+import { REMOTE_WORKER_RUNTIME_RESULT_PAGES_POSTGRES_SQL } from "../remote-worker-runtime-result-pages-schema.js";
+import { REMOTE_WORKER_RUNTIME_APPROVAL_POSTGRES_SQL } from "../remote-worker-runtime-approval-schema.js";
+import { REMOTE_WORKER_CELL_CAPACITY_OBSERVATION_POSTGRES_SQL } from "../remote-worker-cell-capacity-observation-schema.js";
+import { REMOTE_WORKER_CELL_BACKING_CAPACITY_POSTGRES_SQL } from "../remote-worker-cell-backing-capacity-schema.js";
+import { REMOTE_WORKER_CELL_CAPACITY_INVENTORY_POSTGRES_SQL } from "../remote-worker-cell-capacity-inventory-schema.js";
+import { REMOTE_WORKER_NATIVE_CAPACITY_DELIVERY_POSTGRES_SQL } from "../remote-worker-native-capacity-delivery-schema.js";
+import { REMOTE_WORKER_NATIVE_CAPACITY_PAGES_POSTGRES_SQL } from "../remote-worker-native-capacity-pages-schema.js";
+import { REMOTE_WORKER_CELL_OBJECT_INVENTORY_POSTGRES_SQL } from "../remote-worker-cell-object-inventory-schema.js";
+import { REMOTE_WORKER_CELL_OBJECT_INVENTORY_PAGES_POSTGRES_SQL } from "../remote-worker-cell-object-inventory-pages-schema.js";
+import { INTEGRATION_CONNECTION_REVISION_POSTGRES_SQL } from "../integration-connection-revision-schema.js";
 /* eslint-disable max-lines -- Postgres migration ledger keeps every versioned migration in one append-only file so ordering, dependencies, and rollback context stay traceable. */
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
 import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
@@ -29,6 +49,8 @@ import { REMOTE_WORKER_CELL_MOUNT_POSTGRES_SQL } from "../remote-worker-cell-mou
 import { REMOTE_WORKER_CELL_MOUNTED_WORKSPACE_POSTGRES_SQL } from "../remote-worker-cell-mounted-workspace-schema.js";
 import { MEMORY_ITEM_ENUMERATION_POSTGRES_SQL } from "../memory-item-enumeration-schema.js";
 import { PERMISSION_PROFILE_SELECTION_POSTGRES_SQL } from "../permission-profile-selection-schema.js";
+import { CITADEL_ACCESS_REVISION_POSTGRES_SQL } from "../citadel-access-revision-schema.js";
+import { CITADEL_VAULT_REVISION_POSTGRES_SQL } from "../citadel-vault-revision-schema.js";
 import { REMOTE_WORKER_CANCELLATION_SETTLEMENT_POSTGRES_SQL } from "../remote-worker-cancellation-settlement-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "../managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL } from "../product-source-update-repo.js";
@@ -14737,6 +14759,28 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   { version: 171, name: "remote_worker_cell_mounted_workspace_checkpoints", sql: REMOTE_WORKER_CELL_MOUNTED_WORKSPACE_POSTGRES_SQL, integritySha256: "6fb308294a5cd3d705b927fece555946fc592c06b7c778707b2e1b40e9b4a24b" },
   { version: 172, name: "memory_item_enumeration", sql: MEMORY_ITEM_ENUMERATION_POSTGRES_SQL, integritySha256: "3a715ae08cfae03656e58919804d61ee2153c8951ebb70f0ac898477a6fd573c" },
   { version: 173, name: "permission_profile_selection", sql: PERMISSION_PROFILE_SELECTION_POSTGRES_SQL, integritySha256: "bcb5ad15749e7f4332fe1db8e1d9e791830300df332f5ab7dadf0e329fa5f6f3" },
+  { version: 174, name: "citadel_access_revisions", sql: CITADEL_ACCESS_REVISION_POSTGRES_SQL, integritySha256: "cea217f9b3409f512f928bcc6c55c8dd913fef95e569db64e85f5522125e71d0" },
+  { version: 175, name: "citadel_vault_revisions", sql: CITADEL_VAULT_REVISION_POSTGRES_SQL, integritySha256: "3d4f6f0e4ee8c3811df7b0fba1d63f48479dc9b23e5516b044a923654ba7d7d1" },
+  { version: 176, name: "integration_connection_revisions", sql: INTEGRATION_CONNECTION_REVISION_POSTGRES_SQL, integritySha256: "398d436f0020a427d9c5dc81a85507a53ecbb1b2f85942bf70830d9000307d7d" },
+  { version: 177, name: "channel_setup_connection_review", sql: CHANNEL_SETUP_CONNECTION_REVIEW_POSTGRES_SQL, integritySha256: "89d5b7420be41499de45f148fbbcc6b291b5164ab77216a8e81c8b8d7a72c3a8" },
+  { version: 178, name: "remote_worker_cell_capacity_observations", sql: REMOTE_WORKER_CELL_CAPACITY_OBSERVATION_POSTGRES_SQL, integritySha256: "873efe6163610c29a406ff0dd8d7f24db91e848e8c8f14e59d66941fd68d762d" },
+  { version: 179, name: "remote_worker_cell_backing_capacity_observations", sql: REMOTE_WORKER_CELL_BACKING_CAPACITY_POSTGRES_SQL, integritySha256: "8904d315a6489e401015fec443db32e1b4edcec33ae5f85a64d3c912f32a1158" },
+  { version: 180, name: "remote_worker_cell_capacity_inventories", sql: REMOTE_WORKER_CELL_CAPACITY_INVENTORY_POSTGRES_SQL, integritySha256: "0d0235b42d7f264a7fa379f36b9cd1f74b62fda71d0150e9edff3359970b4f75" },
+  { version: 181, name: "remote_worker_cell_object_inventory_observations", sql: REMOTE_WORKER_CELL_OBJECT_INVENTORY_POSTGRES_SQL, integritySha256: "80d28c1e007404d9a2ca57326ba54d4d1f544324d136541782f532ce0e47734d" },
+  { version: 182, name: "remote_worker_cell_object_inventory_staging", sql: REMOTE_WORKER_CELL_OBJECT_INVENTORY_PAGES_POSTGRES_SQL, integritySha256: "db0c7db88926ca3c3ec58ca33c9f2c1e52bd5a60c2c6a15c8b9100ce977bbd50" },
+  { version: 183, name: "remote_worker_runtime_results", sql: REMOTE_WORKER_RUNTIME_RESULT_POSTGRES_SQL, integritySha256: "abdb081840ffda0b0891589b5d73fe8a626f276c04d1b8f4567c934968579cb4" },
+  { version: 184, name: "remote_worker_runtime_result_staging", sql: REMOTE_WORKER_RUNTIME_RESULT_PAGES_POSTGRES_SQL, integritySha256: "346aab3e3a6d4f5e84704c989c704caacbd692c7da560c503f463b651acfebd5" },
+  { version: 185, name: "remote_worker_runtime_approval_binding", sql: REMOTE_WORKER_RUNTIME_APPROVAL_POSTGRES_SQL, integritySha256: "27b2c92f8bffdf721f404db182fc5b6b93e4f532b28f27420f0d4b9865c5d4f7" },
+  { version: 186, name: "remote_worker_native_capacity_deliveries", sql: REMOTE_WORKER_NATIVE_CAPACITY_DELIVERY_POSTGRES_SQL, integritySha256: "235cb8ab60a0656c23ffe806b8720b2c767d265484a20ea68ee76ae0fd34c97b" },
+  { version: 187, name: "remote_worker_native_capacity_staging", sql: REMOTE_WORKER_NATIVE_CAPACITY_PAGES_POSTGRES_SQL, integritySha256: "c21a855e7c0cca40e986ba9d87593cba55d73eccfc473ac7b8ece58edce472b5" },
+  { version: 188, name: "governed_remediation_parent_reservations", sql: GOVERNED_REMEDIATION_PARENT_RESERVATION_POSTGRES_SQL, integritySha256: "d2488db5428e07fb2a98aaef682dfdcab574f533c97f846b75baf28e89358f59" },
+  { version: 189, name: "governed_remediation_resume_version", sql: GOVERNED_REMEDIATION_RESUME_VERSION_POSTGRES_SQL, integritySha256: "eedb5468b66d681b8b1b17078ca31ba5151b5f20f4b380d9a8e67a3858933525" },
+  { version: 190, name: "governed_remediation_parent_resolutions", sql: GOVERNED_REMEDIATION_PARENT_RESOLUTION_POSTGRES_SQL, integritySha256: "f89103de82a8f01d4009bf3f88420fd84189dee0f22a0577a8099709014c2935" },
+  { version: 191, name: "remote_worker_runtime_output_evidence", sql: REMOTE_WORKER_RUNTIME_OUTPUT_POSTGRES_SQL, integritySha256: "5e2507d61bf4a92a018acf2bc3db061969686829376f0c62b7237fad9ae999d5" },
+  { version: 192, name: "remote_worker_native_file_receipts", sql: REMOTE_WORKER_NATIVE_FILE_RECEIPT_POSTGRES_SQL, integritySha256: "efbb70bff7fe93c896959da3ece3eb586072a0ec93bee36637d475d2b9a72e38" },
+  { version: 193, name: "remote_worker_native_file_transfers", sql: REMOTE_WORKER_NATIVE_FILE_TRANSFER_POSTGRES_SQL, integritySha256: "d9fbb01f45bc4c91750d40041d2b89ea9fed25f205112174c55341907a11cf63" },
+  { version: 194, name: "remote_worker_native_policy_reservations", sql: REMOTE_WORKER_NATIVE_POLICY_RESERVATION_POSTGRES_SQL, integritySha256: "300eed6a42458aef515c3a97ec37c1bc82fa2dd0423f75121e07e1deb2a09035" },
+  { version: 195, name: "remote_worker_runtime_install_evidence", sql: REMOTE_WORKER_RUNTIME_INSTALL_POSTGRES_SQL, integritySha256: "3650836cc42eb68832585025c5e6fc60054e2b214c77bcaa8c4501b2243a0d53" },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

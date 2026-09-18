@@ -1,5 +1,6 @@
 #include "availability_broker.hpp"
 #include "local_transport.hpp"
+#include "service_configuration_query.hpp"
 
 #include <aclapi.h>
 #include <bcrypt.h>
@@ -744,19 +745,10 @@ bool QueryServiceConfig2IntoBuffer(
   if (service == nullptr || buffer == nullptr || returned == nullptr) {
     return false;
   }
-  buffer->fill(0U);
-  DWORD required = 0U;
-  if (QueryServiceConfig2W(
-          service,
-          level,
-          buffer->data(),
-          static_cast<DWORD>(buffer->size()),
-          &required) == FALSE ||
-      required < minimum || required > buffer->size()) {
-    return false;
-  }
-  *returned = required;
-  return true;
+  return QueryBoundedServiceConfiguration(buffer, minimum, returned,
+      [service, level](LPBYTE data, DWORD capacity, LPDWORD needed) noexcept {
+        return QueryServiceConfig2W(service, level, data, capacity, needed);
+      });
 }
 
 bool CopySidToSnapshot(PSID sid, AvailabilitySid* output) noexcept {
@@ -787,8 +779,7 @@ bool CollectServiceSnapshot(
           SC_STATUS_PROCESS_INFO,
           reinterpret_cast<LPBYTE>(&status),
           sizeof(status),
-          &returned) == FALSE ||
-      returned != sizeof(status)) {
+          &returned) == FALSE) {
     return false;
   }
   collected.service_process_id = status.dwProcessId;
@@ -802,12 +793,11 @@ bool CollectServiceSnapshot(
 
   alignas(16) std::array<std::uint8_t, kConfigurationBufferBytes> buffer{};
   DWORD required = 0U;
-  if (QueryServiceConfigW(
-          service,
-          reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data()),
-          static_cast<DWORD>(buffer.size()),
-          &required) == FALSE ||
-      required < sizeof(QUERY_SERVICE_CONFIGW) || required > buffer.size()) {
+  if (!QueryBoundedServiceConfiguration(&buffer, sizeof(QUERY_SERVICE_CONFIGW), &required,
+      [service](LPBYTE data, DWORD capacity, LPDWORD needed) noexcept {
+        return QueryServiceConfigW(service,
+            reinterpret_cast<QUERY_SERVICE_CONFIGW*>(data), capacity, needed);
+      })) {
     return false;
   }
   const auto* configuration =
@@ -1449,7 +1439,7 @@ void WINAPI BrokerServiceMain(DWORD argument_count, wchar_t** arguments) noexcep
                 manager.get(),
                 kTargetServiceName,
                 SERVICE_START | SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS |
-                    READ_CONTROL | SYNCHRONIZE));
+                    READ_CONTROL));
   if (stop_event.get() != nullptr && manager.get() != nullptr &&
       broker.get() != nullptr && target.get() != nullptr &&
       BuildInstalledPaths(&paths)) {

@@ -1,4 +1,6 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { ConflictError, SemanticValidationError, type ChannelSetupDraft } from "@goatcitadel/contracts";
 import {
   projectChannelSetupDraftForPublicResponse,
@@ -20,6 +22,32 @@ import {
 import { sendRouteError } from "./_error-handler.js";
 
 export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance): void {
+  fastify.addHook("preHandler", async (request, reply) => {
+    if (request.url.split("?", 1)[0]?.startsWith("/api/v1/channels/drafts")) {
+      reply.header("cache-control", "no-store");
+      reply.header("pragma", "no-cache");
+    }
+  });
+  fastify.get("/api/v1/channels/drafts/:draftId", async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      return reply.send(projectChannelSetupDraftForPublicResponse(await fastify.services.channelSetup.getChannelSetupDraft(params.data.draftId)));
+    } catch (error) { return sendRouteError(reply, error, request.log); }
+  });
+  fastify.post("/api/v1/channels/drafts/:draftId/connection-review", async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    const body = channelDraftActionSchema.extend({ expectedConnectionRevision: z.string().regex(/^[a-f0-9]{64}$/) }).strict().safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "A draft revision and current connection review are required." });
+    try {
+      const draft = await fastify.services.channelSetup.reviewChannelSetupConnection(params.data.draftId, body.data);
+      await markMutationCommitted(request);
+      return reply.send(projectChannelSetupDraftForPublicResponse(draft));
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
   fastify.post(
     "/api/v1/channels/drafts/:draftId/secure-fields",
     {
@@ -42,8 +70,10 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       }
       try {
         const updated = await fastify.services.channelSetup.setChannelSetupDraftSecrets(params.data.draftId, body.data);
+        await markMutationCommitted(request);
         return reply.send(projectChannelSetupDraftForPublicResponse(updated));
       } catch (error) {
+        await markMutationCommittedFromError(request, error);
         return error instanceof ConflictError
           ? sendRouteError(reply, error, request.log)
           : reply.code(422).send({ error: (error as Error).message });
@@ -218,12 +248,12 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       const finalized = await fastify.services.channelSetup.finalizeChannelSetupDraft(
         params.data.draftId,
         body.data.expectedRevision,
+        async () => { await markMutationCommitted(request); },
       );
       return reply.send(projectChannelSetupFinalizeResultForPublicResponse(finalized));
     } catch (error) {
-      return error instanceof ConflictError
-        ? sendRouteError(reply, error, request.log)
-        : reply.code(400).send({ error: (error as Error).message });
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 

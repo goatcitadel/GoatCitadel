@@ -17,9 +17,11 @@ test("dedicated cell controller identity and custody reject substitute authority
   const sourceNames = [
     ...["cell_controller_identity", "cell_filesystem", "cell_workspace", "cell_security"].flatMap((name) =>
       ["cpp", "hpp"].map((extension) => `${cell}/src/${name}.${extension}`)),
-    ...["cell_runtime_bundle", "cell_job", "cell_job_stdio"].map((name) => `${cell}/src/${name}.hpp`),
+    ...["cell_runtime_bundle", "cell_job", "cell_job_stdio", "cell_capacity"].map((name) => `${cell}/src/${name}.hpp`),
     `${cell}/tests/cell_controller_identity_test.cpp`,
     `${host}/src/service_identity.cpp`, `${host}/src/service_identity.hpp`, `${host}/src/worker_host.hpp`,
+    ...["worker-install-native.cs", "worker-controller-key.cs", "worker-install-common.ps1", "broker-coordinator-common.ps1", "worker-capacity-custody.test.ps1"]
+      .map(name => `scripts/remote-worker/${name}`),
   ];
   const snapshot = path.join(output, "source");
   const sourceManifest = sourceNames.map((name) => {
@@ -43,6 +45,19 @@ test("dedicated cell controller identity and custody reject substitute authority
   fs.writeFileSync(path.join(output, "service-sid.log"), showSid.stdout + showSid.stderr, { flag: "wx" });
   const toolchain = resolveExactWindowsToolchain("windows-x64");
   const outcomes = [];
+  const capacityRecords = [];
+  for (const [index, engine] of [path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"), "pwsh.exe"].entries()) {
+    const fixture = path.join(output, `capacity-roots-${index}`);
+    const encoded = spawnSync(engine, ["-NoProfile", "-NonInteractive", "-File",
+      path.join(snapshot, "scripts/remote-worker/worker-capacity-custody.test.ps1"), "-FixtureRoot", fixture],
+    { windowsHide: true, encoding: "utf8", timeout: 30000 });
+    fs.writeFileSync(path.join(output, `capacity-encoder-${index}.log`), `${encoded.stdout ?? ""}${encoded.stderr ?? ""}`, { flag: "wx" });
+    assert.equal(encoded.error, undefined); assert.equal(encoded.status, 0, encoded.stderr);
+    const report = JSON.parse(encoded.stdout);
+    assert.equal(report.passed, true); assert.equal(report.checks, 52);
+    assert.equal(report.installedService, false); assert.equal(report.volumeAttached, false);
+    capacityRecords.push(path.join(fixture, "capacity.identity"));
+  }
   for (const asan of [false, true]) {
     const executable = compileTlsNative({
       target: "windows-x64", outputDirectory: output,
@@ -65,6 +80,16 @@ test("dedicated cell controller identity and custody reject substitute authority
     assert.equal(report.installedService, false);
     assert.equal(report.volumeAttached, false);
     outcomes.push({ asan, ...report });
+    for (const [index, record] of capacityRecords.entries()) {
+      const paired = spawnSync(executable, [record], { windowsHide: true, encoding: "utf8", timeout: 15000,
+        env: { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" } });
+      fs.writeFileSync(path.join(output, `capacity-paired-${asan ? "asan" : "normal"}-${index}.log`),
+        `${paired.stdout ?? ""}${paired.stderr ?? ""}`, { flag: "wx" });
+      assert.equal(paired.error, undefined); assert.equal(paired.status, 0, paired.stderr);
+      const pairedReport = JSON.parse(paired.stdout);
+      assert.equal(pairedReport.passed, true); assert.ok(pairedReport.checks > report.checks);
+      assert.equal(pairedReport.installedService, false); assert.equal(pairedReport.volumeAttached, false);
+    }
   }
   for (const item of sourceManifest) {
     assert.equal(createHash("sha256").update(fs.readFileSync(path.join(repository, item.name))).digest("hex"), item.sha256,

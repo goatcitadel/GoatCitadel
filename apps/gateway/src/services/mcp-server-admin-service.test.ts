@@ -260,10 +260,11 @@ describe("mcp-server-admin-service", () => {
     expect(host.patchMcpServerState).toHaveBeenNthCalledWith(1, "server-1", {
       status: "connecting",
       lastError: undefined,
-    });
+    }, expect.objectContaining({ serverId: "server-1" }));
     expect(host.patchMcpServerState).toHaveBeenLastCalledWith(
       "server-1",
       expect.objectContaining({ status: "connected", lastError: undefined }),
+      expect.objectContaining({ serverId: "server-1", status: "connecting" }),
     );
 
     await expect(disconnectMcpServer(host, "server-1")).resolves.toMatchObject({
@@ -388,7 +389,7 @@ describe("mcp-server-admin-service", () => {
     expect(host.patchMcpServerState).toHaveBeenLastCalledWith("server-1", {
       status: "error",
       lastError: "handshake failed",
-    });
+    }, expect.objectContaining({ serverId: "server-1", status: "connecting" }));
   });
 
   it("stores OAuth handshake state and completes it through the connect path", async () => {
@@ -489,6 +490,21 @@ describe("mcp-server-admin-service", () => {
     }
   });
 
+  it.each(["auth-type", "token-url"])("rejects changed %s during OAuth environment preparation", async drift => {
+    const server = createServer({ authType: "oauth2", oauth: {
+      authorizationUrl: "https://example.invalid/authorize", tokenUrl: "https://example.invalid/token",
+    } });
+    const host = createHost({ servers: [server] });
+    host.prepareMcpStaticEnvironment = vi.fn(async () => drift === "auth-type"
+      ? { ...server, authType: "none" as const }
+      : { ...server, oauth: { ...server.oauth, tokenUrl: undefined } });
+    host.resolveMcpOAuthClientId = vi.fn(async () => "unused-client");
+    await expect(startMcpOAuth(host, server.serverId)).rejects.toThrow("configuration changed");
+    expect(host.resolveMcpOAuthClientId).not.toHaveBeenCalled();
+    expect(host.readMcpAuthState).not.toHaveBeenCalled();
+    expect(host.writeMcpAuthState).not.toHaveBeenCalled();
+  });
+
   it("deletes servers, tools, approval inbox entries, and emits realtime only when present", async () => {
     const host = createHost({
       servers: [createServer({ serverId: "server-1" }), createServer({ serverId: "server-2" })],
@@ -542,10 +558,12 @@ function createHost(input?: {
     writeMcpServers: vi.fn(async (servers: McpServerRecord[]) => {
       const removed = host.servers.filter((server) => !servers.some((next) => next.serverId === server.serverId));
       for (const server of removed) delete host.authState[server.serverId];
+      for (const server of removed) await host.storage.approvalInbox.deleteByReceiver("mcp", server.serverId);
       host.tools = host.tools.filter((tool) => !removed.some((server) => server.serverId === tool.serverId));
       host.servers = [...servers];
+      return host.servers;
     }),
-    patchMcpServerState: vi.fn(async (serverId: string, patch: Partial<McpServerRecord>) => {
+    patchMcpServerState: vi.fn(async (serverId: string, patch: Partial<McpServerRecord>, _expected?: McpServerRecord) => {
       let updated: McpServerRecord | undefined;
       host.servers = host.servers.map((server) => {
         if (server.serverId !== serverId) {
@@ -564,6 +582,10 @@ function createHost(input?: {
       return updated;
     }),
     readMcpTools: vi.fn(async () => host.tools),
+    completeMcpServerConnection: vi.fn(async (server: McpServerRecord, tools: McpToolRecord[]) => {
+      await host.writeMcpTools([...host.tools.filter(tool => tool.serverId !== server.serverId), ...tools]);
+      return host.patchMcpServerState(server.serverId, { status: "connected", lastConnectedAt: new Date().toISOString(), lastError: undefined }, server);
+    }),
     writeMcpTools: vi.fn(async (tools: McpToolRecord[]) => {
       host.tools = [...tools];
     }),

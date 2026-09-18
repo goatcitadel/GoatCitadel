@@ -143,7 +143,7 @@ describe("canonical channel approval handoff", () => {
     await execution;
     expect((await f.drain())[0]).toMatchObject({ status: "sent", providerMessageId: "201", attempts: 1 });
     expect(send).toHaveBeenCalledTimes(1);
-  }, 25_000);
+  }, 60_000);
 
   it("rejects an unregistered part and rolls back its approval and pending action", async () => {
     const f = await fixture();

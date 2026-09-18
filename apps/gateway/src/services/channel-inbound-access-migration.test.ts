@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { evaluateChannelInboundAccess, type IntegrationConnection } from "@goatcitadel/contracts";
+import { ConflictError, evaluateChannelInboundAccess, type IntegrationConnection, type IntegrationConnectionUpdateInput } from "@goatcitadel/contracts";
 import {
   LEGACY_OPEN_STAMP_SETTING_KEY,
   stampLegacyOpenChannelInboundAccess,
@@ -16,6 +16,7 @@ function connection(input: {
 }): IntegrationConnection {
   return {
     connectionId: input.connectionId,
+    revision: "a".repeat(64),
     catalogId: "channels.telegram",
     kind: input.kind ?? "channel",
     key: input.key ?? "telegram",
@@ -147,5 +148,21 @@ describe("stampLegacyOpenChannelInboundAccess", () => {
     expect(deps.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.inbound_access_legacy_stamp_failed" }),
     );
+  });
+
+  it("cannot replace a newly restricted policy with the earlier legacy-open snapshot", async () => {
+    const stale = connection({ connectionId: "conn-race" });
+    const { deps, settingsMap } = createHarness([stale]);
+    let canonical = { ...stale, revision: "b".repeat(64), config: { inboundAccessMode: "allowlist", allowedSenders: [] } as Record<string, unknown> };
+    deps.storage.integrationConnections.update.mockImplementation((_id, patch) => {
+      const expected = (patch as IntegrationConnectionUpdateInput).expectedRevision;
+      if (expected !== undefined && expected !== canonical.revision) throw new ConflictError({ code: "WRITE_CONFLICT", message: "Policy changed" });
+      canonical = { ...canonical, config: patch.config };
+      return canonical;
+    });
+    expect((await stampLegacyOpenChannelInboundAccess(deps)).stampedConnectionIds).toEqual([]);
+    expect(canonical.config).toEqual({ inboundAccessMode: "allowlist", allowedSenders: [] });
+    expect(settingsMap.has(LEGACY_OPEN_STAMP_SETTING_KEY)).toBe(false);
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
   });
 });

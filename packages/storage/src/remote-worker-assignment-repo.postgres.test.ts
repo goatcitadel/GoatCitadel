@@ -1,33 +1,31 @@
+import { bootstrapInput, protectedCredentialNonce, seedProtectedFenceHarness } from "./remote-worker-protected-fence-fixture.js";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
   REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
   REMOTE_WORKER_MESH_NODE_AUTHORITY_FENCE_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_VERSION,
-  REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_SCHEMA_VERSION,
-  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
-  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
   remoteWorkerAssignmentParentContextSha256,
-  remoteWorkerProtectedAdmissionContextSha256,
-  remoteWorkerProtectedAdmissionRemoteCallerBindingSha256,
-  type CreateRemoteWorkerBootstrapCommand,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
   type RemoteWorkerAssignmentEventInput,
   type RemoteWorkerAssignmentManifest,
-  type RemoteWorkerBootstrapRecord,
-  type RemoteWorkerProtectedAdmissionSignerPin,
   type RemoteWorkerRuntimeCredentialRecord,
 } from "@goatcitadel/contracts";
 import { Pool } from "pg";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { prepareChatOfferFixture } from "./remote-worker-chat-offer-fixture.js";
 import { verifyWorkerChatApprovalResume } from "./remote-worker-chat-resume-fixture.js";
+import { verifyNativeRuntimeLeaseResume } from "./remote-worker-native-runtime-resume-fixture.js";
+import { verifyRetainedNativeChatResult } from "./remote-worker-native-chat-result-fixture.js";
 import { verifyWorkerChatParentRecovery } from "./remote-worker-chat-parent-recovery-fixture.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
@@ -37,14 +35,11 @@ import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 import {
   RemoteWorkerAdmissionRepository,
-  type FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
 } from "./remote-worker-admission-repo.js";
 import {
   RemoteWorkerAssignmentRepository,
   type RemoteWorkerAssignmentProtectedCommitFence,
 } from "./remote-worker-assignment-repo.js";
-import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
-import type { RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
 import { TaskRepository } from "./task-repo.js";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
@@ -54,22 +49,117 @@ import { verifyWorkerTerminalRenewal } from "./remote-worker-terminal-renewal-fi
 import { verifyRemoteWorkerMeshSettlements } from "./remote-worker-mesh-settlement-fixture.js";
 import { createRemoteWorkerPostgresTestScope } from "./remote-worker-test-fixtures.js";
 import { verifyCellProvisioningExchange } from "./remote-worker-cell-exchange-fixture.js";
+import { verifyCellCapacityExchange } from "./remote-worker-cell-capacity-fixture.js";
+import { verifyNativePoolMembership } from "./remote-worker-native-pool-fixture.js";
+import { verifyCellObjectInventoryExchange } from "./remote-worker-cell-object-inventory-fixture.js";
+import { verifyCellObjectInventoryPages } from "./remote-worker-cell-object-inventory-pages-fixture.js";
+import { verifyCellBackingCapacityExchange } from "./remote-worker-cell-backing-capacity-fixture.js";
+import { verifyCellCapacityAdmission } from "./remote-worker-cell-capacity-admission-fixture.js";
+import { verifyCellCapacityInventory } from "./remote-worker-cell-capacity-inventory-fixture.js";
+import { verifyNativeCapacityDelivery } from "./remote-worker-native-capacity-delivery-fixture.js";
+import { verifyNativePoolCapacityDelivery } from "./remote-worker-native-pool-capacity-delivery-fixture.js";
+import { verifyNativeCapacityPages, verifyInstallationCapacityPages, verifyNativePoolCapacityPages, verifyPoolInstallationCapacityPages } from "./remote-worker-native-capacity-pages-fixture.js";
+import { capacityInventoryFixture } from "../../contracts/src/remote-worker-cell-capacity-inventory-test-fixture.js";
+import { remoteWorkerCellCapacityInventorySha256 } from "@goatcitadel/contracts";
+import { RemoteWorkerCellCapacityAdmissionRepository } from "./remote-worker-cell-capacity-admission-repo.js";
+import { RemoteWorkerCellProvisioningRepository } from "./remote-worker-cell-provisioning-repo.js";
 import { verifyNativeCellPreparation, NATIVE_CELL_PREPARATION_TEST_POLICY } from "./remote-worker-cell-preparation-fixture.js";
+import { verifyRuntimeResultRetention } from "./remote-worker-runtime-result-fixture.js";
+import { verifyRuntimeInstallRetention } from "./remote-worker-runtime-install-fixture.js";
+import { verifyRuntimeAdmission } from "./remote-worker-runtime-admission-fixture.js";
+import { verifyNativePolicyReservation } from "./remote-worker-native-policy-reservation-fixture.js";
+import { verifyRuntimeOutputRetention, verifyNativeFileDisclosure } from "./remote-worker-runtime-output-fixture.js";
+import { REMOTE_WORKER_RUNTIME_APPROVAL_POSTGRES_SQL } from "./remote-worker-runtime-approval-schema.js";
+import { verifyRuntimeResultPages } from "./remote-worker-runtime-result-pages-fixture.js";
 
 const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 const postgresIt = postgresConnectionString ? it : it.skip;
 const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
-const DBytes = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex");
 const FUTURE = "2099-01-01T00:00:00.000Z";
+
+postgresIt("native approval binding upgrades existing PostgreSQL expectation rows", { timeout: 120_000 }, async () => {
+  assert.ok(postgresConnectionString);
+  const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "approval_upgrade");
+  try {
+    // A session-owned temporary table models the pre-migration shape without
+    // altering the canonical test tables or touching any installed database.
+    scope.db.exec(`CREATE TEMP TABLE approvals (approval_id TEXT PRIMARY KEY);
+      CREATE TEMP TABLE remote_worker_runtime_expectations (nonce TEXT PRIMARY KEY, expectation_json TEXT NOT NULL);
+      INSERT INTO remote_worker_runtime_expectations VALUES ('legacy', '{"retained":true}');`);
+    scope.db.exec(REMOTE_WORKER_RUNTIME_APPROVAL_POSTGRES_SQL);
+    scope.db.exec(REMOTE_WORKER_RUNTIME_APPROVAL_POSTGRES_SQL);
+    assert.deepEqual(scope.db.prepare("SELECT * FROM remote_worker_runtime_expectations WHERE nonce = 'legacy'").get(),
+      { nonce: "legacy", expectation_json: '{"retained":true}', approval_id: null });
+    assert.throws(() => scope.db.prepare("INSERT INTO remote_worker_runtime_expectations VALUES ('invalid', '{}', 'missing-approval')").run());
+  } finally { await scope.teardown(); }
+});
+
+for (const decision of ["approve", "reject"] as const) {
+  const verify = async (db: DatabaseClient, seed: string) => {
+    const h = seedProtectedFenceHarness(db, seed, true);
+    await verifyNativeRuntimeLeaseResume(db, seed, {
+      workerId: h.finalized.generation.workerId,
+      workerGeneration: h.finalized.generation.workerGeneration,
+      nodeId: h.finalized.generation.nodeId,
+      nodeAdmissionGeneration: h.admitted.admission.admissionGeneration,
+    }, h.fence, decision);
+  };
+  it(`native runtime lease resume ${decision} on SQLite`, async () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    try { await verify(db, `native-${decision}-sqlite`); } finally { db.close(); }
+  });
+  postgresIt(`native runtime lease resume ${decision} on PostgreSQL`, { timeout: 120_000 }, async () => {
+    assert.ok(postgresConnectionString);
+    const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, `native_${decision}`);
+    try { await verify(scope.db, `native-${decision}-pg`); } finally { await scope.teardown(); }
+  });
+}
+
+for (const dialect of ["SQLite", "PostgreSQL"] as const) {
+  const run = dialect === "SQLite" ? it : postgresIt;
+  run(`retained native result reaches canonical Chat on ${dialect}`, { timeout: 120_000 }, async () => {
+    const pg = dialect === "PostgreSQL" ? await createRemoteWorkerPostgresTestScope(postgresConnectionString!, "native_chat_result") : undefined;
+    const db = pg?.db ?? createDatabase({ dbPath: ":memory:" });
+    try {
+      const seed = `native-result-${dialect.toLowerCase()}`, h = seedProtectedFenceHarness(db, seed, true);
+      await verifyRetainedNativeChatResult(db, seed, { workerId: h.finalized.generation.workerId,
+        workerGeneration: h.finalized.generation.workerGeneration, nodeId: h.finalized.generation.nodeId,
+        nodeAdmissionGeneration: h.admitted.admission.admissionGeneration }, h.fence, authority => verifyNativePolicyReservation(db, authority));
+    } finally { if (pg) await pg.teardown(); else db.close(); }
+  });
+}
 
 for (const { boundary, kind, verifyExchange } of (["worker", "mesh_authority", "parent"] as const).flatMap((boundary) => [
   { boundary, kind: "provisioning exchange", verifyExchange: verifyCellProvisioningExchange },
+  { boundary, kind: "capacity observation", verifyExchange: verifyCellCapacityExchange },
+  { boundary, kind: "native pool membership", verifyExchange: verifyNativePoolMembership },
+  { boundary, kind: "object inventory observation", verifyExchange: verifyCellObjectInventoryExchange },
+  { boundary, kind: "object inventory pages", verifyExchange: verifyCellObjectInventoryPages },
+  { boundary, kind: "runtime result retention", verifyExchange: verifyRuntimeResultRetention },
+  { boundary, kind: "runtime installation retention", verifyExchange: verifyRuntimeInstallRetention },
+  { boundary, kind: "runtime admission", verifyExchange: verifyRuntimeAdmission },
+  { boundary, kind: "runtime output retention", verifyExchange: verifyRuntimeOutputRetention },
+  { boundary, kind: "native file disclosure", verifyExchange: verifyNativeFileDisclosure },
+  { boundary, kind: "runtime result pages", verifyExchange: verifyRuntimeResultPages },
+  { boundary, kind: "backing capacity observation", verifyExchange: verifyCellBackingCapacityExchange },
+  { boundary, kind: "capacity admission", verifyExchange: verifyCellCapacityAdmission },
+  { boundary, kind: "capacity inventory", verifyExchange: verifyCellCapacityInventory },
+  { boundary, kind: "native capacity delivery", verifyExchange: verifyNativeCapacityDelivery },
+  { boundary, kind: "native pool capacity delivery", verifyExchange: verifyNativePoolCapacityDelivery },
+  { boundary, kind: "native capacity staging", verifyExchange: verifyNativeCapacityPages },
+  { boundary, kind: "installation capacity staging", verifyExchange: verifyInstallationCapacityPages },
+  { boundary, kind: "native pool capacity staging", verifyExchange: verifyNativePoolCapacityPages },
+  { boundary, kind: "pool installation capacity staging", verifyExchange: verifyPoolInstallationCapacityPages },
   { boundary, kind: "preparation", verifyExchange: verifyNativeCellPreparation },
 ])) {
   const verify = (db: DatabaseClient, seed: string) => {
     const h = seedProtectedFenceHarness(db, seed, true);
     const token = D(`${seed}:lease`);
-    const { assignmentId, durableRunId } = seedFencedAssignment(h, seed, "cell", h.meshFence.admissionGeneration, token);
+    // These composed authority fixtures exercise many independent rollback
+    // boundaries; PostgreSQL can exceed a minute without a worker heartbeat.
+    const longRuntimeFixture = kind === "runtime output retention" || kind === "native file disclosure" ||
+      kind === "installation capacity staging" || kind === "pool installation capacity staging";
+    const { assignmentId, durableRunId } = seedFencedAssignment(h, seed, "cell", h.meshFence.admissionGeneration, token, longRuntimeFixture ? 300 : 60, kind === "native file disclosure");
     verifyExchange(db, { registryWorkspaceId: "default", assignmentId, assignmentGeneration: 1 }, token, h.fence, () => {
       if (boundary === "worker") h.workerAdmissions.revokeGeneration({
         registryWorkspaceId: "default", workerId: h.meshFence.workerId, workerGeneration: h.meshFence.workerGeneration,
@@ -87,10 +177,12 @@ for (const { boundary, kind, verifyExchange } of (["worker", "mesh_authority", "
     });
   };
   it(`cell ${kind} rejects ${boundary} revocation on SQLite`, () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = createDatabase({ dbPath: kind.endsWith("capacity staging") ? join(mkdtempSync(join(tmpdir(), "gc-native-capacity-staging-")), "proof.db") : ":memory:" });
     try { verify(db, `sqlite-cell-${boundary}`); } finally { db.close(); }
   });
-  postgresIt(`cell ${kind} rejects ${boundary} revocation on PostgreSQL`, { timeout: 120_000 }, async () => {
+  postgresIt(`cell ${kind} rejects ${boundary} revocation on PostgreSQL`, {
+    timeout: kind === "runtime installation retention" ? 300_000 : kind.endsWith("capacity staging") || ["runtime output retention", "native file disclosure"].includes(kind) ? 240_000 : 120_000,
+  }, async () => {
     assert.ok(postgresConnectionString);
     const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "cell_exchange");
     try { verify(scope.db, `pg-cell-${boundary}`); } finally { await scope.teardown(); }
@@ -138,6 +230,113 @@ postgresIt("cell preparation has one creation winner under concurrent PostgreSQL
     await Promise.allSettled(workers.map((worker) => worker.result));
     await scope.teardown();
   }
+});
+
+for (const inventoryAdmission of [false, true]) {
+postgresIt(`cell capacity ${inventoryAdmission ? "inventory" : "admission"} has one winner under concurrent PostgreSQL requests`, { timeout: 120_000 }, async () => {
+  assert.ok(postgresConnectionString);
+  const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "cell_capacity_race");
+  const workers: FencedRepositoryWorker[] = [];
+  let hold: Awaited<ReturnType<typeof holdAdvisoryLock>> | undefined;
+  try {
+    const h = seedProtectedFenceHarness(scope.db, "capacity-admission-race", true);
+    const token = D("capacity-admission-race:lease");
+    const { assignmentId } = seedFencedAssignment(h, "capacity-admission-race", "cell", h.meshFence.admissionGeneration, token);
+    const authority = { registryWorkspaceId: "default", assignmentId, assignmentGeneration: 1, leaseRevision: 1,
+      leaseTokenSha256: token, protectedAuthority: h.fence };
+    new RemoteWorkerCellProvisioningRepository(scope.db).prepareForAssignment({ ...authority, policy: NATIVE_CELL_PREPARATION_TEST_POLICY,
+      submission: { kind: "cell.provisioning.prepare", parentIdentityHex: "0100000000000000" + "1".repeat(32) } });
+    const owner = new RemoteWorkerCellCapacityAdmissionRepository(scope.db), cell = owner.readForAssignment(authority);
+    const input = { ...authority, expectedCapacityRevision: cell.capacityRevision, expectedCleanupRevision: cell.cleanupRevision,
+      expectedExecutionRevision: cell.executionRevision, observation: {
+        reservation: cell.capacity, incomingBytes: 1_000, peakDiskBytes: 1_000,
+        peakMemoryBytes: 10, peakFileCount: 1, peakProcessCount: 1, rawOutputBytes: 100,
+        footprint: { schemaVersion: cell.capacity.schemaVersion, mutableRootBytes: 1_000, inputStagingBytes: 0,
+          backupStagingBytes: 0, artifactStagingBytes: 0, immutableArtifactBytes: 0, retainedOutboxBytes: 0,
+          databaseSidecarBytes: 0, backupPublicationBytes: 0, manifestBytes: 0, proxySidecarBytes: 0,
+          diagnosticBytes: 0, failedCleanupBytes: 0, quarantineEvidenceBytes: 0 },
+      } };
+    const evidenceCount = () => countRows(scope.db, `SELECT COUNT(*) AS count FROM remote_worker_cell_evidence
+      WHERE registry_workspace_id=@registryWorkspaceId AND assignment_id=@assignmentId AND domain='capacity'`, { registryWorkspaceId: "default", assignmentId });
+    const beforeEvidence = evidenceCount();
+    const inventory = capacityInventoryFixture(cell.profileSha256, "concurrent-inventory");
+    const requestInput = inventoryAdmission ? { ...input, expectedBackupRevision: cell.backupRevision, inventory,
+      inventoryBinding: { profileSha256: inventory.profileSha256, captureSha256: inventory.captureSha256,
+        inventorySha256: remoteWorkerCellCapacityInventorySha256(inventory) } } : input;
+    const connection = new URL(postgresConnectionString);
+    connection.searchParams.set("options", `-csearch_path=${scope.schemaName}`);
+    const database = decodeURIComponent(connection.pathname.slice(1)) || "postgres";
+    hold = await holdAdvisoryLock(scope.scopedPool, 411, "default");
+    for (const name of ["capacity-admit-one", "capacity-admit-two"]) workers.push(runFencedRepositoryWorker(
+      connection.toString(), database, name, { repositoryModule: "remote-worker-cell-capacity-admission-repo",
+        repositoryExport: "RemoteWorkerCellCapacityAdmissionRepository", operation: inventoryAdmission ? "admitInventory" : "admit", args: [requestInput] }));
+    await Promise.all(workers.map(worker => worker.ready));
+    await waitForAdvisoryLockWait(scope.scopedPool, "capacity-admit-one", ", 411)");
+    await waitForAdvisoryLockWait(scope.scopedPool, "capacity-admit-two", ", 411)");
+    await hold.release();
+    const results = await Promise.all(workers.map(worker => worker.result));
+    assert.equal(results.filter(result => result.ok).length, 1, JSON.stringify(results));
+    const refused = results.find(result => !result.ok);
+    assert.ok(refused && !refused.ok && /capacity revision/u.test(refused.error), JSON.stringify(results));
+    const winner = results.find(result => result.ok);
+    assert.ok(winner?.ok);
+    assert.equal(winner.value.decision, "accept");
+    assert.equal(owner.readForAssignment(authority).capacityRevision, cell.capacityRevision + 1);
+    assert.equal(evidenceCount(), beforeEvidence + 1);
+    if (inventoryAdmission) {
+      assert.equal(countRows(scope.db, `SELECT COUNT(*) AS count FROM remote_worker_cell_capacity_inventories
+        WHERE registry_workspace_id=@registryWorkspaceId AND assignment_id=@assignmentId`, { registryWorkspaceId: "default", assignmentId }), 1);
+      assert.equal(owner.readInventory({ ...authority, capacityRevision: cell.capacityRevision + 1 })!.accounting.hostAllocatedBytes, 86_016);
+    }
+  } finally {
+    await hold?.release();
+    await Promise.allSettled(workers.map(worker => worker.result));
+    await scope.teardown();
+  }
+});
+}
+
+function verifyInventoryInodeLimit(db: DatabaseClient, seed: string): void {
+  const h = seedProtectedFenceHarness(db, seed, true), token = D(`${seed}:lease`);
+  const { assignmentId } = seedFencedAssignment(h, seed, "cell", h.meshFence.admissionGeneration, token);
+  const authority = { registryWorkspaceId: "default", assignmentId, assignmentGeneration: 1, leaseRevision: 1,
+    leaseTokenSha256: token, protectedAuthority: h.fence };
+  new RemoteWorkerCellProvisioningRepository(db).prepareForAssignment({ ...authority,
+    policy: { ...NATIVE_CELL_PREPARATION_TEST_POLICY, capacity: { ...NATIVE_CELL_PREPARATION_TEST_POLICY.capacity, fileLimit: 4, inodeLimit: 4 } },
+    submission: { kind: "cell.provisioning.prepare", parentIdentityHex: "0100000000000000" + "1".repeat(32) } });
+  const owner = new RemoteWorkerCellCapacityAdmissionRepository(db), cell = owner.readForAssignment(authority);
+  const inventory = capacityInventoryFixture(cell.profileSha256, seed);
+  const command = () => { const current = owner.readForAssignment(authority); return { ...authority,
+    expectedCapacityRevision: current.capacityRevision, expectedExecutionRevision: current.executionRevision,
+    expectedCleanupRevision: current.cleanupRevision, expectedBackupRevision: current.backupRevision, inventory,
+    inventoryBinding: { profileSha256: inventory.profileSha256, captureSha256: inventory.captureSha256,
+      inventorySha256: remoteWorkerCellCapacityInventorySha256(inventory) },
+    observation: { reservation: current.capacity, incomingBytes: 1, peakDiskBytes: 0, peakMemoryBytes: 0,
+      peakFileCount: 0, peakProcessCount: 0, rawOutputBytes: 0 } }; };
+  const exceeded = owner.admitInventory(command());
+  assert.equal(exceeded.decision, "quarantine");
+  assert.match(exceeded.reason, /inode count/u);
+  assert.equal(exceeded.cell.peakFileCount, 4);
+  inventory.areas[0]!.objects.splice(2, 1);
+  inventory.captureSha256 = D(`${seed}:lower-capture`);
+  const lower = owner.admitInventory(command());
+  assert.equal(lower.decision, "quarantine");
+  const retained = owner.readInventory({ ...authority, capacityRevision: lower.cell.capacityRevision })!;
+  assert.equal(retained.peakInodeCount, 5);
+  const rawCommand = command();
+  const raw = owner.admit({ ...rawCommand,
+    observation: { ...rawCommand.observation, footprint: retained.accounting.footprint } });
+  assert.equal(raw.decision, "quarantine", "footprint-only admission cannot forget a retained inode violation");
+  assert.match(raw.reason, /inode count/u);
+}
+it("cell capacity inventory retains inode violations on SQLite", () => {
+  const db = createDatabase({ dbPath: ":memory:" });
+  try { verifyInventoryInodeLimit(db, "inventory-inodes-sqlite"); } finally { db.close(); }
+});
+postgresIt("cell capacity inventory retains inode violations on PostgreSQL", { timeout: 120_000 }, async () => {
+  assert.ok(postgresConnectionString);
+  const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "inventory_inodes");
+  try { verifyInventoryInodeLimit(scope.db, "inventory-inodes-postgres"); } finally { await scope.teardown(); }
 });
 
 it("worker tool model budgets use canonical protected authority on SQLite", () => {
@@ -1321,44 +1520,6 @@ function assertDirectPostgresEventRejected(
   );
 }
 
-function runtimeManifest(seed: string) {
-  const payload = {
-    schemaVersion: REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
-    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
-    bundleSha256: D(`${seed}:bundle`),
-    dependencyLockSha256: D(`${seed}:lock`),
-    vendorTreeSha256: D(`${seed}:vendor`),
-    launcherSha256: D(`${seed}:launcher`),
-    installedTreeManifestSha256: D(`${seed}:tree`),
-    installedTreeFileCount: 12,
-    platform: "windows",
-    architecture: "x64",
-  } as const;
-  return {
-    payload,
-    payloadSha256: D(canonicalJsonString(payload)),
-    signatureAlgorithm: "ed25519" as const,
-    signerKeyId: `key-${seed}`,
-    signatureBase64Url: "A".repeat(86),
-  };
-}
-
-function bootstrapInput(seed: string): CreateRemoteWorkerBootstrapCommand {
-  return {
-    registryWorkspaceId: "default",
-    workerLabel: `Worker ${seed}`,
-    platform: "windows",
-    architecture: "x64",
-    runtimeManifest: runtimeManifest(seed),
-    allowedWorkspaceIds: ["default"],
-    capabilityClasses: ["durable_compute", "gateway_inference"],
-    expiresInSeconds: 300,
-    createdByActorId: "operator-a",
-    idempotencyKey: `${seed}:bootstrap`,
-    bootstrapSecretSha256: D(`${seed}:bootstrap-secret`),
-  };
-}
-
 function finalizeInput(
   bootstrap: ReturnType<RemoteWorkerAdmissionRepository["createBootstrap"]>["record"],
   seed: string,
@@ -1583,302 +1744,14 @@ async function waitForAdvisoryLockWait(pool: Pool, applicationName: string, lock
   assert.fail(`timed out waiting for ${applicationName} to block on the "${lockLiteral}" advisory lock`);
 }
 
-function postgresNonceClock(db: DatabaseClient): { timestamp: string; expiresAt: string } {
-  const timestamp = new DurableRunRepository(db).readDatabaseNow();
-  return { timestamp, expiresAt: new Date(Date.parse(timestamp) + 60_000).toISOString() };
-}
-
-function protectedBootstrapNonce(
-  db: DatabaseClient,
-  bootstrap: RemoteWorkerBootstrapRecord,
-  seed: string,
-): RemoteWorkerNonceConsumeInput {
-  const clock = postgresNonceClock(db);
-  return {
-    authority: {
-      kind: "bootstrap",
-      registryWorkspaceId: bootstrap.registryWorkspaceId,
-      bootstrapId: bootstrap.bootstrapId,
-      workerId: bootstrap.workerId,
-      targetWorkerGeneration: bootstrap.targetWorkerGeneration,
-    },
-    nonceSha256: D(`${seed}:nonce`),
-    timestamp: clock.timestamp,
-    expiresAt: clock.expiresAt,
-  };
-}
-
-function protectedCredentialNonce(
-  db: DatabaseClient,
-  credential: RemoteWorkerRuntimeCredentialRecord,
-  seed: string,
-): RemoteWorkerNonceConsumeInput {
-  const clock = postgresNonceClock(db);
-  return {
-    authority: {
-      kind: "credential",
-      registryWorkspaceId: credential.registryWorkspaceId,
-      workerId: credential.workerId,
-      workerGeneration: credential.workerGeneration,
-      credentialGeneration: credential.credentialGeneration,
-      credentialId: credential.credentialId,
-    },
-    nonceSha256: D(`${seed}:nonce`),
-    timestamp: clock.timestamp,
-    expiresAt: clock.expiresAt,
-  };
-}
-
-function protectedSignerPin(): RemoteWorkerProtectedAdmissionSignerPin {
-  const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.alloc(32, 0x22)]);
-  return {
-    schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
-    signatureAlgorithm: "ed25519",
-    keysetGeneration: 1,
-    keysetReceiptSha256: D("keyset:1"),
-    signerSpkiSha256: DBytes(spki),
-    signerSpkiBase64Url: spki.toString("base64url"),
-  };
-}
-
-function protectedWorkerSpki(seed: string): Buffer {
-  return Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(D(`${seed}:key`), "hex")]);
-}
-
-function protectedBootstrapInput(seed: string): CreateRemoteWorkerBootstrapCommand {
-  return {
-    ...bootstrapInput(seed),
-    protectedAdmissionSignerPin: protectedSignerPin(),
-  };
-}
-
-function protectedFinalizeInput(
-  db: DatabaseClient,
-  bootstrap: RemoteWorkerBootstrapRecord,
-  bootstrapSeed: string,
-  connectionSeed: string,
-): FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput {
-  const nonce = protectedBootstrapNonce(db, bootstrap, `${bootstrapSeed}:${connectionSeed}`);
-  const admittedWorkerSpki = protectedWorkerSpki(bootstrapSeed);
-  const base = {
-    expectedRegistryWorkspaceId: bootstrap.registryWorkspaceId,
-    expectedBootstrapId: bootstrap.bootstrapId,
-    expectedTargetWorkerGeneration: bootstrap.targetWorkerGeneration,
-    bootstrapSecretSha256: D(`${bootstrapSeed}:bootstrap-secret`),
-    verifiedPublicKeySpkiSha256: DBytes(admittedWorkerSpki),
-    verifiedClientCertificateSha256: D(`${bootstrapSeed}:certificate`),
-    verifiedRuntimeManifestSha256: D(canonicalJsonString(bootstrap.runtimeManifest)),
-    verifiedWorkspaceCeilingSha256: bootstrap.workspaceCeilingSha256,
-    verifiedCapabilityCeilingSha256: bootstrap.capabilityCeilingSha256,
-    verifiedTransportIdentitySource: "native_mtls" as const,
-    verifiedTransportTrustAnchorSha256: D(`${bootstrapSeed}:anchor`),
-    verifiedTransportReceiptSha256: D(`${connectionSeed}:transport`),
-    verifiedProofOfPossessionReceiptSha256: D(`${connectionSeed}:pop`),
-    verifiedDownloadReceiptSha256: D(`${bootstrapSeed}:download`),
-    verifiedInstalledTreeAttestationSha256: D(`${bootstrapSeed}:attestation`),
-    verifiedInstalledTreeReceiptSha256: D(`${bootstrapSeed}:tree-receipt`),
-    credentialIssuanceProofSha256: D(`${connectionSeed}:issuance`),
-    credentialExpiresInSeconds: 600,
-    credentialTokenSha256: D(`${connectionSeed}:credential`),
-    exchangeIdempotencyKey: `${bootstrapSeed}:exchange`,
-  };
-  const tlsExporterSha256 = D(`${connectionSeed}:tls-exporter`);
-  const contextSha256 = remoteWorkerProtectedAdmissionContextSha256({
-    registryWorkspaceId: bootstrap.registryWorkspaceId,
-    bootstrapId: bootstrap.bootstrapId,
-    workerId: bootstrap.workerId,
-    nodeId: bootstrap.nodeId,
-    targetWorkerGeneration: bootstrap.targetWorkerGeneration,
-    platform: bootstrap.platform,
-    architecture: bootstrap.architecture,
-    runtimeManifestSha256: base.verifiedRuntimeManifestSha256,
-    runtimeManifestPayloadSha256: bootstrap.runtimeManifest.payloadSha256,
-    workspaceCeilingSha256: bootstrap.workspaceCeilingSha256,
-    capabilityCeilingSha256: bootstrap.capabilityCeilingSha256,
-    workerPublicKeySpkiSha256: base.verifiedPublicKeySpkiSha256,
-    clientCertificateSha256: base.verifiedClientCertificateSha256,
-    transportTrustAnchorSha256: base.verifiedTransportTrustAnchorSha256,
-    tlsExporterSha256,
-    evidenceNonceSha256: nonce.nonceSha256,
-    downloadVerificationReceiptSha256: base.verifiedDownloadReceiptSha256,
-    installedTreeAttestationSha256: base.verifiedInstalledTreeAttestationSha256,
-    installedTreeVerificationReceiptSha256: base.verifiedInstalledTreeReceiptSha256,
-  });
-  const operationId = Buffer.from(D(`${connectionSeed}:operation`), "hex").subarray(0, 16);
-  const envelope = Buffer.alloc(288);
-  envelope.write("GCAE", 0, "ascii");
-  envelope.writeUInt16LE(1, 4);
-  envelope.writeUInt8(1, 6);
-  envelope.writeUInt32LE(288, 8);
-  operationId.copy(envelope, 16);
-  Buffer.from(nonce.nonceSha256, "hex").copy(envelope, 32);
-  envelope.writeBigUInt64LE(BigInt(bootstrap.targetWorkerGeneration), 64);
-  Buffer.from(contextSha256, "hex").copy(envelope, 96);
-  Buffer.from(base.verifiedRuntimeManifestSha256, "hex").copy(envelope, 128);
-  Buffer.from(base.verifiedPublicKeySpkiSha256, "hex").copy(envelope, 160);
-  Buffer.from(base.verifiedDownloadReceiptSha256, "hex").copy(envelope, 192);
-  Buffer.from(base.verifiedInstalledTreeAttestationSha256, "hex").copy(envelope, 224);
-  Buffer.from(base.verifiedInstalledTreeReceiptSha256, "hex").copy(envelope, 256);
-  const caller = {
-    workerPublicKeySpkiSha256: base.verifiedPublicKeySpkiSha256,
-    clientCertificateSha256: base.verifiedClientCertificateSha256,
-    transportTrustAnchorSha256: base.verifiedTransportTrustAnchorSha256,
-    tlsExporterSha256,
-  };
-  const pin = bootstrap.protectedAdmissionSignerPin;
-  if (!pin) throw new Error("protected signer pin missing");
-  const command: FinalizeRemoteWorkerBootstrapAdmissionCommand = {
-    ...base,
-    verifiedProtectedAdmissionEvidence: {
-      schemaVersion: REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_SCHEMA_VERSION,
-      operationIdBase64Url: operationId.toString("base64url"),
-      evidenceNonceSha256: nonce.nonceSha256,
-      workerGeneration: bootstrap.targetWorkerGeneration,
-      envelopeSha256: DBytes(envelope),
-      envelopeBase64Url: envelope.toString("base64url"),
-      keysetReceiptSha256: pin.keysetReceiptSha256,
-      signerSpkiSha256: pin.signerSpkiSha256,
-      signerSpkiBase64Url: pin.signerSpkiBase64Url,
-      signatureBase64Url: Buffer.alloc(64, 0x33).toString("base64url"),
-      contextSha256,
-      runtimeManifestSha256: base.verifiedRuntimeManifestSha256,
-      runtimeManifestPayloadSha256: bootstrap.runtimeManifest.payloadSha256,
-      workspaceCeilingSha256: bootstrap.workspaceCeilingSha256,
-      capabilityCeilingSha256: bootstrap.capabilityCeilingSha256,
-      ...caller,
-      workerPublicKeySpkiBase64Url: admittedWorkerSpki.toString("base64url"),
-      authenticatedRemoteCallerBindingSha256: remoteWorkerProtectedAdmissionRemoteCallerBindingSha256(caller),
-      downloadVerificationReceiptSha256: base.verifiedDownloadReceiptSha256,
-      installedTreeAttestationSha256: base.verifiedInstalledTreeAttestationSha256,
-      installedTreeVerificationReceiptSha256: base.verifiedInstalledTreeReceiptSha256,
-    },
-  };
-  return { nonce, command };
-}
-
-function seedProtectedFenceHarness(setupDb: DatabaseClient, suffix: string, tools = false) {
-  const tasks = new TaskRepository(setupDb);
-  const durableRuns = new DurableRunRepository(setupDb);
-  const workerAdmissions = new RemoteWorkerAdmissionRepository(setupDb);
-  const meshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(setupDb);
-  const capabilityAdmissions = new MeshCapabilityNodeAdmissionRepository(setupDb);
-  const assignments = new RemoteWorkerAssignmentRepository(setupDb);
-  const bootstrap = workerAdmissions.createBootstrap({ ...protectedBootstrapInput(suffix),
-    ...(tools ? { capabilityClasses: ["artifact_stage", "durable_compute", "gateway_inference", "governed_tool"] as const } : {}),
-  }).record;
-  const finalizeInput = protectedFinalizeInput(setupDb, bootstrap, suffix, tools ? `${suffix}:tool-first` : "first");
-  const finalized = workerAdmissions.finalizeBootstrapAdmissionWithNonce(finalizeInput);
-  const evidence = finalizeInput.command.verifiedProtectedAdmissionEvidence;
-  assert.ok(evidence);
-  const joinAuthorityInput = {
-    registryWorkspaceId: finalized.generation.registryWorkspaceId,
-    bootstrapId: finalized.generation.bootstrapId,
-    workerId: finalized.generation.workerId,
-    workerGeneration: finalized.generation.workerGeneration,
-    nodeId: finalized.generation.nodeId,
-    clientCertificateSha256: finalized.generation.clientCertificateSha256,
-    protectedAdmissionEnvelopeSha256: evidence.envelopeSha256,
-    protectedAdmissionContextSha256: evidence.contextSha256,
-    workspaceId: "default",
-    // Must expire BEFORE the backing 600s runtime credential: the M2 fence
-    // selector requires the credential to outlive the issued join authority.
-    expiresInSeconds: 300,
-    issuedByActorId: "operator-a",
-  } as const;
-  const rawMeshNodeCredential = tools ? Buffer.from(D(`${suffix}:mesh-credential`), "hex").toString("base64url") : "a".repeat(43);
-  const issued = meshNodeAdmissions.issueJoinAuthority({
-    ...joinAuthorityInput,
-    idempotencyKey: `${suffix}:mesh-authority:1`,
-    rawMeshNodeCredential,
-  });
-  assert.equal(issued.disposition, "created");
-  const admissionCommand = {
-    workspaceId: "default",
-    clientCertificateSha256: finalized.generation.clientCertificateSha256,
-    method: "POST" as const,
-    rawPath: "/api/v1/remote-workers/mesh-node-admissions",
-    operation: "mesh.node.admit",
-  } as const;
-  const admitted = meshNodeAdmissions.admitWithNonce({
-    nonce: protectedCredentialNonce(setupDb, finalized.credential, `${suffix}:admit:1`),
-    command: {
-      ...admissionCommand,
-      rawMeshNodeCredential,
-      protocolBodySha256: D(`${suffix}:admission-body:1`),
-      transportReceiptSha256: D(`${suffix}:admission-transport:1`),
-      proofOfPossessionReceiptSha256: D(`${suffix}:admission-pop:1`),
-      tlsExporterSha256: D(`${suffix}:admission-exporter:1`),
-      idempotencyKey: `${suffix}:mesh-admission:1`,
-    },
-  });
-  assert.equal(admitted.disposition, "admitted");
-  const credentialResolutionInput = {
-    registryWorkspaceId: finalized.generation.registryWorkspaceId,
-    bootstrapId: finalized.generation.bootstrapId,
-    workerId: finalized.generation.workerId,
-    workerGeneration: finalized.generation.workerGeneration,
-    nodeId: finalized.generation.nodeId,
-    clientCertificateSha256: finalized.generation.clientCertificateSha256,
-    protectedAdmissionEnvelopeSha256: evidence.envelopeSha256,
-    protectedAdmissionContextSha256: evidence.contextSha256,
-    workspaceId: "default",
-  } as const;
-  const meshFence = meshNodeAdmissions.resolveCurrentForRuntimeCredential({
-    ...credentialResolutionInput,
-    credentialId: finalized.credential.credentialId,
-    credentialGeneration: finalized.credential.credentialGeneration,
-    authorizationCredentialSha256: finalizeInput.command.credentialTokenSha256,
-  });
-  assert.ok(meshFence);
-  const claimAuthority = {
-    registryWorkspaceId: finalized.generation.registryWorkspaceId,
-    bootstrapId: finalized.generation.bootstrapId,
-    workerId: finalized.generation.workerId,
-    workerGeneration: finalized.generation.workerGeneration,
-    credentialId: finalized.credential.credentialId,
-    credentialGeneration: finalized.credential.credentialGeneration,
-    authorizationCredentialSha256: finalizeInput.command.credentialTokenSha256,
-    nodeId: finalized.generation.nodeId,
-    clientCertificateSha256: finalized.generation.clientCertificateSha256,
-    runtimeManifestSha256: finalized.generation.runtimeManifestSha256,
-    workspaceCeilingSha256: finalized.generation.workspaceCeilingSha256,
-    capabilityCeilingSha256: finalized.generation.capabilityCeilingSha256,
-    protectedAdmissionEnvelopeSha256: evidence.envelopeSha256,
-    protectedAdmissionContextSha256: evidence.contextSha256,
-    claimsSha256: finalized.credential.claimsSha256,
-  } as const;
-  const fence: RemoteWorkerAssignmentProtectedCommitFence = {
-    credentialAuthority: claimAuthority,
-    meshAdmission: meshFence,
-  };
-  return {
-    tasks,
-    durableRuns,
-    workerAdmissions,
-    meshNodeAdmissions,
-    capabilityAdmissions,
-    assignments,
-    bootstrap,
-    finalizeInput,
-    finalized,
-    evidence,
-    joinAuthorityInput,
-    admissionCommand,
-    credentialResolutionInput,
-    issued,
-    admitted,
-    meshFence,
-    claimAuthority,
-    fence,
-  };
-}
-
 function seedFencedAssignment(
   h: ReturnType<typeof seedProtectedFenceHarness>,
   suffix: string,
   label: string,
   nodeAdmissionGeneration: number,
   leaseTokenSha256: string,
+  leaseTtlSeconds = 60,
+  nativeArtifacts = false,
 ): { assignmentId: string; taskId: string; durableRunId: string } {
   const now = h.durableRuns.readDatabaseNow();
   const taskId = `task-${suffix}-${label}`;
@@ -1914,9 +1787,9 @@ function seedFencedAssignment(
     toolEffectPostureSha256: D(`${suffix}:${label}:posture`),
     pathJailSha256: D(`${suffix}:${label}:jail`),
     parentContextSha256,
-    requiredCapabilityClasses: ["durable_compute", "gateway_inference"],
+    requiredCapabilityClasses: nativeArtifacts ? ["artifact_stage", "durable_compute", "gateway_inference"] : ["durable_compute", "gateway_inference"],
     deadlineAt: FUTURE,
-    leaseTtlSeconds: 60,
+    leaseTtlSeconds,
     maxEventCount: 100,
     maxEventBytes: 4_096,
     eventLowWatermark: 2,
@@ -1946,8 +1819,8 @@ function seedFencedAssignment(
 }
 
 interface FencedRepositoryWorkerRequest {
-  readonly repositoryModule: "remote-worker-assignment-repo" | "remote-worker-mesh-node-admission-repo" | "remote-worker-cell-provisioning-repo";
-  readonly repositoryExport: "RemoteWorkerAssignmentRepository" | "RemoteWorkerMeshNodeAdmissionRepository" | "RemoteWorkerCellProvisioningRepository";
+  readonly repositoryModule: "remote-worker-assignment-repo" | "remote-worker-mesh-node-admission-repo" | "remote-worker-cell-provisioning-repo" | "remote-worker-cell-capacity-admission-repo";
+  readonly repositoryExport: "RemoteWorkerAssignmentRepository" | "RemoteWorkerMeshNodeAdmissionRepository" | "RemoteWorkerCellProvisioningRepository" | "RemoteWorkerCellCapacityAdmissionRepository";
   readonly operation: string;
   readonly args: readonly unknown[];
 }

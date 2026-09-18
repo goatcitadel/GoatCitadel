@@ -25,7 +25,18 @@ interface CaptureSeed extends WorkflowSkillCaptureRequest {
   actorSha256: string;
 }
 interface CaptureDependencies {
-  storage: AsyncStorage;
+  storage: Pick<
+    AsyncStorage,
+    | "candidateSkillVersions"
+    | "capabilityProposals"
+    | "chatMessages"
+    | "chatSessionMeta"
+    | "chatToolRuns"
+    | "chatTurnCapabilityProfiles"
+    | "chatTurnTraces"
+    | "runImmediateTransaction"
+    | "skillAggregateRevisions"
+  >;
   rootDir: string;
   candidateRoot: string;
 }

@@ -1,3 +1,4 @@
+import { workerLocalStateActivity } from "./worker-local-state-activity.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -72,7 +73,7 @@ export function createFileWorkerDurableState(rootDir: string): WorkerDurableStat
         throw error;
       }
     },
-    write: async (key: string, value: string): Promise<void> => {
+    write: async (key: string, value: string): Promise<void> => workerLocalStateActivity.mutation(async () => {
       const target = pathFor(key);
       await mkdir(dirname(target), { recursive: true });
       const temporary = `${target}.${randomBytes(8).toString("hex")}.tmp`;
@@ -90,10 +91,10 @@ export function createFileWorkerDurableState(rootDir: string): WorkerDurableStat
         await rm(temporary, { force: true });
         throw error;
       }
-    },
-    delete: async (key: string): Promise<void> => {
+    }),
+    delete: async (key: string): Promise<void> => workerLocalStateActivity.mutation(async () => {
       await rm(pathFor(key), { force: true });
-    },
+    }),
   });
 }
 

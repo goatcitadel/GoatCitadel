@@ -213,6 +213,13 @@ describe("deriveLiveActivityPhase", () => {
 });
 
 describe("ChatLiveActivityRail", () => {
+  it("keeps late failed tools in the compact settled activity rows", () => {
+    const toolRuns = Array.from({ length: 5 }, (_, index) => createToolRun({
+      toolRunId: `tool-${index}`, toolName: `tool.${index}`, status: index === 4 ? "failed" : "executed",
+    }));
+    const renderer = TestRenderer.create(<ChatTurnActivityRows mode="chat" toolRuns={toolRuns} onOpenRunDetails={vi.fn()} />);
+    expect(renderer.root.findAllByProps({ "aria-label": "Open execution detail for tool.4" })).toHaveLength(1);
+  });
   afterEach(() => {
     vi.useRealTimers();
   });

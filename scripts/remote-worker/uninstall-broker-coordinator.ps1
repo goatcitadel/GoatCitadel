@@ -183,14 +183,21 @@ function Test-RecipeFootprintIdentity {
     provisionerDirectoryPresent = (Test-Path -LiteralPath $script:Paths.ProvisionerDirectory)
   }
   foreach ($entry in @(
-      @{ Name = $script:BrokerServiceName; Quoted = $script:Paths.BrokerQuotedBinaryPath; Key = "brokerServicePresent" },
-      @{ Name = $script:SignerServiceName; Quoted = $script:Paths.SignerQuotedBinaryPath; Key = "signerServicePresent" })) {
+      @{ Name = $script:BrokerServiceName; Quoted = $script:Paths.BrokerQuotedBinaryPath; Sddl = $script:ServiceObjectSddl; Key = "brokerServicePresent" },
+      @{ Name = $script:SignerServiceName; Quoted = $script:Paths.SignerQuotedBinaryPath; Sddl = $script:SignerServiceObjectSddl; Key = "signerServicePresent" })) {
     if ($native::ServiceExists($entry.Name)) {
       $footprint[$entry.Key] = $true
       $configLine = $native::GetServiceConfigLine($entry.Name)
       $binaryPath = ($configLine -split "\|", 7)[3]
       if (-not [string]::Equals($binaryPath, $entry.Quoted, [System.StringComparison]::Ordinal)) {
         Add-RefusalFinding ("The service '{0}' is bound to '{1}', not the pinned image path '{2}'; refusing to delete a service this recipe did not compose." -f $entry.Name, $binaryPath, $entry.Quoted)
+      }
+      $expectedConfig = [string]::Join('|', @('16', '3', '1', $entry.Quoted, 'LocalSystem', '', '1'))
+      if ($configLine -cne $expectedConfig -or
+          (ConvertTo-CanonicalSddl ($native::GetServiceSddl($entry.Name))) -cne (ConvertTo-CanonicalSddl $entry.Sddl) -or
+          $native::GetServiceSidType($entry.Name) -ne 1 -or
+          $native::GetServiceRequiredPrivileges($entry.Name) -cne $script:ExpectedRequiredPrivilege) {
+        Add-RefusalFinding ("The service '{0}' configuration or protected descriptor drifted; refusing cleanup." -f $entry.Name)
       }
     }
   }
@@ -214,6 +221,10 @@ function Test-RecipeFilesystemIdentity {
       @{ Path = $script:Paths.BinDirectory; Allowed = @($script:BrokerExecutableName, $script:SignerExecutableName, $script:ClientExecutableName) })) {
     if (Test-Path -LiteralPath $entry.Path) {
       foreach ($child in Get-ChildItem -LiteralPath $entry.Path -Force) {
+        if ($entry.Path -eq $script:Paths.ProvisionerDirectory -and $child.Name -ieq 'state-v1') {
+          Add-RefusalFinding 'Protected signer state is present; preserve it. This image-only uninstaller cannot remove or migrate custody state.'
+          continue
+        }
         if ($child.Name -cnotin $entry.Allowed) {
           Add-RefusalFinding "The install footprint contains unrecognized content; refusing cleanup before service mutation."
         }
@@ -311,7 +322,13 @@ function Invoke-RecipeDeleteServices {
   $pending = New-Object System.Collections.Generic.List[string]
   foreach ($serviceName in @($script:BrokerServiceName, $script:SignerServiceName)) {
     if ($native::ServiceExists($serviceName)) {
-      $native::RemoveService($serviceName)
+      $quotedPath = $script:Paths.SignerQuotedBinaryPath
+      $expectedSddl = $script:SignerServiceObjectSddl
+      if ($serviceName -ceq $script:BrokerServiceName) {
+        $quotedPath = $script:Paths.BrokerQuotedBinaryPath
+        $expectedSddl = $script:ServiceObjectSddl
+      }
+      $native::RemoveVerifiedCoordinatorService($serviceName, $quotedPath, $expectedSddl)
       $deadline = [System.Diagnostics.Stopwatch]::StartNew()
       while ($native::ServiceExists($serviceName)) {
         if ($deadline.ElapsedMilliseconds -ge $script:DeleteWaitMilliseconds) {
@@ -323,7 +340,7 @@ function Invoke-RecipeDeleteServices {
     }
   }
   if ($pending.Count -gt 0) {
-    return "delete pending (SCM releases on last handle close): " + ($pending -join ", ")
+    throw ("delete pending (SCM releases on last handle close): " + ($pending -join ", ") + "; installed files preserved")
   }
   return "both service registrations removed"
 }

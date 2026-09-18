@@ -106,10 +106,10 @@ function requireCaptured(handle: McpStaticEnvironmentHandle, server: McpServerRe
 
 export interface McpStaticEnvironmentServiceOptions {
   registry: Pick<McpServerStore, "readEnvironmentBinding" | "writeEnvironmentBinding">;
-  secretStore: Pick<SecretStoreService, "getSecret" | "setSecret" | "deleteSecret" | "isWriteCustodySafe"> & Partial<Pick<SecretStoreService, "setSecretForCustody">>;
+  secretStore: Pick<SecretStoreService, "getSecret" | "setSecret" | "deleteSecret" | "isWriteCustodySafe"> & Partial<Pick<SecretStoreService, "setSecretForCustody" | "supportsCredentialWriteReceipts">>;
   env?: NodeJS.ProcessEnv;
   reconcileRetiredCredentials?: () => Promise<void>;
-  stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string) => undefined) => Promise<void>;
+  stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string, writeId?: string) => undefined) => Promise<void>;
 }
 
 export class McpStaticEnvironmentService {
@@ -143,16 +143,18 @@ export class McpStaticEnvironmentService {
     }
     if (!this.options.secretStore.isWriteCustodySafe())
       throw new Error("MCP environment enrollment requires secure keychain write custody.");
-    const account = `mcp:${server.serverId}:environment:${randomUUID()}`;
+    const receipt = this.options.stageCredentials && this.options.secretStore.supportsCredentialWriteReceipts?.();
+    const account = `mcp:${server.serverId}:environment:${receipt ? "receipt-v1:" : ""}${randomUUID()}`;
     const key = randomBytes(32).toString("base64url");
     const proof: EnvironmentProof = { version: 1, key, digest: digest(key, environment) };
     const next = { credentialRef: `keychain:goatcitadel:${account}` };
     try {
-      const write = (custodyId?: string): undefined => {
+      const write = (custodyId?: string, writeId?: string): undefined => {
         if (custodyId === undefined) this.options.secretStore.setSecret(account, JSON.stringify(proof));
         else {
           if (!this.options.secretStore.setSecretForCustody) throw new Error("MCP environment writer requires its OS custody owner.");
-          this.options.secretStore.setSecretForCustody(account, JSON.stringify(proof), custodyId);
+          if (writeId === undefined) this.options.secretStore.setSecretForCustody(account, JSON.stringify(proof), custodyId);
+          else this.options.secretStore.setSecretForCustody(account, JSON.stringify(proof), custodyId, writeId);
         }
       };
       if (this.options.stageCredentials)
@@ -259,7 +261,7 @@ export function isMcpEnvironmentRefForServer(value: unknown, serverId: string): 
   return (
     typeof value === "string" &&
     value.startsWith(prefix) &&
-    /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value.slice(prefix.length))
+    /^(?:receipt-v1:)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value.slice(prefix.length))
   );
 }
 
@@ -300,6 +302,6 @@ function matchesProof(proof: EnvironmentProof, environment: NodeJS.ProcessEnv): 
 
 function configurationMaterial(server: McpServerRecord): unknown {
   const copy = { ...server };
-  for (const key of ["authState", "status", "lastConnectedAt", "lastError", "updatedAt"] as const) delete copy[key];
+  for (const key of ["revision", "connectionRevision", "authState", "status", "lastConnectedAt", "lastError", "updatedAt"] as const) delete copy[key];
   return JSON.parse(JSON.stringify(copy)) as unknown;
 }

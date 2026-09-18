@@ -2,6 +2,7 @@ import { normalizeRemoteWorkerCellMountedWorkspaceAnchor, type RemoteWorkerCellM
 import { normalizeRemoteWorkerCellProvisioningExchange, remoteWorkerCellProvisioningMountedWorkspaceAnchor } from "./remote-worker-cell-provisioning.js";
 import { mountExchangeFixture } from "./remote-worker-cell-mount-test-fixture.js";
 import { rehashVolumeFixture } from "./remote-worker-cell-volume-test-fixture.js";
+import type { CellVolumeFixtureIdentity } from "./remote-worker-cell-format-test-fixture.js";
 
 /** Independent byte encoder; no filesystem or volume operations. */
 export function mountedWorkspaceCheckpointFixture(input: RemoteWorkerCellMountedWorkspaceAnchor, sequence: number,
@@ -21,8 +22,8 @@ export function mountedWorkspaceCheckpointFixture(input: RemoteWorkerCellMounted
   }
   rehashVolumeFixture(inner); return rehashVolumeFixture(bytes);
 }
-export function mountedWorkspaceExchangeFixture(input: unknown) {
-  const exchange = mountExchangeFixture(input), anchor = remoteWorkerCellProvisioningMountedWorkspaceAnchor(exchange);
+export function mountedWorkspaceExchangeFixture(input: unknown, identity: CellVolumeFixtureIdentity = {}) {
+  const exchange = mountExchangeFixture(input, identity), anchor = remoteWorkerCellProvisioningMountedWorkspaceAnchor(exchange);
   const mountedWorkspaceRecords: string[] = [];
   for (let sequence = 1; sequence <= 2; sequence++) {
     const prior = mountedWorkspaceRecords.at(-1);

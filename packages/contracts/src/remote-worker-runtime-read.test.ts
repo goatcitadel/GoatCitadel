@@ -3,6 +3,7 @@ import { REMOTE_WORKER_CELL_CAPACITY_SCHEMA_VERSION } from "./remote-worker-cell
 import {
   REMOTE_WORKER_ASSIGNMENT_RUNTIME_SCHEMA_VERSION,
   normalizeRemoteWorkerAssignmentRuntime,
+  normalizeRemoteWorkerArtifactsAndEffectsProjection,
   normalizeRemoteWorkerCellRuntimeProjection,
   normalizeRemoteWorkerContactProjection,
   normalizeRemoteWorkerUsageAndCostProjection,
@@ -25,6 +26,17 @@ function usage(known: number, unknown: number) {
 }
 
 describe("remote worker runtime read contracts", () => {
+    it.each(["nativeOutputArtifacts", "nativeFileArtifacts"] as const)("bounds %s discovery and preserves legacy projections", field => {
+    const base = { uploadCount: 0, committedUploadCount: 0, quarantinedUploadCount: 0, cleanupPendingCount: 0,
+      manifestFileCount: null, manifestTotalBytes: null, verificationState: null, effectIntentCount: 0, effectReceiptCount: 0, effectReconciliationCount: 0 };
+    expect(normalizeRemoteWorkerArtifactsAndEffectsProjection(base)).toEqual(base);
+    const valid = { nonces: ["ab".repeat(32)], truncated: false };
+      expect(normalizeRemoteWorkerArtifactsAndEffectsProjection({ ...base, [field]: valid })[field]).toEqual(valid);
+    for (const summary of [{ nonces: ["0".repeat(64)], truncated: false }, { ...valid, truncated: true },
+      { ...valid, nonces: [...valid.nonces, ...valid.nonces] }, { nonces: Array(33).fill("ab".repeat(32)), truncated: false }]) {
+        expect(() => normalizeRemoteWorkerArtifactsAndEffectsProjection({ ...base, [field]: summary })).toThrow();
+    }
+  });
   it("derives contact freshness only within the fixed database-clock window", () => {
     const contact = { basis: "credential_request_nonce", retention: "replay_window", connectionStatus: "unavailable",
       lastAuthenticatedAt: observedAt, evaluatedAt: observedAt, staleAfter: "2026-09-12T12:01:00.000Z", recentWindowMs: 60_000, freshness: "recent" };

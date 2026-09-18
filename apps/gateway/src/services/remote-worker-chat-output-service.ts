@@ -17,6 +17,9 @@ import {
   type RemoteWorkerInferenceToolCall,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage, RemoteWorkerInferenceRequestRecord } from "@goatcitadel/storage";
+import { appendRemoteWorkerNativeChatContext, normalizeRemoteWorkerNativeChatContext, remoteWorkerNativeChatContextSha256,
+  canonicalJsonString, removeRemoteWorkerNativeChatContext, type RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
+import { readRemoteWorkerNativeChatHistory } from "./remote-worker-native-chat-history.js";
 import {
   readCanonicalWorkerModelToolResult,
   type RemoteWorkerChatToolResultStorage,
@@ -30,23 +33,49 @@ export interface RemoteWorkerChatSequenceContext {
   readonly workerId: string;
   readonly workerGeneration: number;
   readonly toolStorage: RemoteWorkerChatToolResultStorage;
+  readonly continuationSha256?: string;
+  readonly nativeContext?: RemoteWorkerNativeChatContext;
+  readonly priorModelSteps?: number;
+  readonly priorUsageEventIds?: readonly string[];
+  readonly priorToolIntentIds?: readonly string[];
 }
 
-type InferenceReader = Pick<AsyncStorage["remoteWorkerInference"], "getRequestByIdempotency" | "listFramesAfter">;
+type InferenceReader = Pick<AsyncStorage["remoteWorkerInference"], "getRequestByIdempotency" | "listFramesAfter" | "hasInferenceOutsideChatSequence" | "listAssignmentChatRequests">;
+
+async function prepareNativeSequenceHistory(inference: InferenceReader, scope: RemoteWorkerChatWorkflowScope,
+  context?: RemoteWorkerChatSequenceContext): Promise<RemoteWorkerChatSequenceContext | undefined> {
+  if (context?.nativeContext) {
+    const base = { ...context, baseMessages: removeRemoteWorkerNativeChatContext(context.baseMessages, context.nativeContext) };
+    if (canonicalJsonString(appendRemoteWorkerNativeChatContext(base.baseMessages, context.nativeContext)) !== canonicalJsonString(context.baseMessages))
+      throw new Error("Native Chat sequence lost its original context boundary.");
+    const { history, toolIntentIds } = await readRemoteWorkerNativeChatHistory(inference, scope, base, context.nativeContext);
+    return { ...context, baseMessages: appendRemoteWorkerNativeChatContext(history.messages, context.nativeContext),
+      priorModelSteps: history.priorModelSteps, priorUsageEventIds: history.usageEventIds, priorToolIntentIds: toolIntentIds };
+  }
+  if (context?.continuationSha256 && await inference.hasInferenceOutsideChatSequence({ ...scope, continuationSha256: context.continuationSha256 }))
+    throw new Error("Native Chat continuation requires preserved prior model history before another sequence can run.");
+  return context;
+}
 
 export function buildRemoteWorkerChatSequenceContext(
   toolStorage: RemoteWorkerChatToolResultStorage,
   profile: ChatTurnCapabilityProfileRecord,
   execution: Awaited<ReturnType<AsyncStorage["remoteWorkerAssignments"]["resolveActiveChatExecution"]>>,
 ): RemoteWorkerChatSequenceContext {
+  if (execution.workload.nativeContinuation && !execution.workload.nativeChatContext)
+    throw new Error("Native continuation must finish before using the canonical Chat sequence.");
+  const native = execution.workload.nativeChatContext ? normalizeRemoteWorkerNativeChatContext(execution.workload.nativeChatContext) : undefined;
+  if (native && canonicalJsonString(native.continuation) !== canonicalJsonString(execution.workload.nativeContinuation))
+    throw new Error("Native Chat context differs from its canonical continuation.");
   const content = (execution.workload.payload.request as Record<string, unknown> | undefined)?.content;
   if (typeof content !== "string") throw new Error("Worker Chat workload has no admitted request.");
+  const baseMessages: readonly RemoteWorkerInferenceMessage[] = execution.workload.chatContext
+    ? remoteWorkerChatInferenceMessages(execution.workload.chatContext) : [{ role: "user", text: content }];
   return {
     profile,
     toolStorage,
-    baseMessages: execution.workload.chatContext
-      ? remoteWorkerChatInferenceMessages(execution.workload.chatContext)
-      : [{ role: "user", text: content }],
+    baseMessages: native ? appendRemoteWorkerNativeChatContext(baseMessages, native) : baseMessages,
+    ...(native ? { continuationSha256: remoteWorkerNativeChatContextSha256(native), nativeContext: native } : {}),
     contextSha256: execution.workload.contextSnapshotSha256,
     taskId: execution.authority.assignment.manifest.taskId,
     workerId: execution.authority.generation.workerId,
@@ -61,16 +90,17 @@ export async function readCanonicalWorkerChatOutput(
   input: RemoteWorkerChatWorkflowScope,
   context?: RemoteWorkerChatSequenceContext,
 ) {
+  context = await prepareNativeSequenceHistory(inference, input, context);
   let messages = context?.baseMessages ?? [];
   const steps: Array<{ record: RemoteWorkerInferenceRequestRecord; usageEventIds: readonly string[] }> = [];
-  const toolIntentIds: string[] = [];
-  for (let stepIndex = 0; stepIndex < REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS; stepIndex++) {
+  const toolIntentIds: string[] = [...(context?.priorToolIntentIds ?? [])];
+  for (let stepIndex = 0; stepIndex < REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS - (context?.priorModelSteps ?? 0); stepIndex++) {
     const result = await readSequenceStep(inference, input, stepIndex, messages, context);
     steps.push({ record: result.record, usageEventIds: result.usageEventIds });
     if (!result.toolCalls) {
       if (!result.text.trim()) throw new Error("Worker output has no completed canonical response.");
       const usageEventIds = normalizeRemoteWorkerInferenceUsageEventIds(
-        steps.flatMap((step) => [...step.usageEventIds]),
+        [...(context?.priorUsageEventIds ?? []), ...steps.flatMap((step) => [...step.usageEventIds])],
       );
       return { ...result, usageEventIds, steps, toolIntentIds };
     }
@@ -90,7 +120,10 @@ export async function readCanonicalWorkerChatInput(
   stepIndex: number,
   context: RemoteWorkerChatSequenceContext,
 ): Promise<readonly RemoteWorkerInferenceMessage[]> {
-  remoteWorkerChatInferenceIdentity(scope, stepIndex);
+  context = (await prepareNativeSequenceHistory(inference, scope, context))!;
+  if (stepIndex + (context.priorModelSteps ?? 0) >= REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS)
+    throw new Error("Worker Chat exceeded its assignment-wide model step limit.");
+  remoteWorkerChatInferenceIdentity({ ...scope, continuationSha256: context.continuationSha256 }, stepIndex);
   let messages = context.baseMessages;
   for (let step = 0; step < stepIndex; step++) {
     const result = await readSequenceStep(inference, scope, step, messages, context);
@@ -106,7 +139,7 @@ async function readSequenceStep(
   messages: readonly RemoteWorkerInferenceMessage[],
   context?: RemoteWorkerChatSequenceContext,
 ) {
-  const identity = remoteWorkerChatInferenceIdentity(scope, stepIndex);
+  const identity = remoteWorkerChatInferenceIdentity({ ...scope, continuationSha256: context?.continuationSha256 }, stepIndex);
   const result = await readCanonicalWorkerInferenceOutput(
     inference,
     scope,

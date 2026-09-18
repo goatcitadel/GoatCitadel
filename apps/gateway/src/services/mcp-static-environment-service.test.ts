@@ -26,6 +26,22 @@ afterEach(async () => {
   for (const storage of opened.splice(0)) await storage.close();
 });
 
+it("enrolls a receipt-bound environment with its registered write identity", async () => {
+  const f = await fixture(), custodyId = "f".repeat(64);
+  const writes = vi.fn((account: string, value: string, custody: string, writeId?: string) => {
+    expect(custody).toBe(custodyId); expect(writeId).toMatch(/^[a-f0-9-]{36}$/u);
+    expect(account).toContain(":environment:receipt-v1:");
+    f.secrets.set(account, value);
+  });
+  const service = new McpStaticEnvironmentService({ registry: f.store, env: f.env,
+    secretStore: { ...f.secretStore, supportsCredentialWriteReceipts: () => true, setSecretForCustody: writes },
+    stageCredentials: (serverId, refs, write) => f.store.stageCredentialVersions(serverId, refs, (writeId) => write(custodyId, writeId), custodyId) });
+  const server = await service.enroll(await f.store.requireServer("fixture"));
+  await expect(service.capture(server)).resolves.toBeDefined();
+  expect(writes).toHaveBeenCalledOnce();
+  expect(f.secretStore.setSecret).not.toHaveBeenCalled();
+});
+
 it.each([true, false])("requires captured custody for an enrolled environment: %s", async (available) => {
   const f = await fixture(), custodyId = "f".repeat(64);
   const guarded = vi.fn((account: string, value: string, expected: string) => {

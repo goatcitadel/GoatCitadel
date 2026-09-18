@@ -572,6 +572,7 @@ async function handleDiscordSharedChannelCommand(
         ].join(" ");
       }
       await host.storage.integrationConnections.update(input.connectionId, {
+        expectedRevision: connection.revision,
         config: {
           ...connection.config,
           defaultChannelId: input.target,
@@ -693,6 +694,7 @@ async function handleDiscordPersonalityCommand(
     nextPersonalities[input.target] = preset.id;
   }
   await host.storage.integrationConnections.update(input.connectionId, {
+    expectedRevision: connection.revision,
     config: {
       ...connection.config,
       channelPersonalities: nextPersonalities,

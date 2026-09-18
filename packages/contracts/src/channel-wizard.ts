@@ -208,6 +208,8 @@ export interface ChannelSetupHydrationResult {
 export interface ChannelSetupSecretState {
   configured: boolean;
   custody: "temporary" | "connection";
+  /** Inherited credentials refresh when the operator reviews a changed connection. */
+  source?: "inherited" | "operator";
   /** Internal opaque locator. Public Gateway projections omit this field. */
   secretRef?: string;
 }
@@ -218,6 +220,8 @@ export interface ChannelSetupDraft {
   revision: number;
   catalogId: string;
   connectionId?: string;
+  /** The connection generation used to hydrate this draft; absent on legacy drafts. */
+  connectionRevision?: string;
   lifecycleMode: ChannelSetupLifecycleMode;
   label?: string;
   enabled: boolean;
@@ -247,6 +251,11 @@ export interface ChannelSetupDraftUpdateInput {
   enabled?: boolean;
   draft?: Record<string, unknown>;
   lastFailureCategory?: ChannelSetupFailureCategory;
+}
+
+export interface ChannelSetupConnectionReviewInput {
+  expectedRevision: number;
+  expectedConnectionRevision: string;
 }
 
 export interface ChannelSetupIssue {

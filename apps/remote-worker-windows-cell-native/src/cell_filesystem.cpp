@@ -410,6 +410,73 @@ DWORD PinnedCellToolDirectory::Write(const std::wstring& relative_path, const st
   } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
 
+DWORD PinnedCellToolDirectory::List(const std::wstring& relative_path, CellToolDirectoryResult* result) noexcept {
+  if (!result) return ERROR_INVALID_PARAMETER;
+  *result = {};
+  try {
+    if (path_.empty() || relative_path.size() > 1024) return ERROR_INVALID_PARAMETER;
+    unsigned depth = 0;
+    for (std::size_t start = 0; start < relative_path.size();) {
+      const auto separator = relative_path.find(L'/', start);
+      const auto end = separator == std::wstring::npos ? relative_path.size() : separator;
+      if (++depth > 32 || !LiteralComponent(std::wstring_view(relative_path).substr(start, end - start))) return ERROR_BAD_PATHNAME;
+      if (separator == std::wstring::npos) break;
+      start = separator + 1;
+      if (start == relative_path.size()) return ERROR_BAD_PATHNAME;
+    }
+    auto target = path_ + (relative_path.empty() ? L"" : L"\\" + relative_path);
+    std::replace(target.begin() + static_cast<std::ptrdiff_t>(path_.size()), target.end(), L'/', L'\\');
+    if (!LiteralPath(target)) return ERROR_BAD_PATHNAME;
+    PinnedCellLaunchFiles directory_pins;
+    directory_pins.handles_.reserve(65);
+    HANDLE directory = INVALID_HANDLE_VALUE;
+    std::wstring canonical;
+    DWORD error = directory_pins.PinPath(target, true, &directory, &canonical);
+    if (error) return error;
+    CellFileIdentity directory_identity{};
+    std::uint64_t bytes = 0;
+    error = worker_cell::Identity(directory, true, &directory_identity, &bytes);
+    if (error || directory_identity.volume_serial != identity_.volume_serial) return error ? error : ERROR_FILE_INVALID;
+    // PinPath's data-access handles deny directory replacement. Enumeration uses
+    // that canonical volume path and never opens an entry or follows a reparse point.
+    WIN32_FIND_DATAW found{};
+    Search search{FindFirstFileExW((canonical + L"\\*").c_str(), FindExInfoBasic, &found, FindExSearchNameMatch, nullptr, 0)};
+    if (search.value == INVALID_HANDLE_VALUE) {
+      error = Error();
+      return error == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : error;
+    }
+    CellToolDirectoryResult listed;
+    std::size_t payload_bytes = 0;
+    for (;;) {
+      const std::wstring name(found.cFileName);
+      if (name != L"." && name != L"..") {
+        if (!LiteralComponent(name)) return ERROR_BAD_PATHNAME;
+        const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, name.data(), static_cast<int>(name.size()), nullptr, 0, nullptr, nullptr);
+        if (size <= 0 || size > 1024) return ERROR_NO_UNICODE_TRANSLATION;
+        if (listed.entries.size() == kCellToolDirectoryEntries || payload_bytes + 8 + static_cast<std::size_t>(size) > kCellToolDirectoryPayloadBytes) {
+          listed.truncated = true;
+          break;
+        }
+        CellToolDirectoryEntry entry;
+        entry.name.resize(static_cast<std::size_t>(size));
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, name.data(), static_cast<int>(name.size()), entry.name.data(), size, nullptr, nullptr) != size)
+          return ERROR_NO_UNICODE_TRANSLATION;
+        entry.kind = (found.dwFileAttributes & (kUnsafeAttributes | FILE_ATTRIBUTE_DEVICE)) ? 3u
+          : (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 2u : 1u;
+        payload_bytes += 8 + entry.name.size();
+        listed.entries.push_back(std::move(entry));
+      }
+      if (!FindNextFileW(search.value, &found)) {
+        error = Error();
+        if (error != ERROR_NO_MORE_FILES) return error;
+        break;
+      }
+    }
+    *result = std::move(listed);
+    return ERROR_SUCCESS;
+  } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+
 DWORD HashRuntimeBundleManifest(const std::vector<CellRuntimeBundleFile>& files, CellFileSha256* digest) noexcept {
   if (!digest) return ERROR_INVALID_PARAMETER;
   *digest = {};

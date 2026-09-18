@@ -1,5 +1,11 @@
 # Comparison implementation evidence
 
+Scope correction (2026-09-15): use the
+[fixed seven-step completion checklist](COMPARISON_COMPLETION_CHECKLIST.md).
+Historical references below to completing C0-C6 **and all M0-M10** do not define
+this task's current finish line. Wider work and its receipts remain preserved
+as follow-up backlog; original seven-step acceptance remains required.
+
 This tracks the approved C0-C6 sequence in the [master program](../MASTER_COMPLETION_PROGRAM.md).
 It records local evidence separately from live-provider quality, external delivery,
 packaged installation, and two-machine acceptance. The implementation is not complete.
@@ -8,7 +14,121 @@ Historical evidence paths beginning with `%TEMP%` refer to the Windows temporary
 directory of the account that ran the check. Their named subdirectories and files
 identify retained local receipts; those receipts are not published with this document.
 
-Latest daily-usability progress: Workbench file actions now require an explicit
+Latest capacity-admission progress: evaluation and high-water evidence now share
+one protected storage transaction. Current credential, mesh, assignment lease,
+immutable profile and capacity/cleanup/execution revisions fence the decision.
+SQLite and actual PostgreSQL rollback checks pass; two concurrent PostgreSQL
+requests produce one winner. Auth and runtime-truth lanes pass. Complete
+accounting, installed quiescence, quotas and backend activation remain open. See
+[transactional capacity admission](#transactional-worker-capacity-admission).
+
+Earlier capacity-admission progress: the injected cell service now quarantines
+new work when observed or retained disk, memory, file-count, process-count or
+raw-output peaks exceed the immutable reservation. Lower later readings preserve
+the violation. Malformed counts fail before authority or storage access. This
+does not compose installed accounting or enforce OS quotas. See
+[capacity admission limits](#worker-capacity-admission-limits).
+
+Latest host-capacity persistence progress: separate SQLite/PostgreSQL rows,
+protected Gateway exchange and durable worker delivery now retain the exact
+host observation and replay it after a lost acknowledgement. Mounted and host
+measurements share authority checks and a local active-owner guard while keeping
+their frames, keys and revisions separate. Accounting consumption, installed
+quiescence, whole-pool inventory and enforcement remain open. See
+[retained host observations](#retained-host-capacity-observations).
+
+Earlier host-capacity transport progress: a distinct read-only operation now carries
+the original host VHDX/journal observations through the controller, client, helper
+and worker. A portable decoder validates every binding against the complete
+retained history. Normal/AddressSanitizer protocol and helper checks, contracts,
+worker tests, typecheck, strict lint and reproducible controller builds pass.
+Host persistence/accounting, installed quiescence, pool inventory and enforcement
+remain open. See [host transport evidence](#host-backing-observation-transport).
+
+Earlier host-capacity progress: the native backing-file owner and provisioning
+journal now measure the original fixed VHDX and journal without double-counting
+guest-volume allocation. Identity, authority, permission, metadata and owner-
+lifetime drift withhold all output. Native normal/AddressSanitizer proof passes
+on unattached images; transport/accounting consumption, installed quiescence,
+complete pool inventory and enforcement remain open. See
+[host backing capacity](#journal-bound-host-backing-capacity).
+
+Earlier capacity persistence progress: separate SQLite/PostgreSQL observation rows,
+protected assignment exchange and retained worker delivery now preserve exact
+native bytes and receipts through current authority and replay. The shared
+decoder rechecks all twenty-one records. Local contract, storage, Gateway,
+worker, migration, auth and runtime-truth checks pass. Installed quiescence,
+accounting consumption, whole-pool inventory, hard quotas and protected execution
+remain open. See [retained observations](#retained-native-capacity-observations).
+
+Earlier capacity transport progress: the controller/client/helper/worker path now
+carries a bounded observation tied to all twenty-one retained native records.
+The consumer waits for a successful terminal receipt, clean helper exit and final
+current authority. Normal/AddressSanitizer protocol and helper checks, 192 focused
+worker tests and reproducible x64/ARM64 controller builds pass. Installed
+quiescence remained unfinished; the later persistence work is recorded above. See
+[capacity transport](#native-capacity-observation-transport).
+
+Earlier native capacity progress: an admitted-handle reader now supplies complete
+logical/allocation/file-count observations for a protected workspace. Normal and
+AddressSanitizer runs each pass 1,212 native assertions using ordinary temporary
+NTFS directories; ARM64 compiles. Changed or incomplete scans withhold all totals.
+See [native capacity inventory](#native-capacity-inventory). Hard quotas, complete
+pool accounting, transport, protected execution and installed acceptance remain
+open. No drive operation or publication was performed.
+
+Latest UI progress: Chat now reads retained worker usage, outstanding budget
+holds, artifacts/effects, execution/capacity and authenticated contact through
+the same generation-bound reader as Ops. Scope changes and failed reads preserve
+explicit uncertainty. Focused tests and real Gateway/SQLite browser checks pass
+at desktop and 390 px widths. See [Chat worker runtime evidence](#chat-worker-runtime-evidence).
+Installed/two-machine and consolidated UI acceptance remain open.
+
+Earlier source progress: cross-drive Windows worker packaging now builds and probes
+successfully. Windows MCP staging can recover new completed-write receipts after
+lost acknowledgement while retaining missing, mismatched, legacy and foreign
+custody records. See [cross-drive packaging](#cross-drive-windows-worker-packaging)
+and [credential receipt recovery](#mcp-completed-write-receipt-recovery).
+The remaining C5/C6 source and C1-C6 acceptance work stays open.
+
+Latest daily-usability progress: MCP edits, policy updates and deletion now require
+the reviewed registry revision. Atomic acknowledgements and connection-attempt
+fencing preserve competing edits and reject late discovery. Settings retains
+drafts, recovers failed reads and requires explicit review and renewed deletion
+confirmation. Database, Gateway and desktop/390 px browser checks pass. See
+[MCP server revisions](#mcp-server-revisions). C5/C6 source work, credential
+recovery and full C1-C6 acceptance remain open. Publication and drive operations
+remain paused.
+
+Earlier daily-usability progress: channel repair/finalization now binds the reviewed
+connection across hydration, validation and credential promotion. Atomic storage
+finalization and versioned credential references preserve concurrent edits.
+Database, Gateway and desktop/390 px browser checks pass. See
+[channel setup connection reviews](#channel-setup-connection-reviews).
+The MCP follow-up is recorded above. C1-C6 source/acceptance boundaries remain
+open. Publication and drive formatting remain paused.
+
+Earlier daily-usability progress: global integration edits and deletes now compare
+connection revisions atomically, retain drafts and require explicit current-value
+review and renewed deletion confirmation. Actual database, Gateway and browser
+checks pass. See [integration connection revisions](#integration-connection-revisions).
+The channel setup and MCP follow-ups are recorded above. C1-C6 source/acceptance
+boundaries remain open. Publication and drive formatting remain paused.
+
+Earlier daily-usability progress: Vault stores and deletes now compare metadata-only
+revisions atomically, preserve drafts on conflict and require explicit replacement
+and deletion confirmation. Database, Gateway and browser proof passes, including
+recovery after a failed metadata refresh. See [Vault credential revisions](#citadel-vault-credential-revisions).
+Global integration/MCP owners and the C1-C6 acceptance boundaries remain open.
+Publication and drive formatting remain paused.
+
+Earlier daily-usability progress: Council seats, Wards, outgoing Passages, members
+and Citadel integration grants now share an atomic access review. Stale changes
+preserve drafts and require explicit review and retry. SQLite, actual PostgreSQL
+and real Gateway/browser checks pass. See [Citadel access-rule revisions](#citadel-access-rule-revisions).
+Vault revisions have since completed locally as recorded above.
+
+Earlier daily-usability progress: Workbench file actions now require an explicit
 review of the exact source, destination and affected paths. Required revisions
 reject intervening file edits, folder changes and destination replacement before
 mutation. The browser keeps entered paths and requires a new review after a
@@ -47,7 +167,14 @@ preserves the earlier effect. All 36 focused Gateway tests, six SQLite storage
 tests and the actual PostgreSQL approval-binding/CAS check pass. See
 [canonical approval refusal settlement](#canonical-approval-refusal-settlement).
 
-Latest C5 progress: Windows controller/helper transport and installed-worker
+Latest C5 progress: the worker's compiled registry now supports bounded `fs.list`
+through the pinned NTFS filesystem helper. It returns names/types only, refuses
+junction traversal and replaced roots, reports truncation and withholds names
+after local configuration changes. Valid native refusals settle as failed reads.
+The evidence below separates native/package checks from installed service and
+two-machine acceptance. See [bounded native directory listing](#bounded-native-directory-listing).
+
+Earlier C5 progress: Windows controller/helper transport and installed-worker
 startup composition now require all twenty-one records through the mounted
 workspace stage. Normal and AddressSanitizer builds each pass 14,894 existing
 controller checks plus 5,373 workspace checks; the compiled helper passes 48
@@ -10407,6 +10534,1944 @@ does not establish transactional rollback, concurrent-write protection or browse
 conflict recovery. Charter/template/blueprint atomicity and required reviewed
 revisions remain open, as do mutable access-rule owners and full C1-C6 acceptance.
 
+## Atomic Citadel structure writes and reviewed retries
+
+Charter edits, Chamber additions, template application, Blueprint import and
+Mason staging now use one data-only persistence command. The owner compares the
+reviewed structure revision under its database lock and returns its own committed
+snapshot. Templates also bind the exact reviewed template content. Empty and
+legacy destinations are covered, profile/lifecycle changes invalidate structure
+reviews, and archived profiles reject setup. Existing profile revisions keep
+their separate scope. These changes require no migration.
+
+All Charter and Chamber inserts in a setup roll back together if a later write
+fails. Blueprint validation and Mason review generation occur before persistence.
+Library preserves stale drafts, displays the refreshed target and requires
+explicit review before retry. Import retains rejected JSON and requires fresh
+validation and confirmation. A successful template remains saved if its Gatehouse
+summary fails to load. See the
+[operator and API contract](../CITADEL_STRUCTURE_REVISIONS.md).
+
+Fresh local evidence:
+
+- SQLite and actual PostgreSQL both pass structure and existing profile tests.
+  Structure coverage includes seven independent-writer pairs, empty and populated
+  destinations, a real later-insert constraint failure, same-value and ABA writes,
+  foreign default Chamber rejection, lifecycle invalidation and a peer commit
+  immediately after acknowledgement. Logs: `.tmp/comparison-structure-sqlite.log`
+  and `.tmp/comparison-structure-postgres.log`. The new PostgreSQL cluster was
+  stopped; its evidence remains under `%TEMP%/gc-citadel-structure-pg-g1p3foul.aer`.
+- The focused Gateway suite passes 147 tests across five files, including
+  required reviews, URL-bound scope, operator access, typed conflicts and
+  post-commit serialization failure. The canonical UI passes 21 tests covering
+  retained drafts, explicit retries, stale templates, scope changes and a failed
+  Gatehouse follow-up. Logs: `.tmp/comparison-structure-gateway-tests-final.log`
+  and `.tmp/comparison-structure-ui-tests-final.log`.
+- The contract helper suite passes 32 tests. Locked typechecks for contracts,
+  storage, shared client, Gateway and Mission Control pass. The named asynchronous
+  Gateway boundary lane passes ten scanner regressions and the production scan.
+  Evidence: `.tmp/comparison-structure-contracts.log`,
+  `.tmp/comparison-structure-typecheck-final.log`, and
+  `.tmp/comparison-structure-async-boundary.log`.
+- `pnpm verify:citadels:revisions` passes both final browser scenarios in
+  `artifacts/verification/2026-09-13T19-59-39-196Z-citadel-record-revisions-d8c4b151/`:
+  five profile and three structure conflicts, each followed by an explicit
+  reviewed retry. Actual Charter and Blueprint drafts survive; desktop and
+  390 px screenshots and Gateway receipts are retained. Template review and
+  application use the same explicit policy and Chamber defaults. Citadel
+  confirmations now have canonical theme, spacing and accessible action styles;
+  the narrow confirmation was visually inspected. The final default-resolution
+  service tests and focused UI tests pass in
+  `.tmp/comparison-structure-template-defaults.log` and
+  `.tmp/comparison-structure-ui-final.log`.
+- The named UI/library fast stage passes both selected scenarios in 2m 17s:
+  1,147 canonical UI tests and 2,523 tests across ten library/desktop packages.
+  Evidence: `artifacts/verification/2026-09-13T19-56-36-788Z-fast-5e4c88a8/` and
+  `.tmp/comparison-structure-ui-library-lane.log`. The final template display and
+  default binding changes additionally pass the focused and browser checks above.
+  Shared client/modal coverage passes 30 tests in
+  `.tmp/comparison-structure-client-modal-final.log`.
+
+The operator's publication pause remains in effect: this slice and the test-worker
+scheduling repair are local changes, with no new commit or push. Drive formatting
+remains paused. This closes the local structure mutation slice; mutable access
+rules, integration/MCP preconditions, worker source work, matched comparison
+benchmarks and full C1-C6 acceptance remain open.
+
+## Citadel access-rule revisions
+
+Council seats, Wards, outgoing Passages, members and Citadel integration grants
+now use a complete nonsecret access snapshot and one repository mutation command.
+The opaque review includes the profile/lifecycle, Charter and Chambers. A persisted
+generation prevents add/remove cycles from reviving old reviews. Missing and stale
+revisions fail before writes; successful responses return their own snapshot.
+The Gateway awaits durable idempotency acknowledgement. Vault values and metadata
+are excluded. See the [operator/API contract](../CITADEL_ACCESS_REVISIONS.md).
+
+The Wards and Council screens retain draft values and selected agents on conflict,
+display the current rules, and require **Use current access review** before an
+explicit retry. Deletion captures the reviewed revision and requires a fresh
+confirmation after conflict. The new tests caught two presentation defects:
+the generic error frame hid the editor, and reloading the conflict closed the
+Council disclosure. Both are fixed. The access review uses a compact desktop grid
+and a single-column narrow layout; actual screenshots were visually inspected.
+
+Fresh local evidence:
+
+- SQLite passes the full owner suite and eight independent-writer race pairs in
+  `.tmp/citadel-access-sqlite-final.log`. Actual PostgreSQL passes the same owner
+  suite and all 24 migration-integrity checks in
+  `.tmp/citadel-access-postgres-final.log`. Both preserve populated Citadel and
+  synthetic Vault data when applying the additive migration. The final temporary
+  PostgreSQL cluster at `%TEMP%/gc-citadel-access-pg-vkm5k5jz.lkt` is stopped.
+- SQLite v229 and PostgreSQL v174 append only `citadel_access_revisions`; prior
+  migration definitions are unchanged. Migration parity and lineage pass, and
+  all 49 migration/scenario-harness tests pass in
+  `.tmp/citadel-access-harness-final.log`.
+- The focused Gateway suite passes 185 tests across four files, including real
+  SQLite ownership for all ten routes, auth, scope binding, 409 preservation,
+  response failure and awaited idempotency. Evidence:
+  `.tmp/citadel-access-gateway-final.log`. The named asynchronous Gateway boundary
+  lane passes ten regressions and its scan of 997 production files in
+  `.tmp/citadel-access-async-boundary-v2.log`.
+- The new browser scenario in `pnpm verify:citadels:revisions` rejects three stale
+  writes (Ward add, Ward delete and Council seating), then accepts three explicit
+  retries. Existing profile and structure scenarios also pass. Desktop and 390 px
+  screenshots, complete snapshots and request revision receipts are retained in
+  `artifacts/verification/2026-09-13T20-41-55-521Z-citadel-record-revisions-25403d0e/`.
+  The final narrow access-review button also passes a 44 px target assertion.
+  The focused UI suite passes 14 tests, including retained drafts, edits during
+  save, scope changes and explicit retries; `.tmp/citadel-access-ui-v3.log`.
+- The selected UI/library fast stage passes 3,675 tests (1,151 canonical UI and
+  2,524 library/desktop) in 2m 7s. Evidence:
+  `artifacts/verification/2026-09-13T20-39-10-612Z-fast-548ca935/` and
+  `.tmp/citadel-access-ui-library-final.log`. The final button-size change is
+  additionally covered by the later browser run above. Locked typechecks for
+  contracts, storage, shared client, Gateway and Mission Control pass in
+  `.tmp/citadel-access-typecheck-final.log`; strict lint and documentation checks
+  pass in `.tmp/citadel-access-lint-final.log` and `.tmp/citadel-access-docs-final.log`.
+
+This completes the local nonsecret access-rule slice. Vault credential revisions,
+global integration/MCP mutation owners, worker/comparison source and acceptance,
+and the external C1-C6 acceptance boundaries remain open. No commit, push, drive
+format, installed-service change or live external/provider request was performed.
+
+## Citadel Vault credential revisions
+
+Vault stores and deletes now use a dedicated metadata-only snapshot and atomic
+repository command. The dedicated credential service still seals values before
+persistence. A persisted generation plus Citadel lifecycle revision prevents
+stale replacement/deletion, including add/delete cycles and same-value writes.
+Metadata digests do not incorporate plaintext or ciphertext. Generic HTTP
+idempotency no longer hashes Vault request bodies, and Vault responses disable
+caching. This does not rewrite historical idempotency data or rotate credentials.
+See the [Vault contract](../CITADEL_VAULT_REVISIONS.md).
+
+The canonical Vault screen retains its memory-only draft after conflict and
+requires **Use current Vault review**, followed by explicit replacement or delete
+confirmation where applicable. It never reveals values for comparison. Failed
+metadata reads can be retried through **Reload Vault review** without discarding
+the draft or approving a write. Late saves/reveals from another Citadel are
+ignored; acknowledgements preserve text entered after submission.
+
+Fresh local evidence:
+
+- SQLite passes the owner suite and six independent-writer race pairs in
+  `.tmp/citadel-vault-sqlite-v1.log`. Actual PostgreSQL passes the same suite and
+  all 24 migration-integrity tests in `.tmp/citadel-vault-postgres-v1.log`, with
+  zero skips. Both prove rollback, exact acknowledgements, lifecycle conflicts,
+  metadata isolation and preservation of populated records/sealed values.
+  The owned PostgreSQL cluster `%TEMP%/gc-citadel-vault-pg-nepwoed5.lky`, on
+  loopback port 65422, is stopped; its logs are retained.
+- SQLite v230 and PostgreSQL v175 append only the Vault generation table.
+  Migration parity and lineage pass for all 230/175 entries in
+  `.tmp/citadel-vault-parity-final.log`; 49 migration/scenario-harness tests pass
+  in `.tmp/citadel-vault-harness-v1.log`.
+- The focused Gateway suite passes 108 tests across five files in
+  `.tmp/citadel-vault-gateway-final.log`. It covers actual SQLite routes, operator
+  auth, URL scope, revision rejection, response failure, awaited commit markers,
+  body-independent idempotency and no-cache responses. Composition tests verify
+  that the dev-verification key bypasses OS-keychain access only with the private
+  dev setting. The named asynchronous boundary lane passes ten regressions and
+  the 997-file production scan in `.tmp/citadel-vault-async-boundary-final.log`.
+- The final `pnpm verify:citadels:revisions` run passes all four scenarios in
+  `artifacts/verification/2026-09-13T21-18-30-919Z-citadel-record-revisions-8f994192/`.
+  The Vault scenario proves two actual competing writes, two explicitly reviewed
+  retries, replacement and renewed deletion confirmation, and recovery after a
+  failed metadata refresh. Desktop and 390 px captures retain masked values and
+  a 44 px review target. Earlier desktop/narrow captures were visually inspected
+  in `2026-09-13T21-10-06-894Z-citadel-record-revisions-e79c2458`.
+  A failed intermediate fixture run is retained at
+  `2026-09-13T21-15-45-998Z-citadel-record-revisions-60bc13bf`: its one-response
+  outage recovered through the client's safe-read retry before the manual-reload
+  step. The final fixture holds the outage through read retries until recovery.
+- Sixteen focused UI tests pass in `.tmp/citadel-vault-ui-v3.log`. The preceding
+  complete UI/library stage passes 3,683 tests (1,159 canonical UI and 2,524
+  library/desktop) in 2m 14s at
+  `artifacts/verification/2026-09-13T21-11-27-099Z-fast-c298bdf7/`. The later
+  metadata-reload refinement is covered by the final focused and browser runs.
+  Shared-client request coverage passes 19 tests in `.tmp/citadel-vault-client-v1.log`.
+
+This completes the local Vault revision slice. Integration revisions are covered
+by the subsequent entry below. MCP mutation preconditions, remaining
+worker/comparison work and external C1-C6 acceptance remain open. No commit or push,
+drive operation, installed-service change or live provider/channel call was made.
+
+## Integration connection revisions
+
+The global integration editor now requires a revision for public PATCH and DELETE.
+The repository serializes comparison, record changes, generation advance and its
+own acknowledgement. Revisions bind only connection ID and generation, including
+credential-only and identical writes. Generic HTTP idempotency does not hash the
+body, and primary connection handlers await their commit marker before runtime
+synchronization. The public projection retains masked credentials. A peer change
+between route-level secret preservation and service-level defaults is rejected.
+
+Settings retains its draft, offers a read-only current-record refresh, and requires
+**Use current connection review** before another save or delete. Delete requires
+a new confirmation. The editor remains mounted during refresh, ignores stale
+scope responses, and retains text entered after submission. Successful responses
+update the list from their own acknowledgement rather than reloading it. Terminal
+updates/deletes, legacy access migration, Telegram/Discord configuration commands,
+Telegram pairing and Slack OAuth merges carry their reviewed connection revision.
+
+Fresh local evidence:
+
+- SQLite passes the owner assertions and five independent-writer pairs in
+  `.tmp/integration-revisions-sqlite-v2.log`; the three existing repository cases
+  also passed in the first run. The initial race harness used the wrong missing
+  entity error-code literal; it was corrected to `ENTITY_NOT_FOUND` and rerun.
+- Actual PostgreSQL passes the same owner/race suite plus all 24 migration
+  integrity checks with zero skips in `.tmp/integration-revisions-postgres-v1.log`.
+  The owned `%TEMP%/gc-integration-connection-pg-2zfrlfxy.a4v` cluster on loopback
+  port 64097 is stopped. Its logs are retained. SQLite v231 / PostgreSQL v176
+  migration parity and lineage pass in `.tmp/integration-revisions-parity-v1.log`;
+  all 49 migration/scenario-harness checks pass in `.tmp/integration-revisions-harness-v1.log`.
+- The focused Gateway suite passed 73 tests in `.tmp/integration-revisions-gateway-v2.log`.
+  Secondary channel/terminal coverage passed 86 tests in
+  `.tmp/integration-revisions-secondary-writers-v1.log`. Twelve command/migration
+  tests, including competing changes to credentials and inbound policy, pass in
+  `.tmp/integration-revisions-writer-races-v1.log`.
+  The final combined suite passes 168 tests across fourteen files in
+  `.tmp/integration-revisions-gateway-final.log`, including channel setup route
+  compatibility. Existing terminal harness listener warnings are retained in its
+  output; the command exits successfully.
+- Canonical Settings coverage passes 131 tests in
+  `.tmp/integration-revisions-ui-existing-v1.log`. Seven dedicated editor tests
+  pass in `.tmp/integration-revisions-ui-focused-v2.log`; six shared-load tests
+  cover stale responses and acknowledgement precedence. Shared API wrapper tests
+  pass in `.tmp/integration-revisions-client-v1.log`.
+  The final complete UI/library selection passes 3,693 tests (1,169 canonical UI
+  and 2,524 library/desktop) in 2m 14.5s at
+  `artifacts/verification/2026-09-13T22-10-31-900Z-fast-4f7b68eb/`.
+- The final `pnpm verify:integrations:revisions` journey passes at
+  `artifacts/verification/2026-09-13T22-07-59-381Z-integration-connection-revisions-8e762d12/`.
+  It proves two real competing writes rejected with 409, two explicitly reviewed
+  retries, failed-refresh recovery, masked credentials, fresh delete confirmation
+  and 44 px review/confirmation buttons at 390 px. The earlier complete journey
+  at `2026-09-13T22-05-36-258Z-integration-connection-revisions-c001cfdc` was
+  visually inspected and exposed the unstyled shared confirmation; the final
+  run includes its scoped styling repair. Earlier failed build/touch-target
+  receipts remain retained; they are not acceptance evidence.
+  The final narrow retained-draft and deletion-confirmation captures were
+  visually inspected: inputs remain readable and the confirmation uses the
+  canonical theme with separated, accessible actions.
+- Dependent typechecks pass in `.tmp/integration-revisions-typecheck-v5.log`,
+  strict lint in `.tmp/integration-revisions-lint-v2.log`, and the named async
+  Gateway lane passes ten regressions and the 997-file production scan in
+  `.tmp/integration-revisions-async-boundary-v1.log`.
+  Documentation/governance checks pass in `.tmp/integration-revisions-docs-v1.log`;
+  `git diff --check` is clean.
+
+The [API/operator contract](../INTEGRATION_CONNECTION_REVISIONS.md) explains the
+client upgrade and additive migration. This closes the local global-connection
+editor slice. The subsequent channel setup section below records the completed
+connection-bound review across draft hydration, validation and credential
+promotion (`channel-setup-service.ts`, `persistConnectionWithSecretReferences`).
+MCP also needs public edit/delete preconditions: its admin service has internal
+catalog CAS and configuration-binding identities, but the public update input
+does not bind the operator's older Settings draft. Worker/comparison source work
+and external C1-C6 acceptance remain open. Publication and drive formatting stay
+paused; these runs use no real provider, connector, OS keychain or installed service.
+
+## Channel setup connection reviews
+
+The [channel setup review contract](../CHANNEL_SETUP_CONNECTION_REVIEWS.md) closes
+the remaining local connection-review gap in channel hydration, testing and
+finalization. Draft and connection preconditions are enforced together with draft
+removal. A failed competing promotion never overwrites a credential already in use.
+HTTP retries remain fenced after commit or runtime synchronization failure.
+
+Evidence from this local slice:
+
+- SQLite: `.tmp/channel-review-storage-v2.log`, three passing tests, including
+  five pairs of independent writers and populated-row migration preservation.
+- Actual PostgreSQL: `.tmp/channel-review-postgres-v3.log`, 25 passed, no skips;
+  the owned cluster was stopped and retained at
+  `%TEMP%/gc-channel-setup-connection-pg-4vrsll1o.cjz`.
+- Migration parity: SQLite 232 / PostgreSQL 177. The first PostgreSQL fresh-bootstrap
+  attempt exposed a duplicate column; only unpublished migration 177 was corrected
+  before the successful runs. Earlier migration history remains unchanged.
+- The migration/scenario harness passed 49 tests in
+  `.tmp/channel-review-harness-v1.log`.
+- Gateway: `.tmp/channel-review-gateway-final.log`, 82 tests in ten files.
+- The selected fast UI/library lane passed all 3,696 tests (1,172 Mission Control;
+  2,524 shared packages/desktop) in
+  `artifacts/verification/2026-09-13T22-51-50-061Z-fast-974e4e81`.
+- Final dependent typecheck passed in `.tmp/channel-review-types-final-v2.log`.
+  The named asynchronous Gateway boundary passed ten regression tests and scanned
+  998 production files in `.tmp/channel-review-async-boundary.log`. Documentation
+  checks and `git diff --check` passed.
+- Browser: `artifacts/verification/2026-09-13T22-48-21-115Z-channel-connection-review-db68ddd5`,
+  real stale-connection rejection, failed current-read recovery, retained unsaved
+  input, explicit review and the accepted revision on the next save. Desktop and
+  390 px screenshots were visually inspected. The earlier failed receipt remains
+  retained; the textarea's explicit accessible name was fixed before this pass.
+- Strict lint passed for all 124 changed TS/TSX/MJS source files in
+  `.tmp/channel-review-lint-final.log`.
+
+All credentials and external checks in the route/service tests are synthetic and
+local. The browser uses a disabled connection and an environment-variable-name
+fixture and performs no live channel test. No provider request, real Telegram
+message, OS-keychain mutation, installed service, disk-format operation, commit or
+push is part of this slice. MCP, C5/C6 and external acceptance remain open.
+
+## MCP server revisions
+
+The [MCP revision contract](../MCP_SERVER_REVISIONS.md) closes the local public
+edit, policy and delete precondition gap. Configuration writes consume the exact
+review and return their own transaction's acknowledgement. Status and tool-cache
+settlement reject stale connection attempts, and late session cleanup affects
+only its captured sessions. Credential-bearing bodies remain outside generic
+idempotency payload hashes.
+
+Evidence from this local slice:
+
+- Gateway: `.tmp/mcp-revisions-gateway-v2.log`, 111 passed across seven files;
+  the two PostgreSQL checks skipped here passed in the dedicated run below.
+- Actual PostgreSQL: `.tmp/mcp-revisions-postgres-v1.log`, 26 passed, no skips,
+  including four pairs of competing configuration writers. The owned cluster
+  was stopped and retained at `%TEMP%/gc-mcp-server-review-pg-flj3ni42.dp0`.
+- Independent SQLite writers and HTTP idempotency:
+  `.tmp/mcp-revisions-races-v1.log`, 37 passed across two files, including all four
+  save/delete writer pairs. Separate registry tests cover rollback and late
+  discovery, including delete/recreate and competing connections. The final
+  independent-writer retry also passed in `.tmp/mcp-revisions-races-final.log`.
+- Gateway composition, static authority and public projection:
+  `.tmp/mcp-revisions-composition-v1.log`, 100 passed across eight files.
+- Settings: `.tmp/mcp-revisions-ui-v1.log`, 131 passed across three files,
+  including six new conflict, own-acknowledgement and late-response regressions.
+  Shared API wrappers: `.tmp/mcp-revisions-client-v1.log`, four passed.
+- Dependent contracts/storage/shared/Gateway/UI typechecks passed in
+  `.tmp/mcp-revisions-typecheck-v3.log`. Earlier browser build attempts exposed
+  fixture typing errors; those fixtures were corrected before this pass.
+- Selected fast UI/library regression: all 3,702 tests passed (1,178 Mission
+  Control and 2,524 shared packages/desktop) in
+  `artifacts/verification/2026-09-13T23-45-27-976Z-fast-5ca454b3`.
+- The named asynchronous Gateway boundary passed ten regression tests and scanned
+  999 production files in `.tmp/mcp-revisions-async-boundary.log`. Documentation
+  checks passed in `.tmp/mcp-revisions-docs.log`; strict lint passed all 151 changed
+  TS/TSX/MJS files in `.tmp/mcp-revisions-lint-final.log`.
+- Browser: `artifacts/verification/2026-09-13T23-44-37-482Z-mcp-server-revisions-a4d75f00`,
+  two rejected stale mutations, two explicitly reviewed retries and successful
+  recovery after a failed current-record read. Desktop and 390 px retained-draft
+  and deletion-confirmation screenshots were visually inspected. No connection
+  action was attempted. The earlier unsuccessful harness receipts remain retained;
+  the navigation locator was corrected to the actual **Back to list** control.
+
+The additive revision fields use the existing JSON registry and require no new
+SQL migration. All credentials, discovery and provider fixtures in these tests
+are synthetic. No live provider/MCP call, OS-keychain mutation, installed service,
+drive operation, commit or push is part of this slice. Remaining C5/C6 source
+work, credential recovery and external acceptance remain open.
+
+## Bounded native directory listing
+
+The stock worker's `fs.list` adapter uses the existing publication, activation,
+permission, invocation and local registry owners. The native helper pins the
+reviewed NTFS root and descendant ancestry, performs a nonrecursive enumeration,
+and returns relative names and observed types. Reparse entries are unavailable;
+attempting to traverse them is refused. At most 128 entries and 32 KiB of entry
+frames are returned, with explicit truncation. No enumeration result grants a
+later read/write authority or claims an atomic directory snapshot.
+
+The Node owner validates the fixed native receipt and rechecks root identity and
+local configuration before exposing names. A complete native refusal is a failed
+read. Malformed or lost responses retain the runtime's existing uncertainty
+boundary. The installed registry allowlist includes the new compiled adapter;
+this source change does not configure or start an installed service.
+
+Local evidence:
+
+- `.tmp/worker-directory-unit-v1.log`: 121 focused tests passed across five files.
+  These include descriptor/schema authority, root/configuration changes,
+  cancellation, malformed receipts, Unicode and credential/root separation.
+- `.tmp/worker-directory-native-v2.log`: all eleven named Windows file-executor
+  checks passed, including real directory listing, entry/byte truncation,
+  junction refusal, root replacement, protocol negatives, existing CAS writes,
+  fixed-image rejection and exact helper cancellation. Normal and AddressSanitizer
+  executables exercised the new protocol. Evidence is retained at
+  `%TEMP%/Goat Worker Files eP0cSz`.
+- `.tmp/worker-directory-arm64.log`: two ARM64 helper builds are byte-identical;
+  SHA-256 `1e9c6fdf52e3835645eb6c41552279fa0137b8daeacdcf49af0c4fe5eb8e8522`.
+  The source-hash receipt is retained at `%TEMP%/gc-worker-directory-arm64-niF6HW`.
+  This is compilation proof, without ARM64 execution.
+- `.tmp/worker-directory-types-final.log`: the dependent worker typecheck passed.
+- `.tmp/worker-directory-full-tests-final.log`: all 669 worker tests passed across
+  39 files, including the final known-refusal regression. Strict lint passed all
+  162 changed TS/TSX/MJS files in `.tmp/worker-directory-lint-final.log`.
+- `.tmp/worker-directory-package-build-v4.log`: a fresh 1,664-file x64 package was
+  built at `.tmp/worker-directory-package-d0f8cf5a1a2341378ad415e0c53725fa/payload`.
+  Its independently retained manifest hash is
+  `c4c23766e2f5b42452443f85d50d328bd1d51348c037bd57da13cb0bb3cad295`.
+  `.tmp/worker-directory-package-probe-final.log` records all 29 package-file tests
+  and the embedded runtime probe passing. The probe loads the new registry binding,
+  lists the real fixture, accepts missing-directory refusal as a failed read, and
+  checks unchanged package inventory. Existing read/write and synthetic loopback
+  bearer-MCP checks also pass. Earlier successful candidates remain retained;
+  the final build includes the known-refusal correction and PowerShell CRLF.
+- Documentation checks passed in `.tmp/worker-directory-docs-final.log`, and
+  `git diff --check` passed.
+
+The first native script attempt failed on a source `.ts` import's `.js`
+dependency. The named lane now builds under the output lock and tests the built
+module. A package attempt targeting C: hit pnpm's legacy cross-drive staging
+path error and remains retained at
+`%TEMP%/gc-worker-directory-package-3b9967bda5ed452f9098767e057e6001`.
+Subsequent package builds use fresh directories under the checkout; no failed
+output was overwritten.
+
+All filesystem work used task-owned ordinary directories. No disk was attached,
+partitioned, formatted, mounted or assigned new root permissions. There was no
+real provider call, installed service, OS-keychain mutation, commit or push.
+Remaining native tools/transports, protected execution/custody, delegation,
+credential recovery, campaign work and external acceptance remain open.
+
+## Cross-drive Windows worker packaging
+
+The pinned pnpm legacy deploy computes `modulesDir` relative to its workspace.
+Across Windows drives this becomes an absolute path that pnpm later joins to the
+workspace again. The earlier C: deployment failure remains retained. The builder
+now creates an exclusive dependency-staging directory under the checkout's `.tmp`
+and copies the verified dependency graph to the requested package destination.
+It refuses redirected scratch roots, preserves prior staging, and records the
+staging path in `dependency-staging.json` and the final build receipt.
+
+Fresh proof:
+
+- All 31 package-file tests pass, including retained staging and redirected-root
+  refusal: `.tmp/worker-cross-drive-files-v1.log`.
+- A full package built from the F: checkout into
+  `%TEMP%/gc-worker-cross-drive-e346e85eec1f4bd28e5244aa4264502a` on C:.
+  It contains 1,664 files / 104,455,189 bytes. Manifest SHA-256 remains
+  `c4c23766e2f5b42452443f85d50d328bd1d51348c037bd57da13cb0bb3cad295`,
+  identical to the previously verified same-drive payload.
+  Evidence: `.tmp/worker-cross-drive-package-v1.log`.
+- The named package verifier passes with `--probe`: embedded Node/OpenSSL,
+  filesystem read/write/list, the actual synthetic bearer loopback MCP session,
+  credential-change refusal, root separation and unchanged final inventory.
+  Evidence: `.tmp/worker-cross-drive-probe-v1.log`.
+
+This is unsigned portable-package proof. It neither installs services nor
+attaches, partitions, formats or mounts a drive.
+
+## MCP completed-write receipt recovery
+
+New Windows MCP OAuth/environment slots keep a bounded write receipt with their
+value in the original keychain account. The private metadata contains only its
+opaque identity and original custodian. Recovery reads that proof outside the
+database transaction, rechecks canonical bindings, and atomically retires the
+unpublished version. It never publishes an abandoned request. The same receipt
+guards deletion, including retry after a lost deletion acknowledgement. Older
+records and missing or mismatched receipts remain preserved. See the
+[owner contract](../MCP_CREDENTIAL_WRITE_RECEIPTS.md).
+
+Fresh proof:
+
+- The focused envelope, synthetic PowerShell, staging, retirement, secret-store,
+  OAuth and environment tests pass: 139 tests across seven files in
+  `.tmp/mcp-write-receipts-focused-v2.log`.
+- Eight Gateway integration suites pass 138 tests, with two optional PostgreSQL
+  cases skipped in that invocation: `.tmp/mcp-write-receipts-integration-v1.log`.
+- A separate fresh PostgreSQL run executes both credential-staging and OAuth
+  RPC scenarios, with no skip: `.tmp/mcp-write-receipt-postgres-v3.log` and
+  `.tmp/mcp-write-receipt-postgres-tests-v3.log`. The staging scenario covers a
+  canonical binding change during the OS probe, competing recovery workers,
+  exact-once retirement, rejected late publication and deletion acknowledgement
+  loss followed by close/reopen. The task-owned cluster
+  `%TEMP%/gc-mcp-write-receipt-pg-0d0k1np4.uhw` on port 63129 is stopped.
+- Gateway typecheck passes in `.tmp/mcp-write-receipts-types-v2.log`. The async
+  boundary lane passes ten tests and scans 1,001 production files in
+  `.tmp/mcp-write-receipts-async-boundary-v1.log`; focused strict lint passes in
+  `.tmp/mcp-write-receipts-lint-v1.log`.
+- Both named auth-matrix scenarios pass:
+  `artifacts/verification/2026-09-14T00-50-56-198Z-auth-matrix-d0c8ec51`.
+- Both named runtime-truth scenarios pass, including approval/restart recovery
+  and the canonical shell:
+  `artifacts/verification/2026-09-14T00-52-47-331Z-runtime-truth-274fff55`.
+- Documentation and whitespace checks pass; the documentation receipt is
+  `.tmp/mcp-write-receipts-docs-v1.log`.
+- The final transport check passes 61 envelope/secret-store/PowerShell tests,
+  including exact Unicode and whitespace preservation through real Windows
+  PowerShell console pipes: `.tmp/mcp-write-receipts-encoding-final.log`.
+  ASCII-safe JSON escapes prevent console code pages from altering credential
+  values. Final Gateway typecheck passes in
+  `.tmp/mcp-write-receipts-types-final-v2.log`.
+
+The first new helper run caught PowerShell 5.1's Int32 JSON version value; the
+receipt parser now accepts the exact integral version under both number widths.
+The first PostgreSQL run exposed a post-commit queue-rotation conflict; rotation
+now preserves the competing queue, and canonical CAS loss is reported as deferred
+work. The second run also encountered concurrent schema-bootstrap interference
+between the two fixtures. The passing run executes those fixture files serially
+while retaining the independent RPC workers inside each concurrency scenario.
+Earlier failures and their stopped clusters remain retained.
+
+All credentials and vaults used for these tests are synthetic. No actual keychain
+credential, real provider, external channel, installed service or disk boundary
+was changed. Missing/pre-write receipts, older unindexed credentials, custodian
+migration/rebinding, unsupported platform recovery, protected worker execution
+and installed/live acceptance remain open. No commit or push was performed.
+
+## Chat worker runtime evidence
+
+Chat's existing remote-worker activity now consumes the assignment-runtime API
+instead of always declaring usage and artifacts unavailable. Recorded cost keeps
+its completeness marker; outstanding holds remain separate reservations. Artifact
+verification and effect reconciliation retain their canonical status. Execution,
+capacity, contact observations and source/authority details expand on demand.
+Missing data is unavailable, and retained contact does not imply a live connection.
+
+Ops and Chat share `useRemoteWorkerAssignmentRuntime`, which checks workspace,
+assignment, assignment generation, worker and worker generation before display.
+Its request key hides prior results before effect cleanup, including refreshes.
+The Chat assignment hook separately clears previous workspace/session/turn data,
+rejects delayed reads and refreshes runtime evidence after the existing event or
+polling reread. Missing lease freshness no longer renders as expired.
+
+Fresh local evidence:
+
+- `.tmp/worker-chat-evidence-ui-tests-final.log`: all 46 tests across eight files
+  pass, covering the Ops panels, Chat components/hooks, background rail and worker
+  realtime projection. New cases cover partial/unknown accounting, failed-read
+  retry, all five runtime identity mismatches, delayed responses, refresh and
+  immediate workspace/session/turn changes.
+- `.tmp/worker-chat-evidence-lane-tests-v1.log`: all twelve worker-lane contract
+  tests pass. The named lane now includes both runtime panel suites.
+- Final app/dependency typecheck and strict lint pass in
+  `.tmp/worker-chat-evidence-types-final.log` and
+  `.tmp/worker-chat-evidence-lint-final.log`. Design-token, typography and button
+  contracts pass. Documentation checks pass in
+  `.tmp/worker-chat-evidence-docs-final.log`; `git diff --check` passes.
+- `artifacts/verification/2026-09-14T01-33-54-116Z-remote-workers-85ad57d2`:
+  the selected `remote-workers.chat-runtime-browser` scenario passes without skips.
+  It mounts the actual Chat/Ops components in a verification harness and reads
+  the real Gateway/SQLite APIs using controlled records. It covers recorded and
+  partial usage, holds, a populated cell/capacity, a committed artifact, manual
+  effect reconciliation, an unavailable connection, failed-read retry and four
+  turn switches at 1440 x 1000 and 390 x 844. Screenshots were inspected; there is
+  no horizontal overflow, framework overlay or uncaught page error. The only
+  browser console errors are the deliberately injected 503 reads.
+- The Browser plugin was unavailable, so this proof used the repository's
+  Playwright installation. The local model stub received only its catalog
+  warmup; it received no completion dispatch. No upstream request was made.
+
+The first browser attempt failed on CommonJS Playwright import handling. The
+second completed the UI interactions but incorrectly counted catalog warmup as
+inference. Both failed receipts remain retained. The corrected final run above
+includes populated artifact/cell records and the final display wording.
+
+This is one selected browser scenario, not a complete `verify:remote-workers`
+campaign or a full-shell/physical-worker acceptance claim. The new snapshot
+reader does not activate execution, grant spending, mutate credentials, or alter
+worker control. Protected native execution, installed custody, two-machine and
+live-provider acceptance, and the consolidated M7 campaign remain open.
+
+## Native capacity inventory
+
+`ScanCellDirectoryFootprint` reads an independently admitted directory handle,
+reopens its exact full-width identity and reads descendants relative to retained
+parent handles. `ScanCellWorkspaceFootprint` composes that reader with the
+existing protected-workspace owner and requires every recorded root identity and
+its security to remain current. It scans the workspace root once rather than
+adding overlapping control/runtime/work subtrees. See the
+[owner contract and verification scope](REMOTE_WORKER_NATIVE_CAPACITY.md).
+
+The reader separately counts logical file bytes, actual sparse/compressed file
+allocation, directory allocation, files and directories. Named streams, hard
+links, reparse/mount paths, malformed or changed entries, exhausted bounds and
+revoked authority cannot produce a complete result. Held entry handles, final
+membership/metadata readback and post-callback security validation prevent a
+stale or partial observation from being reported as zero usage.
+
+Fresh proof:
+
+- `pnpm verify:remote-worker:windows-cell-capacity` passes in
+  `.tmp/worker-cell-capacity-tests-final.log`. The retained receipt is
+  `%TEMP%/Goat Cell Capacity GyHNGW/acceptance.json`, with source hashes and
+  normal/AddressSanitizer native results. Each build executes 1,212 assertions,
+  including fixture setup and the capacity/security cases; these are not 1,212
+  independent test scenarios. ARM64 compilation passes, with execution explicitly
+  unclaimed.
+- Exact totals are compared with independent filesystem controls. Tests cover
+  multi-buffer and Unicode enumeration, empty files/directories, sparse and
+  compressed data, links/streams, live writers, child additions/replacements at
+  every authority callback, rename/replacement, cancellation, deadline exhaustion,
+  frozen bounds, workspace identity drift and final-callback security drift.
+- Focused strict lint passes in `.tmp/worker-cell-capacity-lint-v1.log`.
+- The existing `pnpm verify:remote-worker:windows-cell-job` lane passes after
+  adding the reader to the shared native source inventory:
+  `.tmp/worker-cell-capacity-job-regression-v1.log`, with retained native evidence
+  under `%TEMP%/Goat Worker Cell Job oQ5t7x`. Its ordinary boundary mode runs
+  normal/AddressSanitizer resource and descendant-cleanup checks. No prebuilt
+  package or privileged attachment mode was supplied.
+- Documentation and whitespace checks pass; the final documentation receipt is
+  `.tmp/worker-cell-capacity-docs-final.log`.
+
+The first compiled fixture exposed `ReOpenFile` refusing the directory read.
+The final reader instead verifies the original handle before `OpenFileById` and
+verifies the returned full identity again. A long-name fixture also needed an
+extended path when creating its own files. The rename case confirmed that a
+handle opened by ID is not a lease on the old name: the final metadata readback
+rejects a changed observation. Earlier failed runs and their fixtures remain
+retained separately from the passing receipt.
+
+This source is a read-only inventory dependency, not hard quota enforcement or
+an atomic snapshot of a live tree. Workload quiescence and an outer watchdog
+remain caller requirements. Volume metadata and other footprint categories,
+controller/Gateway observation transport, protected execution, backend activation
+and installed/two-machine acceptance remain open. Tests modify only their own
+ordinary directory/file fixtures; no drive was attached, partitioned, formatted,
+mounted or given new root permissions. No installed service, actual credential,
+user database, provider or external channel was changed. No commit or push was
+performed.
+
+## Journal-bound native capacity
+
+`CellMountedWorkspace::ObserveFootprint` now connects the native inventory to its
+recorded mounted workspace. It freezes the complete checkpoint/binding snapshot
+and checks the mount, protection, host and workspace after authority callbacks.
+`CellProvisioningJournal::ObserveMountedFootprint` requires the independent
+anchor and final digest of all twenty-one records. Its result includes the exact
+assignment/profile bindings, journal identity/head, recorded workspace and
+footprint. The held journal is re-read around authority callbacks and after the
+reader returns. Output remains empty on a stale head, changed bindings, invalid
+root, revoked authority, cancellation, deadline exhaustion or partial read.
+Neither owner runs caller code after the final tree readback or appends a
+provisioning checkpoint. See the [owner contract](REMOTE_WORKER_NATIVE_CAPACITY.md).
+
+Fresh local proof:
+
+- `pnpm verify:remote-worker:windows-cell-mounted-capacity` passes in
+  `.tmp/worker-mounted-capacity-tests-v2.log`, with evidence under
+  `%TEMP%/Goat Mounted Capacity Fmc1zn`. Normal/AddressSanitizer builds each
+  execute 262 assertions against real protected ordinary NTFS directories and
+  native workspace checkpoint bytes, with controlled physical-volume verification.
+  ARM64 compiles but is not executed.
+- `pnpm verify:remote-worker:windows-cell-job` passes in
+  `.tmp/worker-journal-capacity-tests-v1.log`, retaining evidence under
+  `%TEMP%/Goat Worker Cell Job HhkhAl`. Each normal/AddressSanitizer build passes
+  the existing 4,939 checks plus 739 dedicated mounted-workspace journal checks.
+  The journal fixture uses its actual exclusive file and unattached VHDX, with
+  controlled volume stages and a controlled footprint reader. The unchanged
+  independent Node decoder verifies all twenty-one record bytes.
+- The journal cases reject independent anchor/head mismatches before inventory,
+  assignment/profile/disk/owner/checkpoint drift at initial and final callbacks,
+  changes after the reader returns, denied authority, wrong-root and partial
+  results, cancelled reads and callback timeouts. They also verify frozen input
+  bounds and byte-identical history after rejected observations.
+- The first journal run deliberately used an unimplemented reader and failed
+  the exact bound-observation check. Its receipt remains in
+  `.tmp/worker-journal-capacity-red-v1.log`.
+- `pnpm verify:remote-worker:windows-cell-controller-protocol` passes in
+  `.tmp/worker-journal-capacity-controller-v1.log`. Each normal/AddressSanitizer
+  build passes 14,894 existing protocol assertions across 121 sessions and
+  5,373 workspace assertions across 27 sessions. Its controlled drivers perform
+  no physical volume operation or installed-service activation.
+- `node --test scripts/packaging/build-remote-worker-windows-cell-controller.test.mjs`
+  passes in `.tmp/worker-journal-capacity-payload-v1.log`. Two independent builds
+  reproduce exact bytes for each x64 and ARM64 controller candidate; the source
+  inventory now contains all 46 required inputs. ARM64 execution, installation
+  and signing remain unproved.
+- Focused strict lint, documentation and whitespace checks pass. The read-only
+  audit `.tmp/worker-journal-capacity-proof-audit.json` confirms that all retained
+  mounted-reader, journal, controller and payload source hashes still match this
+  implementation, and retains the two reproducible controller image hashes.
+
+This closes local mounted-owner/journal observation composition. The controller
+and helper build inventories now include the reader sources, but no capacity
+wire operation or Gateway persistence is added. Workload quiescence, complete
+pool accounting, hard quotas, protected execution, physical recovery and installed
+acceptance remain open. No drive attachment, partitioning, formatting, mounting,
+drive-root permission write, installed-service change, actual credential write,
+user-database mutation, provider request or external message was performed.
+
+## Native capacity observation transport
+
+Controller operation 14 adds a read-only capacity exchange with the unchanged
+request and complete recovery histories. Operation 13 remains reserved. The
+fixed response carries full-width journal/workspace identities, assignment/profile
+and final-history hashes, plus logical bytes, allocated bytes, files and
+directories. Its decoder compares all bindings with independently validated
+canonical history and trusted local principals. Invalid values clear output.
+The operation is limited to 60 seconds, 20,000 entries and 64 levels, with the
+existing 256 remote-authority challenge ceiling.
+
+The native client freezes caller input before authorization and publishes a
+capacity callback only after a valid terminal receipt. The helper forwards
+exactly 352 bytes in frame 6. The worker permits this frame only for observation,
+after all twenty-one records and a current-authority exchange. It caps output at
+33,507 bytes, joins its own helper, requires clean exit and a successful receipt,
+and rechecks canonical/local authority before returning immutable counts with
+their receipt and assignment scope. It never sends creation acknowledgements.
+The installed service still has no quiescence owner and refuses observation
+before opening the parent directory. No backend activation or Gateway capacity
+persistence is added. See the [owner contract](REMOTE_WORKER_NATIVE_CAPACITY.md).
+
+Fresh proof:
+
+- `pnpm verify:remote-worker:windows-cell-controller-protocol` passes in
+  `.tmp/worker-capacity-transport-protocol-v1.log`, retaining its exact inputs and
+  reports under `%TEMP%/Goat Cell Controller Protocol aPCJic`. Each normal and
+  AddressSanitizer build passes 14,924 legacy checks across 121 sessions,
+  5,403 workspace checks across 27 sessions, and 2,199 capacity checks across
+  27 sessions. The capacity cases cover the complete native chain, full-width
+  identities, principal substitution, frozen caller input, missing owners,
+  malformed/early/repeated frames, current-authority failures, terminal receipt
+  failures and callback revocation. Actual controller refusal uses a nonexistent
+  parent to establish that missing quiescence ownership performs no filesystem
+  opening. Positive observation peers return controlled counts.
+- `pnpm verify:remote-worker:windows-cell-helper-protocol` passes in
+  `.tmp/worker-capacity-transport-helper-v1.log`, with 55 compiled-helper stream
+  scenarios per normal/AddressSanitizer build under
+  `%TEMP%/Goat Cell Helper Protocol Q9gYk9`. An independent Node encoder checks
+  the complete 352-byte response, sparse counts and exact 33,507-byte maximum.
+  Invalid capacity or authority prevents observation/receipt forwarding.
+- Focused worker tests pass all 192 cases in
+  `.tmp/worker-capacity-transport-worker-v3.log`. They cover complete/fragmented
+  streams, every retained history group, exact identity binding, unsafe counts,
+  missing/duplicate/early observations, failed receipts/exits, cancellation,
+  revoked final authority and both challenge/output bounds. The initial
+  root-level test invocation was stopped after its exact process was identified;
+  it had produced no test results. The successful run uses the worker package's
+  test configuration.
+- `pnpm verify:remote-worker:windows-cell-provisioning` passes all eight checks
+  in `.tmp/worker-capacity-transport-bridge-v1.log`, with evidence under
+  `%TEMP%/Goat Worker Provisioning Bridge mge0CL`. This includes the real Gateway
+  coordinator/compiled-helper regression (17 Gateway tests) and normal/AddressSanitizer refusal
+  of operations 3-12 and 14 outside installed controller custody. Gateway and
+  worker typechecks pass through the output-lock wrapper.
+- Reproducible controller builds pass in
+  `.tmp/worker-capacity-transport-payload-v1.log`, under
+  `%TEMP%/Goat Controller Payload Wft7qR`. Two builds match for each x64 and
+  ARM64 target. ARM64 is compiled, not executed.
+- The retained red run `.tmp/worker-capacity-transport-red-v2.log` fails the
+  independently encoded capacity check against the then-unimplemented codec.
+  The earlier red-v1 compile warning was corrected before that behavioral run.
+- Strict lint, `pnpm docs:check` and `git diff --check` pass. The audit in
+  `.tmp/worker-capacity-transport-proof-audit.json` verifies all 54 controller
+  protocol and 52 helper input hashes against current source, plus all 46
+  controller payload inputs and both independently built images for each target.
+  Worker source hashes are recorded separately after its successful tests.
+
+Installed workload quiescence, a real mounted-volume observation through the
+controller, Gateway persistence/accounting, complete pool inventory, hard quotas,
+protected execution and physical two-machine acceptance remain required. These
+fixtures use owned ordinary directories, unattached VHDX files and controlled
+physical-stage responses. No drive attachment, partitioning, formatting, mounting,
+drive-root permission write, installed-service mutation, credential change,
+user-database mutation, live-provider request, external message, commit or push
+was performed.
+
+## September 15 native output through verified Chat artifact settlement
+
+The existing end-to-end native Chat acceptance now explicitly requires v2 output
+in the worker's real inference input, outside system instructions. Its controlled
+answer includes the retained stdout and the nonzero native exit. The same answer
+passes the production artifact publisher/verifier, canonical settlement, durable
+Chat completion, idempotent replay and database reopen. The native evidence
+download is byte-for-byte unchanged after reopen. Tampered artifact bytes are
+still rejected before the matching artifact is accepted.
+
+The real temporary SQLite acceptance passes
+(`.tmp/comparison-native-output-artifact-acceptance-20260915-a.log`), with targeted
+lint also passing. It uses a stubbed provider and controlled native journal/result
+bytes. This proves the governed Chat-answer artifact path, not arbitrary native
+file export, live model usefulness or physical worker execution.
+
+The browser acceptance also passes on actual Chat/Ops components, shared API
+client, Gateway and a seeded temporary SQLite database. At 1440x1000 and 390x844,
+the controls remain within the viewport. Chat download, failed-download retry and
+Ops download each produce the exact retained 2,040-byte document and matching
+SHA-256. No page errors or model dispatches occurred; the only stub request was
+model catalog discovery. Evidence is under
+`artifacts/verification/2026-09-15T20-13-12-713Z-remote-workers-f9f3180a/`, with five
+screenshots under the matching `output/playwright/` run directory. The temporary
+stack closed and its Gateway listener was independently confirmed absent.
+
+Earlier browser attempts are retained: the fixture first needed the source-aware
+loader, then a readiness wait compatible with persistent status connections, and
+then the canonical Chat/Ops styles normally loaded by their route owners. These
+were fixture corrections, not relaxed download or viewport assertions. This is
+focused browser proof for native-output downloads; consolidated application-wide
+visual/accessibility acceptance and installed/physical execution remain open.
+
+## Retained native capacity observations
+
+The shared portable decoder now validates worker and Gateway observations against
+all twenty-one native records. Separate SQLite 233/PostgreSQL 178 evidence rows
+retain exact frame/receipt bytes, plan/profile/checkpoint bindings, original
+assignment lease revision, observation revision and database time. The protected
+route-12 exchange rechecks current credential, mesh, parent and assignment
+authority through commit and replay. A setup-lease expiry does not substitute
+for the still-current assignment authority. Missing/incomplete native history,
+changed cell ownership and cleanup remain refusals.
+
+New observations compare the expected revision; exact retries preserve the
+original row and timestamp, including replay after a newer observation. Changed
+payloads under the same native nonce conflict. The worker connection entry point
+uses the current lease for each RPC and retains the validated native result
+before submission, then its canonical acknowledgement. File-backed response-loss
+recovery and local acknowledgement-write failure replay the retained bytes
+without another native observation. Changed acknowledged evidence, stale scopes,
+concurrent local observers, late authority callbacks and cancellation fail closed.
+
+Fresh proof:
+
+- The contract suite passes 45 tests in
+  `.tmp/worker-capacity-persistence-contracts-v1.log`, covering the independent
+  native encoder, every identity binding, integer bounds, complete history,
+  exact request/receipt shape and record metadata.
+- Three SQLite scenarios pass in
+  `.tmp/worker-capacity-persistence-sqlite-v2.log`; three actual PostgreSQL
+  scenarios pass without skips in
+  `.tmp/worker-capacity-persistence-postgres-tests-v1.log`. Each executes real
+  protected admission/assignment owners and the complete canonical native
+  checkpoint chain. They cover foreign/stale/revoked authority, exact and
+  conflicting replay, immutable rows, final-fence rollback after an inserted
+  observation, real setup-lease expiry and unchanged cell/accounting evidence.
+  The owned cluster `%TEMP%/gc-capacity-persistence-pg-q3sfa3ct.wom`, on loopback
+  port 56231, was verified and stopped after the run.
+- The worker suite passes 217 tests across five files in
+  `.tmp/worker-capacity-persistence-worker-v1.log`. The final delivery follow-up
+  passes 26 tests across two files in
+  `.tmp/worker-capacity-persistence-delivery-final.log`, adding changed-retained-
+  receipt and late-callback rejection. The connection composition test exercises
+  snapshot/scan/receipt delivery across lease renewal through the RPC client.
+  The RPC peer and native readings in these delivery tests are controlled.
+- Focused Gateway protocol/handler proof passes 58 tests in
+  `.tmp/worker-capacity-persistence-gateway-v2.log`, covering protected authority,
+  exact response acknowledgement, malformed submissions before nonce consumption,
+  missing owners, incomplete history and separation from inference/effects.
+- `pnpm verify:storage:migration-parity` passes in
+  `.tmp/worker-capacity-persistence-migrations-v2.log`. All earlier manifest rows
+  are preserved; only the new migration entries were appended. Output-lock
+  typechecks, strict scoped lint and the named asynchronous Gateway boundary
+  check pass; that check scans 1,002 production TypeScript files.
+- Both runtime-truth scenarios pass in
+  `artifacts/verification/2026-09-14T04-26-01-326Z-runtime-truth-dbadf715`, including
+  approval/restart recovery and the canonical Next shell. Both auth-matrix
+  scenarios pass in
+  `artifacts/verification/2026-09-14T04-27-44-787Z-auth-matrix-43524cfe`.
+
+The initial direct compiled-test invocation could not resolve source fixture
+imports; the successful storage run uses `tsx`. The initial migration digest
+omitted the repository's normalized `atomic` prefix; the corrected new migration
+passes the independent runtime integrity check. The Gateway package command
+expanded into its full suite and was stopped after its exact process tree was
+verified; the focused `exec vitest` invocation passed. The first auth invocation
+refused a live verification output lock; its successful retry ran after the
+runtime-truth owner finished. These failed/stopped attempts remain retained.
+
+Partial observations do not advance native readiness or complete capacity
+accounting. Installed quiescence, accounting consumption, complete pool inventory,
+hard quotas, protected execution and physical two-machine acceptance remain open.
+No virtual drive was attached, partitioned, formatted or mounted. No installed
+service, actual credential, user database or external destination was changed.
+No live provider requests, commit or push were performed.
+
+## Journal-bound host backing capacity
+
+The native backing-file owner now exposes fresh physical-file length and host
+allocation bound to the exact recorded VHDX/control identities and frozen disk
+specification. The journal composes that read with its own distinct allocation,
+independent anchor/head digest, assignment/profile bindings and complete creation
+or mounted-workspace history. Changed native metadata, security, journal bytes,
+scope, current authority or owner lifetime invalidates all output. Observations
+never count guest-volume allocation a second time or alter the files to lower
+their reported footprint.
+
+Fresh proof:
+
+- `pnpm verify:remote-worker:windows-cell-backing-capacity` passes in
+  `.tmp/worker-backing-capacity-v2.log`. The retained bundle
+  `%TEMP%/Goat Backing Capacity ymDsZr` has 83 assertions per normal and
+  AddressSanitizer build, plus ARM64 compilation. It compares against independent
+  Windows EOF/allocation queries, checks each authority boundary, invalid and
+  changed identities, cancellation, deadline expiry, metadata/permission drift,
+  caller-data mutation, aliased input/output and same-file close/reopen. Full
+  VHDX hashes remain unchanged. The earlier 76-case receipt is retained in
+  `.tmp/worker-backing-capacity-v1.log`; the later run adds permission cases.
+- `pnpm verify:remote-worker:windows-cell-job` passes in
+  `.tmp/worker-backing-journal-native-v1.log`. The bundle
+  `%TEMP%/Goat Worker Cell Job G25jB6` reports 4,992 assertions per normal and
+  AddressSanitizer build, including 2,430 journal checks. New joined-observation
+  cases use actual protected journal files and unattached VHDX files; they check
+  independent allocations, exact scope/digests, cancellation, all three authority
+  boundaries, eleven journal-binding mutations at each boundary and metadata
+  drift. Both receipts explicitly report no attachment, physical-volume binding
+  or NTFS formatting. Existing controlled volume, process and recovery cases
+  retain their own proof boundaries.
+- The controller payload test passes in
+  `.tmp/worker-backing-capacity-payload-v1.log`. Two builds per architecture are
+  byte-identical in `%TEMP%/Goat Controller Payload tuNZmB`: x64
+  `5fa02ed58b070568d13e6902e1e3bdbe36f3a2a607429332bba3ca47914b5b23`
+  (462,848 bytes) and ARM64
+  `98b75fdd55b2ed704902c62cbffdb2f9619479c9a784e77bfc3334d32fd62816`
+  (424,960 bytes). All 46 source inputs match their retained build receipts;
+  ARM64 execution and installed-service acceptance are not claimed.
+- Scoped harness lint, `pnpm docs:check` and `git diff --check` pass. Source
+  receipts for the backing and native-job lanes are checked again against the
+  final source files; generated binaries remain in their separate temporary
+  evidence directories.
+
+The attached backing-reader success path, installed quiescence, new host-capacity
+transport and Gateway consumption, other pool inventory, hard quotas and native
+execution remain unfinished. No drive was attached, partitioned, formatted or
+mounted; no installed service, real credential or user database was changed.
+No live provider request, external message, commit or push occurred. C5 and the
+complete C0-C6/M0-M10 objective remain open.
+
+## Host backing observation transport
+
+Read-only operation 15 carries the host VHDX and journal allocation independently
+of mounted-tree operation 14. Its fixed 424-byte controller frame binds the
+connection nonce, original journal/host-directory/control/backing identities,
+disk GUID and sizes, assignment/profile digests and final checkpoint. Both sides
+require all twenty-one independently retained records and trusted principals.
+Mixed frame kinds, substituted valid identities, impossible allocation totals,
+oversized journal allocation, missing authority and unsuccessful terminal
+exchanges cannot publish measurements. The helper forwards only the validated
+host frame as kind 7. Worker publication additionally requires a clean helper
+exit and final canonical authority. No creation or checkpoint write is allowed
+in either observation operation.
+
+Fresh proof:
+
+- `pnpm verify:remote-worker:windows-cell-controller-protocol` passes in
+  `.tmp/worker-backing-transport-native-v1.log`, with retained bundle
+  `%TEMP%/Goat Cell Controller Protocol 6Olfnf`. Each normal/AddressSanitizer
+  build passes 14,978 existing provisioning checks, 5,457 workspace checks,
+  2,253 mounted-capacity checks and 2,407 host-capacity checks. The host group
+  runs 29 sessions, including both directions of message-type confusion,
+  authority refusal, missing/error terminal evidence, duplicate observation frames,
+  callback failure/revocation, frozen input and every required history record.
+  The actual controller's missing-owner test refuses before opening even an
+  absent parent. Positive observation replies use a controlled peer over a real
+  local pipe; physical volume recovery and an installed observer are not proved.
+- `pnpm verify:remote-worker:windows-cell-helper-protocol` passes in
+  `.tmp/worker-backing-transport-helper-v1.log`, with bundle
+  `%TEMP%/Goat Cell Helper Protocol YNDqWi`. Each normal/AddressSanitizer build
+  passes 62 compiled stream cases, including independent 424-byte encoding,
+  the full 256-challenge/33,579-byte bound and invalid authority/measurement
+  refusal. These callbacks run without a controller connection or volume action.
+- The shared portable decoder and provisioning contracts pass 75 tests in
+  `.tmp/worker-backing-transport-contracts-v1.log`. Four worker suites pass
+  201 tests in `.tmp/worker-backing-transport-worker-v1.log`. The return-interface
+  typecheck caught two startup test doubles missing the new method; after their
+  correction, typecheck and all 10 startup tests pass in the respective
+  `.tmp/worker-backing-transport-typecheck-v2.log` and
+  `.tmp/worker-backing-transport-startup-v2.log`. Strict scoped lint passes.
+- Reproducible controller payload builds pass in
+  `.tmp/worker-backing-transport-payload-v1.log`, with bundle
+  `%TEMP%/Goat Controller Payload dCvXy6`. Both builds per architecture match:
+  x64 `e767529433493cd0bc91ff095b88583ea1ab2162b843d0bc69beb5c8d8b4971d`
+  (467,968 bytes), ARM64
+  `b5e42b06ce312bb98b9fe24437a6418ff3c3e20cf68595b0d1d5fb1d4851c540`
+  (429,568 bytes). ARM64 execution and installed-service acceptance remain open.
+
+The expected initial compile failure is retained in
+`.tmp/worker-backing-transport-red.log`; it predates the new codec implementation.
+Source receipt hashes and the final diff are audited separately. The installed
+controller still lacks the required workload-quiescence owner. Host observation
+persistence, complete Gateway accounting, whole-pool inventory, hard quotas and
+protected execution remain unfinished. No drive was attached, partitioned,
+formatted, mounted or given new root permissions. No installed service, real
+credential, user database, live provider or external destination was changed.
+The full C0-C6/M0-M10 program remains open; no commit or push occurred.
+
+## Retained host capacity observations
+
+Host VHDX/journal observations now have their own append-only SQLite 234 and
+PostgreSQL 179 table. Its protected assignment exchange uses the same canonical
+credential, mesh-admission, assignment/lease and cell-history transaction as
+mounted observations. Every historical migration manifest entry is preserved.
+Exact retries retain their original revision, lease and database time; a nonce
+collision with different bytes or expected revision is refused. Complete native
+history remains mandatory after the original setup claim expires.
+
+The production Gateway factory awaits the distinct async storage owner. Protected
+route 12 validates both host submission kinds and returns only matching history
+and exact receipts. Worker delivery persists the validated native result before
+RPC and its canonical acknowledgement afterward. Response loss, cancellation and
+local acknowledgement-write failure preserve pending evidence for exact replay.
+Both observation streams share one active owner for a durable-state instance and
+assignment, but keep separate keys, raw decoders and revisions. The host entry
+point composes the real protected RPC client with a caller-supplied native
+observer; the installed controller still lacks its quiescence owner.
+
+Fresh local proof:
+
+- Contracts: 76 tests pass in `.tmp/worker-backing-persistence-contracts-v1.log`.
+  New checks reject mounted-frame/schema substitution, malformed receipt
+  envelopes, getters, partial history and invalid original record metadata.
+- Worker: all 230 tests across six suites pass in
+  `.tmp/worker-backing-persistence-worker-v1.log`. They cover both delivery
+  streams, file-backed restart after response loss, renewal without rescanning,
+  conflicting active owners in both orders, corrupt retained state, cancellation,
+  exact acknowledgements and the existing native protocol/startup regressions.
+- Gateway: 56 protected execution protocol tests and nine production-composition
+  tests pass in `.tmp/worker-backing-persistence-gateway-v1.log` and
+  `.tmp/worker-backing-persistence-owners-v2.log`. Host requests require the
+  existing protected route authority and cannot dispatch inference or effects.
+  The factory awaits storage and honors cancellation before and after it returns.
+- SQLite and actual PostgreSQL each pass six authority scenarios in
+  `.tmp/worker-backing-persistence-sqlite-v1.log` and
+  `.tmp/worker-backing-persistence-postgres-tests-v1.log`. Both streams reject
+  worker, mesh-admission and parent revocation. Host cases also prove independent
+  same-nonce revisions, unchanged mounted rows, mid-transaction cancellation
+  rollback, replay after later records, and observations after setup expiry.
+  The owned PostgreSQL cluster at
+  `%TEMP%/gc-backing-persistence-pg-khegq1tk.gpa` stopped successfully; its retained
+  lifecycle receipt is `.tmp/worker-backing-persistence-postgres-v1.log`.
+- `pnpm verify:storage:migration-parity` passes in
+  `.tmp/worker-backing-persistence-migration-v1.log`. Dependent typechecks pass
+  in `.tmp/worker-backing-persistence-typecheck-v2.log`, strict scoped lint passes
+  in `.tmp/worker-backing-persistence-lint-v1.log`, and
+  `pnpm verify:gateway:async-boundary` passes in
+  `.tmp/worker-backing-persistence-async-v1.log`.
+- `pnpm verify:auth:matrix` passes both scenarios in
+  `2026-09-14T06-09-39-659Z-auth-matrix-b30b203a`, including owned Gateway restarts
+  and persisted device revocation. This is isolated authentication regression,
+  separate from physical worker admission or actual credential custody.
+- `pnpm verify:runtime:truth` passes both scenarios in
+  `2026-09-14T06-11-48-988Z-runtime-truth-c44efec2`: the owned Gateway restarts,
+  the same approved durable run completes with the deterministic provider, and
+  the canonical Next shell reflects the recovered state without browser errors.
+  Docs and whitespace checks also pass.
+
+These are retained partial observations. They do not update complete capacity
+accounting, reservations, readiness or quotas. Installed quiescence, whole-pool
+inventory, enforcement, protected execution, physical two-machine acceptance
+and the full C0-C6/M0-M10 program remain open. No drive operation, installed
+service, real credential, user database, external destination, commit or push
+was part of this change.
+
+## Worker capacity admission limits
+
+`RemoteWorkerCellService.evaluateCapacityAdmission` previously evaluated only
+prospective footprint pressure. Five fresh regressions in
+`.tmp/worker-capacity-limits-red-v1.log` proved that observed disk, memory,
+file-count, process-count and raw-output violations incorrectly returned
+`accept`. An incoming-byte rejection could also discard a current resource
+violation without recording it.
+
+The service now validates all six numeric observations before asynchronous
+authority or repository access. Admission compares the observed and retained
+resource maxima with the canonical immutable reservation; the complete supplied
+footprint is also a minimum observed disk peak. An existing violation takes
+precedence over prospective rejection and returns `quarantine`, preserving
+high-water evidence through the existing capacity/cleanup revision checks. A
+later lower reading cannot clear it. Exact limits remain admissible, and a
+purely prospective byte rejection still leaves canonical state unchanged.
+
+Fresh local proof:
+
+- All 52 cell-service tests pass in
+  `.tmp/worker-capacity-admission-focused-v1.log`, including the five original
+  regressions, later lower observations, exact limits, footprint under-reporting,
+  invalid numeric input, immutable reservation checks and concurrent
+  capacity/cleanup rejection.
+- All 13 SQLite cell-repository tests pass in
+  `.tmp/worker-capacity-admission-storage-v1.log`, including monotonic high-water
+  and retained-byte accounting, immutable records and ordered evidence.
+- Gateway typecheck and strict scoped lint pass in
+  `.tmp/worker-capacity-admission-typecheck-v1.log` and
+  `.tmp/worker-capacity-admission-lint-v1.log`.
+- `pnpm verify:runtime:truth` passes both scenarios in
+  `2026-09-14T06-35-16-215Z-runtime-truth-08709863`. The same durable run completes
+  after the owned Gateway restart, and the canonical Next shell reports no
+  browser errors. This is deterministic-provider regression evidence, not
+  installed capacity or live-provider acceptance.
+
+This earlier admission proof preceded the protected transaction described below.
+Production composition, complete pool inventory, installed quiescence, hard quotas
+and worker quarantine/termination integration remain required. This change returns
+a quarantine decision; it does not transition the
+worker or activate the native backend. No schema change, drive operation,
+installed service, real credential, user database, external destination, commit
+or push was part of this change. The full plan remains open.
+
+## Transactional worker capacity admission
+
+The earlier service checked assignment authority before asynchronous reads and
+writes. A cancellation or lease change could occur between that check and the
+capacity write. Diagnostics also advance execution state and raw-output bytes
+without changing the capacity revision, so the earlier capacity/cleanup checks
+could not detect that competing update.
+
+`RemoteWorkerCellCapacityAdmissionRepository` now owns the decision and evidence
+write in one immediate transaction. It locks current credential, mesh admission,
+assignment and cell authority in canonical order, joins the immutable assignment
+profile, and compares capacity, cleanup and execution revisions. It evaluates
+the complete supplied footprint under those locks, records monotonic peaks using
+database time, then revalidates authority and revisions before commit. A failed
+post-write check rolls back state and appended evidence together. Prospective
+rejection leaves both unchanged. Read-only snapshots require the same protected
+assignment authority.
+
+The arithmetic now lives in the shared contract owner. Gateway requires and
+awaits the storage admission owner; there is no preflight-only fallback. Input
+observations, immutable reservations and private authority are copied before the
+async boundary, and returned results do not expose lease or credential fences.
+The owner is exported through the existing Storage/AsyncStorage repository graph.
+
+Fresh local proof:
+
+- The shared contract suites pass 62 tests in
+  `.tmp/worker-capacity-transaction-contracts-v1.log`. They cover all five limits,
+  retained violations, complete-footprint disk floors, retained cleanup bytes,
+  immutable reservation matching and invalid current or observed counts.
+- Gateway passes 12 tests in `.tmp/worker-capacity-transaction-gateway-v1.log`,
+  including awaited delegation, immutable snapshots and failure without fallback.
+- Three SQLite and three actual PostgreSQL protected-authority scenarios pass in
+  `.tmp/worker-capacity-transaction-sqlite-v2.log` and
+  `.tmp/worker-capacity-transaction-postgres-tests-v1.log`. Each verifies revoked
+  authority, stale revisions, lease renewal and rollback after a real post-write
+  parent, diagnostic, cleanup or lease mutation. The fixture verifies that each
+  competing mutation actually completed before the outer transaction rejected it.
+- A fourth PostgreSQL case holds the canonical advisory lock until two independent
+  repository workers are waiting. Releasing it produces exactly one successful
+  admission, one capacity revision and one appended capacity-evidence record.
+  The owned loopback PostgreSQL cluster stopped after the run.
+- Final dependent typechecks and strict lint pass in
+  `.tmp/worker-capacity-transaction-typecheck-v4.log` and
+  `.tmp/worker-capacity-transaction-lint-v2.log`. The async-boundary lane passes
+  ten tests and scans 1,003 production TypeScript files in
+  `.tmp/worker-capacity-transaction-async-v1.log`.
+- `pnpm verify:auth:matrix` passes in
+  `2026-09-14T13-58-44-666Z-auth-matrix-5808e27b`.
+- `pnpm verify:runtime:truth` passes both scenarios in
+  `2026-09-14T14-00-03-931Z-runtime-truth-474cc4bd`. The same approved durable run
+  completes after the owned Gateway restart; the canonical Next shell has no
+  browser errors. This remains deterministic-provider regression evidence.
+- `pnpm docs:check` passes in `.tmp/worker-capacity-transaction-docs-v2.log`.
+
+Earlier failed typecheck attempts remain retained. The first SQLite attempt
+correctly refused diagnostics without a recorded platform identity; the corrected
+fixture records a controlled planned identity through the existing owner before
+testing diagnostics. It does not establish physical-volume or installed readiness.
+
+This closes the transactional admission gap. Complete accounting consumption,
+whole-pool inventory/reservations, installed workload quiescence, OS quotas,
+quarantine/termination integration and backend activation remain open. No schema,
+drive, installed-service, credential, user-database or external-delivery mutation
+is part of this change. The full C0-C6/M0-M10 program remains open.
+
+## Declared capacity inventory and native object records
+
+The accounting contract now requires all thirteen declared footprint areas and
+an independently supplied profile/capture/inventory binding. Empty areas need
+evidence; physical identities cannot repeat. Guest file/directory allocation
+names its host volume backing and stays outside the host physical total. Shared
+CAS references each consume logical bytes without duplicating host allocation.
+Malformed, oversized, incomplete or inconsistently bound input is refused.
+
+SQLite 235 / PostgreSQL 180 retain the normalized complete input with the exact
+capacity decision. Logical-byte and inode peaks are monotonic, records cannot be
+updated/deleted, and protected reads verify their payload hashes. Admission holds
+the current credential, mesh, assignment lease and cell authority through both
+capacity and inventory writes. Backup revision joins the capacity/execution/
+cleanup fences. Post-insert parent cancellation, lease renewal, backup, cleanup
+or diagnostic changes invalidate and roll back the entire transaction.
+
+The new inventory path and the existing footprint-only path both honor retained
+logical-byte/inode violations. Regression tests first reproduced the old path
+returning `accept` after an inventory violation; both now return `quarantine`,
+including after a lower capture or intervening capacity revision. Prospective
+rejection produces no inventory/evidence write, and duplicate captures cannot
+partially advance peaks. Gateway snapshots input before its asynchronous owner
+call and exposes a protected exact-revision inventory read. This remains injected
+composition; it does not register a permissive native collector or startup path.
+
+The native tree reader now also returns bounded per-object volume/file
+identities, file/directory kinds, logical bytes and allocated bytes. It uses the
+same admitted handles, no-link policy, complete readback and protected workspace
+checks as the aggregate reader. Results include zero-byte files/directories, omit
+names and paths, sort deterministically and clear entirely on failure. Reusing an
+output no longer clears the root identity before it is copied. Native operation
+14/15 records remain aggregate observations; the new local API is not a complete
+pool collector or an installed quiescence owner.
+
+Validation retained on September 14:
+
+- Contract tests: 92 passed in `.tmp/worker-capacity-inventory-contracts-v1.log`.
+- Gateway tests: 15 passed in `.tmp/worker-capacity-inventory-gateway-v1.log`.
+- SQLite: all seven inventory/admission scenarios passed in
+  `.tmp/worker-capacity-inventory-sqlite-v5.log`.
+- Actual isolated PostgreSQL: all nine scenarios passed in
+  `.tmp/worker-capacity-inventory-postgres-tests-v2.log`, including independent
+  concurrent connections with one winner, revocation and rollback. The owned
+  cluster stopped; `.tmp/worker-capacity-inventory-postgres-v2.log` retains proof.
+- Migration parity/integrity and runtime schema checks passed in
+  `.tmp/worker-capacity-inventory-migrations-v3.log`. All 413 earlier migration
+  records are unchanged; only the new SQLite/PostgreSQL entries were added.
+- Contracts/storage/Gateway typechecks and strict scoped lint passed in
+  `.tmp/worker-capacity-inventory-typecheck-v5.log` and
+  `.tmp/worker-capacity-inventory-lint-v2.log`.
+- `verify:remote-worker:windows-cell-capacity` passes 1,298 native assertions in
+  each normal/AddressSanitizer build and compiles ARM64. Exact source hashes,
+  executables and fixture receipts are retained under
+  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Capacity E0GoYL`;
+  `.tmp/worker-capacity-identity-native-v3.log` is the lane receipt.
+- `verify:remote-worker:windows-cell-mounted-capacity` passes 262 assertions per
+  normal/AddressSanitizer build and compiles ARM64. Controlled-volume/actual-tree
+  evidence is under `C:\Users\spurn\AppData\Local\Temp\Goat Mounted Capacity 5myLfu`;
+  `.tmp/worker-capacity-identity-mounted-v1.log` retains the lane result.
+
+Earlier failures are retained: incomplete fixture setup, the new migration's
+incorrect digest format, a PostgreSQL test query's empty parameter binding,
+the reproduced footprint-only quarantine gap, initial native API refusal, a
+fixture depth mismatch, and reused-output identity loss. None was replaced by
+an inferred pass. Native tests used owned ordinary temporary directories; no
+drive was attached, partitioned, formatted or mounted, and no installed service,
+credential, user database, provider request or external delivery was changed.
+
+Native complete capture/quiescence, pool reservations, OS quotas, execution/
+quarantine integration and backend activation still require implementation and
+acceptance. The earlier auth/runtime receipts remain separate; these focused
+results do not recertify the full application or close C5/M4.
+
+## Mounted and journal-bound object inventory
+
+`CellMountedWorkspace::ObserveInventory` now returns the per-object inventory
+through the same protected mount, volume, checkpoint and workspace checks as
+the aggregate reader. `CellProvisioningJournal::ObserveMountedInventory` binds
+those entries to the independently supplied anchor and complete journal head,
+assignment, profile and recorded roots. It refuses malformed object identities,
+ordering, membership, totals and bounds before publishing any result.
+
+A red regression reproduced acceptance across a journal lifetime change. Both
+aggregate and per-object journal reads now retain that revision across caller
+callbacks and the final readback. This closes reuse of earlier owner state;
+it does not establish workload quiescence or activate an installed collector.
+
+Verification:
+
+- The mounted lane passes 525 assertions in each normal/AddressSanitizer build
+  and compiles ARM64 without executing it. Receipt:
+  `.tmp/worker-capacity-mounted-inventory-native-v1.log`; exact native sources
+  and results: `C:\Users\spurn\AppData\Local\Temp\Goat Mounted Capacity ShpqZo`.
+- The job lane exits zero, with 4,992 resource/runtime assertions and 819
+  mounted-journal assertions in each normal/AddressSanitizer build. Receipt:
+  `.tmp/worker-capacity-journal-inventory-native-v1.log`; native sources and
+  results: `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job EkTDnw`.
+  Its network and owned-process cleanup checks also pass. This lane runs x64;
+  it does not provide ARM64 execution evidence.
+- The reproduced lifetime failure remains in
+  `.tmp/worker-capacity-journal-inventory-red-v1.log`. The earlier missing
+  mounted-inventory implementation is retained as a separate red receipt.
+
+These tests use protected temporary trees, real exclusive journal files,
+unattached VHDX files and controlled physical-volume responses. No drive was
+attached, partitioned, formatted or mounted. Operation 14/15 transport remains
+aggregate-only. The following transport increment carries individual tree
+objects; installed capture remains separate implementation work.
+
+## Per-object native inventory transport
+
+Operation 16 now carries the bound mounted-tree summary and ordered object
+batches through the controller protocol, native client, helper stream and
+Windows worker. Each batch has an exact nonce/index/count and canonical padding.
+The shared contracts decoder verifies all roots, unique identities, kinds and
+byte/count totals against independently retained history. The worker publishes
+immutable entries only after the complete stream, successful receipt, clean
+helper exit and final canonical-authority checks. Earlier aggregate operations
+retain their existing formats. Startup still does not invoke a capture owner.
+
+Verification:
+
+- Controller protocol passes 3,466 inventory assertions across 40 real-pipe
+  sessions in each normal/AddressSanitizer build. The existing controller,
+  mounted, aggregate and host observation cases also pass. Exact sources and
+  receipts: `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol fcVENs`;
+  `.tmp/worker-capacity-inventory-transport-native-v4.log` exits zero.
+- Compiled helper stream tests pass all 69 scenarios per normal/AddressSanitizer
+  build, including seven inventory cases and exact bytes for a partial final
+  batch. Evidence: `C:\Users\spurn\AppData\Local\Temp\Goat Cell Helper Protocol 0rztsu`;
+  `.tmp/worker-capacity-inventory-helper-native-v1.log` exits zero.
+- Shared contract tests pass 18 scenarios, including 20,000 objects and refusal
+  of 20,001, malformed identities/totals and executable array properties.
+- Worker transport/startup tests initially pass 196 cases. The final transport
+  run passes 187 cases, including the added maximum-size exchange with 20,000
+  objects and all 256 authority checks. It exercises fragmented batches,
+  omissions, duplicates, reordering, failed receipt/exit and final revocation.
+  Logs: `.tmp/worker-capacity-inventory-transport-worker-v1.log` and
+  `.tmp/worker-capacity-inventory-transport-worker-v2.log`.
+- Locked contracts/worker typechecks and strict scoped ESLint pass. Earlier
+  compiler shadowing, missing test callback, session-count expectation and
+  TypeScript fixture errors remain in the versioned logs; they are not passes.
+
+The physical volume responses and observation values are controlled fixtures;
+the production client and helper/worker stream implementations execute. No
+installed controller, disk attachment/formatting, provider request or external
+delivery runs. These results do not prove installed quiescence, complete pool
+capture, Gateway inventory submission or backend activation.
+
+## Per-object inventory retention
+
+The internal Gateway owner now awaits complete native inventory retention through
+the shared asynchronous storage facade. SQLite 236 and PostgreSQL 181 add
+independent immutable rows containing the summary, exact ordered chunks and
+successful native receipt. All 415 earlier migration entries remain unchanged.
+
+The store validates every object against complete independent native history,
+serializes writes under the existing assignment/cell locks, and rechecks current
+protected authority before commit. Identical nonce replay returns its original
+record even after a newer capture; changed chunks with unchanged aggregate totals
+are refused. These observations do not change readiness, cell evidence or quota
+admission. Gateway result validation also checks scope, lease, revision and every
+submitted byte after awaiting the owner.
+
+Local proof covers frozen caller inputs, malformed/reordered chunks, the full
+20,000-object capture, exact replay, immutable rows, revocation and atomic rollback
+when the parent is cancelled after insertion. The contract suite passes 26 tests;
+Gateway exchange, production-owner and execution-protocol checks pass 78 tests.
+The new inventory checks and existing mounted/backing observation regressions
+pass nine SQLite and nine PostgreSQL cases. PostgreSQL runs in its own temporary
+cluster, which is stopped after verification. Migration parity passes 45 tests;
+locked contracts/storage/Gateway typechecks, strict scoped lint, runtime truth,
+Gateway async-boundary and documentation checks pass. Versioned evidence uses
+`.tmp/worker-object-inventory-*.log`.
+
+The internal owner remains separate from the bounded remote delivery described
+below. Installed quiescence, complete pool capture and backend activation remain
+unfinished.
+
+## Bounded native inventory delivery
+
+Protected assignment settlement now accepts inventory metadata snapshots and
+pages of at most 64 native chunks. The maximum capture uses sixteen requests;
+request payloads and acknowledgements fit below 256 KiB without changing existing
+protocol limits. SQLite 237 and PostgreSQL 182 add one bounded staging capture
+per assignment generation. All 417 earlier migration entries remain unchanged.
+
+The staging owner acquires the existing assignment/cell locks, verifies current
+protected authority for each page, validates the complete contiguous prefix,
+and atomically publishes only the final complete observation. A first page can
+replace an interrupted capture; a later page cannot append to a different nonce,
+lease or cell revision. Exact partial and completed retries are supported across
+repository restarts. Final commit clears staging while immutable history remains.
+Partial pages do not advance readiness or capacity accounting.
+
+The worker sender validates the full successful native capture before sending,
+uses the existing protected route client, freezes caller data and verifies every
+acknowledged page. It checks all sixteen pages even if an earlier response says
+the capture is already committed. Disconnect, cancellation, mismatched bytes or
+changed history stop delivery. No automatic installed scanner activation is added.
+
+The shared contract tests pass 42 cases. Gateway exchange, production composition
+and signed execution-protocol tests pass 82 cases. Three SQLite and three real
+PostgreSQL cases cover a maximum-size capture, replacement, restart, immutable
+replay, stale/revoked authority and rollback of a staging write after parent
+cancellation. The owned PostgreSQL cluster is stopped after verification.
+Worker upload and native stream regression tests pass 198 cases. Migration
+parity, locked package typechecks, scoped lint, runtime truth, Gateway async
+boundaries and documentation checks pass. A reproduced staged-nonce summary
+replacement is now rejected and covered on both storage dialects.
+Versioned logs use `.tmp/worker-inventory-pages-*.log`; initial test-harness errors
+are retained as failures and are superseded by the corrected runs.
+
+## Job-owned quiescent capture
+
+The native job runner now offers a borrowed capture scope after the actual entry
+process and descendants exit and output is drained. The job handle and admitted
+launch-directory pins stay held. Native inventory reads recheck current authority,
+cancellation, the capture deadline and zero active processes on that exact job.
+Provisional inventory is discarded on failure; capture authorization and physical
+job cleanup remain separate facts. No job-name lookup supplies quiescence proof.
+
+The verified runtime owner forwards this scope while retaining the complete
+admitted runtime bundle. For a protected workspace it also checks root identities
+and exact descriptors at every capture authority boundary and after execution.
+Its preflight or final workspace failure clears provisional capture output.
+
+The named Windows cell-job lane passes 5,060 checks in each normal and
+AddressSanitizer build, including 65 capture checks. Tests run real AppContainer
+children, scan isolated launch directories, and cover missing authority, callback
+failure, revocation, cancellation, timeout and a new suspended process inserted
+into the held job during capture. That late process prevents publication and is
+terminated by closing the owned job. Interactive runtime tests also verify
+capture through normal and protected workspace paths and refusal after descriptor
+drift. Evidence: `.tmp/worker-job-quiescent-capture-native-v2.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job AqgaCh`.
+The production Windows stdio lane also passes all 14 checks using freshly built
+native helpers and the current worker. Evidence:
+`.tmp/worker-job-quiescent-capture-stdio-v1.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio EiXt7Z`.
+
+This establishes a native execution/capture boundary. The installed controller
+still needs workload ownership and composition with independent journal/volume
+history, complete pool accounting, quotas and protected delivery. The capture API
+does not enable an installed scanner or perform physical drive operations.
+
+## Job binding for mounted journal inventory
+
+The live `JobQuiescence` scope now supplies a borrowed cell binding to the
+mounted journal inventory reader. Each reader guard compares the independently
+decoded journal cell name and guest work identity with the job's admitted launch
+identity, then rechecks canonical authority, cancellation, deadline and the exact
+held job's zero-process count. The journal freezes the callback and context
+before caller code and verifies its own retained history and owner lifetime
+around the callbacks. An explicit empty binding refuses before caller code.
+
+The named cell-job lane passes 5,082 checks per normal/AddressSanitizer build,
+including 87 capture checks, plus 831 mounted-journal checks per build. Actual
+AppContainer jobs prove the borrowed binding's identity and live authority
+checks. Controlled journal histories separately prove decoded guest identity,
+early mismatch/refusal, callback freezing and journal identity/lifetime drift.
+Those journal fixtures do not attach or format a volume. Evidence:
+`.tmp/worker-job-journal-binding-native-v1.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job MnYeLr`.
+Freshly built production stdio helpers also pass all 14 Windows stdio checks
+with zero upstream requests: `.tmp/worker-job-journal-binding-stdio-v1.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio huZSbb`.
+
+This connects the native job and journal APIs. It does not activate an installed
+controller observer or establish full-pool accounting, quotas or physical-volume
+acceptance. The binding remains borrowed inside the job's capture callback, and
+the final runner check still decides whether provisional inventory can publish.
+
+## Composed journal and runtime capture owner
+
+`CellJournalRuntimeRunner::Run` now owns the local execution/capture sequence.
+It freezes the independent journal anchor/head, protected runtime command, scan
+limits and current-authority callbacks. Native journal/volume custody, its
+original owner lifetime, cell name, principals and all guest roots must match
+before launch and around every canonical authorization. The runner captures
+through the borrowed job binding and retains inventory privately until both
+the final job capture and protected-runtime checks pass. Accounting validity
+remains separate from a workload's nonzero exit code.
+
+The named cell-job lane passes 5,112 checks per normal/AddressSanitizer build,
+including 30 new composed-owner checks within 271 workspace checks. These run
+actual AppContainer children and native scans of the complete protected fixture
+workspace. The journal boundary is controlled; tests cover frozen caller input,
+prelaunch refusal, partial capture, wrong output binding, revocation, cancellation
+and journal drift. The public production entry also refuses an unbound journal
+before launching or invoking canonical authority. Evidence:
+`.tmp/worker-journal-runtime-native-v1.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job rn5Hrw`.
+The separate mounted-journal cases still pass 831 checks per build.
+
+This runner is compiled and exercised by the native acceptance target. Installed
+controller dispatch, physical mounted-volume execution, complete pool accounting,
+quotas and remote publication through the protected delivery owner remain open.
+No installed observer is enabled and no volume is attached or formatted by this
+acceptance run.
+
+## Exact runtime request binding before controller dispatch
+
+The worker prepares a bounded `GCRUN001` request and the native
+`RunCellRuntimeDispatch` entry requires a separately retained connection nonce
+and request SHA256. The digest covers the full protected runtime configuration,
+environment, command, bundle, root identities, job limits, journal anchor/head
+and inventory limits. Substitution refuses before journal access, canonical
+authority callbacks or launch. A valid digest still enters the composed runner's
+native custody and current-authority checks; it is not an execution grant by
+itself. The worker's transport check also returns an independent byte copy.
+
+The worker/native golden request is 935 bytes with digest
+`9e914f87f794f1de2e53a0bc5d96a63cd21c0094e797ad0caaee04bad9bc8c03`.
+The native lane passes 6,092 assertions per normal/AddressSanitizer build,
+including 980 dispatch checks, and 831 separate mounted-journal checks per build.
+Worker codec/MCP regression tests pass 53 checks; the production stdio lane
+passes all 14 checks with zero upstream requests. Typechecking also passes.
+Evidence: `.tmp/worker-runtime-dispatch-native-v4.log`,
+`.tmp/worker-runtime-dispatch-worker-v1.log`,
+`.tmp/worker-runtime-dispatch-stdio-v1.log`, and
+`.tmp/worker-runtime-dispatch-typecheck-v3.log`. Native artifacts are retained at
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job EJQQlQ` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Worker Stdio yb2ZSt`.
+
+An intermittent pre-existing journal fixture failure was reproduced: mode 13
+assigned `f` to a random name that already started with `f`, so no substitution
+occurred and all 21 controlled records completed. The test now deliberately
+starts with `f` and substitutes another valid digit. The same durable-boundary
+assertion then passes consistently for that formerly colliding input in both
+builds. Failure and collision evidence remains in the native-v2/v3 logs and
+`.tmp/worker-runtime-dispatch-journal-collision.json`; no assertion was relaxed.
+
+The dispatch format supports the native job deadline up to 24 hours. The existing
+local stdio helper retains its 25-second limit; the dispatch format alone does
+not prove long-running service execution. The authenticated controller transport
+and its runtime-digest approval exchange remain to be wired. Installed observers,
+pool accounting, quotas and physical acceptance remain unchanged.
+
+## Bound runtime request transfer
+
+`CellRuntimeTransfer` carries the complete bound runtime request on an already
+authenticated, retained local pipe. It freezes its expected nonce/digest and
+authority callbacks, uses exact ordered 4 KiB chunks, and validates the complete
+native configuration before acknowledging or publishing it. Cancellation,
+deadline expiry, revocation, malformed frames or mismatched acknowledgments
+refuse the transfer. Each instance permits one attempt, including failures.
+The acknowledgment means complete bound bytes were received; it never means
+execution started, completed or is safe to retry. The composed `Run` entry still
+requires native journal custody and current workload authority.
+
+`pnpm verify:remote-worker:windows-runtime-transfer` passes in normal and
+AddressSanitizer builds: 128 transfer assertions and 980 dispatch assertions
+per build, over 20 actual private pipe fixtures. The near-limit configuration
+is 513,935 bytes across 126 chunks. Tests include caller-input mutation,
+mid-transfer revocation, corrupt framing/body/ACK, truncation and missing-journal
+refusal after a valid transfer. The production service also compiles and refuses
+interactive launch. Evidence is retained in
+`.tmp/worker-runtime-transfer-native-v1.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Transfer 1G4zD4`.
+
+The installed listener does not yet dispatch this transfer or run a workload.
+Installed workload admission, execution streams/results, installed
+capture, pool accounting and quotas remain open. No service, volume, credential,
+provider or external destination was changed by this verification.
+
+## Runtime approval exchange and launch-time enforcement
+
+The native controller protocol now has distinct runtime-authority messages.
+Every 104-byte challenge binds the connection nonce, ordered check number,
+21-checkpoint count, journal head and complete request SHA256. The client invokes
+a separate canonical workload-admission callback for each challenge, verifies
+current peer custody before acknowledging, and refuses a wrong/repeated challenge
+before admission. Both sides permanently fence failed exchanges. A provisioning
+approval cannot answer a runtime challenge, and the existing provisioning client
+rejects runtime challenges rather than using its volume-approval callback.
+
+`CellControllerRuntimeAuthority::Run` composes transfer, fresh approval and the
+actual native dispatch owner. Inspection during this integration exposed a real
+gap: the journal runner checked admission before setup and during capture, but
+the job launcher did not repeat it at creation/resume. The journal runner now
+supplies a distinct execution callback. The launcher checks it before creation,
+before resuming the verified suspended child, and at 250 ms intervals while the
+entry process runs. Cancellation and wall time are checked after callbacks;
+denial terminates and joins the exact retained job. Capture keeps its separate
+quiescence authority and protected workspace checks.
+
+Fresh local verification:
+
+- `verify:remote-worker:windows-runtime-transfer`: normal/AddressSanitizer pass
+  128 transfer, 980 dispatch and 116 runtime-authority assertions per build,
+  across 20 transfer and 13 additional authority pipe fixtures. Controlled
+  admission covers denial, peer revocation, frozen caller input, reentry,
+  malformed/replayed frames and native-journal refusal after approval.
+- `verify:remote-worker:windows-cell-job`: 6,132 assertions per build, including
+  40 real AppContainer execution-authority checks, 87 quiescent-capture checks
+  and the existing 271 workspace checks. Tests prove no child on precreation
+  denial, no entrypoint output on pre-resume denial, exact-job cleanup after
+  running-job revocation, cancellation and authorization deadline exhaustion.
+  Separate mounted-journal verification still passes 831 per build.
+- `verify:remote-worker:windows-cell-controller-protocol`: normal/AddressSanitizer
+  pass, including 122 main protocol sessions, 109 using the production client,
+  and the separate mounted/capacity/inventory cases. The added legacy-client
+  case refuses runtime approval without delivering a checkpoint or receipt.
+- Controller payloads reproduce for x64 and ARM64; ARM64 execution is unproven.
+  `verify:remote-worker:windows-stdio` passes all 14 checks with zero upstream
+  requests, and its dependency typechecks pass.
+
+Logs: `.tmp/worker-runtime-authority-native-v2.log`,
+`.tmp/worker-runtime-authority-job-v2.log`,
+`.tmp/worker-runtime-authority-protocol-v1.log`,
+`.tmp/worker-runtime-authority-payload-v1.log`, and
+`.tmp/worker-runtime-authority-stdio-v1.log`. Retained native directories are
+`Goat Runtime Transfer qQtjey`, `Goat Worker Cell Job CJ8583`,
+`Goat Cell Controller Protocol ZG2f3F`, `Goat Controller Payload iAGV3X`, and
+`Goat Worker Stdio 7YjrqS` under `C:\Users\spurn\AppData\Local\Temp`.
+
+Installed listener dispatch, execution streams/results, live Gateway admission,
+installed capture, pool accounting and quotas remain open. No installed service,
+physical volume, provider credential or external destination was changed.
+
+## Bounded runtime stream adapters
+
+`CellRuntimeStreamBridge` joins the native job's bounded channel to distinct
+input, stdout and stderr frames. Each frame binds the request nonce/digest,
+per-stream sequence, cumulative total and explicit EOF, with at most 976 binary
+bytes. The sequence owner checks direction, padding, ordering, independent EOFs,
+the input allowance and the combined output allowance. Malformed or repeated
+frames permanently fence that stream instance.
+
+Input permits one staged frame outside the native queue. Queue pressure returns
+`ERROR_RETRY` with no acknowledgment; the same staged bytes are flushed once
+capacity returns. The resulting 80-byte ACK binds accepted channel bytes only,
+not child consumption, tool success or permission to replay a workload. Output
+EOF requires the native channel's cleanup confirmation; EOF alone is not a
+terminal execution result. The surrounding owner must still govern input/tool
+effects and sanitize ephemeral raw output before diagnostic persistence.
+
+`pnpm verify:remote-worker:windows-runtime-streams` passes 130 assertions per
+normal/AddressSanitizer build. Five real private pipe fixtures cover wrong
+direction/kind, oversized frames and truncation. A real task-owned AppContainer
+process receives 73,728 binary input bytes and echoes them to both output streams;
+the receiver verifies all bytes and independent EOFs, then the native owner
+confirms the exact job is empty and its pipes drained. Separate native-channel
+tests fill the queue and prove exact acknowledgment after backpressure, no
+duplicate flush, and no successful EOF after uncertain cleanup.
+
+Evidence: `.tmp/worker-runtime-streams-native-v2.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Streams ixQ1UC`.
+This adapter-only run did not prove stream/authority multiplexing; the following
+run adds that local composition. Terminal execution and inventory-result delivery,
+installed listener dispatch and live Gateway admission remain open.
+No installed service, physical volume, credential or external destination changed.
+
+## Serialized runtime authority and streams
+
+`CellControllerRuntimeChannel` now owns serialized I/O for runtime approval and
+bounded input/output on the same pipe. The native job borrows its authority
+guard; the host pumps streams. Approval waits can receive input and drain output
+without competing readers. Every input queue attempt requires its own current
+admission, including attempts after backpressure. Callbacks retain the fixed
+exchange deadline: a late approval cannot enqueue bytes or acknowledge them.
+This input check does not replace per-tool effect approval.
+
+The channel freezes its owner table and fences permanently on malformed or
+unsolicited replies, reentrant callbacks, revocation and transport errors. It
+does not signal the borrowed cancellation event or join threads; the surrounding
+owner must cancel and join its exact job before releasing borrowed resources.
+
+`pnpm verify:remote-worker:windows-runtime-streams` passes 181 checks in each
+normal and AddressSanitizer build across 13 private pipe fixtures and seven job
+attempts, four of which create real task-owned AppContainer processes. Successful
+runs preserve 73,728 binary input bytes on both output streams while performing
+fresh runtime checks. Refusal before resume leaves no entrypoint output; running
+revocation kills and joins the exact job while it still awaits input. Separate
+cases reject stdin, malformed or unsolicited approval, reentrancy and input
+admission that returns after the fixed deadline. Expired input produces neither
+queued bytes nor an acknowledgment.
+
+Evidence: `.tmp/worker-runtime-multiplex-native-v2.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Streams 6ergqv`.
+Canonical runtime/input admission and peer-custody callbacks are controlled in
+these fixtures. Terminal delivery was still separate in this run; the next
+proof adds it. Installed listener dispatch, live Gateway admission, complete
+pool accounting and quotas remain open. No installed service, physical volume,
+credential or external destination changed.
+
+## Terminal runtime result delivery
+
+`CellRuntimeResultTransfer` now transports a bounded terminal result separately
+from output EOF. The encoding retains native job exit/cleanup/capture fields,
+usage counters, runtime verification and complete declared inventory, excluding
+raw output buffers. Verified inventory requires matching admitted journal/root
+identities and final capture/runtime checks. Nonzero workload exit and valid
+accounting remain separate. The request binding and a result-specific SHA256
+cover the complete exchange, with exact chunk order and a digest-bound receipt.
+Partial, malformed, revoked, expired or reentrant transfers withhold all data;
+neither success nor failure permits replay through the same instance.
+
+The named `verify:remote-worker:windows-runtime-result` lane tests real private
+pipes with controlled execution/inventory metadata, including 20,000 objects,
+late authorization, substituted request bindings, truncated data and incorrect
+ACKs. The stream lane additionally sends actual AppContainer job metadata on
+the same pipe after both output EOFs and native join. That fixture claims no
+mounted inventory. These are local validated-receipt APIs; durable Gateway
+retention, installed dispatch and live admission remain unfinished. The session
+owner is composed in the following proof. No service or physical-volume
+operation is performed.
+
+Fresh proof: 73 result checks across 15 private pipes and 183 stream/job checks
+across 13 pipes pass in both normal and AddressSanitizer builds. Evidence is
+`.tmp/worker-runtime-result-native-v3.log`, `.tmp/worker-runtime-result-streams-v2.log`,
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Result EyHW52` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Streams nCHgA3`.
+The x64/ARM64 payload builds are reproducible; ARM64 execution is not claimed.
+
+## Owned runtime session lifetime
+
+`CellRuntimeSession::Run` now joins bounded request transfer, the original native
+journal dispatch, runtime approval, streams, exact thread join and terminal
+receipt. It owns a private cancellation event and monitor, forwarding external
+cancellation/deadline without signalling the caller's borrowed event. Its copied
+binding/head/owner table cannot be replaced by callbacks. Failure unwinding
+joins the dispatch before releasing borrowed resources. Reuse and reentrancy
+refuse; the connection owner must close the pipe after an error.
+
+Terminal delivery requires input completion, no pending input, both output EOFs
+and agreement between streamed bytes and native job counters. Separate current
+delivery permission applies after join. Early failures retain the local native
+outcome without claiming a terminal receipt or granting permission to replay.
+
+`pnpm verify:remote-worker:windows-runtime-session` passes 108 assertions per
+normal/AddressSanitizer build across 13 real pipe sessions and nine actual
+AppContainer jobs. Cases cover pre-resume and running revocation, disconnect,
+external cancellation, deadlines, result refusal, altered byte counts, frozen
+owners, substituted journal heads and reentrancy. The production entry separately
+refuses a missing original native journal before launch. Evidence:
+`.tmp/worker-runtime-session-native-v1.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Session BdsPDZ`.
+
+Journal/bundle dispatch and canonical callbacks are controlled in the actual-job
+fixtures. Installed listener dispatch over an actual mounted journal, live
+Gateway permission, durable Gateway retention, full pool accounting and quotas
+remain open. No installed service, drive or external destination changed.
+
+## Worker session and retained-result acknowledgment
+
+`CellRuntimeClientSession` now owns request submission, nonblocking input,
+ordered output, fresh runtime replies, result verification and protected
+retention on the worker side. It freezes the request and owner table and refuses
+missing owners before request submission. It asks for another input chunk only
+after the exact previous ACK, rejects malformed source output and checks native
+result counters against the independently received streams before retention.
+
+`CellRuntimeResultTransfer::Retain` verifies that the result still matches its
+validated receipt, invokes a separate protected committer once, and requires
+its exact saved digest plus fresh authority before emitting `GCRTA003`. The
+controller session requires this second ACK. Validated receipt and retained
+receipt remain separate, and uncertain commits cannot silently replay. These
+callbacks must be connected to real protected Gateway persistence; a controlled
+committer in local tests does not prove that connection or durable storage.
+
+The result-transfer lane additionally covers full 20,000-object retention,
+changed results after receipt, forged retention ACKs, late commits and refusal
+to replay a successful or uncertain commit. The integrated session fixture now
+uses both production owners, with controlled journal/canonical/retention
+boundaries and real AppContainer jobs. Immutable request/result storage now
+passes isolated SQLite/PostgreSQL revocation and rollback checks (see
+[retention boundary](REMOTE_WORKER_NATIVE_CAPACITY.md)). Bounded Gateway result
+upload and lookup now use that storage owner. The native retention callback
+and Gateway parent adapter are composed below. Installed parent/listener
+dispatch and actual mounted-journal acceptance remain open.
+
+Fresh proof: the integrated session lane passes 212 assertions across 23 pipe
+sessions and 15 actual AppContainer jobs in each normal/AddressSanitizer build.
+The result lane passes 90 assertions across 19 pipes, including distinct retained
+receipt for 20,000 objects. Evidence: `.tmp/worker-runtime-client-session-native-v2.log`,
+`.tmp/worker-runtime-client-session-result-v2.log`,
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Session j1VL4H` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Runtime Result FpyLdw`.
+Reproducible x64/ARM64 payload builds also pass; ARM64 execution is not claimed.
+
+## Native retention parent bridge
+
+`CellRuntimeResultPipeCommitter::Owner` now connects the native client retention
+callback to a separate borrowed parent pipe using the existing terminal framing.
+It freezes and revalidates canonical metadata, rejects controller-pipe aliases,
+and returns the saved digest only after the exact distinct retention receipt.
+The JavaScript parent independently validates the request, complete journal
+history, result digest and inventory before invoking protected Gateway upload.
+No credentials or ephemeral output buffers enter this native exchange.
+
+Authority, reads, writes and the commit share a bounded lifetime. Failed,
+cancelled, late or ambiguous commits withhold the final receipt; they do not
+replay execution or automatically retry delivery. Exact retained-result lookup
+remains the recovery path. The outer connection owner must authenticate and
+hold both borrowed channels and provide current custody/delivery authority.
+
+The focused worker suites pass 31 tests, including malformed and non-ASCII
+framing, fragmented reads, maximum inventory, callback reentrancy, cancellation
+after commit and production Gateway uploader composition. Normal and
+AddressSanitizer native fixtures pass 133 assertions across 31 private pipes.
+Four native-to-JavaScript pipe cases per build cover saved, refused, substituted
+and cancelled commits against the complete 20,000-object result. Gateway
+responses and admission material are controlled in this cross-language proof.
+
+The surrounding runtime session still passes 212 assertions across 23 pipe
+sessions and 15 actual AppContainer jobs per build. x64 and ARM64 payloads build
+reproducibly; ARM64 execution remains unproved. Evidence:
+`.tmp/worker-native-retention-worker-v4.log`,
+`.tmp/worker-native-retention-native-v4.log`,
+`.tmp/worker-native-retention-session-v1.log`, and
+`.tmp/worker-native-retention-payload-v1.log`.
+
+Installed parent/listener wiring, actual mounted-journal dispatch and live
+Gateway admission remain open. No installed service, user database, physical
+volume, provider or external destination was changed for these checks.
+
+## Explicit controller runtime handoff
+
+Controller operation 17 now requires the complete independent recovery history
+and a separate 128-byte connection/dispatch/head binding. The controller
+reopens the original journal, sends all twenty-one checked records and asks
+for current canonical authority before handing the same pipe and live journal
+to a required runtime owner. Existing provisioning/recovery operations retain
+their meanings; this path cannot create, format or resume provisioning.
+
+The client compares the ready binding with its frozen admission metadata,
+requires the complete history and fresh canonical check, and invokes its
+runtime owner at most once. Both owners must report their distinct retained
+result for the same admitted nonce and request digest before a successful outer
+receipt. The runtime owner must retain its native outcome even when delivery
+fails; this outer protocol does not persist job results. A ready message is not execution
+permission: the supplied runtime sessions still own fresh workload, input,
+delivery and retention gates. Caller mutation cannot replace either owner
+table during the exchange.
+
+Normal and AddressSanitizer builds pass 1,001 assertions across 15 private-pipe
+handoff cases, alongside the existing 14,990 controller regression assertions
+and workspace/capacity/inventory groups.
+The real controller refuses absent runtime owners and the unmounted journal
+fixture before dispatch; it does not bypass Windows privilege or native volume
+validation. Controlled server/runtime callbacks separately verify the production
+client's handoff, altered digest/head, incomplete history, missing authority,
+duplicate handoff, incomplete retention, a result for another request and
+frozen-owner behavior. This proves
+protocol behavior, not a successful installed mounted-journal runtime.
+Evidence: `.tmp/worker-runtime-handoff-protocol-v6.log` and
+`C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Protocol mdf3yk`.
+The large protocol fixture uses sequential batches of eight source files,
+retaining the original optimization/sanitizer flags and 60-second limit for
+each compile/link command. The default release build keeps its single-command
+argument order. Earlier whole-fixture sanitizer compiler timeouts are retained
+in the preceding logs; no assertion or runtime timeout was relaxed.
+
+The runtime-session lane also passes 212 assertions across 23 pipe sessions and
+15 actual AppContainer jobs per normal/AddressSanitizer build. The default x64
+and ARM64 release payloads each build reproducibly; ARM64 execution is not
+claimed. Evidence: `.tmp/worker-runtime-handoff-session-v2.log` and
+`.tmp/worker-runtime-handoff-payload-v2.log`.
+
+The installed controller and provisioning helper still need their full runtime
+owner composition. Actual mounted-journal acceptance and live Gateway admission
+remain open. No service installation, elevation, physical drive attachment,
+partitioning or formatting was performed.
+
+## Protected-parent runtime and delivery authority
+
+The native `CellRuntimeParentAuthority` bridge now forwards fresh runtime and
+delivery challenges over a distinct protected-parent pipe. It copies the
+independent request/head expectation, rejects controller handle aliases, and
+requires an exact reply for each action's consecutive ordinal. Cancellation,
+revocation, malformed replies and reentry permanently fence both actions.
+The bridge never performs controller-pipe I/O or signals borrowed cancellation.
+
+The worker's `WindowsRuntimeParentAuthority` handler validates the challenge
+against independently retained request metadata and the complete mounted-workspace
+history. It consults separate canonical execution and delivery callbacks, checks
+custody around them and around the reply, and bounds every exchange to five
+seconds within the overall lifetime. A late approval cannot produce a reply.
+
+The native transfer lane passes normal and AddressSanitizer builds with 128
+transfer, 980 dispatch and 239 authority assertions per build, using twenty
+transfer pipes and thirty-three authority pipes. The parent responder in these
+native cases is controlled. Separately, 53 focused worker tests pass across the
+new handler, native retention parent and protected Gateway uploader; the worker
+typecheck passes. Evidence: `.tmp/worker-parent-authority-native-v1.log`,
+`.tmp/worker-parent-authority-worker-v1.log` and
+`.tmp/worker-parent-authority-typecheck-v1.log`.
+
+The runtime-session lane also passes 212 assertions, twenty-three pipe sessions
+and fifteen actual AppContainer jobs per normal/AddressSanitizer build. The x64
+and ARM64 controller payloads each build reproducibly; ARM64 execution is not
+claimed. Evidence: `.tmp/worker-parent-authority-session-v1.log` and
+`.tmp/worker-parent-authority-payload-v1.log`.
+
+The installed dispatcher, input/output forwarding, canonical request admission
+and original mounted-journal acceptance remain open. These separate native and
+Node tests do not establish an installed native-to-Node runtime or live Gateway
+approval. No service, user database or physical drive was changed.
+
+## Protected-parent input and output forwarding
+
+`CellRuntimeParentStreams` and `WindowsRuntimeParentStreams` now implement the
+helper-to-parent stream boundary. An input poll carries independent request
+binding, consecutive poll ordinal, next stream sequence and cumulative total.
+The parent polls its input source without waiting for future input, checks
+authority for the exact offered bytes and returns idle, data or EOF. Idle
+does not advance or terminate input. Output forwarding preserves independent
+stdout/stderr sequence and EOF state and requires a receipt naming both the
+stream kind and exact header. The parent awaits its output consumer before
+acknowledging. Combined output and input limits are enforced on both sides.
+
+Each exchange rechecks custody, obeys cancellation and a five-second bound, and
+permanently refuses further use after malformed frames, denial, reentry,
+replay or an uncertain receipt. Native adapters reject the controller handle
+and duplicate aliases and never write that pipe or signal borrowed stop events.
+The surrounding runtime client remains responsible for controller input ACKs;
+forwarding alone does not establish child consumption or tool success.
+
+`pnpm verify:remote-worker:windows-runtime-transfer` passes normal and
+AddressSanitizer builds, including 93 stream assertions over thirty additional
+private pipe pairs. The existing 128 transfer, 980 dispatch and 239 authority
+assertions also pass. Five actual native-to-Node cases per build cover binary
+input, both output streams and EOFs, denied input, refused output, an altered
+output receipt and cancellation after output consumption. The native fixture
+rechecks the independently supplied Node parent process ID. The Node handler
+is production code; request admission and stream consumers are controlled.
+Evidence: `.tmp/worker-parent-streams-native-v2.log` and its retained
+`Goat Runtime Transfer KlbCpS` directory.
+
+The worker typecheck and 92 tests across stream forwarding, runtime authority,
+retention and protected Gateway upload pass. Evidence:
+`.tmp/worker-parent-streams-worker-v1.log` and
+`.tmp/worker-parent-streams-typecheck-v1.log`.
+
+The runtime-session lane passes 212 assertions across twenty-three private
+pipe sessions and fifteen actual AppContainer jobs per normal/AddressSanitizer
+build. The x64 and ARM64 controller payloads each build reproducibly; ARM64
+execution is not claimed. Evidence: `.tmp/worker-parent-streams-session-v1.log`
+and `.tmp/worker-parent-streams-payload-v1.log`.
+
+The installed dispatcher and helper/listener runtime owners still need to
+compose these adapters with canonical admission, the original mounted journal
+and current input/effect authority. This proof does not activate an installed
+runtime, run a provider request or establish physical-machine acceptance.
+No service, user database, disk attachment, partition or format was changed.
+
+## Composed protected-parent runtime connection
+
+`CellRuntimeParentConnection` now supplies the runtime client's input, output,
+admission, delivery and retention callbacks with shared failure and phase
+state. `WindowsRuntimeParentSession` serializes their wire requests over one
+borrowed authenticated pipe. It allows input polling before execution admission,
+requires runtime admission before output, and requires all stream EOFs before
+delivery. Terminal counters must match observed input/stdout/stderr before the
+protected retention owner is called.
+
+Retaining the result does not end the parent connection. The dispatcher serves
+the helper's remaining delivery checks, then requires an explicit finish
+handshake bound to the request, retained digest and metadata length. A denied
+finish preserves confirmed retention while refusing completion. The Gateway
+factory uses the existing protected result uploader with frozen assignment
+custody. Neither peer identity nor successful framing creates a runtime grant.
+
+The retention handoff permits at most one 120-byte subsequent control frame
+only when an enclosing dispatcher owns it. Standalone retention continues to
+reject any tail. Incremental reads now consume available fragments rather than
+waiting for an exact-size readable event; one-byte fragmentation is covered.
+
+Evidence: `.tmp/worker-parent-dispatcher-worker-v3.log` passes 121 tests across
+the dispatcher, streams, authority, retention and uploader, including maximum
+metadata, replay, competing readers, cancellation, post-retention checks and
+Gateway composition. `.tmp/worker-parent-dispatcher-typecheck-v2.log` passes the
+worker typecheck. `.tmp/worker-parent-dispatcher-native-v1.log` passes normal
+and AddressSanitizer builds with 151 component assertions over 31 private pipe
+fixtures, four existing retention cases and seven composed native-to-Node
+cases per build. The latter cover input/runtime/output/retention denial,
+cancellation after commit and finish denial, using complete 20,000-object
+metadata. Evidence is retained in `Goat Native Retention sSjeTg`.
+
+The runtime-session lane passes 212 assertions over twenty-three private pipe
+sessions and fifteen actual AppContainer jobs per normal/AddressSanitizer
+build. The x64 and ARM64 controller payloads each build reproducibly; ARM64
+execution is not claimed. Evidence: `.tmp/worker-parent-dispatcher-session-v1.log`
+and `.tmp/worker-parent-dispatcher-payload-v1.log`.
+
+The composed native callbacks and Node dispatcher are production code, while
+controller completion, grants and commit responses in these cases are
+controlled. Actual helper endpoint custody, installed listener wiring,
+mounted-journal execution and live canonical admission remain unverified.
+No service, provider, user database or physical disk operation was performed.
+
 ## Remaining acceptance inputs
 
 Telegram is the initial channel. The operator has a mini PC available, but its
@@ -10414,3 +12479,5500 @@ Windows version, connection method, test chat ID, and combined provider-request
 and dollar caps are still pending. Credentials must be entered through their
 dedicated local setup flow. These inputs do not account for the unfinished C5/C6
 source work listed above.
+
+## September 15 scoped workflow acceptance refresh
+
+The four focused capture, Chat draft routing, mutation and automatic-learning
+suites completed with 70 passing checks and one 15-second timeout in the first
+skill-mutation test. The initial run is retained at
+`.tmp/comparison-scoped-workflow-20260915-a.log`; it is not a green receipt.
+The entire mutation suite then passed all 19 checks in isolation with the
+unchanged default timeout
+(`.tmp/comparison-scoped-workflow-mutation-retry-20260915-a.log`). No source or
+timeout change was needed to obtain that isolated result.
+
+Sixteen instruction-injection and candidate Change Plan adapter checks also
+pass (`.tmp/comparison-scoped-workflow-authority-20260915-a.log`). These cover
+exact-byte instruction authority, rejected stale or untrusted selections,
+revoked-candidate refusal and observation of the exact rollback version.
+The capture suites retain source authorization/redaction, inactive staging,
+canonical activation, removal after revocation, no memory writes and the
+three-session automatic-learning threshold. These are local fixture checks;
+they do not establish real-model behavioral quality or successful live reuse
+in another session. Final-candidate consolidated and live acceptance remain
+open.
+
+## September 15 scoped Browser QA pack fixture correction
+
+The four focused pack suites initially reported 32 passes and one failure in
+failed-connection compensation
+(`.tmp/comparison-scoped-browser-pack-20260915-a.log`). The adapter test's
+`writeMcpServers` fixture persisted its records but returned void, contrary to
+the current owner contract requiring committed records. Returning those
+records fixes the fixture without changing production compensation or revision
+guards. All 33 pack checks now pass
+(`.tmp/comparison-scoped-browser-pack-20260915-b.log`), including later-edit
+preservation, separate child review, recovery without duplicate setup, stage-only
+compatibility and pinned package validation. The package tests use controlled
+inputs and do not establish a new real Playwright browser run. Targeted lint and
+docs/ownership checks pass. Fresh-workspace and final-candidate acceptance remain
+open.
+
+## September 15 scoped channel and native input acceptance
+
+The focused channel runtime run passes 89 checks
+(`.tmp/comparison-scoped-channel-runtime-20260915-a.log`): durable ingress and
+delivery deduplication/recovery, Telegram commands and approval identifiers,
+progress, attachments and Telegram/Slack webhook handling. Thirteen additional
+checks pass for approval handoff across reopened storage, split-message resume,
+Discord reconnect and integrated durable admission
+(`.tmp/comparison-scoped-channel-handoff-20260915-a.log`). These use controlled
+transports and do not send external messages or prove live channel acceptance.
+
+C5 input authorization previously passed straight through the supplied policy,
+unlike execution/delivery/retention. Three new regressions show that Gateway
+revocation between frames and foreign request/history did not reject the input
+authorization (`.tmp/comparison-native-input-authority-20260915-before.log`).
+`worker-windows-runtime-startup.ts` now binds input to the exact admitted request
+and history, retains the input policy, and checks fresh Gateway execution
+authorization under the current held lease before returning permission.
+The focused startup, streams, continuation and parent-session run passes all
+144 checks (`.tmp/comparison-native-input-authority-20260915-after.log`). Worker
+typecheck and targeted lint pass. The new regression uses controlled Gateway and
+driver ports, not an installed workload. Installed listener policy composition,
+protected native execution and physical-machine acceptance remain unverified.
+No installation, provider request, disk attachment or formatting was performed.
+
+## September 15 installed worker entrypoint composition
+
+`apps/remote-worker/src/main.ts` now passes a native continuation owner only
+when protected startup returned its key owner. The new
+`worker-windows-installed-runtime.ts` composes the existing continuation and
+runtime startup paths with unattended EOF input and bounded local output
+diagnostics. It checks protected key/assignment/lease scope, rejects changed
+request/history and output sequence/limit violations, and retains the existing
+Gateway checks at runtime/input/delivery/retention boundaries. No configuration
+flag supplies an execution grant or enables disk provisioning.
+
+The output policy hashes/counts all received bytes and captures at most 32 KiB
+per stream for diagnostics. Redaction runs after frames are joined; truncated
+partial lines are omitted. Buffers are cleared at stream completion or per-run
+cancellation. These diagnostics are local process-report evidence, not canonical
+Gateway transcripts or uploaded workload artifacts. Unattended service stdin is
+closed; this does not implement an interactive input channel.
+
+All 276 focused entrypoint, policy, startup, continuation, process-lifecycle,
+helper and volume-protocol checks pass
+(`.tmp/comparison-installed-native-policy-20260915-c.log`). Two entrypoint checks
+execute `main.ts` with controlled startup/process owners and distinguish protected
+from PEM startup; helper tests include local pipes with controlled peers. Earlier
+test-only dynamic-import and lint failures are retained in their logs and were
+corrected before the passing run. Worker typecheck and targeted lint pass.
+Installed service execution, canonical output-artifact ingestion and the required
+physical-machine acceptance remain open. No installation, disk attachment,
+formatting, provider spending or external message was performed.
+
+## September 15 native output evidence binding
+
+The installed output owner now produces
+`goatcitadel.remote-worker-runtime-output.v1` evidence only after both streams
+and the retained result are available. The shared contract normalizes immutable
+records, bounds UTF-8 text to 32 KiB per stream, rejects partial/foreign evidence,
+and checks nonce, request/result digests and stdout/stderr counts against
+independently supplied native result facts. A canonical hash covers the exact
+redacted evidence. Parent-reported raw stream hashes are not represented as
+independent verification against native file bytes, and a nonzero exit code is
+not rewritten as success. Retained-result recovery without local capture leaves
+output unavailable.
+
+Eighteen contract checks and 71 focused installed-owner, continuation and
+parent-session checks pass (`.tmp/comparison-native-output-contract-20260915-a.log`
+and `.tmp/comparison-native-output-worker-20260915-a.log`). Worker typecheck and
+targeted lint pass. The contract is used by the installed worker, but Gateway
+persistence, artifact publication and canonical Chat consumption of this native
+output are not yet wired. Existing model-output artifact verification remains
+unchanged. No user database, disk, installed service or external provider was
+used for these checks.
+
+## September 15 native output storage
+
+`RemoteWorkerRuntimeResultRepository` now supports immutable output retention
+and protected lookup. It independently reads the admitted expectation and the
+retained native binary result, checks both stream counts and result identity,
+and rejects output before result retention. Fresh delivery authorization runs
+before and after persistence, with approval locks preceding the existing
+credential, assignment and cell locks. Exact retries return the same record;
+changed evidence, stale authority and known unredacted secrets are refused.
+The evidence remains parent-observed diagnostics, not verified model artifacts.
+
+SQLite v246 and PostgreSQL v191 add only the bounded output-evidence table and
+immutable/retention guards. The initial PostgreSQL run rejected an incorrectly
+computed checksum before applying the new migration; its checksum and this
+turn's unpublished manifest entry were corrected to use the migrator's atomic
+payload convention. No older migration entry was changed by that correction.
+SQLite's three worker/mesh/parent boundary tests pass
+(`.tmp/comparison-native-output-storage-20260915-a.log`), including mid-write
+revocation rollback, exact replay, conflicting evidence and immutable rows.
+Storage typecheck, targeted lint and migration-parity checks pass
+(`.tmp/comparison-native-output-storage-typecheck-20260915-c.log`,
+`.tmp/comparison-native-output-storage-lint-20260915-a.log`, and
+`.tmp/comparison-native-output-migrations-20260915-b.log`).
+
+All three matching PostgreSQL cases pass on the corrected migration
+(`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-native-output-b.log`).
+The task-owned temporary cluster shut down cleanly. These six real-database
+checks use controlled native bytes; they do not launch an installed helper.
+
+Protected Gateway output submission, worker transport integration, artifact
+publication and canonical Chat consumption remain open. This storage change
+does not establish installed or physical-machine acceptance.
+
+## September 15 protected native output submission
+
+The existing signed assignment-settlement route now accepts the bounded
+`runtime.output.retain` submission. Its production owner calls the immutable
+storage repository and returns only a versioned acknowledgement: assignment,
+current lease, admitted request, native result and exact evidence hashes, plus
+the original retention revision/time. Both Gateway and worker reject malformed
+or mismatched receipts and secret-bearing output. The current raw lease token
+is checked before request delivery and before Gateway dispatch; it is not passed
+to the storage owner. Exact evidence retries use a stable scoped idempotency key.
+
+The installed runtime submits verified captured output after native result
+retention and uses the returned current lease. Missing capture on recovered
+results remains unavailable. Lost output acknowledgements propagate without
+publishing a retention receipt or repeating native execution. Native selector
+validation moved into the existing protected-wire validator module so the
+protocol owner remains within its unchanged lint limit.
+
+All 109 Gateway checks, 24 worker checks and 28 contract checks pass:
+`.tmp/comparison-native-output-transport-gateway-20260915-b.log`,
+`.tmp/comparison-native-output-transport-worker-20260915-a.log`, and
+`.tmp/comparison-native-output-transport-contracts-20260915-a.log`.
+The Gateway checks include the real production owner composition with controlled
+storage/transport, and signed protocol proof with controlled current authority.
+The prior real-database retention checks remain separate evidence. Gateway and
+worker typecheck and targeted lint pass. No installed helper, user database,
+provider call, disk action or external message was used. Native output artifact
+publication and canonical Chat consumption remain to be wired.
+
+## September 15 retained native output in canonical Chat
+
+Canonical parent reads now join immutable native output with the independently
+decoded result and the exact approval/resume lineage. The output is exposed as
+`goatcitadel.remote-worker-native-chat-context.v2` only when the bound retained
+row exists. V1 context normalization, serialization and sequence identity remain
+unchanged. If a v1 native model sequence has already started, late output does
+not change its input hash or invalidate its answer/artifact replay. Parent reads
+snapshot caller scope and recheck canonical lineage before returning v2 output;
+they do not renew or manufacture worker authority.
+
+V2 keeps process content outside system instructions. A fixed instruction labels
+it as untrusted data; bounded named user-data messages carry the retained JSON,
+with exact chunk ordering and reconstruction. Gateway history reconstruction and
+the worker's actual input builder share this representation, preserving prior
+model/tool messages, budget consumption and native continuation hashes. Truncation,
+nonzero exit codes and parent-observed stream provenance remain explicit.
+
+Thirteen contract tests, 14 Gateway sequence/continuation tests, and 19 controlled
+parent-read checks pass (`.tmp/comparison-native-output-chat-contracts-20260915-a.log`,
+`.tmp/comparison-native-output-chat-gateway-20260915-a.log`, and
+`.tmp/comparison-native-output-chat-parent-20260915-c.log`). Real SQLite and
+PostgreSQL acceptance each prove retained native output enters the canonical
+assignment workload, using controlled native binary bytes and real approval/
+resume/retention repositories (`.tmp/comparison-native-output-chat-sqlite-20260915-a.log`
+and `.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-native-output-chat-a.log`).
+The temporary PostgreSQL cluster stopped cleanly. Initial test-only import and
+declaration-export errors were corrected before passing verification. Typecheck
+and targeted lint pass. Direct native artifact publication, installed execution
+and physical-machine acceptance remain open; no live model quality is claimed.
+
+## September 15 operator download of retained native output
+
+Native stdout/stderr evidence can now be downloaded as a versioned canonical JSON
+document directly from its immutable database owner. The document includes the
+independently decoded result, admitted expectation, outcome and evidence digest;
+the filename and full-content digest are derived from validated retained facts.
+No duplicate filesystem artifact is created, and the model-generated artifact
+verifier is not reused. Operator reads bind workspace, assignment, generation and
+nonce. Historical evidence remains readable after worker revocation without
+renewing worker authority. Missing records, scope substitution and unavailable
+owners remain distinct failures.
+
+The existing runtime projection discovers at most 32 output nonces for the exact
+current generation and explicitly reports truncation. Chat and Ops share a
+secondary download control using normal operator authentication. Process text is
+not rendered as HTML; download failures use a bounded message and allow retry.
+Legacy runtime projections without native output discovery remain valid.
+
+Passing evidence: 24 contract tests
+(`.tmp/comparison-native-output-artifact-contracts-20260915-b.log`), 30 Gateway
+route/service tests (`.tmp/comparison-native-output-artifact-gateway-20260915-c.log`),
+eight client tests (`.tmp/comparison-native-output-artifact-client-20260915-a.log`),
+15 React component checks (`.tmp/comparison-native-output-artifact-ui-20260915-b.log`),
+and 19 controlled parent-read regressions
+(`.tmp/comparison-native-output-artifact-parent-20260915-a.log`). Real SQLite
+and PostgreSQL integration each verify discovery, exact retained evidence,
+foreign-scope refusal and historical read after worker revocation
+(`.tmp/comparison-native-output-artifact-sqlite-20260915-b.log` and
+`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-native-output-artifact-b.log`).
+The PostgreSQL test passed but the wrapper exited nonzero when shutdown flushing
+exceeded its 30-second timeout. The server subsequently recorded clean shutdown;
+an independent check confirmed its PID file, owned process and listener absent
+(`.tmp/comparison-native-output-artifact-postgres-shutdown-20260915-b.log`).
+
+Gateway, storage, shared-client and Mission Control typechecks pass. The new UI
+test initially used an unavailable testing library; it now uses the existing
+React renderer without adding dependencies. A route-inventory expectation was
+updated, and a narrow artifact response helper keeps the route service under its
+unchanged lint limit. Targeted lint passes. This is component and controlled
+database proof, not full browser, installed-service or physical-machine proof.
+Arbitrary native-generated file return and final consolidated acceptance remain
+open. No disk provisioning, external message, provider request, commit or push
+was performed.
+
+## September 15 bounded reads from pinned native file inventory
+
+The native inventory owner can now read a file by its exact retained object
+identity and logical/allocated byte counts, without accepting or reopening a
+path. The same read-only handles continue to exclude replacement and competing
+writers. A read is bounded to 1 MiB, checks fresh authority between 64 KiB chunks,
+revalidates pinned metadata/membership and preserves the capture's original
+cancellation and deadline. Missing/foreign objects, changed accounting, changed
+membership, expiry, cancellation and callback close/reentry withhold all output.
+Partial buffers are wiped on failure. Blocking native calls still require the
+outer owner's watchdog and globally quiescent workload writers.
+
+The named native capacity lane passes 1,805 checks in both normal and
+AddressSanitizer modes, including the new pinned-file read cases; ARM64 compiles
+but was not executed (`.tmp/comparison-native-file-reader-20260915-b.log`). Source
+and consumer hashes were unchanged through the proof. The retained evidence is
+`.tmp/native-temp-20260915-retained-inventory/Goat Cell Capacity TJzYGC/`.
+Targeted packaging lint passes. Tests use only owned temporary ordinary NTFS
+files, with no volume attachment, formatting, installed service or provider call.
+
+This reader does not authorize publication, open a worker export endpoint or
+establish full native file return. Journal/assignment-bound selection, transport,
+hashing, Gateway verification/settlement and physical acceptance remain required.
+
+
+### September 15: native file ancestry and export selection
+
+The pinned file reader now takes an independently admitted directory identity
+and traverses retained memberships before reading. Same-inventory sibling files,
+file identities masquerading as directories, foreign roots and callback changes
+to the supplied root cannot broaden the read. This uses held handles without
+opening caller paths; existing expiry, revocation and partial-buffer protection
+remain in force.
+
+The native capacity lane passes 1,828 checks in normal and AddressSanitizer
+builds, including 75 file-reader checks; ARM64 is compile-only. Evidence:
+`.tmp/comparison-native-file-scope-20260915-b.log` and
+`.tmp/native-temp-20260915-retained-inventory/Goat Cell Capacity pmLWq4/`.
+An initial test fixture could accidentally select another valid NTFS identity;
+it now changes the volume identity, and both builds pass on the corrected fixture.
+
+The new native-file-export contract derives assignment/generation, request and
+result hashes, work-directory identity and file accounting from decoded retained
+execution evidence. It accepts only an exact file selection plus safe artifact
+label and an independent ceiling up to 1 MiB. Nine focused tests, contracts
+typecheck and targeted lint pass. Flat inventory membership remains insufficient
+ancestry proof; the native check is mandatory. The contract is not yet wired to
+journal authorization, transport or artifact settlement and grants no publication
+authority. No volume operations, installed-service changes or live calls occurred.
+
+
+### September 15: retained-result file selection authority
+
+RemoteWorkerRuntimeResultRepository.authorizeFileSelectionForAssignment now
+checks the normalized exact selection against independent retained request,
+binary result and provisioning history. It reuses current delivery approval,
+credential, mesh, assignment, cell and lease fences in one transaction, with
+an authority check before and after deriving the selection. The byte ceiling
+comes from the internal delivery owner and must match the selected ceiling.
+Altered scope, hashes, work identity, accounting or limits are rejected.
+
+The existing real-database output fixture now also exercises this selection
+check and confirms rejection after worker revocation, mesh-authority revocation
+and parent cancellation. All three SQLite cases pass in
+`.tmp/native-file-selection-authority-sqlite-20260915.log`.
+Storage and Gateway typechecks and targeted lint pass. All three PostgreSQL
+cases also pass in
+`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-native-file-authority-a.log`.
+The isolated PostgreSQL wrapper exited successfully and confirmed owned cluster
+shutdown (`.tmp/native-file-authority-postgres-20260915.log`).
+This internal method creates no durable export grant and exposes no worker RPC.
+Artifact-disclosure governance, native ancestry/transfer and verified publication
+remain required; no installed service or virtual drive was changed.
+
+
+The next native integration must account for the actual lifetime in
+`cell_journal_runtime.cpp`: Capture currently owns its pins locally and
+releases them before returning; its scan authority also references stack-owned
+capture/job state. Keeping a pointer to those pins or reopening a pathname after
+result retention would not preserve custody. File staging therefore needs a
+bounded operation while quiescence, pins and authority are alive, followed by
+result-bound verification and separately governed publication. This lifetime
+constraint remains unresolved by the storage selection check above.
+
+
+### September 15: native staging during retained capture
+
+The journal runner now has an opt-in trusted-owner file-selection callback.
+Production Capture invokes staging before releasing its local inventory pins,
+while the job is quiescent and fresh journal/assignment authority remains alive.
+Each selected identity/accounting record must match the captured inventory and
+pass the native reader's ancestry check beneath the recorded work directory.
+The operation permits at most 64 files, 1 MiB per file and 64 MiB total, with
+caller-supplied smaller ceilings. Duplicate identities, directories, foreign or
+changed records and exceeded limits fail without returning staged bytes.
+
+Staged buffers remain provisional through the runtime owner's final checks.
+Failure discards them, and their owning destructors wipe their populated bytes.
+Successful results contain the exact selected records and bytes, not caller
+paths or automatic published artifacts. This resolves the local handle-lifetime
+problem identified above; installed selection/transport, result-bound hashing,
+Gateway artifact verification and disclosure governance remain open.
+
+The native journal test uses real protected workspace directories, pinned
+inventory and an actual AppContainer job, with a controlled journal/volume
+boundary. New cases cover successful exact bytes, callback failure, duplicates,
+directories, foreign identity, changed accounting, individual/aggregate/count
+limits, selector revocation and revocation after staging. The normal native
+lane and AddressSanitizer each pass 6,189 checks. The complete named native
+cell lane exits successfully, including recovery, network-boundary and owned
+controller-crash cleanup checks. Source hashes remain unchanged through proof.
+The task-owned native test processes have exited; no installed service was used.
+Evidence root: `.tmp/native-temp-20260915-retained-inventory/Goat Worker Cell Job Mu5wIM/`;
+runner log: `.tmp/native-file-staging-cell-20260915-a.log`.
+Volume attachment and formatting are disabled and the normal receipts record
+both as false. No installed service or real provider/channel was used.
+
+
+### September 15: staged-file content record and result consumer compatibility
+
+GCRFA001 encodes a bounded 200-byte header plus exact staged bytes. The native
+encoder requires a verified result, a unique staged identity, exact inventory
+accounting and at most 1 MiB content; its header binds nonce, request hash,
+canonical result hash, work/file identities, byte counts and raw-content SHA256.
+It preserves the existing GCRRS001 terminal metadata encoding. The shared
+TypeScript decoder accepts an independently supplied export selection, checks
+exact length and every binding, and computes content/record hashes itself.
+Neither record is a signature or publication authorization: protected native
+origin and current delivery/disclosure authority remain required.
+
+The first result-consumer build exposed that move-only staged files broke existing
+result snapshot copies. Staged files now retain independent owning copies and
+wipe replaced/destructed buffers; explicit copy/self-copy regression checks
+exercise this compatibility. The failing build is retained in
+`.tmp/native-file-staging-result-consumer-20260915-a.log`.
+
+The content/selection contracts pass 24 focused tests, including empty and 1 MiB
+payloads, all header bindings, accounting, malformed/truncated/oversized records
+and altered content. Contracts typecheck and lint pass. Native result/local
+outcome normal and AddressSanitizer verification passes in
+`.tmp/native-file-content-result-20260915-b.log` (173 result checks per build).
+Additional native empty/max-size cases pass with 176 checks in each normal/ASAN
+build (`.tmp/native-file-content-result-20260915-c.log`). The TypeScript decoder
+also reads actual records emitted by both native builds, checks their fixed
+fixture identities and request binding, independently hashes content/record bytes,
+and rejects a substituted expected result hash. Cross-language evidence:
+`.tmp/native-file-content-cross-language-20260915.json` and its adjacent script.
+Both emitted records have identical digests; the one-byte content SHA256 is
+`684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1`.
+Source snapshots remained unchanged during each native proof. Docs checks pass.
+Installed transport, disclosure approval and artifact settlement remain open;
+no service or drive operation is part of this codec work.
+
+
+### September 15: bounded native file pipe transfer
+
+CellRuntimeFileTransfer exchanges one GCRFA001 record over a caller-owned,
+already authenticated exclusive pipe. MakeCellRuntimeFileExpectation derives
+its request/result/work/file/accounting expectations from independently retained
+verified terminal metadata and a separately admitted per-file byte ceiling.
+The transfer copies these expectations, bounds allocation before accepting a
+body, uses ordered 4 KiB chunks, checks fresh authority/cancellation/deadline
+between chunks, verifies record/content integrity and only then acknowledges
+complete receipt. Sender bytes are frozen before callbacks; failed partial
+receives are wiped and withheld. Each owner allows one attempt, with no retry.
+
+This is a transport component, not an authenticated listener, durable storage
+receipt, disclosure grant, global assignment budget or installed integration.
+The caller must retain peer/pipe custody and authorize this exact selection.
+The build snapshot now includes the transfer implementation for controller builds.
+Packaging lint and docs checks pass. Local-outcome normal/ASAN proof passes in
+`.tmp/native-file-transfer-result-20260915-a.log`. That first terminal-fixture
+build rejected an integer-to-byte fill warning; the fixture now uses an explicit
+uint8_t value with strict compiler warnings unchanged. The corrected terminal
+lane passes 228 checks across 43 pipe fixtures in each normal/ASAN build
+(`.tmp/native-file-transfer-result-20260915-b.log`), including actual local-pipe
+file success, empty/max payload, expiry/revocation, substitution, corruption,
+wrong chunk offset/count, truncated body and wrong declared size cases.
+No installed service, device attachment, formatting or live provider is involved.
+
+Native file-transfer evidence is retained at
+`.tmp/native-temp-20260915-retained-inventory/Goat Runtime Result Jb3DmD/`.
+Source snapshots stayed unchanged through verification. This does not establish
+installed selection/transport integration or a durable file-publication receipt.
+
+
+### September 15: Gateway native-content validation gate
+
+RemoteWorkerRuntimeResultRepository.verifyFileContentForAssignment now validates
+bounded GCRFA001 bytes and their independently selected metadata before locking,
+then checks the selection against retained native execution/provisioning evidence
+and current delivery authority through the existing atomic selection owner.
+That owner checks authority before and after selection validation. Content is
+released only after it returns successfully. Malformed records fail before database
+locks. The method does not persist content or authorize artifact disclosure.
+
+createRemoteWorkerExecutionOwners now provides an internal nativeFiles validator.
+It freezes the record/selection/authority inputs, invokes the storage gate,
+checks cancellation before and after the async boundary, compares the returned
+content evidence independently, and performs no retry or artifact publication.
+The existing Chat-answer artifact verifier is unchanged; native files require
+the separate origin, disclosure, durable staging and settlement integration.
+
+All three SQLite authority cases pass (worker, mesh and parent revocation),
+including altered native headers/accounting/content hashes. The Gateway owner
+and composition tests pass 31 checks. Storage/Gateway typechecks and targeted
+lint pass. Evidence: `.tmp/native-file-content-authority-sqlite-20260915.log`,
+`.tmp/native-file-validation-gateway-20260915.log`, and
+`.tmp/native-file-validation-gateway-typecheck-final-20260915.log`.
+The initial Gateway type import referenced a non-exported alias; it now uses
+the existing exported page input with its submission omitted.
+
+The first PostgreSQL run failed with connection timeouts, not an asserted
+content mismatch (`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-native-file-content-authority-a.log`).
+Its server completed shutdown, its PID file was absent, and port 65123 had no
+listener. Run b passed worker and parent revocation, but its mesh case exceeded
+the unchanged 120-second limit. That cluster subsequently shut down cleanly
+(server log, absent PID file and absent listener on port 52471).
+Run c removed redundant outer authority traversal without changing timeouts;
+its first case timed out and later cases reported migration-session contamination.
+PostgreSQL proof was incomplete at that point. Run c subsequently completed its shutdown
+checkpoint; its PID file, process and port-49523 listener are absent. Evidence is retained in
+`.tmp/native-file-content-authority-postgres-20260915-b.log` and
+`.tmp/native-file-content-authority-postgres-20260915-c.log`.
+After simplification, all three SQLite cases passed again in
+`.tmp/native-file-content-authority-sqlite-20260915-final.log`; storage typecheck
+and targeted lint also passed.
+No installed-service, drive, provider/channel, commit or push operation occurred.
+
+The PostgreSQL verification is now complete for this validation gate. An isolated
+mesh run (d) identified the timeout source: the initial schema DDL batch took
+71,331 ms and live pg_stat_activity reported DataFileImmediateSync. Its test
+exceeded 120 seconds; its shutdown checkpoint later completed after 86 seconds.
+That cluster is stopped (absent PID file, process and port-64119 listener).
+
+Run e used a fresh directory beneath the normal Windows local temporary folder,
+with the same tests, source, 120-second per-case limits and PostgreSQL durability
+settings. Worker, mesh and parent revocation all passed in 38,977, 40,465 and
+42,651 ms respectively. The complete command exited zero and its cluster shut
+down cleanly; the PID file and port-52867 listener are absent. Evidence:
+`.tmp/native-file-content-authority-postgres-20260915-e.log` and
+`.tmp/comparison-remediation-parent-reservation-postgres-tests-20260915-native-file-content-authority-e.log`.
+The test only created ordinary temporary database files. It performed no disk
+attachment, formatting, installed-service operation, provider call or publication.
+This closes the storage validation gap, not native file disclosure, installed
+transport or artifact settlement acceptance.
+
+### September 15: native session staging adapter
+
+RunCellRuntimeDispatch and CellRuntimeSession.Run now accept an explicit trusted
+file-staging policy. The session copies that policy before peer callbacks and
+joins dispatch before returning; callers retain its borrowed context. The native journal runner
+still owns quiescence, pinned-handle ancestry, byte limits and final capture.
+Request substitution and missing journal custody cannot invoke the selector.
+Failed delivery, stream mismatch and exception unwinding discard staged bytes
+while preserving the existing local outcome metadata. No file negotiation or
+installed selection policy is enabled by this adapter.
+
+Both named native verification commands exited zero. Normal and AddressSanitizer
+each passed 415 session checks over 33 pipe scenarios and 23 real AppContainer
+jobs; the helper-forwarding fixture passed 83 checks over eight forwarding
+sessions. The request-transfer lane passed 981 dispatch checks, 730 runtime
+authority checks and 93 parent-stream checks in both builds. Its source-snapshot
+checks passed. Evidence: `.tmp/native-session-staging-20260915-a.log` and
+`.tmp/native-stage-dispatch-20260915-a.log`. These are controlled local fixtures,
+not installed-service or physical-machine acceptance. No volume was attached or
+formatted. File-transfer negotiation, disclosure and artifact settlement remain
+the next integration work.
+
+### September 15: pinned path selection and native staging
+
+CellDirectoryInventoryPins.ResolveFile now resolves bounded, literal relative
+paths under an independently supplied retained directory. It traverses captured
+names and identities without reopening a path, rejects ambiguous Windows case
+matches and non-file targets, and rechecks current authority and the complete
+inventory at traversal boundaries. Cancellation, reentry, changed membership
+or expired capture withhold the selected identity and release local custody.
+The path grammar excludes absolute paths, traversal, alternate streams,
+Windows device names, malformed Unicode and ambiguous separators/suffixes.
+
+CellRuntimeFileStaging now supports exactly one of identity or path selection.
+The journal runner resolves selected paths under its recorded work directory,
+rejects duplicate identities and count/byte overages, then reads through the
+existing pinned reader. Each staged file retains its requested label with the
+exact identity and content; copy/move replacement keeps these fields together.
+The label is not part of GCRFA001, a publication grant or independent native
+origin proof. Installed policy and transfer negotiation remain open.
+
+The capacity lane passed 1,915 checks in each normal/ASAN build, including 87
+selection checks and 75 content-read checks; ARM64 compiled without execution.
+The full native lane passed 6,218 checks in each normal/ASAN build, including
+356 workspace checks and the new successful/missing/traversal/duplicate/denied
+path-staging cases. These use real AppContainer jobs and held NTFS handles with
+controlled journal/volume boundaries and fixture-seeded output files. Both
+commands exited zero. Evidence: `.tmp/native-file-path-selection-20260915-a.log`
+and `.tmp/native-path-staging-runtime-20260915-b.log`.
+
+The initial full-lane run on C: failed with native error 112 while allocating
+disposable VHDX fixtures. The harness's old 4-GiB free-space check was insufficient:
+a completed normal/ASAN fixture set retains approximately 11.3 GB. It now
+requires 16 GiB before creating its fixture directory. The negative check on C:
+refused before allocation (`.tmp/native-path-staging-free-space-refusal-20260915.log`);
+the full retry on F: passed with unchanged native/test timeouts and attachment
+proof unset. Windows reported 103 task-owned images as unattached before their
+exact-path deletion, recovering 7.09 GB on C:. Three unreadable fixture files
+and all logs were preserved. The cleanup inventory is
+`.tmp/native-path-staging-runtime-20260915-disposable-vhdx-cleanup.json`.
+No disk was attached or formatted, and no installed service, user data, provider
+or channel was changed. The task-owned fixture processes have exited.
+
+### September 15: approved native file-collection request binding
+
+Explicit local collection plans now carry their exact relative work paths and
+per-file/total byte ceilings in a `GCRUN002` request. Legacy requests retain
+their original `GCRUN001` bytes. The existing approval digest covers the whole
+configuration and plan; the overall request-size ceiling is unchanged. Native
+dispatch decodes the copied plan into its pinned staging owner and refuses an
+external selector override before journal access. Collection still does not
+grant disclosure, transfer negotiation or artifact publication.
+
+The storage preparation owner copies the plan before asynchronous handoff and
+checks it against the immutable approved request. The Gateway rejects a changed
+plan even when a returned candidate supplies a recomputed hash. Its ephemeral
+review exposes selected paths and byte limits to the existing approval UI;
+restart/expiry continues to make those details unavailable rather than rebuilding
+an unapproved request. Paths remain out of the durable approval payload.
+
+Focused proof passes: 36 contract tests, 60 Gateway tests, 16 approval-view tests,
+and three SQLite plus three PostgreSQL admission cases covering worker, mesh
+and parent revocation. Contract/storage/Gateway/UI typechecks, targeted lint and
+docs checks pass. The temporary PostgreSQL cluster stopped cleanly. Evidence:
+`.tmp/native-file-plan-{contracts,gateway,ui,sqlite,postgres,app-types,lint,docs}-20260915.log`.
+No live provider, channel, installed service or disk attachment/format operation
+was performed. Browser visual proof and installed file delivery remain open.
+
+The final native request-transfer lane also passes with 1,999 dispatch checks
+in each normal and AddressSanitizer build. Both native and TypeScript encoders
+match the 991-byte collection-plan fixture digest
+`1783e213b609cfe59493ad9c4eaaebd1b0119b8312ad54e68a9ac35753544040`.
+Malformed trailers, duplicate Windows paths, every-byte substitution, external
+selector overrides and absent journal custody refuse. Evidence:
+`.tmp/native-file-plan-dispatch-20260915-b.log`. These are controlled local
+pipe/native checks, not physical second-machine or installed transfer proof.
+
+### September 15: native file-selection identity handoff
+
+The next required C5 file-return dependency is now implemented: `GCFSL001`
+associates each approved path with the exact native file identity. Its fixed
+header binds the request nonce/digest and canonical result digest; its bounded
+identity list uses the approved path order. The native encoder refuses missing,
+reordered, relabelled or inconsistent staged content. Native and shared decoders
+derive accounting from retained terminal metadata, enforce individual/aggregate
+limits, reject duplicate/directory/unknown identities and expose no partial list
+on failure. Labels and content are still governed by separate disclosure and
+publication decisions; this codec alone is not authenticated origin proof or
+installed session negotiation.
+
+Normal and AddressSanitizer native result lanes pass 354 checks each, with 43
+existing pipe fixtures (`.tmp/native-file-selection-handoff-20260915-b.log`).
+The added selection checks are codec tests against controlled retained metadata.
+Thirteen shared selection/export tests, contracts typecheck and targeted lint
+pass (`.tmp/native-file-selection-{contracts,types,lint}-20260915.log`). The first
+native attempt passed the local-outcome lane but encountered a warning-as-error
+in the new test fixture's byte fill; correcting its byte type and rerunning the
+affected result lane passed. The first shared fixture used an existing sparse
+file larger than the approved limit; the corrected small-file fixture passes
+alongside explicit limit-refusal checks. No production limit was relaxed.
+
+No provider/channel calls, disk attachments/formats, service installation or
+user-data changes occurred. Installed helper/parent selection negotiation,
+per-file disclosure authorization and artifact settlement remain the next work.
+
+### September 15: native session file-batch transfer
+
+`CellRuntimeFileBatchTransfer` now joins the identity handoff and existing
+single-file content transfer on one authenticated, exclusive data pipe. The
+sender snapshots all bounded content before callbacks. Selection and complete
+receipts bind the exact manifest hash; both peers require current connection
+custody and an explicit per-file delivery owner. The receiver publishes its
+in-memory batch only after every file and the final receipt checks succeed.
+Partial content is wiped on denial, cancellation, expiry, malformed input,
+reentry or incomplete transfer; the attempt is never replayed.
+
+Controller/client runtime sessions invoke this owner after terminal-result
+retention. Missing file-delivery ownership refuses planned collection before
+dispatch. Result/outer-finish gates distinguish requested file delivery from
+terminal metadata receipt. A file refusal preserves the separately retained
+terminal outcome and withholds file completion. The installed helper/parent
+still needs to supply its protected disclosure callback and artifact settlement;
+no generic runtime/collection grant is substituted for that permission.
+
+The final batch/result lane passes 388 checks and 54 private pipe fixtures in
+each normal/AddressSanitizer build (`.tmp/native-file-batch-transfer-20260915-b.log`).
+It covers a second-file refusal after first-file receipt, denial on either
+peer, empty/maximum content, frozen callback inputs, missing ownership,
+cancellation, expiry, reentry and replay refusal. The existing helper-forwarding
+lane also passes 83 checks per build (`.tmp/native-file-batch-session-20260915-a.log`).
+
+The final full session fixture passes 483 checks, 38 pipe sessions and 26 actual
+AppContainer jobs in each normal/ASAN build
+(`.tmp/native-file-batch-session-20260915-c.log`). New cases prove successful
+file delivery after retained terminal metadata, client/controller file denial
+after retention, and refusal before dispatch when either delivery owner is
+missing. File capture identities/content use controlled fixture metadata;
+the actual job, streaming, joins, local pipes and session owners run normally.
+An earlier fixture assertion assumed every success lacked inventory; it was
+updated specifically for the new file-bearing success case, then rerun.
+
+Targeted lint, docs and diff checks pass. No disk attachment/format, installed
+service mutation, provider/channel call or user-data write occurred. This is
+native session composition proof; installed helper-to-parent delivery,
+Gateway disclosure authorization and artifact publication remain open.
+
+### September 15: file-specific control authorization
+
+Native control action 3 now carries the exact result digest, work/file identity,
+accounting, ceiling and logical path through the authenticated controller/helper/
+parent control chain. It requires its own file callback and cannot use ordinary
+delivery approval. The Node parent derives the selection from independently
+retained terminal metadata, waits for retention to finish, and checks current
+peer custody around file authorization. Denial preserves terminal-retention truth
+while withholding file completion.
+
+Validation completed:
+- Native request/control transfer: 731 authority checks, 1,999 dispatch checks,
+  122 authority pipe fixtures, plus existing request/stream cases, in both normal
+  and AddressSanitizer builds (`.tmp/native-file-control-20260915-c.log`).
+- Result/file codec: 399 checks and 54 pipe fixtures in each build
+  (`.tmp/native-file-control-codec-20260915-b.log`).
+- Helper forwarding: 95 checks, 27 pipe pairs and nine sessions in each build,
+  including file revocation after retention
+  (`.tmp/native-file-control-helper-20260915-a.log`).
+- Shared authorization decoder: nine tests. Worker parent/helper/control suites:
+  77 tests, followed by 60 parent-session tests including two new concurrent
+  retention success/failure cases. Worker typecheck, targeted lint and docs pass.
+
+Initial monolithic compiler attempts timed out, including a serialized retry.
+The three proof harnesses now use the existing eight-source sequential batches;
+compiler optimization, sanitizer flags and per-command timeout remain unchanged.
+The release build default is unchanged; these are native proof artifacts, not
+an installed or signed release acceptance result.
+
+Installed primary-pipe file/content forwarding, Gateway disclosure authorization
+and artifact settlement still require wiring. This step does not exercise a
+physical worker, a mounted volume, external channels or live providers. No disk
+attachment/format, installed-service mutation, user-data write or Git publication
+was performed.
+
+### September 15: helper-to-parent file delivery and completion gating
+
+The native helper now receives the controller's complete file batch and forwards
+it over its authenticated primary parent pipe. Both hops retain separate current
+file permissions. Control exchanges and reply inspection use one shared lock;
+this fixes a real race where a reply to a local file check could look unsolicited
+to the forwarding loop. Parent-destination refusal wipes helper content and
+withholds completion while retaining the separately confirmed terminal outcome.
+
+The Node file receiver validates the bounded manifest, exact retained identities,
+per-file headers/chunks, complete native record and hashes before releasing a
+whole private batch. The parent dispatcher handles file traffic after terminal
+retention, keeps secondary file authorization live, rejects missing/duplicate
+batches and gates outer finish. The retention next-frame allowance is explicit
+and capped at 1,644 bytes; standalone retention remains closed to tail data.
+
+The provisioning driver takes the file plan from its normalized admitted request,
+requires file authorization and consumption owners before setup, and calls the
+consumer only after clean exit of the exact helper plus outer-receipt/current-
+custody checks. Borrowed buffers are wiped after either consumer outcome.
+A prior terminal receipt no longer incorrectly completes a file-bearing request:
+separate artifact reconciliation is required and execution is not replayed.
+
+Verified evidence:
+- Helper forwarding: 120 checks, 33 pipe pairs and 11 sessions per normal/ASAN
+  build (`.tmp/native-file-forwarding-20260915-e.log`). Ten further runs passed
+  110 sessions with unchanged source hashes
+  (`.tmp/native-file-forwarding-repeat-20260915.json`).
+- Full native session regression: 483 checks, 38 fixtures and 26 actual
+  AppContainer jobs per normal/ASAN build
+  (`.tmp/native-file-forwarding-session-20260915-a.log`).
+- Receiver/dispatcher/retention/helper suites: 135 tests
+  (`.tmp/native-file-dispatcher-tests-20260915-b.log`). This includes 20 receiver
+  cases and complete-batch, concurrent-control, cleanup and continuation tests.
+- Provisioning driver: 202 tests, including missing file-owner refusal, exact
+  request-plan selection, clean-child-exit ordering and consumer failure cleanup
+  (`.tmp/native-file-driver-tests-20260915-a.log`).
+- Gateway runtime composition: 22 tests including retained-result/file-settlement
+  separation (`.tmp/native-file-retained-reconciliation-20260915.log`).
+- Worker typecheck and targeted lint pass.
+
+Earlier failed attempts exposed incomplete controlled fixture job flags and the
+control reply-inspection race. The destination-refusal fixture now denies at the
+actual second-hop receiver instead of racing a global revocation against the
+first sender's final check. An outdated helper transport mock was also updated
+for buffer disposal. The final evidence above follows those corrections.
+
+These are local composition proofs: native helper tests use controlled terminal
+metadata/custody and a native fixture parent; Node/driver tests use their own
+controlled peers and child lifecycle. They do not establish a full installed
+native-to-Node run or physical second-machine acceptance. Protected startup's
+Gateway file-disclosure owner, durable artifact settlement and reconciliation
+still require implementation. No disk attach/format/mount, service installation,
+provider/channel call, user-data mutation or Git publication occurred.
+
+### 2026-09-16 — explicit native file-disclosure review and authority
+
+The trusted request producer can now opt into a distinct operator-visible
+permission to transfer selected native files to the assignment's Gateway
+artifact workspace. Omitted/false opt-in remains local collection only. The
+durable approval retains a canonical file-plan digest, exact request/nonce,
+assignment generation, execution workspace and path-jail digest; raw file paths
+remain in the ephemeral review. The approval UI identifies the destination and
+states that model, channel and external publication access are not authorized.
+Missing or substituted disclosure review details disable approval.
+
+Storage independently checks the approved scope against the current assignment,
+retained native result, file selection and supplied plan. Gateway validation
+rechecks returned scope/content and withholds results on cancellation,
+revocation or substitution. These internal gates do not create an upload,
+publication receipt or worker RPC. Installed callbacks, complete-batch artifact
+settlement and retained-result reconciliation remain the next integration work.
+
+Local evidence: 11 contract tests, 67 request-producer tests, 18 file-validator
+tests and 19 approval-screen tests pass. Six SQLite authority cases cover
+collection-only refusal, explicit disclosure, changed plans/content and worker,
+mesh and parent revocation; the disclosure case was repeated successfully after
+the fixture timing adjustment. Storage/Gateway/UI typechecks, targeted lint and
+documentation checks pass. Evidence is retained under `.tmp/native-file-disclosure-*`.
+
+The initial PostgreSQL fixture failures occurred when its 60-second assignment
+lease expired during the composed rollback tests. Those two long fixture kinds
+now explicitly request a 300-second test lease and have a 240-second test
+timeout. Production lease limits and authority checks are unchanged. The
+interruption fixture also reports unexpected earlier errors instead of masking
+them behind a missing post-write callback assertion.
+
+The final PostgreSQL rerun passes all six cases (zero skipped), including both
+collection-only refusal and explicit disclosure under worker/mesh revocation
+and parent cancellation. Its task-owned loopback cluster was stopped after the
+run; evidence is retained in `.tmp/native-file-disclosure-final-postgres-tests-v2.log`
+and `.tmp/native-file-disclosure-final-pg-owner.log`. This remains controlled
+native-record and database proof, not installed transport, browser interaction,
+physical-machine or live-provider/channel acceptance. No disk attach, format,
+mount, service installation, user-data mutation or Git publication occurred.
+
+### 2026-09-16 — durable native file-batch receipts
+
+An additive metadata-only table now retains one immutable, complete native file
+receipt per execution nonce. The receipt binds the reviewed disclosure, ordered
+file plan, retained result, exact file identities/accounting and content/record
+hashes. Missing files, duplicate identities, reordered paths, aggregate ceiling
+violations and substituted scope are rejected. It stores no file bytes.
+
+`RemoteWorkerNativeFileReceiptRepository` validates the protected disclosure and
+each complete native content record before retaining the batch transactionally.
+A post-write revocation rolls the insertion back. Exact replay returns the same
+receipt; a new repository instance can read it only under current assignment,
+lease and disclosure authority. Storage and AsyncStorage expose this owner.
+The receipt does not prove native origin for arbitrary caller bytes, establish
+CAS availability or authorize model/channel publication. The protected receiver
+owns custody; artifact installation, receipt-backed CAS revalidation, canonical
+manifest settlement and installed transport wiring remain the next integration.
+
+SQLite v247 and PostgreSQL v192 add the receipt table, foreign keys and immutable
+update/delete guards without changing existing rows or earlier migrations.
+Rollback disables receipt producers and preserves evidence. The append-only
+migration inventory was extended, and independent registry assertions were
+updated through these reviewed versions. The initial new PostgreSQL digest used
+the wrong hashing envelope; the unapplied v192 entry was corrected to the
+migrator's canonical atomic-SQL digest before acceptance reruns. No deployed
+schema or existing migration digest was changed.
+
+Local proof: 14 contract tests, 2 storage/async-wiring tests and all 6 SQLite
+authority cases pass. Migration parity passes for 247/192 migrations with 27
+manifest checks, 24 integrity checks and 45 runtime-schema checks. Storage and
+Gateway typechecks and targeted lint pass. Evidence is retained under
+`.tmp/native-file-receipt-*`. These are controlled native records and isolated
+databases, not physical-machine or installed-helper acceptance.
+
+The corrected PostgreSQL run passes all four selected acceptance cases (zero
+skipped): collection-only receipt refusal, then explicit-disclosure receipts
+under worker revocation, mesh revocation and parent cancellation. Each positive
+case includes post-write rollback, exact replay, new-owner recovery and immutable
+evidence checks. Evidence: `.tmp/native-file-receipt-b-postgres-tests-v2.log`.
+The task-owned PostgreSQL cluster was stopped and its evidence retained. No
+disk operations, service installation, live provider/channel calls, user-data
+mutation or Git publication occurred.
+
+### 2026-09-16 — receipt-backed native CAS installation and recovery
+
+The production execution-owner composition now includes `nativeArtifacts`.
+Its protected-receiver staging path validates the complete approved batch,
+requires the assignment's artifact capability and byte ceiling, installs each
+file at the existing Gateway CAS address, and retains the complete receipt only
+after every installation succeeds. Current disclosure is checked around file
+I/O. Temporary byte buffers are wiped after installation or failure. An
+interruption before receipt retention leaves no recoverable completion claim;
+a retry can converge on the already installed, verified CAS bytes.
+
+Recovery reads the retained receipt under current authority, verifies every
+blob against its exact byte count and content hash, and rechecks the receipt
+and assignment before returning the complete batch to the internal caller.
+Missing, damaged or revoked batches are withheld and partial recovery buffers
+are wiped. Recovery has no execution-dispatch dependency. The existing CAS
+reader accepts an optional exact byte count and checks it before opening and
+allocating the file buffer; default callers retain their existing behavior.
+
+The final focused run passes 108 tests across native artifact storage, shared
+CAS, native file validation and request production
+(`.tmp/native-file-cas-tests-final.log`). Native artifact cases use real temporary
+CAS files and production owner composition with controlled authority/receipt
+ports, including recovery through a fresh owner, caller mutation, missing or
+damaged files, interrupted receipt retention, assignment ceilings, cancellation,
+revocation and buffer cleanup. Gateway typecheck, targeted lint and diff checks
+pass. These are local component/composition proofs, not a combined installed
+worker/database restart or physical-machine acceptance run.
+
+Canonical artifact manifest settlement, its receipt-backed verification gate,
+installed helper/worker/Gateway transport wiring and operator-facing artifact
+delivery remain to be connected. No worker-authored file RPC, model or channel
+publication, disk attach/format/mount, service installation or Git publication was added
+or performed by this slice.
+
+### 2026-09-16 — canonical native artifact manifest settlement
+
+The production owner composition now exposes an internal native artifact
+settlement owner. It derives ordered manifest entries and a receipt-parameterized
+Gateway verifier profile from the retained complete batch. It uses the existing
+canonical upload, bounded part, manifest and verification repositories, with
+the receipt digest as the staging binding and deterministic replay identities.
+Empty files are supported; non-empty files use contiguous parts up to 256 KiB.
+The profile asserts receipt/CAS integrity only, not content quality, native-origin
+attestation, uploaded-code execution or model/channel access.
+
+Each mutation rechecks current receipt and assignment authority inside its
+transaction. The Gateway rereads and hashes CAS files while verification is
+running. Queued/running/passed transitions are one transaction, so interruption,
+corruption or revocation leaves a pending gate rather than partial success.
+Replay through a new owner verifies retained files and the exact committed
+manifest; it does not rerun the native job or repeat an already-passed verifier.
+Temporary recovered buffers are wiped after success or failure.
+
+Local checks pass: 7 manifest/profile contract tests, 117 focused Gateway tests
+and 3 SQLite acceptance cases. The database fixture covers canonical manifests,
+empty files, pending versus verified reads, atomic verification rollback and
+reconstruction/replay under the worker, mesh and parent authority scenarios.
+Gateway tests combine real CAS files with controlled receipt and transactional
+repository ports; database cases use real repositories with controlled blob
+references. This is component/composition evidence, not a combined installed
+transport or physical-machine run. Evidence is retained under
+`.tmp/native-file-settlement-*`; Gateway typecheck and targeted lint pass.
+
+Installed helper/worker/Gateway file-transfer wiring, protected receipt/CAS/
+settlement composition in that path, operator-facing artifact delivery and
+physical acceptance remain to be connected. No worker-authored manifest or
+verifier choice is accepted by this owner, and no new worker file RPC was
+exposed by this slice.
+
+PostgreSQL acceptance also passes all three selected worker/mesh/parent cases
+with zero skipped (`.tmp/native-file-settlement-postgres-tests-v2.log`). The
+task-owned loopback cluster was stopped and its evidence retained. No disk
+attach/format/mount, installed-service change, provider/channel call, user-data
+mutation or Git publication occurred.
+
+### 2026-09-16 — protected native file settlement reconciliation
+
+The signed assignment settlement route now accepts `runtime.files.reconcile`
+metadata requests. Current assignment/credential/mesh/lease authority remains
+required. The Gateway looks up the canonical result and complete file receipt,
+then invokes its receipt-backed CAS/manifest settlement owner. It returns only
+bound result metadata, receipt/manifest digests and upload identity. Missing
+results or receipts remain pending; changed results, revoked authority, corrupt
+files and incomplete verification cannot produce completion evidence.
+
+The worker sends a fresh challenge for each reconciliation so a cached pending
+response cannot stand in for a later read. Fresh execution and restart recovery
+both require settlement of the same retained result. Lease-owner and current-lease
+callback paths preserve assignment scope and reject older leases. The transport
+binding is captured before awaiting caller code. A retained job is never launched
+again to recover incomplete file delivery.
+
+Local proof includes 11 contract cases, 42 worker/client cases and 91 Gateway
+cases covering the signed route, worker-to-Gateway composition, settlement
+interruption/recovery, pending evidence, revocation, substitution, cancellation
+and lost responses. The real-CAS composition case uses controlled receipt and
+transactional repository ports; it recovers through new owners and rejects later
+file corruption. It does not establish installed transport or physical restart
+acceptance. Evidence is under `.tmp/native-file-reconciliation-*`.
+
+The existing bounded response snapshot helper was moved unchanged into the
+existing execution transport module to keep the protocol service within its
+lint size limit. No architecture comparator thresholds were raised. No schema
+change was needed. Raw file-byte upload, installed callback composition,
+operator-facing artifact delivery and physical acceptance remain open. This
+slice made no disk/service/provider/channel/user-data or Git publication changes.
+Gateway/worker typechecks and docs checks pass. Targeted lint is clean after
+removing the response snapshot extraction's unused import; `git diff --check`
+also passes. The earlier invalid byte-length test fixture was corrected and
+the full 91-case Gateway selection rerun successfully.
+
+### 2026-09-16 — installed per-file disclosure authorization composition
+
+The protected settlement route now supports `runtime.file.authorize` metadata
+requests. The request binds one exact native file selection, the complete admitted
+file plan and a fresh challenge. The Gateway requires current signed assignment
+authority, canonical disclosure approval and the retained native result. Its
+artifact owner checks `artifact_stage`, execution workspace, path jail, current
+lease and the file's byte limit before returning permission. Capability is
+rechecked after disclosure resolution. This creates no content receipt or upload.
+
+Installed runtime startup now wraps the local file policy with this Gateway
+check under the held current lease. It validates the callback's exact admitted
+request/history, captures the selection before awaiting caller code and rejects
+selection substitution. Missing local file authority or a complete-batch consumer
+prevents dispatch. Gateway denial, cancellation or disclosure revocation prevents
+file release; a response to an earlier challenge cannot authorize a later call.
+The client bounds each observation to five seconds, with no automatic retry or
+reusable permission token.
+
+Local checks cover 14 contract cases, 73 installed-startup/worker-composition
+cases and the signed-route/metadata-client/artifact-owner cases under
+`.tmp/native-file-grant-*`. Startup tests use a controlled runtime driver and
+transport; artifact tests use temporary local roots and controlled authority
+ports. These establish source composition, not an installed service, real
+remote machine or native-origin attestation. No schema change was needed, and
+the existing SQLite/PostgreSQL disclosure repository checks remain the owner.
+
+Raw file-byte upload and the installed complete-batch consumer still need to
+be connected to receipt/CAS settlement. Operator-facing artifact delivery and
+physical acceptance remain open. No disk attach/format/mount, installed-service
+mutation, provider/channel call, user-data mutation or Git publication occurred.
+The final Gateway selection passes 103 cases, including capability revocation
+during disclosure resolution. Gateway/worker typechecks, targeted lint, docs
+checks and `git diff --check` pass. All proof in this slice is local.
+
+### 2026-09-16 — bounded durable native file transfer staging and receiver
+
+Native transfers now have immutable declarations and fixed 32 KiB page slots.
+The declaration binds the complete approved file plan, retained native result,
+file identities and claimed record/content hashes. It remains unverified metadata
+until the Gateway reconstructs and validates every complete native record.
+Pages are temporary raw bytes in the Gateway database, bounded by the declared
+files and the existing artifact budget. Duplicate exact pages converge; altered
+replays, extra slots, wrong lengths and changed authority are rejected.
+
+The additive migrations are SQLite 248 and PostgreSQL 193
+(`remote_worker_native_file_transfers`). Existing migration definitions and
+integrity hashes are unchanged. PostgreSQL 193 has canonical runtime digest
+`d9fbb01f45bc4c91750d40041d2b89ea9fed25f205112174c55341907a11cf63`.
+Rollback disables the new producers and retains declarations/evidence; it does
+not remove existing data. Raw-page cleanup requires the matching canonical
+receipt and verified artifact manifest, and retains declaration metadata.
+
+The internal Gateway receiver accepts bounded pages through storage authority,
+reconstructs records in exact file/page order, verifies page/record/content hashes
+and passes the complete batch to the existing native receipt/CAS settlement owner.
+Partial batches stay pending. Interrupted staging, settlement or cleanup can be
+retried through a new receiver without resubmitting execution or already-retained
+bytes. This owner is composed into the production owner factory, but the byte
+RPC and installed complete-batch consumer remain unconnected.
+
+Local proof passes: 22 page-contract cases, 48 Gateway receiver/artifact cases,
+2 storage-wiring cases, and all three worker/mesh/parent authority cases on both
+SQLite and PostgreSQL. The real-database fixtures cover post-write revocation
+rollback, immutable replay, reconstruction through new repositories, refusal of
+premature cleanup and raw-page cleanup after verified settlement. The existing
+fixture lacked the required artifact capability; that test-only manifest now
+explicitly requests it for native file disclosure. Production capability checks
+were preserved. The initial fixture failures were followed by successful retries.
+
+Gateway receiver tests use controlled storage/artifact ports and actual native
+record bytes; CAS behavior has separate real-file component proof. Database
+tests use real repositories and controlled empty-file bytes/blob references.
+These are not combined installed-service, physical-machine or live-provider
+acceptance. The isolated PostgreSQL run passed all three cases with zero skips
+in `.tmp/native-file-transfer-postgres-tests-v2.log`; its task-owned loopback
+cluster was stopped and evidence retained. No user database was targeted.
+
+Migration parity (27 cases), PostgreSQL integrity (24), runtime schema (45),
+contracts/storage/Gateway/worker typechecks and targeted lint pass. Evidence is
+under `.tmp/native-file-transfer-*`. No disk attach/format/mount, installed-service
+operation, provider/channel call or Git publication was performed. Protected
+byte-transfer RPC, installed consumer wiring, operator-facing delivery and
+physical acceptance remain open.
+
+### September 16: signed native file transfer and installed consumer wiring
+
+The existing protected settlement route now accepts exact native file
+declarations and bounded pages. Its current assignment/lease/signature fence
+applies before dispatch; responses contain only declaration/page metadata.
+Native operation dispatch lives in a narrow owner, preserving existing
+architecture thresholds. Reconciliation completes retained page sets through
+receipt/CAS settlement and verified cleanup; partial sets remain pending.
+
+Installed startup snapshots the entire bounded native batch before asynchronous
+local consumer callbacks, obtains fresh per-file Gateway disclosure metadata,
+and submits 32 KiB pages while holding the current lease for each request.
+Acknowledgements bind scope, generation, lease, request, transfer and page hash.
+The final receipt and retained result must match the declared batch. Ambiguous
+transport failures do not cause blind resend or native job replay. Private
+record copies are wiped on success or failure. The installed policy now provides
+the required local file callbacks and rejects unapproved, changed, duplicate,
+corrupt or replayed batches without recording file contents in diagnostics.
+
+Fresh local proof: 31 contract cases, 117 Gateway cases and 119 worker cases
+pass. This includes signed route rejection, interrupted/pending reconciliation,
+bounded multi-page upload, altered responses, caller-buffer mutation, current
+lease rotation, installed callback composition, and local custody failures.
+Contracts/Gateway/worker typechecks and targeted lint pass. Evidence:
+`.tmp/native-file-wire-contracts-a.log`, `.tmp/native-file-wire-gateway-a.log`,
+`.tmp/native-file-wire-worker-final.log`, `.tmp/native-file-wire-types-c.log`,
+`.tmp/native-file-wire-types-final.log`, and `.tmp/native-file-wire-lint-*.log`.
+
+These are controlled transport/storage composition and component checks. They
+do not establish combined installed/native-helper/physical-machine acceptance,
+operator-facing file delivery or live providers/channels. No database migration
+or production database change was needed in this slice. No disk attachment,
+formatting, mount, installed-service change, provider/channel send or Git
+publication was performed. The remaining physical and live acceptance inputs
+already requested from the operator remain pending.
+
+### September 16: operator access to verified native files
+
+Generated file batches now appear through the canonical assignment runtime
+projection, independently of stdout/stderr diagnostics. Chat worker details and
+Ops load filenames on demand and offer inert binary downloads. Long logical
+paths wrap at narrow widths; raw file content is not rendered in the UI.
+
+The operator-only, no-store native-file-artifact route binds workspace,
+assignment, generation and nonce. Listing requires a complete receipt matching
+the exact verified manifest. Downloads select a bounded file index, read the
+CAS under the receipt's execution workspace, validate length/hash, and re-read
+the canonical receipt before returning bytes. Response filenames are fixed by
+the Gateway, never copied from worker paths. The browser client bounds and
+hashes downloaded bytes again before creating the download. These historical
+operator reads deliberately remain available after worker, mesh or parent
+revocation; they do not restore execution or worker delivery authority.
+
+Local proof passes: 62 Gateway route/CAS/operator cases, 14 API client cases,
+5 UI component cases, 17 runtime contract cases and 7 runtime-read repository
+cases. The real PostgreSQL fixtures pass worker, mesh and parent revocation
+cases with zero skips, including unavailable-before-verification, scoped
+historical reads and preserved discovery after revocation. Its exact temporary
+loopback cluster stopped successfully; evidence remains in
+`.tmp/native-file-operator-pg-owner.log` and
+`.tmp/native-file-operator-postgres-tests-v2.log`. SQLite evidence is in
+`.tmp/native-file-operator-sqlite-*.log`. No migration was required.
+
+Actual Chromium component/API-client proof passed at 1440 and 390 pixels,
+including long paths without horizontal overflow, exact downloaded bytes,
+failure display and retry. Screenshots and request evidence are in
+`output/playwright/native-file-browser-KvD65u/`. The first browser attempt timed
+out on the full page load event; its process exited, then the DOM-ready retry
+passed. This uses controlled HTTP responses, not the user's runtime or an
+installed worker. Gateway CAS checks use real temporary files; canonical
+metadata/storage checks are separate component/database proof.
+
+Contracts/storage/Gateway/shared-client/Mission-Control typechecks, focused lint,
+docs checks and whitespace validation pass. No disks were attached/formatted,
+no installed service was changed, no provider/channel messages were sent, and
+no Git publication occurred. Source inspection also confirms that the native
+request producer still lacks a production `requestReview` caller. That trusted
+execution-owner integration, combined native/installed/physical proof and live
+acceptance remain open; file downloads do not close those requirements.
+
+## September 16 native operator review entry point and policy checks
+
+The operator-only native-runtime-reviews POST route now calls the production
+request producer through the canonical approval lifecycle. Recent signed worker
+settlement contact supplies protected assignment authority only; operator input
+supplies the exact bounded launch descriptor. The contact cache is bounded,
+expires after 30 seconds, rejects clock regression and never lets an older lease
+refresh a newer lease. Response data contains approval metadata and request hash,
+not private request bytes or lease material. This is an API entry point, not a
+completed workflow-selector UI or an execution/admission endpoint.
+
+Production preparation, admission, selection and runtime authorization now check
+the frozen builtin Chat shell capability and current Gateway tool policy. The
+policy command must name the exact quoted Windows executable image; a decoy
+argv[0] is rejected before policy evaluation. Runtime authorization rechecks the
+complete retained expectation after policy evaluation. Missing policy ownership,
+revocation, cancellation and changed policy context fail closed.
+
+Focused evidence: 218 checks across six Gateway files pass in
+`.tmp/native-review-entry-tests-c.log`. A subsequent missing-policy-owner case
+is recorded in `.tmp/native-review-entry-producer-final.log`. The initial broader
+run exposed an outdated authorization fixture that omitted reviewed policy
+context; it was corrected and retried. Gateway typecheck and docs checks pass.
+Focused lint reports zero errors and one max-lines warning in
+`remote-workers-route-service.ts` (1001 versus 1000); no thresholds were changed.
+These checks use controlled authority/policy ports and Fastify injection, not
+physical native execution or the user's live runtime.
+
+Source inspection confirms `admitReviewed` still has no production caller.
+Native capacity capture registration also lacks its production coordinator
+caller. Connecting complete retained native capacity, exact approved Chat
+continuation and admission remains source work. No capacity values, approval
+verdicts or executable bytes may be invented to bridge it. Installed workflow
+selection and combined physical/live acceptance remain open. No disks were
+attached or formatted, no installed services or user data were changed, no
+provider/channel messages were sent and no Git publication occurred.
+
+## September 16 retained native capacity to approved continuation
+
+Native request selection now has a production call to `admitReviewed`. Before
+that call, it resolves the exact canonical Chat resume and reads a complete
+accepted native capacity delivery at the reviewed capacity/execution/cleanup/
+backup revisions. Partial, foreign, stale or unapproved material fails closed.
+Executable bytes come from the existing private review. Additional input/output
+capacity demand is calculated conservatively from that reviewed request; it
+does not manufacture measurements or change the immutable reservation. Repeated
+selection after confirmed admission does not repeat the admission transaction.
+
+The read-only storage handoff cross-checks the original capture specification,
+complete delivery digest, accepted receipt and canonical inventory under current
+assignment authority. Reading it does not change the cell. Database testing
+exposed a lifecycle defect: native capacity readback still used the active
+provisioning-only endpoint after the cell entered ready. Ready-cell reads now
+use the existing capacity history owner. Provisioning still requires its live
+claim; starting/running cells cannot create a new capacity capture through this
+path. Installed continuation, startup and result upload likewise use the
+protected read-only capacity snapshot instead of re-entering provisioning.
+
+Local Gateway checks pass 90 cases and worker checks pass 187 cases. SQLite
+passes six capacity staging/delivery cases across worker, mesh and parent
+revocation. The first runs exposed the provisioning/ready boundary; the source
+fix and canonical fixture transition pass on retry. Evidence is in
+`.tmp/native-continuation-admission-gateway-tests-b.log`,
+`.tmp/native-continuation-admission-worker-tests-b.log` and
+`.tmp/native-continuation-admission-sqlite-{c,d}.log`. PostgreSQL passes all six
+staging/delivery cases with zero skips in
+`.tmp/native-continuation-admission-postgres-tests-v4.log` (251 seconds). Its
+exact task-owned loopback cluster stopped cleanly. Earlier failed runs also
+closed their clusters and retain their evidence. Package typechecks, docs checks
+and focused lint pass; no migration or native binary change was required.
+
+These are real isolated database checks and controlled Gateway/worker ports,
+not physical-machine acceptance. Production capture registration and native
+platform identity persistence still require their installed coordinator caller;
+workflow selection and combined installed/live proof remain open. No disk
+attachment, formatting, installed-service mutation, provider/channel send or Git
+publication occurred.
+
+## September 16 consolidated Windows host proof
+
+`pnpm verify:remote-worker:windows-host` passes on the current working candidate:
+31 TypeScript cases and 19 native checks, zero skips. Native checks include
+process/job containment, AddressSanitizer lifecycle, EOF and forced-parent-death
+cleanup, the bounded grace deadline, entrypoint/hardlink/junction refusal and
+service identity restrictions. The authoritative lane output is
+`.tmp/native-installed-host-verification-a.log`; retained native evidence is in
+the task-specific `Goat Worker Host RLzqKN` and `Goat Worker Identity Bhi15x`
+directories under the OS temporary directory. This lane does not install a
+service or attach/format a disk.
+
+Read-only service inventory found zero GoatCitadel Windows services on this
+host. Source inspection confirms that installed controller handlers do not yet
+invoke the joined-capacity collector or runtime-bundle installer. The underlying
+native operations exist, but their required complete-pool writer exclusion,
+reviewed bundle custody, platform-identity persistence and capture-registration
+handoff are still coordinator integration work. Do not treat these host checks
+as evidence for that missing integration or two-machine acceptance. The plan
+and pending operator installation/live-test inputs remain unchanged.
+
+## September 16 native review durable-response correction
+
+The named `verify:gateway:async-boundary` lane found an unawaited
+`markMutationCommitted` call in the new native review route. The route now waits
+for persistent idempotency completion before returning HTTP 201. A delayed
+commit holds the response; a failed commit produces HTTP 500 rather than a
+success response. The canonical review is not recreated by the handler.
+
+All 30 remote-worker route cases pass, including the two new delayed/failed
+commit regressions (`.tmp/native-review-idempotency-tests-a.log`). Gateway
+typecheck and focused lint pass. The final named async-boundary lane passes
+10 scanner tests and scans 1,027 production TypeScript files successfully
+(`.tmp/native-coordinator-async-boundary-b.log`); its initial failure is retained
+in the corresponding `-a.log`. No installed coordinator or physical readiness
+is claimed by these checks.
+
+## September 16 unused Gateway entry points
+
+Removed the uncalled `scheduleRemoteWorkerChatOffer` and
+`closeMcpServerSessions` public wrappers from `GatewayService`, plus the former's
+unused imports. Durable Chat placement still schedules through
+`RemoteWorkerChatOfferService`; MCP administration retains its captured
+session-specific closer. No architecture thresholds changed, and the broader
+C0 architecture gate is still unresolved.
+
+All 46 existing placement and MCP administration tests pass
+(`.tmp/gateway-unused-wrappers-tests.log`), as do Gateway typecheck, focused lint
+and diff whitespace checks. The operator confirmed the mini PC runs Windows 11
+x64; access and installation targets remain pending. No disk or installed
+service operations were performed.
+
+## September 16 installed provisioning handoff trace
+
+Production source tracing narrows the remaining coordinator gap: `main.ts`
+constructs `createWindowsInstalledNativeRuntime`, and
+`connected-worker-runtime.ts` sends the claimed workload directly to
+`routeWorkerNativeContinuation`. The Windows adapter then requests a capacity
+snapshot before runtime selection. `prepareWindowsWorkerAssignmentCell` has no
+production caller beyond its public export. Thus the installed execution owner
+does not yet establish a newly claimed assignment's provisioned cell.
+
+The integration must begin at the claimed assignment's retained state owner,
+before native continuation selection, and carry its renewed lease through
+provisioning, reviewed bundle installation, platform-identity persistence and
+complete-pool capacity registration. An unconditional call to provisioning
+inside the continuation adapter would not close this gap: that adapter lacks
+the durable state owner and would still lack the remaining readiness stages.
+Existing mounted/runtime fixtures do not prove this fresh-assignment path.
+This is source inspection, not installed or physical acceptance; no native
+operations or live calls were run for this trace.
+
+## September 16 approved remote-action owner extraction
+
+Moved the approved remote-action execution block from `GatewayService` into
+`remote-worker-approved-action-runtime.ts`. The Gateway supplies narrow typed
+dependencies; the owner retains the same execution fences, builtin preflight,
+side-effect receipt callbacks, and MCP/mesh context bindings. Five new tests
+verify revocation before preparation and before each dispatch family. The
+existing effect-runtime cases still exercise the Gateway delegate with storage,
+approval resume and replay. All 60 tests pass
+(`.tmp/remote-worker-approved-extraction-tests.log`), with Gateway typecheck,
+focused lint, whitespace checks and the async-boundary lane also passing
+(10 scanner tests; 1,028 production TypeScript files).
+
+The architecture lane still fails. Gateway line count is 13,719 (82 fewer for
+this extraction); total dependency accesses increase by 10 as the extracted
+owner is now measured. Host callback counts do not change. This is an explicit
+tradeoff, not a claim that the architecture gate is restored. Thresholds remain
+unchanged. Current metrics are retained under
+`artifacts/verification/2026-09-16T04-08-31-514Z-architecture-metrics-d8349d13/`.
+Installed coordination and physical acceptance remain open.
+
+## September 16 reviewed architecture allowances
+
+The operator authorized explicit allowances for new plan-owned services while
+preserving existing-owner limits. The architecture lane now reads a separate
+`architecture-new-service-allowances.json` record, pinned to the original
+baseline's source digest. Its baseline-era service inventory was taken from
+commit `41d0f2e52910c60c39fa0b788042638eddf302e5`, the baseline file's last
+modifying commit. That inventory also protects existing zero-count owners.
+The original baseline file is unchanged.
+
+The first reviewed entry is `remote-worker-approved-action-runtime.ts`: C0/C5
+ownership extraction, zero host callbacks, ten dependency accesses, with the
+60-test execution evidence described above. New owners are not automatically
+accepted. Each additional entry needs explicit plan attribution, rationale,
+evidence and fixed caps. The lane retains both raw measured deltas and the
+applied allowances in its artifacts.
+
+All 17 architecture/allowance tests pass, including unlisted owners, exhausted
+caps, stale records, duplicates, existing zero-count owners and existing-owner
+growth hidden beneath unused aggregate headroom. Focused lint and docs checks
+pass. The actual named architecture lane still reports the remaining existing
+and unreviewed-new-owner regressions; it does not report the reviewed entry as
+unapproved growth. Evidence is retained under
+`artifacts/verification/2026-09-16T04-15-50-289Z-architecture-metrics-83aebe1b/`.
+
+The next source review adds provider readiness (C0, two accesses), first-task
+detection (C1, three) and workflow capture (C2, 23), each with zero host callbacks.
+Capture's full `AsyncStorage` dependency is narrowed to its nine required
+repositories/operations, excluding memory and activation owners. All 23 owner
+tests pass (`.tmp/architecture-capture-review-tests.log`), including capture
+authority/replay/revocation and first-task pagination; Gateway typecheck and
+focused lint pass. All 17 gate/allowance tests also pass. These allowances cover
+reviewed source boundaries, not outstanding live acceptance.
+
+Browser QA pack review adds four C3 entries: candidate staging (14 dependency
+accesses), the change-plan adapter (20), compensation (nine), and the MCP
+compensation owner (one dependency access and one host callback). Candidate
+storage is narrowed to four repositories/operations, compensation to changePlans,
+and the adapter to their union. All 45 pack/MCP tests pass
+(`.tmp/architecture-pack-review-tests.log`), along with Gateway typecheck, focused
+lint and 17 allowance/gate tests. Review covered immutable inactive bytes,
+separate owner approvals, exact revision/hash compensation, later-edit
+preservation, required tool discovery and recovery without duplicate effects.
+The named architecture lane remains red for other owners and existing-owner
+growth; this does not establish live Browser QA installation or task execution.
+
+Channel review adds the C4 delivery-part owner (11 dependency accesses, one
+host callback) and connection-review guard (one of each). Delivery storage is
+narrowed to channelDeliveryParts, approvals, pendingApprovalActions and
+commsDeliveries. All 17 delivery/setup tests and seven connection-review route
+tests pass (`.tmp/architecture-channel-review-tests.log` and the corresponding
+`-route-tests.log`), covering split sends, durable acknowledgement replay,
+uncertain outcomes, stale-review HTTP 409, auth and retained draft state.
+Gateway typecheck, focused lint and 17 gate tests pass. The architecture lane
+still reports remaining regressions; no live channel sends were performed.
+
+Native exchange review found that provisioning compared owner results against
+the original mutable input after awaiting, unlike its capacity siblings. Both
+prepare and checkpoint exchange now freeze protected authority and normalized
+submission before yielding. Two new input-mutation cases fail before the fix
+and pass afterward (`.tmp/native-provisioning-snapshot-before.log` and
+`-tests.log`). All 83 provisioning/inventory/capacity-page/protocol tests pass,
+with Gateway typecheck, focused lint, 17 architecture tests and the named async
+boundary lane passing. Six reviewed C5 exchange owners receive fixed allowances
+(provisioning three accesses; capacity one; backing capacity one; inventory two;
+native capacity pages one; runtime result one; all zero host callbacks).
+The architecture gate remains red elsewhere. No native disk operations ran;
+installed coordination and physical-machine acceptance remain unproven.
+
+Native artifact review fixes receipt authorization rereading mutable nonce and
+request identifiers after storage lookup. It now captures both before awaiting;
+the regression fails before the change (`.tmp/native-artifact-review-before.log`).
+Settlement's native-artifact dependency is narrowed to authorizeReceipt/recover.
+All 58 artifact-store/settlement/reconciliation tests pass after the fix
+(`.tmp/native-artifact-review-tests.log`), with Gateway typecheck, focused lint
+and 17 allowance tests passing. Reviewed C5 caps are seven, four and five
+dependency accesses respectively, with zero host callbacks. The named
+architecture gate still reports remaining regressions. Real temporary CAS
+tests do not establish installed-worker or physical-machine acceptance.
+
+Native reporting review adds fixed C5 allowances for the authorization receipt
+boundary (one dependency access), outcome reader (three) and output retainer
+(two), all with zero host callbacks. All 120 outcome/output/policy/protocol tests
+pass (`.tmp/native-runtime-report-review-tests.log`), plus 17 allowance tests.
+The architecture gate remains red. The native-policy owner remains unapproved:
+source tracing found advisory policy evaluation without the canonical invocation
+boundary that consumes one-time grants and records limit-counting execution.
+This is tracked as C5-NATIVE-GRANTS-01; no execution enforcement or live proof is
+claimed from the passing evaluation tests. No runtime source changed in this
+review.
+
+Native file-delivery review narrows the transfer and validation owners to the
+repository methods they actually use. The transfer fixture now supplies that
+storage interface without casting a partial object to all of AsyncStorage.
+Reviewed C5 allowances are six dependency accesses for transfer, three for
+validation and two for historical operator download, all with zero host
+callbacks. All 44 focused tests pass (`.tmp/native-file-port-review-tests.log`),
+including incomplete/replayed transfer, corruption, cancellation, revocation and
+actual temporary CAS downloads. Gateway typecheck and all 17 architecture tests
+pass; the original baseline remains unchanged. This review does not close the
+architecture gate or C5-NATIVE-GRANTS-01. The latter requires grant reservation
+to participate in admission's transaction and replay authority, rather than a
+separate advisory or consuming policy call.
+
+C5-NATIVE-WARDS-01: while tracing native admission, four regression cases
+demonstrated that an allowed decision carrying require_dry_run, route_local,
+redact or deny reached native authorization (`.tmp/native-policy-ward-before.log`,
+four failures). The native policy owner now refuses those unenforced effects.
+No-effect, allow and require_approval still use current profile checks and the
+separate exact native review. All 100 native-policy/request-producer tests pass
+(`.tmp/native-policy-ward-tests.log`), along with Gateway typecheck
+(`.tmp/native-policy-ward-types.log`). Grant reservation and installed execution
+remain incomplete; the native-policy owner still has no architecture allowance.
+
+C5-NATIVE-GRANTS-01 fresh-admission progress: the production Gateway policy
+factory now delegates admission to ToolPolicyEngine.admitNativeRuntime. Its
+internal native-runtime-admission helper snapshots the reviewed request, checks
+the exact executable/command and Chat scope, acquires approval before assignment
+locks, then performs current policy inspection, native repository admission,
+canonical grant consumption and limit-counting decision recording in one async
+storage transaction. The producer cannot fall back to direct storage admission.
+Grant unavailability, accounting failure and cancellation roll the transaction
+back. Capacity rejection/quarantine does not debit a grant.
+
+Fifteen focused tests pass against actual temporary SQLite grant, decision and
+transaction repositories (`.tmp/native-policy-admission-tests.log`); the native
+admission callback uses a controlled write to prove rollback, not a fabricated
+physical-execution claim. The cases include simultaneous use of one one-time
+grant, spent/revoked grants, audit failure, cancellation before/after debit,
+scope/command/image mismatch and unsupported Wards. One initial run exceeded the
+first-test migration setup timeout; the final run passes with an explicit
+15-second first-test budget. All 100 Gateway policy/producer tests, Gateway
+typecheck, focused lint and the named async-boundary gate also pass. No schema
+migration, user database, installed worker, disk or provider was touched.
+
+This is not full C5-NATIVE-GRANTS-01 closure: a durable request/approval/grant
+reservation must still support later authorization of the already-admitted call
+without consuming/counting again or rejecting its own consumed grant. Native
+repository integration, PostgreSQL concurrency and cross-invocation request-limit
+proof remain required. The native-policy owner is still excluded from reviewed
+architecture allowances.
+
+C5-NATIVE-GRANTS-01 reservation progress: SQLite v249/PostgreSQL v194 add an
+immutable native policy reservation linking the exact request and policy-request
+hashes, native approval, counted decision and grant identity. Admission writes
+the reservation in the same transaction as grant debit and accounting. Old
+expectations receive no backfill or implicit authorization; rollback retains
+evidence and disables the producer. The Gateway now routes admitted request
+selection and delivery authorization through the reservation reader. It checks
+current native approval/lease/Chat authority and grant identity, expiry and
+revocation, then re-evaluates shared deny-wins policy. Only that reservation's
+already-counted decision is excluded from matching hourly scope/tool/write
+counts; unrelated, old and advisory decisions cannot reduce a count.
+
+Sixteen policy transaction/engine tests pass (`.tmp/native-policy-reservation-engine-tests.log`).
+The real native Chat approval/resume/admission fixture passes on SQLite and
+PostgreSQL, covering retained one-time grants, a new repository instance,
+immutable rows, exact request/lease matching, grant revocation and parent
+cancellation (`.tmp/native-policy-reservation-storage-tests.log`,
+`.tmp/native-policy-reservation-postgres-tests-v1.log`). Native journal/process
+results remain controlled fixtures, not physical-machine proof. The temporary
+PostgreSQL runner verified its data directory and stopped its own cluster.
+Migration parity passes at 249/194 with prior history preserved. Cross-invocation
+hourly-limit concurrency, fully combined policy/native admission proof and
+installed execution remain open; no native-policy allowance or plan completion
+is claimed.
+
+C5-NATIVE-GRANTS-01 hourly-accounting progress: two concurrent external-runtime
+invocations previously both executed against a one-call hourly grant. The
+regression fails before the fix (`.tmp/native-policy-concurrency-before.log`)
+and passes after it (`.tmp/native-policy-concurrency-after.log`). Normal and
+approved tool invocation now keep policy evaluation and counted decision writes
+in one storage transaction. PostgreSQL hourly grant counters acquire a shared
+transaction-scoped advisory lock; SQLite uses its immediate writer transaction.
+Approval terminal-state ownership and existing grant counting semantics remain
+unchanged.
+
+All 944 policy-engine tests pass with four workers
+(`.tmp/native-policy-concurrency-package-tests-final.log`). The first unrestricted
+run exposed obsolete transaction stubs and one dynamic-import timeout; stubs and
+the accounting-transaction expectation were updated, while the existing timeout
+was preserved. Gateway typecheck passes after correcting the helper's optional
+options default (`.tmp/native-policy-concurrency-types-final.log`). An actual
+two-connection PostgreSQL test observes the second connection waiting on the
+advisory lock for session/global call counts and cross-tool write counts, then
+verifies commit and rollback behavior
+(`.tmp/native-policy-concurrency-postgres-tests-v1.log`). Its owned temporary
+cluster was stopped and checked. This does not establish combined native
+policy/admission or installed-worker acceptance; both remain open. Existing-owner
+architecture thresholds are unchanged, and no new allowance is added here.
+
+C5-NATIVE-GRANTS-01 combined integration proof: the native Chat fixture now accepts
+an optional async admission owner, allowing the real ToolPolicyEngine to perform
+admission against the same approval, resumed assignment, cell, grant, decision
+and reservation repositories. The new policy-engine integration test runs on
+SQLite and PostgreSQL remote storage without substituting policy inspection or
+native admission. It verifies one-time debit, repeated admitted authorization
+without extra counting, duplicate-admission refusal, new deny enforcement and
+re-authorization after that deny is revoked. Injecting only a counted-decision
+write failure proves that real cell admission and grant debit roll back, with no
+retained reservation; the subsequent genuine admission succeeds.
+
+Both dialects pass (`.tmp/native-policy-combined-postgres-tests-v2.log`), as do
+Gateway typecheck and focused lint (`.tmp/native-policy-combined-types-final.log`,
+`.tmp/native-policy-combined-lint-final.log`). The owned PostgreSQL cluster was
+stopped and checked. Native filesystem/process evidence remains controlled
+fixture material: this closes the combined policy/native storage proof gap, not
+installed coordination, two-machine acceptance or all of C5-NATIVE-GRANTS-01.
+No architecture threshold or allowance changed.
+
+C5 native-policy owner allowance review: the separate new-service allowance
+registry now permits one measured dependency access and zero host callbacks for
+remote-worker-native-runtime-policy.ts. Its exact command, frozen/current Chat
+profile, unsupported Ward refusal and canonical policy commit/reservation
+delegation were inspected. The owner is absent from the pinned existing-owner
+inventory. All 102 policy/producer tests pass
+(`.tmp/native-policy-owner-review-tests-final.log`); six allowance validation
+tests pass (`.tmp/native-policy-owner-allowance-tests.log`). The existing baseline
+file remains unchanged. This permission does not establish native installation.
+
+The named architecture gate still fails
+(`artifacts/verification/2026-09-16T05-43-54-407Z-architecture-metrics-74dbe7c3`):
+GatewayService is 13,721 lines versus 13,132, with 315 public methods versus 309,
+60 internal public methods versus 57, and 194 route-port members versus 187.
+These existing-owner limits were not relaxed. Installed startup still needs
+bundle installation and complete-pool capacity handoff; directly invoking cell
+provisioning from an already-approved runtime continuation would omit those
+requirements and has not been enabled.
+
+C0 MCP Gateway boundary reduction: removed the redundant public create/connect/
+disconnect MCP wrappers. Routes already compose the MCP administration owner;
+capability-pack connection now calls that same owner directly. Chat command
+composition supplies explicit MCP callbacks rather than inheriting public
+Gateway methods. Typechecking identified that inherited Chat dependency during
+the extraction; it was rewired before validation. Obsolete wrapper-only test
+assertions were removed, while a real command-parser regression verifies connect,
+disconnect and template creation with no administration methods on its source.
+
+The six focused route/composition/admin/pack/facade/Chat suites passed 78 tests
+before the added command test (`.tmp/mcp-gateway-boundary-tests-final.log`); the
+final Chat suite passes all 14 tests including that regression
+(`.tmp/mcp-gateway-command-owner-tests-final.log`). Gateway typecheck and focused
+lint pass. The architecture rerun remains red
+(`artifacts/verification/2026-09-16T05-48-55-961Z-architecture-metrics-3deb8fe5`),
+but Gateway lines fell from 13,721 to 13,711 and public methods from 315 to 312.
+Internal public and route-port counts remain 60 and 194. No existing thresholds
+or allowances changed in this extraction.
+
+C0 MCP administration owner composition: routes now receive a dedicated
+McpServerAdminHost composed from the existing McpServerStore and explicit
+session, environment, OAuth, discovery and realtime callbacks. Chat and
+capability-pack apply/compensation use that same object. Removed the public
+Gateway writeServers/completeConnection/session-closer wrappers and eleven broad
+route-port members; server/tool listing remains on the port for its separate
+integration diagnostic consumer. Store revision checks and captured session
+closure retain their existing owners. No new service allowance was needed.
+
+The six focused suites pass 79 tests (`.tmp/mcp-admin-owner-tests.log`) and the
+actual compensation suite passes eight (`.tmp/mcp-admin-owner-compensation-tests.log`).
+The revision route fixture now uses the production composition function over real
+temporary SQLite storage. Gateway typecheck, focused lint and diff checks pass.
+The architecture gate still fails
+(`artifacts/verification/2026-09-16T05-54-43-907Z-architecture-metrics-d1f03cf5`),
+but public methods now equal the unchanged 309 limit and route-port members are
+184, below the unchanged 187 limit. Gateway lines remain 13,711 and internal
+public methods remain 58 versus 57; other dependency/host excesses remain open.
+
+C0 obsolete MCP facades removed: patchServerState, writeTools, readAuthState and
+writeAuthState had no production Gateway callers after dedicated administration
+composition. Their public wrappers and the now-unused duplicate auth-state type
+are removed. Existing fixture checks call McpServerStore directly; production
+revision-checked routes continue using the composed owner. All four focused
+suites pass 56 tests (`.tmp/mcp-obsolete-facades-tests.log`), with Gateway
+typecheck and focused lint passing. The architecture gate remains red
+(`artifacts/verification/2026-09-16T05-58-14-667Z-architecture-metrics-97af1fca`),
+but the internal public-method excess is removed. The original baseline and
+new-service allowances were not changed.
+
+C0 provider verification continuation: plan-bound staged API-key verification
+now lives in provider-readiness-service.ts. Gateway supplies read-only staged
+custody, provider configuration and preview callbacks; the helper preserves the
+live/nonempty catalog requirement, exact selected transport options and evidence
+wording. Credential promotion and clearing remain outside this helper. Thirteen
+readiness/staging tests pass (`.tmp/provider-readiness-extraction-tests.log`),
+along with the provider Change Plan adapter suite, Gateway typecheck and focused
+lint. No live provider request was made.
+
+Manual allowance review records this additional C0 extraction as three new
+dependency accesses in the already plan-owned readiness service, changing its
+separate cap from two to five while retaining zero host callbacks. The six
+allowance tests pass (`.tmp/provider-readiness-allowance-tests.log`). The original
+architecture baseline remains byte-identical. This scoped extraction does not
+close the remaining Gateway size, dependency or installed-worker work.
+
+C5 installed-bundle custody trace: the production installer independently checks
+the package manifest and the packaged app/runtime/node.exe pin, but its native
+controller custody bridge currently emits only GCCUST01 (120 bytes): controller
+hash, provisioning-helper hash, native-directory identity and cells-parent
+identity. CellControllerInstalledFiles validates that same record. Neither side
+binds the runtime source-directory identity and exact runtime-bundle manifest to
+the controller. PinnedCellRuntimeBundle::InstallTo is still called only by native
+fixtures, and its API explicitly does not confer package approval.
+
+The next installed-coordinator change therefore needs an installer-authored
+runtime custody binding from the already verified package inventory, a matching
+native reader that pins the installed source, and then an explicitly authorized
+installation operation into the recorded protected cell. Keep that distinct from
+the existing 120-byte controller/peer custody contract; do not infer runtime
+trust from workload paths, current directory contents or the mere existence of
+the controller record. This source trace involved no installation, service,
+filesystem-permission or disk mutation and supplies no installed acceptance proof.
+
+C5 runtime custody implementation: the installer now derives a separate 96-byte
+GCRTCS01 record from the independently verified package manifest, the fixed Node
+runtime file inventory and the pinned runtime-directory identity. It writes the
+record with the worker read-only descriptor, retains its hash in the install
+receipt, and rechecks bytes and descriptor before and after service creation.
+GCCUST01 remains unchanged. The native decoder rejects truncated, extended and
+zero-identity/hash records and clears its output on rejection. This is the
+installer binding and decoder only: the installed controller still needs the
+pinned runtime reader and authorized copy/coordinator wiring. PowerShell runtime
+packaging and physical-machine acceptance remain open.
+
+The new-service allowance guard was rechecked: all six tests pass and the original
+architecture threshold document retains SHA256
+7f9b33a867fb164f1e66173238806c0b60429198444e3c74e0ac18b8470d3318.
+The fresh architecture lane at
+artifacts/verification/2026-09-16T06-19-09-908Z-architecture-metrics-262beb0d
+still fails; reviewed allowances do not conceal remaining owner regressions.
+
+Runtime custody local proof: .tmp/native-runtime-custody-install-tests-v4.log
+passes the Windows installer behavior suite using Windows PowerShell 5.1 and
+PowerShell 7, with normal and AddressSanitizer native fixtures. It compares the
+installer record against actual temporary runtime bytes, the independent package
+hash and native file identities, and exercises malformed-record refusals. Earlier
+attempts failed on a compiler timeout and misuse of the release-package inventory
+helper on a runtime-only/intentional damaged-package fixture; the final test reads
+the isolated runtime files directly without weakening release validation.
+ESLint, docs:check and diff whitespace checks pass. This lane uses temporary files
+and installer/configuration/uninstaller preflight; it does not install services,
+format or attach disks, or demonstrate physical-worker execution.
+
+C5 installed runtime reader: CellControllerInstalledFiles now requires and pins
+the fixed configuration/cell-runtime.identity record and payload/app/runtime
+directory. Open and subsequent Verify calls validate their installed security
+descriptors, read the exact record, compare the actual source-directory identity,
+and reject any drift in the retained directory, bundle or package binding. Failed
+open/close clears this state. Existing installs without the record fail custody
+validation; the package documentation now describes that requirement.
+
+.tmp/native-runtime-custody-reader-tests-v2.log passes the Windows installer
+behavior suite on PowerShell 5.1 and 7 with normal and AddressSanitizer native
+fixtures. The same handle reader used by the installed owner is exercised against
+real temporary files: repeated reads, foreign directory, file used as directory,
+invalid record handle, null output, and cleared output on rejection. The first
+attempt failed to compile because the fixture called a private path-pinning API;
+the corrected fixture opens its temporary handles directly and leaves that API
+private. docs:check and git diff --check pass. Installed SYSTEM ownership, service
+startup and the full pinned-layout checks still require physical acceptance;
+fixture success is not that evidence. Authorized runtime copy, complete-pool
+coordination and the remaining C5/C6 work are still open.
+
+C5 runtime-copy authority: PinnedCellRuntimeBundle::InstallTo now requires an
+explicit current-authority callback, snapshots that callback, checks cancellation
+around it, and revalidates destination custody after it returns. Checks precede
+directory/file creation, each write, flushing and final publication. Final refusal
+clears the verified output while retaining disk bytes and counters. Existing
+fixtures now provide explicit fixture-only authority. The controller build now
+includes cell_runtime_bundle_install.cpp; this inclusion does not itself wire an
+installed provisioning call or supply complete-pool capacity authority.
+
+.tmp/native-runtime-install-authority-tests-final.log passes a focused actual-file
+fixture in normal and AddressSanitizer builds: missing authority and initial denial
+create nothing; revocation after a real chunk retains exact partial bytes; retry
+refuses partial state; authorized copy verifies; final revocation withholds output.
+No volume or service operation is present in this fixture. The existing installer
+suite also passes with the updated controller build, recorded in
+.tmp/native-runtime-install-controller-tests.log. The stdio regression initially
+found a missing file-transfer module in the TLS/provisioning package source
+snapshot; that module was added to CELL_PROVISIONING_SOURCES for its required
+runtime-session dependency. Installed wiring and physical acceptance remain open.
+
+The corrected stdio retry passes all 14 tests in
+.tmp/native-runtime-install-stdio-tests-v2.log, including actual Node MCP in an
+AppContainer, recorded protected workspace, parser/substitution refusal, output
+pressure, bundle drift, current-authority rejection, cancellation and image
+guards. This also rebuilds the previously incomplete provisioning package source
+snapshot successfully. ESLint, docs:check and git diff --check pass for this slice.
+
+C5 installed source bundle: the installed custody owner now pins both fixed Node
+runtime files and rechecks their read-only descriptors with the directory/record
+custody. OpenRuntimeBundle verifies the exact two-file inventory against the
+installer-bound manifest digest and pins the complete actual tree. The controller
+wrapper checks running SCM/token identity before and after opening it. Rejected
+output is cleared; an already-ready caller-owned bundle is refused without reset.
+The caller must retain the custody owner and recheck it through the copy authority.
+
+.tmp/installed-runtime-source-tests.log passes the installer behavior suite with
+normal/AddressSanitizer native fixtures and PowerShell 5.1/7. Native fixture
+content hashes and bundle verification agree with the installer record; changed
+file metadata and a foreign manifest hash refuse. Unopened installed/controller
+owners refuse source access and preserve an existing caller-owned bundle. These
+fixtures do not prove successful installed SCM/token/ACL admission. docs:check
+and git diff --check pass. The mounted journal owns the guest destination, whose
+parent differs from the host cells parent; do not route a copy directly through
+that host path. Production mounted-destination/capacity composition remains open.
+
+C5 recorded mounted destination: CellMountedWorkspace::InstallRuntime now routes
+copying through its recorded guest contents. The existing inventory checks were
+extracted into a shared recorded-workspace operation that freezes binding,
+identities and checkpoint bytes and verifies them after current-authority calls.
+Copies preserve partial disk counters on failure and clear verified output;
+read-only inventory still withholds incomplete evidence. The operation does not
+create/recover mounts or advance the provisioning journal. Its guard must supply
+installed-source, explicit install and complete-pool/quiescence authority.
+
+.tmp/mounted-runtime-install-tests.log passes normal and AddressSanitizer fixtures
+with actual temporary guest files and native checkpoint encoding. Successful
+recorded copying, mid-write refusal with retained counts, and checkpoint drift
+after a written chunk are exercised. The mounted volume verifier is controlled;
+this is not physical mounted-volume proof. .tmp/mounted-runtime-capacity-regression.log
+passes all 785 existing inventory checks in each normal/ASAN run and an ARM64
+compile-only build. Packaging source lists include the new copy dependency.
+
+.tmp/mounted-runtime-install-stdio.log also passes all 14 actual native stdio/MCP
+tests with rebuilt helper sources. ESLint, docs:check and git diff --check pass.
+Journal/controller integration, complete-pool authority and physical acceptance
+remain required; no volume or service operation was performed by these fixtures.
+
+C5 journal runtime installation: CellProvisioningJournal::InstallRuntime binds
+the copy to the full recorded phase sequence, independent anchor/head, plan,
+retained file/descriptor, mounted owner/checkpoints and lifetime revision. Its
+guard rereads journal metadata and mounted checkpoints around current authority.
+The existing borrowed-owner scope defers destruction after callback-triggered
+Close; a separate installation latch rejects recursion and releases on refusal.
+Partial-copy counters remain inspectable while verified output is withheld. This
+API does not advance journal history, emit execution readiness or supply source
+and complete-pool permission for the controller.
+
+.tmp/journal-runtime-install-tests-v2.log passes normal/AddressSanitizer fixtures.
+They create an actual protected prepared journal file and verify that incomplete
+history cannot authorize copying; unopened/busy journals, missing authority,
+foreign anchors and cancellation refuse without writes or authorization calls.
+Refusals release the installation latch, and ready caller-owned output is retained.
+The existing copy/mounted-destination fixture cases also pass. No VHD is created
+or operated on: the prepared journal's disk specification remains metadata.
+Successful complete-journal copying and callback-close recovery through the full
+controller still require stronger integration/physical evidence. docs:check and
+git diff --check pass; controller coordination and complete-pool authority remain open.
+
+### Runtime installation request contract (2026-09-16)
+
+The new contracts-only runtime installation codec uses a fixed 272-byte
+`GCRINST1` frame. It binds the nonce, journal identity, prepared and mounted
+checkpoint hashes, independently verified package hash, runtime manifest hash,
+and the two current Node payload file sizes/hashes. It contains no workload
+commands, paths, environment or execution permission. A domain-separated digest
+and nonce must match an independently supplied admission binding before decode.
+The decoder also recomputes the runtime manifest hash and rejects invalid fixed
+inventory, identity components, sizes and hashes. The normalized result is frozen.
+
+The focused contract and runtime-bundle suites pass (26 tests), including every
+single-byte mutation, all truncated lengths, extra bytes, incorrect admission
+nonces, malformed frames with matching digests, and accessor/extra-field refusal.
+The contracts typecheck passes under the repository output lock. These tests do
+not establish native wire parity or installation authority: the native decoder,
+dedicated controller operation, durable admission/result, complete-pool guard and
+production caller are still pending. Operation 17 remains workload execution.
+No disk or installed-service operations were performed for this contract work.
+
+### Native runtime installation decoder (2026-09-16)
+
+`cell_runtime_install.cpp/.hpp` now decode and independently hash `GCRINST1`.
+The controller build snapshots include both sources. This closes the native
+decoder gap noted above, but does not add a callable installation operation.
+Successful decoding requires the independent nonce/request digest, nonzero
+journal identity components and package/checkpoint hashes, exact fixed Node
+file names, bounded nonzero file sizes/hashes, and a recomputed bundle digest.
+Failed decoding clears prior output; aliased expected bindings are snapshotted.
+
+`pnpm verify:remote-worker:windows-runtime-install-wire` passes contracts
+typecheck and 576 checks in each normal and AddressSanitizer native run. The
+fixture consumes TypeScript-produced frame bytes and request digest, checks
+every single-byte mutation and truncated length, extra bytes, malformed but
+correctly rehashed fields, stale output clearing and independent nonce refusal.
+Evidence: `.tmp/runtime-install-wire-tests-v2.log`; the initial run failed on a
+fixture byte-conversion warning, corrected without changing compiler strictness.
+Targeted packaging lint, docs:check and git diff --check pass. No volume or
+installed-service operations ran. Dedicated controller dispatch, durable install
+intent/result, complete-pool/current authority and production composition remain
+open; this codec does not establish installation permission or readiness.
+
+The controller payload reproducibility test also passes for x64 and ARM64:
+two independently built payloads per target have identical receipts and image
+hashes, and their 77 source inputs are rehashed against the checkout. Evidence:
+`.tmp/runtime-install-controller-payload-tests.log`. ARM64 was compiled, not
+executed. This packaging check does not establish installed service acceptance.
+
+### Installed-controller runtime copy composition (2026-09-16)
+
+`InstallCellControllerRuntime` now connects the installation decoder, running
+controller identity, installer-pinned Node source and recorded journal copy
+guard. It compares the independently admitted package/bundle hashes against
+installed custody before source pinning and at every authority boundary. The
+decoded request and callback are snapshotted; cancellation/deadline and current
+service identity are checked around the caller callback. Journal copying keeps
+partial counters on refusal and withholds output verification. This adapter
+requires an external durable intent and complete-pool/current authority owner;
+it does not manufacture either or publish readiness/completion.
+
+The named installation-wire lane passes contracts typecheck plus 583 checks in
+each normal and AddressSanitizer build. New cases prove missing authority,
+invalid deadlines, truncated/substituted metadata, unopened service identity and
+cancellation refuse without writes, output pins or external authority calls.
+Evidence: `.tmp/controller-runtime-install-composition-tests.log`. Packaging
+lint, docs:check and git diff --check pass. The controller source inventory now
+includes 79 files; the earlier 77-file reproducibility result is historical,
+not fresh reproducibility evidence for this new composition. Full installed
+copy success, protocol dispatch, durable intent/result and complete-pool
+authorization remain unverified/incomplete. No volume or service actions ran.
+
+### Durable local installation intent and outcome (2026-09-16)
+
+The existing exclusive protected local outcome writer now has separate
+installation APIs and record domains. Installation intents use `GCRLI001`,
+terminal records use `GCRLIT01`, and filenames end in `.runtime-install`.
+The existing execution record bytes and `.runtime` namespace remain unchanged.
+Installation intent contains the independent request binding, journal anchor/head
+and assignment/profile pins. Its sealed fixed-size terminal record retains
+copy error, verification state and created-file/directory/byte counts. Invalid
+success counts are refused before terminal writing. Closed uncertain nonces
+cannot be reopened for writing; recovery is read-only.
+
+`InstallCellControllerRuntime` now flushes/readbacks this intent before journal
+copying and retains the outcome before returning success. Request bytes are
+snapshotted before authority callbacks. Revocation/deadline failure after intent
+is recorded locally; retention checks original journal/host custody rather than
+remote authorization. Lost local custody or retention failure withholds verified
+output. Remote admission/result persistence and controller dispatch remain open.
+
+Normal and AddressSanitizer fixtures pass 134 checks each, covering existing
+execution records plus installation interruption, duplicate attempts, partial
+cancelled copies, valid completion, invalid success, substituted request hashes,
+corrupted seals and lost local custody. These use actual protected temporary
+NTFS files with a controlled owner seam, not an installed mounted journal.
+Evidence: `.tmp/runtime-install-local-outcome-tests-v2.log`. The first compile
+refused a shadowed fixture variable; it was renamed without weakening warnings.
+The named stdio lane also passes all 14 tests and its package typechecks after
+adding the installation decoder to helper build inputs:
+`.tmp/runtime-install-outcome-stdio-tests.log`. Lint, docs:check and diff checks
+pass. No installed service, VHD, partition, format or mount operation was run.
+
+### Installation server protocol (2026-09-16, validation in progress)
+
+Operation 18 is now a separate installation server operation. It requires the
+complete independently retained history, an installation binding and `GCRINST1`
+frame whose anchor/head agree with that history. It is never a creation or
+workload operation. Missing installation ownership refuses dispatch. The installed
+service does not yet supply that owner; client/canonical authorization and remote
+result persistence are still pending.
+
+Installation effect checks use separate 136-byte challenge/reply message kinds,
+binding connection nonce, installation nonce/request hash, retained journal head,
+monotonic ordinal and version. Volume authorization cannot satisfy these checks.
+They share a 60-second operation deadline, five-second exchange deadline and
+65,536-check ceiling. Successful owner results must report exactly the admitted
+two-file byte total and pass another installation authority check before receipt.
+
+The binding fixture passes 592 checks in each normal/AddressSanitizer run:
+`.tmp/runtime-install-protocol-binding-tests.log`. A standalone normal protocol
+retry passes 14,990 checks across 122 server and 109 native-client sessions:
+`.tmp/runtime-install-protocol-normal-retry.log`. These are regression and binding
+proof, not an end-to-end operation-18 authorization/install session.
+
+The first broader run failed with ERROR_DISK_FULL; C: had about 28 MB free.
+Automatic approval review rejected relocation of task-owned temporary evidence,
+so it was left untouched. New validation uses
+`.tmp/native-temp-20260916-install-protocol` on F:. Its first full fixture exceeded
+the outer 40-second observation timeout; an independently rerun identical binary
+passed. The runner now allows 300 seconds without changing native deadlines.
+The subsequent normal phase passed, but its AddressSanitizer service compile
+exceeded the compiler wrapper timeout. Service compilation now uses the existing
+eight-source batching option already used for fixtures. The full named lane is
+running again; `.tmp/runtime-install-protocol-regression-tests-fdrive-v3.log`
+must be checked before claiming it passed. Docs and diff checks pass.
+
+The server-protocol named lane subsequently passed in full:
+`.tmp/runtime-install-protocol-regression-tests-fdrive-v3.log` (545 seconds).
+Both normal and AddressSanitizer phases passed the 14,990-check main fixture,
+122 server/109 native-client sessions, and workspace/capacity/backing/inventory/
+runtime-handoff probes. This verifies the server slice before the subsequent
+installation-client changes. The original architecture baseline hash remains
+`7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`.
+
+### Native installation client authority (2026-09-16)
+
+The production native client now requires an installation-specific current
+authority callback before connection, decodes the independently bound request,
+sends its frozen binding/body after full recovery history, and checks every
+installation challenge's connection nonce, request nonce/hash, retained head,
+version and monotonic ordinal before calling that owner. Missing, early,
+substituted, replayed or volume-kind challenges cannot approve installation.
+Successful receipts require installation authority checks; workload handoff
+continues through its existing distinct owner. Worker/Gateway and installed
+service composition, remote result persistence and live acceptance remain open.
+
+`pnpm verify:remote-worker:windows-install-client` passes in normal and
+AddressSanitizer modes: 1,038 checks/14 sessions for installation and 1,165
+checks/19 sessions for existing workload handoff in each mode. The installation
+fixture uses real private pipes and the production client with a controlled
+server/authority owner; it does not copy runtimes or use canonical Gateway
+admission. It covers denial, replay, nonce/hash/head/version/ordinal substitution,
+early challenges, unearned success, and missing authority before callbacks.
+Evidence: `.tmp/runtime-install-client-tests-v2.log`. The initial harness expected
+13 sessions instead of the actual 14 (two workspace setup sessions plus twelve
+installation peers); the count was corrected after inspecting the fixture.
+Targeted lint, docs and diff checks pass. All new temporary test files are on F:;
+no installed-service or physical-volume operation was run.
+
+### Worker installation helper handoff (2026-09-16)
+
+The worker now snapshots a strict runtime-install request against an independent
+nonce/request hash and the complete retained mounted-workspace history. Helper
+operation 18 carries that binding and the fixed request; dedicated installation
+challenge/acknowledgement frames bind nonce, request hash, checkpoint head and
+ordinal. Volume approval cannot acknowledge installation. Success requires the
+complete history, two installation checks, a clean helper exit and current final
+authority. Startup fixtures continue to refuse accidental installation calls.
+
+Worker protocol/startup tests pass (221 tests), as do worker typecheck and targeted
+lint. Evidence: `.tmp/worker-install-bridge-focused-v2.log` and
+`.tmp/worker-install-bridge-typecheck2.log`. The initial success fixture closed
+stdin before acknowledgement completion; its lifecycle ordering was corrected.
+The native helper regression is tracked separately: its first run had 18 passing
+Gateway tests but a stale expected count of 17, then timed out compiling ASAN.
+The wrapper now expects the inspected 18 tests and uses eight-source compiler
+batches; operation deadlines are unchanged.
+
+The retry passes all eight native helper checks, including normal and ASAN
+protocol/recovery fixtures and the 18-test Gateway section. Evidence:
+`.tmp/worker-install-bridge-native-v2.log`; retained fixture root:
+`.tmp/native-temp-20260916-install-protocol/Goat Worker Provisioning Bridge JhNxTy`.
+These helper regressions do not prove a successful operation-18 installation
+through an installed service. All six architecture allowance tests also pass,
+including the original-baseline pin; this does not establish a green global
+architecture gate. Docs, targeted lint and diff checks pass. No physical-volume
+or installed-service action was performed.
+
+This is a transport boundary, not installed-worker completion. Gateway admission,
+complete-pool authority, production controller installation ownership, canonical
+outcome retention and readiness composition still need integration and proof.
+
+### Installation outcome decoding for canonical retention (2026-09-16)
+
+The contracts package now validates the native installation intent/outcome file
+format against an independently supplied request and complete canonical journal.
+It checks nonce, request/package digest, journal identity, prepared/head hashes,
+assignment/profile bindings, both domain-separated seals and exact copy counters.
+A 256-byte intent is explicitly uncertain; only a valid 352-byte sealed record
+can report a copy outcome. Neither grants retry authority or worker readiness.
+
+The request/outcome suite passes 22 tests, including every-byte mutation,
+interrupted terminal writes, resealed foreign bindings and invalid accounting.
+Contracts typecheck and targeted lint pass. Evidence:
+`.tmp/install-outcome-codec-final-tests.log`, `.tmp/install-outcome-typecheck-v2.log`.
+The native local-outcome fixture also has a cross-language mode that accepts the
+encoded request, flushes/reopens its real temporary record, and returns its bytes
+to this decoder. This uses controlled journal metadata and ordinary protected
+temporary files; no runtime files are installed and no volume is attached.
+
+Fresh normal and ASAN runs each pass 134 local-outcome checks plus 19
+cross-language installation checks. The TypeScript decoder accepts each
+native-written sealed outcome and its intent prefix, and refuses a substituted
+admitted package. Evidence: `.tmp/install-outcome-cross-language.log` and
+`.tmp/native-temp-20260916-install-protocol/Goat Local Outcome ZBPEYS/acceptance.json`.
+The helper still needs to transport this retained record, and Gateway storage,
+protected retention routes and installed readiness remain unconnected.
+
+### Retained installation evidence transport (2026-09-16)
+
+Controller installation completion now reopens the actual local outcome under
+the original journal custody and compares its verified copy counters before
+transport. The local reader exposes its exact validated bytes, including the
+intent and terminal seals; transport does not reconstruct evidence from counters.
+The client requires a dedicated evidence validator, the full retained history,
+two installation authority checks and one exact record. Distinct receipt frames
+acknowledge the connection and outcome hash. These acknowledge validated receipt,
+not canonical Gateway retention.
+
+The helper forwards the record over its parent stream. The worker checks it
+against the admitted request and journal using the contracts decoder, rechecks
+authority, and returns the frozen decoded outcome and exact hex alongside the
+successful helper receipt. Missing, corrupt, early, repeated or revoked evidence
+withholds success. Worker protocol/startup tests pass (226 tests), as do worker
+typecheck and targeted lint. Evidence: `.tmp/install-evidence-worker-tests.log`,
+`.tmp/install-evidence-typecheck.log`. Native client and helper proof are tracked
+separately. Production installation ownership and Gateway retention are still
+required; no installed-service or physical-volume acceptance is implied.
+
+Fresh native proof passes: installation client 1,380 checks/20 sessions and
+existing workload handoff 1,165 checks/19 sessions in both normal and ASAN modes;
+eight helper regression checks; local outcome 134 checks plus 20 cross-language
+checks in each mode, including byte-for-byte equality with the reopened record.
+Evidence: `.tmp/install-evidence-native-client.log`, `.tmp/install-evidence-helper.log`,
+`.tmp/install-evidence-local-outcome.log`. Retained roots under
+`.tmp/native-temp-20260916-install-protocol/` are `Goat Install Client EHmaKt`,
+`Goat Worker Provisioning Bridge CmFQ6E`, and `Goat Local Outcome WpcpTl`.
+These separately prove client framing, worker validation and native local
+readback; a complete installed operation-18 service-to-Gateway run remains open.
+
+### Canonical installation evidence repository (2026-09-16)
+
+`RemoteWorkerRuntimeInstallRepository` now persists one immutable reviewed
+installation request per cell and an immutable terminal outcome. Request retention
+requires the exact approved package/request, profile and cell revisions, linked
+parent context, live approval expiry and current credential/mesh/assignment lease.
+This approval kind forbids edited payloads and linkage changes. It is an internal
+storage boundary, not worker-callable installation admission: current effect
+policy, installed custody and complete-pool reservation/quiescence still belong
+to the production installation owner.
+
+Outcome retention validates the native sealed record against the retained
+request and complete journal. Exact repeats recover lost responses; substituted
+outcomes and intent-only records are refused. Final authority is checked inside
+the same transaction, so parent revocation during insertion rolls back the write.
+Saving a result does not publish platform identity, transition readiness or
+authorize execution. Revocation preserves the immutable rows.
+
+Additive SQLite v250/PostgreSQL v195 create separate request/outcome tables and
+immutable-row triggers. Rollback disables the producer while retaining evidence;
+no prior data is rewritten or backfilled as authorized. All previous 249 SQLite
+and 194 PostgreSQL manifest entries were compared with this task's preceding
+source backup and are unchanged. Migration parity passes. Storage and Gateway
+typechecks pass; 71 wiring/schema-generation/integrity checks, the fresh SQLite
+migration check, and all three SQLite worker/mesh/parent revocation fixtures pass.
+Evidence: `.tmp/install-storage-sqlite-tests-v4.log`,
+`.tmp/install-storage-wiring-final.log`, `.tmp/install-storage-sqlite-migration.log`,
+`.tmp/install-storage-parity-final.log`, `.tmp/install-storage-gateway-typecheck.log`.
+The PostgreSQL repository lane is tracked separately; its initial 120-second
+test timeout expired during isolated schema creation, before repository assertions.
+Only this new case's harness timeout was increased; runtime/lease limits remain
+unchanged. Protected Gateway routes, worker delivery, current installation
+admission and production readiness composition still need integration.
+
+The fresh PostgreSQL retry passes all three worker/mesh/parent revocation cases
+against actual isolated database authority, including immutable rows, exact
+replays and transactional rollback after parent cancellation during insertion.
+Evidence: `.tmp/install-storage-evidence-retry-postgres-tests-v2.log` and
+`.tmp/install-storage-evidence-retry-postgres-run.log`. The initial timed-out
+runner was explicitly stopped; both task-owned PostgreSQL instances were verified
+shut down, with their temporary data retained on F:. These database fixtures use
+controlled native history/outcome bytes and do not prove installed runtime copying.
+
+### 2026-09-16: protected installation evidence exchange
+
+Installation terminal evidence now has strict lookup/retain contracts, a protected
+Gateway settlement route, canonical storage exchange, and a worker delivery client.
+Lookup cannot admit installation or retry copying. Storage binds independently
+retained request hashes even when no outcome exists; exact replay returns the
+retained receipt. The worker independently decodes terminal seals and journal
+bindings before delivery and when recovering a receipt. No readiness transition
+is performed. The production installation caller and current complete-pool
+admission remain unfinished; the delivery client is not yet called by that flow.
+
+Reviewed new-owner architecture allowances are explicit: native dispatch 6,
+installation exchange 1, execution composition 32 dependency accesses, each with
+zero host callbacks. Existing baseline bytes and owner limits remain unchanged.
+The existing protocol owner measures 26 against its original 16 limit; the global
+architecture gate remains unresolved despite this extraction reducing accesses.
+
+Fresh validation: Gateway protected protocol/composition 96 tests; installation
+contract/outcome 21 tests; worker delivery 8 tests; SQLite installation retention
+3 revocation fixtures; architecture allowance 6 tests; Gateway/worker typechecks
+and focused lint pass. Evidence: .tmp/install-exchange-gateway-tests-final.log,
+.tmp/install-exchange-contract-tests.log, .tmp/install-exchange-worker-tests.log,
+.tmp/install-exchange-storage-tests.log, .tmp/install-exchange-allowance-tests.log,
+.tmp/install-exchange-typecheck-final.log, .tmp/install-exchange-lint.log.
+PostgreSQL installation persistence passed in the preceding slice; the new
+exchange wrapper was exercised on SQLite this slice, not rerun on PostgreSQL.
+No installed service, virtual drive, live channel or paid provider was exercised.
+The full comparison implementation and live acceptance plan remains open.
+
+### 2026-09-16: protected protocol architecture ceiling restored
+
+Separated cell provisioning/observation dispatch, artifact settlement and native
+submission coordination into explicit owners. Artifact manifest scope validation
+still precedes CAS writes; signed authority, nonce, cancellation, policy and
+repository fences remain in their existing boundaries. Unsupported submissions
+are explicitly refused before effect dispatch. The protected protocol owner's
+dependency count is now 16, meeting its unchanged original limit (previously 26).
+New reviewed allowances are cell dispatch 6, artifact settlement 3 and native
+coordination 1, with zero host callbacks. A regression test asserts the existing
+protocol ceiling and forbids a new-service allowance for that owner.
+
+Validation: 96 protocol/composition tests, 7 architecture allowance tests, Gateway
+typecheck and focused lint pass. Evidence: .tmp/native-dispatch-tests-final.log,
+.tmp/native-dispatch-allowance-tests.log, .tmp/native-dispatch-typecheck-final.log,
+.tmp/native-dispatch-lint.log. The full architecture lane remains failed with
+broader existing service overages and GatewayService at 13667 lines against 13132.
+Fresh comparison evidence: artifacts/verification/2026-09-16T09-28-21-719Z-architecture-metrics-8f4585e9/diagnostics/architecture-metrics-compare.json.
+No baseline thresholds were raised. This source restructuring does not enable
+installation; current-policy/complete-pool admission and installed integration
+remain unfinished. No drive, installed service, provider or channel was exercised.
+
+### 2026-09-16: current installation review validation
+
+The canonical installation repository now validates an already retained request
+against its current exact approval, database-clock expiry, protected assignment,
+full mounted history and four retained cell revisions. Missing or substituted
+requests cannot create admission. A retained terminal outcome refuses a new copy
+review. The outer transaction preserves approval-before-assignment/cell lock
+ordering. AsyncStorage exposes this owner method. It supplies review evidence,
+not installation permission; package custody, current policy, complete-pool
+reservation/quiescence and native replay prevention remain separate requirements.
+
+Fresh SQLite evidence: all three worker/mesh/parent revocation fixtures plus two
+storage wiring tests pass in .tmp/install-review-current-sqlite-v4.log. Internal
+assertions cover expired/rejected decisions, changed execution/cleanup/capacity/
+backup state, wrong hashes/leases, absent requests and completed installations.
+Earlier fixture attempts correctly hit database revision/platform constraints;
+these were corrected without changing schemas or weakening constraints. Storage
+typecheck passes in .tmp/install-review-current-typecheck-v4.log.
+
+Integration finding: RemoteWorkerNativeCapacityPagesRepository.readAdmissionForAssignment
+requires executionState ready. Installation occurs during provisioning, so it
+cannot reuse that ready-cell admission path unchanged or fabricate readiness.
+A distinct installation capacity admission path and production caller remain open.
+
+The isolated PostgreSQL run also passes all three worker/mesh/parent revocation
+fixtures, including the new exact-request, current approval/expiry, absent-request
+and terminal-outcome checks. Evidence: .tmp/install-current-review-postgres-tests-v2.log
+and .tmp/install-current-review-postgres-run.log; the runner exited zero and
+verified its database shutdown. Additional four cell-state mutation assertions
+were added after this run started and are proven by the final SQLite run only.
+The PostgreSQL test exercised the current repository implementation, but does not
+claim those later-added assertions. No migrations, baseline thresholds, installed
+services, virtual drives, live channels or providers were changed or exercised.
+
+### 2026-09-16: provisioning-phase installation capacity material
+
+The canonical capacity repository now has separate readers for ready workload
+admission and provisioning-phase installation capacity. Both require an exact
+accepted complete capture, matching retained inventory and all four cell
+revisions under current protected assignment authority. The existing workload
+reader remains ready-only; installation rejects ready cells and native platform
+identity. No caller-supplied phase flag can weaken the public reader boundary.
+
+The installation repository joins that capacity material to the exact retained
+request and current approval in one transaction, revalidating review afterward.
+An approval without complete capacity, or capacity without an approved request,
+cannot supply installation admission material. This read changes neither cell
+state nor reservation and does not authorize copying. Fresh complete-pool
+quiescence, installation demand reservation, current policy, installed package
+custody and production invocation remain required.
+
+Fresh SQLite validation: six file-backed ready/installation capacity fixtures
+pass, including partial/corrupt delivery, immutable replay, database reopen, lease
+rotation and worker/mesh/parent revocation. The provisioning cases also join real
+approval/request rows with the accepted capture and prove no readiness change.
+Five installation-retention/storage-wiring tests pass, including missing-capacity
+refusal. Evidence: .tmp/installation-capacity-sqlite.log and
+.tmp/installation-capacity-review-sqlite.log. Storage/Gateway typechecks and focused
+lint pass; .tmp/installation-capacity-gateway-typecheck.log and
+.tmp/installation-capacity-lint.log. PostgreSQL validation is recorded separately.
+
+Fresh PostgreSQL validation passes all three installation capacity staging
+worker/mesh/parent revocation cases, including joined approval/request/capture
+evidence and phase separation. Evidence: .tmp/installation-capacity-postgres-tests-v2.log
+and .tmp/installation-capacity-postgres-run.log. The runner exited zero, and both
+its postmaster file and loopback listener were verified absent afterward. These
+are real database transactions with controlled native capture bytes, not installed
+copying or fresh live-pool proof. No schema or architecture thresholds changed;
+no installed services, virtual disks, channels or paid providers were exercised.
+
+### 2026-09-16: explicit read-only installation outcome recovery
+
+The private controller protocol now distinguishes operation 18 installation from
+operation 19 recovery. Recovery accepts the independently retained request and
+complete checkpoint history, checks current evidence-read authority, reads the
+sealed local terminal record and returns its exact bytes. It never calls the
+copy owner, even when one is present. Missing or intent-only evidence cannot
+trigger a retry. A retained failed installation remains a failed installation;
+the outer successful receipt describes evidence delivery only.
+
+The Windows worker exposes recoverRuntimeInstallation separately from
+installRuntime. Both validate binding, history, seals, challenge ordering and
+current authority before acknowledging evidence. Only recovery accepts a sealed
+failure record; installation still requires verified success. The installed
+copy callback and startup integration remain uncomposed, and this change does
+not publish readiness or grant capacity reservations.
+
+An attempted full controller recovery fixture encountered Windows error 1314
+while reopening the controlled journal. The test was not elevated and no OS
+boundary was relaxed. Successful evidence transport and local record readback
+are verified at separate controlled layers; full installed-controller recovery
+remains unverified. The controller refusal fixture checks that neither an
+absent nor a trap copy callback causes installation on recovery. The first
+failed attempt remains in .tmp/install-recovery-native.log.
+
+Fresh validation passes 244 worker protocol/startup tests, including both
+operations, retained failure, intent-only refusal, invalid seals, ordering,
+duplicate evidence and revoked authority. Native normal and AddressSanitizer
+runs pass 2,314 checks across 40 installation/recovery client and refusal
+sessions each; the unchanged runtime handoff also passes. Local outcome normal
+and sanitizer runs pass 134 retention checks plus 20 installation exchange
+checks each, using protected temporary NTFS files and controlled journal
+metadata. Evidence: .tmp/install-recovery-worker-final.log,
+.tmp/install-recovery-native-v2.log and .tmp/install-recovery-local-record.log.
+
+Worker typecheck, focused lint, documentation checks and diff whitespace checks
+pass. All seven architecture allowance tests pass and the original baseline
+SHA256 remains 7f9b33a867fb164f1e66173238806c0b60429198444e3c74e0ac18b8470d3318.
+This is not a green claim for the broader architecture gate. No virtual-drive
+operations, elevation, installed-service changes, live provider/channel traffic,
+staging, commits or pushes were performed.
+
+### 2026-09-16: installed installation recovery composition
+
+The Windows worker now composes protected assignment lifetime, current canonical
+history, installation evidence exchange and the read-only native recovery driver
+in recoverWindowsWorkerAssignmentInstallation. Each history/evidence pair holds
+one current lease; renewals between native challenges cannot silently change the
+assignment or journal. Gateway lookup runs before local custody is opened and
+again after retention. Existing canonical success or failure evidence returns
+without starting a native helper. Local recovery has no copy action and neither
+path changes readiness.
+
+Fresh validation passes 43 recovery, protected-exchange and assignment-authority
+tests (.tmp/install-recovery-startup-tests-final.log). They cover retained
+failure, lease renewal, authority loss, history changes before/during recovery,
+custody refusal, substituted requests, cancellation, uncertain intent, missing
+readback and a lost write response followed by canonical recovery with no second
+native read. Worker typecheck and focused lint pass. The native driver is
+controlled in these composition tests; installed process acceptance remains
+open. The service loop still needs canonical installation-request selection and
+the admission/capacity/readiness owners before this entry point can be connected
+there. No foreground configuration or helper enables those missing owners.
+
+### 2026-09-16: canonical installation request selection
+
+The protected runtime.install.select submission now retrieves the assignment's
+already retained installation request and complete journal history. Its strict
+contract accepts only a fresh challenge; executable request data, approval flags
+and extra fields are refused. Canonical storage validates the immutable request
+hash, plan and journal binding inside the existing current-authority transaction
+and returns null when no reviewed request exists. Selection does not create a
+request or require an expired copy approval to remain valid for evidence reads.
+The distinct admission owner still requires current approval before copying.
+
+The Gateway awaits the storage selection, checks cancellation and binds response
+challenge/scope/generation/lease. The worker verifies those bindings and can now
+invoke installation recovery with selectRetained instead of caller request data.
+Missing reviewed input stops before native custody. This closes the recovery
+input-selection gap; full service-loop provisioning, admission, complete-pool
+reservation and readiness composition remain open.
+
+Fresh checks pass four contract cases, 100 signed Gateway/protocol/composition
+tests, 52 worker selection/recovery/authority tests and three SQLite installation
+retention cases covering worker, mesh and parent revocation. The SQLite fixtures
+also verify null-before-admission, exact selection, expired/rejected approval
+evidence reads, current-authority rejection and unchanged cell state. Evidence:
+.tmp/install-selection-contracts.log, .tmp/install-selection-gateway-final.log,
+.tmp/install-selection-worker.log and .tmp/install-selection-sqlite.log.
+
+Gateway/worker typechecks and focused lint pass. The explicit new-service
+allowance is reviewed at three dependency accesses for installation exchange
+(existing exchange plus selection presence/call) and 33 for C5 execution
+composition (one added awaited storage reader). Native runtime dispatch remains
+at six; existing-owner limits and the original baseline SHA256 are unchanged.
+All seven allowance checks pass. This does not establish a green broader
+architecture gate or installed-process acceptance. PostgreSQL proof follows
+separately; no schema, virtual-drive, installed-service or live-traffic changes
+were made.
+
+Fresh PostgreSQL selection/retention validation passes all three worker, mesh
+and parent revocation cases against the same final fixture and repository
+source used for SQLite. Evidence: .tmp/install-selection-postgres-tests-v2.log
+and .tmp/install-selection-postgres-run.log. The runner exited zero and verified
+that its owned cluster and loopback listener stopped. No PostgreSQL migration
+or installed Windows service was changed.
+
+### 2026-09-16: canonical installation review preparation
+
+The installation repository now builds review candidates from trusted package
+metadata and current canonical assignment state. It generates the nonce, binds
+the original journal and completed checkpoint head, reads all four current cell
+revisions and requires the provisioning-specific complete retained capacity
+capture. A retained installation request refuses a fresh candidate so recovery
+cannot accidentally become another copy attempt.
+
+The result is a review_required candidate and ApprovalCreateInput draft with
+the exact request, package/bundle hashes, file sizes and canonical task/session/
+turn linkage. Preparation creates no approval, request, outcome, reservation or
+readiness transition. The existing approval owner must create/resolve the draft;
+current copy policy, package custody, fresh pool quiescence and capacity
+reservation remain separate requirements. No new worker admission RPC was added.
+
+Six fresh SQLite retention/capacity cases pass, including missing capacity,
+worker/mesh/parent revocation, exact generated approval binding, no preparation
+writes, approval of the generated draft through the existing retention owner,
+and refusal to generate another nonce after retention. Two storage/async wiring
+checks pass. Storage typecheck and focused lint pass. Evidence:
+.tmp/install-review-preparation-sqlite.log,
+.tmp/install-review-preparation-wiring.log,
+.tmp/install-review-preparation-typecheck.log and
+.tmp/install-review-preparation-lint.log. These are canonical database checks
+with controlled native capacity metadata, not installed copying or live pool
+reservation proof. PostgreSQL evidence follows separately.
+
+Fresh PostgreSQL preparation/capacity validation passes all three worker, mesh
+and parent revocation fixtures using the same final preparation and capacity
+fixture source as SQLite. The runner exited zero and verified its isolated
+cluster/listener shutdown. Evidence: .tmp/install-review-preparation-postgres-tests-v2.log
+and .tmp/install-review-preparation-postgres-run.log. Gateway typecheck also
+passes (.tmp/install-review-preparation-gateway-typecheck.log). There were no
+migration, architecture-threshold, virtual-drive or installed-service changes.
+
+### 2026-09-16: installation approval creation lifecycle
+
+The trusted C5 installation review owner now uses the canonical ApprovalRuntime
+creation lifecycle with a five-minute expiry. Its creation hook revalidates the
+pending approval, exact request and four revisions, canonical parent linkage,
+current protected assignment authority and complete provisioning capacity.
+Approval locking precedes assignment/cell locking. Failed validation rolls back
+the pending approval rather than publishing a stale installation review.
+
+The Gateway snapshots trusted package material, rejects substituted candidates,
+and preserves a committed approval result after late cancellation. It neither
+retains an installation request nor admits a copy, changes readiness, exposes a
+worker approval RPC or retries a lost lifecycle response. Copy policy, package
+custody, live pool quiescence and capacity reservation remain separate work.
+
+Fresh proof: 42 Gateway review/composition checks, six SQLite capacity/retention
+cases and two storage/async wiring checks pass. Gateway/storage typechecks,
+focused lint and all seven architecture allowance checks pass. Evidence:
+.tmp/install-review-lifecycle-gateway-v2.log,
+.tmp/install-review-lifecycle-sqlite.log,
+.tmp/install-review-lifecycle-wiring.log,
+.tmp/install-review-lifecycle-typecheck.log,
+.tmp/install-review-lifecycle-lint.log and
+.tmp/install-review-lifecycle-allowances.log.
+
+The explicit allowance for this new owner is three dependency accesses and zero
+host callbacks. Its existing new-service composition allowance rises from 33 to
+35 for storage and ApprovalRuntime injection. Existing-owner limits, inventory
+and the original architecture threshold file remain unchanged. This does not
+establish a green global architecture gate, native installation acceptance or
+live traffic proof. PostgreSQL parity follows separately.
+
+Fresh PostgreSQL parity now passes all three worker, mesh and parent revocation
+cases, including the pending approval rollback checks on the same final source.
+Evidence: .tmp/install-review-lifecycle-postgres-tests-v2.log and
+.tmp/install-review-lifecycle-postgres-run.log. The runner exited zero and
+verified shutdown of its owned cluster and listener. No installed service,
+virtual drive, schema or live provider/channel traffic was changed.
+
+### 2026-09-16: approved installation review handoff
+
+The trusted installation review owner now retains an approved review using only
+the supplied approval identifier and current protected assignment authority.
+It reads canonical approval material, checks kind/status/scope, normalizes the
+stored request and revisions, then calls the existing transactional retention
+repository. Caller-supplied requests or revision overrides are not propagated.
+The repository remains responsible for approval expiry/linkage and current
+credential, mesh, parent, journal and cell revision checks under its locks.
+
+This makes the reviewed request available to the existing read-only worker
+selection path. It does not resolve an approval, authorize runtime copying,
+reserve live pool capacity or mark the cell ready. Cancellation before retention
+prevents the write; cancellation after a committed return preserves that result.
+Lost retention responses and current-authority refusals are not auto-retried.
+
+Fresh Gateway validation passes 54 focused review/composition tests, typecheck,
+lint and seven allowance checks. Evidence: .tmp/install-review-retention-gateway.log,
+.tmp/install-review-retention-typecheck.log, .tmp/install-review-retention-lint.log
+and .tmp/install-review-retention-allowances.log. This turn changes no storage
+implementation or schema and does not claim new database or installed proof.
+The new review owner's allowance is now five dependency accesses for canonical
+approval reading and transactional retention; existing-owner limits and the
+original architecture baseline remain unchanged.
+
+### 2026-09-16: worker model-budget lifetime review
+
+The fresh C0 architecture gate still reports existing-owner growth and new C5
+owners needing explicit review. Evidence:
+artifacts/verification/2026-09-16T11-02-36-121Z-architecture-metrics-9ec33fef/diagnostics/architecture-metrics-compare.json.
+Review of the new tool-model-budget owner exposed a C5 dispatch race: a detached
+model request could pass the initial lifetime check, wait on authority or budget
+authorization, then continue after its owning tool returned.
+
+Two tests reproduced entry into mocked HTTP after return. The owner now checks
+its lifetime after both awaits. Five focused tests using actual LlmService and
+local SQLite usage accounting pass, covering both races, budget denial, revoked
+execution and a stream consumed after return. Every refusal asserts zero HTTP
+calls and canonical confirmed-not-dispatched usage. The original failed run also
+hit the 15-second fixture timeout in an existing case; these storage-backed tests
+now allow 60 seconds for fresh schema initialization. Runtime deadlines and
+resource limits are unchanged. Evidence: .tmp/worker-budget-lifetime-before.log
+and .tmp/worker-budget-lifetime-after.log. Typecheck and focused lint pass.
+
+The owner is absent from the pinned existing-service inventory. Its explicit C5
+allowance is two measured dependency accesses and zero host callbacks, reviewed
+against its narrow assignment/budget storage and shared LlmService ports. The
+seven allowance checks pass; existing-owner thresholds remain unchanged. No
+provider request, installed service, virtual drive or schema change was made.
+
+The focused invocation without a timeout override passes all five cases
+(.tmp/worker-budget-lifetime-final.log). The refreshed architecture report has
+83 findings rather than 84 and no finding for this reviewed new owner; the
+broader gate remains failed. Report:
+artifacts/verification/2026-09-16T11-09-04-030Z-architecture-metrics-56abf43c/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+
+The final test source captures the detached rejection explicitly, satisfying
+the no-empty-catch gate. All five cases pass again in
+.tmp/worker-budget-lifetime-final-v2.log; docs and lint pass in
+.tmp/worker-budget-lifetime-docs-v2.log and .tmp/worker-budget-lifetime-lint-final.log.
+
+### 2026-09-16: worker inference reasoning and dispatch ceilings
+
+Review of the new C5 LlmService adapter reproduced two defects. Reasoning-enabled
+requests included temperature and failed the canonical OpenAI compatibility
+check before any usage intent. After omitting optional temperature for reasoning
+requests, a modified 21-token attempt incorrectly passed a 20-token combined
+reasoning/output ceiling because the guard compared against the larger general
+output allowance. The adapter now shares one computed bound between request
+construction and attempt authorization. Non-reasoning requests preserve their
+configured temperature; reasoning requests use provider-default sampling.
+
+All 14 adapter tests pass with actual LlmService, local SQLite budgets/usage and
+mocked HTTP. This includes valid reasoning, changed output ceiling, route/grant
+revocation, governed memory requests under a shared grant, tool-call retention,
+embedding/image authority and uncertain charge preservation. Existing fixtures
+use a 60-second test timeout override for on-disk initialization; application
+deadlines are unchanged. Typecheck, lint and seven allowance checks pass.
+Evidence: .tmp/worker-inference-ceiling-diagnostic.log,
+.tmp/worker-inference-ceiling-before-guard.log,
+.tmp/worker-inference-ceiling-final.log,
+.tmp/worker-inference-ceiling-typecheck.log,
+.tmp/worker-inference-ceiling-lint.log and
+.tmp/worker-inference-ceiling-allowances.log.
+
+This new owner's reviewed allowance is 11 measured dependency accesses and zero
+host callbacks. The pinned existing-owner inventory and original thresholds are
+unchanged. No live provider/channel request, drive operation, installed service
+or schema change was performed. This proof does not establish physical worker
+acceptance or a green global architecture gate.
+
+The refreshed gate reports 82 remaining findings and no finding for this
+reviewed adapter. The baseline SHA256 is unchanged. Evidence:
+artifacts/verification/2026-09-16T11-22-13-247Z-architecture-metrics-4909b680/diagnostics/architecture-metrics-compare.json.
+Documentation checks pass in .tmp/worker-inference-ceiling-docs.log.
+
+### 2026-09-16: native approval projection and installation wait identity
+
+The process-local native review projection now has a read-only owner separate
+from ApprovalRuntimeService. Canonical replay/event work completes first; its
+failures propagate. Missing ephemeral launch context preserves retained replay
+without writing that context into history. ApprovalRuntimeService is back to
+its original zero measured host/dependency accesses. The new projection's
+explicit allowance is one callback and one dependency access.
+
+Review of ApprovalWaitRunService found that installation approvals were missing
+from the native parent-preservation path. All nine installation cases failed
+before the fix, including real SQLite wait identity reuse. Both native execution
+and installation reviews now require their original admitted execution parent,
+reserve separate wait runs and reject vanished/mismatched parents or legacy
+parent-as-wait reservations. Parent linkage is not rewritten. A narrow read-only
+parent validator owns the shared check; eliminating the duplicated wait-ID
+factory access returns ApprovalWaitRunService to its original 15-access limit.
+Its new validator's explicit allowance is one dependency access and zero host
+callbacks. No baseline-era owner received an allowance.
+
+Fresh proof: 125 focused approval runtime, wait, native request and installation
+review checks pass. This includes actual SQLite unique wait reservations and
+owner restart for both approval kinds, but not PostgreSQL or installed worker
+acceptance. Gateway typecheck, focused lint and seven allowance checks pass.
+Evidence: .tmp/approval-install-wait-before.log,
+.tmp/approval-native-owners-final-tests.log,
+.tmp/approval-native-owners-typecheck.log,
+.tmp/approval-native-owners-lint.log and
+.tmp/approval-native-owners-allowances.log. No schema, live traffic, drive or
+installed-service changes were made.
+
+The refreshed architecture gate has 79 remaining findings, with no remaining
+finding for ApprovalRuntimeService or ApprovalWaitRunService. It remains failed
+overall; the original threshold file hash is unchanged. Evidence:
+artifacts/verification/2026-09-16T11-27-42-261Z-architecture-metrics-ca5436ac/diagnostics/architecture-metrics-compare.json.
+Docs checks pass in .tmp/approval-native-owners-docs.log.
+
+### 2026-09-16: installation approval resolution and parent wake
+
+Installation approvals now use the same exact parent/action binding and early
+decision sequencing as native execution approvals. Previously, all four added
+installation-resolution cases failed: valid decisions lacked the retained
+parent-wake binding, mismatched parent/action linkage could enqueue Chat wakes,
+and the wait deferral owner rejected installation reviews. The shared native
+approval predicate now governs all three resolution checks.
+
+The separate approval wait stays unresolved until the exact linked parent wake
+completes. Restart reads the same retained effect state. Wrong parent/turn and
+malformed bindings fail closed. Installation approvals remain excluded from
+workload-request discovery; this fix does not approve copying or make an
+installation request executable.
+
+All 135 tests in the approval resolution, wait and installation-review files
+pass, including actual SQLite early-decision/restart cases for both approval
+kinds. Gateway typecheck and focused lint pass. Evidence:
+.tmp/approval-install-resolution-before.log,
+.tmp/approval-install-resolution-final.log,
+.tmp/approval-install-resolution-typecheck.log and
+.tmp/approval-install-resolution-lint.log. The suite used a 60-second test timeout
+for storage fixture initialization; runtime deadlines were unchanged.
+
+No architecture thresholds or allowances changed. The resolution owner's
+measured dependency count remains 270, so its pre-existing gate regression is
+still open. No schema, PostgreSQL, installed-worker, live traffic or drive proof
+is claimed by this change.
+
+### 2026-09-16: native parent-wake reader extraction
+
+The native parent owner now performs the exact approval, wait-reservation and
+parent-wake reads used by resolution sequencing. Its port exposes only those
+three read methods and returns either a pending parent identity or no deferral.
+Claim ownership, retry writes and wait completion remain with the effect
+processor. The resolution owner's measured accesses decrease from 270 to 268;
+its original limit remains 259, so this is partial C0 progress.
+
+The new parent owner's reviewed allowance rises from one to four read accesses,
+with zero host callbacks. No baseline-era owner allowance or threshold changes.
+All 112 approval resolution/wait checks pass, including real SQLite early
+decision and restart cases for both native approval kinds. Gateway typecheck,
+focused lint and seven allowance checks pass. Evidence:
+.tmp/approval-parent-reader-tests.log,
+.tmp/approval-parent-reader-typecheck.log,
+.tmp/approval-parent-reader-lint.log and
+.tmp/approval-parent-reader-allowances.log. No schema or live/physical operation
+was changed or newly certified.
+
+The fresh architecture gate retains 79 findings and confirms this owner's
+259-to-268 remaining overage. The original baseline hash is unchanged. Report:
+artifacts/verification/2026-09-16T11-35-50-365Z-architecture-metrics-356afbcb/diagnostics/architecture-metrics-compare.json.
+Docs checks pass in .tmp/approval-parent-reader-docs.log.
+
+### 2026-09-16: linked Chat wake owner extraction
+
+Canonical linked-Chat target selection, resumed-trace compare-and-swap and
+already-running evidence reads now share a narrow owner. The resolution
+processor retains durable wake, enclosing effect transactions, claim settlement
+and processing requests. The extraction preserves explicit/inline linkage
+precedence, native parent/action checks, conditional waiting-to-running updates,
+race readback and unavailable-proof handling.
+
+All 89 approval-resolution tests pass, including native installation/runtime
+sequencing, exact linked Chat authority, resumed trace ordering and restart
+cases. Gateway typecheck, lint and seven allowance checks pass. Evidence:
+.tmp/approval-chat-wake-owner-tests-v2.log,
+.tmp/approval-chat-wake-owner-typecheck.log,
+.tmp/approval-chat-wake-owner-lint.log and
+.tmp/approval-chat-wake-owner-allowances.log.
+
+The resolution owner's measured accesses fall from 268 to 264; its original
+limit remains 259. The new owner's explicit allowance is seven accesses and
+zero host callbacks. No baseline-era owner allowance, threshold, storage schema,
+live traffic or physical worker operation changed.
+
+The fresh gate confirms 79 remaining findings and the 259-to-264 resolution
+owner overage. The original baseline hash remains unchanged. Report:
+artifacts/verification/2026-09-16T11-41-17-188Z-architecture-metrics-c45fd952/diagnostics/architecture-metrics-compare.json.
+Documentation checks pass in .tmp/approval-chat-wake-owner-docs.log.
+
+### 2026-09-16: approval materialization persistence owner
+
+Five existing persistence helpers now form a narrow materialization owner:
+immediate transaction entry, fresh effect-claim locking, durable-run and
+Chat-turn row locks, and canonical assistant-message lookup. The extraction
+preserves production refusal when a transaction/lock owner is unavailable and
+the existing test-only fixture fallbacks. Effect dispatch, retry, durable wake
+and lifecycle coordination remain with the resolution processor.
+
+The resolution service now measures exactly 259 dependency accesses, matching
+its original limit. The new owner has an explicit allowance of five accesses
+and zero host callbacks. Its port exposes only the required persistence methods;
+no baseline-era owner limit or threshold changed.
+
+All 101 materialization/approval-resolution checks pass. Added checks cover
+production missing transaction/row-lock refusal, expired and current claims,
+execution inside the transaction, and canonical assistant session/role binding.
+The existing suite retains actual SQLite resolution and restart coverage.
+Gateway typecheck, lint and seven allowance checks pass. Evidence:
+.tmp/approval-materialization-owner-tests.log,
+.tmp/approval-materialization-owner-typecheck.log,
+.tmp/approval-materialization-owner-lint.log,
+.tmp/approval-materialization-owner-test-lint.log and
+.tmp/approval-materialization-owner-allowances.log. No schema, live traffic,
+installed-worker or drive operation changed.
+
+Fresh architecture verification clears the resolution owner's finding and
+reports 78 remaining findings elsewhere. The global gate still fails, and the
+original baseline hash is unchanged. Report:
+artifacts/verification/2026-09-16T11-47-05-566Z-architecture-metrics-04e8d902/diagnostics/architecture-metrics-compare.json.
+Docs checks pass in .tmp/approval-materialization-owner-docs.log.
+
+### 2026-09-16: channel setup review and draft security ownership
+
+Extracted explicit connection review into channel-setup-connection-review.ts and
+shared draft revision/custody/hydration guards into channel-setup-draft-security.ts.
+The setup service retains its public review export. Operator replacements, draft
+compare-and-swap, cache invalidation and committed-error behavior are unchanged.
+The review port exposes only draft read/update, connection read, test-cache
+invalidation and credential custody; it cannot finalize connections or run probes.
+
+The existing setup owner now measures 57 dependency accesses and 52 host callbacks,
+below its unchanged original limits of 61 and 56. The new review owner has six
+accesses/callbacks; draft security has two host reads, conservatively bounded by
+two for both counters. These are explicit new-owner allowances, not baseline edits.
+
+All 16 setup contract and authenticated SQLite route tests pass, including added
+pre-save conflict credential retention and post-save cleanup failure checks.
+Evidence: .tmp/channel-setup-owner-final-tests-v3.log. Initial added test fixtures
+incorrectly assumed legacy tokens were rehydrated and attempted to spy on the
+async storage proxy; those fixture errors were corrected, with failed logs retained.
+Gateway typecheck, focused lint and seven allowance tests pass. No schema, live
+channel/provider traffic, installed-service or disk operation changed. Full-plan
+completion and global architecture readiness are not established by this slice.
+
+The full architecture gate clears both setup-owner overages and reports 76
+remaining findings. Report: artifacts/verification/2026-09-16T11-59-34-572Z-architecture-metrics-8e4dceee/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+
+### 2026-09-16: approved-tool evidence owner review
+
+Reviewed approved-tool-boundary-evidence.ts against canonical approval effect
+materialization. The owner reads pending actions, approvals and execution events;
+it does not execute, retry or write. Its caller owns the materialization transaction.
+Granted an explicit allowance of four dependency accesses and zero host callbacks
+for this new plan-owned file, absent from the pinned existing-service inventory.
+No original owner threshold or baseline changed.
+
+Added completion-evidence coverage for exact local/external boundaries, already
+materialized results, mismatched scope/attempts, altered arguments/results, revoked
+approvals, missing/conflicting receipts and unavailable canonical owners. All 120
+focused evidence and approval-resolution tests pass, including the existing SQLite
+restart/materialization cases. The test-only 60-second per-case allowance accommodates
+on-disk fixture initialization; runtime deadlines are unchanged. Gateway typecheck,
+lint, seven allowance checks and diff checks pass. Evidence:
+.tmp/approved-tool-evidence-owner-tests.log,
+.tmp/approved-tool-evidence-owner-typecheck.log,
+.tmp/approved-tool-evidence-owner-lint.log and
+.tmp/approved-tool-evidence-owner-allowances.log.
+No runtime source, schema, external traffic, installed service or disk operations
+changed in this slice. Full-plan and global gate completion remain unproven.
+
+Fresh architecture verification clears this new-owner finding and reports 75
+remaining findings. Report: artifacts/verification/2026-09-16T12-04-03-839Z-architecture-metrics-c6ae3ac9/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 is unchanged. Docs checks also pass.
+
+### 2026-09-16: channel delivery approval recovery ownership
+
+Extracted approval-aware part lookup and fenced parking into
+channel-delivery-approval-recovery.ts. The narrow list/park port cannot dispatch
+a provider request or resolve approval. Delivery projections remain in the existing
+runtime and only move to waiting after canonical parking succeeds. A lost claim
+evicts the local delivery; ordinary failures retain their existing failure path.
+
+The existing runtime is restored to its original 31 dependency accesses. The
+new C4 owner has an explicit allowance of three accesses and zero host callbacks.
+No baseline-era owner limit changed. The full architecture gate clears that
+overage and now reports 74 remaining findings:
+artifacts/verification/2026-09-16T12-08-35-804Z-architecture-metrics-665edb06/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 is unchanged.
+
+Four focused parking/lease checks pass in
+.tmp/channel-delivery-recovery-fence-tests.log. Initial integrated validation
+recorded 40 passes and three explicit fixture timeouts (15/25 seconds) in
+.tmp/channel-delivery-recovery-owner-tests.log. Those three storage-heavy tests
+now allow 60 seconds, with no change to production deadlines or their assertions.
+Their isolated retry is recorded in .tmp/channel-delivery-recovery-retry-tests.log.
+Gateway typecheck, focused lint, seven allowance tests and diff checks pass.
+No live channel traffic, installed service or disk operations occurred.
+
+The isolated retry completed successfully: all three previously timed-out cases
+pass (62.38 seconds total), including shared-queue single-send and stale-runtime
+protection. Across the original run and retry all 43 integrated cases are verified,
+plus four focused fence tests. This is combined run evidence, not a claim of one
+fully green integrated invocation. Docs checks pass. Global and full-plan
+completion remain outstanding.
+
+### 2026-09-16: durable Chat worker boundary ownership
+
+Extracted frozen worker context load/verification, prepared-history injection and
+retained-placement resolution into durable-chat-worker-adapter.ts. The port only
+exposes the frozen-context reader and existing execution resolver. Dispatch, durable
+leases, recovery traces, persistence and approval authority remain in their owners.
+Execution ordering is unchanged: verify the frozen context before preparation and
+resolve placement before stream registration or dispatch.
+
+DurableExecutionService now measures its original 162 dependency accesses and
+129 host callbacks. The new C5 adapter receives an explicit allowance of two
+dependency accesses and zero host callbacks. Existing thresholds and the original
+baseline are unchanged.
+
+All 114 durable execution and routed-context tests pass. Added coverage rejects
+altered retained input before preparation and propagates failed placement without
+dispatch. Existing coverage verifies admission/recovery, changed live history,
+missing frozen context and retained remote execution. Gateway typecheck, focused
+lint, seven allowance checks and diff checks pass. Evidence:
+.tmp/durable-chat-worker-adapter-final-tests.log,
+.tmp/durable-chat-worker-adapter-typecheck.log,
+.tmp/durable-chat-worker-adapter-final-lint.log and
+.tmp/durable-chat-worker-adapter-allowances.log.
+No live provider/channel calls, installed-worker execution or disk operations were
+performed. This extraction does not prove physical-machine or full-plan acceptance.
+
+Fresh architecture verification clears both durable-execution overages and
+reports 72 remaining findings. Report:
+artifacts/verification/2026-09-16T12-14-37-058Z-architecture-metrics-e33b1e3e/diagnostics/architecture-metrics-compare.json.
+Docs checks pass; the original baseline SHA256 remains unchanged.
+
+### 2026-09-16: shared Chat capability and waiting authority review
+
+Reviewed chat-capability-current-binding.ts and chat-durable-waiting-authority.ts
+as new C5 owners absent from the pinned baseline inventory. The first has only
+two catalog/lifecycle reads and requires current owner revalidation for private
+MCP and mesh capabilities. Immutable profiles cannot promote withdrawn or changed
+capabilities. The second has one checkpoint read and requires exact waiting
+authority plus completed post-commit generation before queue/wake callers proceed.
+Neither owner dispatches, activates, queues or writes state.
+
+Explicit allowances are two and one dependency accesses respectively, both with
+zero host callbacks. No existing-owner threshold or baseline changed. Gateway
+typecheck, focused lint and seven allowance tests pass. Integrated validation
+runs the capability-profile agent runner, static and requester MCP composition,
+and actual SQLite worker approval handoff suites in
+.tmp/chat-authority-owner-review-tests.log. Transport/provider boundaries are
+fixtures; this does not establish live MCP/channel/provider or physical-worker
+acceptance.
+
+All 75 integrated tests pass across four files (275.44 seconds). Fresh architecture
+verification clears these two findings and reports 70 remaining findings:
+artifacts/verification/2026-09-16T12-17-53-648Z-architecture-metrics-7763e231/diagnostics/architecture-metrics-compare.json.
+Docs checks pass and the original baseline SHA256 is unchanged. No runtime source
+behavior changed in this review; full-plan acceptance remains outstanding.
+
+### 2026-09-16: governed completion and stream timing ownership
+
+Moved governed completion entry points into governed-llm-completion-service.ts;
+all internal consumers now import that owner directly. It wraps the existing
+canonical completion pipeline in LlmService dispatch authority, including memory,
+hooks and deferred stream consumption. Moved attempt/first-chunk diagnostics to
+llm-stream-attempt-observer.ts, preserving attempt numbering, messages and timing
+boundary labels. Neither extraction introduces a provider transport or accounting
+owner. Memory composition now uses one invocation with the same conditional
+attribution argument list, removing a duplicate dependency access.
+
+Existing completion and memory owners are restored to their original 51 and six
+dependency accesses/host callbacks respectively. The two new owners each have an
+explicit allowance of two accesses and callbacks. No original threshold changed.
+All 60 completion/memory tests pass, covering guarded nested calls, deferred
+streams, retry refusal, timing diagnostics and memory attribution. Gateway
+typecheck, focused lint, seven allowance checks and diff checks pass. Evidence:
+.tmp/llm-completion-owners-tests.log, .tmp/llm-completion-owners-typecheck.log,
+.tmp/llm-completion-owners-lint.log and .tmp/llm-completion-owners-allowances.log.
+No live provider/channel traffic or installed/drive operations occurred. These
+checks do not establish the live comparative benchmark or full-plan acceptance.
+
+Fresh architecture verification clears four completion/memory findings and
+reports 66 remaining findings:
+artifacts/verification/2026-09-16T12-25-24-293Z-architecture-metrics-d4536bd0/diagnostics/architecture-metrics-compare.json.
+Docs checks pass. The original baseline SHA256 is unchanged; the global gate
+and full plan remain incomplete.
+
+### 2026-09-16: MCP OAuth handshake ownership
+
+Extracted handshake initialization and its safe ambient environment fallback to
+mcp-oauth-handshake-service.ts. The administration module retains its public
+startMcpOAuth export. The new narrow port can read expected server/auth state,
+prepare the static environment, resolve its client ID and publish the bound
+handshake. Token exchange, connection completion and server mutation stay with
+their existing owners. Revalidation after preparation and superseded token-request
+clearing are unchanged.
+
+The existing administration owner now has 26 dependency accesses and host callbacks,
+below its unchanged original limits of 29. The new C3 owner has an explicit allowance
+of seven accesses/callbacks. Added tests show that changed auth type or missing
+token metadata after preparation prevents client-ID resolution and auth-state reads
+or writes. All 20 administration tests pass. Gateway typecheck, focused lint, seven
+allowance checks and diff checks pass. Evidence: .tmp/mcp-handshake-owner-final-tests.log,
+.tmp/mcp-handshake-owner-final-typecheck.log, .tmp/mcp-handshake-owner-final-lint.log
+and .tmp/mcp-handshake-owner-allowances.log. No real OAuth requests, credentials,
+installed services or drive operations were involved. Full-plan acceptance remains
+outstanding.
+
+Fresh architecture verification clears both MCP administration overages and
+reports 64 remaining findings:
+artifacts/verification/2026-09-16T12-29-24-689Z-architecture-metrics-3f2ee096/diagnostics/architecture-metrics-compare.json.
+Docs checks pass, and the original baseline SHA256 remains unchanged.
+
+### 2026-09-16: MCP execution convergence owner
+
+Extracted executeMcpRuntime, its scope guard and MCP result/evidence helpers into
+mcp-runtime-execution-service.ts. The coordinator retains policy and approval
+checks, then delegates through a narrow host. Scope refusal remains before any
+dispatch; private requester/static owners retain the deepest execution fence and
+side-effect marker. Internal runtime dispatch, Ward/server redaction and retained
+evidence ordering are unchanged. Shared deep-secret redaction remains the same
+function for MCP and ordinary tool results.
+
+The coordinator now measures 58 dependency accesses/host callbacks, below its
+original limits of 63. The new C3 owner has a conservative allowance covering all
+17 direct host reads; this also bounds accesses the metric's single-file imported
+Pick classifier cannot resolve. No original baseline or existing-owner limit changed.
+
+All 165 integrated coordinator and requester-composition tests pass with no
+unhandled errors in .tmp/mcp-runtime-execution-owner-final-tests.log. The initial
+run exposed two stale fixtures feeding synchronous Storage into the async policy
+engine; both now use createSqliteAsyncStorage. Assertions and runtime transaction
+behavior were not weakened. The failed run remains in
+.tmp/mcp-runtime-execution-owner-tests.log. Typecheck, focused lint, seven allowance
+checks and diff checks pass. No real provider/channel traffic or installed/drive
+operations were performed.
+
+Fresh architecture verification clears the coordinator overages and the aggregate
+host-callback overage, leaving 61 findings:
+artifacts/verification/2026-09-16T12-33-46-818Z-architecture-metrics-fdf21abe/diagnostics/architecture-metrics-compare.json.
+The full plan and remaining global gate findings remain outstanding.
+
+### 2026-09-16: native MCP and mesh Chat owner review
+
+Reviewed four new C5 owners under services/gateway: native-mcp-chat-binding,
+mesh-chat-binding, mesh-chat-catalog and mesh-chat-dispatch. Their explicit
+allowances are one, two, two and three dependency accesses respectively, with
+zero host callbacks. All are absent from the pinned existing-service inventory;
+no original owner limit changed.
+
+Native target mapping preserves branded context, exact stored identities and
+requester/static hashes without granting transport authority. Mesh binding joins
+profile/catalog authority to current publication schemas. Catalog admission uses
+digest-verified descriptors, bounded/interleaved inventory and current activation
+bindings; published skills stay inspectable-only. Dispatch remains behind policy
+and rechecks binding after its execution/effect fences, preserving cancellation
+and uncertain-delivery truth. No runtime behavior was changed in this review.
+
+All 104 tests pass across native binding, mesh catalog/dispatch and capability
+profile suites. Gateway typecheck, lint, seven allowance tests and diff checks
+pass. Evidence: .tmp/chat-native-mesh-owner-review-tests.log,
+.tmp/chat-native-mesh-owner-review-typecheck.log,
+.tmp/chat-native-mesh-owner-review-lint.log and
+.tmp/chat-native-mesh-owner-review-allowances.log. These fixture checks do not
+establish physical-worker or live remote transport acceptance.
+
+Fresh architecture verification clears all four findings and reports 57 remaining:
+artifacts/verification/2026-09-16T12-38-25-288Z-architecture-metrics-59a9e9df/diagnostics/architecture-metrics-compare.json.
+Docs checks pass; the original baseline SHA256 remains unchanged. Full-plan
+acceptance and the remaining global findings are still outstanding.
+
+### 2026-09-16: durable Chat admission and checkpoint ownership
+
+Moved worker context preparation/retention into durable-chat-worker-adapter.ts,
+keeping both operations inside the existing admission transaction. Preparation
+precedes run creation, and context retention follows it with the exact request
+claim before commit. Strict task-bound versus optional local-context handling is
+unchanged. The adapter now has five bounded dependency accesses, adding three
+admission accesses to its previous recovery/placement boundary.
+
+Extracted checkpoint output into chat-durable-checkpoint-output.ts: tool/artifact
+read projections, canonical assistant message verification, heartbeat actor checks,
+summary and terminal output metadata helpers. Its three read accesses cannot
+write or finalize state. Existing public output exports remain available from
+chat-durable-run-service.ts.
+
+The existing Chat durable owner is restored to its original 76-access limit.
+All 57 admission/finalization/routed-context tests pass in
+.tmp/chat-durable-admission-owners-tests.log. Gateway typecheck, focused lint, seven
+allowance checks and diff checks pass. Evidence also includes
+.tmp/chat-durable-admission-owners-typecheck.log,
+.tmp/chat-durable-admission-owners-lint.log and
+.tmp/chat-durable-admission-owners-allowances.log. No original threshold, schema,
+live traffic, installed service or drive operation changed. Full-plan acceptance
+remains outstanding.
+
+Fresh architecture verification clears the Chat durable overage and reports 56
+remaining findings:
+artifacts/verification/2026-09-16T12-42-27-563Z-architecture-metrics-1dff6960/diagnostics/architecture-metrics-compare.json.
+Docs checks pass, and the original baseline SHA256 remains unchanged.
+
+
+### Change Plan approval owner review (2026-09-16)
+
+Reviewed explicit C2 allowances for canonical approval disposition (two reads)
+and refused-plan reconciliation (three repository accesses). Pending expiry uses
+database time; prior refusals remain refusals. Temporary-input cleanup succeeds
+before settlement, revision races reread canonical state, and refused rollback
+preserves the earlier effect for operator review. Neither helper applies an effect.
+
+All 29 disposition, control-plane and SQLite workflow-capture reconciliation/replay
+tests pass in .tmp/change-plan-approval-owner-review-tests.log. Gateway typecheck,
+focused lint and seven allowance checks pass. No runtime source changed in this
+review. Architecture verification reports 54 remaining findings in
+artifacts/verification/2026-09-16T12-45-16-905Z-architecture-metrics-8d6515e1/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains outstanding; no live provider/channel, installed
+service, drive operation, commit or push was performed.
+
+
+### Change Plan reconciliation extraction (2026-09-16)
+
+Moved bounded approval-refusal delivery and pending-plan disposition reads into
+evolution-control-plane-approval-reconciliation.ts. The existing control-plane
+owner returns to its original 31 dependency-access limit. The reviewed helper
+has nine accesses through a narrow approval reader and get/transition/list port.
+Adapter selection, cleanup, apply and rollback remain with the control plane.
+Exact approval binding, full-batch retry, cleanup-before-settlement and revision
+fences retain their order. No baseline thresholds changed.
+
+Two focused tests in .tmp/change-plan-reconciliation-batch-tests.log prove a
+101-plan retry completes without repeated settlement and a foreign approval
+binding fails before settlement. Final source typecheck and lint pass. The
+existing disposition/control-plane/SQLite recovery suite passes all 29 tests in
+.tmp/change-plan-reconciliation-extraction-tests.log.
+Architecture verification reports 53 remaining findings:
+artifacts/verification/2026-09-16T14-03-12-523Z-architecture-metrics-20a39f45/diagnostics/architecture-metrics-compare.json.
+Full-plan acceptance remains outstanding.
+
+Final-source concurrent settlement replay also passes in
+.tmp/change-plan-reconciliation-final-settlement-tests.log. Docs and diff checks
+pass; original baseline SHA256 remains unchanged. No live traffic, service,
+drive, commit or push operation was performed.
+
+
+### MCP OAuth publication cleanup extraction (2026-09-16)
+
+Moved post-publication credential retirement to mcp-oauth-publication-cleanup.ts.
+The helper exposes only the existing reconciliation callback and token-retirement
+method. It runs after the canonical publication and durable ledger commit; a
+reconciliation failure retains the successful outcome and emits a fixed diagnostic.
+The fallback still uses the token owner that handles individual keychain failures.
+No network request, auth publication or transaction authority moved.
+
+The existing Gateway OAuth owner returns to its original seven-access limit.
+The new helper has an explicit three-access C3 allowance. Gateway typecheck,
+focused lint, docs and seven allowance checks pass. All 31 durable OAuth
+publication and token-custody tests pass in
+.tmp/mcp-oauth-publication-cleanup-tests.log. Architecture verification reports
+52 remaining findings in
+artifacts/verification/2026-09-16T14-11-08-085Z-architecture-metrics-58ba31dd/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged. Full-plan acceptance remains
+outstanding; no live provider/channel or installed/drive operation was performed.
+
+
+### MCP OAuth token persistence extraction (2026-09-16)
+
+Moved versioned credential-slot staging, token-reference construction and token
+response metadata projection to mcp-oauth-token-persistence.ts. Its explicit port
+contains only setSecret, optional receipt-aware custody writes, receipt support
+and the staging callback. It cannot read or directly delete stored credentials.
+Uncomposed partial failures delegate cleanup to the existing owner; lost staged
+acknowledgement retains registered slots for durable recovery. Receipt IDs,
+refresh-token inheritance, expiry and scope projection preserve their behavior.
+
+The existing token service returns to its original six dependency accesses. The
+new persistence owner has an explicit nine-access C3 allowance. Typecheck, lint
+docs and seven allowance checks pass. All 31 token-custody and durable-publication
+tests pass in .tmp/mcp-oauth-token-persistence-tests.log. Architecture verification reports
+51 remaining findings:
+artifacts/verification/2026-09-16T14-16-57-180Z-architecture-metrics-7bbec908/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 is unchanged. Full-plan acceptance remains open.
+No live provider/channel, keychain, installed-service or drive operation ran.
+
+
+### MCP credential journal owner review (2026-09-16)
+
+Reviewed the staging and retirement stores as new C3 owners absent from the
+pinned baseline inventory. Their explicit allowances are four and twenty measured
+dependency accesses respectively; original owners and counting rules are unchanged.
+The staging metadata context is restricted to settings get/CAS and immediate
+transactions, with permanent retirement delegated to its existing owner.
+
+Source review preserves registration-before-write, terminal receipt/custody
+identity, post-probe canonical rereads, transaction rollback and quarantine of
+unacknowledged writers. Retirement retains permanent tombstones, checks all
+canonical bindings before deleting, fences republication, and requires positive
+receipt-aware deletion acknowledgement. OS callbacks run outside transactions.
+No runtime source changed in this review. Gateway typecheck, focused lint and
+seven allowance checks pass. The SQLite restart/recovery and receipt run
+(.tmp/mcp-credential-store-owner-review-tests.log) passed 54 tests; two exceeded
+the 60-second test timeout without an assertion failure. Those two cases are
+verified by an isolated retry with one worker and a 120-second test-only limit
+in .tmp/mcp-credential-store-owner-review-retry-tests.log. Both retries passed
+(43.78 seconds combined test execution), so all 56 cases pass across the two runs.
+The original full run remains a failed receipt; this is not one fully green run.
+Runtime limits and assertions are unchanged.
+
+Architecture verification reports 49 remaining findings:
+artifacts/verification/2026-09-16T14-22-21-738Z-architecture-metrics-7c1a386f/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged. This review does not establish
+physical-host or live-keychain acceptance; full-plan acceptance remains open.
+
+
+### MCP environment and session owner review (2026-09-16)
+
+Reviewed explicit C3 allowances for mcp-static-environment-service.ts (22 measured
+accesses) and mcp-stdio-session-pool.ts (five). Both are absent from the pinned
+existing-owner inventory. No runtime source or original threshold changed.
+
+Environment enrollment remains explicit, custody-bound and opaque in metadata.
+Private handles bind captured values to current server authority; ambient drift
+cannot silently enroll or dispatch. Transactional invalidation, uncertain
+publication retention and server-scoped cleanup remain intact. The session pool
+retains exact scope/configuration identity, serializes calls, bounds capacity and
+idle lifetime, avoids replay, and closes only sessions captured by delayed cleanup.
+
+All 19 environment tests pass in
+.tmp/mcp-static-environment-owner-review-tests.log, including loopback HTTP and
+a task-owned real stdio child. All six pool tests pass in
+.tmp/mcp-stdio-pool-owner-review-tests.log. Gateway typecheck, focused lint and
+seven allowance checks pass. These are local fixture receipts, not live provider
+or installed-machine acceptance. Full-plan acceptance remains open.
+
+Fresh architecture verification reports 47 remaining findings:
+artifacts/verification/2026-09-16T14-38-21-557Z-architecture-metrics-61b95e1d/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged. No live traffic, drive operation,
+installation, commit or push was performed.
+
+
+### Static MCP Chat owner review (2026-09-16)
+
+Reviewed mcp-static-chat-service.ts as a new C3 owner absent from the pinned
+existing-service inventory, with an explicit 16-access allowance. Discovery
+is bounded and private; invocation reconstructs exact durable profile/catalog,
+shared callable capability, actor scope, current server and enrolled environment.
+Schema and authority checks surround the asynchronous effect marker. Redaction
+preserves canonical outcome fields, and uncertain dispatch never auto-replays.
+No runtime source or original threshold changed.
+
+Gateway typecheck, focused lint, docs and seven allowance checks pass. All 16
+static Chat tests pass in .tmp/mcp-static-chat-owner-review-tests.log, including
+post-marker revalidation and no redispatch after a lost response. Architecture verification reports
+46 remaining findings:
+artifacts/verification/2026-09-16T14-40-41-874Z-architecture-metrics-c5a56074/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged. Full-plan acceptance remains
+open; no live provider/channel, installation or drive operation was performed.
+
+
+### Requester profile freeze extraction (2026-09-16)
+
+Moved selected-descriptor validation, binding construction and outcome recording
+to mcp-requester-profile-freeze.ts. Its narrow input contains only the hook,
+process-local outcome recorder and clock. The existing public freeze functions
+retain discovery/attempt ownership, including disposal and the empty-batch fast
+path. The helper validates every selected descriptor before recording outcomes,
+preserving exact schema, alias, scope, resolver, mesh and catalog hashes. No
+transport, effect dispatch or activation port moved. Type-only imports avoid a
+runtime dependency cycle.
+
+The requester owner now has 54 dependency accesses against its original limit
+of 55; the new owner has an explicit 11-access allowance. All 90 resolution,
+orchestration and capability-profile tests pass in
+.tmp/mcp-requester-profile-freeze-tests.log. Gateway typecheck, lint and seven
+allowance checks pass. The original baseline SHA256 remains unchanged.
+
+Fresh architecture verification reports 45 remaining findings:
+artifacts/verification/2026-09-16T14-48-36-107Z-architecture-metrics-6f09b19d/diagnostics/architecture-metrics-compare.json.
+Full-plan acceptance remains open. No live traffic, drive operation, installation,
+commit or push was performed.
+
+
+### Remote-worker Chat authority reader review (2026-09-16)
+
+Reviewed three new C5 owners absent from the pinned baseline inventory:
+remote-worker-native-chat-history.ts (one measured dependency access),
+remote-worker-chat-authority.ts (six) and
+remote-worker-chat-approval-wait-read-service.ts (ten). Original limits and
+runtime source remain unchanged.
+
+History reconstruction enforces exact request/context/profile identity, ordered
+continuations, bounded assignment steps, settled tool results and unique usage
+identities. Current Chat authority re-enters capability, native/mesh and policy
+owners and rejects changed requester/permission identity. Approval reads verify
+protected assignment, canonical parent/checkpoint, decision/action hashes and
+recovery phase without waking runs, rotating leases or returning tool arguments.
+
+All 62 controlled history and approval-wait tests pass in
+.tmp/remote-worker-chat-authority-read-tests.log. All 12 selected requester/mesh
+refusal cases pass in .tmp/remote-worker-chat-authority-refusal-tests.log before
+tool-run or effect creation. Gateway typecheck, focused lint and seven allowance
+checks pass. This evidence does not establish installed or two-machine behavior.
+
+Architecture verification reports 42 remaining findings:
+artifacts/verification/2026-09-16T14-52-04-822Z-architecture-metrics-426713a0/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged. Full-plan acceptance remains
+open; no live traffic, installation, drive operation, commit or push occurred.
+
+
+### Remote-worker budget and inference owner review (2026-09-16)
+
+Reviewed three new C5 owners absent from the pinned baseline inventory:
+remote-worker-budget-operator-service.ts (three measured accesses),
+remote-worker-inference-runtime.ts (six), and remote-worker-chat-tool-runtime.ts
+(two). Original thresholds and runtime source remain unchanged.
+
+Budget administration validates admitted generation and scope, auditing operator
+authorization before mutation. Inference re-enters current protected assignment,
+Chat profile/context, route and spending owners, including replay and in-flight
+authority checks. Tools derive their selector/arguments from canonical provider
+output, enforce earlier-call completion, register intent under fresh authority
+and recheck before returning the settled result. Spending never grants tools.
+
+All six budget/native-continuation/canonical inference tests pass in
+.tmp/remote-worker-inference-budget-review-tests.log. Both selected local
+second-process mTLS cases (tool_calls and continuous_budget_exhausted) pass in
+.tmp/remote-worker-inference-tool-connected-review-tests.log. Provider responses
+are mocked; this does not prove live inference or physical two-machine behavior.
+Gateway typecheck, focused lint and seven allowance checks pass.
+
+Architecture verification reports 39 remaining findings:
+artifacts/verification/2026-09-16T14-56-53-103Z-architecture-metrics-9b59f604/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged. Full-plan acceptance remains
+open. No live traffic, installation, drive operation, commit or push occurred.
+
+### Remote-worker artifact publication owner review (2026-09-16)
+
+Reviewed the complete artifact runtime and native file submission owners. Added
+explicit C5 allowances of 9/0 and 5/0 measured dependency accesses/host callbacks
+respectively; both are absent from the pinned existing-owner inventory. Existing
+limits and counting rules remain unchanged. No runtime source changed.
+
+Artifact publication retains exact protected assignment, parent dispatch, durable
+payload, profile and manifest identity. Verification compares canonical model
+bytes and rereads retained content even after a satisfied verification gate.
+Native file submission snapshots authority and delegates normalized bounded
+requests to governed owners within the signed settlement route.
+
+All 96 tests across five suites pass in
+.tmp/remote-worker-artifact-owner-review-tests.log. Seven allowance checks pass.
+The architecture gate remains failing with 37 findings (previously 39):
+artifacts/verification/2026-09-16T15-04-10-437Z-architecture-metrics-e4ca3621/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+These are local controlled tests with mocked inference, not installed-worker or
+physical-machine acceptance. Full-plan acceptance remains open. No drive,
+installation, live traffic, commit or push operation occurred.
+
+### Remote-worker canonical output owner review (2026-09-16)
+
+Reviewed the complete remote-worker-chat-output-service.ts owner and granted a
+C5 allowance of 30 measured dependency accesses and zero host callbacks. It is
+absent from the pinned existing-owner inventory. No runtime behavior or existing
+threshold changed. Canonical output requires settled inference, bounded complete
+frame chains, exact request/context/profile identity and completed governed tools.
+Native continuation preserves prior history and assignment-wide model limits.
+
+Added eight retained-inference corruption refusal cases to
+remote-worker-chat-sequence.test.ts. All 20 sequence/native acceptance tests pass
+in .tmp/remote-worker-output-owner-review-tests.log. Gateway typecheck, focused
+lint and seven allowance checks pass. Tests use controlled tool-result/provider
+responses; this does not establish installed or physical-machine acceptance.
+
+Architecture verification still fails with 36 findings (previously 37):
+artifacts/verification/2026-09-16T15-06-52-164Z-architecture-metrics-2024966a/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains unchanged at
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan completion remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Remote-worker offer and request producer review (2026-09-16)
+
+Reviewed the complete Chat offer and native runtime request producer owners.
+Added explicit C5 allowances of 5/0 and 13/0 measured dependency accesses/host
+callbacks respectively; both are absent from the pinned existing-owner inventory.
+No runtime source changed. Offers preserve the original admission deadline and
+re-enter atomic durable claim validation after asynchronous policy preflight.
+The producer keeps bounded ephemeral review candidates, binds exact approval and
+protected continuation material, and consumes admission before the commit boundary
+so lost responses cannot cause automatic duplicate admission.
+
+All 79 focused cases pass in .tmp/remote-worker-dispatch-owner-review-tests.log.
+Offer tests use temporary SQLite; native policy/preparation/admission are controlled
+fixtures, not installed execution. Focused lint and seven allowance checks pass.
+Architecture verification remains failing with 34 findings, down from 36:
+artifacts/verification/2026-09-16T15-09-00-505Z-architecture-metrics-dc6af629/diagnostics/architecture-metrics-compare.json.
+The original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Remote-worker mesh protocol owner review (2026-09-16)
+
+Reviewed the complete native mesh handler and protocol owner. Added C5 allowances
+of 1/0 and 12/0 measured dependency accesses/host callbacks respectively; both
+are absent from the pinned existing-owner inventory. No runtime source changed.
+The handler bounds decoding and responses. The protocol snapshots data without
+accessor execution, derives node identity from current credential/native mTLS
+authority, consumes durable nonces and checks current admission again before
+returning read results. No activation action is exposed. Governed destination
+owners retain mutation authority.
+
+All 17 focused cases pass in
+.tmp/remote-worker-mesh-protocol-owner-review-tests.log, including a real local
+native mTLS exchange. Destination mutations use controlled fixtures; this is not
+physical-machine or installed-service acceptance. Focused lint and seven allowance
+checks pass. Architecture verification still fails with 32 findings, down from 34:
+artifacts/verification/2026-09-16T15-11-44-434Z-architecture-metrics-d629f048/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, external
+provider/channel traffic, commit or push occurred.
+
+### Remote-worker provisioning coordination owner review (2026-09-16)
+
+Reviewed the complete remote-worker-cell-provisioning-service.ts owner and added
+a C5 allowance of 12 measured dependency accesses and zero host callbacks. It
+is absent from the pinned existing-owner inventory. No runtime source changed.
+The owner retains intent before native creation, acknowledges exact serial
+checkpoint commits, drains pending commits after failure and enters verification
+only on replay. Volume history remains reconciliation-required without a capable
+verifier. It does not mark platform readiness or grant volume privileges.
+
+All four selected provisioning coordination tests pass in
+.tmp/remote-worker-provisioning-owner-review-tests.log (11 other cases skipped).
+They use temporary SQLite and a simulated native driver. The native proof
+environment was checked absent before execution. No disk creation or formatting
+was performed. Focused lint and seven allowance checks pass.
+Architecture verification remains failing with 31 findings, down from 32:
+artifacts/verification/2026-09-16T15-13-56-790Z-architecture-metrics-bdbeb22e/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan and installed-worker acceptance remain open. No drive operation,
+installation, live provider/channel traffic, commit or push occurred.
+
+### Remote-worker Chat completion owner review (2026-09-16)
+
+Reviewed the complete Chat execution owner; added a C5 allowance of 26 measured
+dependency accesses and zero host callbacks. It is absent from the pinned
+existing-owner inventory. No runtime source changed. Completion binds verified
+artifacts and canonical model/usage evidence to actual Chat messages, traces and
+sealed terminal checkpoints. Parent recovery and approval handoffs retain durable
+authority; uncompleted assignments cannot invent local fallback output.
+
+All 16 tests across execution, usage and native Chat acceptance pass in
+.tmp/remote-worker-chat-completion-owner-review-tests.log. Provider responses
+are mocked; this is not installed or live acceptance. Focused lint and seven
+allowance checks pass. Architecture verification still fails with 30 findings,
+down from 31:
+artifacts/verification/2026-09-16T15-15-50-632Z-architecture-metrics-51c8416c/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live
+provider/channel traffic, commit or push occurred.
+
+### Remote-worker effect runtime owner review (2026-09-16)
+
+Reviewed the complete effect dispatcher and added a C5 allowance of 14 measured
+dependency accesses and zero host callbacks. It is absent from the pinned
+existing-owner inventory. No runtime source changed. Retained intents pass
+current assignment/profile and scoped owner checks before tool creation and
+again at dispatch. Approved continuations bind retained approval/pending-action
+hashes. Started or uncertain outcomes cannot automatically redispatch; terminal
+projection requires matching canonical effect evidence.
+
+All 55 cases pass in .tmp/remote-worker-effect-owner-review-tests.log, covering
+MCP/mesh contexts, approval execution, restart and lost responses, authority drift
+and uncertain external outcomes. Tests use temporary SQLite and controlled
+dispatch owners, not live channels/providers. Focused lint and seven allowance
+checks pass. Architecture verification still fails with 29 findings, down from 30:
+artifacts/verification/2026-09-16T15-19-17-136Z-architecture-metrics-1aaa1ef2/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Cell inventory owner extraction (2026-09-16)
+
+Extracted complete inventory read/admission into remote-worker-cell-inventory-service.ts
+with a narrow two-method capacity repository port. Existing cell entry points
+delegate without changing snapshots, validation or protected transaction ownership.
+The existing cell owner returns from six to its original four dependency accesses;
+the reviewed new C5 owner receives a fixed 2/0 allowance. No baseline limit changed.
+
+All 15 cell-service tests pass in .tmp/remote-worker-cell-inventory-extraction-tests.log.
+Gateway typecheck, lint and seven allowance checks pass. Tests use controlled
+capacity/native ports and temporary SQLite; native proof environment checked absent.
+Architecture still fails with 28 findings (previously 29):
+artifacts/verification/2026-09-16T15-23-38-348Z-architecture-metrics-e4b814e1/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+The unrelated remediation helper was inspected but received no allowance because
+its dependency on this plan has not been established. Full-plan acceptance remains
+open. No drive operations, installation, live traffic, commit or push occurred.
+
+### Assignment workload reader extraction (2026-09-16)
+
+Extracted native workload projection and the post-projection canonical re-read
+into remote-worker-assignment-workload-reader.ts. The narrow repository and
+projector port retains exact binding checks and legacy no-context behavior.
+Dispatcher public API and sanitized error behavior remain unchanged. Existing
+dispatcher accesses decrease from eight to six, below the original seven limit.
+New C5 owner receives a reviewed fixed 4/0 allowance; no baseline change.
+
+All 13 final dispatch/protocol/handler tests pass in
+.tmp/remote-worker-workload-reader-extraction-final-tests.log. Gateway typecheck,
+lint and seven allowance checks pass. These are controlled fixtures, not installed
+acceptance. Architecture still fails with 27 findings (previously 28):
+artifacts/verification/2026-09-16T15-26-45-195Z-architecture-metrics-b72fff0d/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Assignment sync handoff extraction (2026-09-16)
+
+Extracted parent-recovery-first and optional approval-wait reads into
+remote-worker-assignment-sync-handoff.ts. The existing protocol still owns
+request authentication, nonces, protected fence resolution, exact returned-record
+validation and active lease fallback. The helper cannot renew, wake or dispatch.
+Existing protocol accesses return from 17 to the original 15; the new C5 owner
+receives a reviewed 2/0 allowance. No original threshold changed.
+
+All 68 protocol/approval-wait tests pass in .tmp/remote-worker-sync-handoff-tests.log.
+Gateway typecheck, lint and seven allowance checks pass. These are local controlled
+checks, not installed acceptance. Architecture still fails with 26 findings, down
+from 27:
+artifacts/verification/2026-09-16T15-29-44-175Z-architecture-metrics-9f2021b8/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Worker runtime read extraction (2026-09-16)
+
+Extracted status projection and native output reads into
+remote-worker-runtime-read-service.ts. Route input validation, public imports
+(via re-exports), error identity, scope checks and artifact validation are
+preserved. The store receives separate request objects so mutation cannot alter
+the expected response scope. Existing route accesses return from ten to the
+original seven. The new read-only C5 owner receives a fixed 3/0 allowance.
+
+All 22 runtime-read/route-service tests pass in
+.tmp/remote-worker-runtime-read-extraction-tests.log. Gateway typecheck, lint
+and seven allowance checks pass. Controlled stores do not prove installed
+execution. Architecture still fails with 25 findings (previously 26):
+artifacts/verification/2026-09-16T15-35-00-796Z-architecture-metrics-c718b135/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Assignment preflight extraction (2026-09-16)
+
+Extracted structural runtime and execution preflight checks into
+remote-worker-assignment-preflight.ts. Check order, required methods and callable
+AsyncStorage support remain unchanged. Current authorization and execution stay
+with their runtime owners. Existing composition accesses fall from 28 to 21,
+below its original 22 limit. New C5 owner receives a reviewed fixed 7/0 allowance.
+
+All 13 runtime/admission composition tests pass in
+.tmp/remote-worker-assignment-preflight-tests.log, including missing-owner
+rejection and withholding the handler after preflight failure. Gateway typecheck,
+lint and seven allowance checks pass. These structural tests do not prove
+installed readiness. Architecture still fails with 24 findings (previously 25):
+artifacts/verification/2026-09-16T15-37-25-378Z-architecture-metrics-78146644/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Mesh handler composition extraction (2026-09-16)
+
+Extracted optional mesh preflight and handler preparation into
+remote-worker-mesh-handler-composition.ts. Missing mesh support stays omitted;
+preflight failure prevents the complete listener handler from being returned.
+The existing admission composition returns from 21 to its original 18 dependency
+accesses. The new C5 helper receives a reviewed fixed 3/0 allowance.
+
+Added a composition regression for optional mesh preflight failure. All 14
+runtime/admission composition tests pass in
+.tmp/remote-worker-mesh-handler-composition-tests.log. Gateway typecheck, lint
+and seven allowance checks pass. Structural fixtures do not establish installed
+readiness. Architecture still fails with 23 findings (previously 24):
+artifacts/verification/2026-09-16T15-40-15-791Z-architecture-metrics-c8ae6da2/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Governed multipart dispatch extraction (2026-09-16)
+
+Extracted the single-attempt multipart HTTP/usage lifecycle into
+llm-multipart-dispatch.ts. LlmService retains provider resolution, credential and
+pricing lineage, accounting preparation and current dispatch authorization.
+Timeout creation still precedes preparation; fetch rejection is observed before
+usage acceptance; abandoned pre-dispatch and uncertain post-dispatch accounting
+retain their original behavior. No automatic retry is introduced.
+
+Existing LlmService accesses decrease from 92 to 85, below its original 87 limit.
+The new C5 helper receives a fixed 5/0 allowance. All 54 usage-accounting, guard
+and loop33 tests pass in .tmp/llm-multipart-tests.log (556.41 seconds), including
+multipart image edits and accounting failures. Provider responses are mocked.
+Gateway typecheck, lint and seven allowance checks pass. Architecture still fails
+with 22 findings, down from 23:
+artifacts/verification/2026-09-16T15-43-55-771Z-architecture-metrics-f777cd7d/diagnostics/architecture-metrics-compare.json.
+Original baseline SHA256 remains
+7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+Full-plan acceptance remains open. No drive operation, installation, live traffic,
+commit or push occurred.
+
+### Onboarding completion extraction (2026-09-16)
+
+Moved retained setup-marker persistence and event publication into onboarding-completion-service.ts. Existing onboarding state accesses decrease from 41 to 35, below the original 39 limit; the new C1 helper receives a fixed 6/0 allowance. Setup completion does not claim successful inference. All 14 completion, state and first-task tests pass in .tmp/onboarding-completion-tests.log. Gateway typecheck, lint and seven allowance checks pass. Architecture still fails with 21 findings: artifacts/verification/2026-09-16T15-59-15-200Z-architecture-metrics-94c1eab2/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Live acceptance and full-plan completion remain open. No drive operation, installation, live traffic, commit or push occurred.
+
+### Approved external runtime target extraction (2026-09-16)
+
+Extracted frozen native MCP and mesh target resolution into gateway/approved-external-runtime-target.ts. Approval evaluation and durable external-effect accounting remain in their existing owners. Native mapping is re-read after policy evaluation; changed or missing targets fail before transport. Mesh dispatch retains its canonical runtime owner. Existing adapter accesses fall from 11 to its original 6 limit; the new C3 owner receives a fixed 5/0 allowance.
+
+All 33 adapter/side-effect tests pass in .tmp/approved-runtime-target-tests.log. Two added server/tool replacement cases pass in .tmp/approved-runtime-target-drift-tests.log. Gateway typecheck, lint and seven allowance checks pass. Tests use temporary storage and mocked transport. Architecture still fails with 20 findings: artifacts/verification/2026-09-16T16-02-19-995Z-architecture-metrics-877c8709/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan acceptance remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### Scheduled channel reconciliation extraction (2026-09-16)
+
+Moved completed-connector receipt reconciliation and attached agent occurrence observation into gateway/cron-channel-reconciliation.ts. Canonical channel receipts remain authoritative: queued delivery waits, mismatched evidence requires manual reconciliation, and ambiguous external outcomes are not replayed. CronAutomationService retains scheduling, summary accounting and final settlement. Its dependency accesses decrease from 91 to its original 86 limit; the new C4 helper receives a fixed 10/0 allowance.
+
+All 62 cron/settlement/evidence tests pass in .tmp/cron-channel-reconciliation-tests.log (186.50 seconds). Gateway typecheck, lint and seven allowance checks pass. Tests use temporary storage and simulated receipts; live channel acceptance remains open. Architecture still fails with 19 findings: artifacts/verification/2026-09-16T16-07-52-864Z-architecture-metrics-da56eb3b/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan acceptance remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### Connection post-commit lifecycle extraction (2026-09-16)
+
+Consolidated acknowledgement, realtime publication and ordered channel runtime synchronization in integration-connection-commit-service.ts. Storage mutations, setup finalization and revision checks remain with their existing owners. Failures after commit retain mutationCommitted and the original cause, preventing a follow-up failure from implying that the mutation can safely be replayed. IntegrationChannelService decreases from 65 to 53 dependency accesses below its original 59 ceiling; the new C4 helper receives a fixed 3/0 allowance.
+
+All 23 helper, integration and setup-route tests pass in .tmp/integration-connection-commit-tests.log, including five ordering/failure cases. Gateway typecheck, lint and seven allowance checks pass. Architecture still fails with 18 findings: artifacts/verification/2026-09-16T16-12-46-692Z-architecture-metrics-555f38a7/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Mocked synchronization is not live channel acceptance. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP transport credential extraction (2026-09-16)
+
+Moved environment preparation, allowlisted child environment composition and HTTP credential header creation into mcp-transport-credentials.ts. Invocation timing, captured-environment freshness checks and OAuth resolver ownership remain unchanged. The explicit local credential port keeps seven dependency accesses visible to the metrics gate; its new C3 allowance is 7/0. Existing MCP runtime decreases from 39 to 32 accesses and remains above its original seven-access limit.
+
+All 53 runtime/session/static-environment tests pass in .tmp/mcp-transport-credentials-tests.log (61.03 seconds). Gateway typecheck, lint and seven allowance checks pass. Tests use local transport fixtures and synthetic credentials, not live provider acceptance. Architecture still fails with 18 findings: artifacts/verification/2026-09-16T16-16-43-218Z-architecture-metrics-0a51083b/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP stdio transport extraction (2026-09-16)
+
+Moved stdio client creation, stream handling, session reuse and process-tree cleanup into mcp-stdio-transport.ts. Reviewed-package launch, captured-environment checks, spawn defaults, request cancellation, bounded buffers and cleanup ordering are preserved. Existing runtime helper exports remain available for lifecycle tests. The new C3 owner has a conservative 10/0 allowance matching its original contribution; current single-file measurement is six due to imported type inference. Existing MCP runtime falls from 32 to 22 accesses and remains above its original seven-access limit.
+
+All 54 runtime/lifecycle/session tests pass in .tmp/mcp-stdio-transport-tests.log (16.29 seconds). Gateway typecheck, lint and seven allowance checks pass. Tests use local fixtures and simulated failures, not installed-worker or live Browser QA acceptance. Architecture still fails with 18 findings: artifacts/verification/2026-09-16T16-19-58-702Z-architecture-metrics-ea1676d4/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP HTTP transport extraction (2026-09-16)
+
+Moved allowlisted HTTP session initialization, requests, cleanup and bounded JSON/SSE response reading into mcp-http-transport.ts. Requester-scoped transport reuses the same bounded reader. Credential preparation, protocol negotiation, session cleanup, response limits and timeout cancellation ordering remain unchanged. The new C3 owner receives a conservative 4/0 allowance matching its original contribution; current single-file measurement is three. Existing MCP runtime falls from 22 to 18 accesses, still above its unchanged original seven-access limit.
+
+All 54 runtime/requester-scope tests pass in .tmp/mcp-http-transport-tests.log (11.78 seconds). Gateway typecheck, lint and seven allowance checks pass. Local HTTP/SSE fixtures are not live Browser QA or installed-worker acceptance. Architecture still fails with 18 findings: artifacts/verification/2026-09-16T16-22-20-376Z-architecture-metrics-cba0de02/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+The initial docs check flagged the relocated SSE reader. Moved its existing body.getReader exception from mcp-runtime.ts to mcp-http-transport.ts without adding an exception or changing reader limits. Final docs check passes in .tmp/mcp-http-transport-final-docs.log.
+
+### Static MCP transport authorization extraction (2026-09-16)
+
+Consolidated bounded static discovery and pre-dispatch environment/catalog checks in mcp-static-transport-authorization.ts. Both transports validate the current captured environment before fresh tools/list and single-use authority consumption. Tools/call and uncertain-outcome handling remain in MCP runtime. Existing runtime decreases from 18 to six accesses below its original seven limit. The new C3 owner receives a conservative 12/0 allowance matching the original extracted contribution; current single-file imported-type measurement is two.
+
+All 89 static Chat/environment/runtime/requester-scope tests pass in .tmp/mcp-static-transport-auth-tests.log (322.72 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. Local fixtures are not live Browser QA acceptance. Architecture still fails with 17 findings: artifacts/verification/2026-09-16T16-25-32-578Z-architecture-metrics-1e9db650/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP auth publication extraction (2026-09-16)
+
+Moved the auth publication transaction into mcp-auth-publication-service.ts and shared unchanged configuration validation/normalization in mcp-server-state-helpers.ts. Preserve configuration-row locking, expected auth state comparison, bounded write-conflict retries, credential staging/retirement and first-approval invalidation in one transaction. Store accesses fall from 45 to 37; its original seven-access limit remains failing. The new C3 publication owner receives a conservative 9/0 allowance including five settings/transaction operations obscured by imported context typing and four measured port accesses. Pure state helpers have zero measured dependency accesses.
+
+54 store/Gateway OAuth/token tests pass and one is skipped in .tmp/mcp-auth-publication-tests.log (220.35 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. PostgreSQL and live OAuth acceptance were not rerun for this extraction. Architecture still fails with 16 findings: artifacts/verification/2026-09-16T16-33-48-213Z-architecture-metrics-d112da0a/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP environment publication extraction (2026-09-16)
+
+Moved static environment publication into mcp-environment-publication-service.ts. Preserve captured-input validation, current static configuration, expected binding, bounded write-conflict retries, credential staging/retirement and configuration/auth/approval invalidation in one immediate transaction. Existing store decreases from 37 to 29 accesses; its original seven-access ceiling remains failing. The new C3 owner receives a conservative 10/0 allowance including five settings/transaction operations obscured by imported context typing and five measured port accesses.
+
+42 store/static-environment tests pass and one is skipped in .tmp/mcp-environment-publication-tests.log (42.61 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. Local fixtures do not establish live or PostgreSQL acceptance. Architecture still fails with 16 findings: artifacts/verification/2026-09-16T16-39-44-436Z-architecture-metrics-ba0ed00b/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP retained-state removal extraction (2026-09-16)
+
+Consolidated auth/environment/tool/approval removal in mcp-server-state-removal-service.ts. It uses the same caller transaction-bound repositories, preserves compare-and-set failures and records retired credential references without independent commits or secret deletion. Existing store decreases from 29 to 22 accesses while its original seven-access limit remains failing. The new C3 owner receives a conservative 11/0 allowance covering nine imported-context settings/inbox operations and two measured retirement accesses.
+
+36 store/retirement tests pass and one is skipped in .tmp/mcp-state-removal-tests.log (207.49 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. PostgreSQL/live acceptance was not rerun. Architecture still fails with 16 findings: artifacts/verification/2026-09-16T16-42-43-296Z-architecture-metrics-f79f4987/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP tool inventory extraction (2026-09-16)
+
+Moved discovery completion and tool inventory projection/persistence into mcp-tool-inventory-service.ts. Connection revision validation and inventory CAS remain in one caller transaction; internal tools remain synthesized and are excluded from persisted caller inventory. Store decreases from 22 to 17 accesses; its original seven-access limit remains failing. The new C3 owner receives a conservative 6/0 allowance covering five imported-context storage accesses and one measured connection callback.
+
+43 store/admin tests pass and one is skipped in .tmp/mcp-tool-inventory-tests.log (11.66 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. Local fixtures are not live Browser QA or PostgreSQL acceptance. Architecture still fails with 16 findings: artifacts/verification/2026-09-16T16-48-14-949Z-architecture-metrics-8cf83cef/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP registry mutation extraction (2026-09-16)
+
+Moved normalized registry compare-and-set persistence into mcp-server-registry-mutation.ts. The four-attempt limit, fresh-snapshot update evaluation, no-op return and non-CAS failure behavior remain unchanged. The new C3 helper receives a fixed 2/0 allowance. Store accesses fall from 17 to 15; its original seven-access limit remains failing.
+
+43 store/admin tests pass and one is skipped in .tmp/mcp-registry-mutation-tests.log (12.04 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. PostgreSQL/live acceptance was not rerun. Architecture still fails with 16 findings: artifacts/verification/2026-09-16T16-50-55-559Z-architecture-metrics-b3c8b4bb/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP read projection extraction (2026-09-16)
+
+Moved server/auth/environment/approval reads and internal-server synthesis into mcp-server-read-service.ts. Its settings dependency exposes get only; normalized caller inventory and secret-safe public auth summaries remain unchanged. The new C3 helper receives a fixed 4/0 allowance. Store decreases from 15 to 11 accesses while its original seven-access limit remains failing.
+
+43 store/admin tests pass and one is skipped in .tmp/mcp-server-read-tests.log (12.61 seconds). Gateway typecheck, lint, seven allowance checks and docs checks pass. PostgreSQL/live acceptance was not rerun. Architecture still fails with 16 findings: artifacts/verification/2026-09-16T16-53-22-462Z-architecture-metrics-fd3719f9/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP credential-store composition extraction (2026-09-16, validation pending)
+
+Moved shared credential staging/retirement construction into mcp-credential-store-composition.ts, preserving construction order, transaction context and deferred custody/write-id readers. New C3 allowance is 2/0. Store decreases from 11 to nine accesses; original seven-access limit remains failing. Typecheck, final lint, seven allowance checks and docs checks pass. Initial lint required const for the single-assignment staging binding; corrected and rechecked.
+
+The two-suite staging/retirement run is still active: .tmp/mcp-credential-composition-tests.log, exec session 99949, runner PID 52400 and later worker PID 45180 observed. Keep the same run; do not restart based only on observation timeout. No pass claim until terminal results arrive. Architecture has 16 findings: artifacts/verification/2026-09-16T16-55-39-230Z-architecture-metrics-6637dce0/diagnostics/architecture-metrics-compare.json. Baseline unchanged. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### MCP configuration coordination extraction and credential validation completion (2026-09-16)
+
+The previously pending credential composition run completed successfully on the original session: all 43 staging/retirement tests passed in 663.08 seconds (.tmp/mcp-credential-composition-tests.log). No restart was needed.
+
+Moved reviewed configuration writes and exact OAuth reservation into mcp-server-configuration-service.ts. Preserve immediate transactions, current configuration checks, pending request reuse, mutation retries and cleanup/publication owner ordering. New C3 allowance is a conservative 10/0: eight measured callbacks plus two imported-context transaction accesses. Existing MCP store decreases from nine to its original seven-access limit; MCP runtime also remains within its original limit.
+
+57 store/admin/Gateway OAuth tests pass and one is skipped in .tmp/mcp-configuration-tests.log (244.64 seconds). Typecheck, lint, seven allowance checks and docs checks pass. PostgreSQL/live acceptance was not rerun. Architecture still fails with 15 findings: artifacts/verification/2026-09-16T17-08-19-887Z-architecture-metrics-802c5778/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion remains open. No drive operation, installation, live traffic, commit or push occurred.
+
+### Chat MCP and mesh profile binding extraction (2026-09-16)
+
+Moved native MCP discovery/final binding and mesh schema/publication freeze checks into separate plan-owned services. Preserve authenticated/manual admission, exact snapshot identity, static authority checks, fail-closed mesh drift checks and original ordering. Explicit local ports retain all measured moved accesses: C3 MCP allowance 10/0 and C5 mesh allowance 4/0. Existing Chat capability profile owner returns from 32 to its original 18-access limit.
+
+Initial MCP/profile/catalog/binding run passed 76 tests (.tmp/chat-mcp-profile-tests.log). After final mesh extraction, profile/mesh catalog/dispatch run passed 84 tests in 20.50 seconds (.tmp/chat-profile-bindings-tests.log); overlapping profile tests are not claimed as distinct tests. Gateway typecheck, lint, seven allowance checks, docs checks and diff check pass. Architecture still fails with 14 findings: artifacts/verification/2026-09-16T17-18-45-624Z-architecture-metrics-1b90a947/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full-plan completion and live acceptance remain open. No drive operation, installation, live traffic, commit or push occurred.
+
+### Mesh invocation read authority extraction (2026-09-16)
+
+Moved admitted-node intent/input read guards into mesh-invocation-read-authority-service.ts. Preserve exact node identity, confirmed envelope identity, current publisher credentials, settlement and deadline checks in their original order. Vault custody remains in the invocation owner. Shared errors moved into mesh-capability-invocation-errors.ts and re-exported from the original module, preserving class identity and status codes. New C5 allowance is a conservative 3/0 for the three moved storage operations obscured by imported Pick typing. Existing invocation owner decreases from 28 to 25, within its original 26-access limit.
+
+52 invocation/Chat dispatch tests pass in 72.17 seconds (.tmp/mesh-read-authority-tests.log). Gateway typecheck, lint, seven allowance checks, docs checks and diff check pass. Initial architecture command encountered the active typecheck output lock; retried only after that command exited. Final architecture run still fails with 13 findings: artifacts/verification/2026-09-16T17-22-06-864Z-architecture-metrics-a6234ca1/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full plan and live acceptance remain open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Durable wake transaction extraction (2026-09-16)
+
+Moved the immediate transaction containing worker approval wake evidence, optimistic queue update and timeline recording into durable-wake-transition-service.ts. The existing run owner retains admission, exact metadata authority, failure handling and post-commit realtime publication. New C5 owner receives a measured 4/0 allowance; existing owner decreases from 239 to 237 against its unchanged 238 limit.
+
+Initial focused run passed 133/134 tests. The checkpoint-seal drift fixture could insert two checkpoints in the same millisecond; repository identity tie-break meant the replacement was not necessarily latest. Fixed the fixture to create an explicitly newer checkpoint and assert selection, preserving the rejection expectation. All 16 approval-resume tests pass on retry in 36.31 seconds (.tmp/durable-wake-transition-resume-retry.log); all 118 durable-run tests passed in the original run (.tmp/durable-wake-transition-tests.log). Includes queue-CAS and timeline failure rollback. Typecheck, final lint, seven allowance checks, docs checks and diff check pass.
+
+Architecture still fails with 12 findings: artifacts/verification/2026-09-16T17-25-05-292Z-architecture-metrics-0f57938b/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full plan and live acceptance remain open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Channel setup and remote-worker route composition extraction (2026-09-16)
+
+Moved shared channel setup host binding into channel-setup-host-composition.ts, retaining original factory construction order, connection/diagnostic callbacks and secret custody. C4 allowance 11/0; existing integration composition decreases from 106 to 101 against unchanged 105 limit. Moved remote-worker route binding into remote-worker-route-composition.ts, preserving lazy runtime-owner access, manifest verification and disabled join-secret issuance. C5 allowance 9/0; existing runtime composition decreases from 110 to 101 against unchanged 104 limit.
+
+18 channel composition/contract/route tests pass in 7.67 seconds (.tmp/channel-setup-composition-tests.log); eight runtime composition tests pass in 6.52 seconds (.tmp/remote-worker-route-composition-tests.log). Gateway typechecks, focused lint, seven allowance checks and diff checks pass. Local wiring proof is not live channel or installed-worker acceptance. Architecture still fails with 10 findings: artifacts/verification/2026-09-16T17-30-09-963Z-architecture-metrics-4b90f5ff/diagnostics/architecture-metrics-compare.json. Original baseline remains unchanged. Full plan remains open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Remote-worker factory composition extraction (2026-09-16)
+
+Route service construction now shares remote-worker-route-composition.ts with its dependency binding. Its reviewed allowance grows from nine to 15 for six moved constructor accesses; gateway-route-services falls from 78 to 73 against original 75. Native handler composition moves into remote-worker-gateway-handler-composition.ts with a narrow port and nine-access allowance; runtime factory falls from 27 to 18 against original 24. Activation, required mesh owners, lazy execution construction and admission refusal are preserved. Initial direct GatewayService type import triggered the import-boundary gate and was replaced with a narrow explicit port; no gate threshold changed.
+
+Initial four-suite test run passed 33/34. Existing source assertion looked in the old runtime composition file; updated to inspect extracted owner plus factory delegation. All 17 route tests pass on retry (.tmp/worker-factory-composition-route-retry.log). Other 17 composition/admission tests passed initially (.tmp/worker-factory-composition-tests.log), including three new activation/refusal tests. Final Gateway typecheck and lint pass; seven allowance checks pass. Local tests do not establish live listener or installed-worker acceptance. Final architecture has 8 findings: artifacts/verification/2026-09-16T17-35-19-478Z-architecture-metrics-dd8b655d/diagnostics/architecture-metrics-compare.json. Original baseline unchanged; full plan remains open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Workflow capture composition extraction (2026-09-16)
+
+Moved workflow capture construction and preparation/staging route bindings into workflow-skill-capture-composition.ts, preserving one shared service instance and unchanged actor/session arguments. C2 allowance is a conservative 5/0 for storage, two configuration reads and two service callbacks; imported typing measures three. Existing Chat composition returns from 144 to original 141 limit. No activation or memory-write authority added.
+
+All 16 capture/Chat composition tests pass in 29.91 seconds (.tmp/workflow-capture-composition-tests.log). Gateway typecheck, focused lint, seven allowance checks, docs checks and diff check pass. Architecture still fails with 7 findings: artifacts/verification/2026-09-16T17-37-54-051Z-architecture-metrics-fce364b5/diagnostics/architecture-metrics-compare.json. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Cross-session live capture acceptance and full plan remain open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Candidate skill catalog extraction (2026-09-16, test run pending)
+
+Moved workspace-approved candidate catalog projection and artifact-review delegation into candidate-skill-catalog-service.ts. Preserve sequential exact-byte loading, workspace binding, lifecycle projection matching, runtime disabled state and revision fallback. Shared pure callable/projection checks remain single-source. New C2 allowance is measured 6/0; capability owner returns from 265 to original 259 limit. Added three focused projection tests covering workspace forwarding, rejected loads and disabled-state preservation.
+
+Initial typecheck found the existing inferred array narrower than SkillListItem; made its public item contract explicit and removed the moved unused type import. Final typecheck and lint pass, as do seven allowance checks, docs checks and diff check. The original three-suite Vitest process remains live on exec session 10145, started 10:41:11 local, with runner process tree observed (19588/52992 among task-related Node processes). Log: .tmp/candidate-catalog-extraction-tests.log. No terminal test result yet; do not restart because observation timeouts expired. Architecture still fails with six findings: artifacts/verification/2026-09-16T17-41-47-561Z-architecture-metrics-d212bbc0/diagnostics/architecture-metrics-compare.json. Full plan remains open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Candidate catalog validation completion and requester MCP composition extraction (2026-09-16)
+
+The previously pending candidate test run completed on its original process: all 114 tests passed in 184.99 seconds (.tmp/candidate-catalog-extraction-tests.log).
+
+Moved the complete 622-line requester MCP host/runtime block from GatewayService into mcp-requester-runtime-composition.ts, preserving its exact function bodies and public exports through re-export. Original shared imports retained where still used; new owner has no GatewayService import. It owns fixed resolver registry, bounded discovery, final bindings, live revocation checks, exact recovery, dispatch and secret-free diagnostics. C3 allowance records the moved 36 dependency accesses and 34 host callbacks. GatewayService line-count regression is cleared.
+
+All 19 composed MCP tests pass in 36.28 seconds (.tmp/mcp-requester-composition-tests.log). Gateway typecheck, lint, seven allowance checks, docs checks and diff check pass. Local composition proof is not live Browser QA acceptance. Architecture still fails with five findings: artifacts/verification/2026-09-16T17-47-01-374Z-architecture-metrics-2e70d6cb/diagnostics/architecture-metrics-compare.json. Remaining findings are Chat workbench, remediation approval authority, memory pagination/lifecycle and personality test support; scope needs continued review rather than blanket allowances. Original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. Full plan remains open. No drive operations, installation, live traffic or Git publication occurred.
+
+### Async-boundary capture correction and ownership checks (2026-09-16)
+
+The required async-boundary gate exposed an extraction regression: its route analyzer could not classify spread workflow-capture methods. Restored explicit preparation/staging methods in Chat composition and limited workflow-skill-capture-composition.ts to shared service construction. The allowance narrows from five to three accesses; analyzer rules and original owner limits are unchanged.
+
+Async-boundary retry passes all ten tests and scans 1084 production TypeScript files (.tmp/capture-async-boundary-retry.log). All 16 capture/Chat tests pass in 29.76 seconds (.tmp/capture-async-boundary-tests.log). Gateway typecheck and lint pass. Memory ownership passes with 21 references across two allowlisted files (.tmp/comparison-memory-ownership-20260916.log). Architecture retains 5 findings: F:/code/personal-ai/artifacts/verification/2026-09-16T17-50-41-285Z-architecture-metrics-cfb1b12e/diagnostics/architecture-metrics-compare.json. Existing remaining workbench/memory/personality revision work is documented under broader GATE-02 history; remediation scope also needs review. No blanket allowances granted. Full plan remains open; no drive operation, installed service, live traffic or Git publication occurred.
+
+### Installed-worker composition verification and remaining native owners (2026-09-16)
+
+Fresh source inspection confirms cell_controller_main.cpp wires volume/format/protection/mount/mounted-workspace provisioning and runtime sessions, but no observe_capacity, observe_backing_capacity, observe_inventory or install_runtime callbacks. The protocol explicitly refuses missing owners. CellControllerInstalledFiles pins ten installation directories and two runtime files; these pins do not establish the global writer quiescence required by cell_capacity.hpp or map all thirteen accounting categories. Runtime bundle InstallTo requires current package/capacity authority at each create/write/publication boundary. Do not wire it with an always-successful guard, empty category roots, or a mutex that other writers do not honor.
+
+All 164 tests passed across worker-windows-installed-runtime, worker-windows-runtime-startup, worker-windows-installation-recovery, worker-runtime-install-client and worker-windows-runtime-parent-session in 30.16 seconds (.tmp/installed-worker-composition-20260916.log). Remote-worker typecheck passes (.tmp/installed-worker-source-typecheck-20260916.log). These are controlled local protocol/composition tests, not installed-service, drive, quota or two-machine proof. No source behavior was changed in this verification slice. Full C5 implementation and physical-machine acceptance remain unfinished. No drive operation, installed service, live provider/channel traffic or Git publication occurred.
+
+### Node worker local-state writer coordination (2026-09-16)
+
+Added worker-local-state-activity.ts and registered actual file-backed durable writes/deletes, process-report publication and initial state-directory creation. The process-local FIFO owner drains earlier writes and holds later writes until a quiescent callback settles. Cancelled queued observers cannot let successors overtake an active writer. Active cancellation retains exclusion until callback completion and then rejects its result. Nested activity rejects instead of deadlocking; failures release the queue. Report content remains captured at request time before waiting.
+
+Ten activity/durable-state/state-ownership tests pass in 1.87 seconds (.tmp/worker-local-state-activity-final-tests.log), including real temporary files and held report publication; there is no separate worker-process-report.test.ts, and it is not counted as an executed suite. An additional 43 lease/credential/transcript/terminal-settlement tests pass in 2.64 seconds (.tmp/worker-local-state-activity-owners-tests.log). Remote-worker typecheck, focused lint, docs checks and diff check pass.
+
+This is a prerequisite for installed capacity measurement, not complete global quiescence. Native jobs, native journal writers, other processes and unregistered filesystem calls require separate custody and coordination; no installed capacity or runtime-install callback is enabled by this change. The authenticated controller handshake, complete accounting layout and physical-machine acceptance remain open. No drive operation, installed service, live traffic or Git publication occurred.
+
+### Capacity protocol local-writer exclusion (2026-09-16)
+
+Connected mounted capacity, backing capacity and inventory observation calls to the registered Node worker local-state activity owner. Each observation drains earlier writers and holds later writers through the helper's terminal close. The deadline starts before queue admission and the same signal reaches the transport, so queue time does not receive a fresh transport budget. Delivery persistence remains outside this measurement hold. Runtime execution and installation are unchanged.
+
+All 243 protocol/activity tests pass in 40.92 seconds (.tmp/measurement-writer-exclusion-tests.log). New integration cases cover cancellation during each of the three measurement operations, delayed helper close, queued cancellation, and successor ordering. After adding a success-path writer-release assertion, that focused test passes in 1.89 seconds (.tmp/measurement-writer-success-tests.log). Remote-worker typecheck and focused lint pass. These are controlled child-stream tests; no installed helper or drive operation ran.
+
+This establishes registered Node-writer exclusion only. Native/controller writers, cross-process custody, complete accounting layout, installed callbacks and physical acceptance remain unfinished. Existing architecture-owner limits and reviewed allowance scope are unchanged. Full plan remains open; no Git publication occurred.
+
+### Refuse controller continuation after uncertain job teardown (2026-09-16)
+
+CellRuntimeControllerConnection now retains a controller-stop requirement while its session runs. It clears that requirement only after dispatch has joined (or never started), and any launched job has verified zero processes and drained output. Permission or receipt failure after proven cleanup remains distinct. The installed controller checks this state after the current protocol session and returns ERROR_PROCESS_ABORTED before accepting another session. This prevents serialization from being mistaken for cleanup proof; it does not enable capacity callbacks or establish global writer quiescence.
+
+The native runtime-session lane passed in 137.71 seconds (.tmp/controller-cleanup-proof-tests.log). Normal and AddressSanitizer each passed 501 checks over 39 sessions, nine composed controller connections and 27 real AppContainer jobs. A controlled seam removes cleanup evidence after a safely drained real job: terminal retention remains successful, but controller continuation is refused. Evidence is retained at .tmp/native-temp-20260916-install-protocol/Goat Runtime Session uMkg0v. The Windows x64 production controller payload also compiled successfully (.tmp/controller-cleanup-build.log; SHA256 2d91ea9a96d573589421e795468b2aa4873eb7fadb17c042a782c46b08245a3e). The payload was not installed or executed. Script syntax and diff checks passed.
+
+Production service-stop behavior was compiled but not exercised under SCM. These checks use private pipes, controlled admission/persistence and temporary NTFS paths; no physical volume, installed service, live Gateway/provider/channel or two-machine acceptance ran. Native capacity ownership, complete accounting layout and installed runtime-copy composition remain open. Full C0-C6 completion remains unproven; no commit or push occurred.
+
+### Stable lease authority during native installation reads (2026-09-16)
+
+Inspection found that ordinary assertCurrent renews and persists the worker lease. Calling it under local writer exclusion would reject a nested state write; concurrent renewal could also wait on the held writer window. Added validated readWorkerLeaseControl and an explicit withStableLease authority window: renew/persist first, retain the exact lease, perform read-only current-control checks, defer concurrent renewal until release, and expire escaped callbacks. Failed stable-window checks abort further authority.
+
+Installed installation recovery now uses that window and its read-only check for native custody and repeated installation challenges. Canonical outcome retention remains after release. Native installation/recovery exchanges now hold registered Node writers through terminal helper close, sharing one deadline across queue and transport. This does not enable the absent installed runtime-copy callback or authorize a copy. Future capacity composition must likewise supply stable read-only checks; the driver contract documents this requirement.
+
+The initial three-suite run had 268 passes and one expected-error mismatch: revocation is now caught earlier by the read-only control check. Updated that expectation; final lease/recovery run passes all 31 tests in 5.46 seconds (.tmp/stable-install-lease-retry.log). The volume protocol suite passed all 240 tests in the initial run (.tmp/stable-install-lease-tests.log), including added success/cancellation writer exclusion for both install and recovery. Another 148 tests across installed-runtime/startup/install-client/parent-session pass in 13.41 seconds (.tmp/stable-install-composition-tests.log). Final remote-worker typecheck and focused lint pass. Native source was unchanged this slice; no installed service or drive operation ran.
+
+Full plan remains open, including native/global accounting ownership and physical acceptance. No live provider/channel traffic, commit or push occurred.
+
+### Installed assignment capacity delivery composition (2026-09-16)
+
+Added worker-windows-assignment-capacity.ts to connect mounted/backing retained-delivery coordinators to protected RPC clients, installed custody and the native driver's matching observation method. Renewal/persistence completes before entering a stable lease window. Native authority callbacks only read current control; observation writers are held by the native driver and pending/canonical delivery records are written after that hold. Scope passed to delivery excludes the lease secret. This is an explicit callable composition entry, not scheduling activation or a claim that the controller's missing measurement callbacks are implemented.
+
+Eight new controlled composition tests pass in 3.86 seconds (.tmp/installed-capacity-composition-tests.log): both measurement kinds, actual temporary file-backed state, stable checks without nested renewal, pending delivery replay after response loss without a rescan, native refusal and post-scan revocation. Existing coordinator/client tests pass all 55 cases in 5.05 seconds (.tmp/installed-capacity-existing-tests.log). Typecheck and focused lint pass; final typecheck also confirms distinct mounted/backing return types.
+
+The native controller must still supply its independently quiescent observation owners. No scheduler, readiness flag, installed service, drive operation or live traffic was enabled. Complete accounting layout, native installation and physical-machine acceptance remain open. Full plan is unfinished; no Git publication occurred.
+
+### Full worker coordination regression and native restart boundary (2026-09-16)
+
+The complete @goatcitadel/remote-worker test suite passes: 1,337 tests across 67 files in 65.34 seconds (.tmp/worker-coordination-full-suite.log). This covers the current Node worker candidate after registered writer exclusion, stable read-only lease authority, installation recovery and mounted/backing delivery composition. It is not native installed-service, global accounting, quota or two-machine acceptance.
+
+Native source inspection confirms workspace ACLs grant controller/System writes and scoped AppContainer work writes, excluding ordinary worker access. A serialized listener and same-process cleanup-stop guard do not alone establish restart quiescence. CellRuntimeLocalOutcome flushes an intent before dispatch and a sealed outcome afterward; Read requires an independently bound exact CellRuntimeDispatch, while incomplete/encoding-failed outcomes retain uncertainty. Do not manufacture that binding from filenames, interpret a directory scan as complete writer coverage, or enable observe_capacity/observe_backing_capacity/observe_inventory on that evidence alone. The installed owner still needs complete prior-attempt and writer-lifetime custody before those callbacks can be connected.
+
+No source behavior changed in this verification slice. Full plan remains unfinished. No drive operation, installed-service operation, live provider/channel traffic, commit or push occurred.
+
+### Explicit retained job-cleanup evidence (2026-09-16)
+
+CellRuntimeLocalOutcomeRecord now exposes cleanup_verified, derived by the existing exact-request/sealed-outcome decoder. An encoded pre-launch refusal with no process ID qualifies; a launched process requires both recorded zero-process verification and drained output. Intent-only, diagnostic-only/unencodable, corrupt or mismatched records cannot supply this fact. No stored bytes, hash domains or wire format changed. This is historical evidence for the bound attempt, not current quiescence, complete prior-attempt coverage, or execution/measurement authority.
+
+The native runtime-result lane passes both tests in 211.58 seconds (.tmp/native-retained-cleanup-tests.log). Normal and AddressSanitizer each pass 150 local-outcome checks, including reopening all cleanup flag combinations from protected temporary files. Both also pass 399 terminal-result checks over 54 private-pipe fixtures and the 20,000-entry inventory boundary. Existing cross-language installation outcome validation passes in the same lane. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome reI3CU and Goat Runtime Result oFl4r2. These fixtures use controlled execution metadata and no workloads, installed services or physical volumes.
+
+Runtime request download remains bound to admitted request bytes and its expectation; the local reader must not reconstruct that authority from filenames. The native controller still needs complete prior-attempt/writer custody before measurement callbacks can be enabled. Full plan remains unfinished. No drive operation, installed-service operation, live provider/channel traffic, commit or push occurred.
+
+### Complete runtime-attempt cleanup coverage reader (2026-09-16)
+
+Added CellRuntimeLocalOutcome::VerifyCleanupCoverage. It binds the original mounted journal and scans the protected control directory's direct .runtime attempt namespace. Independently supplied requests must match that complete filename set exactly; duplicate or omitted nonces, malformed attempt entries, mismatched request hashes and unproven cleanup refuse. Each outcome is decoded through existing sealed exact-request custody. A second enumeration after the last authority callback detects newly added attempts. Reads are bounded to 1,000 runtime records, 20,000 directory entries and 60 seconds, under the caller's native watchdog. No record is rewritten or adopted.
+
+The caller must serialize control-directory writers for the entire check and ensuing use. This covers runtime attempts only, not installation/host writers or arbitrary privileged changes. It does not supply the independently admitted request set, current execution authority, global accounting coverage or measurement activation.
+
+Normal and AddressSanitizer each pass 168 native local-outcome checks (.tmp/native-cleanup-coverage-tests.log, lane duration 107.78 seconds). Added protected temporary-file cases cover exact coverage, omissions, duplicates, matching-name/wrong-request substitutions, revocation, an attempt added during the final authority callback and a complete name set containing an interrupted intent. Existing cross-language installation outcome checks also pass. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome cpxSYN. No workload, installed service or physical volume was used.
+
+Native request-set transport/composition and other-writer custody remain necessary before controller measurement callbacks can be enabled. Full plan remains unfinished; no drive operation, installed-service operation, live traffic, commit or push occurred.
+
+### Historical cleanup expectation set in storage (2026-09-16)
+
+Source tracing found executable review candidates are a five-minute in-memory Gateway cache, so they cannot supply a restart-wide cleanup set. No new command/input retention was introduced. Existing immutable remote_worker_runtime_expectations hold nonce/request hash, checkpoint hash, runtime-bundle hash and result limits; the current validated provisioning history supplies journal/workspace identities. Together these metadata inputs can bind native result verification without recovering executable review content or granting execution.
+
+Added RemoteWorkerRuntimeResultRepository.readCleanupExpectationsForAssignment under its existing assignment/cell transaction and protected credential/mesh/lease fences. It returns the entire deterministically ordered expectation set plus history, refuses more than 1,000 records and decodes every row against the current plan/lease/history. One batched query avoids a query per expectation. Existing single-expectation reads share the same decoder. No schema, retained record or migration changed.
+
+After correcting an initial missing brace and an intentional-invalid-input test cast, storage typecheck passes. Final batched-read SQLite verification passes all three runtime-result retention scenarios in 27.34 seconds (.tmp/cleanup-expectations-batch-read-tests.log): reconstructed repository reads, retained metadata after execution completion, stale/missing authority and worker/mesh/parent revocation. These are isolated SQLite fixtures; PostgreSQL was not run this slice. Native wire adaptation, protected cleanup-set transport and controller composition remain open. No drive/service operation, live traffic, commit or push occurred. Full plan remains unfinished.
+
+### Native cleanup metadata boundary (2026-09-16)
+
+VerifyCleanupCoverage now accepts CellRuntimeCleanupExpectation, containing only retained nonce/request hash, journal anchor/checkpoint, runtime bundle hash, workspace identities and result limits. It no longer accepts full executable dispatches. The sealed-result decoder receives a local metadata-only adapter; no command, arguments, environment, stdin or staging selectors are retained or dispatched. Protected transport must independently supply these values from the retained expectation set and validated history.
+
+The local-outcome lane passes in 85.86 seconds (.tmp/native-cleanup-metadata-retry.log), with 174 checks each in normal and AddressSanitizer runs. Added coverage includes a sealed launched-result fixture with a 20,000-entry inventory and refusal of substituted checkpoint, runtime bundle, workspace identity, input/output limits and inventory limit. Existing omitted/duplicate/new/interrupted attempt and revocation cases pass. An initial warning-as-error for a shadowed local variable was corrected before the successful rerun. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome xptVvb. Execution metadata remains controlled; no workloads, physical volumes or installed services were used.
+
+This is the native metadata reader boundary, not an implemented Gateway transport or controller measurement activation. Protected complete-set transport, writer custody and installed controller composition remain open. No architecture baseline changed, live traffic, drive/service operation, commit or push occurred. Full plan remains unfinished.
+
+### Protected historical cleanup lookup (2026-09-16)
+
+Added the runtime.cleanup.read contract, Gateway historical-read owner and worker client through the existing signed assignment-settlement path. The Gateway obtains the complete set from readCleanupExpectationsForAssignment under existing storage fences. Responses contain a fresh challenge, validated mounted provisioning history and up to 1,000 strictly ordered unique expectations; they contain no executable requests. Both Gateway and worker bind the response to the current assignment generation and lease. Cancellation is checked before and after storage/transport. Caller-injected expectations/approval claims, missing owners, malformed sets and invalid proof refuse. This read does not grant execution, measurement or cleanup authority and does not activate controller callbacks.
+
+Validation: .tmp/cleanup-transport-final-tests.log passes 125 tests across four suites, including production owner composition and signed protocol routing. The final 11-test cleanup suite also passes after adding the 1,000-entry response-size boundary and descending nonce refusal (.tmp/cleanup-transport-boundary-tests.log). Contracts build, Gateway and worker typechecks and focused lint pass. The initial Gateway typecheck found an unexported type import; it was replaced with the existing exported page-assignment input type. The named async-boundary lane passes 10 tests and scans 1,085 production TypeScript files. Seven architecture allowance tests pass. These are controlled storage/route fixtures, not live mTLS, PostgreSQL, installed-controller or second-machine acceptance.
+
+Reviewed an explicit four-dependency, zero-host-callback allowance for the new C5 cleanup read owner. Historical-read composition was extracted so existing execution-composition and submission-owner limits remain unchanged. Original architecture baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. The final gate reports only the five previously recorded unrelated-owner findings (artifact artifacts/verification/2026-09-16T19-00-51-832Z-architecture-metrics-c272e36a); it is not globally green. One simultaneous verification attempt correctly refused a live worker-typecheck output lock; the retry ran after that process completed without bypassing the lock.
+
+Gateway-to-worker historical lookup is connected. Native pipe encoding/transport, independently validated complete-set binding at the controller and full writer custody remain before measurement activation. No live traffic, drive/service operation, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Cross-language cleanup set encoding (2026-09-16)
+
+Added encodeRemoteWorkerRuntimeCleanup and native HashCellRuntimeCleanup/DecodeCellRuntimeCleanup. GCCLEAN1 carries a 252-byte common challenge/journal/checkpoint/workspace header plus 108 bytes per ordered expectation, up to 1,000 entries (108,252 bytes). A domain-separated SHA256 binds the entire set; the native decoder requires an independently supplied challenge and digest. All shared identities, lengths, nonce ordering, nonzero hashes and result limits are validated before any decoded output is returned. No command or staging selector is encoded. The binary format supplies no current authority and opens no transport endpoint.
+
+Named local-outcome verification passes in 87.16 seconds (.tmp/cleanup-wire-native-retry.log). Normal and AddressSanitizer both pass empty/two/1,000-entry cross-language cases with 15/39/2,021 checks, respectively, in addition to the existing 174 local-outcome checks and installation exchange. The two-entry decoded set reconciles actual protected temporary local records through the existing coverage reader. Tests refuse challenge replay, substituted history, count/length mismatch, invalid/duplicate identities, zero nonce/output limits, excessive inventory limits and duplicate entries. The first build caught a narrowing warning in test fill values; explicit byte values fixed it. Contracts build and focused encoder lint pass. The snapshot includes native sources plus TypeScript encoder/normalizer source, built JavaScript and the test runner, and verifies hashes after the run. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome ABn4Kp.
+
+This proves encoding/decoding and controlled local reconciliation, not a native pipe exchange, installed journal, physical volume or current writer quiescence. Protected native pipe handoff and controller-side authority/custody composition remain open. No live traffic, drive/service operation, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Native cleanup pipe exchange (2026-09-16)
+
+Added CellRuntimeCleanupTransfer on retained authenticated overlapped pipes, with copied independent challenge/set digest, required cancellation, a maximum 60-second deadline and current-authority checks around bounded I/O. The one-shot transfer sends a 96-byte GCCLX001 header, ordered GCCLD001 chunks of at most 4,096 bytes and an 80-byte GCCLA001 receipt. Receipt fields bind challenge, digest and full byte count. Reserved framing bytes must be zero. Reads return no metadata until decoding and the final authority check succeed; successful receipt is not cleanup, measurement or execution authority. No endpoint or installed callback is activated.
+
+Final named native local-outcome lane passes in 86.71 seconds (.tmp/cleanup-pipe-final-tests.log). Normal and AddressSanitizer each pass empty/two/1,000-entry cases with 49/73/2,055 checks, respectively; these include 39 real task-owned private pipe fixtures per mode. Checks cover complete delivery, immutable send snapshots, wrong bindings, mid-transfer and post-receipt authority loss, cancellation, expired deadlines, missing authority, per-instance replay refusal, oversized headers, wrong chunk offsets, truncated connections, wrong receipts and truncated receipts. Existing local-outcome and installation checks also pass. A final fixture refinement joins the receipt peer before signalling cancellation, avoiding a race between receiving ACK bytes and the peer's completed write. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome CUnJIh.
+
+The new native-to-native pipe primitive consumes the cross-language metadata encoding. Installed peer/set authority, the worker-parent adapter and production controller composition still need wiring, and complete writer custody remains necessary before measurement activation. Fixture authority is controlled and is not installed admission proof. No live traffic, physical-volume/drive/service operation, workload, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Worker cleanup sender and stable-lease composition (2026-09-16)
+
+Added WindowsRuntimeCleanupSender for the native GCCLX001/GCCLD001/GCCLA001 metadata protocol. It snapshots canonical metadata before callbacks, sends bounded ordered chunks, validates the entire receipt, checks current authority around writes/receipt, and refuses reuse. Cancellation, closed channels, unsolicited/excess response bytes, competing data consumers and absolute deadline overrun withhold success. Timer starvation cannot extend authority because checks also use the monotonic deadline. Event listeners and timers are removed on both success and refusal; the enclosing authenticated owner retains and closes the borrowed channel.
+
+Added sendWindowsAssignmentCleanup. It holds withStableLease across protected Gateway lookup, independent receiver binding and transfer, using the supplied read-only lease check instead of renewing under the hold. Receiver binding is an explicit protected peer callback; the helper neither opens nor admits a native endpoint. Lookup, binding, revocation and cancellation failures send no metadata.
+
+All 18 focused worker tests pass (.tmp/cleanup-parent-final-tests.log), covering empty/two/1,000-entry framing, fragmented receipts, wrong/extra/truncated/missing receipts, cancellation, mid-transfer and late authority failure, hung callbacks, deadline starvation, snapshots, competing readers, listener cleanup, one-shot behavior and stable-lease composition order. Worker typecheck and focused lint pass. Initial typecheck found an unchecked fixture byte access, corrected before the final pass. These are controlled Duplex/authority fixtures; direct Node-to-native interoperability, installed admission and controller measurement composition remain unverified.
+
+No architecture limits changed. No live traffic, physical-volume/drive/service operation, workload, commit or push occurred. Full C0-C6 plan remains unfinished. Next native acceptance must connect this Node sender to CellRuntimeCleanupTransfer on a task-owned pipe before installed integration is claimed.
+
+### Node-to-native cleanup interoperability (2026-09-16)
+
+Extended the named local-outcome lane to connect the built WindowsRuntimeCleanupSender to the compiled CellRuntimeCleanupTransfer receiver on fresh task-owned Windows named pipes. The native fixture obtains its independent challenge/digest from a separate bounded fixture file and checks the actual pipe server PID against the launched Node parent. It remains connected through the sender's final authority check, then waits for explicit fixture completion before exiting. The runner joins each child and closes its own socket/server; a bounded watchdog only terminates that task-owned child on failure.
+
+The full lane passes in 92.77 seconds (.tmp/cleanup-parent-native-tests.log). Normal and AddressSanitizer builds each accept empty, two-entry and 1,000-entry transfers (252, 468 and 108,252 bytes), and both reject a deliberately mismatched independent digest. Both Node delivery and native exit status are checked; the negative native stderr failure is expected. All prior local outcome, native pipe, metadata-boundary and installation checks pass in the same run. Source manifests now also pin the worker sender's TypeScript and built JavaScript. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome 4zv7Kj/acceptance.json.
+
+This closes the direct Node/native interoperability gap for the cleanup transfer. Fixture PID continuity is not installed service admission or full protected receiver-binding composition. The production controller still needs exact-set authority and complete writer custody before measurement callbacks can be activated. No real workloads, live Gateway/provider/channel requests, drive/volume/service operation, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Native file-writer lifetime joins measurement exclusion (2026-09-16)
+
+Source tracing confirmed the installed controller serializes its accepted sessions and stops after uncertain runtime teardown, but found a separate worker writer: createWindowsWorkerFileExecutor launched mutating helpers outside workerLocalStateActivity. Registered the write channel with that owner from before spawn through the existing joined child-close completion. Receipt bytes and kill requests cannot release the hold early. Read-only inspection/listing remain outside the mutation queue. WorkerLocalStateActivity.mutation now accepts optional cancellation, preserving FIFO ordering when queued writes are cancelled.
+
+The file request is copied before encoding and queueing, so caller changes cannot alter delayed native bytes or subsequent root/creation receipt checks. Added controlled child tests for success, cancellation, malformed output, delayed close, queued cancellation, non-overtaking successors and request mutation. Final focused validation passes 49 tests across three suites (.tmp/native-file-writer-activity-final-tests.log); worker typecheck and lint pass.
+
+The real native file lane also passes all 11 checks in 50.32 seconds (.tmp/native-file-writer-real-tests.log). It exercises actual bounded temporary-file writes/replacements, path escapes, links/streams/open-writer refusal, directory reads, image pinning, ASAN protocol boundaries and joined cancellation. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Worker Files zaUWB0. All filesystem effects are test-owned temporary files; no volume or installed-service operation was used.
+
+This closes the native file helper's local measurement-exclusion gap, not full process/host writer custody. Native stdio/job lifetimes and installed controller cleanup admission still require composition; the existing measurement callbacks remain unactivated. No architecture limits changed, live traffic, drive formatting, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Native stdio writer lifetime joins measurement admission (2026-09-16)
+
+WorkerLocalStateActivity now registers external writer lifetimes separately from its FIFO state-save queue. Measurements refuse while any registered job is active or has uncertain cleanup, while durable state/output handling can continue. Registration is synchronous before spawn and refuses during an active measurement. Queued measurements check the writer set when they acquire the queue. Each registration finishes once; uncertain cleanup cannot be cleared by a later duplicate finish call. This state is local to one owner lifetime and does not establish cross-process or restart custody.
+
+startWindowsWorkerStdio reserves this lifetime after current-authority admission and before spawning the pinned helper. A synchronous spawn failure releases the unused reservation. A launched helper releases only after joined close and an accepted completion proving zero processes and drained output. Receipt arrival alone does not release it. Missing/malformed receipts, cancellation and incomplete cleanup retain measurement refusal. Existing job state writes remain available; no measurement or installed controller callback is activated.
+
+All 20 focused checks across three suites pass (.tmp/stdio-writer-final-tests.log), including multiple concurrent registrations, sticky uncertainty, queued measurement rechecks, no launch during measurement, no early release on receipt and continued state saves. Worker output-lock typecheck and focused lint pass. The real native stdio lane also passes all 14 tests in 91.04 seconds (.tmp/stdio-writer-native-tests.log), covering actual AppContainer MCP exchanges, malformed/hung peers, protected workspace substitution, binary I/O pressure, bundle drift, authority loss, protocol rejection, cancellation and image pinning. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Worker Stdio mgY17J.
+
+This closes the registered stdio helper's process-local measurement gap. Historical cleanup and complete installed writer custody remain necessary before measurement activation. The native lane used task-owned temporary fixtures and children; no physical-volume operation, drive formatting, installed-service operation, live provider/channel traffic, commit or push occurred. Existing architecture-owner limits remain unchanged. Full C0-C6 plan remains unfinished.
+
+### Cleanup handoff deadline and joined authority callbacks (2026-09-16)
+
+Controller integration tracing found that sendWindowsAssignmentCleanup previously started its timeout only after lookup and receiver binding. The composition now validates one total budget before lease admission, carries a combined cancellation signal through lookup/peer verification/binding, and checks a monotonic absolute deadline before and after awaited work. The sender accepts the same enclosing deadline, so delayed binding or delayed timers cannot restart the transfer budget. Closing the composition cancels its borrowed callback signal.
+
+The stable lease remains held until the sender's last in-flight authority callback settles, including when the sender cancels its own wait first. Lookup and binding callbacks are also awaited through settlement. Callbacks must honor cancellation and join their own I/O; a callback that ignores cancellation still requires the enclosing process watchdog. Timeout refuses success and further protocol steps, rather than falsely claiming arbitrary native work has already stopped.
+
+Final focused validation passes 28 checks across the assignment composition and sender suites (.tmp/cleanup-handoff-deadline-final-tests.log). New cases cover timeout during lookup, initial peer verification, receiver binding and transfer authorization, held lease until delayed callback join, no protocol writes after refusal, timer-starved deadline checks, delayed sender start and invalid budgets before lease admission. Worker output-lock typecheck and focused lint pass.
+
+The named native local-outcome lane passes in 146.36 seconds (.tmp/cleanup-handoff-deadline-native-tests.log), including existing normal/ASAN local outcome coverage and direct Node/native cleanup exchanges. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome rdPxoJ/acceptance.json. These remain controlled private-pipe and temporary-file fixtures; installed receiver admission, complete writer custody and physical-host acceptance are not established. No architecture thresholds, installed services, volumes, live provider/channel state or Git publication were changed. Full C0-C6 plan remains unfinished.
+
+### Remaining architecture allowance review (2026-09-16)
+
+Fresh architecture-metrics verification still fails on exactly five dependency-access regressions: chat-workbench-service 73 versus 71; governed-remediation-approval-authority 4 versus 0; memory-item-pagination-service 4 versus 0; memory-lifecycle-service 263 versus 258; personality-revisions.test-support 1 versus 0. Evidence: artifacts/verification/2026-09-16T19-56-45-876Z-architecture-metrics-cdfbb7f2/diagnostics/architecture-metrics-compare.json and .tmp/architecture-remaining-review.log. Baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318.
+
+The two existing owners remain subject to their original caps. Inspection of the other three owners did not establish a direct approved-plan ownership basis for new allowances: they implement generic remediation approval verification, memory-admin cursor pagination, and personality revision test support. Their checkpoint commit alone does not establish plan scope. No allowance, baseline, inventory or counting rule was changed, and these regressions remain visible rather than being labeled waived or passed. This is a gate review, not completion of C0 or the full plan.
+
+### Controller cleanup metadata binds the complete native history (2026-09-16)
+
+Added DecodeCellControllerCleanup beside the controller's existing history validators. It verifies the independently supplied cleanup challenge/digest, validates the complete outer request and its 21 retained history records under local owner/controller principals, and matches cleanup journal identity, prepared hash, checkpoint and mounted workspace identities. Workspace identities are independently decoded from the validated mount/workspace checkpoints, including for an empty cleanup set. Every refusal clears the output. This decoding establishes metadata binding only; it neither proves current writer quiescence nor activates an installed callback.
+
+New native protocol cases cover empty and populated sets, capacity/backing/inventory requests, an independently bound runtime request, all 21 missing history records, substituted principals, challenge/digest mismatches and invalid operation/binding combinations. Eight journal/checkpoint/workspace substitutions are rehashed and first verified as internally valid cleanup encodings, then refused against the independent controller request. This distinguishes request binding from merely checking an internally consistent digest.
+
+The first build rejected an implicit integer-to-byte conversion in the new fixture under warnings-as-errors; explicit uint8_t fixture values corrected it. The full named controller protocol lane then passed in 619.02 seconds (.tmp/controller-cleanup-binding-final-tests.log). Both normal and AddressSanitizer runs pass 14,990 base checks and 2,381 capacity checks, plus mounted workspace, backing capacity, inventory and runtime-handoff groups. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Cell Controller Protocol UlNfuO/acceptance.json. Production service binaries compile and refuse interactive launch; controlled physical-driver fixtures report no installed service, volume attachment, formatting or mounting.
+
+Installed cleanup admission still needs to invoke this binding check together with sealed historical outcome coverage and complete writer custody before observations can be activated. No live provider/channel traffic, drive formatting, installed-service operation, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Controller-bound cleanup receiving before acknowledgement (2026-09-16)
+
+CellRuntimeCleanupTransfer.ReadForController now connects the complete controller-history validator to the actual framed cleanup receive path. It snapshots the independently admitted request and local principals before any authority callback, checks received bytes against that snapshot before sending GCCLA001, and returns metadata only after the existing final authority check. Bound and generic reads share one framing implementation and one-shot state; a refused bound read cannot be retried as an unbound read. The receipt still proves delivery, not sealed historical cleanup or present writer quiescence.
+
+Ten new task-owned private-pipe cases per native build cover empty/populated sets, successful bound receipt, mutation of caller-owned request/principal data after snapshot, missing history, wrong principal and authority revocation before acknowledgement. The guards check actual client/server PIDs against the fixture process; this is controlled local identity evidence, not installed service admission. Both reader output and writer receipt result are checked, and the writer is joined before successful-fixture cancellation.
+
+The named controller protocol lane passes in 636.21 seconds (.tmp/controller-cleanup-receive-tests.log), with all normal and AddressSanitizer groups passing and 2,451 capacity-group checks per build. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Cell Controller Protocol WvbuAE/acceptance.json. The existing local-outcome/cleanup transfer lane also passes in 158.55 seconds (.tmp/controller-cleanup-receive-regression.log), including normal/ASAN coverage and direct Node/native interoperability; evidence is .tmp/native-temp-20260916-install-protocol/Goat Local Outcome oK8yK5/acceptance.json.
+
+The receiver API is ready for the installed admission owner, but that owner still needs to supply the independently bound request and combine historical coverage with complete writer custody before enabling observations. No installed callback, service, volume, live provider/channel traffic or Git publication was activated. Full C0-C6 plan remains unfinished.
+
+### Sealed local outcome coverage before cleanup acknowledgement (2026-09-16)
+
+Added CellRuntimeCleanupTransfer.ReadVerifiedForController. After snapshotting and validating the complete controller request, this path invokes CellRuntimeLocalOutcome.VerifyCleanupCoverage against the original borrowed journal and exact received expectation set before writing the acknowledgement. Coverage receives the remaining native deadline and current authority/cancellation guard. Failure or late authority loss withholds the acknowledgement and output. The caller must retain the journal and exclusive writer custody throughout; this does not establish present quiescence or cover installation/host writers by itself. Existing metadata-only receive behavior remains available for its separate contract.
+
+The named local-outcome lane passes in 107.84 seconds (.tmp/controller-cleanup-coverage-tests.log). New private-pipe cases use the existing controlled local owner and real temporary sealed records: missing records refuse, complete records succeed, and corrupted records refuse. The public controller-bound verified path also refuses an absent journal. Controlled owner coverage is not a successful installed/mounted-journal acceptance claim. Evidence: .tmp/native-temp-20260916-install-protocol/Goat Local Outcome 1lCa3b/acceptance.json.
+
+The full controller protocol lane passed every normal group and the ASAN base group, then failed because the ASAN mounted-workspace process exceeded the existing 40-second test timeout (.tmp/controller-cleanup-coverage-protocol-tests.log). No timeout or gate was relaxed. An exact-binary retry verified the copied source hashes and ASAN executable hash, used fresh task-owned fixtures, and retained the same 40-second limit. All five remaining ASAN groups then passed: workspace 5,457 checks, capacity 2,463, backing capacity 2,407, inventory 3,624 and runtime handoff 1,165. Evidence: .tmp/controller-cleanup-coverage-retry.log and .tmp/native-temp-20260916-install-protocol/Goat Cleanup Coverage Retry GxSQiV/acceptance.json. This retry does not relabel the original named run as passed; the timeout cause is not established.
+
+Installed cleanup transport/admission and complete writer custody still need composition. No service activation, real volume operation, formatting, live provider/channel traffic, commit or push occurred. Full C0-C6 plan remains unfinished.
+
+### Existing-owner workbench correction and local journey checks (2026-09-16)
+
+Consolidated the identical project-root realpath and write-jail checks used by command execution and workbench mutation into one private helper. Both call sites retain the same check ordering, and mutation retains its separate worktree write-jail check. All 43 workbench tests and focused ESLint pass. Evidence: .tmp/architecture-workbench-scope-tests.log. Architecture verification measures 70 dependency accesses against the unchanged limit of 71. The original baseline SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318. No allowance was added or broadened.
+
+The architecture lane still fails on four previously recorded owners: governed-remediation-approval-authority, memory-item-pagination-service, memory-lifecycle-service, and personality-revisions.test-support. Evidence: artifacts/verification/2026-09-16T20-56-25-069Z-architecture-metrics-9d87370b/diagnostics/architecture-metrics-compare.json. Unestablished plan ownership remains insufficient for an allowance.
+
+Following the requested shortest-actionable-first order, local onboarding checks pass 28 tests across five suites; explicit skill capture passes 13 tests across two suites; capability-pack lifecycle/compensation/change-plan/routes pass 40 tests across four suites; Telegram routing, commands, sessions, pairing and webhook checks pass 40 tests across six suites. Logs: .tmp/comparison-onboarding-local-20260916.log, .tmp/comparison-skill-capture-local-20260916.log, .tmp/comparison-pack-local-20260916.log, and .tmp/comparison-telegram-local-20260916.log. These are local regression checks, not fresh-profile browser proof, real provider responses, activated-skill reuse, Browser QA acceptance, or a live Telegram journey.
+
+The unchanged full native controller rerun again fails at the ASAN mounted-workspace process timeout of 40 seconds, after the normal groups and ASAN base group pass. Evidence: .tmp/controller-cleanup-coverage-full-retry.log and .tmp/native-temp-20260916-install-protocol/Goat Cell Controller Protocol vHfHiS. The repeated timeout needs diagnosis; neither the watchdog nor acceptance criteria was relaxed, and the full named lane is not green. No drive, installed-service, live provider/channel, commit or push operation occurred. The full plan remains open.
+
+### Memory schema execution consolidation and native timeout timing (2026-09-16)
+
+MemoryLifecycleService now shares one sequential executor for its three existing schema setup sequences. An AST comparison against HEAD verifies all nine SQL string values and their per-method ordering are unchanged. Each statement still finishes before the next starts; errors propagate without continuing. No new storage owner, migration, schema, allowance or baseline change was introduced. The architecture gate now measures 255 dependency accesses against the existing cap of 258. Only the three previously unapproved owners remain architecture failures; evidence: artifacts/verification/2026-09-16T21-04-55-715Z-architecture-metrics-4cceda58/diagnostics/architecture-metrics-compare.json.
+
+Gateway typecheck and focused ESLint pass. The combined memory run passes 40 tests but fails one postgres-dialect-facade test at its unchanged 15-second timeout; the isolated retry fails both facade tests at that same limit. The main service and bulk-forget suites pass. Logs: .tmp/architecture-memory-schema-tests.log, .tmp/architecture-memory-schema-dialect-retry.log, and .tmp/architecture-memory-schema-typecheck.log. These failures remain open; the facade uses real SQLite transactions and is not live PostgreSQL evidence.
+
+Added flushed per-case elapsed timing to the native controller test fixture's stderr, preserving its machine-readable stdout and all protocol/deadline behavior. An ASAN-only mounted-workspace diagnostic passes 27 sessions in 39,841.57 ms under the unchanged 40,000 ms process cap. Seven creation-failure cases each take about 3.4-3.7 seconds; the completed run shows cumulative time near the watchdog rather than a single stuck case. This observation does not establish the underlying performance cause or make the earlier full named failures green. Evidence: .tmp/controller-workspace-timeout-diagnostic.log and .tmp/native-temp-20260916-install-protocol/Goat Workspace Timing 2wxtIM/diagnostic.json, with separate stdout/stderr and pinned source/executable hashes.
+
+No disk formatting, installed service operation, live provider/channel request, commit or push occurred. The full plan remains unfinished.
+
+### Measured test-fixture budgets (2026-09-16)
+
+A standalone strict-dialect fixture measurement attributes 14,724.80 ms to creating the fully migrated SQLite database, 86.27 ms to storage repositories, and 1,435.29 ms to close. Evidence: .tmp/comparison-database-startup-timing.log and .tmp/native-temp-20260916-install-protocol/Goat Database Timing ESM7Nl/timing.json. The original 15-second test budget included that setup cost. The two facade transaction tests now explicitly allow 30 seconds each, retaining fresh databases, synchronous=FULL, exact commit/rollback assertions and all production storage deadlines. Running the three memory suites serially passes all 41 tests in 112.88 seconds; evidence: .tmp/architecture-memory-schema-final-tests.log. Focused fixture lint passes. Earlier timeout receipts remain historical failures, not relabeled successes.
+
+The native controller runner now allows 60 seconds for the aggregate 27-session mounted-workspace group, based on the measured 39.84-second ASAN run. This changes only that outer test-process watchdog; native per-operation and authority deadlines, expected session counts and assertions are unchanged. Other process budgets and all architecture limits are unchanged. The full named controller lane must pass separately before this adjustment is treated as validated.
+
+### Explicit cross-plan allowance approval closes the architecture gate (2026-09-16)
+
+The operator explicitly approved reviewed caps of 4/4/1 for governed-remediation-approval-authority.ts, memory-item-pagination-service.ts, and personality-revisions.test-support.ts. Recorded these as narrow C0 reconciliation exceptions for pre-existing cross-plan work, each with zero host callbacks, rather than asserting original comparison-plan ownership. Their responsibilities and evidence are recorded in architecture-new-service-allowances.json; the approved plan includes the exact scope clarification.
+
+All seven allowance checks pass, including rejection of original-owner increases, exhaustion of reviewed caps, and unlisted-owner growth. Fresh architecture verification passes: artifacts/verification/2026-09-16T21-19-43-965Z-architecture-metrics-38c57093; log .tmp/architecture-approved-three-owners.log. The original baseline file SHA256 remains 7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318, and its source inventory/counting rules are unchanged. Four remediation approval tests also pass (.tmp/comparison-allowance-approval-owner-tests.log). This closes the recorded architecture regressions, not final-candidate C0 verification or full-plan acceptance.
+
+The full named controller protocol lane now passes in 637.67 seconds with the measured aggregate fixture budget. Normal and AddressSanitizer builds both pass the base, mounted-workspace, capacity, backing-capacity, inventory and runtime-handoff groups. Evidence: .tmp/controller-workspace-budget-full-tests.log and .tmp/native-temp-20260916-install-protocol/Goat Cell Controller Protocol MU1IuM/acceptance.json. The earlier failed runs remain preserved. This is controlled local protocol/filesystem proof, not installed service, volume, physical-machine or live workload acceptance. No disk operation, installed-service activation, live provider/channel traffic, commit or push occurred.
+
+### C1 interrupted onboarding preserves current navigation (2026-09-16)
+
+Consolidated local UI checks initially pass 50 tests across GuidedModelSetup, WorkflowSkillCaptureControl, PackExecutionPanel and MissionControlNextApp (.tmp/comparison-guided-capture-ui-tests.log). Source inspection then identified an uncovered interruption race: a pending Enter Chat action could refresh and navigate after the screen unmounted or changed workspace. Two new regression cases reproduce that behavior before the fix (.tmp/onboarding-late-entry-before.log).
+
+GuidedModelSetup now invalidates its action generation on workspace change/unmount. Enter Chat checks that generation after completion and refresh; plan receipts/errors and busy-state cleanup also remain with the initiating generation. A new workspace resets its presentation state and remains usable while old requests settle. Already submitted Gateway operations are not cancelled or represented as rolled back. This fixes the original C1 interrupted-setup journey without changing provider, approval or onboarding authority.
+
+All 48 guided-setup/app-shell tests pass, including five new cases for late completion after unmount/workspace change, unmount during refresh, and old-workspace plan receipt/error handling (.tmp/onboarding-late-entry-final.log). Mission Control typecheck passes through the output-lock wrapper (.tmp/onboarding-late-entry-typecheck.log). DOM interaction tests use controlled API promises; no browser screenshot, live provider response, OAuth/API-key/local first-task acceptance or paid probe is claimed. No disk operation, installed service, external message, commit or push occurred.
+
+### Installed runtime local writer exclusion (2026-09-16)
+
+C5-RUNTIME-WRITER-01 closes a source integration gap: runRuntime previously bypassed WorkerLocalStateActivity while file and stdio writers used it. Runtime dispatch now reserves before private parent setup, allows ordinary state mutations while running, and refuses measurement until the exact helper has joined, file delivery has settled, and both parent endpoints have closed. The parent exposes cleanup evidence only after validated retention and session finish. A launched runtime releases its reservation only with zeroProcessesVerified and outputDrained; failure or uncertain cleanup remains sticky. A synchronous spawn failure releases an unused reservation after endpoint closure.
+
+Focused tests cover measurement refusal before launch, active execution, retained result before helper exit, delayed parent closure, missing cleanup proof, unused spawn failure, and failed runtime retention. Initial four-suite proof passes 334 tests (.tmp/runtime-writer-initial-tests.log). Final transport/helper proof passes 260 tests (.tmp/runtime-writer-final-tests.log); the two exact-retention cases pass (.tmp/runtime-writer-retention-test.log). Worker output-lock typecheck, focused ESLint, docs checks (9 tests), and scoped diff whitespace checks pass. An initial test-fixture Promise typing error was corrected before the passing typecheck.
+
+This is in-process coordination only. It does not establish cross-process or restart writer custody, installed capacity/layout integration, or physical-machine acceptance. No virtual disk, formatting, installed service, live provider/channel request, staging, commit or push was performed.
+
+### Installation recovery custody-window race (2026-09-16)
+
+C5-INSTALL-RECOVERY-RACE-01: the recovery composition performed a fresh canonical outcome lookup after inspecting controller custody but ignored a terminal record newly retained in that window. Two controlled regressions (successful and failed installation outcomes) reproduced an unnecessary local read failing despite valid canonical evidence (.tmp/installation-recovery-race-before.log). Recovery now returns the freshly validated terminal evidence from that stable-lease lookup before constructing the local driver. It does not copy files, repeat retention, or reinterpret a retained failure as success.
+
+All 35 installation-recovery and protected-install-client tests pass (.tmp/installation-recovery-race-final.log), as does remote-worker typecheck through the output lock (.tmp/installation-recovery-race-typecheck.log). Focused ESLint and scoped whitespace checks pass. The installed controller still lacks the measurement/install callbacks and complete cross-process quiescence ownership required for full C5 completion; the existing read-only recovery adapter also remains unwired to automatic startup. No physical disk, service installation, live external request, staging, commit or push occurred.
+
+### Installed native startup reconciles retained installation evidence (2026-09-16)
+
+The installed native continuation now invokes reconcileWindowsWorkerAssignmentInstallation after protected custody/policy setup and before its capacity snapshot and runtime dispatch. The new composition selects only retained installation input under current protected assignment authority. A retained request enters the existing read-only recovery path; terminal evidence is decoded against that request and history. A verified successful installation permits the ordinary independent runtime admission path. Failed or uncertain recovery stops execution, with terminal evidence recorded in observed diagnostics. No retained request preserves the existing admission path without asserting readiness. The renewed lease returned by reconciliation is used for both the following snapshot and runtime startup.
+
+The combined recovery, continuation, installed-policy and protected-client run passes 72 tests (.tmp/installation-startup-reconciliation-final-tests.log). Additional success/failure and cancellation coverage passes all 13 continuation tests (.tmp/installation-startup-continuation-final.log). Worker output-lock typecheck and focused lint pass (.tmp/installation-startup-reconciliation-final-typecheck.log, .tmp/installation-startup-lint.log). Initial installed-policy mocks lacked the new startup boundary and were corrected; no failing initial run is claimed as acceptance. Test transports are controlled; no live provider, Gateway or installed helper was invoked.
+
+This connects the previously test-only recovery adapter to installed continuation source. It does not compose controller capacity/install callbacks, complete cross-process writer custody, provision storage, retry copying, or establish physical restart acceptance. No disk/service mutation, staging, commit or push occurred.
+
+### Consolidated remote-worker regression after startup integration (2026-09-16)
+
+The full @goatcitadel/remote-worker test command passes 1,394 tests across 71 files in 48.92 seconds after the installation reconciliation connection and writer-exclusion changes. Evidence: .tmp/installed-recovery-worker-suite.log. The owned temporary test directory is on F:; the test run did not install services or provision disks. This establishes current worker-package regression evidence, not compiled native controller, installed-machine, live Gateway/provider/channel, or final-candidate certification. The installed controller still requires capacity/install composition and complete cross-process writer custody.
+
+### Stable lease lifetime bounds for native capacity/recovery (2026-09-16)
+
+C5-STABLE-LIFETIME-01: held-lease checks used only remainingLeaseMs() < 100, allowing NaN, infinity and values above renewal's 900000-ms maximum. Six focused cases reproduced acceptance before and after the asynchronous control read (.tmp/stable-lease-lifetime-before.log). Renewal and stable checks now share the existing finite inclusive 100-to-900000-ms bounds; failure aborts further authority. No threshold was raised.
+
+All 96 tests across installation recovery, assignment capacity, cleanup handoff and runtime startup pass (.tmp/stable-lease-lifetime-final.log). Remote-worker output-lock typecheck, focused lint and scoped whitespace checks pass. This strengthens the current-authority prerequisite for installed capacity integration; it does not supply storage-area mapping or cross-process writer ownership. No installed service, virtual disk, external request, staging, commit or push operation occurred.
+
+### Installed layout dependency and current architecture gates (2026-09-16)
+
+Current named architecture metrics pass at artifacts/verification/2026-09-16T21-50-30-070Z-architecture-metrics-d31eb347 (.tmp/comparison-architecture-current-20260916.log). The named async-boundary lane passes its 10 scanner tests and scans 1,085 production TypeScript files (.tmp/comparison-async-boundary-20260916.log). Original baseline-owner limits remain unchanged; these are current working-tree checks, not clean-pinned final-candidate certification.
+
+Installed layout tracing identifies a concrete prerequisite to capacity callback composition: Get-WorkerServicePaths in scripts/remote-worker/worker-install-common.ps1 defines a shared state directory and separate protected cells parent. ValidateInstalledEnvironment in apps/remote-worker-windows-host-native/src/installed_worker_files.cpp binds STATE_DIR to state and REPORT_FILE to state/service-report.json. CellCapacityLayout::OpenRecorded requires 13 distinct recorded root identities with verified native security; the existing directories cannot be repeated as fabricated category coverage. Durable-state and report writes already use WorkerLocalStateActivity locally. Installer-owned category layout records, compatible state/report placement, and cross-process writer custody must be composed before enabling the installed collector callbacks. No installer or disk command was run during this trace.
+
+### Trusted per-area capacity security ownership (2026-09-16)
+
+C5-CAPACITY-ROOT-POLICY-01: CellCapacityLayout previously required the same controller-only descriptor for every host root, while installed worker state uses a different service-writable ACL. OpenRecordedWithSecurity now accepts an explicit trusted-host verifier bound to each pinned area identity. The verifier descriptor is snapshotted, required before admission, and called throughout verification/capture; it is never decoded from workload/wire input. Existing OpenRecorded/OpenRecordedBytes retain their exact controller-only security policy. Missing/revoked policy clears/refuses capture. Closure or reentrancy during verification invalidates admission without prematurely releasing the handle being inspected. This creates no roots, repairs no ACLs, and supplies no writer-quiescence claim.
+
+The native capacity lane passes 1,932 checks in both normal and AddressSanitizer builds and compiles ARM64 (.tmp/capacity-root-security-mixed-retry.log; Goat Cell Capacity 43F3QH). Controlled ordinary NTFS fixtures prove distinct exact root ACLs, default-path refusal, explicit mixed-policy capture, revocation, policy snapshotting, and closure during verification. Two earlier added-fixture runs failed due to an unsupported test principal and insufficient test ACL-handle access; both failures remain in their original logs. Production security policy was not relaxed to fix those fixture errors.
+
+Joined host/guest/backing accounting also passes 3,624 checks in each normal/ASAN build (.tmp/capacity-root-security-joined-tests.log; Goat Joined Capacity Wire FAAwkT), with physicalVolumeScanned=false and no guest-allocation double count. The final header-only documentation update follows those compiled receipts; this is not clean-pinned final-candidate proof. Installer root layout/records, the concrete installed policy callback, and cross-process writer coordination remain to be composed. No virtual disk, installed service, live external request, staging, commit or push occurred.
+
+### Fixed installed controller capacity-root policy (2026-09-16)
+
+CellControllerIdentity now exposes CapacityRootSecurity for the explicit trusted layout hook. Each check requires the admitted running controller, verifies a real non-reparse directory and its exact NTFS identity, then repeats controller custody after ACL inspection. The mutable area must match the independently installed cells parent and its exact controller descriptor. Other areas use the existing fixed worker-state ACL verifier; no caller-supplied principal or permission mask is accepted. This policy does not discover paths, authenticate a layout record, or establish writer quiescence. It remains separate from enabling measurement callbacks.
+
+The controller identity lane passes 264 checks in both normal and AddressSanitizer builds (.tmp/controller-capacity-security-final.log; Goat Cell Controller Identity m3ZxCa). All 13 area policies reject an unadmitted interactive owner; unknown areas and invalid handles refuse. Existing worker-service identity/ACL checks also pass (.tmp/controller-capacity-worker-acl-tests.log; Goat Worker Identity cFtRsJ). The source snapshot fixture now includes the required cell_capacity.hpp header. An initial missing-header failure and the added test's misuse of the -1 process pseudo-handle were corrected; their failed logs remain preserved.
+
+No controller service was installed or started, no volume was attached, and privileges remained unchanged. These refusal/ACL tests do not prove successful installed layout admission. Installer-owned area records and cross-process writer coordination remain open. No commit or push occurred.
+
+### Installer/native capacity custody record (2026-09-16)
+
+C5-CAPACITY-CUSTODY-01 adds a separate installer-owned GCCAPS01 encoding: 320 bytes containing thirteen 24-byte directory identities in CellCapacityArea order. CreateCellCapacityCustody snapshots the handle array and uses the existing native NTFS/no-follow directory inspection. It refuses missing/closed handles, wrong cardinality, duplicate roots and cross-volume roots. DecodeCellControllerCapacityCustody independently enforces exact length/version, nonzero identities, uniqueness and one volume; any failure clears all output. Existing assignment/profile layout records and GCCUST01/GCRTCS01 encodings remain unchanged. This is metadata encoding, not installed-file custody or execution authority.
+
+The named controller identity lane now snapshots the C# and PowerShell fixture sources alongside the native sources. Windows PowerShell 5.1 and PowerShell 7 each pass 20 encoder checks against thirteen create-only ordinary NTFS fixture directories. Both generated records are decoded by normal and AddressSanitizer binaries, which independently open the same roots and compare their current IDs in order. Native cases also reject every truncated record length, unknown version, trailing data, zero identities, duplicate identities and cross-volume identities. Evidence: .tmp/capacity-custody-cross-language-tests.log and Goat Cell Controller Identity z1EFUu. Earlier individual native/PowerShell logs are retained separately.
+
+Protected installer publication, controller record admission, installed directory layout and cross-process writer coordination remain open. The fixture creates only its own temporary directories/files and does not call service installation or virtual-disk APIs. No staging, commit or push occurred.
+
+### Capacity custody native handle binding (2026-09-16)
+
+ReadCellControllerCapacityCustody now reads the exact 320-byte installer record from a caller-held regular single-link file and independently matches all thirteen caller-held directory identities. Slot zero must match the separately admitted cells parent. Directory/file substitutions, reparse roots, pending deletion, malformed input and wrong parent identity fail with cleared output. Input handles and parent identity are snapshotted before output clearing, including aliased caller output. The caller still owns no-follow path/ACL custody and serializes/retains the handles; this reader neither opens an installed path nor grants measurement authority.
+
+The named controller identity lane passes with both PowerShell 5.1/7 encoders and normal/AddressSanitizer native consumers (.tmp/capacity-custody-handle-reader-tests.log; Goat Cell Controller Identity S8ZUS3). Each paired native run performs 706 checks, including substituting each of thirteen roots, putting a file in every directory slot, replacing the record handle with a directory, and changing the independent cells parent. Ordinary fixture directory identities are independently read by Windows. No installed service, volume attachment, privilege change, commit or push occurred. Protected publication and installed controller layout/writer composition remain open.
+
+
+### Fixed capacity root map and installer identity collection (2026-09-16)
+
+Get-WorkerCellCapacityPaths defines the thirteen GCCAPS01 areas in native enum order: cells plus twelve separate state subdirectories. Resolving the map creates no files and refuses UNC/device or alternate-stream paths. Get-WorkerCellCapacityCustodyBytes pins the installation and state parents and every area while collecting the record; it does not create directories, publish custody, or grant authority. Higher-ancestor custody and installed ACL verification remain the caller responsibility. Existing installer settings, enrollment and service startup are unchanged until the coordinated layout migration is integrated.
+
+The named controller identity lane passes 52 PowerShell checks in each of Windows PowerShell 5.1 and PowerShell 7, plus both native normal/AddressSanitizer consumers. Tests assert the exact independent area order/paths, pure path resolution, missing-directory refusal, and agreement of collected bytes with separately held directory identities. Evidence: .tmp/capacity-fixed-root-path-tests.log and Goat Cell Controller Identity ZWYBkp. A final source-comment clarification is followed by the final rerun below. Installed publication, startup/enrollment layout handling and cross-process writer coordination remain open. No installed service, VHD, formatting, elevation, external request, commit or push occurred.
+
+Final unchanged-source rerun: .tmp/capacity-fixed-root-path-final-tests.log, Goat Cell Controller Identity TrqnwU, passed. Scoped git diff --check passed.
+
+
+### Installer, startup and enrollment capacity layout (2026-09-16)
+
+Fresh-install source now creates a read-only state container and twelve separately writable recorded areas, publishes GCCAPS01 using existing create-only protected-file custody, rereads its exact identities/security before service creation, and adds its digest to the installation receipt. The host accepts only a complete legacy or complete new state/report path pair. It retains the new directory pins and protected capacity-record file before starting a child. Legacy installations keep their existing paths; no automatic migration occurs. Enrollment derives the credential destination from validated settings, verifies the appropriate parent/child ACLs and protected record digest, and rejects missing, mismatched or mixed-layout receipts. Existing private enrollment settings remain isolated.
+
+The safe named windows-state-layout lane covers both PowerShell engines, both layout forms and normal/ASAN native consumers: 27 PowerShell checks per engine, 68 native checks per paired run. Evidence: .tmp/worker-state-layout-receipt-tests.log, Goat Worker State Layout PNnl2y. Existing enrollment behavior also passes 40 cases per engine using only task-owned fixtures/child processes (.tmp/worker-enrollment-layout-regression.log; Goat Enrollment Layout Regression vf7dzC). Earlier failed fixture logs are retained: a replacement-string editing error was corrected, then an incorrectly guessed harness check count was corrected to the actual 68 assertions. No assertion was removed.
+
+This is source/local fixture proof, not actual SYSTEM-owned installation, successful installed service startup or physical capacity enforcement. Installed controller record/path admission, cross-process writer coordination and complete accounting remain open. No installer/enrollment main script was executed, no live network call, volume operation or elevation occurred, and nothing was committed or pushed.
+
+Final named lane: .tmp/worker-state-layout-named-lane.log, Goat Worker State Layout klfMVU, passed. The existing controller custody lane also passes against the updated shared installer helpers (.tmp/capacity-install-layout-identity-tests.log; Goat Cell Controller Identity qgEzWL). pnpm docs:check and scoped git diff --check passed.
+
+
+### Installed controller capacity custody composition (2026-09-16)
+
+CellControllerIdentity now pins the fixed read-only state container, twelve fixed worker-state children and protected GCCAPS01 file while opening an admitted controller. The existing cells parent is root zero. It matches every live directory ID to the protected record and original controller parent, then repeats record/ACL checks on each Verify call. Missing/changed custody refuses startup or later verification. ReadCapacityRoots exports borrowed handles only after current running-service admission, clears all output on refusal, and the layout security callback now requires each area identity to match the installed record. Close drops the capacity pins and remembered identities. The restricted shared installed-file owner still does not open cells.
+
+The controller identity lane passes 660 base and 720 paired checks in normal and AddressSanitizer builds, with records from both PowerShell 5.1 and PowerShell 7 (.tmp/controller-installed-capacity-custody-tests.log; Goat Cell Controller Identity Ne51Yr). New cases prove an unadmitted process cannot export roots and that all thirteen stale outputs are cleared. Existing real-directory record substitution tests remain green. This is local custody/refusal proof, not successful SYSTEM-service admission. Measurement/install callbacks and cross-process writer coordination remain uncomposed. No service, privilege, volume, live-network, commit or push operation was performed.
+
+The full controller payload builds reproducibly twice for each Windows x64 and ARM64 target, including current source-hash checks (.tmp/controller-installed-capacity-build-tests.log; Goat Controller Payload HtXwOl, 107.6 seconds). ARM64 binaries were built, not executed. pnpm docs:check and scoped git diff --check pass.
+
+
+### Enrollment/service writer exclusion (2026-09-16)
+
+The writer audit confirmed that Node mutations and current-lifetime external writers are already registered, but those counters do not survive process loss. Sealed runtime cleanup verifies historical dispatched work and expressly excludes installation/host writers; it cannot enable measurement by itself. Enrollment was a concrete external writer: the stopped-worker check did not serialize credential publication against a subsequent service start or an already running controller.
+
+Fresh-install source now creates protected empty configuration/state-writers.guard. Native worker startup and controller custody retain shared read pins before admitting work. Enrollment of the new layout acquires an exclusive OPEN_EXISTING read handle, checks protected security while holding it, and retains it through private-state changes and credential handoff. This leaves the guard unchanged, refuses missing/nonempty/aliased files, and closes the enrollment/service-start race through Windows share-access enforcement. Preflight does not acquire a mutation lease. Existing legacy layout behavior is preserved.
+
+The safe windows-state-layout lane now includes real child-process reader leases in both PowerShell engines. It checks both exclusion directions, compatible readers, release/reacquisition, no recreation of missing guards, empty-file enforcement and no mutation of refused files. The source-change scope is enrollment versus service lifetimes only. Registered Node writes, runtime helpers, retained cleanup across restarts, complete pool coverage and capacity callbacks remain separate work; no claim of global quiescence is made. No installed service, privilege change, volume operation, live external call, commit or push occurred.
+
+Final evidence: pnpm verify:remote-worker:windows-state-layout passes with 17 cross-process/file-gate checks per PowerShell engine, 27 settings/receipt checks per engine, and 68 checks in each paired native normal/ASAN run (.tmp/worker-state-enrollment-gate-alias-tests.log; Goat Worker State Layout vPEqry). Controller identity tests pass (.tmp/controller-enrollment-gate-identity-tests.log; Goat Cell Controller Identity 80mBrd), and the complete controller builds reproducibly twice each for x64/ARM64 (.tmp/controller-enrollment-gate-build-tests.log; Goat Controller Payload 4dDpek). ARM64 was not executed. pnpm docs:check and scoped git diff --check passed.
+
+
+### Historical installation writer coverage (2026-09-16)
+
+VerifyInstallationCoverage complements runtime cleanup coverage with the separate .runtime-install namespace. It takes independently retained request bytes/bindings, decodes and checks their journal/checkpoint, snapshots expectations before callbacks, enumerates the complete retained installation set before and after inspection, and requires a sealed outcome for every entry. Interrupted intents, omitted/duplicate/substituted expectations, revoked authority and new records during inspection refuse coverage. A sealed failed copy is historical completion evidence only, not a successful installation or permission to execute.
+
+Runtime and installation coverage now share bounded enumeration and custody checks while retaining distinct record namespaces and result decoders. This does not claim that Node/helper writers are currently excluded or that every cell in the pool has been covered; those remain required composition steps. The controller measurement callbacks remain disabled. No installation, volume operation, live provider/channel request or Git publication was performed.
+
+Validation: the initial complete runtime-result lane passed both tests (.tmp/installation-writer-coverage-tests.log; Goat Local Outcome h8KRxZ and Goat Runtime Result IVp5tZ). After adding early missing-authority/cancellation/lifetime rejection and preserving the original deadline through the final check, the focused local-outcome lane passes normal and ASAN builds (.tmp/installation-writer-coverage-deadline-tests.log; Goat Local Outcome VtLAlu), with 207 component checks per build and existing cross-language installation/cleanup transfers. The tests use ordinary owned NTFS fixtures and report workloadsRun=0, installedService=false and volumeAttached=false. Docs checks pass; tracked diff and untracked native whitespace checks pass. The original installed measurement callbacks remain absent.
+
+### Combined historical cleanup acknowledgement (2026-09-16)
+
+The controller's ReadVerifiedForController now requires independently retained installation expectations in addition to the streamed runtime history. It snapshots the installation bytes and bindings before peer callbacks, reconciles installation outcomes first, then checks runtime cleanup with the remaining original transfer budget. Both must pass before the ACK. An empty installation set still checks the local installation namespace; it cannot silently ignore installation intents. Invalid oversized input clears output and consumes the one-shot transfer, preventing a weaker retry.
+
+Validation: the focused local-outcome lane passes normal and ASAN builds with 211 component checks each plus existing cross-language installation/cleanup transfers (.tmp/combined-writer-cleanup-tests.log; Goat Local Outcome Ib1D2d). The existing controller protocol fixture's capacity group passes 2463 checks and 27 controlled sessions per build, normal and ASAN (.tmp/combined-writer-capacity-protocol.log; Goat Combined Cleanup wsVwTf). That group covers controller history binding and refusal/ACK behavior with an absent original journal. It does not prove successful installed combined-history admission. The full controller protocol lane and ARM64 build were not rerun for this slice.
+
+The installed protected receiver still needs to supply the installation history. Current cross-process/restart writer exclusion, full pool coverage, and installed measurement callbacks remain incomplete. All fixture runs report no installed service or attached/formatted/mounted volume; no live network, installation, disk operation or Git publication occurred.
+
+### Worker cleanup installation selection (2026-09-16)
+
+sendWindowsAssignmentCleanup now reads the existing protected runtime.install.select owner under the same stable lease as runtime cleanup. It requires exact canonical equality of the two journal histories before contacting the receiver-binding port. The binding contains the complete zero-or-one retained installation set as immutable GCRINST1 bytes, nonce and request hash. Selection failure, history mismatch or malformed request refuses before cleanup stream writes. The existing total deadline and lease hold cover selection as well, including waiting for cancelled selection I/O to join. This path only selects retained requests; it never creates, copies or retries an installation.
+
+Validation: 47 focused tests pass across assignment cleanup, protected installation client and cleanup transport, including successful empty/nonempty selection, changed history/checkpoint rejection and cancellation while selection is pending. Remote-worker typecheck passes through the output-lock wrapper. This is worker handoff composition using the existing independent receiver-binding port; its concrete installed transport, current writer exclusion and measurement callbacks remain incomplete. No live Gateway/provider/channel call, service or disk operation, commit or push occurred.
+
+### Cleanup admission wire format (2026-09-16)
+
+The worker receiver-binding port now receives immutable admissionHex in GCCADM01 format: an 80-byte header containing the cleanup challenge/hash and zero-or-one installation count, optionally followed by the exact 336-byte installation binding and request. The encoder validates the retained request against its nonce/hash. The native DecodeCellRuntimeCleanupAdmission accepts only the exact 80/416-byte shapes, requires zero reserved bytes and nonzero cleanup bindings, verifies installation request hashes, and clears all output on refusal. This record belongs on authenticated primary admission, separately from the cleanup data stream; parsing it conveys no journal or writer authority.
+
+Validation: 48 focused worker tests and the output-locked worker typecheck pass. The focused native local-outcome lane passes in normal and ASAN builds (.tmp/cleanup-admission-native-retry.log; Goat Local Outcome AI0Vci), including TypeScript-generated empty/nonempty admission records (13/19 decoder checks per build), existing 211 local-outcome checks and cross-language installation/cleanup transfers. The initial run failed because the new fixture used an int zero in a byte fill under warnings-as-errors; the fixture now uses an explicit uint8_t zero and the real rerun passes. No compiler warning policy changed.
+
+This adds the shared encoding and decoder, not the concrete installed primary/secondary pipe handoff. That transport, current writer exclusion, full pool measurement composition and physical-machine acceptance remain incomplete. No live request, installed service action, disk operation, commit or push was performed.
+
+### Retained host writer uncertainty across restart (2026-09-16)
+
+The installed host's unnamed job had reliable current-process cleanup checks but no retained proof after host loss. Fresh-layout installation source now precreates a fixed 32-byte configuration/host-run.guard with protected worker-state file permissions. InstalledWorkerFiles pins it with exclusive write custody. Immediately before atomic job-bound child creation, the host flushes its PID and process creation time into the previously clean marker. Only this process's exact marker plus a fresh zero-process observation of the original child job allows clearing it. A failed child creation also requires empty-job proof before clearing. Missing, partial, nonzero or uncertain prior contents are never initialized/reset by startup. Legacy layout and foreground fixture behavior remain separate.
+
+The marker is fixed installed control metadata under the read-only configuration parent, outside workload-scanned data roots. An initial placement in diagnostics was corrected during review because the retained write handle would conflict with the scanner's exclusive-read custody. It is not evidence that a currently running Node worker is quiescent, and there is no automatic reset of an uncertain marker.
+
+Validation: the final combined host and state-layout run passes 19 tests (.tmp/host-run-marker-final-tests.log; Goat Worker Host RQm5dF and Goat Worker State Layout 2HVfBh). State-layout fixtures now pass 89 checks per native invocation in normal/ASAN builds, paired with PowerShell 5.1/7 and both settings layouts. New real-file/owned-job checks cover durable begin, retained uncertainty after closing/reopening, competing-writer and rename exclusion, live-child refusal, empty-job completion and substituted process identity. The existing foreground lifecycle lane passes, including forced owner/launcher death and descendant termination; x64/ARM64 host builds are reproducible, and ARM64 is not executed. These tests do not run installed services or establish installed crash/recovery acceptance. Installer source is parsed, never executed. No live network, user-state changes, disk operations or Git publication occurred.
+
+### Controller admission binds the running worker host (2026-09-16)
+
+CellControllerPeer now calls CellControllerIdentity.VerifyWorkerHostProcess after validating its existing pipe, token and provisioning image. The added read-only check requires the exact running worker SCM configuration/DACL, a retained live host process at the configured protected image path, matching helper/host service logons, and a helper creation time no earlier than the host. It reads configuration/host-run.guard through a separate no-follow handle with the sharing needed while the host retains write custody, verifies its protected state ACL and exact live PID/creation-time marker, and rechecks service PID/state and marker before returning. This strengthens peer admission; it does not prove current writer quiescence or replace assignment authority.
+
+The marker reader lives in the shared native service-identity owner and is also used by host completion. The SCM validator accepts an explicit running state while keeping START_PENDING as its unchanged default; arbitrary expected states remain refused.
+
+Validation: controller identity and worker service identity lanes pass (.tmp/controller-host-marker-tests.log; Goat Cell Controller Identity VZupRB and Goat Worker Identity wzMfHU). The final state-layout lane passes 94 checks per native invocation, normal/ASAN and PowerShell 5.1/7 (.tmp/controller-host-marker-reader-tests.log; Goat Worker State Layout J2ORtH), including a separate read-only observer while the host write handle remains open and refusal of another live process's marker. The pipe transport lane passes normal/ASAN (.tmp/controller-host-marker-transport-retry.log; Goat Cell Controller Transport Na3xER). Its stale source snapshot lacked cell_capacity.hpp; adding that required header restored the actual lane without weakening assertions. An initial marker test incorrectly treated the current-process pseudo-handle as invalid; it now tests a missing process handle. Full controller payloads build reproducibly twice each for x64 and ARM64 (.tmp/controller-host-marker-build-tests.log; Goat Controller Payload CifnKM). ARM64 is built, not executed.
+
+Installed worker/SCM admission remains unproven; local controller identity tests correctly refuse an unadmitted process. The cleanup transport and measurement composition remain incomplete. No installed service action, disk operation, live provider/channel request, commit or push occurred.
+
+### Cleanup lookup inside an existing measurement lease (2026-09-16)
+
+The assignment cleanup sender now shares `readWindowsAssignmentCleanupOnLease` with the pending measurement composition. The helper reads runtime cleanup and retained installation history without acquiring or renewing a lease. The caller retains the stable lease and any writer pause through use of the result. An optional exact measurement history is snapshotted before asynchronous reads and checked before installation selection; the lease binding is copied and frozen. Cancellation and current-authority checks surround both reads. The existing standalone sender still acquires its lease once and holds it through receiver binding and joined delivery.
+
+Validation: 52 focused cleanup/sender/installation-client tests pass, including four new cases for matching, mismatched, mutated and cancelled measurement history. The output-locked worker typecheck passes after correcting a readonly fixture mutation in the new tests. Architecture metrics pass at `2026-09-16T23-55-07-348Z-architecture-metrics-bfd671b5`; the approved cross-plan limits remain exactly 4/4/1 and the original baseline SHA256 remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`.
+
+This is a shared read path, not a completed installed cleanup transport or measurement owner. Those connections and installed/live acceptance remain incomplete.
+
+### Ordered cleanup handoff in measurement sessions (2026-09-16)
+
+The Windows measurement composition now supplies the cleanup read through its existing stable lease. The provisioning driver performs that read inside its local writer pause, requires the exact measurement history, and sends bounded admission and cleanup bytes to the helper. The native helper bounds and decodes both records before controller dispatch. Capacity, backing-capacity and inventory clients send a connection-bound primary admission frame, wait for all 21 checkpoints and canonical authority, and accept a cleanup-ready message only for the exact challenge, digest and retained head. The separate data phase uses the existing bounded cleanup transfer. Observation frames are refused until that transfer has completed.
+
+The server requires a retained measurement hold before inviting cleanup data and rechecks it through cleanup, observation and receipt. The historical verifier checks installation and runtime namespaces before acknowledging the data. Raw transfer checks only local peer/hold authority so it cannot interleave canonical protocol frames into the data stream; canonical checks surround the phase. The production controller still supplies neither the concrete measurement hold nor the observation owners. Thus installed measurement remains disabled, and the production server's successful held-cleanup/scan path still needs acceptance when those owners are composed.
+
+Validation: 278 focused worker tests pass, plus the output-locked worker typecheck. The new tests prove lookup occurs before helper spawn with competing local mutations held, exact admission/data handoff, mismatched-history refusal and cancellation release. Initial test failures were fixture errors (missing digest domain prefix and a prohibited nested mutation); the corrected test queues a competing writer outside the pause and joins cleanup even on assertion failure. Native normal/ASAN protocol evidence is retained in `.tmp/cleanup-phase-capacity-final.log` (33 sessions, 3041 checks each) and `.tmp/cleanup-phase-additional-reads.log` (backing: 29 sessions/2601 checks; inventory: 40 sessions/3917 checks, each normal/ASAN). These controlled sessions cover absent, substituted and duplicate cleanup phases and refusal of an observation callback without a measurement hold. They do not prove installed quiescence or real scanning.
+
+The compiled helper lane passes normal/ASAN (`.tmp/cleanup-phase-helper.log`, `Goat Cell Helper Protocol OjkIES`). Controller payloads build reproducibly for x64 and ARM64 (`.tmp/cleanup-phase-controller-build.log`, `Goat Controller Payload Zz1bJt`); ARM64 is built, not executed. The native capacity fixtures are `Goat Cleanup Phase hIbJoB`. No disk provisioning, formatting, mounting, installed-service action, live provider/channel request, commit or push occurred. Concrete current-writer and complete-pool measurement composition remains the next source work.
+
+### Native current-writer gate (2026-09-16)
+
+Native-host worker startup now opens the fixed protected empty `configuration/state-writers.guard` through the compiled image guard and acquires a shared byte-range lock before state ownership or report writes. The addon validates the service token, pins its compiled helper and configuration custody, refuses reparse/nonempty/multiply linked guard objects, and exposes only start/pause/resume operations with no caller-selected path. The worker releases shared custody only inside its drained local writer pause with no uncertain external writers. It retains the local queue through bounded native reacquisition, including after cancellation. Failed pause/resume permanently refuses subsequent mutations and external writers for that process lifetime.
+
+The controller now supplies `CellInstalledMeasurementHold`: an exclusive lock on its independently pinned copy of the same guard, retained through the protocol's cleanup, scan and receipt lifetime with repeated peer checks. Kernel lock release after a process exits is only coordination, not historical job-cleanup proof; the host-run marker and both cleanup namespaces remain mandatory. This uses [Windows byte-range lock semantics](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex) without writing or extending the guard. Pool observation callbacks remain absent, so installed scans remain disabled until complete-pool composition is available.
+
+Startup scope is the native host's existing lifecycle protocol, not the mere presence of a protected TLS key. The broader native TLS test caught an initial overbroad startup requirement; ordinary public-key workers now retain their existing portable admission/reconnect path. The image guard adds read-only security/logon imports, while the test still forbids process launch, service control, socket and signing imports. An initial controller reproducibility failure was isolated to the anonymous namespace's source-path-dependent RTTI name; placing the new polymorphic hold in a named namespace restored identical x64/ARM64 payloads. A focused regression also proved that an unadmitted measurement acquisition must not release a caller's pre-existing lock; acquisition failure now returns before cleanup of any newly acquired ownership.
+
+Local evidence: all 1423 worker tests pass across 72 files (`.tmp/writer-gate-worker-full.log`), and the locked worker typecheck passes. Native state-layout evidence passes 112 checks per invocation across normal/ASAN and PowerShell 5.1/7 (`.tmp/writer-gate-native-state-retry.log`, `Goat Worker State Layout miH21b`), including multiple shared writers, exclusive exclusion, separate-process contention, forced exit/join of the owned child and nonempty-guard refusal. The first wrapper run expected the old count of 94; its updated real rerun passes. The controller-identity regression failed before the ownership fix (`.tmp/writer-gate-owner-regression.log`) and passes afterward (`.tmp/writer-gate-owner-regression-fixed.log`, `Goat Cell Controller Identity 53wIu5`). These are ordinary-file/process fixtures, not installed-service or physical-machine acceptance.
+
+Final payload verification after the ownership fix passes: controller reproducibility for x64 and ARM64 (`.tmp/writer-gate-controller-build-final.log`, `Goat Controller Payload MEgb00`) and all 23 local native TLS checks (`.tmp/writer-gate-addon-build-final.log`, `native-tls-acceptance-7QLn6r`). ARM64 payloads were built, not executed. Complete-pool observation and installed acceptance remain open; no disk provisioning, formatting, mounting, installed-service action, live provider/channel request, commit or push occurred.
+
+### Joined collector retains installed root policy (2026-09-16)
+
+Integration inspection found that `CellJoinedCapacityCollector` still demanded a uniform controller ACL descriptor, rejecting layouts opened with the installed per-area security owner. The collector now snapshots that owner's callback and context alongside root handles and descriptor, checks they have not changed at every matching boundary, and delegates fresh policy verification to `CellCapacityLayout::VerifyRetainedSecurity`. Uniform-policy layouts still require the exact descriptor for the retained principals; explicit per-area layouts require their original callback and an empty uniform descriptor. Every root is rechecked, and policy revocation still refuses publication. This supplies a prerequisite for installed composition; it does not enable incomplete pool measurement.
+
+The ordinary-file capacity lane passes normal/ASAN and ARM64 compilation (`.tmp/joined-policy-capacity-retry.log`), including new cases for unchanged uniform policy, real mixed ACLs, replaced callback and revoked policy. Initial fixture compilation failed because the test unnecessarily included the controller and then placed one assertion in the wrong scope; the corrected fixture exercises the layout-owned method directly. The joined native-to-portable accounting lane also passes normal/ASAN (`.tmp/joined-policy-wire-final.log`, `Goat Joined Capacity Wire EUVky3`). These remain controlled ordinary-file/protocol fixtures, with no physical volume scanning or installed acceptance.
+
+### Retained backing custody for pool composition (2026-09-16)
+
+The journal now exposes `WithBackingCapacity`, a synchronous read-only borrowing path for its original journal/backing handles and exact mounted leaf. The callback runs inside existing journal lifetime, cancellation, deadline, identity and final-readback checks. It can nest another journal's custody before a common host scan, avoiding serial scans that release one cell before observing the next. Callback descriptors are frozen; fresh retained authority surrounds capture, and any callback, nested discard, duplicate/reentrant capture or enclosing validation failure discards provisional evidence exactly once. Borrowed pointers, handles and guard contexts must not escape the callback.
+
+The final controlled joined lane passes 3948 checks in each normal/ASAN run (`.tmp/pool-borrow-joined-final.log`, `Goat Joined Capacity Wire 4qAEQy`). Controller payloads build reproducibly for x64/ARM64 (`.tmp/pool-borrow-controller-build.log`, `Goat Controller Payload 7lDELm`); ARM64 was not executed. New cases exercise the callback lifecycle and refusal of an unadmitted journal. These tests do not establish successful mounted borrowing: that branch is compiled but still needs installed or controlled mounted-owner acceptance. Complete-pool enumeration, nested collection, wire delivery and controller observation composition remain open. No disk or installed-service action was performed.
+
+### Nested pool host collector (2026-09-16)
+
+`CellPoolCapacityCollector` now nests each retained member's `WithBackingCapacity` call before one host-area scan. All journal/backing handles, mount leaves and their current authority checks remain in scope during that scan; release unwinds in reverse order. The entire result stays provisional until every member's final readback succeeds. The collector freezes the supplied member bindings, layout roots and security policy, checks each borrowed journal/backing identity and byte count, and refuses duplicate identities, missing callbacks, mismatched returned evidence, cancellation and changed authority. An empty membership still requires a host scan. A 64-member bound limits recursion and refuses larger sets without truncating them. The caller still must establish complete membership and global writer exclusion under an outer watchdog.
+
+The controlled nested-owner cases and existing joined accounting lane pass 3976 checks in each normal/ASAN run (`.tmp/pool-collector-joined-final.log`, `Goat Joined Capacity Wire r9y3Xf`). The nested-owner cases substitute borrowing/scanning operations and use marker handles; they prove callback lifetimes, binding retention, cancellation and whole-result rejection, not physical multi-cell scanning. Native adapters compile against the original journal and layout owners. Complete installed membership enumeration, mounted/guest pool evidence, wire delivery and production controller composition remain open; observation callbacks stay disabled. No virtual-disk or installed-service operation was run.
+
+Final controller reproducibility passes for x64/ARM64 (`.tmp/pool-collector-build-retry.log`, `Goat Controller Payload bdEwzm`). The first wrapper run stopped at its former 79-source expectation; the updated wrapper requires 81 sources and explicitly requires both new collector files. ARM64 was built, not executed. Documentation checks pass, and nothing was staged, committed or pushed.
+
+### Pool guest pins inside the host capture (2026-09-16)
+
+`CellPoolCapacityCollector::CaptureJoined` now collects each retained member's guest inventory inside the shared host-pinned callback. Guest pins remain alive through subsequent guest reads, host/member unwind and final authority checks. The native adapter invokes the original journal's mounted-inventory reader with an exact cell-name binding; per-member checkpoint, assignment and profile bindings are checked before publication. The original layout custody and all supplied descriptors are frozen before external callbacks. Missing/duplicate capture, partial guest failure, revoked bindings, mismatched backing receipts and the combined host-plus-guest entry limit all reject the entire observation. Pins close only after the enclosing call finishes, including failed paths.
+
+The controlled joined lane passes 4000 checks in each normal/ASAN run (`.tmp/pool-guests-joined.log`, `Goat Joined Capacity Wire u10dl9`). New multi-guest cases substitute reader and pin operations; they prove retention, cleanup and result rejection rather than real mounted multi-cell reads. The production adapters compile, but complete membership enumeration, pool wire delivery, controller composition and installed acceptance remain open. No disk creation, attachment, formatting, mounting or installed-service operation was performed.
+
+Controller payloads build reproducibly for x64 and ARM64 (`.tmp/pool-guests-build.log`, `Goat Controller Payload jjHzNV`); ARM64 was not executed. Documentation and whitespace checks pass. The index remains empty; nothing was committed or pushed.
+
+### Pinned pool membership closure (2026-09-16)
+
+`CellCapacityPinnedView::VerifyChildren` now compares an independently retained complete child list against the already-pinned directory membership. Names, object identities, volume identities and file/directory types must match exactly; it never opens an expected path. The native joined-pool adapter applies this check to the cells root before and after guest capture, requiring one exact cell directory and provisioning journal per retained member. Each member now carries its independently retained host workspace-root identity, which the backing borrower also checks. Omitted, extra, substituted or unexpectedly incomplete cells therefore refuse the observation instead of becoming a partial pool result. Canonical acquisition and transport of that complete retained list remain to be composed.
+
+Ordinary NTFS membership evidence passes 1946 checks per normal/ASAN run plus ARM64 compilation (`.tmp/pool-membership-capacity.log`, `Goat Cell Capacity Sr0dJc`). New real pinned-directory cases cover exact membership and omitted, extra, renamed, wrongly typed, wrong-volume and substituted identities. The controlled joined accounting lane passes 4000 checks per normal/ASAN run (`.tmp/pool-membership-joined.log`, `Goat Joined Capacity Wire yznEmg`). These do not prove a real mounted multi-cell pool. Wire delivery, production controller composition and installed acceptance remain open; no virtual-disk or installed-service action occurred.
+
+Controller builds are reproducible for x64/ARM64 (`.tmp/pool-membership-build.log`, `Goat Controller Payload TA7sa5`); ARM64 was not executed. Documentation checks pass and the index remains empty. Nothing was committed or pushed.
+
+### Canonical retained-cell enumeration (2026-09-16)
+
+The storage cell owner now provides `listRetainedNativeCellsForWorker`, an internal registry/worker-scoped read. It includes every retained native generation and state, including incomplete and terminal cells, and excludes container rows. A 65-row sentinel query refuses pools above the native 64-member collection bound instead of returning a truncated membership. Returned records have a stable ordinal assignment/generation order. The caller must already authorize the scope and retain its fence through consumption; no worker-facing RPC or fallback authority was added.
+
+All 14 SQLite cell-repository tests pass (`.tmp/pool-membership-storage-retry.log`), and the output-locked storage typecheck passes (`.tmp/pool-membership-storage-typecheck-final.log`). The new case covers empty/scoped lookup, incomplete and cancelled native records, container exclusion and frozen result records. Its initial cancellation fixture violated the database's platform-identity prerequisite; the corrected case uses normal claim/platform/ready transitions first. PostgreSQL-specific execution and the oversized/multiple-generation matrix are not newly proven by this lane. Protected worker-fence composition, canonical history transport and installed acceptance remain open. No runtime data, disk or installed-service action was performed.
+
+### Protected pool metadata lookup (2026-09-16)
+
+`RemoteWorkerNativePoolRepository.readForAssignment` derives the registry/worker scope from current protected assignment authority, reads all retained native members with their provisioning histories, and rechecks authority and membership before returning. Missing history remains explicit. The read is available through the Storage repository graph and its awaited adapter; it does not grant execution authority or reserve a pool after the transaction ends. Native capture must still hold writer exclusion and verify physical membership. Worker transport and production controller composition remain open.
+
+The three focused SQLite cases pass for worker, mesh-authority and parent revocation (`.tmp/pool-fence-sqlite.log`), including foreign assignment/scope, stale lease/generation and credential rejection. The output-locked storage typecheck passes (`.tmp/pool-fence-composition-typecheck.log`), as do all seven existing async-storage tests (`.tmp/pool-fence-async-storage.log`). This does not establish PostgreSQL pool execution, mounted-pool or installed acceptance.
+
+The architecture gate passes at `artifacts/verification/2026-09-17T01-34-01-751Z-architecture-metrics-94e04af4`, preserving the approved cross-plan caps of 4/4/1. The original architecture baseline SHA256 remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`. No disk, installed-service or live-provider/channel action occurred; the index remains empty and nothing was committed or pushed.
+
+### Credential-free pool transport projection (2026-09-16)
+
+The native-pool contract now carries a bounded, ordered complete membership list with a digest of normalized members. Incomplete members retain explicit null history; duplicate assignments/cells/names, oversized lists, profile mismatch, invalid checkpoint chains and malformed objects are rejected. The digest is an integrity binding, not a signature, authority or freshness claim. A shared provisioning-history validator preserves the existing checkpoint validation while separating retained resource evidence from active assignment leases. Historical members therefore do not receive fabricated leases.
+
+`RemoteWorkerNativePoolRepository.readSnapshotForAssignment` projects only member identifiers, profile hashes and normalized resource history, without credential fences or provisioning-owner claims. It rechecks protected authority and retained membership inside the enclosing transaction. Gateway dispatch, worker/native delivery, production controller composition and installed acceptance remain open.
+
+The focused contract lane passes 81 tests across the provisioning and pool suites (`.tmp/pool-transport-contracts-retry.log`); an initial run exposed and corrected a hash-helper import name. Three protected SQLite pool cases pass with the new projection and post-revocation rejection (`.tmp/pool-transport-sqlite.log`). The output-locked storage typecheck passes (`.tmp/pool-transport-typecheck.log`). PostgreSQL pool execution, physical mounted-pool capture and end-to-end transport have not been newly verified. No disk or installed-service action was performed.
+
+### Protected bounded pool-page exchange (2026-09-16)
+
+Gateway now dispatches `cell.native_pool.page` through the existing signed assignment settlement route to the canonical storage pool reader. Every page re-reads protected membership; subsequent pages require the same whole-snapshot hash. The 32 KiB page bound fits the existing 512 KiB transport limit without widening it. Complete reassembly verifies size, order, digest, canonical encoding and the pool contract. Partial, reordered, mixed or modified pages do not produce a usable pool; changed membership or lease requires restarting the read. No worker-selected scope is accepted. This is retained evidence transport, not a reservation or execution grant.
+
+Four page-contract tests pass (`.tmp/pool-route-contracts-final.log`), along with 109 Gateway signed-protocol/exchange/composition tests (`.tmp/pool-route-gateway-retry.log`) and three protected SQLite page-transfer/revocation cases (`.tmp/pool-route-sqlite.log`). The initial signed-route test caught null-prototype protocol objects being refused by the new field validator; the validator now accepts those plain data records while still rejecting accessors and extra fields. Output-locked Gateway typechecking passes (`.tmp/pool-route-typecheck-final.log`).
+
+Architecture passes at `artifacts/verification/2026-09-17T01-49-17-933Z-architecture-metrics-42aefd95`. Reviewed C5 allowances account for one added storage read in execution composition (35 to 36), one pool-owner dispatch (6 to 7), and one read in the new pool exchange (1). Original baseline limits and the approved 4/4/1 cross-plan caps remain unchanged. An earlier gate attempt correctly refused the live typecheck output lock; it was retried only after that process completed. Worker page acquisition, native delivery, production controller composition, PostgreSQL-specific pool execution and installed acceptance remain open. No disk, installed-service, live-provider or channel action occurred.
+
+### Worker pool acquisition under a stable lease (2026-09-16)
+
+`readWorkerNativePoolOnLease` now acquires the bounded pages through the protected settlement client, freezes the selected credential/lease, checks read-only authority before and after each request, and verifies the complete snapshot before returning. The final registry, assignment, generation, lease revision and credential worker generation must match. The worker ID remains canonical Gateway-derived metadata; it is not independently available in the retained credential. Fresh per-read request keys avoid reusing a prior first-page response. Changed hashes/sizes, duplicate offsets, corrupt bytes, foreign envelopes, response loss, cancellation and authority revocation discard the transfer. The caller must retain its stable lease through consumption; this function neither renews it nor grants execution authority.
+
+Eight focused worker tests pass (`.tmp/pool-client-tests-final.log`), including revocation between pages and at final publication. The worker typecheck passes (`.tmp/pool-client-typecheck.log`). These tests use the real page contract with a mocked protected transport, not a live Gateway or installed controller. Native delivery, installed measurement composition, PostgreSQL-specific pool execution and live acceptance remain open. No virtual-disk, installed-service, provider or channel operation occurred.
+
+### Native pool history container (2026-09-16)
+
+The worker can now encode a fixed, bounded `GCPPOOL1` container containing each member's 21 exact checkpoints. Encoding requires the active request's exact history, matching parent/security principals and complete histories for every retained member. The native decoder validates the same histories through existing controller validators, requires the current member, rejects duplicate names/journals/assignment bindings and clears the entire result on refusal. The container carries no sender-selected session nonce: reserved nonce bytes must be zero, and the admitted outer receiver supplies its current nonce. The snapshot fingerprint is retained provenance, not a signature or independently reconstructed Gateway authority.
+
+Four worker encoder tests and the worker typecheck pass (`.tmp/pool-native-encoder.log`, `.tmp/pool-native-typecheck.log`). The native joined fixture passes 4041 checks in each normal/ASAN run (`.tmp/pool-native-decoder.log`, `Goat Joined Capacity Wire 0ftZtf`), including independently encoded single-member history, every checkpoint class, malformed headers, duplicate membership, extra/truncated bytes and missing trusted principals. This proves parsing and refusal behavior, not multi-member installed transport or physical mounted-pool observation. Helper/pipe delivery and production controller capture composition remain open. No virtual-disk attachment, formatting, mounting or installed-service action occurred.
+
+Controller payloads build reproducibly for x64 and ARM64 (`.tmp/pool-native-build.log`, `Goat Controller Payload QIpa8g`); ARM64 was compiled, not executed. Documentation and whitespace checks pass. Nothing was staged, committed or pushed.
+
+### Pool history helper/controller handoff (2026-09-16)
+
+Installed capacity composition now supplies the protected pool reader inside the existing stable-lease window. The driver acquires pool evidence while local writers are held, requires its exact current history, and appends the bounded container after cleanup input. Failed pool acquisition prevents helper launch. The helper checks the member count before allocation and carries the container into the authenticated controller session. Each header/member frame binds the receiver's nonce; the controller verifies authority between reads and validates the complete pool before cleanup admission and measurement. The receiver may narrow the retained wall limit to the remaining session deadline, never widen it.
+
+Each member uses two fixed frames below the unchanged 16 KiB pipe I/O bound. A native retry exposed the oversized single-frame attempt; splitting it resolved the failure without increasing transport limits. The worker fixture's prior end-of-buffer cleanup offsets were updated to account for the appended pool, and a native fixture variable typo was corrected. All 259 worker protocol/composition/encoding tests pass (`.tmp/pool-handoff-worker-final.log`), as does output-locked worker typechecking (`.tmp/pool-handoff-typecheck-final.log`). The native joined lane passes 4330 checks in each normal/ASAN run (`.tmp/pool-handoff-native-split.log`, `Goat Joined Capacity Wire YTrCFA`).
+
+This establishes metadata handoff in controlled local fixtures. It does not enable the missing installed capture owner or establish real mounted multi-cell measurement, PostgreSQL-specific acceptance or two-machine acceptance. No virtual-disk attachment, formatting, mounting, installed-service operation, provider call or external message was performed.
+
+The controller payload is reproducible for x64/ARM64 (`Goat Controller Payload QdbvXp`), and compiled helper stream checks pass in normal/ASAN mode (`Goat Cell Helper Protocol Gy1HZG`), both recorded in `.tmp/pool-handoff-helper-build.log`. ARM64 was compiled, not run. Docs and whitespace checks pass; nothing was staged, committed or pushed.
+
+### Recorded journal ownership for pool collection (2026-09-16)
+
+`CellPoolCapacityCollector::CaptureRecorded` now decodes the complete retained pool, reuses the current session journal, and owns the other recorded journals until joined capture and final readback finish. Every member's creation, volume, format, protection, mount and workspace records must match the retained history. Guest bindings check the exact cell name and recorded work-directory identity. The owner freezes inputs before callbacks, narrows the scan deadline, and withholds the entire result on cancellation, revoked authority, failed opening/readback, changed identities or missing member output.
+
+The joined native lane passes 4373 checks in each normal/ASAN run (`.tmp/pool-recorded-owner-native-retry.log`, `Goat Joined Capacity Wire nXxDDm`). Controlled two-member cases prove current-journal reuse, retained ownership, input snapshotting, exact guest bindings and all-or-nothing failure. A production entry check rejects a closed current journal without reopening it. The initial compile identified a DWORD/uint32_t template mismatch, corrected before the passing run.
+
+This adds the recorded-journal adapter, not installed acceptance. Complete-pool cleanup admission, complete output delivery/accounting and installed controller composition remain required before wiring the capture callbacks. The positive multi-member ownership cases use controlled native operations; no physical guest volume was scanned. No virtual disk, installed service, provider or external channel was operated, and nothing was staged, committed or pushed.
+
+The x64/ARM64 controller payloads build reproducibly (`Goat Controller Payload ri3wno`), and the compiled helper checks pass (`Goat Cell Helper Protocol wFmb6X`), recorded together in `.tmp/pool-recorded-owner-build.log`. ARM64 was compiled, not executed. Documentation and whitespace checks pass.
+
+### Protected pool-wide historical cleanup read (2026-09-16)
+
+`RemoteWorkerNativePoolRepository.readCleanupForAssignment` now reads retained runtime expectations and installation requests for every canonical pool member within the protected assignment transaction. The existing runtime and installation repositories validate their own evidence against each member's normalized resource history. Historical records are not assigned the requesting lease or renewed approvals. The pool owner rechecks membership, cell state, attempt sets and current authority; more than 1000 total runtime attempts refuses the whole read rather than truncating coverage. Missing history cannot hide an existing attempt.
+
+All nine selected SQLite pool/runtime/installation cases pass across worker, mesh and parent revocation (`.tmp/pool-cleanup-sqlite-final.log`). They include empty sets, retained runtime and installation records, missing history refusal, whole-pool refusal for a corrupt retained attempt, and installation evidence retained after copy approval expiry/rejection. The initial corruption fixture attempted an update and was correctly blocked by the immutable-evidence trigger. The corrected fixture inserts its invalid row only inside a rolled-back test transaction; production triggers remain unchanged. Output-locked storage typechecking passes (`.tmp/pool-cleanup-typecheck-final.log`).
+
+This is a canonical historical reader, not completed cleanup admission. Protected page delivery, native reconciliation of all members and complete output/accounting wiring remain open. The added assertions are shared with the PostgreSQL test matrix, but only SQLite was executed here. No disk, installed-service, live-provider or channel operation occurred. Nothing was staged, committed or pushed.
+
+### Bounded complete-pool cleanup transport contract (2026-09-16)
+
+The new `goatcitadel.remote-worker-native-pool-cleanup.v1` contract binds each ordered cleanup member to the corresponding canonical pool history. It rejects missing, duplicated, reordered or foreign coverage, wrong runtime checkpoint heads, wrong installation journal/anchor/head, sparse/accessor arrays and more than 1000 total runtime attempts. Missing resource history is preserved only with empty runtime and installation sets; this is historical metadata, not local quiescence or execution authority.
+
+Cleanup pages reuse the unchanged 32 KiB page and 8 MiB aggregate bounds through shared internal framing, with a distinct submission kind and snapshot schema. Existing pool-history pages retain their original schema and behavior. Complete assembly verifies page count/order, whole-snapshot digest, UTF-8 and canonical normalized encoding; mixed or partial formats refuse. `readCleanupPageForAssignment` rereads the protected canonical cleanup snapshot for each page and refuses a changed continuation fingerprint.
+
+All 15 focused pool/cleanup/page contract tests pass (`.tmp/pool-cleanup-wire-contracts.log`). All nine SQLite pool/runtime/installation cases pass, including protected cleanup-page assembly and post-revocation refusal (`.tmp/pool-cleanup-wire-sqlite.log`); output-locked storage typechecking passes (`.tmp/pool-cleanup-wire-typecheck.log`). PostgreSQL execution, Gateway dispatch, worker acquisition and native reconciliation of these cleanup pages remain unverified or unwired. No disk, installed-service, provider or channel operation occurred, and nothing was staged, committed or pushed.
+
+### Signed cleanup-page dispatch and worker acquisition (2026-09-16)
+
+Gateway now accepts `cell.native_pool.cleanup.page` through the existing signed assignment settlement route, selects the canonical protected cleanup-page reader, and returns a distinct `native_pool_cleanup_page` disposition. Existing pool-history dispatch remains available. The worker's new `readWorkerNativePoolCleanupOnLease` uses bounded complete assembly, checks current authority before/after each page and before publication, and binds the result to the retained registry, assignment generation, lease revision and worker credential generation. It does not renew the lease. Each acquisition uses a fresh read identity; response disposition, snapshot changes, lost replies and revocation refuse the entire read.
+
+All 117 Gateway protocol/exchange/composition checks pass (`.tmp/pool-cleanup-route-gateway.log`), including signatures, rejected worker-selected scope, exact storage-method selection and cancellation for both page kinds. All 16 worker acquisition checks pass (`.tmp/pool-cleanup-route-worker.log`). Output-locked Gateway/worker typechecks pass (`.tmp/pool-cleanup-route-typecheck.log`). Architecture passes at `artifacts/verification/2026-09-17T02-59-28-896Z-architecture-metrics-ee39eacb` after a narrow review of one additional canonical cleanup read in the plan-owned composition service (36 to 37). Existing baseline-owner limits and the approved cross-plan 4/4/1 allowances remain unchanged.
+
+This completes the protected page route and worker reader in controlled tests. The installed driver still needs to send each member's admitted cleanup set to native reconciliation before complete pool capture and output delivery can be enabled. No installed service, virtual disk, provider or external channel was operated; nothing was staged, committed or pushed.
+
+### Native cleanup bytes from historical resource records (2026-09-16)
+
+Retained pool members can now derive their mounted-workspace anchor and encode the existing `GCCLEAN1` cleanup bytes directly from resource history. The new history-only normalizer refuses assignment/lease/owner fields, incomplete or altered chains, unbound challenges, wrong checkpoint heads, duplicate/unordered attempts, oversized arrays and accessors. Existing active-assignment cleanup uses the same byte encoder after its original exchange validation; no historical lease is manufactured.
+
+Golden digests were captured from the previously built encoder before its source changed. Empty and two-attempt fixtures retain those exact digests and byte lengths. All 87 focused contract checks pass (`.tmp/pool-cleanup-native-contracts.log`), including provisioning-chain coverage and pool cleanup, and all 285 worker cleanup/assignment-cleanup/volume-protocol checks pass (`.tmp/pool-cleanup-native-worker.log`). The output-locked worker typecheck passes (`.tmp/pool-cleanup-native-typecheck.log`).
+
+This provides the resource-only encoding needed for old members. Pool-member transfer and native reconciliation remain unwired; existing native cleanup layout was preserved, but no new physical-volume, installed-service or two-machine execution was performed. No disk operations, provider/channel calls, staging, commits or pushes occurred.
+
+### Bounded pool cleanup container (2026-09-16)
+
+The worker now encodes ordered per-member cleanup admissions and resource-history cleanup sets in a bounded `GCPCLN01` container. Its pool fingerprint must match the canonical protected snapshot, every member must have complete mounted history, and the total runtime-attempt limit remains 1,000. The native decoder checks each assignment binding, admission size, checkpoint head, workspace identity and independently admitted challenge before publishing any result. Fingerprints identify the supplied snapshots; they do not grant authority or replace retained-journal reconciliation.
+
+All eight focused worker encoding/history checks pass (`.tmp/pool-cleanup-container-worker.log`), including empty, installation-bearing and 1,000-attempt encoding fixtures. The output-locked worker typecheck passes (`.tmp/pool-cleanup-container-typecheck.log`). Native protocol checks pass in normal and AddressSanitizer builds, 4,404 checks each (`.tmp/pool-cleanup-container-native.log`), including malformed lengths, changed bindings, stale challenges, noncanonical padding and all-or-nothing refusal. The native positive container fixture covers one member with empty cleanup namespaces; this is not native multi-member or 1,000-attempt acceptance. Controller payloads build reproducibly for x64 and ARM64 (`.tmp/pool-cleanup-container-build.log`); ARM64 execution was not tested.
+
+The container encoder and decoder are not yet connected through the helper/controller transport. Per-member retained-journal reconciliation and complete pool output delivery remain required before installed capture can be enabled. No physical volume was scanned, no disk or installed-service operations ran, and no provider/channel calls, staging, commits or pushes occurred. The approved cross-plan 4/4/1 allowances and the original architecture baseline remain unchanged.
+
+### Pool cleanup transport through the worker and controller (2026-09-16)
+
+The assignment-capacity composition now reads the protected full-pool cleanup snapshot. The worker sends its complete pool history and length-prefixed cleanup container while retaining the local writer pause. The helper rejects out-of-bound container lengths before allocation. The native client validates the container after generating its connection nonce, then sends a nonce-bound size frame and ordered chunks of at most 4,096 data bytes. The controller checks current authority, nonce, exact offset and expected chunk length throughout reception, then validates the complete container before journal access. Existing frame-size limits remain unchanged.
+
+Worker protocol/composition/encoding tests pass, 259 checks (`.tmp/pool-cleanup-transport-worker.log`), with four additional focused refusal checks for incomplete member coverage, stale leases, cancellation and authority revocation (`.tmp/pool-cleanup-transport-worker-refusal-final.log`). The output-locked worker typecheck passes (`.tmp/pool-cleanup-transport-typecheck.log`). Final native/package evidence passes all three lanes (`.tmp/pool-cleanup-transport-native-verified.log`): 4,548 checks each in normal and AddressSanitizer native runs, helper stream checks, and reproducible x64/ARM64 payload builds. ARM64 was compiled, not executed. The helper-shaped empty-nonce regression exposed an older current-cell cleanup validation ordering issue as well; both current-cell and full-pool validation now follow nonce creation, before any pipe write. Earlier runs that changed a generated input during the helper snapshot or failed the nonce regression are not acceptance evidence.
+
+This is metadata handoff, not completed pool measurement. Per-member retained-journal cleanup reconciliation and complete pool output delivery remain unwired, and installed capture callbacks remain disabled. Positive native transport coverage uses an empty single-member cleanup set; hostile transport and multi-chunk coverage still need expansion. No disk formatting, volume attachment, installed-service operation, provider/channel call, staging, commit or push occurred.
+
+### Retained pool cleanup reconciliation (2026-09-16)
+
+`CellPoolCapacityCollector::CaptureRecorded` now decodes the admitted full-pool cleanup container and freezes its member sets before invoking owners. Each set must match its retained journal anchor, checkpoint head and mounted workspace. Installation coverage and runtime coverage run on that exact journal, in order, using the remaining shared capture deadline and current cancellation/authority guard. Any failure refuses the whole capture before scanning. All journals remain retained through capture and final identity readback; the installed caller must still hold the stable lease and global writer exclusion.
+
+The controlled two-member owner fixture now verifies both cleanup namespaces before capture, second-member installation/runtime rejection, cancellation/revocation between namespaces, missing member coverage, incorrect journal/workspace binding and caller-input mutation. The native checks pass 4,586 checks in each normal and AddressSanitizer run, and x64/ARM64 controller payloads build reproducibly (`.tmp/pool-reconciliation-native.log`). These are controlled owner/protocol checks, not a real installed multi-member volume scan; ARM64 execution was not tested.
+
+Complete pool output encoding/delivery and installed capture composition remain outstanding. No installed capture callback was enabled, and no disk formatting, attachment, installed-service operation, provider/channel call, staging, commit or push occurred.
+
+### Complete pool output encoder (2026-09-16)
+
+`EncodeCellPoolJoinedCapacity` now accepts the independently admitted pool history and encodes one shared host capture plus ordered guest summary/chunk/backing frames for every member. It preserves the pool fingerprint, validates each observation against that member's full history and original host objects, rejects duplicate guest volume identities and applies the 20,000-object limit across the host and all guests together. Incomplete, extra or inconsistent member evidence clears the entire output. This is data encoding and grants no collection authority.
+
+Native checks pass 4,610 checks in normal and AddressSanitizer runs, and controller payloads build reproducibly for x64/ARM64 (`.tmp/pool-output-native.log`). New checks establish exact single-member compatibility with existing bytes, all-or-nothing refusal, missing/extra member rejection and the combined object limit. The current valid encoding fixture has one member; a positive multi-member fixture with distinct volume identities remains required. ARM64 was compiled, not executed.
+
+The pool output is not yet transferred through the controller/helper response or consumed by portable accounting/delivery. Those integrations, positive multi-member proof and installed capture composition remain outstanding. No volume or installed service was operated, and nothing was staged, committed or pushed.
+
+### Distinct multi-member output proof (2026-09-16)
+
+The independent contract fixtures can now produce 64 complete histories with distinct assignment bindings, journals, backing files, volume identifiers, NTFS serials and mount identities under one host parent. The default fixture retains its pre-change digest. All 100 focused contract checks pass (`.tmp/pool-multimember-contracts-final.log`), and the output-locked worker/contracts typecheck passes (`.tmp/pool-multimember-typecheck.log`). The new 64-member fixture initially exceeded Vitest's default five-second limit; it now avoids repeated baseline construction and has a local 30-second bound, with the final complete lane finishing in 8.63 seconds.
+
+The packaging proof feeds the worker's encoded pool histories and independent guest/backing frames through the compiled native pool encoder. Both normal and AddressSanitizer runs pass two-member (48 checks) and 64-member (1,102 checks) cases, including exact per-member summary/object preservation, original journal order, the single shared host capture, swapped-guest rejection and missing-final-backing rejection. The existing 4,610-check native lane also passes in both modes (`.tmp/pool-multimember-native-final.log`). Snapshots include the contract sources/build outputs and worker pool encoder inputs. These are byte-level proofs over task-owned files; no journals, devices or physical volumes are opened by the multi-member codec path.
+
+This closes the positive multi-member encoder proof gap. Complete response transport, portable full-pool accounting/delivery and installed capture composition remain outstanding. No installed service or disk operation ran, and nothing was staged, committed or pushed.
+
+### Portable complete-pool accounting (2026-09-16)
+
+Guest summary, object-inventory and backing readers now validate historical resource chains without adding current assignment or lease fields. Existing lease-bearing readers retain their public result shapes and share the same byte validators. Historical readers refuse injected authority fields, incomplete chains, foreign histories, accessors and incomplete or mismatched chunks.
+
+The new full-pool composer binds the exact retained pool snapshot, connection nonce, host capture, ordered member frames and shared references to an independent capture window. It validates every historical member against its original host objects, rejects missing/extra/reordered members and duplicate guest volumes, and applies the combined 20,000-object limit. Accounting marks every host backing once, records guest allocation separately and retains shared logical references without multiplying them by member count. No historical lease is manufactured.
+
+All 156 focused contract checks pass (`.tmp/pool-accounting-contracts.log`), including one-, two- and 64-member accounting, and the additional exact-20,000/over-20,000 boundary check passes (`.tmp/pool-accounting-boundary.log`). All 50 focused existing worker capacity/delivery checks pass (`.tmp/pool-accounting-worker.log`). The output-locked worker/contracts typecheck passes (`.tmp/pool-accounting-typecheck-verified.log`). The earlier fixture-only typecheck error was corrected before these successful checks.
+
+This is portable composition over independently generated fixture bytes. Native multi-member output has not yet been delivered into this composer through the real controller/helper response. Full-pool delivery persistence/replay and installed capture composition remain outstanding. No disk or installed-service operation, provider/channel call, staging, commit or push occurred.
+
+### Durable complete-pool delivery and replay (2026-09-16)
+
+The full-pool delivery contract freezes the original pool, layout, capture window and source bytes, recomposes the complete inventory and verifies its bundle and inventory digests. Independent retained bindings are required when reading delivered evidence; claimed totals cannot replace recomposition. The existing 16 MiB delivery bound is unchanged.
+
+The worker's existing persistence/replay owner now also supports full-pool captures with a distinct schema and durable key. Both delivery variants share assignment exclusion. Evidence is persisted and read back before delivery; response loss and lease renewal replay the original capture without rescanning. Membership changes, revoked authority, cancellation, failed persistence/readback and changed canonical receipts refuse completion while retaining evidence.
+
+All 27 contract checks and 25 worker checks pass (`.tmp/pool-delivery-contracts.log`, `.tmp/pool-delivery-worker.log`), including two- and 64-member delivery round trips and file-backed recovery. The final output-locked worker/contracts typecheck passes (`.tmp/pool-delivery-final-typecheck.log`) after correcting the new test mock's callback type. Native response transport, protected full-pool Gateway upload/canonical retention and installed capture composition remain outstanding. No disk or installed-service operation, provider/channel call, staging, commit or push occurred.
+
+### Native multi-member output into portable accounting (2026-09-16)
+
+The native pool codec fixture now retains its encoded layout, shared host capture, pool fingerprint and every member's guest/chunk/backing frames in new ordinary output files. The packaging proof feeds those actual native outputs into the portable full-pool composer, checks exact preservation of independent input member bytes, verifies complete accounting and refuses swapped member evidence even when its source digest is recomputed.
+
+Normal and AddressSanitizer runs both pass the two-member (57 native checks) and 64-member (1,297 native checks) cases, plus the existing 4,610-check native lane (`.tmp/pool-native-portable-bridge.log`, retained fixture `Goat Joined Capacity Wire MbdFUr`). Both builds produce 138,547,200 host/180,224 guest allocated bytes for two members and 4,431,859,712 host/5,767,168 guest allocated bytes for 64 members, with each host backing counted once. The complete lane passes in 285.07 seconds under its 360-second bound; source/build snapshots remain unchanged throughout execution.
+
+Architecture passes at `artifacts/verification/2026-09-17T04-19-56-796Z-architecture-metrics-358c063d`; the original baseline SHA256 remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`, and the approved cross-plan 4/4/1 caps remain unchanged. This closes the native-to-portable codec proof gap using fixture files. Actual controller/helper response transport, protected Gateway retention and installed/live acceptance are still outstanding. No physical pool scan, disk operation, installed-service operation, provider/channel call, staging, commit or push occurred.
+
+### Bounded full-pool response and private-pipe transfer (2026-09-16)
+
+The native encoder now emits a complete `GCPRESP1` response containing one layout and shared host capture plus every ordered guest/backing/chunk set. Its 2,074,488-byte maximum derives from the existing 64-member and 20,000-object limits. The portable decoder checks fixed header/version/reserved fields, connection nonce, independent pool fingerprint/layout, member ordinals, chunk counts, exact lengths and end-of-input before composing the complete delivery against the independently retained capture window and shared references.
+
+New native read/write transport functions use existing framed pipe I/O with a bounded size frame and nonce/offset-bound chunks of at most 4,096 bytes. They freeze caller-owned inputs before external authority callbacks, enforce the retained deadline, recheck current authority/cancellation before and after I/O, and publish no partial response. They operate only on an already authenticated borrowed pipe; receipt and capture validation remain separate caller responsibilities.
+
+All 21 focused contract checks pass (`.tmp/pool-response-contracts.log`), as does the output-locked worker/contracts typecheck (`.tmp/pool-response-typecheck.log`). Native normal and AddressSanitizer runs pass two-member (94 checks) and 64-member (1,334 checks) cases, plus the existing 4,610-check lane (`.tmp/pool-response-native.log`, retained fixture `Goat Joined Capacity Wire YSMGmh`). Private-pipe cases cover exact complete transfer, caller mutation, oversized advertisements, wrong nonces/offsets/kinds/lengths, cancellation and final-boundary revocation. The actual native response also passes portable decoding with unchanged accounting totals. The complete native lane passes in 178.89 seconds.
+
+Controller payloads also build reproducibly for x64 and ARM64 (`.tmp/pool-response-build.log`, retained fixture `Goat Controller Payload cg32EY`). ARM64 was compiled, not executed. Documentation and whitespace checks pass (`.tmp/pool-response-docs.log`).
+
+These transport functions are not yet dispatched by the installed controller/helper session or worker stdio driver. That composition, protected Gateway upload/retention and installed/live acceptance remain outstanding. No physical volume, installed service, provider or external channel was operated, and nothing was staged, committed or pushed.
+
+### Full-pool controller/client dispatch and helper response (2026-09-16)
+
+Native operation 20 now identifies full-pool capture separately from the existing single-cell diagnostics. It requires a nonzero independently supplied capture nonce, complete admitted pool/cleanup metadata, the existing measurement hold and a dedicated collection owner. The controller validates and encodes the entire owner's result before sending its ready frame and bounded response. Endpoint/measurement custody is checked during transfer; a fresh canonical authority exchange follows the chunks before the terminal receipt. Installed collection remains unavailable because the installed collection owner is not yet supplied.
+
+The native client freezes the original request, verifies the ready binding and response's pool/count/assignment/profile/capture nonce, and withholds its consumer callback until both post-transfer canonical reauthorization and a successful terminal receipt arrive. The consumer must still perform portable decoding against independently retained capture bindings. The helper accepts the separate capture nonce and forwards the complete result as frame 14 before its own terminal receipt; the parent must require successful helper completion as well.
+
+The final native lane passes 5,665 checks in normal and AddressSanitizer builds, including ten controlled single-member full-pool client session cases for success, input mutation, unavailable collection, missing response/receipt, changed receipt count, native failure, consumer failure/revocation and missing final canonical authorization (`.tmp/pool-dispatch-native-retry.log`, retained fixture `Goat Joined Capacity Wire JsbTzt`). Existing two-/64-member response and portable accounting checks also pass (94/1,334 native checks). The first run stopped on a fixture assertion still expecting the old operation number; that assertion was corrected before the successful rerun.
+
+Helper framing checks pass in normal and AddressSanitizer builds, including exact frame/receipt bytes and refusal of wrong-nonce, short and oversized responses. These helper cases test framing only; semantic response coverage comes from the separate native/portable lanes. Controller payloads build reproducibly for x64 and ARM64 (`.tmp/pool-dispatch-helper-build.log`, helper fixture `Goat Cell Helper Protocol besyll`, payload fixture `Goat Controller Payload OOQmKV`). ARM64 was compiled, not executed.
+
+The TypeScript worker driver has not yet been connected to operation 20/frame 14. Positive controller collection-owner composition, protected Gateway upload/retention and installed/live acceptance remain outstanding; the new client session proof uses a controlled peer. No installed service, physical volume, provider or external channel was operated, and nothing was staged, committed or pushed.
+
+### Full-pool worker driver and local capture provenance (2026-09-16)
+
+The worker driver now sends operation 20 for every admitted member, appends the independently selected capture nonce and accepts only a bounded frame 14 after complete history replay and current-authority checks. It freezes pool/layout/nonce/shared-reference inputs, compares the protected cleanup reader's pool with the retained pool before launch, and holds local writer exclusion through helper termination and validation. A response is returned only after a successful native receipt, clean helper exit, complete portable validation and final authority checks. Duplicate, truncated, early, wrong-binding and post-response frames refuse completion.
+
+The local capture producer derives provenance hashes from completed authenticated native bytes after receipt/exit checks, using independently retained pool/layout/nonce/reference inputs. It remains separate from the ingress reader, which still requires an independently retained capture window. Creating local provenance does not grant Gateway admission or execution authority. Shared references are passed as immutable serialized input, bounded and validated before helper launch.
+
+All 283 focused worker checks pass (`.tmp/pool-worker-tests.log`), including existing provisioning/startup paths, and the final 18-test full-pool lane passes after adding explicit writer-exclusion and per-member operation checks (`.tmp/pool-worker-focused-final.log`). All 25 response-contract checks pass (`.tmp/pool-worker-contracts.log`). The final output-locked worker/contracts typecheck passes (`.tmp/pool-worker-final-typecheck.log`); startup mocks and the new fixture's literal layout type were corrected before that successful run.
+
+The native cross-language fixture now uses operation 20 for both two- and 64-member inputs. Normal and AddressSanitizer runs pass the 94/1,334 member-count checks and the 5,665-check protocol lane with unchanged portable accounting (`.tmp/pool-worker-native.log`, retained fixture `Goat Joined Capacity Wire PmQNG2`). Source/build snapshots remained unchanged through the 182.25-second run. This is controlled driver, codec and private-pipe proof; an installed collection owner, protected full-pool Gateway upload/retention and installed/live acceptance remain outstanding. No installed service, physical volume, provider/channel call, staging, commit or push occurred.
+
+### Full-pool canonical capture retention (2026-09-16)
+
+The storage package now exports `RemoteWorkerNativePoolCapacityDeliveryRepository`. It recomposes submitted full-pool source bytes against independently retained pool/layout/window bindings, compares the entire retained pool with current protected canonical membership, and commits source evidence together with the existing capacity admission transaction. It shares the existing immutable source table and nonce namespace; no schema migration or replacement of the single-cell reader was introduced. Lease renewal may advance current authority while preserving the original capture, pool snapshot, receipt and inventory revision. Replay never repeats admission.
+
+The nine-case SQLite lane passes for pool membership, legacy delivery and full-pool delivery across worker, mesh-authority and parent revocation (`.tmp/pool-retention-sqlite.log`). The final three full-pool cases also pass after adding correctly rehashed but invented worker ID, member cell ID and future lease refusals (`.tmp/pool-retention-sqlite-final.log`). These fixtures additionally cover rejected admission, immutable evidence, duplicate nonce/source, stable replay after newer admission, quarantine, current-authority loss and transaction rollback after source insertion. The output-locked storage typecheck passes (`.tmp/pool-retention-final-typecheck.log`).
+
+This is controlled SQLite retention proof with one canonical member; prior two- and 64-member portable/native proofs do not establish multi-member database or installed acceptance. PostgreSQL fixtures were registered but not executed. Protected full-pool paged upload and capture-coordinator wiring, installed collection ownership and live acceptance remain outstanding. Original architecture baseline SHA-256 remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`; approved 4/4/1 caps remain unchanged. No physical volume, installed service, provider or channel was operated, and nothing was staged, committed or pushed.
+
+### Protected full-pool page upload and admission reads (2026-09-16)
+
+The existing native-capacity page repository now supports full-pool expectations through `preparePoolForAssignment`. A distinct expectation schema retains the independently supplied capture window, layout and original pool lease revision. It stores the complete pool fingerprint instead of duplicating every member history; each prepare/page/read reconstructs protected canonical membership under the current assignment and verifies that exact fingerprint with the original capture lease revision. Changed membership or scope refuses admission. The existing 128 KiB expectation, 32 KiB page and 16 MiB delivery limits, immutable tables, shared nonce namespace and atomic final-page/source/inventory transaction remain unchanged. Worker page ingress still cannot register expectations.
+
+Runtime and installation capacity reads now resolve either supported capture schema through its corresponding source-retention owner. The worker page client validates full-pool envelopes and exposes `deliverWorkerNativePoolCapacityOnConnection`, composing protected upload with the existing full-pool durable capture ledger. Retries preserve original source bytes and confirm the canonical receipt; renewed authority does not rewrite the capture, and quarantine remains explicit.
+
+All 12 file-backed SQLite cases pass across legacy/full-pool upload, runtime/installation phases and worker/mesh/parent revocation (`.tmp/pool-upload-sqlite.log`, 561.58 seconds). These cover partial durable pages, database reopen, exact replay, lease renewal, corrupted final bytes, rollback after page insertion, complete retained admission and immutable expectations/pages. Canonical database fixtures contain one pool member. The three pure expectation tests separately prove compact frozen snapshots for two and 64 members and invalid digest/size/lease refusal (`.tmp/pool-upload-snapshot.log`); they establish no database or OS authority. All 41 worker delivery/page tests pass, including a two-member protected upload fixture (`.tmp/pool-upload-worker.log`), and all 113 Gateway page/owner/settlement regression tests pass (`.tmp/pool-upload-gateway.log`). Output-locked storage/worker/Gateway typechecks and documentation/whitespace checks pass.
+
+Production capture-coordinator expectation registration, assignment-driver composition, installed collection ownership and live acceptance remain outstanding. PostgreSQL fixtures are registered but were not executed. No installed service, physical volume, provider or external channel was operated. Original architecture baseline and approved 4/4/1 caps remain unchanged; nothing was staged, committed or pushed.
+
+### Assignment full-pool capture and renewable upload composition (2026-09-16)
+
+`observeWindowsWorkerAssignmentPoolCapacity` now composes protected assignment authority, canonical pool reads, the native pool driver, durable local capture retention and protected page upload for ready/runtime and provisioning/installation phases. Its layout, nonce and shared-reference bindings must come from the trusted installed capture coordinator. The function does not infer them from worker configuration, register Gateway expectations or enable the installed collection owner.
+
+A capture-only operation in the existing durable delivery owner retains and re-reads the complete source while the caller holds one stable measurement lease. It shares assignment exclusion and the existing capture key with delivery. Capture completion releases that lease hold before upload; the page client can then renew/persist authority before each request and hold that binding through its response. Upload reopens the retained source, refuses rescanning if it is missing, verifies current pool membership and preserves the original pool/window across renewal. Changed layout/reference bindings, revoked authority, changed membership and absent Gateway expectations refuse completion. Local capture retention alone does not confirm a canonical receipt or grant execution authority.
+
+All 58 focused tests across six worker files pass in the serial lane (`.tmp/pool-coordinator-worker-retry.log`, 84.80 seconds), including nine new composition cases with controlled two-member native responses and task-owned file-backed state. They cover both phases, stable capture versus per-request renewal, reopened response-loss recovery without rescanning, quarantine, unavailable native ownership, revocation, changed membership/bindings, missing expectation and upload cancellation. The initial run correctly rejected an extra lease-token field in the new mock response; that fixture was corrected. Parallel execution also hit default five-second test limits; the successful retry used one test worker, and the new composed cases have bounded twenty-second limits. The output-locked final worker typecheck passes.
+
+This is local composition proof, not installed execution. Production capture-coordinator expectation registration and assignment-runner selection still need wiring; the native collection owner and installed/live acceptance also remain outstanding. No installed service, physical volume, provider or external channel was operated; nothing was staged, committed or pushed.
+
+### Installed-root full-pool collection adapter (2026-09-16)
+
+The controller's operation-20 owner is now connected to `CellInstalledPoolCapacity`. The adapter reads all thirteen roots from `CellControllerIdentity`, binds layout metadata to the frozen current assignment/profile, requires the recorded mutable root to match the admitted parent, opens the layout through the installed ACL verifier, and invokes `CellPoolCapacityCollector::CaptureRecorded` on the original session journal. Existing complete-pool history, historical cleanup verification, recorded journal custody and shared measurement hold remain required. The adapter checks cancellation/current authority around each ownership boundary, carries one shrinking deadline into collection, and publishes no layout or observation on any failure. Legacy single-cell observation callbacks and runtime installation callback remain separate.
+
+The new controlled native owner lane passes in normal and AddressSanitizer builds (`.tmp/pool-installed-owner-native.log`; retained fixture `Goat Installed Pool Owner 0JDdsT`). It exercises installed-root derivation through controlled callbacks, request freezing, inadmissible roots/ACLs, missing authority, partial output, post-collection revocation, cancellation and bounds. These callbacks do not open an installed service or scan a real pool. Controller payloads also build reproducibly for Windows x64 and ARM64 (`Goat Controller Payload NpPxpX`); the source manifest now includes both adapter files. ARM64 was compiled, not executed. Both named test files passed in 336.62 seconds with unchanged source snapshots throughout.
+
+Production capture-coordinator expectation registration and assignment-runner selection, the installed runtime-copy owner, end-to-end installed collection proof and live acceptance remain outstanding. Source dispatch wiring is not installed acceptance or backend readiness. No installed service, virtual disk, volume, provider or external channel was operated; nothing was staged, committed or pushed.
+
+### Legacy capacity requires complete single-member membership (2026-09-16)
+
+Legacy single-cell expectations now read the protected complete retained pool and refuse missing, additional or foreign members. This check applies before expectation/page retention, accepted receipt replay and runtime/installation admission; a sole active lease cannot hide historical cells. The full-pool expectation path retains its existing complete membership fingerprint check.
+
+All six focused file-backed SQLite fixtures pass across runtime/installation phases and worker/mesh/parent revocation (`.tmp/legacy-pool-sqlite.log`, 260.29 seconds). Membership faults are controlled reader injections around real canonical authority and page rows, not physical multi-cell collection proof. The initial Vitest invocation used the wrong runner and failed; the passing run used the storage package's `tsx --test` runner. Output-locked storage typechecking, documentation and whitespace checks pass. The fresh architecture gate passes at `artifacts/verification/2026-09-17T06-00-40-832Z-architecture-metrics-14b7d018`; reviewed cross-plan caps remain 4/4/1 and the original baseline SHA-256 remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`.
+
+The native installation adapter still requires a live complete-pool reservation before its controller callback can be connected. Stored capacity acceptance is not that reservation. Production coordinator/runner wiring and installed/live acceptance remain outstanding. No installed service, disk, provider or channel was operated; nothing was staged, committed or pushed.
+
+### Installation controller retains writer exclusion (2026-09-16)
+
+Operation 18 now requires both the installation callback and the existing native writer-exclusion owner. The session acquires and verifies that hold before opening the retained journal, rechecks it through its existing authority guard, and retains it through local outcome retention and terminal receipt handling. Every return releases the hold. Read-only installation recovery remains separate. This supplies exclusion, not a live capacity reservation; the production installation callback remains absent pending that reservation owner.
+
+The named installation-client lane passes in normal and AddressSanitizer builds (`.tmp/install-exclusion-native-retry.log`, 174.59 seconds; retained fixture `Goat Install Client LF5vRX`). Each build covers 46 installation sessions and 19 workload-handoff sessions. Six new actual-controller refusal cases cover missing copy/hold owners, denied acquisition, a success result with no hold, revoked verification and release after a held journal refusal. Journal bytes remain unchanged and copy/provisioning callbacks are not invoked. The first build caught a shadowed test variable under warnings-as-errors; the corrected retry passed. Documentation and whitespace checks pass. These are private-pipe and controlled-journal fixtures, not installed copying or physical volume acceptance. Nothing was staged, committed or pushed.
+
+### Installation guest-capacity projection and migration gate repair (2026-09-16)
+
+Installation review preparation, pending-review validation and admission-material reads now project the reviewed bundle into the active guest identified by its retained backing checkpoint. The projection verifies the inventory binding, checks guest logical bytes against both the native disk and profile limits, and includes the new files in captured file/inode limits. Preallocated backing bytes remain host-accounted once; another retained guest's logical files are not charged to the active guest. This is a captured-capacity prerequisite, not live allocation or reservation authority.
+
+Seven pure projection cases pass (`.tmp/install-capacity-unit-final.log`), including exact boundaries, each exceeded limit, incorrect inventory binding and two-member selection. Both legacy and full-pool file-backed SQLite installation fixtures pass with worker revocation (`.tmp/install-capacity-sqlite-retry.log`, 131.49 seconds), including oversized-package refusal before any approval/request/outcome creation. The initial installation fixtures contained the codec's deliberately wide 8-GiB sparse logical file and were correctly refused; installation fixtures now request 9,000 logical bytes while the default wide-number codec fixture remains unchanged. All 44 focused contract regression tests pass (`.tmp/install-capacity-contracts.log`), and output-locked contracts/storage typechecks pass. PostgreSQL and physical installation were not executed.
+
+The bounded source gate found stale independently reviewed migration-test counts. Reviewed SQLite 249/250 and PostgreSQL 194/195 are the existing additive native policy-reservation and runtime-installation evidence migrations. Their immutable tables, registry entries and checked-in hashes remain unchanged; the test now independently asserts their counts and names while preserving prior entries. The named migration-parity lane passes (`2026-09-17T06-20-20-608Z-fast-c8ec361b`). Earlier root typechecking and Gateway async-boundary checks passed at `2026-09-17T06-18-25-751Z-fast-abec7e5d`, whose aggregate status was failed because of that stale migration assertion. An earlier hygiene selection expanded into all packaging tests and was stopped by its verified task-owned process tree; it provides no passing hygiene evidence. Its terminated-owner output lock was reclaimed by the normal lock wrapper after expiry, not bypassed.
+
+The final bounded source-gate run passes root typechecking, Gateway async-boundary, storage migration parity and documentation checks together at `artifacts/verification/2026-09-17T06-27-53-919Z-fast-e1cf8f26`. This is a selected fast-lane run, not the full repository gate.
+
+Live complete-pool reservation, production capture coordination/runner selection and installed/live acceptance remain outstanding. Nothing was staged, committed or pushed.
+
+### Native capture-to-copy reservation composition (2026-09-16)
+
+`CellInstallCapacity` composes installed full-pool collection, an independently supplied live reservation owner and the existing guarded installed runtime-copy adapter in one bounded call. It freezes metadata before callbacks, verifies installation journal/checkpoint bindings, requires the caller's retained native writer-exclusion hold, and checks exclusion, current authority, cancellation, deadline and reservation during the copy. Missing or failed reservation acquisition cannot call the copy adapter. Reservation destruction releases its ownership on all paths; failed copies preserve partial counters and clear verified output. The caller must retain writer exclusion through terminal receipt handling.
+
+This composition does not create Gateway reservation authority. Combined capture/install protocol transport and the canonical reservation owner still need wiring, and installed installation dispatch remains absent. Human approval belongs upstream of this bounded call. No physical disk or installed-service operation is part of the controlled composition proof.
+
+Both named native lanes pass (`.tmp/capture-copy-native.log`, 333.71 seconds). Controller payloads build reproducibly for Windows x64 and ARM64 with all 85 source inputs (`Goat Controller Payload IdWDsn`); ARM64 was compiled, not executed. The controlled composition fixture passes in normal and AddressSanitizer builds (`Goat Install Capacity Owner UY3C2h`), covering successful ordering, request freezing, missing/lost exclusion, failed collection/admission, empty or revoked reservations, cancellation, mid-copy revocation, incorrect copy counts and invalid input bounds. Collection, reservation and copy callbacks are controlled; this is not installed-copy or live-pool acceptance. Native source snapshots remained unchanged throughout these proofs.
+
+### Installation reservation challenge and private-pipe exchange (2026-09-17)
+
+The portable and native challenge codecs bind the connection nonce, installation nonce, reviewed request hash, exact captured-byte hash and length, and independently retained sequential ordinal in a canonical 144-byte frame. Capture hashing is transport binding only; it does not decode the capture or establish reservation authority. The native channel freezes its binding, uses an absolute bounded deadline and shared cancellation handle, rechecks local authority, and permanently refuses reuse after an uncertain or rejected exchange. Role switching, reentrancy and peer-selected counter resets cannot restart the channel. Canonical reservation callbacks must complete without waiting for human approval.
+
+Four focused contract tests and output-locked contracts typechecking pass. Cross-language wire proof passes in normal and AddressSanitizer builds (`.tmp/install-capacity-challenge-native.log`, 115.92 seconds; `Goat Install Capacity Challenge 4aaYxL`). Real private-pipe exchange proof also passes in both builds (`.tmp/install-capacity-pipe-native-final.log`, 117.67 seconds; `Goat Install Capacity Pipe P9VCrt`), covering sequential success, foreign capture refusal, current-authority denial, reentrancy, role switching, replay and rejection of a valid legacy acknowledgement. Initial runs found missing shared frame-validator entries and a malformed wrong-kind fixture; both were corrected before the passing retry. Source snapshots remained unchanged during each passing native run. The source manifest now includes all 89 controller inputs; x64 fixtures compile them, but the earlier ARM64 reproducibility proof covered 85 inputs and has not been refreshed for this change.
+
+Full capture transfer within combined installation dispatch, the reservation factory/canonical owner, production expectation registration and assignment-runner wiring remain outstanding. These controlled callbacks do not establish installed endpoint custody, live Gateway reservation, physical copying or installed acceptance. The original architecture baseline hash and approved cross-plan 4/4/1 caps remain unchanged. No drive, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Controller-side capture admission transport (2026-09-17)
+
+`CellInstallCapacityPipeAdmission` now provides the admission callback required by the capture-to-copy composition. It validates the independently reviewed installation metadata, encodes and freezes the complete pool capture, sends a distinct capture header plus bounded capture stream, and acquires a reservation proxy only after the peer answers the first exact-bound challenge. Every subsequent proxy verification requests fresh authority. Admission is single-use, failed or reentrant attempts poison it, and it cannot replace an existing reservation. Its borrowed connection/guard owner must outlive the proxy; the peer's enclosing operation remains responsible for releasing canonical reservation ownership.
+
+The real handoff test found that the composite request still carried installation-only fields into strict capacity validation. Capture now receives a separate capacity request with those fields removed, while admission and copy retain the original reviewed installation metadata. Neither validator was relaxed. Controlled capture/copy regression passes in normal and AddressSanitizer builds (`.tmp/install-reservation-admission-native-retry.log`, the passing 115.98-second composition subtest; `Goat Install Capacity Owner Eiwsd2`). That aggregate run failed on a separate protocol fixture race and is not a passing aggregate receipt.
+
+The final joined-wire lane passes in both builds (`.tmp/install-reservation-admission-native-final.log`, 327.36 seconds; `Goat Joined Capacity Wire SvgxA4`). Each build covers two-member and 64-member complete captures (120 and 1,360 checks), successful admission, denial before acquisition, later revocation, foreign capture binding and refusal to reuse the admission connection, plus 5,665 existing protocol checks. The pre-existing missing-terminal fixture now permits only the expected broken/closed-pipe write outcomes when the client rejects its header before the body write; exact client `ERROR_INVALID_DATA` and zero publication assertions remain unchanged. Native and portable consumer source snapshots remained unchanged throughout the final proof. The separate challenge-channel lane also passed in the first aggregate attempt; that aggregate failed on the composite-request mismatch.
+
+This closes the controller-side admission transport dependency, not the full C5 journey. Installed client/Gateway canonical reservation ownership, combined operation dispatch, production expectation registration and assignment-runner selection remain required. The fixtures use private pipes, controlled authority and byte fixtures; they do not establish installed copying or physical pool acceptance. No drive, installed-service, provider or channel operations ran, and nothing was staged, committed or pushed.
+
+### Client reservation lifetime through capture handoff (2026-09-17)
+
+`CellInstallCapacityPipeClient` receives the complete capture on the existing authenticated borrowed pipe, checks its connection and independently retained installation nonce/request hash, derives the exact capture hash and length, and verifies the full challenge header before invoking admission. The supplied admission owner must independently validate pool/layout/history and current installation review and acquire canonical reservation ownership. The client retains that owned reservation across sequential replies; errors and destruction release it. Empty successful admission is refused, partial acquisition on failure is released, and retries or reentrant callbacks poison the channel without destroying an owner while its callback is executing. The enclosing installed session must retain the client through verified final receipt or failure.
+
+The two-member and 64-member fixtures now exercise the actual controller and client handoff adapters together with controlled reservation owners. They cover success, first-check denial, later revocation, stale installation binding, empty admission, failed admission after allocation, reentrancy during admission and verification, immutable input bindings, exact-once release and refused retries. Both normal and AddressSanitizer builds pass: 167 checks for two members, 1,407 for 64 members, and all 5,665 existing protocol checks per build (`.tmp/install-capacity-client-native-retry.log`, 345.70 seconds; `Goat Joined Capacity Wire wwJMuT`). Native and portable consumer source snapshots remained unchanged throughout this passing proof.
+
+The first run passed normal validation and the two-member sanitizer fixture but timed out at the previous 40-second process limit for the expanded 64-member sanitizer fixture. The fixture now includes eight admission scenarios rather than four. Per-scenario timing confirms roughly five seconds per 64-member sanitizer admission; each retains its original ten-second native deadline. Only the aggregate test-process timeout increased to 120 seconds, with a 480-second whole-lane limit. Production deadlines and validation limits were not relaxed; the first aggregate run remains failed evidence.
+
+The client is a transport/lifetime owner with a required independent admission callback, not a Gateway reservation implementation. Combined installed dispatch, real canonical reservation acquisition, production expectation registration and runner wiring remain outstanding. Controlled byte/pipeline proof does not establish installed endpoint custody, physical copying, or live acceptance. No drive, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Canonical full-pool installation baseline (2026-09-17)
+
+The storage prerequisite for the Gateway reservation owner now reads the exact accepted full-pool layout together with current canonical membership/lease, mounted history and the approved installation request. `readInstallationPoolBaselineForAssignment` rejects legacy single-cell evidence, stale phase/revisions and changed membership, and rechecks accepted capacity before returning. `readPoolAdmissionMaterialForAssignment` joins that result to the exact approved request and revalidates the join under the existing transaction/fence owners. Neither method returns the old capture window as fresh authority, exposes protected credentials, writes a reservation or grants permission to copy. The existing admission reader remains unchanged for compatibility and recovery.
+
+Output-locked storage typechecking and whitespace checks pass. The existing legacy SQLite fixture passes the new full-pool rejection assertion (`.tmp/install-pool-baseline-sqlite.log`, 58.25-second passing subtest). That first aggregate run failed because the new expected history still used the pre-renewal lease; the returned history correctly used the current canonical lease. The corrected full-pool SQLite retry passes (`.tmp/install-pool-baseline-sqlite-retry.log`, 90.03 seconds), including exact request/layout/membership/history, renewed lease, unapproved and foreign selection refusal, no cell mutation and worker-revocation refusal. The common fixture is registered for PostgreSQL but PostgreSQL execution was not performed.
+
+This supplies independently retained inputs needed for fresh-capture validation; the live reservation owner and installed dispatch remain outstanding. No schema migration, drive, installed-service, provider or channel operations ran, and nothing was staged, committed or pushed.
+
+### Canonical installation capture validation (2026-09-17)
+
+`validatePoolCaptureForAssignment` now validates complete new native pool bytes under the canonical installation-review, credential, mesh, assignment and cell fences. It snapshots the independently retained window/references and challenge binding, requires the exact connection/installation/request/capture hashes and length, reconstructs the full inventory against canonical pool/layout/history, projects the reviewed copy into its guest limits, and evaluates fresh footprint/file counts against current immutable reservation and high-water state. It rechecks canonical baseline and cell state before returning. This read-only validation does not increment a capacity revision, publish an observation, acquire a live reservation, grant policy authority or permit copying.
+
+The portable reader documentation distinguishes ordinary observation publication, which still requires successful terminal transport, from validation inside a live authenticated installation challenge with retained writer exclusion. Neither path allows incoming bytes to choose its independent bindings. Reference input retains the existing 16-MiB delivery bound rather than introducing a smaller arbitrary cap.
+
+Output-locked contracts/storage typechecks pass. The file-backed SQLite and snapshot-bound tests pass together (`.tmp/install-capture-validation-sqlite-retry.log`, 113.63 seconds), covering valid distinct capture provenance, altered digests/length/window/references, exceeded guest logical capacity, canonical memory high-water refusal, wrong request, worker revocation, unchanged cell state, immutable input bindings and UTF-8 byte limits. The first SQLite run expired its fixture lease before reaching the new validation; the expanded installation scenarios now use the existing 300-second long-fixture lease instead of 60 seconds. Production lease rules remain unchanged and the first run is failed evidence. PostgreSQL fixtures are registered but were not executed.
+
+The live Gateway reservation lifetime/policy owner, independently registered capture session, combined installed dispatch and runner integration still require completion. These tests use controlled native bytes and canonical local database rows, not live capture or physical-copy acceptance. No schema migration, drive, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Gateway installation reservation lifetime (2026-09-17)
+
+`RemoteWorkerInstallationCapacityOwner` now coordinates the in-process lifetime around a frozen installation capture. It requires independently supplied current native-window and policy owners, checks both before and after canonical capture validation, pins the canonical baseline hash, and serializes exact-bound monotonic native challenges. Consumed windows cannot replay; overlapping checks poison the lifetime; cancellation, expiry, authority loss, failed or incomplete operations and completion close it. Outstanding verification drains before assignment ownership is released. This process-local coordination does not replace native writer exclusion or the canonical journal's single-attempt boundary.
+
+Gateway execution composition exposes the owner and fails closed when its installation-policy dependency is absent. The production installation-policy implementation and independently registered native-session owner are not connected yet. The storage capture snapshot helper is exported for this composition; no schema or database mutation was added.
+
+Focused lifetime, composition and installation-review tests pass together: 44 tests in `.tmp/install-reservation-lifetime-tests-retry.log`. Initial fixture failures involved a deferred-check scheduling race and a missing shared completion-host identity; the corrected tests retain explicit incomplete-operation and missing-policy refusals. These lifetime tests use controlled canonical-validation, window and policy ports; prior file-backed capture validation is separate evidence, not an integrated installed acceptance run. Output-locked storage and Gateway typechecks pass in `.tmp/install-reservation-lifetime-typecheck-retry.log`.
+
+Architecture run `2026-09-17T08-07-28-898Z-architecture-metrics-d5c686fd` passes after explicit review of one canonical dependency access for this new C5 owner and two composition inputs (37 to 39). The original baseline file remains SHA-256 `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`; original-owner limits and the approved cross-plan 4/4/1 caps are unchanged. Combined installed dispatch, production session/policy wiring, worker runner and live acceptance remain outstanding. No drive, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Current installation policy connected to Gateway (2026-09-17)
+
+Gateway execution composition now supplies `createRemoteWorkerInstallationPolicy` to the reservation lifetime owner. Each verification snapshots protected assignment selection, reads the exact current installation review, resolves the active canonical Chat execution and existing capability/permission authority, inspects current policy, and rereads the review, manifest and policy bindings. Foreign package bindings, cancellation, revoked approval, changed execution/profile context and unsupported Ward restrictions refuse continuation.
+
+The shared policy engine exposes a dedicated read-only inspection for `remote_worker.native_runtime_install`. Its fixed dangerous-action template is absent from the callable tool registry and cannot be selected through ordinary tool inspection. Effective policy must allow this infrastructure action, and active permission-profile ceilings, global/agent/profile denies, scoped deny grants and Citadel Wards still apply. Ordinary allow grants cannot widen installation permission or substitute for its exact retained native approval. Inspection neither consumes grants nor records a tool invocation; the separate native approval/journal owners retain installation evidence. Approval remains required even under bypass posture. No default profile, user configuration or live runtime state was changed.
+
+Validation: 62 Gateway tests pass (`.tmp/install-policy-gateway-final.log`), including the real policy-engine bridge, current deny revocation, changed canonical authority, reservation lifetime and existing execution-policy behavior. The policy/native-admission regression group passes 35 tests (`.tmp/install-policy-engine-final.log`); the final focused policy rerun passes 14 (`.tmp/install-policy-engine-final-profile.log`). Earlier fixture failures were an unmatched grant scope and an invalid typed profile name; the final tests use a matching session grant and a valid empty `minimal` profile. Output-locked policy-engine/Gateway typechecks pass (`.tmp/install-policy-typecheck-verified-final.log`); an earlier attempt correctly refused the architecture lane's live output lock and was retried after that process ended.
+
+Architecture run `2026-09-17T08-18-24-081Z-architecture-metrics-98e9cccf` passes with exactly two reviewed canonical dependency reads and zero host callbacks for the new C5 owner. Original baseline-owner limits, the original baseline hash above and cross-plan 4/4/1 caps remain unchanged. Documentation and whitespace checks pass. These are source and controlled policy proofs: independently registered native sessions, combined installed dispatch, worker runner and physical/live acceptance remain outstanding. No drive, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Scoped installation-session registration (2026-09-17)
+
+`RemoteWorkerInstallationSessionOwner` is now composed alongside the Gateway reservation owner. A trusted installed transport registers its independent full-window evidence, reference set and authenticated connection nonce before response ingestion. The owner freezes protected assignment/request selection, rejects mismatched connection or reference hashes, snapshots the endpoint's signal and verifier, and carries one absolute deadline through registration and capture admission. Incoming bytes must match the registered connection, installation nonce, request hash, complete-byte digest and length before canonical validation. A session cannot choose replacement authority through its response.
+
+The registration permits one capture, refuses endpoint reuse or rebinding, serializes assignment registrations, propagates endpoint/caller cancellation, and drains unfinished verification before releasing assignment ownership. Leaked session methods fail after scope closure. Endpoint object identity must remain stable for its authenticated connection. This is a process-local registration boundary, not a durable replay token, an RPC for worker-selected evidence, or a replacement for native journal fencing. Its callback spans the operation through the verified native terminal receipt; the enclosing transport must retain endpoint/exclusion until final scope validation returns, then shut down and publish the canonical outcome.
+
+The focused session/lifetime/policy group passes 54 tests (`.tmp/install-session-tests-final.log`), including altered bindings, endpoint loss/rebinding, independent reference hashes, caller mutation during awaits, expiry during registration, duplicate capture, swallowed failure, incomplete work, concurrent assignment exclusion and pending-check drain. These tests use the real lifetime coordinator with controlled endpoint and canonical-validation ports; prior real database/full-byte validation remains separate evidence. Output-locked Gateway typechecking passes (`.tmp/install-session-typecheck-verified.log`). Architecture run `2026-09-17T08-26-18-779Z-architecture-metrics-89db752e` passes without an allowance increase; the original baseline hash and cross-plan caps remain unchanged.
+
+The installed transport does not yet call this registrar: authenticated endpoint evidence must still be connected through the native client/controller bridge, combined capture/install dispatch and worker runner. No installed-session, physical-copy or two-machine acceptance is claimed. No drive, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Worker terminal acknowledgement boundary (2026-09-17)
+
+Source tracing confirmed the native controller retains its measurement hold while waiting for the final `finish` acknowledgement. The native client calls its receipt sink first, and that sink waits for parent-input EOF before sending `finish`. The worker previously closed input immediately on receiving the terminal frame. Its copy API now requires a `WindowsWorkerInstallationFinish` callback, checked before helper launch, so the enclosing registration/reservation scope can finish read-only Gateway validation while acknowledgement remains withheld.
+
+Before invoking that callback, the worker requires the full 21-record history, installation-specific challenges, exact validated local outcome and a successful terminal receipt with phase/count/attempt fields matching the operation. It rechecks current installation and assignment authority. The callback receives frozen request-hash, receipt and outcome hex strings plus cancellation. Only successful completion permits input EOF. Callback failure, cancellation or malformed terminal evidence refuses acknowledgement and joins the owned helper. Local writers remain paused until helper closure. Read-only recovery retains its separate API and does not require copy finalization, but now also rechecks authority before acknowledging a successful terminal.
+
+The existing complete worker protocol suite passes 251 tests (`.tmp/install-terminal-worker-tests.log`, 112.63 seconds). The expanded installation-focused run passes 46 tests (`.tmp/install-terminal-worker-focused.log`, 18.14 seconds; other cases intentionally skipped by the filter), including withheld acknowledgement while finalization waits, immutable evidence, missing finalizer before spawn, denial/cancellation, terminal-time revocation and malformed receipt fields. Output-locked worker typechecking passes (`.tmp/install-terminal-worker-typecheck.log`). These fixtures use controlled child streams and do not launch a native helper or touch a drive. Native source was inspected but not modified or rebuilt in this step.
+
+This supplies the worker-side terminal barrier needed to connect the Gateway session registrar. Authenticated capture/session bridging, combined installed dispatch, runner integration and physical/live acceptance remain outstanding. No schema, architecture allowance, drive, installed-service, provider or channel operations were performed; nothing was staged, committed or pushed.
+
+### Native installation frame handoff (2026-09-17)
+
+The shared native controller reply decoder now recognizes the fixed-size installation capture and authority frames. `CellInstallCapacityPipeClient::BeginReceived` and `ReplyReceived` let a dispatcher hand off an already-consumed header instead of incorrectly reading a second header. Both reuse the existing admission/challenge paths: they snapshot supplied frames before callbacks, retain the independently selected connection and request, recompute the full capture hash/length, enforce the next exact ordinal, and preserve sticky failure, cancellation, deadlines and reservation ownership. The standalone pipe-reading entry points remain supported. Unexpected messages still fail in callers that have no corresponding operation handler; this does not activate installed combined dispatch.
+
+The frozen-source joined native/portable lane passes in normal and AddressSanitizer builds (`.tmp/install-routed-native.log`, 368.60 seconds; retained fixture `Goat Joined Capacity Wire aJqbpu`). Each build passes two-member and 64-member complete pool scenarios with 201 and 1,441 checks, respectively, plus 5,665 existing protocol checks. Added routed-frame cases exercise successful shared-decoder handoff, altered installation bindings, changed challenge ordinals and caller-buffer mutation during local authorization callbacks. Existing denial, revocation, empty admission, reentrancy and exact-once release checks remain covered. Production deadlines and test timeout limits were not changed; only the test comment was updated to describe twelve admission scenarios.
+
+These are controlled private-pipe and ordinary-file fixtures with real codecs and portable accounting, not installed endpoint or physical-volume proof. The installed combined-operation handler, native-to-Gateway session bridge and worker runner are still pending. No drive attachment/formatting, installed-service, provider or channel operations ran; nothing was staged, committed or pushed.
+
+### Native installation client dispatch (2026-09-17)
+
+The controller client reply loop now accepts a trusted caller-owned installation-capacity admission callback. Its presence requires a complete capture before a successful installation outcome; read-only recovery cannot acquire a copy reservation. Capture and subsequent authority frames are routed to the existing bounded client only after the full retained journal and installation authority have passed. Duplicate capture, unsolicited authority, post-outcome authority and missing capture fail closed. The reservation remains owned through the terminal receipt callback and finish acknowledgement, then releases on scope exit or failure. Existing callers without this admission owner retain their previous protocol and reject the new frames.
+
+The frozen-source installation-client lane passes normal and AddressSanitizer builds (`.tmp/install-client-dispatch-native.log`, 176.43 seconds; fixture `Goat Install Client iN15Ya`). Each build passes 2,924 checks across 52 installation sessions and 1,325 checks across 19 existing workload-handoff sessions. Six added private-pipe cases cover successful capture dispatch and lifetime, missing capture, denied admission, replayed capture, post-outcome challenges and denied terminal receipt. This dispatch fixture uses a controlled admission callback and synthetic bounded capture bytes; it does not establish complete-pool accounting or installed canonical admission. The earlier full-pool codec/accounting evidence remains separate.
+
+The installed combined-operation handler, authenticated Gateway session bridge and worker runner remain outstanding. The original architecture baseline hash and approved 4/4/1 cross-plan allowances remain unchanged. No drives, installed services, live providers or channels were operated, and nothing was staged, committed or pushed.
+
+### Combined native capture and installation operation (2026-09-17)
+
+Operation 21 now carries the reviewed installation request alongside the original operation-20 pool records. Client and server exchange installation metadata before decoding the pool, validate the exact installation binding before projecting read-only pool history, and retain the original pool members without giving them installation authority. The client requires an installation-capacity admission owner and completed cleanup before accepting the capture. The server requires its distinct combined-operation owner, acquires writer exclusion before opening the journal, reconciles cleanup under that same hold, then calls capture/admission/copy. It retains the hold through local outcome and terminal receipt handling. Read-only recovery and legacy installation do not fall back into this operation.
+
+The installed service composition now connects that owner to `CellInstallCapacity::Install` and same-connection `CellInstallCapacityPipeAdmission`, keeping local endpoint checks separate from protocol-exchanging canonical checks. The worker helper's production admission bridge and runner selection remain unfinished; this source wiring is not a live installed-copy acceptance result.
+
+Normal and AddressSanitizer joined-pool tests pass (`.tmp/install-combined-native.log`): 205 checks for two members, 1,445 for 64 members, and 5,665 existing protocol checks per build. Added checks prove original pool-record preservation and refusal to project a corrupted installation request. The expanded installation-client lane also passes (`.tmp/install-combined-dispatch-native.log`, 178.33 seconds), with 2,934 installation checks across 53 sessions and 1,325 workload-handoff checks per build. Its new real client/server refusal case transports combined metadata and proves a missing combined owner returns `ERROR_NOT_SUPPORTED` without acquiring exclusion or invoking legacy copy.
+
+The actual x64 service payload builds successfully with 89 native source inputs (`.tmp/install-combined-controller-build-retry.log`; fixture `Goat Combined Controller Build hExW1B`). The first unbatched build reached the compiler wrapper's unchanged timeout, so payload builds now use the same eight-source compiler batches as the native fixtures. The successful result is an unsigned build candidate; installed service, protected installed custody, signing, physical copy and two-machine behavior remain unproven. No physical volume, installed-service, provider or channel operations ran, and nothing was staged, committed or pushed.
+
+The controlled installation-capacity owner lane also passes normal and AddressSanitizer builds (`.tmp/install-combined-capacity-owner.log`, 119.03 seconds). It now exercises all fifteen success/failure scenarios using both the internal operation-20 composite and operation 21, and requires the collector to receive only the read-only operation-20 projection. Missing/lost writer exclusion, denied/empty admission, cancellation, authority/reservation revocation, partial-copy counters, mutated inputs and incorrect copy results remain covered without physical operations. The service receipt's 89 source hashes and executable hash were independently compared with current files after validation.
+
+### Native helper installation admission bridge (2026-09-17)
+
+The controller client now offers the authenticated handshake nonce to its trusted owner before request dispatch or journal evidence. Operation 21 requires that callback as well as capture admission. The helper uses it to announce the actual connection independently of later capture data, then retains a `CellInstallCapacityStdio` bridge for the enclosing client session. Its parent protocol emits nonce frame 15, exact capture binding frame 16, complete capture frame 17 and numbered authority frame 18; only an exact frame-19 echo authorizes the matching check. Original binding, deadline, callback table and capture bytes are frozen before callbacks. Repeated admission, reentrancy, mismatched binding/hash/deadline, transport failure, cancellation, revocation and altered echoes poison further use. The existing process watchdog bounds blocking stdio reads. Reservation ownership remains with the parent session rather than a persisted echo or helper-local receipt.
+
+Three frozen-source lanes pass in normal and AddressSanitizer builds (`.tmp/install-helper-native.log`, 427.18 seconds with serial test-file execution): compiled helper protocol regression (131.14 seconds), controlled capture/copy plus stdio admission (117.25 seconds, 250 checks per build), and native client installation/workload handoff (178.49 seconds, 2,940 installation checks across 53 sessions and 1,325 workload checks per build). The client tests verify one authenticated connection callback before installation evidence; stdio tests cover exact consecutive challenges, mutated caller buffers, refusal before parent I/O and sticky failure. The native source inventory includes the new header. These are controlled fixtures; they do not prove installed helper-parent admission or canonical Gateway reservation ownership end to end.
+
+The TypeScript worker still rejects the new frames until its consumer, scoped Gateway session registration and runner selection are connected. No installed operation is selected by this change alone. No physical-volume, installed-service, provider or channel actions ran, and no staging, commit or push occurred. The original architecture baseline remains unchanged.
+
+### Worker combined-installation consumer (2026-09-17)
+
+`worker-windows-installation-capture.ts` now consumes the helper's authenticated nonce, capture header, complete response and numbered reservation challenges. It freezes caller inputs and the callback table before awaits, validates the exact installation/connection binding and full response digest, decodes the complete retained pool/layout/references through the existing accounting contract, and compares the decoded connection with the separately announced nonce. Capture admission and each numbered check must complete before an acknowledgement is emitted. Reordered/repeated frames, skipped/replayed ordinals, foreign bindings, semantic capture tampering, overlapping calls and cancelled or failed callbacks poison further use. Abortable waits prevent stalled admission callbacks from keeping the driver alive past its cancellation boundary.
+
+The provisioning driver exposes `installRuntimeWithCapacity`, emits operation 21 with original operation-20 pool metadata and cleanup, handles both cleanup/volume and installation checks, and routes frames 15–18 to the consumer. Successful outcome and terminal acknowledgement require completed capture admission. It preserves the existing terminal validation barrier and closes the consumer after helper termination. Missing capture owners refuse before launch rather than selecting legacy operation 18. Legacy installation/recovery entry points remain unchanged; production assignment-runner selection is still pending. The consumer borrows its callbacks from an enclosing owner: production canonical reservation lifetime must still be supplied by the Gateway session composition.
+
+The final focused worker run passes 298 tests with seven intentional skips (`.tmp/install-worker-bridge-final-tests.log`, 120.90 seconds), covering the full private provisioning protocol, startup and the new capture consumer. A simulated-helper combined-installation journey verifies the actual operation-21 input, two complete reservation acknowledgements, sealed outcome handling and terminal validation. Denied capture admission kills the helper without an acknowledgement, and absent owners never launch it. Consumer cases additionally cover full semantic pool validation even with a recomputed envelope digest, immutable input during callbacks, withheld acknowledgement, cancellation and overlap. Output-locked worker typechecking passes (`.tmp/install-worker-bridge-typecheck-verified.log`). Initial typechecking identified missing new-method mocks and overly narrow fixture types; those were corrected before the final run.
+
+This does not prove an installed native-to-Gateway round trip. The production session adapter and runner hookup, packaged/two-machine acceptance and remaining live plan gates are still outstanding. No volume, installed-service, live-provider, channel or Git publication operations ran.
+
+### Installation terminal reservation phase (2026-09-17)
+
+The Gateway reservation and registered-session owners now expose an explicit terminal phase. After the trusted caller validates the native terminal receipt, `reservation.finish` rechecks the live window, policy and canonical capture before allowing the final acknowledgement and helper join. It keeps assignment ownership until that join settles and refuses additional challenges, repeated finish, overlapping checks, cancellation and swallowed shutdown failure. A successful explicit finish does not subsequently try to verify native exclusion that the finished helper has already released. Callers that do not use the terminal phase retain their existing final live checks. Canonical outcome publication remains outside the session, after successful shutdown; the terminal callback cannot authorize more installation work.
+
+Both focused Gateway suites pass all 55 tests (`.tmp/install-terminal-lifetime-focused.log`), including loss of authority before finish, normal shutdown with released exclusion, failure/cancellation/rebinding during shutdown and draining an unawaited join while retaining the assignment. Output-locked Gateway typechecking and architecture metrics pass (`.tmp/install-terminal-lifetime-typecheck.log`, architecture run `2026-09-17T09-53-22-525Z-architecture-metrics-1d6e3268`). The original architecture baseline hash remains unchanged. The first package test invocation unexpectedly selected the full Gateway suite; its verified task-owned process tree was stopped, and no full-suite result is claimed.
+
+This resolves a lifecycle conflict for the pending production transport adapter; it does not connect the worker runner or prove installed execution. No disk, installed-service, provider, channel, staging, commit or push operations ran.
+
+### Worker terminal reservation handoff (2026-09-17)
+
+The combined-installation driver now requires a terminal reservation owner before launching the helper. After the existing terminal receipt validation, it waits for that owner's current-authority check before sending EOF. The owner's join callback then waits for the entire helper call, including process exit and final local checks. The driver retains local writer quiescence until reservation completion, and rejects omitted/repeated joins, early owner return, cancellation and failed shutdown. Legacy installation and read-only recovery retain their existing interfaces. The capture decoder still handles only capture/challenge frames; terminal ownership belongs to the enclosing driver operation.
+
+The expanded combined-installation lane passes eleven focused tests (`.tmp/install-worker-terminal-expanded.log`, 17.39 seconds), including withholding EOF before authority verification, retaining writer exclusion after helper exit until reservation release, and terminal failure cases. Output-locked worker typechecking passes (`.tmp/install-worker-terminal-typecheck-final.log`). These tests use simulated helper streams and controlled admission callbacks; the authenticated production Gateway adapter, runner selection and physical acceptance remain outstanding. No native helper, installed service, drive operation, live provider or channel was invoked, and nothing was staged, committed or pushed.
+
+The broader driver, capture-consumer and startup regression run passes 306 tests with fifteen intentional skips (`.tmp/install-worker-terminal-regression.log`, 135.53 seconds). The first docs check identified three empty promise handlers introduced in this slice; they now explicitly return `undefined`, preserving behavior and matching repository convention. Docs and diff checks pass after that correction (`.tmp/install-worker-terminal-docs-final.log`, `.tmp/install-worker-terminal-diff-final.log`).
+
+### Production operator installation-review routes (2026-09-17)
+
+The existing native review operator now connects the canonical installation-review service to protected Ops routes for review creation and approved-request retention. Both routes bind workspace/assignment from the URL, require idempotency keys, use bounded bodies and deadlines, and preserve disconnect cancellation and committed-response handling. The shared operator uses only recent signed worker contact for lease authority; the canonical service/repository rechecks the approval, assignment and reviewed revisions. Retention accepts an approval identifier, never replacement request bytes. Route composition remains lazy and uses the same production execution owners as signed worker submissions. These endpoints do not register capacity windows, admit installation or change read-only worker reconciliation.
+
+All 93 focused operator, installation-review service, route and route-service tests pass (`.tmp/install-operator-review-tests-final.log`, 14.28 seconds), including lazy production composition, protected scope, stale/missing contact, cancellation, malformed manifests, injected authority and retention refusal without retry. Gateway typechecking passes (`.tmp/install-operator-review-typecheck.log`). The architecture gate initially identified two new dependency accesses in this plan-owned operator, which is absent from the original baseline. Review records a fixed allowance of two installation-owner calls and zero host callbacks. The gate passes with that explicit allowance (`2026-09-17T10-09-39-425Z-architecture-metrics-a9fe4914`); original baseline limits and the approved cross-plan 4/4/1 caps remain unchanged.
+
+The Windows package guide now documents these review routes and corrects its stale statement that the controller lacks complete-pool observation owners. Authenticated native-session transport, worker runner selection, packaged/two-machine and remaining live acceptance are still pending. No installed, drive, provider, channel or Git publication operations ran.
+
+### Comparison verification coverage and fixture isolation (2026-09-17)
+
+The self-configuration lane now includes the comparison plan's onboarding state/completion/first-task owners, workflow-to-skill capture, pack execution and compensation, their routes, canonical capture/pack UI controls, trace storage and pack migration tests. It also typechecks the canonical Mission Control package. Its proof matrix explicitly holds live workflow-skill reuse and fresh-workspace Browser QA pack acceptance, in addition to the existing provider, packaged-restart and secure-input requirements; controlled tests cannot close those rows.
+
+The initial aggregate run (`2026-09-17T10-14-41-771Z-self-configuration-7c7014af`) was interrupted after source inspection found that `app.rate-limit.test.ts` copied the current workspace configuration. Logs showed provider-catalog prewarming, so that run is not claimed as hermetic or successful. The fixture now writes explicit temporary configuration with an unconfigured synthetic provider and no schedules. Its optional localhost health probe is mocked unavailable; any other fetch is blocked and fails the fixture. The lane also removes configured secret environment variables before every child command. No operator configuration files were changed.
+
+Focused proof passes: 77 comparison Gateway owner/route tests, 7 canonical UI tests, 17 file-backed trace/migration tests, 4 corrected application rate-limit tests, and 8 verifier-definition/environment-isolation tests. Evidence is retained in `.tmp/comparison-c1-c3-owners-20260917.log`, `.tmp/comparison-c2-c3-ui-20260917.log`, `.tmp/comparison-c1-c3-storage-20260917.log`, `.tmp/comparison-rate-limit-isolation-final.log`, and `.tmp/comparison-lane-coverage-tests-verified.log`. Gateway typechecking passes (`.tmp/comparison-rate-limit-isolation-typecheck-final.log`). The corrected expanded aggregate lane has been started; no final aggregate result is claimed here.
+
+The native transport trust-model clarification is recorded in the completion checklist. Independent verification continues while that decision and the existing machine/channel/provider acceptance inputs remain pending. No drive, installed-service, staging, commit or push operation was performed.
+
+### Consolidated lane fixture timing and channel regression (2026-09-17)
+
+All 64 focused channel delivery, Chat command and communication route tests pass (`.tmp/comparison-channel-runtime-focused-20260917.log`, 73.11 seconds). Senders are mocked and storage is temporary; this is not designated-channel acceptance.
+
+The expanded aggregate run `2026-09-17T10-32-27-885Z-self-configuration-882fc2e5` reported budgets-mirror and evolution-control-plane test failures and was stopped as a failed attempt. An isolated budgets-mirror case reproduced a 15-second timeout during its 35-second fixture setup (`.tmp/comparison-budget-recipe-failure-diagnostic.log`). All 15 budgets-mirror cases then passed with the existing per-process SQLite schema accelerator and a 60-second test limit (`.tmp/comparison-budget-recipe-timing-diagnostic.log`, 73.75 seconds). The Gateway owner/fault command now uses those settings; no assertion or runtime deadline changed. The separate migration correctness command retains its ordinary fresh-database path. Five verifier tests pass, including propagation of the schema setting alongside secret-environment exclusions. The amended full lane still needs a successful retry; this entry does not claim that the other reported failures are resolved.
+
+### Browser foundation fixture isolation (2026-09-17)
+
+Preflight inspection found that the usability foundation copied operator configuration and private workspace files before replacing only its provider. Its new fixture owner uses the shipped example configuration, empty schedules and fresh model metadata, installs the loopback provider before returning, and preserves shipped skills without importing private workspaces. Foundation startup also disables maintenance scheduling. Other verification lanes retain their existing runtime preparation and are not covered by this isolation claim.
+
+All 40 fixture-isolation and usability-definition tests pass (`.tmp/comparison-usability-fixture-tests-20260917.log`), including canaries in operator configuration, credentials and workspace memory, unchanged source files, matching configuration mirrors and the sole loopback provider. Actual browser execution remains pending the current output-locked aggregate. That amended run (`2026-09-17T10-45-10-674Z-self-configuration-251ff1b9`) has passed its 345 Gateway owner/fault tests (one skip) and 77 comparison-owner tests; storage and later phases are still running, so no aggregate pass is claimed.
+
+The amended aggregate subsequently completed with all executed command rows and typechecks passing, including 115 storage tests. Its overall status remains **degraded** because the explicit live/provider/packaged/browser acceptance rows are held (`.tmp/comparison-self-configuration-timing-20260917.log`). The new browser fixture also passes the real Gateway configuration loader (`.tmp/comparison-usability-config-load-20260917.log`). The next browser run uses exploratory source mode, preserving the dirty-source hash and the no-commit instruction; it cannot establish clean-pinned final-candidate acceptance.
+
+### Browser build boundary and revision-aware fixture cleanup (2026-09-17)
+
+The first isolated browser attempt failed its production UI build because `remote-worker-install-capacity-challenge.ts` imported Node crypto through the shared contracts entry point. It now uses the existing isomorphic SHA-256 helper, Uint8Array and DataView, preserving the domain separator and exact 144-byte challenge. Five contract tests, 55 Gateway consumer tests, and 296 worker tests pass (15 worker skips); contracts/worker typechecks pass. Evidence: `.tmp/comparison-install-challenge-browser-tests.log`, `.tmp/comparison-install-challenge-gateway-tests.log`, `.tmp/comparison-install-challenge-worker-tests.log` and `.tmp/comparison-install-challenge-typecheck.log`.
+
+The retry `2026-09-17T11-10-46-326Z-usability-core-f06bb86e` successfully rebuilt the production UI and passed health/onboarding, provider, catalog and session setup. Its capability fixture then failed because profile archival omitted the API's required reviewed revision. The fixture now retains the creation response's revision, rejects missing/malformed revisions before tool invocation, and sends that exact revision for cleanup without retrying a conflict. Three regression cases fail before the fix and all 43 combined fixture/usability tests pass afterward (`.tmp/comparison-usability-profile-revision-before.log`, `.tmp/comparison-usability-profile-revision-after.log`). No Gateway permission rule was relaxed. A full browser retry remains required; neither failed run establishes browser Chat acceptance.
+
+The subsequent core run passed, but screenshot inspection found that reply completion was captured before the streaming composer settled. The browser check now also waits for the idle Send control after checking canonical completed turns. The stronger retry passes all eight steps at `2026-09-17T11-17-23-749Z-usability-core-4f220bc1`: onboarding/health, provider visibility, capability catalogs, session policy, governed capability probes, fresh desktop Chat, returning desktop Chat and mobile-light reflow. The recorded source hash is unchanged from start to finish (`e2559d4a4334b36107e3bf7728726adb07392c72329f3f826e1c88a350b10f25`). Desktop inspection confirms the busy banner has cleared. Screenshots and traces are retained in that run; the lane has stopped its task-owned runtime processes. This remains exploratory, deterministic-provider evidence, not real-provider acceptance or full accessibility/visual certification. No installed-service, drive, commit or push operation occurred.
+
+### Local channel parity and approval recovery (2026-09-17)
+
+The named channel parity proof completed successfully with inherited credential variables scrubbed: five matrix tests, 19 gateway-core tests, 224 Gateway tests, 17 selected policy-adapter tests and the output-locked Gateway typecheck. The policy selection intentionally skipped 144 unrelated tests. Evidence: `.tmp/comparison-channel-parity-20260917.log`. Separately, all 38 multipart delivery, approval recovery, remote-token and connector-delivery tests passed across four files (`.tmp/comparison-channel-approval-recovery-20260917.log`). These fixtures use mocked sends and temporary databases, including reopen/recovery and uncertain-provider-outcome coverage. No real Telegram, Discord or Slack message was sent; their designated live journeys remain open.
+
+### Isolated runtime restart acceptance (2026-09-17)
+
+The runtime-truth lane now reuses the clean usability fixture instead of copying operator configuration and private workspaces. Maintenance scheduling is disabled on both Gateway launches. Six runtime-truth and fixture-isolation tests pass (`.tmp/comparison-runtime-truth-fixture-tests-20260917.log`). A credential-scrubbed launcher completed the full named lane at `2026-09-17T11-27-33-151Z-runtime-truth-161ad151`: both backend approval/restart recovery and canonical Mission Control consistency passed. The backend receipt records distinct task-owned Gateway PIDs, the same resumed durable run, and one resumed local-provider dispatch. This is controlled local evidence, not a real-provider or physical-worker result.
+
+The durable-recovery lane now uses the same clean fixture, a loopback model stub and disabled maintenance scheduling on both launches, with stub/runtime cleanup in its terminal path. Its credential-scrubbed run `2026-09-17T11-29-38-838Z-durable-recovery-86f69a12` passed all three scenarios: stack-backed orphan/dead-letter recovery, 163 durable-worker tests and 89 approval-wake tests. Both recovery runs terminated successfully and no matching task-owned Gateway/UI process remained. `pnpm docs:check` and `git diff --check` passed; the index remains empty. These receipts close the current local recovery checks only; final-candidate and designated external acceptance remain open.
+
+
+### Browser accessibility and visual matrix (2026-09-17)
+
+The accessibility and visual lanes now use the shipped-default, loopback-only usability fixture instead of copying operator configuration and private workspaces. Accessibility also disables maintenance scheduling. Sixteen focused verifier/isolation tests pass (`.tmp/comparison-visual-isolation-tests-20260917.log`). Both execution launchers scrub inherited credential variables.
+
+Accessibility run `2026-09-17T11-33-38-061Z-accessibility-smoke-225f9d8a` passed all eight checks. Visual run `2026-09-17T11-35-26-088Z-visual-regression-1a41eeeb` passed all 416 comparisons: 52 routes across desktop, laptop, narrow-desktop and mobile in dark/light themes. Neither run skipped or degraded a scenario. Existing baselines and comparison thresholds were retained. Screenshots, differences, browser evidence and manifests remain in their artifact directories. Direct inspection of the mobile Chat image confirms that its approval controls and composer fit the viewport.
+
+Both run handles exited zero; the visual runner and its exact Gateway/UI child PIDs were absent after cleanup. These are controlled local browser receipts for the dirty working candidate. They do not certify real-provider journeys, live channels, physical native workers, benchmark outcomes or a clean-pinned final release.
+
+
+### Route interactions and desktop verification (2026-09-17)
+
+The surface-regression lane now prepares a clean shipped-default fixture and local provider instead of copying operator configuration/private workspaces; runtime and stub cleanup remain inside the terminal path. Five focused surface/isolation tests pass (`.tmp/comparison-surface-isolation-tests-20260917.log`). The credential-scrubbed full run `2026-09-17T11-55-23-617Z-surface-regression-de68ac6e` passed all 75 route, interaction, compatibility and mobile-shell checks with no skips or degraded rows.
+
+The first desktop dispatch respected the live surface output lock and did not start. The next desktop attempt (`2026-09-17T11-59-56-035Z-desktop-b9ed7e9e`) failed two missing-launcher assertions because this task had pointed TEMP/TMP inside the checkout; the intended ancestor search found the actual source launcher. No product launcher behavior was changed. Retrying with the existing Windows temporary directory outside the checkout passed the named desktop gate at `2026-09-17T12-01-03-407Z-desktop-7a018414`, covering secret-store regression fixtures, Windows host .NET tests, Rust check/tests and isolated launcher status. This is source/build/fixture evidence, not installed-worker or physical-machine acceptance.
+
+PostgreSQL execution was not performed: read-only `docker info` failed because the Docker Desktop Linux-engine named pipe was absent, and no pg_ctl/initdb executable was found on PATH. No system service was started. Live PostgreSQL compatibility remains open alongside the already recorded external/native acceptance requirements.
+
+
+### Controller trust choice and mini-PC handoff (2026-09-17)
+
+The operator selected controller-signed attestations and confirmed they can remote into the Windows 11 x64 mini PC to run supplied commands. The controller-specific signing/enrollment implementation is now authorized; enrolled worker identity alone must not substitute for independently verified controller state. The pending-input checklist has been updated. The first mini-PC handoff is a read-only OS/CPU/RAM/PowerShell, system-volume free-space and IPv4 readiness query. No installation, service, disk or credential operation is included, and the signing/production wiring is not yet claimed complete.
+
+### Controller signing foundation and native capture derivation (2026-09-17)
+
+Added a shared fixed-width attestation codec, a native CNG P-256 signer and a Gateway verifier. The native signer rejects exportable or non-signing keys, checks retained authority before and after signing, and permanently refuses replay, overlap, cancellation and expiry. The Gateway requires an independently enrolled public key, fresh nonce and sequential ordinal, exact installation/window bindings, and current enrollment before and after verification. Native capture digests are derived from the frozen GCPRESP1 bytes; the native member encoding matches the existing canonical JSON hash. Reference and authority digests remain Gateway context, not independent native filesystem observations.
+
+Validation: four contract tests, 19 scoped Gateway tests, output-locked contracts build and Gateway typecheck passed. Normal and AddressSanitizer native fixtures passed, including cross-language signature verification, rejection of every changed signed byte, matching native/Gateway capture hashes, and malformed/truncated capture rejection. Native evidence is retained at `.tmp/native-temp-20260916-install-protocol/Goat Controller Attestation 2CVo0T`; these fixtures create ephemeral keys only and perform no volume operations. The x64 and ARM64 controller payloads each built twice with identical receipts and hashes (`.tmp/controller-attestation-payload-build-tests.log`); ARM64 execution remains untested. The initial payload assertion used a stale input count; it now compares the exact input list and requires both signing files.
+
+Architecture run `2026-09-17T16-22-02-543Z-architecture-metrics-ec0f028a` passed after reviewing a two-access, zero-host-callback allowance for the new plan-owned verifier. The original baseline hash remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`; original-owner and cross-plan 4/4/1 limits are unchanged. A root-scoped Vitest invocation stalled during collection and was stopped using its verified task-owned process; the package-scoped retry passed all 19 tests.
+
+This is not installed-worker readiness. Persistent controller-key provisioning/enrollment, production controller-session construction, authenticated worker relay, and selection of the combined installation path remain unfinished. No installable GOATBOX handoff is claimed, and no installer/start/format command has been supplied for this signing slice. No service, persisted key, drive, stage, commit or push operation occurred.
+
+### Controller enrollment and native worker relay (2026-09-17)
+
+The controller service now opens its separately provisioned, non-exportable machine P-256 signing key and verifies its SYSTEM/controller-only protected permissions. Installer source creates a fresh key without overwrite or reuse, verifies its properties and permissions, and emits a public enrollment file. These persistent key operations were not executed locally. The operator review route accepts the public pin into the canonical installation approval; storage retrieves it only while the same approval, parent, credential, mesh, lease and installation request remain current. Worker RPC cannot enroll or replace the pin.
+
+The combined installation helper now relays fresh signing challenges across its retained controller pipe. The worker handles proof frames outside the capture callback queue, preventing a callback/proof deadlock. Native code derives the signed capture fields from frozen bytes, uses the canonical assignment binding, and holds its signer with the native reservation. Gateway signed-session composition resolves the public pin and reviewed pool baseline from storage, verifies fresh signatures before session admission and through reservation/finish, and refuses changed enrollment, baseline, context, replay and cancellation.
+
+Fresh local validation:
+
+- 131 focused Gateway approval, operator, route, attestation and session tests passed (`.tmp/controller-worker-gateway-final.log`).
+- 306 worker relay/capture/protocol tests passed; 15 existing controlled variants skipped (`.tmp/controller-worker-relay-final.log`).
+- Five contract tests and all three SQLite installation-retention revocation cases passed. Three PostgreSQL equivalents skipped because no test PostgreSQL connection was configured (`.tmp/controller-worker-enrollment-contracts.log`, `.tmp/controller-worker-enrollment-storage.log`).
+- PowerShell 5.1 and 7 compiled the installer key helper and passed pure descriptor admission/refusal checks without creating a key (`.tmp/controller-worker-key-descriptor.log`). Installer file/configuration and preflight tests passed with task-owned temporary fixtures (`.tmp/controller-worker-install-preflight.log`). No service was installed or started.
+- Native signing, reservation pipe and combined client normal/AddressSanitizer fixtures passed. The production helper and controller each built reproducibly for x64 and ARM64 (`.tmp/controller-worker-production-builds.log`). ARM64 execution and persisted machine-key access remain untested.
+- Output-locked Gateway/worker typechecks, documentation checks and diff checks passed. Architecture run `2026-09-17T16-57-07-988Z-architecture-metrics-cfd570ae` passed after narrow review of the new plan-owned session's two accesses and one additional execution-composition access. Original baseline hash remains `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`; original-owner and cross-plan 4/4/1 limits are unchanged.
+
+Still incomplete: the protected remote Gateway RPC must drive the signed session across capture, challenge, finish and joined shutdown, and the installed worker startup must select that combined first-install path. Current startup remains read-only installation reconciliation. The local relay and signed-session tests do not prove that remote production link. GOATBOX deployment instructions and installed acceptance remain pending this source integration. No disk/VHD operation, persisted key creation, elevation, service installation/start, provider/channel request, stage, commit or push occurred.
+
+### Protected installation RPC and worker startup completed (2026-09-17)
+
+The source integration described as incomplete above is now wired. The existing
+protected assignment settlement boundary dispatches a bounded installation RPC:
+canonical material paging, capture upload, fresh controller signature challenges,
+capacity checks, terminal verification and joined shutdown. Canonical storage
+supplies the approved controller pin, reviewed pool and retained references;
+worker messages cannot supply approval or enrollment authority. Four simultaneous
+sessions, a 60-second absolute lifetime, monotonic exchanges and bounded buffers
+limit retained state. Revocation, replay, cancellation and mismatched authority
+refuse the session through the existing owners.
+
+Installed worker continuation selects a canonical reviewed request and invokes
+combined controller operation 21. It publishes and reads back the exact native
+outcome only after joined completion. Native exclusive intent prevents recopying;
+uncertain local or remote results enter one read-only recovery attempt. The native
+controller now retains the signer through terminal verification, and the helper
+continues relaying proof frames while waiting for finish, avoiding terminal
+callback deadlock. Legacy operation 18 remains unconnected and refuses execution.
+
+Fresh validation:
+
+- 158 Gateway tests passed, including seven integrated real worker-client/Gateway
+  signed-session tests and protected route validation (`.tmp/worker-rpc-gateway-final.log`).
+  These tests use controlled transport/storage ports and ephemeral signing keys.
+- 327 worker tests passed, 16 controlled variants skipped
+  (`.tmp/worker-rpc-worker-final.log`); 20 startup/continuation tests passed
+  (`.tmp/worker-rpc-combined-startup.log`). Existing recovery/continuation coverage
+  passed 43 tests. The terminal protocol regression relays a fresh proof while
+  receipt handling is waiting for finish.
+- 17 contract tests and three SQLite complete-pool installation/revocation tests
+  passed. Three PostgreSQL counterparts skipped because no test connection was
+  configured (`.tmp/worker-rpc-contracts.log`, `.tmp/worker-rpc-sqlite.log`).
+- Native normal/AddressSanitizer terminal pipe and client fixtures passed,
+  including signer lifetime, signature verification and wrong finish nonce
+  refusal (`.tmp/worker-rpc-native-terminal.log`). Production helper/controller
+  reproducibility passed for x64 and ARM64 (`.tmp/worker-rpc-native-build.log`).
+- Output-locked Gateway, storage and worker typechecks passed
+  (`.tmp/worker-rpc-typecheck-final.log`). Narrow new-plan allowances are 41 for
+  execution composition, seven for native submission dispatch and one for the
+  new installation RPC. Original baseline SHA-256 remains
+  `7F9B33A867FB164F1E66173238806C0B60429198444E3C74E0AC18B8470D3318`;
+  original-owner and cross-plan 4/4/1 caps remain unchanged.
+- The first package attempt exceeded the helper compiler's 60-second timeout.
+  The helper now uses the existing bounded eight-source batching mechanism,
+  keeping per-command timeouts unchanged. A fresh x64 candidate built successfully
+  and passed the named package inventory/execution-probe lane
+  (`.tmp/worker-goatbox-package-batched.log`, `.tmp/worker-rpc-package-verify.log`).
+
+The [GOATBOX guide](GOATBOX_WORKER_INSTALL.md) records the candidate hash and exact
+preflight/install steps. Protected listener/enrollment inputs and successful
+installed custody, service startup, physical provisioning and end-to-end execution
+remain unverified. This closes the worker source integration, not C5 installed
+acceptance or the whole comparison plan. No disk/VHD operation, persistent key
+creation, elevation, service installation/start, provider/channel request, stage,
+commit or push occurred.
+
+### GOATBOX SCM permission and rollback repair (2026-09-17)
+
+The first physical broker installation reached service read-back and failed: the
+recipe expected administrator mask 0x120035, while SCM returned 0x20035. The
+unsupported SYNCHRONIZE bit was required by both native validators as well as the
+installer. Corrected all three and the broker OpenService request; exact owner,
+DACL, principal and supported-right checks remain. Process/file synchronization
+rights are unchanged. This is an installer defect exposed by physical acceptance,
+not successful installed-worker proof.
+
+GOATBOX then reported Access Denied on both rollback deletions. The installer had
+closed its initial all-access service handles before tightening the DACL, then
+tried to reopen DELETE access as administrator. Fresh-install rollback now retains
+those original handles, checks stopped state, and preserves files if any service
+removal is uncertain. GOATBOX's original failed rollback already removed the
+payload directory; direct operator SCM queries confirmed the two exact stopped,
+demand-start LocalSystem registrations and their original image paths.
+
+The standalone recover-orphaned-broker-services.ps1 defaults to read-only and
+requires failed local evidence, absent payload, exact service configuration and
+permissions. Its optional Apply path holds the SCM object, takes administrator
+ownership and adds DELETE only to remove the verified orphan. No files or disks
+are changed. GOATBOX has passed its read-only recovery preflight; Apply and
+replacement installation remain unverified. See GOATBOX_BROKER_RECOVERY.md.
+
+Validation: 15 installer suite tests passed, including 32 filesystem/descriptor
+scenarios under each of PowerShell 5.1 and 7. The actual reported SDDL matches the
+corrected recipe; uncertain service removal preserves the fixture payload. Two
+recovery tests compile its native helper and check exact identity plus six
+refusals under both engines without SCM mutation. All 47 native tests passed,
+including x64/ARM64 reproducibility and x64 ASan proof. Logs:
+.tmp/broker-scm-installer-tests-final.log, .tmp/broker-orphan-recovery-tests.log,
+.tmp/broker-scm-native-tests.log.
+
+The first replacement package attempt failed a protected_operations ASan fixture
+handle-count assertion (147 versus 148). The independent full native test run
+passed, and a fresh isolated package build passed without changing or skipping
+that assertion. The failed artifact is retained; this records the intermittent
+validation result rather than treating the first attempt as green.
+
+Replacement candidate: .tmp/worker-goatbox-scm-fix-20260917-retry/payload.
+Manifest SHA-256: fb0d1bf98ec7acdc74f027c3e70dc0f44b7e45a24fba98877e5b4c7b48bf5150.
+The named package verification lane passed all 32 inventory tests and the packaged
+execution probe (.tmp/broker-scm-package-verify.log). Copy the full payload to a
+fresh controller-signed-scm-fix candidate directory; retain the old package for
+recovery and evidence. No local service mutation, key creation, disk operation,
+commit or push was performed. The replacement is unsigned; privileged recovery
+and successful GOATBOX installation still require fresh operator evidence.
+
+### GOATBOX broker startup query repair (2026-09-17)
+
+The operator completed orphan recovery and the replacement broker/signer install
+passed with no refusals or cleanup failures in
+`C:\worker-evidence\broker-fixed-install-20260917-140551`. Starting the broker then
+failed with Win32 1066 and its own `ServiceIdentity` code 2; the signer remained
+never-started (1077). Event Viewer's generic text for code 2 did not establish a
+missing file.
+
+A read-only Win32 probe entered through the GOATBOX RustDesk session confirmed
+`QueryServiceConfig2W(SERVICE_CONFIG_TRIGGER_INFO)` succeeds with no triggers and
+leaves `pcbBytesNeeded` at zero. Both native identity collectors required that
+failure-only output to contain a successful byte length. They now use a shared
+bounded, zero-initialized query adapter and keep pointer/content validation. The
+broker validates its own process image/token during START_PENDING and requires
+the SCM PID match after RUNNING, before starting the signer. Windows does not
+guarantee a valid SCM PID in START_PENDING. This follows the
+[configuration query contract](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-queryserviceconfig2w)
+and [status query contract](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-queryservicestatusex).
+
+The protected-service uninstall path now retains the exact SCM object, verifies
+the fixed configuration and descriptor, acquires deletion authority, restores the
+original descriptor before DELETE, and preserves files if deletion remains
+pending. This corrects the same missing administrator DELETE right that affected
+the original installer's rollback. No permanent runtime permissions were added.
+
+Validation passed: all 47 native tests (x64/ARM64 reproducibility and x64 ASan),
+18 installer/recovery tests (PowerShell 5.1 and 7), and the named package lane's
+32 inventory tests plus packaged execution probe. Logs:
+`.tmp/broker-startup-native-tests.log`,
+`.tmp/broker-startup-installer-tests-final.log`, and
+`.tmp/broker-startup-package-verify.log`. The architecture baseline remains
+`7f9b33a867fb164f1e66173238806c0b60429198444e3c74e0ac18b8470d3318`.
+
+Candidate: `.tmp/worker-goatbox-startup-fix-20260917/payload`; manifest SHA-256
+`08bfa8d4cf7c0f096da0dc8dbda00c7d1cba896533d23e968b336a0ab554a7b6`.
+The sibling `GoatCitadel-GOATBOX-startup-fix.zip` contains that complete payload;
+ZIP SHA-256 `948b5587018a9c6222c2f0918dfdd03fc688fbf0ced7038d5288679f5917bad9`.
+The GOATBOX guide has the transfer/extraction and read-only replacement preflight.
+Replacement, successful broker/signer startup, worker/controller installation,
+protected enrollment and execution remain unverified. No disk operation, local
+service mutation, commit or push occurred in this repair.
+
+### GOATBOX signer startup diagnostic boundary (2026-09-17)
+
+The operator verified the startup-fix manifest and every payload file. Replacement
+uninstall and install both passed, with no refusals or cleanup failures:
+`C:\worker-evidence\startup-remove-20260917-143940-686` and
+`C:\worker-evidence\startup-install-20260917-143940-686`. This supplies physical
+proof of the protected-service uninstall and corrected installation path. The
+broker progressed to starting the signer; the signer then failed with its own
+ServiceIdentity code 2, and the broker followed with TargetIdentity code 3.
+Successful service startup remains unverified.
+
+The signer now separates collection and validation failures into stable SCM
+service-specific codes 2001–2060. It preserves every existing identity predicate,
+the fixed privilege and ACL requirements, and the fail-closed startup sequence.
+It does not expose token contents, add a bypass argument, create a diagnostic
+service, or change installed permissions. The next diagnostic build must run on
+GOATBOX before attributing this failure to a specific identity check.
+
+Diagnostic candidate: `.tmp/worker-goatbox-signer-diagnostics-20260917/payload`;
+manifest `55f660b5a630eb4a3589ef907a0de6070877f0535c0a4ab111ca2bdbb7d93db9`.
+The named Windows package lane passed all 32 inventory tests and the packaged
+execution probe (`.tmp/signer-startup-diagnostics-package-verify.log`); the build
+also reran the x64 native/ASan and reproducibility proof with the final diagnostic
+fixtures. The handoff ZIP, `GoatCitadel-GOATBOX-signer-diagnostics.zip`, includes
+the full payload and a GOATBOX-only launcher that pins the previous installed trio,
+verifies every candidate file, preflights the existing protected-service removal,
+and replaces/starts only those services with `-Apply`. All 1,775 ZIP entries were
+read back and verified; its SHA-256 is
+`64959d42375bd4c7f064aa7feca417dd8d03cd4c1c639088a688f5ce8f1b9148`.
+The launcher parsed under PowerShell 5.1 and 7. No disk operation, local service
+mutation, commit or push occurred. GOATBOX diagnostic execution remains pending.
+
+Final local validation passed all 47 native suite tests with the current source,
+including x64/ARM64 reproducibility and x64 ASan
+(`.tmp/signer-startup-diagnostics-native-final.log`). Documentation checks and
+scoped `git diff --check` also passed. The original architecture baseline remains
+`7f9b33a867fb164f1e66173238806c0b60429198444e3c74e0ac18b8470d3318`.
+
+### GOATBOX signer privilege-filtering correction (2026-09-17)
+
+The operator ran the verified diagnostic ZIP. Package verification, preflight,
+uninstall and install passed with no refusals or cleanup failures. Evidence:
+`C:\worker-evidence\signer-diagnostics-preflight-20260917-150620-498`,
+`C:\worker-evidence\signer-diagnostics-remove-20260917-150620-498` and
+`C:\worker-evidence\signer-diagnostics-install-20260917-150620-498`. The signer
+stopped with diagnostic code 2044, while the broker stopped with target-failure
+code 3. This identifies the prior filtering-history rejection.
+
+SCM strips privileges outside the configured required list, which this installer
+fixes to `SeChangeNotifyPrivilege`. `TokenHasRestrictions` records filtering
+history; it does not mean the token has restricting SIDs. The signer now uses
+`IsTokenRestricted` with explicit error handling, while separately requiring zero
+restricting SIDs and the exact enabled privilege. Every SCM, SYSTEM, service SID,
+session, ambient-token, privilege and ACL predicate remains in force. No privileges
+or installed permissions were added. This follows the Windows
+[required-privilege contract](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_required_privileges_infow)
+and [restriction-query contract](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-istokenrestricted).
+
+The regression creates disposable real Windows tokens with privilege-only
+filtering and with restricting SIDs. It verifies that filtering history alone
+does not reject the approved privilege shape, and that restricting SIDs, failed
+queries, extra privileges and deny-only service identity still fail. No service
+installation or current-process token mutation is used by the test. Corrected
+startup on GOATBOX remains unverified until the replacement is run there.
+
+Validation passed: all 47 native tests, including x64/ARM64 reproducibility and
+x64 ASan (`.tmp/signer-token-filter-native-tests.log`), and all 32 named package
+inventory tests plus packaged execution probe
+(`.tmp/signer-token-filter-package-verify.log`). Candidate:
+`.tmp/worker-goatbox-signer-token-fix-20260917/payload`; manifest SHA-256
+`e8cca8905f76252abf7e93468bc26519cd1401675201343a1ebccdee12f1b3cb`.
+The handoff ZIP `GoatCitadel-GOATBOX-signer-token-fix.zip` contains the full payload
+and a launcher pinned to the three installed diagnostic images. All 1,775 archive
+entries were read back and hash-verified. ZIP SHA-256:
+`feb807c5ffec4a4dfecbb64b378499862a73f553bef60ab2a9d2886db6b68cb5`.
+The launcher passed PowerShell 5.1 and 7 syntax checks. The architecture baseline
+remains `7f9b33a867fb164f1e66173238806c0b60429198444e3c74e0ac18b8470d3318`.
+No local service mutation, disk formatting, commit or push was performed.
+
+### GOATBOX signer inspection refusal diagnostics (2026-09-17)
+
+The operator's token-fix replacement passed verification, uninstall preflight,
+uninstall and install. Evidence directories:
+`C:\worker-evidence\signer-token-fix-preflight-20260917-152330-164`,
+`C:\worker-evidence\signer-token-fix-remove-20260917-152330-164` and
+`C:\worker-evidence\signer-token-fix-install-20260917-152330-164`.
+The initial SCM/token identity validation now passes on GOATBOX. The signer then
+stops at legacy code 2060, while the broker reports target failure 3. Both services
+are stopped. This establishes progress past the privilege-filtering defect, but
+does not establish successful service startup or identify which inspection
+operation failed.
+
+`signer_inspection.cpp` and the shared `service_inspection.cpp` now carry bounded
+refusal diagnostics through the existing startup-result owner. SCM receives a
+stage, reason and Win32 error, and the new handoff launcher decodes them. Descriptor
+read, composition, pre-write comparison, write and readback failures are distinct
+for the process and token. A built-in Administrators owner has its own diagnostic
+classification but is still refused. Existing SYSTEM-only ownership, exact worker
+query masks, prior ACE bytes/order, protection flags, full service identity and
+all startup gates remain unchanged. No SID, ACL or credential contents are logged.
+The service still stops on every inspection failure.
+
+Fresh validation passed all 47 native suite tests, including x64/ARM64 reproducible
+builds and x64 ASan (`.tmp/signer-inspection-diagnostics-native-tests.log`). The
+shared controller client-identity lane also passed
+(`.tmp/signer-inspection-diagnostics-controller-tests.log`), including 141 signer
+inspection checks in each normal/ASan run. New cases exercise actual Windows
+read/write access-denied results on disposable unassigned token copies, retain
+the descriptor after a denied write, distinguish refused owner/ACE shapes, and
+check diagnostic reset and encoding. These local tests do not establish GOATBOX
+service startup. The next physical diagnostic run is required before changing an
+inspection predicate.
+
+The named Windows package build and verification passed, including all 32
+inventory tests and the packaged execution probe
+(`.tmp/signer-inspection-diagnostics-package.log` and
+`.tmp/signer-inspection-diagnostics-package-verify.log`). Candidate:
+`.tmp/worker-goatbox-inspection-check-20260917/payload`; manifest SHA-256
+`4f80b4b14c0f2ffd10998c69a16afd661faf07c2b790cf87162c0f98a5202821`.
+The ZIP `GoatCitadel-GOATBOX-inspection-check.zip` contains the complete payload
+and `Run-GOATBOX-Inspection-Check.ps1`. All 1,775 archive entries were read back
+and verified. ZIP SHA-256:
+`7cde60f5dd3990621e8788d63c3e550c9468750879175ce134aa880f78beedab`.
+Launcher SHA-256:
+`809f73a0e457828c2f58980b2ffdd109074a5241d00641a694b952f4bd126e15`.
+Launcher syntax and the isolated decoder passed under PowerShell 5.1 and 7,
+including all 240 valid stage/reason combinations and real-error examples; no
+service command was executed on the development PC. The launcher independently
+pins all three installed token-fix images and uses the existing protected
+preflight/uninstall/install recipes. It saves the bounded startup diagnostic when
+available. GOATBOX execution is pending; no disk/volume operation, commit or push
+was performed.
+
+### GOATBOX service-owned inspection objects (2026-09-17)
+
+The inspection-check replacement passed package verification, uninstall preflight,
+uninstall and install with no refusals or cleanup failures. Operator evidence:
+`C:\worker-evidence\inspection-check-preflight-20260917-154610-962`,
+`C:\worker-evidence\inspection-check-remove-20260917-154610-962` and
+`C:\worker-evidence\inspection-check-install-20260917-154610-962`.
+The signer stopped at `1174667264` (`0x46040000`), process inspection ACL
+composition / unexpected owner, with no Win32 API error. The broker stopped at 3.
+The decoded result was saved to
+`C:\worker-evidence\inspection-check-startup-20260917-154610-962.json`.
+This identifies an owner other than SYSTEM or Administrators, but not its exact
+SID. The initial SCM/token validation passed, and neither kernel-object DACL was
+changed because process preparation failed before the two-descriptor write phase.
+
+The shared inspection owner now takes an explicit fixed service role. The signer
+selects Provisioner; the cell controller selects CellController. Their permitted
+object owners are SYSTEM or that role's exact service SID. The live collector
+independently requires that SID to be present once, enabled, owner-eligible and
+not deny-only in its validated SYSTEM primary token. Different service SIDs,
+the worker SID, Administrators, arbitrary owners and unknown roles remain refused.
+No owner is changed, no privilege is added, and original ACE bytes/order, DACL
+protection and exact read-only worker masks are retained. Test-only user-owned
+token/process fixtures retain their strict owner comparison.
+
+Windows documents the [owner eligibility of service SIDs](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_sid_info)
+separately from the [object owner/default owner](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object).
+Accepting the service's own validated identity corrects the missing ownership
+case without removing owner validation. Whether it resolves GOATBOX's observed
+refusal still requires the next physical run; the captured diagnostic alone
+does not establish that its unexpected owner is the service SID.
+
+The controller client/inspection lane initially hit the existing 60-second compiler
+invocation timeout, including a serial retry. Its test recipe now uses the existing
+eight-source batching option already used by the controller payload builder;
+compiler flags, timeout and runtime assertions are unchanged. The batched lane
+passed in normal and ASan builds, with 163 client checks and 430 inspection checks
+per build, unchanged privileges, real pipe-server inspection and custody codec
+verification. Evidence: `.tmp/signer-service-owner-controller-batched-tests.log`
+and `C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Client Identity E30lbo\acceptance.json`.
+
+The first provisioner native run passed 46/47 tests; its x64 ASan execution
+reported one local-transport test failure without an ASan memory report. The
+ARM64 target's x64 ASan execution passed. This failed run is retained in
+`.tmp/signer-service-owner-native-tests.log`, not counted as passing proof.
+Protected-signing test groups now report their names on failure, while preserving
+every assertion, timeout and handle-count requirement. A fresh serial run is
+required before handing off this candidate.
+
+That serial run passed the source/closure tests but failed both target build
+tests during their x64 ASan executions: protected-operation handle totals changed
+from 147 to 148 (four journal-publication assertions in one run, thirteen
+directory-move assertions in the other). Neither run emitted an ASan memory
+error. Evidence: `.tmp/signer-service-owner-native-serial-tests.log`. These failures
+are not classified as fixed or passing proof.
+
+A separate retained ASan build of the same native tests was used for diagnosis.
+The first diagnostic used a different scratch volume and did not pass; a monitored
+run using the usual Windows temporary directory reproduced a one-handle count
+change, and a second monitored run passed. External snapshotting can itself affect
+timing, so these observations do not identify the original cause. Two subsequent
+unmonitored runs, using the builder's input frame and sanitized environment with
+fresh Windows temporary directories, both exited 0 with empty stderr and the
+65,536-case receipt. Evidence: `.tmp/signer-handle-native-rechecks.log` and
+`.tmp/signer-handle-probe-20260917/recheck-1.log` / `recheck-2.log`. The intermittent
+handle-count failure remains an open validation limitation; no leak allowance,
+runtime timeout or assertion was relaxed. The named package build must still pass
+its own fresh x64 ASan and reproducibility checks before a GOATBOX handoff.
+
+The first named package attempt also refused publication at the same pre-existing
+147-to-148 protected-operation handle-count assertion (six revoke checks), recorded
+in `.tmp/signer-service-owner-package.log`. Its partial output at
+`.tmp/worker-goatbox-service-owner-fix-20260917` is retained and is not an installable
+handoff. This exact count change was already recorded in the earlier SCM installer
+package attempt, before the ownership correction. Additional disposable diagnostic
+builds remain under `.tmp/signer-handle-probe-20260917`; two instrumented runs passed,
+one reproduced the signing handle-count delta, and the handle-tracing diagnostic
+exited with `STATUS_INVALID_HANDLE`. These are diagnostic observations only, not
+release proof or an established root cause. Handle-inspection/tracing instrumentation
+was confined to disposable diagnostic builds. A fresh named package attempt uses
+a distinct `-retry` output directory and the unchanged gate.
+
+The fresh named package build passed its x64 ASan execution and byte-identical
+native builds with the unchanged assertions (`.tmp/signer-service-owner-package-retry.log`).
+All 32 inventory tests and the packaged execution probe also passed
+(`.tmp/signer-service-owner-package-verify.log`). Candidate:
+`.tmp/worker-goatbox-service-owner-fix-20260917-retry/payload`, manifest SHA-256
+`a5970794ea895f3901571f1277f5a8b93348a0538eb0673a3ee9d6f4b334f5fc`;
+1,773 inventoried files, 105,902,204 bytes. This successful fresh run does not erase
+the earlier intermittent failures or establish their cause.
+
+The handoff ZIP `GoatCitadel-GOATBOX-service-owner-fix.zip` contains the complete
+payload and `Run-GOATBOX-Service-Owner-Fix.ps1`. All 1,775 archive entries were
+read back and hash-verified; size is 39,986,766 bytes. ZIP SHA-256:
+`6e0b96d40d46efb0a8ec78746fd441febf3dd6d9c1acfab3f4a22c6c2acddca6`.
+Launcher SHA-256:
+`ffb23e8df50ad53055fe1cafb499795d9250eca58758a0f7f09f6cb1e8e1a33c`.
+Launcher syntax and isolated diagnostic decoding passed under PowerShell 5.1 and 7,
+including all 240 stage/reason combinations. The launcher pins the three installed
+inspection-check images, requires stopped services, and uses the existing protected
+preflight/uninstall/install recipes before one broker start. It is fixed to
+`C:\worker-candidates\service-owner-fixed` on GOATBOX. No local service, key,
+disk, mount or formatting operation was run; no commit or push was performed.
+Physical startup, worker/controller installation and protected enrollment remain
+unverified. See `GOATBOX_WORKER_INSTALL.md` for the exact handoff command.
+
+### GOATBOX service-owner correction still refused; observe actual owner (2026-09-17)
+
+The operator ran the service-owner-fix candidate. Package verification, uninstall
+preflight, uninstall and install all passed with empty refusals and cleanup failures:
+`C:\worker-evidence\service-owner-fix-preflight-20260917-164800-877`,
+`C:\worker-evidence\service-owner-fix-remove-20260917-164800-877` and
+`C:\worker-evidence\service-owner-fix-install-20260917-164800-877`.
+The broker again stopped at service code 3; the signer stopped at
+`1174667264` (`0x46040000`), process inspection ACL composition / unexpected owner.
+The decoded result is in
+`C:\worker-evidence\service-owner-fix-startup-20260917-164800-877.json`.
+This rules out SYSTEM, Administrators and the signer's own fixed service SID as
+the observed owner. It does not identify that owner. Both services are stopped,
+and the refusal precedes either inspection DACL write. The ownership policy and
+native binaries were not changed after this result.
+
+`scripts/remote-worker/read-broker-startup-owner.ps1` is a separate diagnostic for
+the existing installation. It pins all three current images, retains read-only
+file handles, verifies exact stopped configurations, and optionally starts only
+the broker once. A twelve-second observer reads owner SIDs and process/token
+identity metadata for the fixed broker/signer image paths in session zero, with
+creation times after the observation window began. It records capture errors and
+both final service states. SCM PID matches during pending states are explicitly
+not treated as documented valid identity proof. It never changes permissions,
+owners, privileges, service configuration or disks, and never reads process
+memory or private key material. Default preflight starts no service; `-SelfTest`
+reads only its caller's owners/identity and process metadata.
+
+Five focused tests passed via
+`node --test scripts/remote-worker/read-broker-startup-owner.test.mjs`, including
+actual owner/metadata reads under Windows PowerShell 5.1 and PowerShell 7 and
+wrong-host refusal with `-StartOnce`. No local service was started. The diagnostic
+ZIP was read back and hash-verified: 6,046 bytes, one script entry, at
+`.tmp/worker-goatbox-owner-observation-20260917/GoatCitadel-GOATBOX-owner-observation.zip`.
+ZIP SHA-256: `9fc455bd368dbcbefece9036e61f04863896d6f6d82a0b3958e065aa55d9ebd1`.
+Script SHA-256: `c70d450cb34a960a74832f026d888fb7774bec195829f648a490c19c260d3a8a`.
+GOATBOX owner capture and successful startup remain unverified. No replacement
+package, commit or push was produced for this diagnostic step.
+
+### GOATBOX broker owner observed; signer sample missed (2026-09-17)
+
+The operator's first owner observation started the broker successfully and saved
+`C:\worker-evidence\broker-owner-observation-20260917-180359-532.json`.
+It captured only the broker, PID 9868, session zero, created at
+`2026-09-18T01:03:59.5568161Z`, from its expected installed image path.
+Process owner was `S-1-5-5-0-343575503`; token user and token default owner were
+both SYSTEM (`S-1-5-18`). Reading the token-object owner was denied with Win32 5.
+The sample was in START_PENDING, so its matching SCM PID was correctly labeled
+not documented-valid. The signer was not sampled; final signer/broker states were
+STOPPED with the same service codes `0x46040000` and 3 respectively. The broker's
+logon-session owner does not establish the signer's owner. No ownership-policy
+or installed-native change follows from this partial observation.
+
+The diagnostic now warms its descriptor/token readers and prepares the capture
+method before startup. Separate threads poll the two fixed SCM handles, so
+broker inspection cannot block signer discovery. Each observer is bounded by
+twelve seconds and 40,000 queries; it yields without a timer delay while awaiting
+the PID and sleeps after capture. PID discovery is still followed by exact image
+path, creation-time and session checks, with pending-state SCM identity limits
+retained. The report adds logon SID/group attributes for each captured token and
+the diagnostic caller, plus poll counts. No owner is accepted or changed by this
+diagnostic, and its fixed installed-image hashes and stopped-config preflight
+remain unchanged.
+
+Five focused tests passed under PowerShell 5.1 and 7, including reader preparation,
+actual owner/metadata reads, wrong-host refusal and independent comparison with
+`whoami /logonid`: `.tmp/goatbox-owner-observation-v2-final-tests.log`.
+An initial additional test used `WindowsIdentity.Groups` as the logon-SID oracle;
+that oracle was incorrect because the [.NET implementation filters logon SIDs](https://raw.githubusercontent.com/dotnet/runtime/main/src/libraries/System.Security.Principal.Windows/src/System/Security/Principal/WindowsIdentity.cs).
+The failed local check is retained in `.tmp/goatbox-owner-observation-v2-tests.log`;
+the final check uses Windows' dedicated logon-ID command. No service was started
+on the development PC and no production owner validation was relaxed.
+
+The revised one-script ZIP is 6,811 bytes, with its entry read back and verified:
+`.tmp/worker-goatbox-owner-observation-v2-20260917/GoatCitadel-GOATBOX-owner-observation-v2.zip`.
+ZIP SHA-256: `fdaa33bcd8ee1defe64356494487622c653daa075c6b1057f77542448e5b307a`.
+Script SHA-256: `b2a644a367f4f4270f8284bf210687406dd550ddbd00208ab6144510bb411f8c`.
+The revised GOATBOX signer capture is pending. Physical startup, worker/controller
+installation and protected enrollment remain incomplete. No disk operation,
+commit or push was performed.
+
+### GOATBOX own logon owner confirmed for broker; token-bound candidate (2026-09-17)
+
+The operator's v2 observation is retained on GOATBOX at
+`C:\worker-evidence\broker-owner-observation-v2-20260917-181521-752.json`.
+It captured only the broker, PID 13504, session zero, from the expected image,
+created at `2026-09-18T01:15:21.7875404Z`. Process owner
+`S-1-5-5-0-344967097` exactly matched its token's logon SID. Group attributes
+`3221225487` (`0xc000000f`) include LOGON_ID, ENABLED, OWNER, MANDATORY and
+ENABLED_BY_DEFAULT. Token user and default owner were SYSTEM; token-object owner
+read was denied with Win32 5. The observer's different logon SID had attributes
+`0xc0000007`, without OWNER. The broker was START_PENDING and its matching SCM PID
+remains explicitly unverified under that API's contract. Dedicated observer counts
+were 40,000 signer polls and 31 broker polls; no signer sample was captured. Both
+services ended STOPPED, signer `0x46040000`, broker 3. This supports the broker's
+own owner-eligible logon identity; it does not prove the signer's object owner.
+
+The shared `service_inspection.cpp` now collects the unique logon SID from the
+same own SYSTEM primary token used to validate the exact signer/controller role.
+The bounded TOKEN_GROUPS parser validates record counts, pointer alignment,
+SID bounds/form, unique required service membership and unique logon membership.
+Only an exact match with that token's enabled, owner-eligible logon SID is accepted
+as an additional owner form. Missing or unsupported flags, another token's logon
+SID, duplicate groups, arbitrary owners and malformed input fail before either
+grant is written. SYSTEM and the exact role's service SID retain their previous
+behavior. No caller-controlled owner identity enters the production interface.
+The original ACE bytes/order and exact worker query/wait masks are preserved;
+no owner or privilege is changed. The shared controller entrypoint uses the same
+check. Windows' [TOKEN_GROUPS contract](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_groups)
+defines the logon-ID and owner-eligibility flags supporting this case.
+
+New native cases cover both roles and both object types, positive and negative
+logon ownership, missing/unsupported flags, conflicting groups, malformed SID
+buffers and unchanged output on refusal. Normal and ASan execution passed 696
+inspection checks each, alongside the controller client's real pipe/identity
+checks. Retained evidence:
+`C:\Users\spurn\AppData\Local\Temp\Goat Cell Controller Client Identity K508XF`;
+runner log `.tmp/signer-logon-owner-controller-tests.log`. Five focused source
+wiring/fence tests also passed. None of these tests install or start a service.
+New numeric reasons 13 and 14 distinguish a logon-owner mismatch from unsupported
+owner-eligibility flags without emitting SID or credential data. Fresh package
+verification and GOATBOX startup remain separate acceptance steps.
+
+The named x64 package build passed on its first attempt, including native ASan
+execution and byte-identical rebuilds with the existing assertions unchanged:
+`.tmp/signer-logon-owner-package.log`. All 32 package tests and the foreground
+execution probe passed in `.tmp/signer-logon-owner-package-verify.log`. Candidate:
+`.tmp/worker-goatbox-logon-owner-fix-20260917/payload`, manifest SHA-256
+`55034271669f9b17a80f16b8022d2449bc70515119c82b384d9aab044578c8c3`;
+1,773 files, 105,904,764 bytes. This successful run does not resolve the previously
+recorded intermittent protected-operation handle-count failure.
+
+Fresh signer SHA-256 is
+`f87f8b17731425247c3f3ca3726a9a91067ada86f778d095d81a3559ee3a278a`;
+broker SHA-256 is `58eaad53febdb189a08cd1ebadba46c6d67472a0274fd965828318a451573376`.
+The client retains `6d0c6d53272c1564b70906193be452358af0f30a81788d469599b125735c9469`.
+The shared controller was also rebuilt; its SHA-256 is
+`26ef748c02ffd2dfdc039bfe27915d4a8ecea73be4563f460bba875af05f0898`.
+
+The full `GoatCitadel-GOATBOX-logon-owner-fix.zip` handoff is 39,988,017 bytes,
+with all 1,775 entries read back and hash-verified. ZIP SHA-256:
+`b251c36efb1aa39fa7b18edfc18052220deb7234133dea23713a636ac75e2990`.
+Launcher `Run-GOATBOX-Logon-Owner-Fix.ps1` SHA-256:
+`9563ec372e0e1799bcb20b26153cd8307280cef26b0a724abeaa8fb83a2bef69`.
+Launcher syntax and all 280 diagnostic mappings passed under Windows PowerShell
+5.1 and PowerShell 7. It pins the currently installed service-owner-fix trio,
+requires stopped services, invokes protected uninstall preflight/uninstall/install,
+then starts only the broker once and reports both statuses. The new extraction
+directory is `C:\worker-candidates\logon-owner-fixed`. The existing installation
+has not yet been replaced by the operator. GOATBOX startup, worker/controller
+installation, protected enrollment and actual worker execution remain incomplete.
+No local service, key, disk, mount or formatting operation was performed. No
+commit or push was performed. Exact instructions are in `GOATBOX_WORKER_INSTALL.md`.
+
+### GOATBOX signer code 3; self-process handle regression (2026-09-17)
+
+The operator installed the logon-owner-fix candidate. All recipe stages passed
+with empty refusals and cleanup failures:
+`C:\worker-evidence\logon-owner-fix-preflight-20260917-183559-524`,
+`C:\worker-evidence\logon-owner-fix-remove-20260917-183559-524` and
+`C:\worker-evidence\logon-owner-fix-install-20260917-183559-524`.
+The one broker start ended with both services STOPPED, Win32 1066 and service
+code 3. The broker's code remains target failure; the signer's code is
+`ServiceTransportResult::ProtectedImage`. That result can arise before or after
+inspection validation, and also covers the later known-answer self-test. The
+absence of the previous inspection refusal does not by itself prove the exact
+stage reached or successful inspection ACL publication.
+
+A read-only GOATBOX report showed expected installed owners/principals/masks,
+no reparse/compression/encryption attributes, and only the unnamed data stream
+for signer (1,222,144 bytes) and client (81,408 bytes). `Get-Acl` presented the
+Administrators allow ACE before the service ACE; an in-memory RawSecurityDescriptor
+versus FileSecurity comparison reproduced that managed reordering without any
+file access or mutation. The report does not establish a raw ACL-order mismatch.
+An initial paste lost line breaks and failed during PowerShell parsing before
+execution; a single-line command with explicit semicolons collected the report.
+
+Source inspection found a deterministic failure in `local_transport.cpp`:
+`ValidateServiceTransportImages` passes `GetCurrentProcess()` to `QueryProcessPath`
+twice, but the helper rejected its `(HANDLE)-1` value as an invalid file handle.
+Windows documents that [current-process pseudo-handle](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocess)
+as valid whenever a process handle is required. The new native regression first
+proved that Windows accepts the handle and then failed at the production helper:
+`FAIL: GCPA own-process pseudo-handle resolves the exact image used by startup validation`.
+This was the only native test failure. The expected-red ASan build and log are
+retained at `.tmp/worker-signer-self-image-red-20260917` and
+`.tmp/signer-self-image-red.log`; no replacement was published from that attempt.
+
+The fix removes the same incorrect sentinel comparison from the four related
+helpers that intentionally receive the caller's pseudo-handle: image path,
+creation time, liveness and client process capture. The creation-time helper is
+also used when binding authenticated signer requests. The fixed client still
+requires exact path equality before/after token capture and a live process.
+Null/invalid-type handles remain subject to real Windows API refusal. Retained
+external service handles keep their existing ownership checks; no access mask,
+ACL, owner, privilege, timeout or signature requirement changes. The regression
+adds own-process path/liveness/creation-time proof against independent Windows
+reads, real query-only handles, non-process handles and mismatched-path refusal. Six
+source/project/fence checks passed in `.tmp/signer-self-image-source-tests.log`.
+Fresh packaged proof and physical startup remain separate acceptance steps.
+
+The first complete-package attempt passed the self-image regression but exposed
+an incorrect assumption in the added client test: a normal, unelevated test process
+must not pass protected client authentication. Its failed output is retained at
+`.tmp/worker-goatbox-self-image-fix-20260917`, with log
+`.tmp/signer-self-image-package.log`; it is not an installable handoff. The test
+now reads Windows' elevation type independently. Unelevated runs require refusal
+without published client identity; fully elevated runs require matching creation
+time and primary-token user. Positive own-process path/liveness/creation-time
+queries are tested separately in both cases. No product elevation check or prior
+assertion was relaxed. The fully elevated branch remains unproven locally.
+
+The fresh named package build passed with the corrected test expectation and all
+product checks intact: `.tmp/signer-self-image-package-retry.log`. The native x64
+ASan suite executed successfully, including the process-handle regressions and
+65,536 generated cases, and two clean test builds were byte-identical. Native
+service/client/broker reproducibility and embedded pin checks passed. All 32
+package tests and the foreground probe passed in
+`.tmp/signer-self-image-package-verify.log`. The probe still refused unadmitted
+controller use as required. This does not establish privileged client or physical
+service acceptance.
+
+Candidate: `.tmp/worker-goatbox-self-image-fix-20260917-retry/payload`.
+Manifest SHA-256:
+`7d49ac3eae7c2c0435b2838a2fea8e4ff494454d2b06f175e176fe67d5076eda`;
+1,773 files, 105,904,252 bytes. The signer pins the rebuilt client, and the broker
+pins the rebuilt signer:
+
+- Signer: `b3b056ef523b57bce4e6f3aec20ceefcd69e524961bc0d1167c1184fa6235381`.
+- Client: `6f7309533bf1034c537e9e4c50a19c31d07354490092e8b97d9a29ba3af05948`.
+- Broker: `48402f8212e1e0a57d1d36ff546ab781b1ed0731a89470d6628e3c5fec0196b0`.
+
+The complete `GoatCitadel-GOATBOX-self-image-fix.zip` is 39,987,912 bytes. All
+1,775 entries were read back and verified; ZIP SHA-256:
+`9848d8c114ceaafed608758bdc60812125281956ebfbeff595acbb1cb6f1c061`.
+Launcher `Run-GOATBOX-Self-Image-Fix.ps1` SHA-256:
+`e3f7a2387d424ea7104c5b9612633020e4eb5f33963e90597452268e6cb0f8b0`.
+Syntax and all 280 diagnostic mappings passed under Windows PowerShell 5.1 and
+PowerShell 7. The launcher pins the installed logon-owner-fix trio, requires
+stopped services, uses protected preflight/uninstall/install, then starts the
+broker once. Extract to `C:\worker-candidates\self-image-fixed`. The command in
+`GOATBOX_WORKER_INSTALL.md` uses explicit semicolons so it remains valid if a
+paste flattens its line breaks. No installed service or persistent key was changed
+on the development PC, and no disk, mount or formatting operation was performed.
+No commit or push was performed. GOATBOX replacement/startup and worker/controller
+installation, enrollment and actual execution remain pending.
+
+### GOATBOX signer code 9; missing protected state layout (2026-09-17)
+
+The operator ran the verified self-image-fix replacement at 19:09 local.
+Preflight, removal and installation all passed, with empty refusals and cleanup
+failures. Evidence folders use
+`C:\worker-evidence\self-image-fix-<stage>-20260917-190911-790`.
+The one broker start left broker code 3 and signer `CustodyOrJournal` code 9
+(both STOPPED, Win32 1066). Unlike code 3, this signer result is downstream of
+identity/inspection validation, protected self-image validation and the Ed25519
+known-answer self-test. It does not establish protected state recovery or RUNNING.
+
+Source inspection found that `OpenProtectedFilesystem` requires `state-v1` and
+exactly four fixed children: `journal`, `keysets`, `controls`, `quarantine`.
+The installer only created `bin` and the executable trio. A subsequent read-only
+GOATBOX listing confirmed only `bin`, attributes 8208 (`Directory` plus
+`NotContentIndexed`), below the provisioner root. No custody state existed.
+
+The installer now initializes and reads back the five empty directories before
+registering either service. `broker-state-common.ps1` pins the native filesystem's
+exact SYSTEM owner and primary group, protected non-inheriting DACL containing
+only SYSTEM and the signer SID with full control, and fixed-child inventory.
+`broker-state-native.cs` uses exclusive, handle-relative directory creation under
+retained parents, with backup/restore privileges enabled only in the installer
+process. It does not change parent ACLs or service privileges. It normalizes
+only the newly created empty directories to directory-only attributes, preventing
+inherited indexing flags from violating the native fixed-child inventory.
+Raw descriptor read-back preserves owner/group/defaulted flags, DACL controls
+and ACE order; it does not use managed FileSecurity canonicalization.
+
+The directory lease owns only objects it exclusively created. Rollback deletes
+only empty directories through those retained handles; unknown/nonempty content
+is preserved with cleanup failures. A pre-existing state root is never adopted
+or overwritten. The image-only uninstaller now explicitly identifies protected
+state and refuses before service mutation. A state-preserving upgrade remains a
+separate verified operation; do not reuse an old replacement after state exists.
+The implementation follows the documented [NtCreateFile creation and backup-intent
+contract](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+and [Windows file security/backup access](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
+
+Validation:
+
+- `pnpm verify:remote-worker:windows-install` passed all 19 checks. It runs the
+  existing 32 filesystem/refusal scenarios and eight added state scenarios in
+  Windows PowerShell 5.1 and PowerShell 7. The new scenarios cover actual native
+  directory creation, inherited indexing attributes, exact permissions, unknown
+  and escaping components, pre-existing state, aliases, held-handle rename
+  refusal, partial rollback and nonempty-state preservation. The first test run
+  found a missing parenthesis in the new test fixture; corrected before the
+  successful run. Logs: `.tmp/broker-state-install-tests.log` and
+  `.tmp/broker-state-install-tests-retry.log`.
+- These filesystem cases substitute the current test user's owner/group for
+  SYSTEM in a fresh temporary tree. No test grants a worker or administrator
+  extra production state access. Actual SYSTEM-owned installation remains the
+  GOATBOX acceptance boundary.
+- The fresh named x64 package build passed native ASan and reproducibility
+  checks: `.tmp/broker-state-full-package.log`. The complete package is
+  `.tmp/worker-goatbox-state-layout-fix-20260917/payload`, manifest SHA-256
+  `4cc5c520a8c218b318be2baf58096e67b4709e35febc6a0156e9b405234f195e`,
+  1,775 files, 105,925,544 bytes. The signer/client/broker hashes remain exactly
+  the self-image-fix hashes already installed on GOATBOX.
+- All 34 package tests and the packaged foreground probe passed, including
+  rejection of rehashed inventories missing either new state helper:
+  `.tmp/broker-state-full-package-verify.log`. Controller admission was refused
+  as required. This remains portable foreground proof, not physical service proof.
+- The small repair ZIP contains the exact five install sources from that full
+  package and a GOATBOX launcher. Every ZIP entry was read back and hashed.
+  Launcher syntax and all 280 existing inspection mappings passed under both
+  PowerShell engines; no local service operation was executed.
+
+Handoff: `.tmp/worker-goatbox-state-repair-20260917/GoatCitadel-GOATBOX-state-repair.zip`,
+37,703 bytes, six entries; SHA-256
+`98b0260aec46cfaba5cd93d4583529e406e7e071f8d927e0b01997dead19c599`.
+Launcher `Run-GOATBOX-State-Repair.ps1` SHA-256:
+`a77fd532de2db11df772ab442bcf746aebd8aa5ade45f95b42eaf4a7f6ca68c7`.
+The launcher extracts at `C:\worker-candidates\state-repair`, verifies every
+repair source and the retained `C:\worker-candidates\self-image-fixed\payload`
+(manifest `7d49ac3eae7c2c0435b2838a2fea8e4ff494454d2b06f175e176fe67d5076eda`),
+pins the installed trio, and requires stopped services. It uses the verified
+uninstall preflight, reinstalls the same executables with the fixed state layout,
+requires five successful state read-backs, then starts the broker once. The
+service re-registration is required because the broker refuses SCM's retained
+signer failure metadata. Its default without `-Apply` stops after preflight.
+Evidence uses `C:\worker-evidence\state-repair-<stage>-<timestamp>`.
+
+No disk, partition, VHD, mount or formatting action was performed. No installed
+service, persistent key, architecture baseline, commit or push was changed on
+the development PC. The architecture baseline remains SHA-256
+`7f9b33a867fb164f1e66173238806c0b60429198444e3c74e0ac18b8470d3318`.
+GOATBOX state repair/startup and subsequent worker/controller installation,
+enrollment and real execution are still pending.
+
+## GOATBOX signer RUNNING; broker target observation (2026-09-17 19:36)
+
+The operator's state-repair run passed preflight, uninstall and installation,
+with no refusals or cleanup failures. It verified all five protected state
+directories and started the broker once. The signer reached RUNNING, PID 7008,
+with Win32/service exit codes 0/0. The broker stopped at 1066/3 (`TargetIdentity`).
+Evidence directories are `C:\worker-evidence\state-repair-<stage>-20260917-193654-022`.
+This is physical signer startup evidence; ongoing broker supervision remains
+unverified. The signer exits cleanly after its bounded idle wait, so this is
+a captured state, not an assertion that PID 7008 is still running.
+
+Source tracing found that broker code 3 spans target snapshot collection and
+validation, image revalidation, and running process/token checks. Unlike earlier
+attempts, the signer is healthy in the captured result; its code cannot identify
+the broker's failing check. No speculative native identity or permission change
+was made. Protected state now exists and must be retained; the old replacement
+and image-only uninstall paths must not be repeated.
+
+`scripts/remote-worker/read-broker-target-diagnostic.ps1` provides a bounded
+observation of the unchanged installed trio. It pins the three expected hashes
+and final image paths, verifies fixed service configuration, requires a stopped
+broker and healthy stopped/RUNNING signer, and starts only the broker once.
+Separate observers retain up to 64 SCM transitions per service over twelve
+seconds and capture signer process/token evidence only after RUNNING. It has no
+custody, privilege, ACL, installation, service-stop or disk mutation authority.
+Its only output file is a fresh diagnostic JSON under `C:\worker-evidence`.
+The queries use the operator's administrator token, so successful reads are
+not evidence that the broker's own token has the same access.
+
+Seven focused tests passed, including actual process/token/security/path reads
+in Windows PowerShell 5.1 and PowerShell 7, mismatched-path refusal, 28
+classification cases per engine, and wrong-host refusal before service access.
+Log: `.tmp/broker-target-diagnostic-tests.log`. The three installed-image pins
+were independently rehashed against the retained self-image-fix package.
+No native executable changed and no local installed service was started.
+
+Single-file handoff:
+`.tmp/worker-goatbox-broker-target-observation-20260917/Read-GOATBOX-Broker-Target.ps1`,
+33,228 bytes, SHA-256
+`4917f56095bca068c1a51d9d0820271cc0d079cb267ad8922504aaa82aebe2b0`.
+Copy only this file to `C:\worker-recovery\Read-GOATBOX-Broker-Target.ps1` and
+verify its hash before `-StartOnce`. The GOATBOX report is pending. Broker
+readiness, worker/controller installation, enrollment and execution remain open.
+No commit or push was made.
+
+## GOATBOX broker inspection grant and retained-state update (2026-09-17)
+
+The 19:55 physical report (`broker-target-observation-20260917-195519-095.json`)
+showed signer RUNNING throughout twelve seconds with zero exit codes, while the
+broker stopped at 294 ms with target identity code 3. The signer process DACL
+contained its own logon owner, administrator query rights (0x1400), and worker
+query/wait rights, but no broker query/wait grant. The broker has a different
+logon SID. Windows AccessCheck reproduced denial using the captured process
+security descriptor. The report did not expose token-object security.
+
+`service_inspection.cpp` now adds process QUERY_LIMITED_INFORMATION|SYNCHRONIZE
+and TOKEN_QUERY only for the fixed broker SID when composing the validated signer
+inspection ACL. It preserves controller behavior, original ACEs/order and owner,
+refuses explicit denies, duplicate grants and nonexact broker masks, and grants
+no process control, memory access, token duplication or privilege modification.
+The focused native regression failed before the fix (794 checks, 7 failures) and
+passed after it (794 checks, zero failures).
+
+The full x64 package build passed its clean-build comparison and native ASan
+checks. Manifest: beafa81d55ade7d82274c86a0ab0c1ce2dc8a88685adb400dd2fdde04018eab2.
+New signer: be670dfd61f42bcf01b182ccdac4e3c3551c3fe3cd08290d08210a9e60c08846.
+New broker: 069241c7653b5f314a16f9c6105bd615698ffd458853762dedb2d116a5cf14d8.
+Client unchanged: 6f7309533bf1034c537e9e4c50a19c31d07354490092e8b97d9a29ba3af05948.
+The named package verification lane passed 34 tests and its foreground probe.
+Logs: `.tmp/broker-inspection-package-build.log`,
+`.tmp/broker-inspection-package-verify.log`, `.tmp/broker-inspection-green.log`.
+
+The separate broader native packaging suite passed 45/47 tests. Both failing
+assertions use old fixed client image pins (x64 expected 81,408 bytes and
+6d0c6d...; current candidate is 80,896 bytes and 6f7309...; ARM64 expected
+030d82..., observed 1a79f3...). Each build had already passed its clean-pair and
+ASan assertions before these failures, but later assertions were not reached.
+The suite is not green. Existing test pins were not changed in this handoff.
+Log: `.tmp/broker-inspection-source-tests.log`.
+
+New `repair-broker-inspection.ps1` and `broker-image-maintenance.cs` implement a
+GOATBOX-only update of the two old-hash-pinned existing executables, preserving
+service registrations, installed file identity/security, client image and all
+protected state. Services must already be stopped. Preflight obtains exclusive
+write handles without writing bytes. Apply durably saves original executables
+and a prepared receipt, replaces through those handles, and restores both on
+caught failure. This is not crash-atomic across two files; power-loss recovery
+requires the retained backups and operator direction. Only the maintenance
+process enables backup/restore privileges. No custody contents are read and no
+state/service/disk mutation APIs are used by the updater.
+
+Thirteen repair tests passed in PowerShell 5.1 and 7: fourteen low-level real
+NTFS checks per engine, wrong-host refusal, and production-orchestration fixture
+runs for preflight, replacement, second-image failure rollback and running-service
+refusal. The orchestration fixtures substitute SCM and privilege operations,
+while using real temporary files and retained directory handles. An initial Node
+wrapper run exposed an inherited PowerShell 7 module-path problem for Windows
+PowerShell; clearing only that test child's PSModulePath resolved it. No test
+assertion was relaxed. Log: `.tmp/broker-inspection-maintenance-tests.log`.
+
+Handoff: `.tmp/GoatCitadel-GOATBOX-broker-inspection-fix.zip`, 40,018,573 bytes,
+SHA-256 67edcc7227c7e19508888bfe7931ba60c5740b5ec385e3baa49bffde17e0ebf5.
+All 1,782 ZIP files were verified against staging. Copy the whole ZIP to GOATBOX;
+extract into the new `C:\worker-candidates\broker-inspection-fixed` directory.
+The launcher verifies companions, runs preflight then apply, and starts the
+broker once with observations at approximately three and twelve seconds.
+Detailed commands are in `docs/testing/GOATBOX_WORKER_INSTALL.md`.
+
+Physical update/startup remains pending. Broker readiness, worker/controller
+installation, enrollment and execution are not complete. No commit or push,
+installed-service changes on this development PC, or disk operations occurred.
+
+## GOATBOX broker and signer RUNNING; receipt confirmed (2026-09-17 20:25)
+
+The operator applied the broker-inspection handoff. Both observations (about
+three and twelve seconds after its single broker start) showed broker PID 6744
+and signer PID 9396 RUNNING with zero Win32 and service exit codes. Evidence:
+`C:\worker-evidence\broker-inspection-update-20260917-202531-523\startup-observation.json`.
+The subsequent read-only receipt report confirms apply/passed, three images,
+five protected directories, empty refusals/rollback failures, unchanged service
+registrations and no state-content access. Physical broker/signer startup is now
+established for this observation; long-running supervision and installed worker
+execution are not implied. Worker/controller installation and enrollment remain.
+
+The console's four null fields were independently reproduced under Windows
+PowerShell 5.1: Select-Object on the ordered dictionary did not project its keys.
+The serialized receipt was correct. The source display now explicitly casts to
+PSCustomObject; a new assertion verifies displayed mode/verdict against the saved
+receipt in each orchestration scenario. Red-before/green-after was verified,
+and all 13 maintenance tests passed in PowerShell 5.1/7. Log:
+`.tmp/broker-inspection-summary-fix-tests.log`. This is display-only and does not
+require redeployment. The transferred ZIP, installed binaries, custody and
+service registrations were not altered again. No commit or push was made.
+
+## GOATBOX enrollment inputs absent; public custody inspection next
+
+The operator confirmed client-cert.pem, ca.pem, ticket.json and protected-key.json
+are all absent from C:\worker-inputs. Worker installation must wait for enrollment
+preparation. The development checkout's .env and current agent process have no
+remote-worker enablement/listener/TLS trust settings. This is not a claim about
+a separately running Gateway process; its listener and trust must be established.
+
+Added scripts/remote-worker/read-protected-enrollment-state.ps1. It validates the
+current broker-inspection package inventory, pins and holds the installed client,
+then uses the packaged typed client to issue only public INSPECT. It projects
+public key references and generation/capacity fields, with bigint values encoded
+as decimal strings. It performs no key creation, service control or file writes.
+Four focused tests passed, including fixed helper path, private-field exclusion,
+public bytes/bigint serialization and wrong-host refusal in PowerShell 5.1/7.
+The source handoff is 2,864 bytes, SHA-256
+4b3fd7fb6f0ff160eea0ab8958b08d6fb88b1a000648690a8c054afd7ae55e23.
+Live public custody inspection is pending before any keyset initialization.
+No private material was read or generated, no services were changed, and no
+commit or push occurred.
+
+## GOATBOX public INSPECT failed; signer protocol failure (2026-09-17 20:38:22)
+
+The public inspection client returned exit 5, empty stdout/stderr and no keyset
+metadata. A subsequent read-only SCM query showed signer STOPPED 1066/6 and broker
+STOPPED 1066/3, both PID zero. SCM event 7024 timestamps both failures at 20:38:22.
+Code 6 is native ProtocolInvalid; generic Windows message text is not evidence of
+an invalid-handle API failure. The earlier twelve-second startup success remains
+valid but does not establish sustained supervision or a working client exchange.
+
+Source permits empty client exit 5 at stdio errors or several transport/authentication
+stages. The signer can return ProtocolInvalid when a connected peer aborts before
+ClientHello, among other protocol failures. Thus the pair is consistent with a
+failed handshake, but no exact failing check has been established. A development
+PC read-only SCM probe returned successful status/config queries with byte counts
+36/348; it did not reproduce a zero-size successful config query. No speculative
+native fix or new image package was issued.
+
+Added read-signer-client-boundary.ps1, based on the existing bounded public
+metadata observer. Current image hashes are pinned; initial signer/broker status
+must exactly match stopped 1066/6 and 1066/3. Optional -StartOnce starts only the
+signer, retaining image/SCM handles and fixed configuration checks, then observes
+for twelve seconds. The broker remains stopped and no protocol request is sent.
+The report adds initial service configuration byte counts and distinguishes the
+administrator observer from native-client authority. No key/custody contents,
+service install/removal/stop, ACL/privilege mutation or disk operations occur.
+Five local tests passed: bounded single-signer start and authority exclusions,
+real own-process/token reads, and wrong-host refusal in PowerShell 5.1 and 7.
+Handoff: scripts/remote-worker/read-signer-client-boundary.ps1, 33,628 bytes,
+SHA-256 3f7606976aab86b304ed0edf1e1afe1e81aec0e967983d7156d2bf4afb1ec662.
+Live diagnostic is pending. Enrollment and all four missing input files remain
+unprepared; no private keys, installed images or commits were changed this turn.
+
+## GOATBOX client token-query fix and three-image handoff (2026-09-17)
+
+The 20:46:25 signer-only diagnostic (signer-client-boundary-20260917-204625-907.json)
+showed signer RUNNING at 27 ms through twelve seconds. Broker remained stopped.
+Signer token identity matched; process DACL carried both worker and broker query/
+wait grants. Initial QueryServiceConfig byte counts were 398/462, not zero.
+The admin observer could query/wait and TOKEN_QUERY, but token READ_CONTROL was
+denied. This is not native-client-context proof and does not itself isolate the
+prior handshake failure.
+
+A concrete bug was reproduced in CaptureClientTokenProjection's restricted-SID
+query. Windows returns a successful 8-byte header for zero restricted groups;
+the shared client/server collector required sizeof(TOKEN_GROUPS), 16 on x64.
+The isolated regression compiled the actual query/helper function bodies and
+used real Windows primary and restricted tokens: red reported emptyAccepted=0,
+then green reported emptyAccepted=1, restrictedRefused=1, invalidRefused=1.
+Logs: .tmp/client-token-query-red.log and .tmp/client-token-query-green.log.
+The production fix uses offsetof(TOKEN_GROUPS, Groups), matching the existing
+service-startup collector; all other identity/role/path/privilege gates remain.
+The normal local_transport native tests now assert the real header-only case.
+The prior failed authentication stage was not logged; live retry is still needed.
+
+Full x64 package build passed native ASan and clean-build identity checks.
+Manifest d80b8d70375b40962947689e2cfc4787ae28aa9dc64a8ebc9e0fed3c5559256b;
+1,775 inventory files, 105,925,544 bytes. New signer SHA-256:
+5b462d106464b6cbf089572f91cf64c3c8d5fe3132616f4d2ad89bb744e894b1.
+Broker: 4ac5adb9cb5a782fd46f31e19b0096261b37889d462ae7beffcba3fb99633ba4.
+Client: 9fb70095d3c4c473d0be1d3ec67eb17e892ae4870911e7773e11df26d6ac46d0.
+Named package verification passed 34 tests and the portable foreground probe.
+Logs: .tmp/client-token-package-build.log and .tmp/client-token-package-verify.log.
+No claim of installed authentication, enrollment, or ARM64 runtime proof is made.
+
+Added repair-client-token-query.ps1, pinning the currently installed trio and
+updating all three images because signer/client/broker embed paired image hashes.
+The maintenance class has a separate explicit fixed-client replacement entry
+point; ordinary Open still refuses client writes. Both services must already be
+stopped. All originals and a prepared receipt are durably saved before writes.
+Held image/directory identity and security are retained; caught failure restores
+all originals. This is not crash-atomic; backups support operator recovery.
+No state contents or service registrations are modified. Twenty-six maintenance
+tests passed in PowerShell 5.1/7, including an injected third-image failure with
+all original bytes restored. Log: .tmp/client-token-maintenance-tests.log.
+
+Whole-ZIP handoff: .tmp/GoatCitadel-GOATBOX-client-token-fix.zip, 40,019,494 bytes,
+SHA-256 160d2d6c6587c5ed9dbff527c53bb897f9ffd92d7617e36259b61b405f0b1392.
+All 1,782 archive files matched staging. Launcher SHA-256:
+95977959ddfd196d84dc411cd31bfbff2a40ae185fd6f5dd94fb5c5a55a7a21a.
+It runs preflight/apply, starts the broker once, observes both services at three/
+twelve seconds, gates on both RUNNING, and requests public INSPECT once. Public
+metadata/error projection, one-start boundary, gate and wrong-host guards passed
+local checks. No keys are created. Detailed commands are in GOATBOX_WORKER_INSTALL.
+Live update/inspection is pending. All four enrollment inputs remain unprepared.
+No installed services on the development PC were changed; no formatting, commit
+or push occurred. Original architecture baseline hash remains unchanged.

@@ -438,7 +438,7 @@ describe("useChatSurfaceOrchestration", () => {
   });
 
   it("stops active turns and reports cancel errors", async () => {
-    apiMocks.cancelChatTurn.mockResolvedValue(undefined);
+    apiMocks.cancelChatTurn.mockResolvedValue({ sessionId: "session-1", turnId: "turn-active-123456", cancelled: true, trace: { status: "cancelled" } });
     mountHarness({
       activeStream: {
         sessionId: "session-1",
@@ -489,6 +489,7 @@ describe("useChatSurfaceOrchestration", () => {
       await latest!.controller.handleStopActiveTurn();
     });
     expect(latest!.setError).toHaveBeenCalledWith("cancel failed");
+    expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
 
     mountHarness({ selectedSessionId: null });
     await act(async () => {
@@ -506,6 +507,27 @@ describe("useChatSurfaceOrchestration", () => {
       latest!.controller.handleBeginEditTurn("missing-turn");
     });
     expect(latest!.snapshot().editingTurnId).toBeNull();
+  });
+
+  it("keeps the stream alive until cancellation is confirmed and deduplicates pending requests", async () => {
+    let settle!: (result: unknown) => void;
+    apiMocks.cancelChatTurn.mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
+    mountHarness({ activeStream: {
+      sessionId: "session-1", streamToken: "pending-stop", turnId: "turn-1", controller: new AbortController(),
+    } });
+    let stop!: Promise<void>;
+    act(() => { stop = latest!.controller.handleStopActiveTurn(); });
+    expect(latest!.controller.isStopPending).toBe(true);
+    expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
+    await act(async () => { await latest!.controller.handleStopActiveTurn(); });
+    expect(apiMocks.cancelChatTurn).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      settle({ sessionId: "session-1", turnId: "turn-1", cancelled: false, trace: { status: "running" } });
+      await stop;
+    });
+    expect(latest!.controller.isStopPending).toBe(false);
+    expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
+    expect(latest!.pushNotice).not.toHaveBeenCalledWith(expect.stringContaining("Stopped turn"), "warning");
   });
 
   it("records resume and remove queue diagnostics", async () => {

@@ -24,6 +24,7 @@ class CellControllerServerIdentity final {
   DWORD ReadCustodySnapshot(std::vector<std::uint8_t>* output) noexcept;
   DWORD Open(HANDLE connected_pipe) noexcept;
   DWORD Verify() noexcept;
+  DWORD VerifyBoundPipe(CellPipeServerEvidence& additional) noexcept;
   const std::wstring& ParentPath() const noexcept { return installed_.ParentPath(); }
   const CellFileIdentity& ParentIdentity() const noexcept { return installed_.ParentIdentity(); }
   void Close() noexcept;

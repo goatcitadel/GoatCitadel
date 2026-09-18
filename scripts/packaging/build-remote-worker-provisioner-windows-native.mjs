@@ -64,6 +64,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS = Object.freez
   "apps/remote-worker-provisioner-windows-native/src/protocol.cpp",
   "apps/remote-worker-provisioner-windows-native/src/protocol.hpp",
   "apps/remote-worker-provisioner-windows-native/src/protocol.test.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/service_configuration_query.hpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.cpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.hpp",
   "apps/remote-worker-provisioner-windows-native/src/service_runtime.test.cpp",
@@ -936,8 +937,8 @@ function sameFileIdentity(left, right) {
 }
 
 export function computeW1B1aCanonicalSourceManifest(sourceRoot = repoRoot) {
-  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 54) {
-    throw new Error("The W1B1A canonical source fence must contain exactly 54 paths.");
+  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 55) {
+    throw new Error("The W1B1A canonical source fence must contain exactly 55 paths.");
   }
   const sortedPaths = [...REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS].sort();
   if (!sortedPaths.every((value, index) => value === REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS[index])) {

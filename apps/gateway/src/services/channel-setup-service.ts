@@ -1,3 +1,5 @@
+import { assertDraftRevision, custodyInitialDraftSecrets, hydrateChannelSetupDraftSecrets, sanitizeChannelSetupHydration, requireChannelSecretCustody } from "./channel-setup-draft-security.js";
+export { reviewChannelSetupConnection } from "./channel-setup-connection-review.js";
 import { randomUUID } from "node:crypto";
 import type {
   ChannelSetupDefinition,
@@ -30,10 +32,17 @@ import {
 } from "./channel-setup-test-cache.js";
 import { preserveChannelSetupDraftSecretsForPublicUpdate } from "./channel-setup-public-projection.js";
 import type { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
 
 export interface ChannelSetupHost {
   readonly storage: Pick<Storage, "channelSetupDrafts">;
   readonly recentChannelSetupTests: Map<string, ChannelSetupRecentTestCacheEntry>;
+  commitChannelSetupConnection(
+    draftId: string,
+    expectedRevision: number,
+    input: Parameters<Storage["channelSetupDrafts"]["finalizeConnection"]>[2],
+    onCommitted?: () => Promise<void>,
+  ): Promise<IntegrationConnection>;
   readonly channelSecrets?: Pick<
     ChannelSecretCustodyService,
     | "storeTemporary"
@@ -108,6 +117,10 @@ export async function listChannelSetupDrafts(
     .slice(0, limit);
 }
 
+export async function getChannelSetupDraft(host: ChannelSetupHost, draftId: string): Promise<ChannelSetupDraft> {
+  return host.storage.channelSetupDrafts.get(draftId);
+}
+
 export async function createChannelSetupDraft(
   host: ChannelSetupHost,
   input: ChannelSetupDraftCreateInput,
@@ -118,6 +131,7 @@ export async function createChannelSetupDraft(
   let hydration = undefined;
   let label = runtime.definition.catalog.label;
   let enabled = true;
+  let connectionRevision: string | undefined;
 
   if (input.connectionId) {
     const connection = await host.getIntegrationConnection(input.connectionId);
@@ -132,6 +146,7 @@ export async function createChannelSetupDraft(
     hydration = hydrated.hydration;
     label = connection.label;
     enabled = connection.enabled;
+    connectionRevision = connection.revision;
   }
 
   const secured = custodyInitialDraftSecrets(host, draftId, seedDraft, runtime.definition.adapter.secretFieldKeys);
@@ -147,6 +162,7 @@ export async function createChannelSetupDraft(
       enabled,
       draft: secured.draft,
       secretState: secured.secretState,
+      connectionRevision,
       hydration,
       contentVersion: runtime.definition.wizard.contentVersion,
       adapterVersion: runtime.definition.adapter.adapterVersion,
@@ -235,6 +251,7 @@ export async function validateChannelSetupDraft(
 ): Promise<ChannelSetupValidationResult> {
   const draft = await host.storage.channelSetupDrafts.get(draftId);
   assertDraftRevision(draft, expectedRevision);
+  await requireReviewedChannelConnection(host, draft);
   const runtime = requireChannelSetupDefinition(draft.catalogId);
   const issues = runtime.validate(hydrateChannelSetupDraftSecrets(host, draft));
   const result = buildChannelSetupValidationResult(draft, runtime.definition.validation.levels, issues);
@@ -272,6 +289,7 @@ export async function testChannelSetupDraft(
   assertDraftRevision(draft, expectedRevision);
   const validation = await validateChannelSetupDraft(host, draftId, draft.revision);
   const validatedDraft = await host.storage.channelSetupDrafts.get(draftId);
+  assertDraftRevision(validatedDraft, validation.draftRevision);
   if (validation.status === "error") {
     host.recentChannelSetupTests.delete(draftId);
     const blocked: ChannelSetupTestResult = {
@@ -309,6 +327,7 @@ export async function testChannelSetupDraft(
       ? { discordRuntimeReadiness: "deferred" as const }
       : {}),
   });
+  await requireReviewedChannelConnection(host, validatedDraft);
   const checks = [...host.buildIntegrationConnectionChecks(connection), ...liveChecks.checks];
   const issues = checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check));
   const status = issues.some((issue) => issue.level === "error")
@@ -367,6 +386,7 @@ export async function finalizeChannelSetupDraft(
   host: ChannelSetupHost,
   draftId: string,
   expectedRevision: number,
+  onCommitted?: () => Promise<void>,
 ): Promise<ChannelSetupFinalizeResult> {
   const draft = await host.storage.channelSetupDrafts.get(draftId);
   assertDraftRevision(draft, expectedRevision);
@@ -376,7 +396,8 @@ export async function finalizeChannelSetupDraft(
     throw new Error("Channel setup draft still has validation errors.");
   }
   const validatedDraft = await host.storage.channelSetupDrafts.get(draftId);
-  const reusableTest = await getReusableChannelSetupTestResult(host, host.recentChannelSetupTests, validatedDraft);
+  assertDraftRevision(validatedDraft, validation.draftRevision);
+  const reusableTest = await getReusableChannelSetupTestResult(host, host.recentChannelSetupTests, hydrateChannelSetupDraftSecrets(host, validatedDraft));
   if (reusableTest) {
     host.recordDevDiagnostic({
       level: "info",
@@ -409,17 +430,23 @@ export async function finalizeChannelSetupDraft(
   if (readyDraft.revision !== test.draftRevision) {
     throw new Error("Channel setup draft changed after its live test; run the test again before finalizing.");
   }
+  const ephemeral = await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, readyDraft));
   const payload = {
+    connectionId: readyDraft.connectionId ?? randomUUID(),
+    catalogId: ephemeral.catalogId,
+    kind: ephemeral.kind,
+    key: ephemeral.key,
     label: readyDraft.label ?? runtime.definition.catalog.label,
     enabled: readyDraft.enabled ?? true,
     status: "connected" as const,
-    config: (await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, readyDraft))).config,
+    config: ephemeral.config,
     lastSyncAt: test.checkedAt,
     lastError: undefined,
   };
 
-  const connection = await persistConnectionWithSecretReferences(host, readyDraft, payload);
+  const connection = await persistConnectionWithSecretReferences(host, readyDraft, payload, onCommitted);
 
+  try {
   host.recordDevDiagnostic({
     level: "info",
     category: "integrations",
@@ -437,7 +464,6 @@ export async function finalizeChannelSetupDraft(
   });
 
   host.recentChannelSetupTests.delete(draftId);
-  await host.storage.channelSetupDrafts.delete(draftId, readyDraft.revision);
 
   return {
     draftRevision: readyDraft.revision,
@@ -445,6 +471,9 @@ export async function finalizeChannelSetupDraft(
     validation,
     test,
   };
+  } catch (cause) {
+    throw Object.assign(new Error("The channel connection was saved. Review its current state before retrying.", { cause }), { mutationCommitted: true });
+  }
 }
 
 export async function createChannelSetupRepairDraft(
@@ -492,19 +521,21 @@ export async function setChannelSetupDraftSecrets(
   }
 
   const staged: Array<{ fieldKey: string; secretRef: string }> = [];
+  let committed = false;
   try {
     for (const [fieldKey, secret] of entries) {
       staged.push({ fieldKey, secretRef: custody.storeTemporary(draftId, fieldKey, secret) });
     }
     const secretState = { ...(current.secretState ?? {}) };
     for (const item of staged) {
-      secretState[item.fieldKey] = { configured: true, custody: "temporary", secretRef: item.secretRef };
+      secretState[item.fieldKey] = { configured: true, custody: "temporary", source: "operator", secretRef: item.secretRef };
     }
     const updated = await host.storage.channelSetupDrafts.update(draftId, {
       expectedRevision: current.revision,
       draft: omitSecretFields(current.draft, runtime.definition.adapter.secretFieldKeys),
       secretState,
     });
+    committed = true;
     for (const item of staged) {
       const prior = current.secretState?.[item.fieldKey];
       if (prior?.secretRef && prior.custody === "temporary") custody.deleteTemporary(prior.secretRef);
@@ -524,6 +555,7 @@ export async function setChannelSetupDraftSecrets(
     });
     return updated;
   } catch (error) {
+    if (committed) throw Object.assign(new Error("The channel credentials were saved. Reload the draft before retrying.", { cause: error }), { mutationCommitted: true });
     for (const item of staged) custody.deleteTemporary(item.secretRef);
     throw error;
   }
@@ -703,42 +735,6 @@ export async function retestChannelConnection(
   return testChannelSetupDraft(host, repairDraft.draftId, repairDraft.revision);
 }
 
-function assertDraftRevision(draft: ChannelSetupDraft, expectedRevision: number): void {
-  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || draft.revision !== expectedRevision) {
-    throw new Error(
-      `Channel setup draft ${draft.draftId} changed after it was loaded (expected revision ${expectedRevision}, current revision ${draft.revision}).`,
-    );
-  }
-}
-
-function custodyInitialDraftSecrets(
-  host: ChannelSetupHost,
-  draftId: string,
-  rawDraft: Record<string, unknown>,
-  secretFieldKeys: readonly string[],
-): { draft: Record<string, unknown>; secretState: ChannelSetupDraft["secretState"] } {
-  const draft = { ...rawDraft };
-  const secretState: ChannelSetupDraft["secretState"] = {};
-  for (const fieldKey of secretFieldKeys) {
-    const value = draft[fieldKey];
-    delete draft[fieldKey];
-    if (value === undefined || value === null || value === "") continue;
-    if (typeof value !== "string") {
-      throw new ValidationError({
-        message: `Channel credential field ${fieldKey} must be submitted through secure input.`,
-      });
-    }
-    const custody = requireChannelSecretCustody(host);
-    const secretRef = custody.isChannelSecretRef(value) ? value : custody.storeTemporary(draftId, fieldKey, value);
-    secretState[fieldKey] = {
-      configured: true,
-      custody: custody.custodyFor(secretRef),
-      secretRef,
-    };
-  }
-  return { draft, secretState };
-}
-
 function stripGenericSecretFields(
   draft: Record<string, unknown>,
   secretFieldKeys: readonly string[],
@@ -759,31 +755,6 @@ function omitSecretFields(draft: Record<string, unknown>, secretFieldKeys: reado
   const next = { ...draft };
   for (const fieldKey of secretFieldKeys) delete next[fieldKey];
   return next;
-}
-
-function hydrateChannelSetupDraftSecrets(host: ChannelSetupHost, draft: ChannelSetupDraft): ChannelSetupDraft {
-  const next = { ...draft.draft };
-  for (const [fieldKey, state] of Object.entries(draft.secretState ?? {})) {
-    if (!state.configured || !state.secretRef) continue;
-    const custody = requireChannelSecretCustody(host);
-    custody.assertUsableForDraft(state.secretRef, {
-      draftId: draft.draftId,
-      connectionId: draft.connectionId,
-      fieldKey,
-    });
-    next[fieldKey] = custody.resolve(state.secretRef);
-  }
-  return { ...draft, draft: next };
-}
-
-function sanitizeChannelSetupHydration(
-  hydration: ChannelSetupDraft["hydration"] | undefined,
-): ChannelSetupDraft["hydration"] | undefined {
-  if (!hydration) return undefined;
-  const { rawLegacyConfig: _rawLegacyConfig, ...safeHydration } = hydration;
-  return {
-    ...safeHydration,
-  };
 }
 
 function buildReconciledHydration(
@@ -814,14 +785,8 @@ function buildReconciledHydration(
 async function persistConnectionWithSecretReferences(
   host: ChannelSetupHost,
   draft: ChannelSetupDraft,
-  payload: {
-    label: string;
-    enabled: boolean;
-    status: "connected";
-    config: Record<string, unknown>;
-    lastSyncAt: string;
-    lastError: undefined;
-  },
+  payload: Parameters<Storage["channelSetupDrafts"]["finalizeConnection"]>[2],
+  onCommitted?: () => Promise<void>,
 ): Promise<IntegrationConnection> {
   const configWithTemporaryRefs = { ...payload.config };
   for (const [fieldKey, state] of Object.entries(draft.secretState ?? {})) {
@@ -829,45 +794,36 @@ async function persistConnectionWithSecretReferences(
     else delete configWithTemporaryRefs[fieldKey];
   }
 
-  const initial = draft.connectionId
-    ? await host.updateIntegrationConnection(draft.connectionId, { ...payload, config: configWithTemporaryRefs })
-    : await host.createIntegrationConnection({
-        catalogId: draft.catalogId,
-        label: payload.label,
-        enabled: payload.enabled,
-        status: payload.status,
-        config: configWithTemporaryRefs,
-      });
-
   const custody = Object.keys(draft.secretState ?? {}).length > 0 ? requireChannelSecretCustody(host) : undefined;
   const promotedConfig = { ...configWithTemporaryRefs };
   const promotedRefs: string[] = [];
+  let committed = false;
   try {
     for (const [fieldKey, state] of Object.entries(draft.secretState ?? {})) {
       if (!state.configured || !state.secretRef || !custody) continue;
-      const promoted = custody.copyToConnection(state.secretRef, initial.connectionId, fieldKey);
+      const promoted = custody.copyToConnection(state.secretRef, payload.connectionId, fieldKey);
       promotedRefs.push(promoted);
       promotedConfig[fieldKey] = promoted;
     }
-    const connection = await host.updateIntegrationConnection(initial.connectionId, {
+    const connection = await host.commitChannelSetupConnection(draft.draftId, draft.revision, {
       ...payload,
       config: promotedConfig,
+    }, async () => {
+      committed = true;
+      await onCommitted?.();
     });
+    committed = true;
     for (const state of Object.values(draft.secretState ?? {})) {
       if (state.secretRef && state.custody === "temporary") custody?.deleteTemporary(state.secretRef);
     }
     return connection;
   } catch (error) {
+    if (committed || (error && typeof error === "object" && "mutationCommitted" in error && error.mutationCommitted === true)) {
+      throw Object.assign(new Error("The channel connection was saved. Review its current state before retrying.", { cause: error }), { mutationCommitted: true });
+    }
     for (const secretRef of promotedRefs) custody?.delete(secretRef);
     throw error;
   }
-}
-
-function requireChannelSecretCustody(host: ChannelSetupHost): NonNullable<ChannelSetupHost["channelSecrets"]> {
-  if (!host.channelSecrets) {
-    throw new ValidationError({ message: "Secure channel credential storage is unavailable." });
-  }
-  return host.channelSecrets;
 }
 
 function mapDiagnosticCheckToChannelIssues(check: ConnectorDiagnosticReport["checks"][number]): ChannelSetupIssue[] {

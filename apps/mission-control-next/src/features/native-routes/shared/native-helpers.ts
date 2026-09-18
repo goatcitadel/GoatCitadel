@@ -78,6 +78,8 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
   // it so no in-flight response calls setState after teardown. This prevents
   // last-writer-wins races on workspace switch and setState-after-unmount.
   const requestIdRef = useRef(0);
+  const activeRef = useRef(false);
+  const dataRef = useRef(state.data); dataRef.current = state.data;
 
   const reload = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
@@ -111,15 +113,24 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
   }, deps);
 
   useEffect(() => {
+    activeRef.current = true;
     void reload();
     return () => {
       // Supersede any in-flight reload so its resolution is ignored once this
       // effect (and typically the component) tears down.
       requestIdRef.current += 1;
+      activeRef.current = false;
     };
   }, [reload]);
 
-  return { ...state, reload };
+  /** Accept an owner's acknowledgement without a second read replacing it. */
+  const updateData = useCallback((update: (current: T) => T) => {
+    if (!activeRef.current || dataRef.current === null) return;
+    requestIdRef.current += 1;
+    setState((current) => current.data === null ? current : { loading: false, error: null, data: update(current.data) });
+  }, []);
+
+  return { ...state, reload, updateData };
 }
 
 export function dedupeAgentProfiles<T extends { agentId: string; roleId?: string; name?: string }>(items: T[]): T[] {

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <cwchar>
 #include <string_view>
 
@@ -247,15 +248,29 @@ bool ValidateWorkerToken(const TokenIdentity& token) noexcept {
   return service_groups == 1 && SameLuid(privilege.Luid, token.change_notify) &&
     (privilege.Attributes & SE_PRIVILEGE_ENABLED) && !(privilege.Attributes & ~allowed);
 }
-bool ValidateServiceConfiguration(const ServiceConfiguration& config, const std::wstring& quoted_image) noexcept {
-  return quoted_image.size() > 2 && quoted_image.front() == L'"' && quoted_image.back() == L'"' &&
+bool ValidateServiceConfiguration(const ServiceConfiguration& config, const std::wstring& quoted_image, DWORD expected_state) noexcept {
+  return (expected_state == SERVICE_START_PENDING || expected_state == SERVICE_RUNNING) &&
+    quoted_image.size() > 2 && quoted_image.front() == L'"' && quoted_image.back() == L'"' &&
     SameWindowsName(config.binary, quoted_image) && SameWindowsName(config.account, kWorkerAccount) &&
     config.type == SERVICE_WIN32_OWN_PROCESS && config.start == SERVICE_DEMAND_START &&
     config.error_control == SERVICE_ERROR_NORMAL && config.sid_type == SERVICE_SID_TYPE_UNRESTRICTED &&
-    config.status_type == SERVICE_WIN32_OWN_PROCESS && config.status_state == SERVICE_START_PENDING && !config.status_flags &&
+    config.status_type == SERVICE_WIN32_OWN_PROCESS && config.status_state == expected_state && !config.status_flags &&
     config.no_load_group && config.no_dependencies && config.no_triggers && config.no_failure_actions &&
     config.no_non_crash_actions && config.no_delayed_start &&
     config.required_privileges.size() == 1 && config.required_privileges.front() == SE_CHANGE_NOTIFY_NAME;
+}
+bool VerifyWorkerHostRunMarker(HANDLE marker, HANDLE process) noexcept {
+  BY_HANDLE_FILE_INFORMATION info{}; FILETIME created{}, exited{}, kernel{}, user{};
+  std::array<std::uint8_t, 32> bytes{}, expected{}; LARGE_INTEGER start{}; DWORD count = 0;
+  const DWORD pid = GetProcessId(process);
+  if (!pid || WaitForSingleObject(process, 0) != WAIT_TIMEOUT || !GetProcessTimes(process, &created, &exited, &kernel, &user) ||
+      !GetFileInformationByHandle(marker, &info) || GetFileType(marker) != FILE_TYPE_DISK ||
+      (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || info.nNumberOfLinks != 1 ||
+      info.nFileSizeHigh || info.nFileSizeLow != bytes.size() || !SetFilePointerEx(marker, start, nullptr, FILE_BEGIN) ||
+      !ReadFile(marker, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) || count != bytes.size()) return false;
+  std::memcpy(expected.data(), "GCHOST01", 8); std::memcpy(expected.data() + 8, &pid, sizeof(pid));
+  std::memcpy(expected.data() + 16, &created, sizeof(created));
+  return bytes == expected && WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
 }
 bool ValidateServiceObject(const ServiceObjectSecurity& security) noexcept {
   if (security.owner != kSystemSid || security.owner_defaulted || !security.dacl_present || security.dacl_defaulted ||
@@ -361,5 +376,36 @@ DWORD VerifyWorkerServiceIdentity(DWORD argument_count, wchar_t** arguments) noe
       return ERROR_ACCESS_DENIED;
     return ERROR_SUCCESS;
   } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+namespace {
+bool EmptyGate(HANDLE file, BY_HANDLE_FILE_INFORMATION* identity) noexcept {
+  return file && file != INVALID_HANDLE_VALUE && GetFileType(file) == FILE_TYPE_DISK &&
+    GetFileInformationByHandle(file, identity) &&
+    !(identity->dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
+    identity->nNumberOfLinks == 1 && !identity->nFileSizeHigh && !identity->nFileSizeLow;
+}
+}
+DWORD WorkerStateGateLock::Acquire(HANDLE file, bool exclusive) noexcept {
+  if (file_) return ERROR_INVALID_STATE;
+  BY_HANDLE_FILE_INFORMATION identity{};
+  if (!EmptyGate(file, &identity)) return ERROR_INVALID_DATA;
+  range_ = {};
+  if (!LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY | (exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0), 0, 1, 0, &range_)) return GetLastError();
+  file_ = file; identity_ = identity;
+  const auto error = Check();
+  if (error) Release();
+  return error;
+}
+DWORD WorkerStateGateLock::Check() const noexcept {
+  BY_HANDLE_FILE_INFORMATION current{};
+  if (!EmptyGate(file_, &current) || current.dwVolumeSerialNumber != identity_.dwVolumeSerialNumber ||
+      current.nFileIndexHigh != identity_.nFileIndexHigh || current.nFileIndexLow != identity_.nFileIndexLow) return ERROR_INVALID_STATE;
+  return ERROR_SUCCESS;
+}
+DWORD WorkerStateGateLock::Release() noexcept {
+  if (!file_) return ERROR_INVALID_STATE;
+  if (!UnlockFileEx(file_, 0, 1, 0, &range_)) return GetLastError();
+  file_ = nullptr; identity_ = {}; range_ = {};
+  return ERROR_SUCCESS;
 }
 }  // namespace goatcitadel::worker_host

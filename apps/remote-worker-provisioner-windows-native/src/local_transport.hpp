@@ -98,7 +98,14 @@ std::uint64_t ProtectedCallerCallableOpcodes(ProtectedCallerRole role) noexcept;
 bool IsProtectedCallerOperationAllowed(ProtectedCallerRole role, std::uint8_t opcode) noexcept;
 
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
+bool TokenHasNoRestrictedSidsForTest(HANDLE token) noexcept;
 bool CaptureProtectedCallerForTest(HANDLE token, TokenProjection* output) noexcept;
+bool QueryProcessImagePathForTest(HANDLE process,
+    std::array<wchar_t, 512U>* output) noexcept;
+bool QueryLiveProcessCreationTimeForTest(HANDLE process,
+    std::uint64_t* creation_file_time) noexcept;
+bool CaptureCurrentClientProcessForTest(const wchar_t* expected_path,
+    std::uint64_t* creation_file_time, TokenProjection* token) noexcept;
 bool BuildProtectedPipeSecurityForTest(SECURITY_ATTRIBUTES* attributes,
     SECURITY_DESCRIPTOR* descriptor, std::array<std::uint8_t, 512U>* acl_storage) noexcept;
 HANDLE OpenProtectedClientPipeForTest(const wchar_t* name, std::uint32_t wait_ms) noexcept;

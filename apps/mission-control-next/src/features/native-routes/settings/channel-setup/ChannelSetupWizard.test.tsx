@@ -8,6 +8,7 @@ import type { ChannelSetupDefinition, ChannelSetupDraft } from "@goatcitadel/con
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelSetupWizard, type ChannelSetupWizardFeedback } from "./ChannelSetupWizard";
 import { ChannelsSection } from "../sections/ChannelsSection";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 
 const channelApiMocks = vi.hoisted(() => ({
   createChannelSetupDraft: vi.fn(),
@@ -17,6 +18,9 @@ const channelApiMocks = vi.hoisted(() => ({
   discoverTelegramTargets: vi.fn(),
   fetchChannelSetupDefinitions: vi.fn(),
   fetchChannelSetupDrafts: vi.fn(),
+  fetchChannelSetupDraft: vi.fn(),
+  fetchIntegrationConnection: vi.fn(),
+  reviewChannelSetupConnection: vi.fn(),
   fetchIntegrationConnections: vi.fn(),
   fetchSlackOAuthStatus: vi.fn(),
   startSlackOAuth: vi.fn(),
@@ -355,6 +359,8 @@ let currentApiDraft: ChannelSetupDraft = discordDraft;
 
 function configureChannelApiMocks(): void {
   currentApiDraft = discordDraft;
+  channelApiMocks.isApiRequestError.mockReturnValue(false);
+  channelApiMocks.fetchChannelSetupDraft.mockImplementation(async () => currentApiDraft);
   channelApiMocks.fetchChannelSetupDefinitions.mockImplementation(async () => ({ items: [discordDefinition] }));
   channelApiMocks.fetchChannelSetupDrafts.mockImplementation(async () => ({ items: [currentApiDraft] }));
   channelApiMocks.fetchIntegrationConnections.mockImplementation(async () => ({ items: [] }));
@@ -738,6 +744,69 @@ describe("ChannelSetupWizard", () => {
 });
 
 describe("ChannelsSection Discord setup lifecycle", () => {
+  it("preserves unsaved input through a failed connection refresh and explicitly reviews before retrying", async () => {
+    currentApiDraft = { ...discordDraft, connectionId: "connection-fixture", connectionRevision: "a".repeat(64) };
+    const connection = { connectionId: "connection-fixture", revision: "a".repeat(64), catalogId: "channel.discord", kind: "channel", key: "discord", label: "Saved connection", enabled: true, status: "connected", config: { botToken: "[REDACTED]" }, createdAt: discordDraft.createdAt, updatedAt: discordDraft.updatedAt };
+    channelApiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [connection] });
+    channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(new Error("Read unavailable")).mockResolvedValue({ ...connection, revision: "b".repeat(64), label: "Peer connection", enabled: false });
+    channelApiMocks.isApiRequestError.mockReturnValue(true);
+    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Changed", { kind: "http", method: "PATCH", path: "/fixture", status: 409 }));
+    channelApiMocks.reviewChannelSetupConnection.mockImplementation(async (_id, input) => {
+      currentApiDraft = { ...currentApiDraft, revision: 2, connectionRevision: input.expectedConnectionRevision };
+      return currentApiDraft;
+    });
+    const renderer = await renderChannelsSection();
+    await click(findButton(renderer.root, "Advanced JSON"));
+    await changeValue(renderer.root.findByType("textarea"), JSON.stringify({ ...discordDraft.draft, defaultChannelId: "retained-channel" }));
+    await click(findButton(renderer.root, "Save draft"));
+    expect(textOf(renderer.root)).toContain("Current settings could not be loaded");
+    expect(renderer.root.findByType("textarea").props.value).toContain("retained-channel");
+    expect(findButton(renderer.root, "Run live test").props.disabled).toBe(true);
+    await click(findButton(renderer.root, "Reload connection review"));
+    expect(textOf(renderer.root)).toContain("Peer connection");
+    expect(channelApiMocks.reviewChannelSetupConnection).not.toHaveBeenCalled();
+    await click(findButton(renderer.root, "Use current connection review"));
+    expect(channelApiMocks.reviewChannelSetupConnection).toHaveBeenCalledExactlyOnceWith(discordDraft.draftId, { expectedRevision: 1, expectedConnectionRevision: "b".repeat(64) });
+    expect(renderer.root.findByType("textarea").props.value).toContain("retained-channel");
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();
+    await click(findButton(renderer.root, "Save draft"));
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenLastCalledWith(discordDraft.draftId, expect.objectContaining({ expectedRevision: 2, draft: expect.objectContaining({ defaultChannelId: "retained-channel" }) }));
+    renderer.unmount();
+  });
+
+  it("blocks a deleted connection while retaining the channel draft", async () => {
+    currentApiDraft = { ...discordDraft, connectionId: "deleted-connection", connectionRevision: "a".repeat(64) };
+    channelApiMocks.isApiRequestError.mockReturnValue(true);
+    channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(new ApiRequestError("Deleted", { kind: "http", method: "GET", path: "/fixture", status: 404 }));
+    const renderer = await renderChannelsSection();
+    await click(findButton(renderer.root, "Advanced JSON"));
+    expect(textOf(renderer.root)).toContain("This connection was deleted. Your draft is retained.");
+    expect(renderer.root.findByType("textarea").props.value).toContain(discordDraft.draft.defaultChannelId);
+    expect(findButton(renderer.root, "Run live test").props.disabled).toBe(true);
+    expect(channelApiMocks.updateChannelSetupDraft).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
+  it("ignores a late accepted review after switching workspace and back", async () => {
+    currentApiDraft = { ...discordDraft, connectionId: "connection-fixture", connectionRevision: "a".repeat(64) };
+    const connection = { connectionId: "connection-fixture", revision: "b".repeat(64), catalogId: "channel.discord", kind: "channel", key: "discord", label: "Current connection", enabled: true, status: "connected", config: {}, createdAt: discordDraft.createdAt, updatedAt: discordDraft.updatedAt };
+    channelApiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [connection] });
+    channelApiMocks.fetchIntegrationConnection.mockResolvedValue(connection);
+    let resolve!: (draft: ChannelSetupDraft) => void;
+    channelApiMocks.reviewChannelSetupConnection.mockReturnValueOnce(new Promise<ChannelSetupDraft>(yes => { resolve = yes; }));
+    const renderer = await renderChannelsSection();
+    await click(findButton(renderer.root, "Use current connection review"));
+    const props = renderer.root.findByType(ChannelsSection).props as ComponentProps<typeof ChannelsSection>;
+    await act(async () => { renderer.update(<ChannelsSection {...props} activeWorkspaceId="other" />); });
+    await act(async () => { renderer.update(<ChannelsSection {...props} />); });
+    await act(async () => { resolve({ ...currentApiDraft, label: "Late response", revision: 2, connectionRevision: connection.revision }); });
+    await click(findDraftButton(renderer.root, "Discord sandbox"));
+    expect(textOf(renderer.root)).not.toContain("Late response");
+    expect(renderer.root.findByType(ChannelSetupWizard).props.busyAction).toBe(null);
+    expect(channelApiMocks.updateChannelSetupDraft).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
   it("retains incomplete advanced JSON through close and reopen and failed saves", async () => {
     const renderer = await renderChannelsSection();
     await click(findButton(renderer.root, "Advanced JSON"));

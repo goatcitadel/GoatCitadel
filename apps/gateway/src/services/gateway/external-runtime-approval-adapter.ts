@@ -12,6 +12,7 @@ import type {
 import { ToolExecutionPreconditionError, type McpToolPolicyBinding, type MeshToolPolicyBinding } from "@goatcitadel/policy-engine";
 import { isNativeMcpToolName, type NativeMcpChatToolBinding } from "./native-mcp-chat-binding.js";
 import { isMeshChatToolName, type MeshChatToolBinding } from "./mesh-chat-binding.js";
+import { resolveApprovedExternalRuntimeTarget } from "./approved-external-runtime-target.js";
 import {
   executeApprovedExternalRuntimeSideEffect,
   type ApprovedExternalRuntimeSideEffectInput,
@@ -83,16 +84,8 @@ export async function executeApprovedExternalRuntimePendingAction(
         return result ?? staleApprovedActionResult(false);
       }
 
-      const native = isNativeMcpToolName(storedRequest.toolName);
-      const mesh = isMeshChatToolName(storedRequest.toolName);
-      const meshBinding = mesh ? await port.resolveMeshChatToolBinding?.(storedRequest) : undefined;
-      if (mesh && (!meshBinding || !port.invokeApprovedMeshRuntime)) {
-        throw new ToolExecutionPreconditionError("Approved mesh invocation has no frozen target or runtime owner");
-      }
-      const nativeBinding = native ? await port.resolveNativeMcpChatToolBinding?.(storedRequest) : undefined;
-      if (native && !nativeBinding) {
-        throw new ToolExecutionPreconditionError("Approved native MCP invocation has no frozen target binding");
-      }
+      const target = await resolveApprovedExternalRuntimeTarget(port, storedRequest);
+      const { nativeBinding, meshBinding } = target;
       const policyResult = await port.executeApprovedAction(approvalId, signal, {
         deferResolution: true,
         externalRuntimeReplay: true,
@@ -105,16 +98,12 @@ export async function executeApprovedExternalRuntimePendingAction(
 
       const request = withExternalRuntimePolicyContext(storedRequest, policyResult);
       if (meshBinding) {
-        return port.invokeApprovedMeshRuntime!(request, policyResult, approvalId, markExternalCallStarted);
+        return target.invokeMesh(request, policyResult, approvalId, markExternalCallStarted);
       }
       if (request.toolName === "mcp.invoke" || nativeBinding) {
         // Re-read the durable profile after approval policy work; do not permit
         // a stale or missing mapping to reach the transport owner.
-        const currentBinding = native ? await port.resolveNativeMcpChatToolBinding?.(storedRequest) : undefined;
-        if (native && (!currentBinding || currentBinding.serverId !== nativeBinding?.serverId ||
-          currentBinding.nativeToolName !== nativeBinding.nativeToolName)) {
-          throw new ToolExecutionPreconditionError("Approved native MCP target binding drifted");
-        }
+        const currentBinding = await target.revalidateNative();
         const mcpResult = await port.invokeApprovedMcpRuntime(
           await port.enrichMcpInvokePolicyContext(toMcpInvokeRequest(request, signal, currentBinding)),
           markExternalCallStarted,

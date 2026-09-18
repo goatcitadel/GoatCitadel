@@ -56,6 +56,34 @@ export class ApprovalWaitRunRepository {
     return this.get(approvalId)?.runId;
   }
 
+  /** Canonical native review discovery, independent of the executable-request
+   * cache. Resolved decisions remain discoverable until their wait is settled. */
+  public findUnresolvedNativeForAssignment(input: {
+    registryWorkspaceId: string; assignmentId: string; assignmentGeneration: number;
+    workspaceId: string; taskId: string; durableRunId: string; sessionId: string; turnId: string;
+  }): ApprovalWaitRunRecord | undefined {
+    const textKeys = ["registryWorkspaceId", "assignmentId", "workspaceId", "taskId", "durableRunId", "sessionId", "turnId"] as const;
+    if (textKeys.some(key => typeof input[key] !== "string" || !input[key].trim() || input[key].length > 200) ||
+        !Number.isSafeInteger(input.assignmentGeneration) || input.assignmentGeneration < 1) {
+      throw new Error("Native review lookup requires an exact assignment and parent scope.");
+    }
+    const field = (column: string, keys: string[]) => this.db.dialect === "postgres"
+      ? `${column}::jsonb #>> '{${keys.join(",")}}'`
+      : `CAST(json_extract(${column}, '$.${keys.join(".")}') AS TEXT)`;
+    const links = ["workspaceId", "taskId", "durableRunId", "sessionId", "turnId"];
+    const binding = ["registryWorkspaceId", "assignmentId", "assignmentGeneration"];
+    const rows = this.db.prepare(`SELECT w.* FROM approval_wait_runs w
+      JOIN approvals a ON a.approval_id = w.approval_id
+      WHERE w.resolved_at IS NULL AND a.kind = 'remote_worker.native_runtime'
+        AND ${field("a.linkage_json", ["actionType"])} = 'remote_worker.native_runtime'
+        AND ${links.map(key => `${field("a.linkage_json", [key])} = @${key}`).join(" AND ")}
+        AND ${binding.map(key => `${field("a.payload_json", ["nativeRuntime", key])} = @${key}`).join(" AND ")}
+      ORDER BY w.created_at, w.approval_id LIMIT 2`).all({ ...input,
+      assignmentGeneration: String(input.assignmentGeneration) }) as ApprovalWaitRunRow[];
+    if (rows.length > 1) throw new Error("Multiple unresolved native reviews require reconciliation.");
+    return rows[0] ? mapRow(rows[0]) : undefined;
+  }
+
   /** Reserves the first durable run id without allowing a racing writer to replace it. */
   public createOrGet(input: { approvalId: string; runId: string; createdAt?: string }): ApprovalWaitRunRecord {
     this.createOrGetStmt.run(input.approvalId, input.runId, input.createdAt ?? new Date().toISOString());

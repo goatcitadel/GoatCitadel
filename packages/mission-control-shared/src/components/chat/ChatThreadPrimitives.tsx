@@ -1279,13 +1279,17 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
               </>
             ) : null}
           </p>
+          {turn.trace.status === "cancelled" ? (
+            <p className="mc-next-thread-meta"><strong>Stopped</strong> · Partial output is kept; actions already started may still finish.</p>
+          ) : null}
           <ChatThinkingSection thinking={turn.thinking} turnStatus={turn.trace.status} />
           {showLiveActivity && !hideLiveActivity ? (
             <ChatLiveActivityRail
               turn={turn}
               hasVisibleAssistantText={hasAssistantOutput}
+              hidePhase={hidePendingIndicator}
               onOpenRunDetails={onOpenRunDetails}
-              onStopStreamingTurn={isStreamingTurn ? onStopStreamingTurn : undefined}
+              onStopStreamingTurn={isStreamingTurn && !hidePendingIndicator ? onStopStreamingTurn : undefined}
             />
           ) : null}
           {hasAssistantOutput ? (

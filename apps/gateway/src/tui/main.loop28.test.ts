@@ -299,6 +299,10 @@ vi.mock("./api-client.js", () => ({
       return this.forward("updateIntegrationConnection", ...args);
     }
 
+    public getIntegrationConnection(...args: unknown[]) {
+      return this.forward("getIntegrationConnection", ...args);
+    }
+
     public deleteIntegrationConnection(...args: unknown[]) {
       return this.forward("deleteIntegrationConnection", ...args);
     }
@@ -1086,6 +1090,7 @@ describe("tui main loop28 entry coverage", () => {
       priority: "urgent",
     });
     expect(state.client.updateIntegrationConnection).toHaveBeenCalledWith("connection-1", {
+      expectedRevision: "a".repeat(64),
       status: "paused",
       enabled: true,
     });
@@ -1347,7 +1352,7 @@ describe("tui main loop28 entry coverage", () => {
     expect(state.client.getImprovementReport).toHaveBeenCalledWith("report-1");
     expect(state.client.getImprovementReplayRun).toHaveBeenCalledWith("run-1");
     expect(state.client.getReplayDiff).toHaveBeenCalledWith("run-1");
-    expect(state.client.deleteIntegrationConnection).toHaveBeenCalledWith("connection-1");
+    expect(state.client.deleteIntegrationConnection).toHaveBeenCalledWith("connection-1", "a".repeat(64));
     expect(state.client.meshReleaseLease).toHaveBeenCalledWith({
       leaseKey: "lease-1",
       holderNodeId: "node-1",
@@ -1872,6 +1877,7 @@ function createMockTuiClient() {
       connectionId: "connection-created",
       ...connection,
     })),
+    getIntegrationConnection: vi.fn(async () => ({ connectionId: "connection-1", revision: "a".repeat(64), label: "Discord Ops", status: "connected", enabled: true, config: {}, updatedAt: "2026-09-13T00:00:00.000Z" })),
     updateIntegrationConnection: vi.fn(async () => ({ connectionId: "connection-1", status: "paused" })),
     deleteIntegrationConnection: vi.fn(async (connectionId: string) => ({ connectionId, deleted: true })),
     meshStatus: vi.fn(async () => ({ nodeId: "node-1", role: "leader", healthy: true })),

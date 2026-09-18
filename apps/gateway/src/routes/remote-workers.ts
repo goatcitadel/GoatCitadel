@@ -10,6 +10,7 @@ import {
   REMOTE_WORKER_MESH_NODE_JOIN_AUTHORITY_MAX_TTL_SECONDS,
   REMOTE_WORKER_REGISTRY_MAX_CURSOR_BYTES,
   REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+  normalizeRemoteWorkerRuntimeBundleManifest,
 } from "@goatcitadel/contracts";
 import { markMutationCommitted } from "../plugins/idempotency.js";
 import {
@@ -34,6 +35,23 @@ const identifierSchema = z
 const paramsSchema = z.object({ workspaceId: identifierSchema }).strict();
 const detailParamsSchema = paramsSchema.extend({ workerId: identifierSchema }).strict();
 const assignmentParamsSchema = paramsSchema.extend({ assignmentId: identifierSchema }).strict();
+const nativeOutputParamsSchema = assignmentParamsSchema.extend({ nonce: z.string().regex(/^[0-9a-f]{64}$/u).refine(value => !/^0+$/u.test(value)) }).strict();
+const nativeOutputQuerySchema = z.object({ assignmentGeneration: z.string().regex(/^[1-9]\d{0,9}$/u).transform(Number)
+  .refine(value => Number.isSafeInteger(value) && value <= 2147483647) }).strict();
+const nativeFileQuerySchema = nativeOutputQuerySchema.extend({ fileIndex: z.string().regex(/^(?:0|[1-9]\d?)$/u).transform(Number)
+  .refine(value => value <= 63).optional() }).strict();
+const nativeReviewBodySchema = z.object({ assignmentGeneration: z.number().int().min(1).max(2147483647),
+  launch: z.unknown(), inventoryLimits: z.unknown(), fileStaging: z.unknown().optional(), discloseFilesToGateway: z.boolean().optional() }).strict();
+const nativeInstallationReviewBodySchema = z.object({ assignmentGeneration: z.number().int().min(1).max(2147483647),
+  controllerEnrollment: z.object({ publicPointHex: z.string().regex(/^04[0-9a-f]{128}$/u),
+    keySha256: z.string().regex(/^[0-9a-f]{64}$/u) }).strict().optional(),
+  packageSha256: z.string().regex(/^[0-9a-f]{64}$/u).refine(value => !/^0+$/u.test(value)),
+  runtimeBundle: z.unknown().transform((value, context) => {
+    try { return normalizeRemoteWorkerRuntimeBundleManifest(value); }
+    catch { context.addIssue({ code: "custom", message: "Invalid runtime bundle manifest." }); return z.NEVER; }
+  }) }).strict();
+const nativeInstallationRetentionParamsSchema = assignmentParamsSchema.extend({ approvalId: identifierSchema.refine(value => value.length <= 200) }).strict();
+const nativeInstallationRetentionBodySchema = z.object({ assignmentGeneration: z.number().int().min(1).max(2147483647) }).strict();
 const generationParamsSchema = detailParamsSchema
   .extend({
     workerGeneration: z
@@ -480,6 +498,104 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
       if (!service) return reply.code(503).send({ error: "Remote worker runtime reads are unavailable." });
       try {
         return reply.send(await service.getAssignmentRuntime(params.data));
+      } catch (error) {
+        if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
+        if (error instanceof RemoteWorkerRuntimeReadUnavailableError) return reply.code(503).send({ error: error.message });
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-runtime-reviews",
+    { ...operatorMutation, bodyLimit: 512 * 1024 },
+    async (request, reply) => {
+      const params = assignmentParamsSchema.safeParse(request.params), body = nativeReviewBodySchema.safeParse(request.body), query = emptyQuerySchema.safeParse(request.query);
+      if (!params.success || !body.success || !query.success || body.data.launch === undefined || body.data.inventoryLimits === undefined) return invalidRequest(reply);
+      const native = resolveService(fastify.services)?.nativeRuntime;
+      if (!native) return reply.code(503).send({ error: "Native runtime review is unavailable." });
+      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); }; reply.raw.once("close", disconnected);
+      try {
+        const result = await native.requestReview({ registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId, ...body.data,
+          launch: body.data.launch, inventoryLimits: body.data.inventoryLimits }, AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]));
+        await markMutationCommitted(request); return reply.code(201).send(result);
+      } catch (error) { return sendRouteError(reply, error, request.log); }
+      finally { reply.raw.off("close", disconnected); }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-installation-reviews",
+    { ...operatorMutation, bodyLimit: 512 * 1024 },
+    async (request, reply) => {
+      const params = assignmentParamsSchema.safeParse(request.params), body = nativeInstallationReviewBodySchema.safeParse(request.body), query = emptyQuerySchema.safeParse(request.query);
+      if (!params.success || !body.success || !query.success || body.data.runtimeBundle === undefined) return invalidRequest(reply);
+      const native = resolveService(fastify.services)?.nativeRuntime;
+      if (!native?.requestInstallationReview) return reply.code(503).send({ error: "Native installation review is unavailable." });
+      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); }; reply.raw.once("close", disconnected);
+      try {
+        const result = await native.requestInstallationReview({ registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId,
+          ...body.data, runtimeBundle: body.data.runtimeBundle }, AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]));
+        await markMutationCommitted(request); return reply.code(201).send(result);
+      } catch (error) { return sendRouteError(reply, error, request.log); }
+      finally { reply.raw.off("close", disconnected); }
+    },
+  );
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-installation-reviews/:approvalId/retention",
+    { ...operatorMutation, bodyLimit: 4096 },
+    async (request, reply) => {
+      const params = nativeInstallationRetentionParamsSchema.safeParse(request.params), body = nativeInstallationRetentionBodySchema.safeParse(request.body), query = emptyQuerySchema.safeParse(request.query);
+      if (!params.success || !body.success || !query.success) return invalidRequest(reply);
+      const native = resolveService(fastify.services)?.nativeRuntime;
+      if (!native?.retainInstallationReview) return reply.code(503).send({ error: "Native installation retention is unavailable." });
+      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); }; reply.raw.once("close", disconnected);
+      try {
+        const result = await native.retainInstallationReview({ registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId,
+          approvalId: params.data.approvalId, assignmentGeneration: body.data.assignmentGeneration }, AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]));
+        await markMutationCommitted(request); return reply.code(200).send(result);
+      } catch (error) { return sendRouteError(reply, error, request.log); }
+      finally { reply.raw.off("close", disconnected); }
+    },
+  );
+
+  fastify.get(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-file-artifacts/:nonce",
+    operatorRead,
+    async (request, reply) => {
+      const params = nativeOutputParamsSchema.safeParse(request.params), query = nativeFileQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) return invalidRequest(reply);
+      const files = resolveService(fastify.services)?.nativeFiles;
+      if (!files) return reply.code(503).send({ error: "Native file artifacts are unavailable." });
+      const scope = { registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId,
+        assignmentGeneration: query.data.assignmentGeneration, nonce: params.data.nonce };
+      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); };
+      reply.raw.once("close", disconnected);
+      const signal = AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]);
+      try {
+        reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff");
+        if (query.data.fileIndex === undefined) return reply.send(await files.list(scope, signal));
+        const artifact = await files.download({ ...scope, fileIndex: query.data.fileIndex }, signal);
+        return reply.header("Content-Disposition", `attachment; filename="${artifact.fileName}"`)
+          .header("X-Content-SHA256", artifact.sha256).type(artifact.contentType).send(artifact.content);
+      } catch (error) { return sendRouteError(reply, error, request.log); }
+      finally { reply.raw.off("close", disconnected); }
+    },
+  );
+
+  fastify.get(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-output-artifacts/:nonce",
+    operatorRead,
+    async (request, reply) => {
+      const params = nativeOutputParamsSchema.safeParse(request.params), query = nativeOutputQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return reply.code(503).send({ error: "Remote worker runtime reads are unavailable." });
+      try {
+        const artifact = await service.getNativeOutputArtifact({ ...params.data, ...query.data });
+        return reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff")
+          .header("Content-Disposition", `attachment; filename="${artifact.fileName}"`)
+          .header("X-Content-SHA256", artifact.sha256).type(artifact.contentType).send(artifact.content);
       } catch (error) {
         if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
         if (error instanceof RemoteWorkerRuntimeReadUnavailableError) return reply.code(503).send({ error: error.message });

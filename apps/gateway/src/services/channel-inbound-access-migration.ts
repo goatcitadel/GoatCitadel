@@ -67,6 +67,7 @@ export async function stampLegacyOpenChannelInboundAccess(
     }
     try {
       await deps.storage.integrationConnections.update(connection.connectionId, {
+        expectedRevision: connection.revision,
         config: {
           ...connection.config,
           inboundAccessMode: "open_legacy",

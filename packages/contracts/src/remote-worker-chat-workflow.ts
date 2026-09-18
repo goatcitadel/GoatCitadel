@@ -19,12 +19,20 @@ export interface RemoteWorkerChatWorkflowScope {
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
   readonly assignmentGeneration: number;
+  readonly continuationSha256?: string;
 }
 
 export function remoteWorkerChatInferenceIdentity(scope: RemoteWorkerChatWorkflowScope, stepIndex: number) {
   if (!Number.isSafeInteger(stepIndex) || stepIndex < 0 || stepIndex >= REMOTE_WORKER_CHAT_MAX_INFERENCE_STEPS)
     throw new TypeError("Worker Chat model step exceeds its bound.");
   const suffix = stepIndex === 0 ? "" : `:step:${stepIndex}`;
+  if (scope.continuationSha256 !== undefined) {
+    if (!/^[0-9a-f]{64}$/u.test(scope.continuationSha256) || /^0+$/u.test(scope.continuationSha256))
+      throw new TypeError("Worker Chat continuation identity is invalid.");
+    const key = sha256Hex(canonicalJsonString({ registryWorkspaceId: scope.registryWorkspaceId, assignmentId: scope.assignmentId,
+      assignmentGeneration: scope.assignmentGeneration, continuationSha256: scope.continuationSha256 }));
+    return { inferenceRequestId: `worker-native-${key}${suffix}`, attempt: 1, idempotencyKey: `inference-native:${key}${suffix}` } as const;
+  }
   return {
     inferenceRequestId: `worker-${scope.assignmentId}${suffix}`,
     attempt: 1,

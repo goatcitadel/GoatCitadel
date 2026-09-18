@@ -3,10 +3,9 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'worker-install-common.ps1')
 $script:WorkerEnrollmentSddl = 'O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
 
-function Get-WorkerEnrollmentStartInfo {
-  param($Paths, [byte[]]$Settings, [string]$RunId)
-  if ($Settings.Length -lt 4 -or $Settings.Length -gt 65534 -or $Settings.Length % 2 -ne 0 -or
-      $RunId -cnotmatch '^[a-zA-Z0-9-]{1,80}$') { throw 'REFUSED: invalid enrollment settings.' }
+function Get-WorkerInstalledSettings {
+  param($Paths, [byte[]]$Settings)
+  if ($Settings.Length -lt 4 -or $Settings.Length -gt 65534 -or $Settings.Length % 2 -ne 0) { throw 'REFUSED: invalid enrollment settings.' }
   $entries = ([Text.UnicodeEncoding]::new($false,$false,$true)).GetString($Settings).Split([char]0)
   if ($entries.Count -ne 14 -or $entries[12] -cne '' -or $entries[13] -cne '') { throw 'REFUSED: invalid installed environment.' }
   $values = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
@@ -19,7 +18,30 @@ function Get-WorkerEnrollmentStartInfo {
   $port = 0
   if (-not [int]::TryParse($values[$prefix+'PORT'],[ref]$port)) { throw 'REFUSED: invalid installed port.' }
   $expected = Get-WorkerSettingsBytes $Paths $values[$prefix+'HOST'] $port $values[$prefix+'RUN_ID']
-  if ((Get-WorkerBytesHash $expected) -cne (Get-WorkerBytesHash $Settings)) { throw 'REFUSED: installed environment differs from the fixed service contract.' }
+  if ((Get-WorkerBytesHash $expected) -cne (Get-WorkerBytesHash $Settings)) {
+    $expected = Get-WorkerSettingsBytes $Paths $values[$prefix+'HOST'] $port $values[$prefix+'RUN_ID'] -CapacityLayout
+    if ((Get-WorkerBytesHash $expected) -cne (Get-WorkerBytesHash $Settings)) { throw 'REFUSED: installed environment differs from the fixed service contract.' }
+  }
+  return ,$values
+}
+function Assert-WorkerCapacityEnrollmentReceipt {
+  param([bool]$CapacityLayout, $Receipt, $CapacityRecord)
+  $hasDigest = $Receipt.PSObject.Properties.Name -contains 'capacityCustodySha256'
+  if (-not $CapacityLayout) {
+    if ($hasDigest -or $null -ne $CapacityRecord) { throw 'REFUSED: capacity receipt requires the separate state layout.' }
+    return
+  }
+  if (-not $hasDigest -or $Receipt.capacityCustodySha256 -cnotmatch '^[a-f0-9]{64}$' -or
+      $null -eq $CapacityRecord -or $CapacityRecord.sizeBytes -ne 320 -or
+      $CapacityRecord.sha256 -cne $Receipt.capacityCustodySha256) {
+    throw 'REFUSED: capacity custody differs from the installation receipt.'
+  }
+}
+function Get-WorkerEnrollmentStartInfo {
+  param($Paths, [byte[]]$Settings, [string]$RunId)
+  if ($RunId -cnotmatch '^[a-zA-Z0-9-]{1,80}$') { throw 'REFUSED: invalid enrollment run ID.' }
+  $values = Get-WorkerInstalledSettings $Paths $Settings
+  $prefix = 'GOATCITADEL_CONNECTED_WORKER_'
   $values[$prefix+'STATE_DIR'] = $Paths.Enrollment
   $values[$prefix+'REPORT_FILE'] = Join-Path $Paths.Enrollment 'report.json'
   $values[$prefix+'RUN_ID'] = $RunId

@@ -3921,9 +3921,8 @@ export class MemoryLifecycleService {
   }
 
   private async ensureLearningSchema(): Promise<void> {
-    await this.deps.admin.gatewaySql
-      .prepare(
-        `
+    await this.ensureMemorySchema([
+      `
       CREATE TABLE IF NOT EXISTS memory_learnings (
         learning_id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
@@ -3940,22 +3939,14 @@ export class MemoryLifecycleService {
         updated_at TEXT NOT NULL
       )
     `,
-      )
-      .run();
-    await this.deps.admin.gatewaySql
-      .prepare(
-        "CREATE INDEX IF NOT EXISTS idx_memory_learnings_workspace_status ON memory_learnings(workspace_id, status)",
-      )
-      .run();
-    await this.deps.admin.gatewaySql
-      .prepare("CREATE INDEX IF NOT EXISTS idx_memory_learnings_key ON memory_learnings(workspace_id, learning_key)")
-      .run();
+      "CREATE INDEX IF NOT EXISTS idx_memory_learnings_workspace_status ON memory_learnings(workspace_id, status)",
+      "CREATE INDEX IF NOT EXISTS idx_memory_learnings_key ON memory_learnings(workspace_id, learning_key)",
+    ]);
   }
 
   private async ensureFeedbackSchema(): Promise<void> {
-    await this.deps.admin.gatewaySql
-      .prepare(
-        `
+    await this.ensureMemorySchema([
+      `
       CREATE TABLE IF NOT EXISTS memory_feedback (
         feedback_id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
@@ -3972,22 +3963,14 @@ export class MemoryLifecycleService {
         updated_at TEXT NOT NULL
       )
     `,
-      )
-      .run();
-    await this.deps.admin.gatewaySql
-      .prepare(
-        "CREATE INDEX IF NOT EXISTS idx_memory_feedback_workspace_status ON memory_feedback(workspace_id, status)",
-      )
-      .run();
-    await this.deps.admin.gatewaySql
-      .prepare("CREATE INDEX IF NOT EXISTS idx_memory_feedback_target ON memory_feedback(target_kind, target_ref)")
-      .run();
+      "CREATE INDEX IF NOT EXISTS idx_memory_feedback_workspace_status ON memory_feedback(workspace_id, status)",
+      "CREATE INDEX IF NOT EXISTS idx_memory_feedback_target ON memory_feedback(target_kind, target_ref)",
+    ]);
   }
 
   private async ensureTraceCandidateSchema(): Promise<void> {
-    await this.deps.admin.gatewaySql
-      .prepare(
-        `
+    await this.ensureMemorySchema([
+      `
       CREATE TABLE IF NOT EXISTS memory_trace_candidates (
         candidate_id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
@@ -4006,18 +3989,15 @@ export class MemoryLifecycleService {
         updated_at TEXT NOT NULL
       )
     `,
-      )
-      .run();
-    await this.deps.admin.gatewaySql
-      .prepare(
-        "CREATE INDEX IF NOT EXISTS idx_memory_trace_candidates_workspace_status ON memory_trace_candidates(workspace_id, status)",
-      )
-      .run();
-    await this.deps.admin.gatewaySql
-      .prepare(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_trace_candidates_dedupe_key ON memory_trace_candidates(dedupe_key)",
-      )
-      .run();
+      "CREATE INDEX IF NOT EXISTS idx_memory_trace_candidates_workspace_status ON memory_trace_candidates(workspace_id, status)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_trace_candidates_dedupe_key ON memory_trace_candidates(dedupe_key)",
+    ]);
+  }
+
+  private async ensureMemorySchema(statements: readonly string[]): Promise<void> {
+    for (const statement of statements) {
+      await this.deps.admin.gatewaySql.prepare(statement).run();
+    }
   }
 
   private async requireTraceMemoryCandidate(candidateId: string): Promise<TraceMemoryCandidateRecord> {

@@ -1557,7 +1557,7 @@ export class GovernedRemediationRepository {
       if (
         receipt.durableRunId !== state.record.durableRunId ||
         receipt.blockedCheckpointId !== state.record.blockedCheckpointId ||
-        receipt.resumedRunVersion !== state.record.expectedWaitingRunVersion + 1
+        receipt.resumedRunVersion !== state.record.expectedWaitingRunVersion + 2
       ) {
         throw conflict("resume durable-run lineage");
       }
@@ -2777,7 +2777,7 @@ function assertStateTerminalLineage(
         latest.kind !== "resume" ||
         latest.durableRunId !== next.durableRunId ||
         latest.blockedCheckpointId !== next.blockedCheckpointId ||
-        latest.resumedRunVersion !== next.expectedWaitingRunVersion + 1
+        latest.resumedRunVersion !== next.expectedWaitingRunVersion + 2
       ) {
         throw conflict("completed remediation receipt lineage");
       }

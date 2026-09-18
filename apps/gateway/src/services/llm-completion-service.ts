@@ -1,3 +1,4 @@
+import { createLlmStreamAttemptObserver } from "./llm-stream-attempt-observer.js";
 /**
  * LLM completion service.
  *
@@ -42,8 +43,6 @@ import {
   parseLlmRequestHookPatch,
 } from "./hook-patch-helpers.js";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
-import type { LlmService } from "./llm-service.js";
-import type { LlmDispatchGuard } from "./llm-dispatch-guard.js";
 import {
   composeChatCompletionMemoryContext,
   shouldUseChatCompletionMemoryContext,
@@ -57,35 +56,6 @@ import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatc
 import { StreamIdleTimeoutError, resolveStreamIdleTimeoutMs, withStreamIdleWatchdog } from "./stream-idle-watchdog.js";
 
 export type { LlmCompletionHost } from "./llm-completion-host.js";
-
-export interface GovernedLlmCompletionHost extends LlmCompletionHost {
-  readonly llmService: LlmCompletionHost["llmService"] &
-    Pick<LlmService, "runWithDispatchGuard" | "streamWithDispatchGuard">;
-}
-
-/** Preserve the canonical memory, hook and retry pipeline under the same
- * server-owned dispatch authority, including its nested utility model calls. */
-export function createGovernedChatCompletion(
-  host: GovernedLlmCompletionHost,
-  request: ChatCompletionRequest,
-  attribution: ModelUsageAttributionContext,
-  guard: LlmDispatchGuard,
-): Promise<ChatCompletionResponse> {
-  return host.llmService.runWithDispatchGuard(guard, () => createChatCompletion(host, request, attribution));
-}
-
-/** Preparation and deferred provider iteration both execute under authority;
- * returning the generator never transfers that authority to its consumer. */
-export function createGovernedChatCompletionStream(
-  host: GovernedLlmCompletionHost,
-  request: ChatCompletionRequest,
-  attribution: ModelUsageAttributionContext,
-  guard: LlmDispatchGuard,
-): AsyncGenerator<Record<string, unknown>> {
-  return host.llmService.streamWithDispatchGuard(guard, async function* () {
-    yield* await createChatCompletionStream(host, request, attribution);
-  });
-}
 
 // Retry after normalizing provider tool-call output into GoatCitadel's expected protocol shape.
 const TOOL_PROTOCOL_RETRY_NORMALIZED = 1;
@@ -674,7 +644,7 @@ export async function* createChatCompletionStream(
     level: "debug",
     category: "chat",
     event: "chat.completion_stream.start",
-    message: "Starting chat completion stream",
+    message: "Preparing chat completion stream context and hooks",
     sessionId: memoryInput?.sessionId,
     taskId: memoryInput?.taskId,
     providerId: request.providerId,
@@ -682,11 +652,15 @@ export async function* createChatCompletionStream(
     runtimeKind: "model.call",
     runtimeStatus: "started",
     context: {
+      timingBoundary: "preparation_start",
       messageCount: request.messages.length,
       stream: true,
       idleWatchdogDisabled,
       idleTimeoutMs,
     },
+  });
+  const startProviderAttempt = createLlmStreamAttemptObserver(host, {
+    completionStartedAt, sessionId: memoryInput?.sessionId, taskId: memoryInput?.taskId,
   });
   const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput, attributionInput);
   const memoryContextInsertion = memoryContext ? insertMemoryContextMessage(request, memoryContext) : undefined;
@@ -827,6 +801,7 @@ export async function* createChatCompletionStream(
           : attemptRequest.signal
             ? AbortSignal.any([attemptRequest.signal, idleAbort.signal])
             : idleAbort.signal;
+        const recordFirstChunk = startProviderAttempt(lastAttemptTarget.providerId, lastAttemptTarget.model, false);
         const providerStream = host.llmService.chatCompletionsStream(
           {
             ...attemptRequest,
@@ -864,6 +839,7 @@ export async function* createChatCompletionStream(
         let returnedModel: string | undefined;
         for await (const chunk of attemptStream) {
           throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
+          if (!attemptStreamed) recordFirstChunk();
           attemptStreamed = true;
           streamed = true;
           returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
@@ -1051,6 +1027,7 @@ export async function* createChatCompletionStream(
             : fallbackRetryRequest.signal
               ? AbortSignal.any([fallbackRetryRequest.signal, idleAbort.signal])
               : idleAbort.signal;
+          const recordFirstChunk = startProviderAttempt(fallback.providerId, fallback.model, true);
           const fallbackProviderStream = host.llmService.chatCompletionsStream(
             {
               ...fallbackRetryRequest,
@@ -1091,6 +1068,7 @@ export async function* createChatCompletionStream(
           let returnedModel: string | undefined;
           for await (const chunk of fallbackStream) {
             throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
+            if (!attemptStreamed) recordFirstChunk();
             attemptStreamed = true;
             streamed = true;
             returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;

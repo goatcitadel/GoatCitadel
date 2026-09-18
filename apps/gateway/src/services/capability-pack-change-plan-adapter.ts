@@ -15,7 +15,11 @@ import type {
   EvolutionControlPlaneAdapterContext,
 } from "./evolution-control-plane-adapter.js";
 import { packBindingHash, resolvePackAssetBinding, type PackAssetBinding } from "./capability-pack-bindings.js";
-import { packCandidateIds, stagePackSkillCandidate } from "./capability-pack-candidate-service.js";
+import {
+  packCandidateIds,
+  stagePackSkillCandidate,
+  type PackCandidateStorage,
+} from "./capability-pack-candidate-service.js";
 import { packMcpConfiguration as mcpConfiguration } from "./capability-pack-mcp-owner.js";
 import {
   compensatePack,
@@ -24,6 +28,7 @@ import {
 } from "./capability-pack-compensation.js";
 
 interface Dependencies extends PackCompensationDependencies {
+  storage: PackCompensationDependencies["storage"] & PackCandidateStorage;
   rootDir: string;
   candidateRoot: string;
   listPacks(): CapabilityPackManifest[];

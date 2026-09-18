@@ -122,4 +122,9 @@ void CellControllerServerIdentity::Close() noexcept {
   if (manager_) CloseServiceHandle(manager_);
   service_ = manager_ = nullptr;
 }
+DWORD CellControllerServerIdentity::VerifyBoundPipe(CellPipeServerEvidence& additional) noexcept {
+  DWORD error = Verify();
+  if (!error) error = server_.VerifySameProcess(additional);
+  return error ? error : Verify();
+}
 }

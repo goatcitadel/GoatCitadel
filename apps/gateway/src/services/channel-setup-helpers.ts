@@ -9,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
 import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
+import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
 import {
   resolveReusableChannelSetupTestResult,
   type ChannelSetupRecentTestCacheEntry,
@@ -61,7 +62,7 @@ export async function buildEphemeralChannelConnection(
     throw new Error(`Unknown integration catalog id: ${draft.catalogId}`);
   }
   const nextConfig = runtime.normalize(draft);
-  const currentConfig = draft.connectionId ? (await host.getIntegrationConnection(draft.connectionId)).config : {};
+  const currentConfig = (await requireReviewedChannelConnection(host, draft))?.config ?? {};
   const preservedSecrets = Object.fromEntries(
     (secretFieldKeys ?? runtime.definition.adapter.secretFieldKeys)
       .filter((key) => nextConfig[key] === undefined && currentConfig[key] !== undefined)
@@ -69,6 +70,8 @@ export async function buildEphemeralChannelConnection(
   );
   return {
     connectionId: draft.connectionId ?? draft.draftId,
+    // Validation-only records cannot be used as a persisted connection review.
+    revision: `ephemeral:${draft.draftId}:${draft.revision}`,
     catalogId: catalog.catalogId,
     kind: catalog.kind,
     key: catalog.key,

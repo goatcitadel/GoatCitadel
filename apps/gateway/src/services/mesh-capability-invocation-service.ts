@@ -1,3 +1,6 @@
+import { MeshCapabilityInvocationServiceError } from "./mesh-capability-invocation-errors.js";
+export { MeshCapabilityInvocationServiceError, type MeshCapabilityInvocationServiceErrorCode } from "./mesh-capability-invocation-errors.js";
+import { requireMeshInvocationIntentForNode, prepareMeshInvocationInputRead, type InputVaultEntry } from "./mesh-invocation-read-authority-service.js";
 /**
  * HX-408 M3: the generation-fenced mesh capability invocation owner.
  *
@@ -78,42 +81,6 @@ const MAX_SETTLEMENT_OUTPUT_BYTES = 512 * 1_024;
 const EXPIRED_INTENT_RECONCILE_BATCH = 8;
 const GATEWAY_SETTLEMENT_AUTHORITY = "gateway" as const;
 
-export type MeshCapabilityInvocationServiceErrorCode =
-  | "mesh_capability_invocation_not_callable"
-  | "mesh_capability_invocation_input_invalid"
-  | "mesh_capability_invocation_capacity_exhausted"
-  | "mesh_capability_invocation_conflict"
-  | "mesh_capability_invocation_not_found"
-  | "mesh_capability_settlement_node_mismatch"
-  | "mesh_capability_settlement_stale_generation"
-  | "mesh_capability_settlement_conflict"
-  | "mesh_capability_settlement_invalid"
-  | "mesh_capability_progress_rejected";
-
-const ERROR_STATUS: Readonly<Record<MeshCapabilityInvocationServiceErrorCode, number>> = Object.freeze({
-  mesh_capability_invocation_not_callable: 409,
-  mesh_capability_invocation_input_invalid: 400,
-  mesh_capability_invocation_capacity_exhausted: 503,
-  mesh_capability_invocation_conflict: 409,
-  mesh_capability_invocation_not_found: 404,
-  mesh_capability_settlement_node_mismatch: 403,
-  mesh_capability_settlement_stale_generation: 409,
-  mesh_capability_settlement_conflict: 409,
-  mesh_capability_settlement_invalid: 400,
-  mesh_capability_progress_rejected: 409,
-});
-
-/** Content-free typed failure; the reason code is the entire disclosure. */
-export class MeshCapabilityInvocationServiceError extends Error {
-  public readonly statusCode: number;
-
-  public constructor(public readonly code: MeshCapabilityInvocationServiceErrorCode) {
-    super(`Mesh capability invocation request failed: ${code}.`);
-    this.name = "MeshCapabilityInvocationServiceError";
-    this.statusCode = ERROR_STATUS[code];
-  }
-}
-
 /**
  * The exact packet-mandated dispatch envelope. It binds the invocation ID and
  * idempotency key, the workspace/session/turn/run lineage, the exact
@@ -189,16 +156,6 @@ export interface MeshCapabilityInvocationServiceOptions {
   deadlineSafetyMarginMs?: number;
 }
 
-interface InputVaultEntry {
-  inputCanonicalJson: string;
-  inputSha256: string;
-  dispatchStarted: boolean;
-  /** Present only after the replication owner confirms the exact envelope. */
-  dispatchEnvelope?: Readonly<MeshCapabilityInvocationDispatchEnvelope>;
-  expiresAtMs: number;
-  outputSha256?: string;
-  output?: Record<string, unknown>;
-}
 
 /**
  * Only the exact node-facing invocation paths below carry admitted-node
@@ -949,50 +906,20 @@ export class MeshCapabilityInvocationService {
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     invocationId: string,
   ): Promise<MeshCapabilityInvocationIntentRecord> {
-    if (typeof invocationId !== "string" || invocationId.length < 1 || invocationId.length > 256) {
-      throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
-    }
-    const intent = await this.storage.meshCapabilityPublications.findInvocationIntent(
-      identity.workspaceId,
-      invocationId,
-    );
-    if (!intent) {
-      throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
-    }
-    if (intent.nodeId !== identity.nodeId) {
-      // Admission-bound identity, never body-claimed: only the dispatched
-      // node can read input, report progress, or settle this invocation.
-      throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_node_mismatch");
-    }
-    return intent;
+    return requireMeshInvocationIntentForNode(this.storage, identity, invocationId);
   }
 
   private async prepareNodeInputRead(
     identity: MeshCapabilityAuthenticatedNodeIdentity,
     invocationId: string,
   ): Promise<{ intent: MeshCapabilityInvocationIntentRecord; entry: InputVaultEntry }> {
-    const intent = await this.requireIntentForNode(identity, invocationId);
-    const entry = this.readVaultEntry(identity.workspaceId, invocationId);
-    if (!entry?.dispatchStarted || !entry.dispatchEnvelope || entry.inputSha256 !== intent.inputSha256 ||
-      canonicalJsonString(entry.dispatchEnvelope) !== canonicalJsonString(buildDispatchEnvelope(intent)))
-      throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
-    let publisher;
-    try {
-      publisher = await this.storage.meshCapabilityPublications.getPublisher(
-        identity.workspaceId, identity.nodeId, intent.publisherGeneration,
-      );
-    } catch (error) {
-      if (error instanceof NotFoundError)
-        throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_callable");
-      throw error;
-    }
-    if (publisher.admissionGeneration !== identity.admissionGeneration ||
-      publisher.mtlsRequired !== identity.mtlsRequired || publisher.tlsFingerprint !== identity.tlsFingerprint)
-      throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_callable");
-    const settled = await this.storage.meshCapabilityPublications.findInvocationSettlement(identity.workspaceId, invocationId);
-    if (settled || Date.parse(intent.deadlineAt) <= this.now().getTime())
-      throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_found");
-    return { intent, entry };
+    return prepareMeshInvocationInputRead(
+      this.storage,
+      (workspaceId, id) => this.readVaultEntry(workspaceId, id),
+      this.now,
+      identity,
+      invocationId,
+    );
   }
 
   private storeVaultInput(

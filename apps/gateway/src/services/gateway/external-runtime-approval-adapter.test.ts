@@ -280,7 +280,7 @@ describe("external runtime approval adapter", () => {
     },
   );
 
-  it.each(["allowed", "denied", "missing", "drift", "unknown"] as const)(
+  it.each(["allowed", "denied", "missing", "drift", "changed-server", "changed-tool", "unknown"] as const)(
     "retains the native MCP request through approval replay (%s)", async (scenario) => {
       const nativeToolName = "mcp.server.with.dots.tool.echo";
       const request = toolRequest({ toolName: nativeToolName, externalRuntime: true, turnId: "turn", toolRunId: "tool-run",
@@ -293,6 +293,10 @@ describe("external runtime approval adapter", () => {
         async () => scenario === "missing" ? undefined : target,
       );
       if (scenario === "drift") resolveBinding.mockResolvedValueOnce(target).mockResolvedValueOnce(undefined);
+      if (scenario === "changed-server") resolveBinding.mockResolvedValueOnce(target)
+        .mockResolvedValueOnce({ ...target, serverId: "replacement-server" });
+      if (scenario === "changed-tool") resolveBinding.mockResolvedValueOnce(target)
+        .mockResolvedValueOnce({ ...target, nativeToolName: "replacement-tool" });
       const policyResult: ToolInvokeResult = { outcome: scenario === "denied" ? "blocked" : "executed",
         policyReason: scenario === "denied" ? "current native deny" : "allowed_via_approval", auditEventId: "audit-native" };
       const executeApprovedAction = vi.fn<ApprovedExternalRuntimePendingActionPort["executeApprovedAction"]>(async () => policyResult);
@@ -305,7 +309,7 @@ describe("external runtime approval adapter", () => {
       const port = createPort(storage, { resolveNativeMcpChatToolBinding: resolveBinding,
         executeApprovedAction, invokeApprovedMcpRuntime: transport });
       const call = executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
-      if (scenario === "missing" || scenario === "drift") {
+      if (scenario === "missing" || scenario === "drift" || scenario === "changed-server" || scenario === "changed-tool") {
         await expect(call).rejects.toThrow(/frozen target binding|target binding drifted/);
         expect(transport).not.toHaveBeenCalled();
         if (scenario === "missing") expect(executeApprovedAction).not.toHaveBeenCalled();

@@ -254,6 +254,10 @@ async function probeSafeContract(input) {
     `create safe capability profile for ${input.item.capabilityId}`,
   );
   if (!profile.body?.profileId) throw new Error("safe capability probe profile returned no profileId");
+  const profileRevision = profile.body.revision;
+  if (typeof profileRevision !== "string" || !/^[0-9a-f]{64}$/u.test(profileRevision)) {
+    throw new Error("safe capability probe profile returned no valid reviewed revision");
+  }
   try {
     const invokeBody = {
       toolName: probe.toolName,
@@ -328,7 +332,7 @@ async function probeSafeContract(input) {
     await checkedRequest(
       input,
       `/api/v1/tools/permission-profiles/${encodeURIComponent(profile.body.profileId)}/archive`,
-      { method: "POST", body: {} },
+      { method: "POST", body: { expectedRevision: profileRevision } },
       `archive safe capability profile for ${input.item.capabilityId}`,
     );
   }

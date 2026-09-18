@@ -131,6 +131,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
           return reply.code(404).send({ error: "Pairing code was not found or has expired." });
         }
         const updated = await fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, {
+          expectedRevision: connection.revision,
           config: {
             ...connection.config,
             ...approval.configPatch,

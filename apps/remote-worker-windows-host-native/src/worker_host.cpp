@@ -280,10 +280,15 @@ Result Run(HANDLE stop_event, bool watch_standard_input, Observer observer, void
     startup.lpAttributeList = attributes.list;
     std::wstring command = L"\"" + layout.node + L"\" \"" + layout.entrypoint + L"\"";
     PROCESS_INFORMATION process{};
+    if (!watch_standard_input && !installed.BeginHostRun()) {
+      result.error = ERROR_INVALID_STATE; return result;
+    }
     if (!CreateProcessW(layout.node.c_str(), command.data(), nullptr, nullptr, TRUE,
         CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
         environment.data(), layout.root.c_str(), &startup.StartupInfo, &process)) {
-      result.error = GetLastError(); return result;
+      result.error = GetLastError();
+      if (!watch_standard_input && !installed.FinishHostRun(child.job.Get())) result.error = ERROR_INVALID_STATE;
+      return result;
     }
     child.process.Reset(process.hProcess);
     child.thread.Reset(process.hThread);
@@ -331,6 +336,7 @@ Result Run(HANDLE stop_event, bool watch_standard_input, Observer observer, void
     if (!result.job_empty) result.error = ERROR_TIMEOUT;
     if (!GetExitCodeProcess(child.process.Get(), &result.child_exit_code) || result.child_exit_code == STILL_ACTIVE)
       result.error = ERROR_PROCESS_ABORTED;
+    if (!watch_standard_input && result.job_empty && !installed.FinishHostRun(child.job.Get())) result.error = ERROR_INVALID_STATE;
   } catch (...) {
     result.error = ERROR_NOT_ENOUGH_MEMORY;
     result.job_empty = !child.process.Valid();

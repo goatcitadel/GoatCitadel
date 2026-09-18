@@ -1372,6 +1372,11 @@ describe("ThreadedComposer", () => {
     expect(onStopActiveTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("disables the composer Stop action while cancellation awaits confirmation", async () => {
+    const renderer = await renderComposer({ sending: true, hasActiveStream: true, isStopPending: true });
+    expect(findButton(renderer.root, "Stopping…").props.disabled).toBe(true);
+  });
+
   it("surfaces a cowork Stop run control beside the composer with honest state-only copy", async () => {
     const onCoworkStopRun = vi.fn();
     const renderer = await renderComposer({

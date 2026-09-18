@@ -23,6 +23,18 @@ afterEach(() => {
 });
 
 describe("MCP stdio session ownership", () => {
+  it("a delayed configuration cleanup closes only the captured sessions", async () => {
+    const pool = createPool();
+    const first = createClient(), replacement = createClient(), another = createClient();
+    await pool.use("server", "session", "old-binding", async () => first, async () => undefined);
+    const closeOwned = pool.captureServerCloser("server");
+    await pool.use("server", "session", "new-binding", async () => replacement, async () => undefined);
+    await pool.use("server", "new-session", "new-binding", async () => another, async () => undefined);
+    closeOwned();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(another.close).not.toHaveBeenCalled();
+  });
   it("reuses a process only for the same scope and spawn binding", async () => {
     const pool = createPool();
     const create = vi.fn(async () => createClient());

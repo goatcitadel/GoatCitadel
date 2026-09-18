@@ -1,5 +1,9 @@
 /* eslint-disable max-lines -- Cross-dialect assignment fencing, replay, and mapping stay in one audited repository boundary. */
 import { createHash } from "node:crypto";
+import { normalizeRemoteWorkerNativeContinuation, type RemoteWorkerNativeContinuation } from "@goatcitadel/contracts";
+import { ApprovalRepository } from "./approval-repo.js";
+import { RemoteWorkerRuntimeResultRepository } from "./remote-worker-runtime-result-repo.js";
+import type { RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
 import { RemoteWorkerChatPlacementRepository } from "./remote-worker-chat-placement-repo.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
@@ -258,6 +262,9 @@ export interface RemoteWorkerAssignmentOfferCursor {
 }
 
 export interface RemoteWorkerAssignmentWorkloadIdentity {
+  readonly nativeChatHistory?: import("@goatcitadel/contracts").RemoteWorkerNativeChatHistory;
+  readonly nativeContinuation?: RemoteWorkerNativeContinuation;
+  readonly nativeChatContext?: RemoteWorkerNativeChatContext;
   readonly schemaVersion: typeof REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION;
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
@@ -3169,6 +3176,23 @@ export class RemoteWorkerAssignmentRepository {
     }
     const durableRunVersion = asPositiveInteger(run.version);
     const durableRunPayloadSha256 = sha256Bytes(run.payload_json);
+    const generation = this.findCurrentGenerationRow(assignment.registryWorkspaceId, assignment.assignmentId);
+    const resume = generation ? new RemoteWorkerChatResumeLedger(this.db).readLatest(assignment.registryWorkspaceId,
+      assignment.assignmentId, asPositiveInteger(generation.assignment_generation)) : undefined;
+    let nativeContinuation: RemoteWorkerNativeContinuation | undefined;
+    if (resume?.material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1") {
+      const approval = new ApprovalRepository(this.db).get(resume.material.approvalId);
+      if (sha256(approval) !== resume.material.approvalSha256 || approval.kind !== "remote_worker.native_runtime" ||
+          sha256(approval.payload.nativeRuntime) !== resume.material.nativeRuntimeBindingSha256)
+        throw conflict("remote worker native continuation decision");
+      nativeContinuation = normalizeRemoteWorkerNativeContinuation({ schemaVersion: "goatcitadel.remote-worker-native-continuation.v1",
+        assignmentGeneration: resume.material.assignmentGeneration, resumeSha256: resume.materialSha256,
+        approvalId: approval.approvalId, approvalSha256: resume.material.approvalSha256,
+        nativeRuntimeBindingSha256: resume.material.nativeRuntimeBindingSha256, decision: approval.status });
+    }
+    const nativeChatContext = nativeContinuation ? new RemoteWorkerRuntimeResultRepository(this.db).readChatContextForParent({
+      registryWorkspaceId: assignment.registryWorkspaceId, assignmentId: assignment.assignmentId,
+      assignmentGeneration: nativeContinuation.assignmentGeneration, durableRunId: run.run_id, continuation: nativeContinuation }) : null;
     const identityMaterial = Object.freeze({
       schemaVersion: REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
       registryWorkspaceId: assignment.registryWorkspaceId,
@@ -3180,6 +3204,8 @@ export class RemoteWorkerAssignmentRepository {
       capabilityProfileId,
       capabilityProfileSha256,
       contextSnapshotSha256: assignment.manifest.contextSnapshotSha256,
+      ...(nativeContinuation ? { nativeContinuation } : {}),
+      ...(nativeChatContext ? { nativeChatContext } : {}),
     });
     const projection: RemoteWorkerAssignmentWorkloadProjection = Object.freeze({
       ...identityMaterial,

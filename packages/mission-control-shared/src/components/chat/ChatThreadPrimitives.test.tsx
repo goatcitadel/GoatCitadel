@@ -91,6 +91,17 @@ function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
 }
 
 describe("ChatThreadPrimitives", () => {
+  it("labels canonical cancellation alongside retained output after reload", () => {
+    const turn = createTurn();
+    turn.trace.status = "cancelled";
+    const renderer = renderTurn({ turn });
+    expect(renderedText(renderer)).toContain("Stopped");
+    expect(renderedText(renderer)).toContain("Patch looks ready.");
+    expect(renderer.root.findAllByProps({ className: "mc-next-live-activity" })).toHaveLength(0);
+    const failed = createTurn();
+    failed.trace.status = "failed";
+    expect(renderedText(renderTurn({ turn: failed }))).not.toContain("Partial output is kept;");
+  });
   it("renders a retained heartbeat as an assistant-only system notice", () => {
     const notice = {
       kind: "system_heartbeat",

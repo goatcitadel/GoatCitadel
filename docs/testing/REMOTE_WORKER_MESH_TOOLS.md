@@ -1,6 +1,6 @@
 # Destination tools in the Windows worker
 
-The stock worker entrypoint can execute the shipped `fs.read`, `fs.write` and
+The stock worker entrypoint can execute the shipped `fs.read`, `fs.write`, `fs.list` and
 `mcp.http` adapters for exact published entries. The filesystem adapters use an
 operator-configured destination directory; MCP connects to an independently
 operated HTTP server. Foreground execution has local proof. The installed service
@@ -52,7 +52,7 @@ The registry uses `goatcitadel.worker-mesh-tools.v1` and has exactly these field
     manifest: MeshCapabilityManifest; // Exact authenticated publication result.
     localId: string;                 // The selected published entry.
   } & ({
-    toolName: "fs.read" | "fs.write";
+    toolName: "fs.read" | "fs.write" | "fs.list";
     rootId: string;                  // Lowercase letter, then letters/digits/hyphens.
     rootPath: string;                // Absolute local destination directory.
   } | {
@@ -176,6 +176,44 @@ On success, it flushes the file and verifies the resulting bytes and SHA-256.
 Cancellation terminates and joins the exact helper process. Neither filesystem
 adapter provides hostile-code sandboxing or the pending protected-cell quotas.
 
+## Listing directories
+
+`createWorkerMeshDirectoryListDescriptor(rootId)` supplies the native `fs.list`
+contract. It grants only `filesystemRead` for that logical root, with `read_only`
+effect posture and `intrinsic` idempotency. The installed registry allowlist and
+foreground loader accept the exact published entry; neither grants activation
+or invocation authority.
+
+Use `{ path: "." }` for the configured root or `{ path: "folder/nested" }` for
+one descendant directory. The response is `{ path, entries, truncated }`, where
+each entry has a relative `name` and a `type` of `file`, `directory` or
+`unavailable`. Reparse points and other unsupported attributes are reported as
+unavailable and never followed. File contents and host paths are not returned.
+Names are observations; every subsequent read/write still checks its own path,
+identity, content and current authority.
+
+The native helper pins the admitted NTFS root and all target ancestors against
+replacement, then enumerates that canonical directory without recursion. It
+rejects traversal, network/device paths, ambiguous names, file targets, changed
+roots and junction traversal. The response retains at most 128 entries and
+32 KiB of encoded entry frames, with an explicit truncation flag if either bound
+stops enumeration. Returned entries are sorted by name, but a truncated result
+is a subset, without pagination or a complete-directory guarantee. Directory
+enumeration is not an atomic snapshot; concurrent entry changes can affect it.
+These limits account for Windows' [unsorted directory enumeration and mutable
+metadata](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfileexw).
+
+The existing fixed-image guard and bounded private pipe carry the new read-only
+operation. Its parser rejects malformed UTF-8, duplicate names, unexpected types,
+extra bytes and mismatched root identities. Cancellation joins the exact helper;
+local configuration and root identity are checked again before names are returned.
+A complete native refusal, such as a missing directory, settles as a failed read.
+Lost or malformed responses preserve the runtime's existing uncertainty boundary.
+The JSON response must also fit the publication's limit and a 64 KiB ceiling.
+Windows x64 native checks, AddressSanitizer, worker tests and the portable package
+probe cover this adapter. ARM64 compilation remains separate from execution proof.
+See [directory listing evidence](COMPARISON_IMPLEMENTATION_STATUS.md#bounded-native-directory-listing).
+
 ## Connecting to an MCP server
 
 `createWorkerMeshMcpHttpDescriptor(endpoint, tools, authorization?)` provides the publication
@@ -200,7 +238,7 @@ token issued for that server. Never use Gateway enrollment or lease credentials.
 
 Keep the credential outside the package, registry/state directories and every
 destination filesystem root. The registry rejects a credential that a configured
-`fs.read` or `fs.write` binding could reach. The operator owns its OS access control;
+filesystem binding could reach. The operator owns its OS access control;
 the worker does not encrypt this file or provision its permissions. Grant the worker
 read access and restrict changes to the trusted operator. The installed registry
 command configures registry selection only; it does not install the credential.

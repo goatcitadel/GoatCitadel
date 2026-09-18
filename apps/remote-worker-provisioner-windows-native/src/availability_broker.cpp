@@ -11,7 +11,7 @@ namespace {
 
 constexpr DWORD kAdministratorServiceMask =
     SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG |
-    SERVICE_QUERY_STATUS | READ_CONTROL | SYNCHRONIZE;
+    SERVICE_QUERY_STATUS | READ_CONTROL;
 constexpr std::array<std::uint32_t, 1U> kLocalSystemSidParts = {18U};
 constexpr std::array<std::uint32_t, 2U> kAdministratorsSidParts = {32U, 544U};
 constexpr wchar_t kLocalSystemAccount[] = L"LocalSystem";
@@ -221,7 +221,10 @@ bool ValidateAvailabilityBrokerSnapshot(
     bool starting) noexcept {
   return snapshot.exact_service_main_arguments &&
          snapshot.current_process_id != 0U &&
-         snapshot.current_process_id == snapshot.service_process_id &&
+         // SCM does not guarantee a valid PID during START_PENDING. The runtime
+         // independently verifies this process's image and service token before
+         // publishing RUNNING, then requires the SCM PID match before any start.
+         (starting || snapshot.current_process_id == snapshot.service_process_id) &&
          snapshot.status_service_type == SERVICE_WIN32_OWN_PROCESS &&
          snapshot.current_state == static_cast<DWORD>(starting ? SERVICE_START_PENDING : SERVICE_RUNNING) &&
          snapshot.service_flags == 0U &&

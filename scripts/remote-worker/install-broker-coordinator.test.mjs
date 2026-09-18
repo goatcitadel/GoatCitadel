@@ -21,6 +21,7 @@ const readLf = (filePath) => fs.readFileSync(filePath, "utf8").replace(/\r\n/gu,
 const common = readLf(path.join(scriptsDir, "broker-coordinator-common.ps1"));
 const installer = readLf(path.join(scriptsDir, "install-broker-coordinator.ps1"));
 const uninstaller = readLf(path.join(scriptsDir, "uninstall-broker-coordinator.ps1"));
+const stateCommon = readLf(path.join(scriptsDir, "broker-state-common.ps1"));
 const brokerHeader = readLf(path.join(nativeSrcDir, "availability_broker.hpp"));
 const brokerValidation = readLf(path.join(nativeSrcDir, "availability_broker.cpp"));
 const brokerRuntime = readLf(path.join(nativeSrcDir, "availability_broker_runtime.cpp"));
@@ -35,7 +36,53 @@ const allRecipeScripts = [
   ["broker-coordinator-common.ps1", common],
   ["install-broker-coordinator.ps1", installer],
   ["uninstall-broker-coordinator.ps1", uninstaller],
+  ["broker-state-common.ps1", stateCommon],
 ];
+
+test("fresh installation initializes the signer's exact protected state before service registration", () => {
+  const filesystem = readLf(path.join(nativeSrcDir, "protected_filesystem.cpp"));
+  const stateNative = readLf(path.join(scriptsDir, "broker-state-native.cs"));
+  for (const [constant, component] of [["kState", "state-v1"], ["kJournal", "journal"],
+    ["kKeysets", "keysets"], ["kControls", "controls"], ["kQuarantine", "quarantine"]]) {
+    assert.equal(extractCppWideLiteral(filesystem, constant), component);
+    assert.ok(stateCommon.includes(`'${component}'`));
+  }
+  const sidBlock = filesystem.match(/kServiceSid = \{([^}]+)\}/u)[1];
+  const sid = Buffer.from([...sidBlock.matchAll(/0x([a-f0-9]{2})U/gu)].map((entry) => Number.parseInt(entry[1], 16)));
+  assert.equal(sid.length, 32);
+  assert.equal(sid.subarray(0, 8).toString("hex"), "0106000000000005");
+  const parts = Array.from({ length: 6 }, (_, index) => sid.readUInt32LE(8 + index * 4));
+  assert.ok(stateCommon.includes(`O:SYG:SYD:P(A;;0x001f01ff;;;SY)(A;;0x001f01ff;;;S-1-5-${parts.join("-")})`));
+  assert.match(filesystem, /group_defaulted == FALSE/u);
+  assert.match(filesystem, /SE_DACL_AUTO_INHERITED \| SE_DACL_AUTO_INHERIT_REQ/u);
+  assert.match(installer, /broker-state-common\.ps1/u);
+  const stage = installer.indexOf('Invoke-RecipeStep -Name "stage"');
+  const state = installer.indexOf('Invoke-RecipeStep -Name "initialize-protected-state"');
+  const services = installer.indexOf('Invoke-RecipeStep -Name "install-services"');
+  assert.ok(stage >= 0 && state > stage && services > state);
+  assert.match(installer, /protectedState = Get-BrokerCoordinatorStateReadBack/u);
+  assert.match(installer, /Undo-BrokerCoordinatorCreatedState/u);
+  assert.match(uninstaller, /Protected signer state is present; preserve it/u);
+  assert.match(stateNative, /0x10u, 3u, 2u, 0x00204021u/u); // directory, no delete sharing, FILE_CREATE, backup intent
+  assert.doesNotMatch(stateNative, /CreateService|StartService|CreateProcess|FormatVolume|SetNamedSecurityInfo/u);
+});
+
+for (const engine of ["powershell", "pwsh"]) {
+  test(`protected state creation, identity and preservation under ${engine}`, { skip: process.platform !== "win32", timeout: 60_000 }, (t) => {
+    const artifactRoot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goat-broker-state-")), engine);
+    const result = spawnSync(engine, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+      path.join(scriptsDir, "broker-state-behavior.test.ps1"), "-RepositoryRoot", repoRoot, "-ArtifactRoot", artifactRoot],
+    { encoding: "utf8", timeout: 50_000, maxBuffer: 65_536, windowsHide: true });
+    assert.equal(result.status, 0, `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`);
+    const receipt = JSON.parse(fs.readFileSync(path.join(artifactRoot, "state-behavior-receipt.json"), "utf8"));
+    assert.equal(receipt.passed, true);
+    assert.equal(receipt.scenarioCount, 8);
+    assert.equal(receipt.scenarios.length, 8);
+    assert.equal(receipt.serviceMutations, 0);
+    assert.equal(receipt.installedPathMutations, 0);
+    t.diagnostic(`Retained ${engine} state evidence: ${artifactRoot}`);
+  });
+}
 
 function extractCppWideLiteral(source, constantName) {
   const match = source.match(new RegExp(`${constantName}\\[\\]\\s*=\\s*\\n?\\s*L"((?:[^"\\\\]|\\\\.)*)"`, "u"));
@@ -120,19 +167,18 @@ test("the broker SCM DACL, demand-start configuration, and privilege list are fr
   const SERVICE_START = 0x0010;
   const SERVICE_STOP = 0x0020;
   const READ_CONTROL = 0x00020000;
-  const SYNCHRONIZE = 0x00100000;
   const administratorMask =
-    SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL | SYNCHRONIZE;
-  assert.equal(administratorMask, 0x00120035);
+    SERVICE_START | SERVICE_STOP | SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | READ_CONTROL;
+  assert.equal(administratorMask, 0x00020035);
   const SERVICE_ALL_ACCESS = 0x000f01ff;
 
   const serviceObjectSddl = extractPsString(common, "ServiceObjectSddl");
-  assert.equal(serviceObjectSddl, "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00120035;;;BA)");
+  assert.equal(serviceObjectSddl, "O:SYD:P(A;;0x000f01ff;;;SY)(A;;0x00020035;;;BA)");
   assert.ok(serviceObjectSddl.includes(`0x${SERVICE_ALL_ACCESS.toString(16).padStart(8, "0")}`));
   assert.ok(serviceObjectSddl.includes(`0x${administratorMask.toString(16).padStart(8, "0")}`));
   assert.match(
     brokerValidation,
-    /SERVICE_START \| SERVICE_STOP \| SERVICE_QUERY_CONFIG \|\n\s*SERVICE_QUERY_STATUS \| READ_CONTROL \| SYNCHRONIZE/u,
+    /SERVICE_START \| SERVICE_STOP \| SERVICE_QUERY_CONFIG \|\n\s*SERVICE_QUERY_STATUS \| READ_CONTROL;/u,
   );
   assert.match(brokerValidation, /system_ace\.mask == SERVICE_ALL_ACCESS/u);
   assert.match(brokerValidation, /snapshot\.service_ace_count != \(allow_worker_query \? 3U : 2U\)/u);
@@ -366,6 +412,24 @@ test("uninstall is identity-bound, restore-then-delete ordered, and preserves sh
   assert.match(installer, /rollback: failed to delete service/u);
 });
 
+test("protected coordinator removal restores security before DELETE and preserves pending files", () => {
+  const removal = common.slice(common.indexOf("public static void RemoveVerifiedCoordinatorService("),
+    common.indexOf("private static void AssertServiceStopped("));
+  const retained = removal.indexOf("retained = OpenServiceHandle(");
+  const validated = removal.indexOf("GetServiceConfigLine(serviceName) != expectedConfig");
+  const takeover = removal.indexOf('ApplyServiceDescriptor(retained, "O:BA"');
+  const deleteHandle = removal.indexOf("removable = OpenServiceHandle(");
+  const restore = removal.indexOf("ApplyServiceDescriptor(writable, expectedSddl, OwnerAndDacl)");
+  const stopped = removal.indexOf("AssertServiceStopped(removable)");
+  const deletion = removal.indexOf("DeleteService(removable)");
+  assert.ok(retained >= 0 && validated > retained && takeover > validated &&
+    deleteHandle > takeover && restore > deleteHandle && stopped > restore && deletion > stopped);
+  assert.match(removal, /if \(descriptorChanged\)[\s\S]*?ApplyServiceDescriptor/u);
+  assert.match(removal, /finally[\s\S]*?CloseServiceHandle\(retained\)/u);
+  assert.match(uninstaller, /RemoveVerifiedCoordinatorService\(\$serviceName, \$quotedPath, \$expectedSddl\)/u);
+  assert.match(uninstaller, /throw \("delete pending[^\n]+installed files preserved/u);
+});
+
 test("evidence bundles are machine-readable, always written, and never deleted", () => {
   assert.match(common, /goatcitadel\.remote-worker\.broker-coordinator-install\/1/u);
   assert.match(common, /goatcitadel\.remote-worker\.broker-coordinator-uninstall\/1/u);
@@ -387,7 +451,8 @@ test("the scripts stay Windows PowerShell 5.1 compatible", () => {
     assert.match(source, /^#Requires -Version 5\.1/u, `${name} must require PowerShell 5.1`);
     assert.doesNotMatch(source, /\?\?/u, `${name}: null-coalescing is PowerShell 7 only`);
     assert.doesNotMatch(source, /\$\w+\?\./u, `${name}: null-conditional access is PowerShell 7 only`);
-    assert.doesNotMatch(source, /&&|\|\|/u, `${name}: pipeline chain operators are PowerShell 7 only`);
+    const powershellSource = source.replace(/\$script:BrokerCoordinatorNativeSource = @'[\s\S]*?\n'@/u, "");
+    assert.doesNotMatch(powershellSource, /&&|\|\|/u, `${name}: pipeline chain operators are PowerShell 7 only`);
     assert.match(source, /Set-StrictMode -Version Latest/u);
   }
 });
@@ -420,8 +485,8 @@ for (const engine of ["powershell", "pwsh"]) {
       assert.equal(result.status, 0, `${engine}: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`);
       const receipt = JSON.parse(fs.readFileSync(path.join(artifactRoot, "behavior-receipt.json"), "utf8"));
       assert.equal(receipt.passed, true);
-      assert.equal(receipt.scenarioCount, 30);
-      assert.equal(receipt.scenarios.length, 30);
+      assert.equal(receipt.scenarioCount, 32);
+      assert.equal(receipt.scenarios.length, 32);
       assert.equal(receipt.serviceMutations, 0);
       assert.equal(receipt.installedPathMutations, 0);
       t.diagnostic(`Retained ${engine} behavior evidence: ${artifactRoot}`);

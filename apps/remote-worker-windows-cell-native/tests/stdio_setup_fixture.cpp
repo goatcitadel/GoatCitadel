@@ -78,7 +78,7 @@ RuntimeWorkspaceReference ProtectFixture(JobCommand& command, const std::vector<
   Require(HashRuntimeBundleManifest(manifest, &digest) == ERROR_SUCCESS, "Hash protected source inventory failed.");
   PinnedCellRuntimeBundle source, installed;
   Require(source.Open(source_path, command.expected_directory_identity, manifest, digest) == ERROR_SUCCESS, "Pin protected source inventory failed.");
-  const auto install = source.InstallTo(workspace, installed);
+  const auto install = source.InstallTo(workspace, installed, {[](void*) noexcept -> DWORD { return ERROR_SUCCESS; }});
   Require(!install.error && install.verified, "Install protected fixture inventory failed.");
   RuntimeWorkspaceReference reference{parent_path, {}, user, user};
   Require(workspace.RecordIdentities(&reference.identities) == ERROR_SUCCESS, "Capture protected fixture record failed.");

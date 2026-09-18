@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { persistMcpOAuthTokenResponse, accessTokenAccount, refreshTokenAccount, type TokenResponse } from "./mcp-oauth-token-persistence.js";
 import type { McpOAuthConfig, McpOAuthReadiness, McpServerRecord } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
@@ -7,20 +7,11 @@ import type { SecretStoreService } from "./secret-store-service.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 
 export interface McpOAuthTokenServiceOptions {
-  secretStore: Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret"> & Partial<Pick<SecretStoreService, "setSecretForCustody">>;
+  secretStore: Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret"> & Partial<Pick<SecretStoreService, "setSecretForCustody" | "supportsCredentialWriteReceipts">>;
   networkAllowlist: string[];
   env?: NodeJS.ProcessEnv;
   environmentResolver?: (server: McpServerRecord) => Promise<NodeJS.ProcessEnv>;
-  stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string) => undefined) => Promise<void>;
-}
-
-interface TokenResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  expires_at?: string;
-  scope?: string;
-  token_type?: string;
+  stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string, writeId?: string) => undefined) => Promise<void>;
 }
 
 export class McpOAuthTokenService {
@@ -223,43 +214,7 @@ export class McpOAuthTokenService {
     response: TokenResponse,
     previous: McpAuthStateRecord,
   ): Promise<McpAuthStateRecord> {
-    const now = new Date().toISOString();
-    const version = randomUUID();
-    const accessAccount = `${accessTokenAccount(serverId)}:${version}`;
-    const refreshAccount = `${refreshTokenAccount(serverId)}:${version}`;
-    const refreshToken = response.refresh_token?.trim();
-    const write = (custodyId?: string): undefined => {
-      const save = (account: string, value: string): void => {
-        if (custodyId === undefined) this.options.secretStore.setSecret(account, value);
-        else {
-          if (!this.options.secretStore.setSecretForCustody) throw new Error("MCP credential writer requires its OS custody owner.");
-          this.options.secretStore.setSecretForCustody(account, value, custodyId);
-        }
-      };
-      save(accessAccount, response.access_token!.trim());
-      if (refreshToken) save(refreshAccount, refreshToken);
-    };
-    try {
-      if (this.options.stageCredentials) {
-        await this.options.stageCredentials(serverId,
-          [tokenRefFromAccount(accessAccount), ...(refreshToken ? [tokenRefFromAccount(refreshAccount)] : [])], write);
-      } else write();
-    } catch (error) {
-      // Composed writes retain their exact terminal/unknown state for durable cleanup.
-      if (!this.options.stageCredentials) this.deleteOwnedAccounts(new Set([accessAccount, refreshAccount]));
-      throw error;
-    }
-    return {
-      ...previous,
-      accessTokenRef: tokenRefFromAccount(accessAccount),
-      refreshTokenRef: refreshToken ? tokenRefFromAccount(refreshAccount) : previous.refreshTokenRef,
-      tokenExpiresAt: resolveTokenExpiresAt(response),
-      scopes: normalizeScopes(response.scope) ?? previous.scopes,
-      resourceIndicator: `mcp://${serverId}`,
-      updatedAt: now,
-      lastRefreshedAt: now,
-      error: undefined,
-    };
+    return persistMcpOAuthTokenResponse(this.options, serverId, response, previous, (accounts) => this.deleteOwnedAccounts(accounts));
   }
 
   private isRefreshNeeded(oauth: McpOAuthConfig | undefined, stateRecord: McpAuthStateRecord): boolean {
@@ -401,24 +356,6 @@ function readEnv(env: NodeJS.ProcessEnv, key?: string): string | undefined {
   return normalized ? env[normalized]?.trim() || undefined : undefined;
 }
 
-function resolveTokenExpiresAt(response: TokenResponse): string | undefined {
-  if (response.expires_at?.trim()) {
-    return response.expires_at.trim();
-  }
-  if (typeof response.expires_in === "number" && Number.isFinite(response.expires_in)) {
-    return new Date(Date.now() + response.expires_in * 1000).toISOString();
-  }
-  return undefined;
-}
-
-function normalizeScopes(scope?: string): string[] | undefined {
-  const scopes = scope
-    ?.split(/\s+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return scopes?.length ? scopes : undefined;
-}
-
 export function isMcpOAuthTokenRefForServer(
   ref: string,
   serverId: string,
@@ -428,20 +365,8 @@ export function isMcpOAuthTokenRefForServer(
   return (
     ref === base ||
     (ref.startsWith(`${base}:`) &&
-      /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(ref.slice(base.length + 1)))
+      /^(?:receipt-v1:)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(ref.slice(base.length + 1)))
   );
-}
-
-function accessTokenAccount(serverId: string): string {
-  return `mcp:${serverId}:access-token`;
-}
-
-function refreshTokenAccount(serverId: string): string {
-  return `mcp:${serverId}:refresh-token`;
-}
-
-function tokenRefFromAccount(account: string): string {
-  return `keychain:goatcitadel:${account}`;
 }
 
 function accountFromTokenRef(ref: string | undefined): string | undefined {

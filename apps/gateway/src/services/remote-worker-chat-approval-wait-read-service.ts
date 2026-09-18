@@ -50,10 +50,16 @@ export class RemoteWorkerChatApprovalWaitReadService implements RemoteWorkerChat
           seal.material.waitForEvent?.eventKey !== "approval.resolved" ||
           seal.material.waitForEvent.correlationId !== material.approvalId ||
           approval.status === "pending" || digest(approval) !== material.approvalSha256 ||
-          !pending || (!pendingRecovery && (resume.recovery
-            ? !matchesRecoveredAction(pending, approval.status, material.pendingActionSha256, resume.recovery.material.pendingActionSha256)
+          (material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1"
+            ? approval.kind !== "remote_worker.native_runtime" || approval.status === "edited" ||
+              (resume.recovery && (resume.recovery.material.schemaVersion !== "goatcitadel.remote-worker-native-runtime-resume-recovery.v1" ||
+                resume.recovery.material.nativeRuntimeBindingSha256 !== material.nativeRuntimeBindingSha256)) ||
+              digest(approval.payload.nativeRuntime) !== material.nativeRuntimeBindingSha256
+            : !pending || (!pendingRecovery && (resume.recovery
+            ? resume.recovery.material.schemaVersion !== "goatcitadel.remote-worker-chat-resume-recovery.v1" ||
+              !matchesRecoveredAction(pending, approval.status, material.pendingActionSha256, resume.recovery.material.pendingActionSha256)
             : pending.resolutionStatus !== (approval.status === "approved" ? "pending" : "rejected") ||
-              digest(pending) !== material.pendingActionSha256)))
+              digest(pending) !== material.pendingActionSha256))))
           throw new Error("Worker approval resume differs from its retained handoff.");
         return { ...records, phase, resume: { approvalId: material.approvalId,
           runtimeAuthoritySha256: material.waitingRuntimeAuthoritySha256,

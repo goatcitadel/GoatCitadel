@@ -227,6 +227,11 @@ export interface RemoteWorkerCellProvisioningExchange {
   readonly mountedWorkspaceRecords?: readonly string[];
 }
 
+/** Retained resource evidence, without a current assignment lease or execution
+ * grant. Pool members may belong to older, no-longer-active generations. */
+export type RemoteWorkerCellProvisioningHistory = Omit<RemoteWorkerCellProvisioningExchange,
+  "schemaVersion" | "registryWorkspaceId" | "assignmentId" | "assignmentGeneration" | "leaseRevision">;
+
 export function normalizeRemoteWorkerCellProvisioningSubmission(input: unknown): RemoteWorkerCellProvisioningSubmission {
   const kind = input && typeof input === "object" ? Object.getOwnPropertyDescriptor(input, "kind")?.value : undefined;
   if (kind === "cell.volume.checkpoint") return normalizeRemoteWorkerCellVolumeSubmission(input);
@@ -283,6 +288,31 @@ export function normalizeRemoteWorkerCellProvisioningExchange(input: unknown): R
   for (const name of ["assignmentGeneration", "leaseRevision"]) {
     if (!Number.isSafeInteger(value[name]) || (value[name] as number) < 1) throw invalid();
   }
+  const history = normalizeRemoteWorkerCellProvisioningHistory({ plan: value.plan, planSha256: value.planSha256,
+    records: value.records, ...(suppliedLayout ? { diskLayoutPlan: value.diskLayoutPlan } : {}),
+    ...(suppliedVolume ? { volumeRecords: value.volumeRecords } : {}),
+    ...(suppliedFormat ? { formatRecords: value.formatRecords } : {}),
+    ...(suppliedProtection ? { protectionRecords: value.protectionRecords } : {}),
+    ...(suppliedMount ? { mountRecords: value.mountRecords } : {}),
+    ...(suppliedWorkspace ? { mountedWorkspaceRecords: value.mountedWorkspaceRecords } : {}) });
+  const exchange: RemoteWorkerCellProvisioningExchange = Object.freeze({ schemaVersion: REMOTE_WORKER_CELL_PROVISIONING_EXCHANGE_SCHEMA_VERSION,
+    registryWorkspaceId: value.registryWorkspaceId as string, assignmentId: value.assignmentId as string,
+    assignmentGeneration: value.assignmentGeneration as number, leaseRevision: value.leaseRevision as number, ...history });
+  verifiedExchanges.add(exchange);
+  return exchange;
+}
+
+export function normalizeRemoteWorkerCellProvisioningHistory(input: unknown): RemoteWorkerCellProvisioningHistory {
+  const suppliedLayout = input !== null && typeof input === "object" && Object.hasOwn(input, "diskLayoutPlan");
+  const suppliedVolume = input !== null && typeof input === "object" && Object.hasOwn(input, "volumeRecords");
+  const suppliedFormat = input !== null && typeof input === "object" && Object.hasOwn(input, "formatRecords");
+  const suppliedProtection = input !== null && typeof input === "object" && Object.hasOwn(input, "protectionRecords");
+  const suppliedMount = input !== null && typeof input === "object" && Object.hasOwn(input, "mountRecords");
+  const suppliedWorkspace = input !== null && typeof input === "object" && Object.hasOwn(input, "mountedWorkspaceRecords");
+  const value = object(input, ["plan", "planSha256", "records", ...(suppliedLayout ? ["diskLayoutPlan"] : []),
+    ...(suppliedVolume ? ["volumeRecords"] : []), ...(suppliedFormat ? ["formatRecords"] : []),
+    ...(suppliedProtection ? ["protectionRecords"] : []), ...(suppliedMount ? ["mountRecords"] : []),
+    ...(suppliedWorkspace ? ["mountedWorkspaceRecords"] : [])]);
   const plan = normalizeRemoteWorkerCellProvisioningPlan(value.plan);
   const planSha256 = remoteWorkerCellProvisioningPlanSha256(plan);
   if (value.planSha256 !== planSha256 || !Array.isArray(value.records) ||
@@ -392,17 +422,13 @@ export function normalizeRemoteWorkerCellProvisioningExchange(input: unknown): R
       mountedWorkspaceRecords.push(checkpoint.recordHex); priorWorkspace = checkpoint;
     }
   }
-  const exchange: RemoteWorkerCellProvisioningExchange = Object.freeze({ schemaVersion: REMOTE_WORKER_CELL_PROVISIONING_EXCHANGE_SCHEMA_VERSION,
-    registryWorkspaceId: value.registryWorkspaceId as string, assignmentId: value.assignmentId as string,
-    assignmentGeneration: value.assignmentGeneration as number, leaseRevision: value.leaseRevision as number,
+  return Object.freeze({
     plan, planSha256, records: Object.freeze(records), ...(diskLayoutPlan ? { diskLayoutPlan } : {}),
     ...(volumeRecords.length ? { volumeRecords: Object.freeze(volumeRecords) } : {}),
     ...(formatRecords.length ? { formatRecords: Object.freeze(formatRecords) } : {}),
     ...(protectionRecords.length ? { protectionRecords: Object.freeze(protectionRecords) } : {}),
     ...(mountRecords.length ? { mountRecords: Object.freeze(mountRecords) } : {}),
     ...(mountedWorkspaceRecords.length ? { mountedWorkspaceRecords: Object.freeze(mountedWorkspaceRecords) } : {}) });
-  verifiedExchanges.add(exchange);
-  return exchange;
 }
 
 function volumeAnchor(layoutPlan: RemoteWorkerCellDiskLayoutPlan, disk: RemoteWorkerCellProvisioningCheckpoint): RemoteWorkerCellVolumeAnchor {
@@ -458,6 +484,23 @@ export function remoteWorkerCellProvisioningMountedWorkspaceAnchor(input: unknow
   const exchange = normalizeRemoteWorkerCellProvisioningExchange(input);
   return normalizeRemoteWorkerCellMountedWorkspaceAnchor({ schemaVersion: REMOTE_WORKER_CELL_MOUNTED_WORKSPACE_ANCHOR_SCHEMA_VERSION,
     mountAnchor: remoteWorkerCellProvisioningMountAnchor(exchange), mountRecords: exchange.mountRecords, cellName: exchange.plan.cellName });
+}
+
+/** Resource-only anchor for retained pool members. This validates the original
+ * chain without manufacturing assignment, lease or provisioning-owner fields. */
+export function remoteWorkerCellProvisioningHistoryMountedWorkspaceAnchor(input: unknown): RemoteWorkerCellMountedWorkspaceAnchor {
+  const history = normalizeRemoteWorkerCellProvisioningHistory(input), plan = history.plan;
+  if (history.records.length !== 5 || !history.diskLayoutPlan || history.volumeRecords?.length !== 6 ||
+      history.formatRecords?.length !== 2 || history.protectionRecords?.length !== 2 || history.mountRecords?.length !== 4) throw invalid();
+  const disk = readRemoteWorkerCellProvisioningCheckpoint(history.records[4]!);
+  return normalizeRemoteWorkerCellMountedWorkspaceAnchor({ schemaVersion: REMOTE_WORKER_CELL_MOUNTED_WORKSPACE_ANCHOR_SCHEMA_VERSION,
+    mountAnchor: { schemaVersion: REMOTE_WORKER_CELL_MOUNT_ANCHOR_SCHEMA_VERSION,
+      protectionAnchor: { schemaVersion: REMOTE_WORKER_CELL_PROTECTION_ANCHOR_SCHEMA_VERSION,
+        formatAnchor: { schemaVersion: REMOTE_WORKER_CELL_FORMAT_ANCHOR_SCHEMA_VERSION,
+          volumeAnchor: volumeAnchor(history.diskLayoutPlan, disk), volumeRecords: history.volumeRecords }, formatRecords: history.formatRecords,
+        ownerSid: plan.ownerSid, controllerSid: plan.controllerSid }, protectionRecords: history.protectionRecords,
+      parentIdentityHex: plan.parentIdentityHex, workspaceIdentityHex: disk.workspaceIdentityHex },
+    mountRecords: history.mountRecords, cellName: plan.cellName });
 }
 
 export const REMOTE_WORKER_CELL_PREPARATION_SCHEMA_VERSION = "goatcitadel.remote-worker-cell-preparation.v1" as const;

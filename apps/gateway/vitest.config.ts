@@ -9,6 +9,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: "@goatcitadel/contracts/remote-worker-runtime-node",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/remote-worker-runtime-node.ts"),
+      },
+      {
         find: "@goatcitadel/contracts/mesh-schema-node",
         replacement: path.resolve(configDir, "../../packages/contracts/src/mesh-schema-node.ts"),
       },
