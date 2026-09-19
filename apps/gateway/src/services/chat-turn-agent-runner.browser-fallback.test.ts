@@ -1950,7 +1950,18 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.assistantContent).toContain("client-server CRUD backends");
   });
 
-  it("keeps web tools exposed for direct-url chat prompts in auto mode", async () => {
+  it.each([
+    { content: "Summarize https://www.rfc-editor.org/rfc/rfc9110 from the page itself.", searches: 0 },
+    {
+      content:
+        "I need you to act like a head of marketing and help me increase traffic to my website, www.irolled20.com.",
+      searches: 1,
+    },
+    {
+      content: "I need you to act like a head of marketing and help me increase traffic to my website, irolled20.com.",
+      searches: 1,
+    },
+  ])("keeps web tools exposed for direct-url chat prompts in auto mode: $content", async ({ content, searches }) => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockImplementationOnce(async (request) => {
@@ -1973,7 +1984,14 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
           ],
         };
       });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      result: {
+        results: [
+          { title: "iRolled20", url: "https://www.irolled20.com", snippet: "Find tabletop games and players." },
+        ],
+      },
+    });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate", "http.get", "time.now"]),
@@ -1985,7 +2003,7 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
       sessionId: "sess-direct-url-chat-1",
       turnId: randomUUID(),
       userMessageId: "msg-direct-url-chat-1",
-      content: "Summarize https://www.rfc-editor.org/rfc/rfc9110 from the page itself.",
+      content,
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -1993,13 +2011,11 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [
-        { role: "user", content: "Summarize https://www.rfc-editor.org/rfc/rfc9110 from the page itself." },
-      ],
+      historyMessages: [{ role: "user", content }],
     });
 
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
-    expect(invokeTool).not.toHaveBeenCalled();
+    expect(invokeTool).toHaveBeenCalledTimes(searches);
     expect(result.assistantContent).toContain("inspect that page");
   });
 

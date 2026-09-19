@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { ChatModelRouterTraceRecord } from "@goatcitadel/contracts";
 import { hasExternalResearchIntent, hasLiveDataIntent } from "../orchestration/live-data-detect.js";
+import { extractExplicitWebUrl } from "../orchestration/web-url-detect.js";
 import type { OrchestrationRouterInput } from "../orchestration/types.js";
 
 type ModelRouterRoute = ChatModelRouterTraceRecord["route"];
@@ -61,7 +62,8 @@ export function routeWithModelRouter(input: ModelRouterDecisionInput): ChatModel
   const startedAt = performance.now();
   const liveDataIntent = hasLiveDataIntent(input.prompt);
   const externalResearchIntent = hasExternalResearchIntent(input.prompt);
-  const route = classifyModelRouterRoute(input.prompt, { liveDataIntent, externalResearchIntent });
+  const directUrlIntent = Boolean(extractExplicitWebUrl(input.prompt));
+  const route = classifyModelRouterRoute(input.prompt, { liveDataIntent, externalResearchIntent, directUrlIntent });
   const selectedEngine = ENGINE_BY_ROUTE[route];
   const requiresTools = TOOL_ROUTES.has(route);
   const decision: ChatModelRouterTraceRecord = {
@@ -81,7 +83,7 @@ export function routeWithModelRouter(input: ModelRouterDecisionInput): ChatModel
     requiresImageGeneration: route === "image_generation",
     ...(input.hasAttachments ? { hasAttachments: true } : {}),
     decisionLatencyMs: roundLatency(performance.now() - startedAt),
-    reasons: buildReasons(route, { liveDataIntent, externalResearchIntent }),
+    reasons: buildReasons(route, { liveDataIntent, externalResearchIntent, directUrlIntent }),
   };
   return decision;
 }
@@ -138,7 +140,7 @@ export function withModelRouterOrchestrationDecision(
 
 function classifyModelRouterRoute(
   prompt: string,
-  intents: { liveDataIntent: boolean; externalResearchIntent: boolean },
+  intents: { liveDataIntent: boolean; externalResearchIntent: boolean; directUrlIntent: boolean },
 ): ModelRouterRoute {
   const rawText = (prompt || "").trim().toLowerCase();
   const promptLength = prompt.length;
@@ -170,7 +172,8 @@ function classifyModelRouterRoute(
   if (
     (RESEARCH_RE.test(rawText) && (CURRENT_RE.test(rawText) || hasRecentYear(rawText))) ||
     intents.liveDataIntent ||
-    intents.externalResearchIntent
+    intents.externalResearchIntent ||
+    intents.directUrlIntent
   ) {
     // Live-data intent (latest/news/weather/prices/"right now", etc.) needs the web_research
     // engine. Reusing the orchestrator's own detector keeps the model-router receipt honest:
@@ -229,7 +232,7 @@ function estimateConfidenceScore(route: ModelRouterRoute, prompt: string): numbe
 
 function buildReasons(
   route: ModelRouterRoute,
-  intents: { liveDataIntent: boolean; externalResearchIntent: boolean },
+  intents: { liveDataIntent: boolean; externalResearchIntent: boolean; directUrlIntent: boolean },
 ): string[] {
   switch (route) {
     case "simple":
@@ -243,7 +246,10 @@ function buildReasons(
     case "research":
       return intents.liveDataIntent
         ? ["fresh research intent", "external evidence likely required"]
-        : ["external research requested", "external evidence likely required"];
+        : [
+            intents.directUrlIntent ? "website URL supplied" : "external research requested",
+            "external evidence likely required",
+          ];
     case "vision":
       return ["vision or OCR intent"];
     case "image_generation":

@@ -108,6 +108,24 @@ describe("model-router decision service", () => {
     }
   });
 
+  it.each(["www.irolled20.com", "irolled20.com", "https://www.irolled20.com"])(
+    "routes website advice through governed web tools: %s",
+    (website) => {
+      const decision = routeWithModelRouter({
+        prompt: `I need you to act like a head of marketing and help me increase traffic to my website, ${website}.`,
+      });
+      expect(decision).toMatchObject({
+        route: "research",
+        requiresTools: true,
+        requiresFreshness: false,
+        reasons: expect.arrayContaining(["website URL supplied"]),
+      });
+      expect(
+        shouldBypassOrchestrationWithModelRouter({ routerInput: createInput(), decision, advisoryOnly: false }),
+      ).toMatchObject({ bypass: false });
+    },
+  );
+
   it("routes explicit market research to governed web tools without claiming freshness", () => {
     const decision = routeWithModelRouter({
       prompt:
