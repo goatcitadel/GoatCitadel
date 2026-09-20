@@ -20,6 +20,7 @@ import { REMOTE_WORKER_CELL_OBJECT_INVENTORY_PAGES_POSTGRES_SQL } from "../remot
 import { INTEGRATION_CONNECTION_REVISION_POSTGRES_SQL } from "../integration-connection-revision-schema.js";
 /* eslint-disable max-lines -- Postgres migration ledger keeps every versioned migration in one append-only file so ordering, dependencies, and rollback context stay traceable. */
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
+import { POSTGRES_SCHEMA_CONVERGENCE_V196_SQL } from "./schema-convergence-v196.js";
 import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
 import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-remediation-recipe-binding.js";
 import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
@@ -15010,6 +15011,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "remote_worker_runtime_install_evidence",
     sql: REMOTE_WORKER_RUNTIME_INSTALL_POSTGRES_SQL,
     integritySha256: "3650836cc42eb68832585025c5e6fc60054e2b214c77bcaa8c4501b2243a0d53",
+  },
+  {
+    version: 196,
+    name: "additive_schema_shape_convergence",
+    sql: POSTGRES_SCHEMA_CONVERGENCE_V196_SQL,
+    integritySha256: "217269a7ec078f2013e9aaa61ace846d9e449d683536aaa147cc3fa215066ec7",
   },
 ];
 

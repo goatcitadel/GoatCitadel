@@ -1764,9 +1764,9 @@
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 195,
+      "expectedCount": 196,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 195,
+      "expectedLastVersion": 196,
       "migrations": [
         {
           "version": 1,
@@ -2939,6 +2939,12 @@
           "name": "remote_worker_runtime_install_evidence",
           "definitionSha256": "37e5307f32ee3e32a00de0abf66d1017250b13a511b0205d697c01d83ac75d32",
           "runtimeIntegritySha256": "3650836cc42eb68832585025c5e6fc60054e2b214c77bcaa8c4501b2243a0d53"
+        },
+        {
+          "version": 196,
+          "name": "additive_schema_shape_convergence",
+          "definitionSha256": "35751f5310b93c37c69197eb172175c2f45fe4b3496d0d02957f0d01c9fa755d",
+          "runtimeIntegritySha256": "217269a7ec078f2013e9aaa61ace846d9e449d683536aaa147cc3fa215066ec7"
         }
       ]
     }
