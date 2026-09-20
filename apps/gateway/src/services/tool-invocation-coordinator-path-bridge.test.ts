@@ -1004,7 +1004,7 @@ describe("ToolInvocationCoordinatorService workspace path execution bridge", () 
 
     await coordinator.invokeTool(request);
 
-    expect(invoke).toHaveBeenCalledWith(request);
+    expect(invoke).toHaveBeenCalledWith(request, { beforeExecute: expect.any(Function) });
   });
 
   it("rejects not-applicable from a resolver for a mandatory cwd tool", async () => {

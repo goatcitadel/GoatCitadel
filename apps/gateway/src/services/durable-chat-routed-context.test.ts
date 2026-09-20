@@ -59,7 +59,8 @@ describe("durable Chat routed-context binding", () => {
     const host = {
       ...baseHost,
       resolveRemoteWorkerChatExecution: vi.fn(async () => ({
-        async *stream() {}, recordAssistantCommit: vi.fn(async () => undefined),
+        async *stream() {},
+        recordAssistantCommit: vi.fn(async () => undefined),
       })),
       storage: {
         ...baseHost.storage,
@@ -72,7 +73,10 @@ describe("durable Chat routed-context binding", () => {
     expect(canonicalJsonString(dispatched.history)).not.toContain("Changed live guidance");
     expect(host.resolveRemoteWorkerChatExecution).toHaveBeenCalledExactlyOnceWith(run, dispatched);
     expect(vi.mocked(executePreparedAgentChatTurnBackground).mock.calls[0]![7]).toMatchObject({
-      remoteWorkerExecution: expect.objectContaining({ stream: expect.any(Function), recordAssistantCommit: expect.any(Function) }),
+      remoteWorkerExecution: expect.objectContaining({
+        stream: expect.any(Function),
+        recordAssistantCommit: expect.any(Function),
+      }),
     });
     vi.mocked(executePreparedAgentChatTurnBackground).mockClear();
     host.storage.remoteWorkerChatContexts.findForRun.mockResolvedValue(undefined);
@@ -85,12 +89,25 @@ describe("durable Chat routed-context binding", () => {
     const fixture = await admitRoutedTurn(true);
     const run = { ...fixture.run, status: "running" as const, leaseOwnerId: "replacement-gateway", attemptCount: 2 };
     const prepare = vi.fn(async () => buildReplayPrepared(fixture.finalProfile));
-    const baseHost = replayHost(run, fixture.finalProfile, fixture.trace, prepare, vi.fn(() => fixture.finalSnapshot));
-    const findForRun = vi.fn(async (): Promise<RemoteWorkerChatContextSnapshot | undefined> => ({
-      ...fixture.workerContext!, messages: [{ role: "user", content: "Altered retained input" }],
-    }));
-    const resolve = vi.fn(async () => { throw new Error("Worker placement unavailable"); });
-    const host = { ...baseHost, resolveRemoteWorkerChatExecution: resolve,
+    const baseHost = replayHost(
+      run,
+      fixture.finalProfile,
+      fixture.trace,
+      prepare,
+      vi.fn(() => fixture.finalSnapshot),
+    );
+    const findForRun = vi.fn(
+      async (): Promise<RemoteWorkerChatContextSnapshot | undefined> => ({
+        ...fixture.workerContext!,
+        messages: [{ role: "user", content: "Altered retained input" }],
+      }),
+    );
+    const resolve = vi.fn(async () => {
+      throw new Error("Worker placement unavailable");
+    });
+    const host = {
+      ...baseHost,
+      resolveRemoteWorkerChatExecution: resolve,
       storage: { ...baseHost.storage, remoteWorkerChatContexts: { findForRun } },
     };
     await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow();
@@ -684,6 +701,7 @@ function replayHost(
         })),
       },
       chatTurnTraces: { get: vi.fn(() => trace) },
+      durableRuns: { getRun: vi.fn(() => run) },
       routedContextSnapshots: { get: getSnapshot },
       chatTurnCapabilityProfiles: { get: vi.fn(() => profile), findByTurn: vi.fn() },
     },

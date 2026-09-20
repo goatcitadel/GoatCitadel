@@ -1697,7 +1697,13 @@ export async function resolvePreparedTurnOrchestration(
   const mode = prepared.effectiveMode;
   // Execution stays inside the admitted turn: ask uses the durable prompt and
   // auto uses the governed agent.fanout path. Advisory planning remains distinct.
-  if (prepared.prefs.planningMode !== "advisory") return undefined;
+  if (prepared.prefs.planningMode !== "advisory") {
+    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
+      decision: "bypassed",
+      reason: "Separate orchestration is bypassed: non-advisory Chat execution stays inside the admitted turn.",
+    });
+    return undefined;
+  }
   const runtime = host.llmService.getRuntimeConfig({
     useCache: true,
   });
