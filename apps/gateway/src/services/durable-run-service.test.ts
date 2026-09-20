@@ -1568,6 +1568,44 @@ describe("DurableRunService", () => {
     },
   );
 
+  it("waits for an exact final-answer generation to settle before admitting the next message", async () => {
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "denial-finalization-race",
+      status: "completed",
+      traceStatus: "completed",
+    });
+    const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, { ...fixture.run, status: "running" }]]);
+    const context = createContext(runs, [], []);
+    await installAdmittedChatRuntimeFixture(context, fixture);
+    Object.assign(context.storage, {
+      chatTurnTraces: {
+        get: async () => ({
+          sessionId: fixture.admission.sessionId,
+          status: "completed",
+          durable: { runId: fixture.run.runId },
+        }),
+      },
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit: async (_run, progress) => {
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) await progress.runEffect(effect, () => undefined);
+        return { status: "completed" };
+      },
+    });
+    const pending = service.reconcileTerminalChatAdmission(fixture.admission as never);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fixture.admission.status).toBe("active");
+    runs.set(fixture.run.runId, fixture.run);
+    await expect(pending).resolves.toMatchObject({ recoveryOutcome: "released", durableRunId: fixture.run.runId });
+    expect(fixture.admission.status).toBe("completed");
+  });
+
   it("returns a bounded non-release outcome while canonical durable admission remains active", async () => {
     const fixture = createAdmittedChatRuntimeFixture({
       runId: "run-terminal-delivery-active",
@@ -4063,6 +4101,12 @@ describe("DurableRunService", () => {
       });
       const backgroundTasks = new Set<Promise<void>>();
       const agentEnd = vi.fn();
+      const onChatTurnCancelled = vi.fn(async (sessionId: string, cancelledTurnId: string) => {
+        expect(trace.status).toBe("cancelled");
+        expect(sessionId).toBe("session-cancel");
+        expect(cancelledTurnId).toBe(turnId);
+        expect(runs.get(run.runId)?.status).toBe(runStatus);
+      });
       const onGeneralChatPostCommit = vi.fn(
         async (_observed: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
           expect(progress.targetTraceStatus).toBe("cancelled");
@@ -4081,9 +4125,12 @@ describe("DurableRunService", () => {
           markWorkflowUnrecoverable: vi.fn(),
         },
         onGeneralChatPostCommit,
+        onChatTurnCancelled,
       });
 
       const cancelled = await service.cancelDurableRun(run.runId, "operator-cancel");
+
+      expect(onChatTurnCancelled).toHaveBeenCalledWith("session-cancel", turnId, "operator-cancel");
 
       expect(cancelled.status).toBe("cancelled");
       expect(trace).toMatchObject({

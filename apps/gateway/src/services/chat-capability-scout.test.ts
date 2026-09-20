@@ -67,6 +67,25 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not propose another capability after an operator closes tool use", async () => {
+    const trace = createTrace();
+    trace.routing = {
+      turnControl: { toolClosure: { outcome: "denied", actorId: "operator", closedAt: trace.startedAt } },
+    };
+    const suggestions = await scoutCapabilityUpgradeSuggestions({
+      content: "Create a PDF report",
+      assistantText: "The file was not created.",
+      sessionId: trace.sessionId,
+      trace,
+      deps: new Proxy({} as Parameters<typeof scoutCapabilityUpgradeSuggestions>[0]["deps"], {
+        get() {
+          throw new Error("A closed turn must not scout capabilities");
+        },
+      }),
+    });
+    expect(suggestions).toEqual([]);
+  });
+
   it("suggests enabling a matching installed skill before import suggestions", async () => {
     const suggestions = await scoutCapabilityUpgradeSuggestions({
       content: "Send an email to my teammate with Gmail",

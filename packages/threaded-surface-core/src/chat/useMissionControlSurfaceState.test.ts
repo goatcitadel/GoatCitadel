@@ -279,7 +279,11 @@ describe("useMissionControlSurfaceState", () => {
 
     let renderer: ReturnType<typeof create>;
     await act(async () => {
-      renderer = create(React.createElement(Harness, { thread: makeThread("cancelled") }));
+      renderer = create(
+        React.createElement(Harness, {
+          thread: makeThread("cancelled", { failure: { recommendedAction: "approve_pending_step" } }),
+        }),
+      );
     });
     expect(state?.selectedTurnRecovery).toEqual(expect.objectContaining({ action: "retry", label: "Retry the turn" }));
 

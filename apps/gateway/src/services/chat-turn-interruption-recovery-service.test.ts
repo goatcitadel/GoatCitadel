@@ -7,6 +7,7 @@ import type { ChatMessageRecord, ChatTurnTraceCreateInput } from "@goatcitadel/c
 import { TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
 import {
   INTERRUPTED_BY_RESTART_MESSAGE,
+  preserveCancelledChatTurnOutput,
   reconcileInterruptedDurableChatTurn,
   reconcileInterruptedChatTurns,
   type ChatTurnInterruptionRecoveryDeps,
@@ -233,6 +234,69 @@ describe("reconcileInterruptedChatTurns", () => {
     expect(result.interruptedTurnIds).toEqual(["turn-active"]);
     expect(storage.chatTurnTraces.get("turn-active").status).toBe("failed");
   });
+
+  it("retains cancelled output and its transcript exactly once without claiming completion", async () => {
+    const storage = createStorage();
+    seedSession(storage);
+    storage.chatTurnTraces.create(activeTrace({ status: "cancelled", assistantMessageId: "msg-assistant" }));
+    appendStreamChunk(storage, 1, { type: "message_start", messageId: "msg-assistant" });
+    appendStreamChunk(storage, 2, {
+      type: "delta",
+      messageId: "msg-assistant",
+      delta: "Example Domain is a documentation example.",
+    });
+    const deps = buildDeps(storage);
+    await preserveCancelledChatTurnOutput(deps.storage, "session-a", "turn-active");
+    await preserveCancelledChatTurnOutput(deps.storage, "session-a", "turn-active");
+    expect(storage.chatMessages.get("msg-assistant")?.content).toBe("Example Domain is a documentation example.");
+    expect(storage.chatTurnTraces.get("turn-active")).toMatchObject({
+      status: "cancelled",
+      completion: { status: "interrupted", repaired: false },
+    });
+    expect(storage.chatTurnTraces.get("turn-active").failure).toBeUndefined();
+    expect(storage.transcriptOutbox.listPending(10)).toHaveLength(1);
+  });
+
+  it("does not mutate active turns or a different session during cancelled output preservation", async () => {
+    const storage = createStorage();
+    seedSession(storage);
+    storage.chatTurnTraces.create(activeTrace());
+    await preserveCancelledChatTurnOutput(buildDeps(storage).storage, "session-a", "turn-active");
+    expect(storage.chatTurnTraces.get("turn-active").status).toBe("running");
+    storage.chatTurnTraces.patch("turn-active", { status: "cancelled" });
+    await preserveCancelledChatTurnOutput(buildDeps(storage).storage, "session-other", "turn-active");
+    expect(storage.transcriptOutbox.listPending(10)).toHaveLength(0);
+  });
+
+  it("retains the captured final word once and excludes events beyond the Stop snapshot", async () => {
+    const storage = createStorage();
+    seedSession(storage);
+    storage.chatTurnTraces.create(activeTrace({ status: "cancelled", assistantMessageId: "msg-assistant" }));
+    appendStreamChunk(storage, 1, { type: "message_start", messageId: "msg-assistant" });
+    appendStreamChunk(storage, 2, { type: "delta", delta: "Saved " });
+    appendStreamChunk(storage, 3, { type: "delta", delta: "word and late text" });
+    const deps = buildDeps(storage);
+    const snapshot = { throughSequence: 2, tail: "word" };
+    await preserveCancelledChatTurnOutput(deps.storage, "session-a", "turn-active", snapshot);
+    await preserveCancelledChatTurnOutput(deps.storage, "session-a", "turn-active", snapshot);
+    expect(storage.chatMessages.get("msg-assistant")?.content).toBe("Saved word");
+    expect(storage.transcriptOutbox.listPending(10)).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    "keeps a stopped turn visible without overriding another selection (%s)",
+    async (changedSelection) => {
+      const storage = createStorage();
+      seedSession(storage);
+      storage.chatTurnTraces.create(activeTrace({ status: "cancelled", parentTurnId: "prior" }));
+      storage.chatSessionBranchState.setActiveLeaf("session-a", changedSelection ? "other" : "prior");
+      await preserveCancelledChatTurnOutput(buildDeps(storage).storage, "session-a", "turn-active");
+      expect(storage.chatSessionBranchState.get("session-a")?.activeLeafTurnId).toBe(
+        changedSelection ? "other" : "turn-active",
+      );
+      expect(storage.transcriptOutbox.listPending(10)).toHaveLength(0);
+    },
+  );
 
   it("preserves retained deltas as an interrupted partial prefix and enqueues them exactly once", async () => {
     const storage = createStorage();

@@ -201,6 +201,17 @@ describe("useChatCapabilityProfileInspection", () => {
     act(() => result.renderer.unmount());
   });
 
+  it("waits for the selected turn to belong to the active session before inspecting", async () => {
+    fetchProfile.mockResolvedValue({ state: "available", profile: makeProfile() });
+    const result = await renderInspection(makeTurn({ sessionId: "previous-session" }));
+    expect(result.latest()?.status).toBe("idle");
+    expect(fetchProfile).not.toHaveBeenCalled();
+    await result.update(makeTurn());
+    expect(fetchProfile).toHaveBeenCalledExactlyOnceWith("session-1", "turn-1", "workspace-1");
+    expect(result.latest()?.status).toBe("verified");
+    act(() => result.renderer.unmount());
+  });
+
   it("hides profile detail when the immutable hash or execution selection differs", async () => {
     fetchProfile.mockResolvedValue({
       state: "available",

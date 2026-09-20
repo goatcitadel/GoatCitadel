@@ -439,6 +439,7 @@ export class ApprovalRepository {
     limit?: number;
     cursor?: string;
     workspaceId?: string;
+    includeExpired?: boolean;
   }): ApprovalListResponse {
     const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 100), 200));
     const scopedWorkspaceId = input.workspaceId?.trim();
@@ -451,7 +452,7 @@ export class ApprovalRepository {
       const fetchLimit = scopedWorkspaceId
         ? Math.max(Math.min(remaining * 10 + 1, 1000), remaining + 1)
         : remaining + 1;
-      const mapped = this.readApprovalPage(input.status, fetchLimit, cursor);
+      const mapped = this.readApprovalPage(input.status, fetchLimit, cursor, input.includeExpired);
       const accepted = scopedWorkspaceId
         ? mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId)
         : mapped;
@@ -490,9 +491,10 @@ export class ApprovalRepository {
     status: ApprovalRequest["status"] | undefined,
     limit: number,
     cursor?: ApprovalPageCursor,
+    includeExpired = false,
   ): ApprovalRequest[] {
     const rows = toApprovalRows(
-      status === "pending"
+      status === "pending" && !includeExpired
         ? cursor
           ? this.listActivePendingPageAfterStmt.all({
               limit,
@@ -520,6 +522,36 @@ export class ApprovalRepository {
     return rows.map(mapRow);
   }
 
+  /** Close an exact Chat request without granting execution or attributing expiry. */
+  public withdrawPendingChatTurn(
+    approvalId: string,
+    input: {
+      sessionId: string;
+      turnId: string;
+      resolvedBy: string;
+      resolutionNote: string;
+    },
+  ): ApprovalRequest {
+    return this.db.transaction("immediate", () => {
+      const row = this.getForUpdateRow(approvalId);
+      const current = mapRow(row);
+      if (current.linkage?.sessionId !== input.sessionId || current.linkage.turnId !== input.turnId) {
+        throw new ConflictError({ message: "Approval withdrawal belongs to another Chat turn." });
+      }
+      const changed = this.resolveStmt.run({
+        approvalId,
+        status: "rejected",
+        linkageJson: row.linkage_json,
+        payloadJson: row.payload_json,
+        resolvedBy: input.resolvedBy,
+        resolutionNote: input.resolutionNote,
+        allowExpired: 1,
+      }).changes;
+      if (changed !== 1) throw new ConflictError({ message: `Approval ${approvalId} is already resolved` });
+      return this.get(approvalId);
+    });
+  }
+
   public resolve(
     approvalId: string,
     input: ApprovalResolveInput,
@@ -539,7 +571,10 @@ export class ApprovalRepository {
       // resolution time and expiry comparison are both owned by the database.
       void options?.resolvedAt;
 
-      const exactDetachedActivation = current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND || current.kind === "remote_worker.native_runtime" || current.kind === "remote_worker.native_runtime_install";
+      const exactDetachedActivation =
+        current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND ||
+        current.kind === "remote_worker.native_runtime" ||
+        current.kind === "remote_worker.native_runtime_install";
       if (exactDetachedActivation && (input.decision === "edit" || input.editedPayload !== undefined)) {
         throw new ValidationError({
           code: "FIELD_INVALID",
@@ -586,7 +621,11 @@ export class ApprovalRepository {
   public mergeLinkage(approvalId: string, linkagePatch: NonNullable<ApprovalRequest["linkage"]>): ApprovalRequest {
     return this.db.transaction("immediate", () => {
       const row = this.getForUpdateRow(approvalId);
-      if (row.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND || row.kind === "remote_worker.native_runtime" || row.kind === "remote_worker.native_runtime_install") {
+      if (
+        row.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND ||
+        row.kind === "remote_worker.native_runtime" ||
+        row.kind === "remote_worker.native_runtime_install"
+      ) {
         throw new ValidationError({
           code: "FIELD_INVALID",
           field: "linkage",

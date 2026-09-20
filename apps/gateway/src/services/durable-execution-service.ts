@@ -1,4 +1,8 @@
-import { loadDurableChatWorkerContext, injectDurableChatWorkerContext, resolveDurableChatWorkerExecution } from "./durable-chat-worker-adapter.js";
+import {
+  loadDurableChatWorkerContext,
+  injectDurableChatWorkerContext,
+  resolveDurableChatWorkerExecution,
+} from "./durable-chat-worker-adapter.js";
 /* eslint-disable max-lines -- Durable execution helpers and workflow registry stay co-located so lease, recovery, and step replay stay traceable together. */
 /**
  * Durable execution helpers and workflow registry.
@@ -61,6 +65,8 @@ import { hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload } from "./app
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import { readChatTurnControl } from "./chat-turn-control.js";
+import { hasConfirmedDelegationWaitingEvidence } from "./chat-confirmed-delegation-service.js";
 import {
   hasAutonomousChatPostCommitPending,
   persistPreparedChatCapabilityAdmission,
@@ -113,6 +119,7 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
     | "approvals"
     | "audit"
     | "chatMessages"
+    | "chatDelegationRuns"
     | "chatSessionBranchState"
     | "chatSessionPrefs"
     | "chatStreamEvents"
@@ -211,6 +218,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
       capabilityProfileId?: string;
       capabilityProfileHash?: string;
       capabilityProfileContent?: string;
+      skipProviderPreparation?: boolean;
       turnAdmission?: import("./chat-turn-types.js").ActiveTurnAdmission;
       serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
     },
@@ -1995,6 +2003,9 @@ export async function executeDurableChatTurnRun(
     ? undefined
     : await capabilityProfileStore?.findByTurn(payload.turnId);
   const prepared = await host.prepareAgentChatTurn(payload.sessionId, request, {
+    skipProviderPreparation: Boolean(
+      (await readChatTurnControl(host.storage, payload.sessionId, payload.turnId)).toolClosure,
+    ),
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,
     parentTurnId: payload.parentTurnId,
@@ -3068,7 +3079,11 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
   }
   if (isDurableChatWaitingStatus(trace.status)) {
     const toolRuns = await host.storage.chatToolRuns.listByTurn(payload.turnId);
-    if (!hasDurableChatWaitingEvidence(trace, toolRuns)) {
+    const hasEvidence =
+      trace.status === "waiting_for_tool" && trace.routing?.confirmedDelegation
+        ? await hasConfirmedDelegationWaitingEvidence(host.storage, durableRun, trace)
+        : hasDurableChatWaitingEvidence(trace, toolRuns);
+    if (!hasEvidence) {
       return {
         outcome: "invalid",
         reason: `Durable Chat trace ${payload.turnId} lacks canonical evidence for ${trace.status}.`,

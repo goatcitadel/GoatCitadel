@@ -975,10 +975,15 @@ describe("chat-durable-run-service", () => {
     const transact = state.deps.runImmediateTransaction;
     let insideTransaction = false;
     let rejectReceipt = true;
-    state.deps.runImmediateTransaction = async (work) => await transact(async () => {
-      insideTransaction = true;
-      try { return await work(); } finally { insideTransaction = false; }
-    });
+    state.deps.runImmediateTransaction = async (work) =>
+      await transact(async () => {
+        insideTransaction = true;
+        try {
+          return await work();
+        } finally {
+          insideTransaction = false;
+        }
+      });
     const materialize = vi.fn(async () => {
       expect(insideTransaction).toBe(true);
       expect(state.runs.get("run-complete")?.status).toBe("completed");
@@ -988,8 +993,9 @@ describe("chat-durable-run-service", () => {
     });
     state.deps.recordTerminalResultMaterialization = materialize;
 
-    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace))
-      .rejects.toThrow("worker receipt rejected");
+    await expect(finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).rejects.toThrow(
+      "worker receipt rejected",
+    );
     expect(state.runs.get("run-complete")).toEqual(before);
     expect(state.checkpoints).toEqual([]);
     expect(state.timelineEvents).toEqual([]);
@@ -1075,6 +1081,32 @@ describe("chat-durable-run-service", () => {
     expect(state.checkpoints).toHaveLength(1);
     expect(state.timelineEvents).toHaveLength(1);
     expect(state.tracePatches).toHaveLength(1);
+  });
+
+  it.each(["durable", "inherited"])("suppresses model post-processing for %s tool closure", async (source) => {
+    const state = createFinalizeState();
+    const closure = { outcome: "denied" as const, actorId: "operator", closedAt: "2026-09-19T00:00:00Z" };
+    const run = state.runs.get("run-complete")!;
+    if (source === "durable")
+      state.runs.set(run.runId, {
+        ...run,
+        metadata: { ...run.metadata, chatTurnControlV1: { toolClosure: closure } },
+      });
+    const eligibility = vi.fn(state.deps.resolvePostCommitEligibility);
+    state.deps.resolvePostCommitEligibility = eligibility;
+    await finalizeDurableChatRun(
+      state.deps,
+      run.runId,
+      createPreparedTurn(),
+      createTrace({
+        status: "completed",
+        routing: source === "inherited" ? { turnControl: { toolClosure: closure } } : {},
+      }),
+    );
+    expect(eligibility).not.toHaveBeenCalled();
+    expect(state.runs.get(run.runId)?.metadata?.generalChatPostCommitPending).toMatchObject({
+      postCommitEligibility: { autonomyEnabledAtParentSettlement: false, humanSession: false },
+    });
   });
 
   it("does not create autonomous post-commit work for failed or human Chat finalization", async () => {

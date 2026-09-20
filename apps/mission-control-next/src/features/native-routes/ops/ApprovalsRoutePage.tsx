@@ -6,6 +6,7 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip, ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
+  approvalResolutionLabel,
   findTraceMetadata,
   formatInferredIds,
   getCanonicalDurableRunId,
@@ -292,8 +293,7 @@ export function ApprovalsRoutePage({
                 <EmptyState size="compact" title={emptyApprovalsLabel} />
               ) : (
                 approvals.visibleItems.map((approval) => {
-                  const expired = isExpiredApproval(approval);
-                  const effectiveStatus = expired ? "expired" : approval.status;
+                  const effectiveStatus = approvalResolutionLabel(approval);
                   const selected = approval.approvalId === selectedApproval?.approvalId;
                   const isNewArrival = approvals.view === "pending" && newApprovalIds.has(approval.approvalId);
                   return (
@@ -323,8 +323,8 @@ export function ApprovalsRoutePage({
                         />
                         {approval.linkage?.durableRunId ? <StatusChip tone="default">durable</StatusChip> : null}
                         {approval.followUp && approval.followUp.status !== "none" ? (
-                          <StatusChip tone={approvalFollowUpTone(approval.followUp.status)}>
-                            {formatApprovalFollowUp(approval.followUp.status)}
+                          <StatusChip tone={approvalFollowUpTone(approval.followUp.status, approval.actionOutcome)}>
+                            {formatApprovalFollowUp(approval.followUp.status, approval.actionOutcome)}
                           </StatusChip>
                         ) : null}
                       </div>
@@ -565,7 +565,7 @@ function ApprovalInspectorCard(props: {
     onOpenRunDetail,
   } = props;
   const expired = isExpiredApproval(approval);
-  const effectiveStatus = expired ? "expired" : approval.status;
+  const effectiveStatus = approvalResolutionLabel(approval);
   const decisionCopy = buildApprovalDecisionCopy(approval, effectiveStatus);
   const evidence = buildApprovalEvidenceModel(approval.preview, replay?.pendingAction?.request);
   const nativeReviewRequired = approval.kind === "remote_worker.native_runtime";
@@ -624,8 +624,8 @@ function ApprovalInspectorCard(props: {
           </StatusChip>
         ) : null}
         {approval.followUp && approval.followUp.status !== "none" ? (
-          <StatusChip tone={approvalFollowUpTone(approval.followUp.status)}>
-            {formatApprovalFollowUp(approval.followUp.status)}
+          <StatusChip tone={approvalFollowUpTone(approval.followUp.status, approval.actionOutcome)}>
+            {formatApprovalFollowUp(approval.followUp.status, approval.actionOutcome)}
           </StatusChip>
         ) : null}
       </div>
@@ -677,7 +677,11 @@ function ApprovalInspectorCard(props: {
           ) : null}
           {approval.status === "pending" && !expired ? (
             <>
-              <NativeButton variant="outline" disabled={resolvePending || (nativeReviewRequired && !nativeReview)} onClick={onApprove}>
+              <NativeButton
+                variant="outline"
+                disabled={resolvePending || (nativeReviewRequired && !nativeReview)}
+                onClick={onApprove}
+              >
                 Approve now
               </NativeButton>
               <NativeButton variant="outline" className="danger" disabled={resolvePending} onClick={onReject}>
@@ -714,7 +718,7 @@ function ApprovalInspectorCard(props: {
             <span className="mc-next-approvals-followup">
               <Clock size={16} aria-hidden="true" />
               <span>
-                <strong>{formatApprovalFollowUp(approval.followUp.status)}</strong>{" "}
+                <strong>{formatApprovalFollowUp(approval.followUp.status, approval.actionOutcome)}</strong>{" "}
                 {approval.followUp.reason ??
                   `${approval.followUp.effectKind ?? "Follow-up"} for ${approval.followUp.targetKind ?? "target"} ${
                     approval.followUp.targetId ?? ""
@@ -1124,7 +1128,12 @@ function formatApprovalAge(createdAt: string | number | Date | undefined): strin
   return `${days}d`;
 }
 
-function formatApprovalFollowUp(status: NonNullable<ApprovalRequest["followUp"]>["status"]): string {
+function formatApprovalFollowUp(
+  status: NonNullable<ApprovalRequest["followUp"]>["status"],
+  outcome?: ApprovalRequest["actionOutcome"],
+): string {
+  if (outcome === "delivery_failed") return "Approved action failed";
+  if (outcome === "policy_blocked") return "Approved action blocked by policy";
   switch (status) {
     case "queued":
       return "Follow-up queued";
@@ -1142,7 +1151,9 @@ function formatApprovalFollowUp(status: NonNullable<ApprovalRequest["followUp"]>
 
 function approvalFollowUpTone(
   status: NonNullable<ApprovalRequest["followUp"]>["status"],
+  outcome?: ApprovalRequest["actionOutcome"],
 ): "critical" | "warning" | "success" | "muted" | "default" {
+  if (outcome === "delivery_failed" || outcome === "policy_blocked") return "critical";
   switch (status) {
     case "failed":
       return "critical";

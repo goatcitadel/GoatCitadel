@@ -74,6 +74,7 @@ function Harness(props: {
   initialDraft?: string;
   initialAttachments?: unknown[];
   selectedSessionId?: string | null;
+  turnStatus?: "completed" | "waiting_for_approval" | "waiting_for_user_input";
   outboundContext?: OutboundContextBlock | null;
   onOutboundContextConsumed?: ReturnType<typeof vi.fn>;
   sending?: boolean;
@@ -108,6 +109,7 @@ function Harness(props: {
       turns: [
         {
           turnId: "turn-1",
+          trace: { status: props.turnStatus ?? "completed" },
           userMessage: { content: "Original prompt" },
         },
       ],
@@ -121,6 +123,7 @@ function Harness(props: {
     setDraft,
     setPendingAttachments: setPendingAttachments as never,
     setPendingApproval: setPendingApproval.current,
+    setPendingUserInput: vi.fn(),
     setError: setError.current,
     onOutboundContextConsumed: props.onOutboundContextConsumed,
     consumeModelCouncilArming: () => {
@@ -438,7 +441,12 @@ describe("useChatSurfaceOrchestration", () => {
   });
 
   it("stops active turns and reports cancel errors", async () => {
-    apiMocks.cancelChatTurn.mockResolvedValue({ sessionId: "session-1", turnId: "turn-active-123456", cancelled: true, trace: { status: "cancelled" } });
+    apiMocks.cancelChatTurn.mockResolvedValue({
+      sessionId: "session-1",
+      turnId: "turn-active-123456",
+      cancelled: true,
+      trace: { status: "cancelled" },
+    });
     mountHarness({
       activeStream: {
         sessionId: "session-1",
@@ -460,21 +468,22 @@ describe("useChatSurfaceOrchestration", () => {
     expect(latest!.abortActiveChatStream).toHaveBeenCalledWith(
       expect.objectContaining({ turnId: "turn-active-123456" }),
     );
+    expect(latest!.setPendingApproval).toHaveBeenCalledWith(null);
 
-    mountHarness({
-      activeStream: {
-        sessionId: "session-1",
-        streamToken: "stream-2",
-        controller: new AbortController(),
-      },
-    });
+    const admittingStream = {
+      sessionId: "session-1",
+      streamToken: "stream-2",
+      controller: new AbortController(),
+      turnId: undefined as string | undefined,
+    };
+    mountHarness({ activeStream: admittingStream });
     await act(async () => {
-      await latest!.controller.handleStopActiveTurn();
+      const stopped = latest!.controller.handleStopActiveTurn();
+      expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
+      admittingStream.turnId = "turn-active-123456";
+      await stopped;
     });
-    expect(latest!.pushNotice).toHaveBeenCalledWith(
-      "Stopped the local connection before the turn id was assigned.",
-      "warning",
-    );
+    expect(latest!.pushNotice).toHaveBeenCalledWith("Stopped turn 123456.", "warning");
 
     apiMocks.cancelChatTurn.mockRejectedValue(new Error("cancel failed"));
     mountHarness({
@@ -511,15 +520,29 @@ describe("useChatSurfaceOrchestration", () => {
 
   it("keeps the stream alive until cancellation is confirmed and deduplicates pending requests", async () => {
     let settle!: (result: unknown) => void;
-    apiMocks.cancelChatTurn.mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
-    mountHarness({ activeStream: {
-      sessionId: "session-1", streamToken: "pending-stop", turnId: "turn-1", controller: new AbortController(),
-    } });
+    apiMocks.cancelChatTurn.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    mountHarness({
+      activeStream: {
+        sessionId: "session-1",
+        streamToken: "pending-stop",
+        turnId: "turn-1",
+        controller: new AbortController(),
+      },
+    });
     let stop!: Promise<void>;
-    act(() => { stop = latest!.controller.handleStopActiveTurn(); });
+    act(() => {
+      stop = latest!.controller.handleStopActiveTurn();
+    });
     expect(latest!.controller.isStopPending).toBe(true);
     expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
-    await act(async () => { await latest!.controller.handleStopActiveTurn(); });
+    await act(async () => {
+      await latest!.controller.handleStopActiveTurn();
+    });
     expect(apiMocks.cancelChatTurn).toHaveBeenCalledTimes(1);
     await act(async () => {
       settle({ sessionId: "session-1", turnId: "turn-1", cancelled: false, trace: { status: "running" } });
@@ -529,6 +552,38 @@ describe("useChatSurfaceOrchestration", () => {
     expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
     expect(latest!.pushNotice).not.toHaveBeenCalledWith(expect.stringContaining("Stopped turn"), "warning");
   });
+
+  it.each(["waiting_for_approval", "waiting_for_user_input"] as const)(
+    "stops a reloaded %s turn without a local stream",
+    async (turnStatus) => {
+      let settle!: (result: unknown) => void;
+      apiMocks.cancelChatTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      );
+      mountHarness({ turnStatus });
+      let stop!: Promise<void>;
+      act(() => {
+        stop = latest!.controller.handleStopActiveTurn();
+      });
+      expect(latest!.controller.isStopPending).toBe(true);
+      expect(latest!.setPendingApproval).not.toHaveBeenCalled();
+      await act(async () => {
+        await latest!.controller.handleStopActiveTurn();
+      });
+      expect(apiMocks.cancelChatTurn).toHaveBeenCalledExactlyOnceWith("session-1", "turn-1", "mission-control");
+      await act(async () => {
+        settle({ sessionId: "session-1", turnId: "turn-1", cancelled: true, trace: { status: "cancelled" } });
+        await stop;
+      });
+      expect(latest!.controller.isStopPending).toBe(false);
+      expect(latest!.loadSessionCoreState).toHaveBeenCalled();
+      expect(latest!.setPendingApproval).toHaveBeenCalledWith(null);
+      expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
+    },
+  );
 
   it("records resume and remove queue diagnostics", async () => {
     mountHarness({ initialDraft: "Queue diagnostics", canBegin: false });

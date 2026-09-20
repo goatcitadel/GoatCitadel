@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ApprovalRequest,
   ChatTurnTraceRecord,
@@ -3547,6 +3548,7 @@ describe("durable-execution-service orchestration workflow", () => {
     const host = {
       storage: {
         runImmediateTransaction: async (callback: () => unknown | Promise<unknown>) => await callback(),
+        durableRuns: { getRun: vi.fn(() => run) },
         chatMessages: {
           get: vi.fn(() => ({
             messageId: "user-1",
@@ -3819,7 +3821,9 @@ describe("durable-execution-service orchestration workflow", () => {
           })),
         },
         chatTurnTraces: {
-          get: vi.fn(() => undefined),
+          get: vi.fn(() => {
+            throw new NotFoundError({ entity: "Chat turn trace", id: "turn-1" });
+          }),
         },
       },
       prepareAgentChatTurn,
@@ -3889,7 +3893,9 @@ describe("durable-execution-service orchestration workflow", () => {
           })),
         },
         chatTurnTraces: {
-          get: vi.fn(() => undefined),
+          get: vi.fn(() => {
+            throw new NotFoundError({ entity: "Chat turn trace", id: "turn-1" });
+          }),
         },
       },
       prepareAgentChatTurn: vi.fn(async () => ({
@@ -4365,13 +4371,127 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
   });
 
+  it("recovers a confirmed delegation wait only from its matching stored plan and confirmation", async () => {
+    const run = buildRunWithPayload("chat.turn.execute", {
+      version: "chat.turn.execute.v1",
+      sessionId: "session-resting",
+      turnId: "turn-resting",
+      userMessageId: "user-resting",
+      assistantMessageId: "assistant-resting",
+      branchKind: "new",
+      threadEventType: "chat_thread_turn_appended",
+      request: { content: "Use one QA specialist." },
+      userInputResponses: [
+        {
+          promptId: "proposal-1",
+          kind: "single_select",
+          question: "Run QA?",
+          answeredAt: "2026-09-19T00:00:00.000Z",
+          response: { kind: "single_select", optionId: "run_plan" },
+        },
+      ],
+    });
+    run.status = "waiting";
+    run.metadata = {
+      waitForEvent: { eventKey: "chat.confirmed_delegation.resolved", correlationId: "delegation-1" },
+      chatTurnControlV1: {
+        delegationProposal: {
+          promptId: "proposal-1",
+          bindingHash: "a".repeat(64),
+          objective: "Use one QA specialist.",
+          roles: ["qa"],
+        },
+      },
+    };
+    const trace = {
+      turnId: "turn-resting",
+      sessionId: "session-resting",
+      userMessageId: "user-resting",
+      status: "waiting_for_tool",
+      durable: { runId: run.runId, status: "waiting" },
+      toolRuns: [],
+      routing: { confirmedDelegation: { runId: "delegation-1", proposalId: "proposal-1", waiting: true } },
+    } as unknown as ChatTurnTraceRecord;
+    const delegation = {
+      runId: "delegation-1",
+      parentRunId: run.runId,
+      sessionId: trace.sessionId,
+      workflowTemplate: "chat.confirmed-delegation.v1",
+      executionPlanId: "proposal-1",
+      mode: "sequential",
+      objective: "Use one QA specialist.",
+      roles: ["qa"],
+      status: "completed",
+    };
+    const getDelegation = vi.fn(async () => delegation);
+    const host = {
+      storage: {
+        chatTurnTraces: { get: vi.fn(async () => trace) },
+        chatMessages: {
+          get: vi.fn(async (id: string) =>
+            id === "user-resting" ? { role: "user", sessionId: trace.sessionId } : undefined,
+          ),
+        },
+        chatToolRuns: { listByTurn: vi.fn(async () => []) },
+        chatDelegationRuns: { get: getDelegation },
+      },
+    };
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+    const invalid = {
+      recoverable: false,
+      reason: "Durable Chat trace turn-resting lacks canonical evidence for waiting_for_tool.",
+    };
+    for (const mutation of [
+      { parentRunId: "other-parent" },
+      { sessionId: "other-session" },
+      { executionPlanId: "other-plan" },
+      { objective: "A changed task" },
+      { roles: ["qa", "coder"] },
+      { workflowTemplate: "manual" },
+    ]) {
+      getDelegation.mockResolvedValueOnce({ ...delegation, ...mutation });
+      expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual(invalid);
+    }
+    getDelegation.mockRejectedValueOnce(new NotFoundError({ entity: "delegation", id: "delegation-1" }));
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual(invalid);
+    expect(
+      await isDurableWorkflowRecoverable(host as never, {
+        ...run,
+        payload: { ...run.payload, userInputResponses: [] },
+      }),
+    ).toEqual(invalid);
+    expect(
+      await isDurableWorkflowRecoverable(host as never, {
+        ...run,
+        metadata: {
+          ...run.metadata,
+          waitForEvent: { eventKey: "chat.confirmed_delegation.resolved", correlationId: "other-delegation" },
+        },
+      }),
+    ).toEqual(invalid);
+    expect(
+      await isDurableWorkflowRecoverable(host as never, {
+        ...run,
+        metadata: { ...run.metadata, chatTurnControlV1: {} },
+      }),
+    ).toEqual(invalid);
+    expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+  });
+
   it("labels verified repair context as a server outcome and excludes malformed repair content", () => {
     const response = {
-      promptId: "prompt-repair", kind: "text" as const, title: "Repair", question: "Repair the missing prerequisite?",
+      promptId: "prompt-repair",
+      kind: "text" as const,
+      title: "Repair",
+      question: "Repair the missing prerequisite?",
       answeredAt: "2026-09-15T17:00:00.000Z",
       response: { kind: "text" as const, text: "The runtime completed and verified the requested repair." },
-      runtimeRemediationReceipt: { schemaVersion: "goatcitadel.remediation-resume-reference.v1" as const,
-        resolutionId: "resolution-1", remediationId: "repair-1", verificationReceiptId: "verification-1" },
+      runtimeRemediationReceipt: {
+        schemaVersion: "goatcitadel.remediation-resume-reference.v1" as const,
+        resolutionId: "resolution-1",
+        remediationId: "repair-1",
+        verificationReceiptId: "verification-1",
+      },
     };
     const content = buildDurableChatTurnResumeContent("Original request", [response]);
     expect(content).toContain("Runtime repair verification");

@@ -4,6 +4,19 @@ import { projectChatStreamChunkForPublic } from "./chat-secret-projection.js";
 import { ChatStreamSecretProjector } from "./chat-stream-secret-projector.js";
 
 describe("ChatStreamSecretProjector", () => {
+  it("snapshots a redacted cancellation tail before reset without consuming it", () => {
+    const projector = new ChatStreamSecretProjector();
+    expect(projector.project(deltaChunk("The final word"))).toMatchObject({ delta: "The final " });
+    const tail = projector.snapshotAssistantTail("session-1", "turn-1");
+    expect(tail).toBe("word");
+    expect(projector.snapshotAssistantTail("another-session", "turn-1")).toBe("");
+    expect(projector.snapshotAssistantTail("session-1", "turn-1")).toBe(tail);
+    projector.resetTurn("turn-1");
+    expect(tail).toBe("word");
+    projector.project(deltaChunk("Authorization: Bearer hunter2"));
+    expect(projector.snapshotAssistantTail("session-1", "turn-1")).not.toContain("hunter2");
+  });
+
   it("contains every split point for each supported credential family", () => {
     const cases = [
       { content: "Authorization: Token abcdef1234567890", secrets: ["abcdef1234567890"] },

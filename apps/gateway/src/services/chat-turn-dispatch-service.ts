@@ -58,7 +58,7 @@ export interface ChatTurnDispatchHost
     ChatTurnIntegrationDispatch,
     ChatTurnStreamLifecycleControl {
   readonly storage: chatTurnStreamService.ChatTurnStreamHost["storage"] &
-    Pick<Storage, "durableRuns" | "runImmediateTransaction" | "sessionMutationAdmissions">;
+    Pick<Storage, "durableRuns" | "runImmediateTransaction" | "sessionMutationAdmissions" | "chatMessages">;
   updateActiveLeafOrThrow(
     sessionId: string,
     previousActiveTurnId: string | undefined,
@@ -182,6 +182,12 @@ export async function consumePreparedAgentChatTurn(
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   options?: PreparedAgentChatTurnDispatchOptions,
 ): Promise<ChatSendMessageResponse> {
+  if (
+    options?.returnAfterDurableAdmission &&
+    (!options.requireDurableExecution || !options.onChildDurableRunLaunched)
+  ) {
+    throw new Error("Child admission acknowledgment requires durable execution and a bound watcher.");
+  }
   let assistantMessage: ChatMessageRecord | undefined;
   let trace: ChatTurnTraceRecord | undefined;
   let citations: ChatCitationRecord[] = [];
@@ -197,6 +203,32 @@ export async function consumePreparedAgentChatTurn(
       resolvedOrchestration,
       options,
     );
+    if (options?.returnAfterDurableAdmission) {
+      // A durable parent must park before the same worker can execute its child.
+      // The launch callback has already committed the exact child/watcher link.
+      const admitted = await host.storage.chatTurnTraces.get(prepared.turnId);
+      if (
+        !launchedDurableRunId ||
+        admitted.sessionId !== sessionId ||
+        admitted.turnId !== prepared.turnId ||
+        admitted.durable?.runId !== launchedDurableRunId
+      ) {
+        throw new Error("Child admission acknowledgment has no exact canonical durable trace.");
+      }
+      return {
+        sessionId,
+        userMessage: prepared.userMessage,
+        transport: "llm",
+        turnId: prepared.turnId,
+        model: admitted.model ?? input.model ?? prepared.prefs.model,
+        trace: admitted,
+        assistantMessage: admitted.assistantMessageId
+          ? await host.storage.chatMessages.get(admitted.assistantMessageId)
+          : undefined,
+        citations: admitted.citations ?? [],
+        routing: admitted.routing,
+      };
+    }
   } else {
     await options?.assertDispatchOwnership?.();
     const admit = async () => {

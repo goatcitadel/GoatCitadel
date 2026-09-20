@@ -25,9 +25,11 @@ export function ChatTurnActivityRows({
 
   const limit = mode === "chat" ? 3 : 6;
   // Keep failed/blocked evidence visible even when later successful steps finish.
-  const prioritized = [...toolRuns].sort((a, b) =>
-    Number(getChatToolRunDiagnostics(b).hasFailureSignal || b.status === "failed" || b.status === "blocked")
-    - Number(getChatToolRunDiagnostics(a).hasFailureSignal || a.status === "failed" || a.status === "blocked"));
+  const prioritized = [...toolRuns].sort(
+    (a, b) =>
+      Number(getChatToolRunDiagnostics(b).hasFailureSignal || b.status === "failed" || b.status === "blocked") -
+      Number(getChatToolRunDiagnostics(a).hasFailureSignal || a.status === "failed" || a.status === "blocked"),
+  );
   const visibleIds = new Set(prioritized.slice(0, limit).map((run) => run.toolRunId));
   const visibleRuns = toolRuns.filter((run) => visibleIds.has(run.toolRunId));
   const hiddenCount = toolRuns.length - visibleRuns.length;
@@ -59,7 +61,9 @@ export function ChatTurnActivityRows({
             onClick={onOpenRunDetails}
             aria-label={`Open execution detail for ${run.toolName}`}
           >
-            <span className="mc-next-thread-tool-activity-status">{formatToolRunStatus(run.status)}</span>
+            <span className="mc-next-thread-tool-activity-status">
+              {formatToolRunStatus(run.status, run.result?.approvalOutcome)}
+            </span>
             <span className="mc-next-thread-tool-activity-name">{run.toolName}</span>
             <span className="mc-next-thread-tool-activity-summary" title={summary}>
               {summary}
@@ -106,7 +110,12 @@ function getToolRunActivityTone(
   return "neutral";
 }
 
-function formatToolRunStatus(status: ChatThreadTurnRecord["toolRuns"][number]["status"]): string {
+function formatToolRunStatus(
+  status: ChatThreadTurnRecord["toolRuns"][number]["status"],
+  outcome?: import("@goatcitadel/contracts").ApprovalResolutionOutcome,
+): string {
+  if (status === "blocked" && outcome && outcome !== "approved" && outcome !== "unknown")
+    return outcome.replaceAll("_", " ");
   switch (status) {
     case "approval_required":
       return "approval";
@@ -345,11 +354,13 @@ export function ChatLiveActivityRail({
     return () => clearInterval(intervalId);
   }, [hasRunningTool]);
 
-  const phase = hidePhase ? null : deriveLiveActivityPhase({
-    traceStatus: turn.trace.status,
-    toolRuns: turn.toolRuns,
-    hasVisibleAssistantText,
-  });
+  const phase = hidePhase
+    ? null
+    : deriveLiveActivityPhase({
+        traceStatus: turn.trace.status,
+        toolRuns: turn.toolRuns,
+        hasVisibleAssistantText,
+      });
 
   if (turn.toolRuns.length === 0 && !phase) {
     return null;
