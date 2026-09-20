@@ -17,11 +17,21 @@ test("storage coverage rejects invalid or partial shard selections before runnin
 test("Node storage shards execute every test file exactly once with separate report directories", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goat-storage-shards-"));
   try {
-    const files = Array.from({ length: 11 }, (_value, index) => `fixture-${index}.test.mjs`);
+    const authorityFiles = [
+      "remote-worker-assignment-repo.cell-mesh-authority.postgres.test",
+      "remote-worker-assignment-repo.cell-parent.postgres.test",
+      "remote-worker-assignment-repo.cell-worker.postgres.test",
+      "remote-worker-assignment-repo.postgres.test",
+    ].map((name) => {
+      assert.ok(fs.existsSync(new URL(`../packages/storage/src/${name}.ts`, import.meta.url)), `${name} source exists`);
+      return `${name}.mjs`;
+    });
+    const files = [...Array.from({ length: 11 }, (_value, index) => `fixture-${index}.test.mjs`), ...authorityFiles];
     for (const file of files) {
       fs.writeFileSync(path.join(root, file), `import { test } from 'node:test'; test(${JSON.stringify(file)}, () => {});`);
     }
     const seen = new Set();
+    const authorityShards = new Set();
     const reports = new Set();
     for (let shard = 1; shard <= STORAGE_COVERAGE_SHARD_COUNT; shard++) {
       const options = storageCoverageOptions([`--shard=${shard}/${STORAGE_COVERAGE_SHARD_COUNT}`]);
@@ -30,15 +40,17 @@ test("Node storage shards execute every test file exactly once with separate rep
         cwd: root, encoding: "utf8", timeout: 30_000, env: { ...process.env, NODE_TEST_CONTEXT: undefined },
       });
       assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
-      const executed = [...result.stdout.matchAll(/^ok \d+ - (fixture-\d+\.test\.mjs)\r?$/gm)].map((match) => match[1]);
+      const executed = [...result.stdout.matchAll(/^ok \d+ - (\S+\.test\.mjs)\r?$/gm)].map((match) => match[1]);
       assert.ok(executed.length > 0, `shard ${shard} must execute tests: ${result.stdout}`);
       for (const file of executed) {
         assert.equal(seen.has(file), false, `${file} must not run twice`);
         seen.add(file);
+        if (authorityFiles.includes(file)) authorityShards.add(shard);
       }
     }
     assert.equal(reports.size, STORAGE_COVERAGE_SHARD_COUNT);
     assert.deepEqual([...seen].sort(), files.sort());
+    assert.equal(authorityShards.size, STORAGE_COVERAGE_SHARD_COUNT, "authority matrices use separate runners");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
