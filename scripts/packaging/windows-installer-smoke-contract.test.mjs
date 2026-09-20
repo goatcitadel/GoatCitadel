@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -121,8 +122,13 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
 test("native host navigates the initialized WebView controller and smoke rejects a blank embedded page", () => {
   assert.equal((nativeMainWindow.match(/MissionWebView\.CoreWebView2\.Navigate\(uri\.AbsoluteUri\)/g) ?? []).length, 2);
   assert.doesNotMatch(nativeMainWindow, /MissionWebView\.Source\s*=/);
-  assert.match(smokeScript, /WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS/);
-  assert.match(smokeScript, /json\/list/);
+  assert.match(nativeMainWindow, /CreateWithOptionsAsync\(\s*null, userDataFolder, null\)/);
+  assert.match(nativeMainWindow, /EnsureCoreWebView2Async\(environment, null\)/);
+  assert.match(nativeMainWindow, /CoreWebView2\.NavigationCompleted[\s\S]*?args\.IsSuccess/);
+  assert.match(nativeMainWindow, /CoreWebView2\.DocumentTitleChanged/);
+  assert.match(smokeScript, /Get-VerifiedDesktopNavigation[\s\S]*?-ExpectedProcessId \$hostProc.Id/);
+  assert.match(smokeScript, /-StartedAfter \$hostProc.StartTime.ToUniversalTime\(\)/);
+  assert.doesNotMatch(smokeScript, /remote-debugging-port|json\/list/);
   assert.match(smokeScript, /embedded Mission Control target remained blank/);
   assert.match(
     smokeScript,
@@ -157,9 +163,6 @@ test("desktop launch and cleanup are pinned to an isolated runtime before host s
   const appAssignment = smokeScript.indexOf("$env:GOATCITADEL_APP_DIR = $appHome");
   const databaseAssignment = smokeScript.indexOf('$env:GOATCITADEL_DATABASE_DRIVER = "sqlite"');
   const webViewAssignment = smokeScript.indexOf("$env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir");
-  const webViewDebugAssignment = smokeScript.indexOf(
-    '$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$webViewDebugPort"',
-  );
   const launcherClear = smokeScript.indexOf("Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER");
   const gatewayClear = smokeScript.indexOf("Remove-Item Env:GOATCITADEL_GATEWAY_URL");
   const uiClear = smokeScript.indexOf("Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL");
@@ -170,7 +173,6 @@ test("desktop launch and cleanup are pinned to an isolated runtime before host s
   assert.ok(databaseAssignment >= 0 && databaseAssignment < hostLaunch);
   assert.match(smokeScript, /\$env:GOATCITADEL_DATABASE_DRIVER = \$previousDatabaseDriver/);
   assert.ok(webViewAssignment >= 0 && webViewAssignment < hostLaunch);
-  assert.ok(webViewDebugAssignment >= 0 && webViewDebugAssignment < hostLaunch);
   assert.ok(launcherClear >= 0 && launcherClear < hostLaunch);
   assert.ok(gatewayClear >= 0 && gatewayClear < hostLaunch);
   assert.ok(uiClear >= 0 && uiClear < hostLaunch);
@@ -179,11 +181,60 @@ test("desktop launch and cleanup are pinned to an isolated runtime before host s
     /if \(\$runtimeIsolationConfigured -and[\s\S]*?\$bundledNode[\s\S]*?\$launcher[\s\S]*?stop --json/,
   );
   assert.match(smokeScript, /Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER/);
-  assert.match(smokeScript, /Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS/);
   assert.match(smokeScript, /\$env:GOATCITADEL_DESKTOP_LAUNCHER = \$previousDesktopLauncher/);
   assert.match(smokeScript, /\$env:GOATCITADEL_GATEWAY_URL = \$previousGatewayUrl/);
   assert.match(smokeScript, /\$env:GOATCITADEL_MISSION_CONTROL_URL = \$previousMissionControlUrl/);
 });
+
+test(
+  "native navigation proof rejects stale, failed, malformed, and foreign-process snapshots",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = spawnSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
+    . $env:GOAT_STARTUP_SMOKE_HELPER
+    $started = [DateTimeOffset]::UtcNow.AddSeconds(-1)
+    $good = @{ schemaVersion=1; processId=123; phase='navigation-completed'; navigationSucceeded=$true;
+      recordedAt=[DateTimeOffset]::UtcNow.ToString('O'); url='http://127.0.0.1:5175/settings/onboarding'; title='GoatCitadel Get started' }
+    $accepted = Get-VerifiedDesktopNavigation -Snapshot ([pscustomobject]$good) -ExpectedProcessId 123 -StartedAfter $started
+    if (-not $accepted -or $accepted.url -ne $good.url -or $accepted.title -ne $good.title) { throw 'Valid navigation rejected' }
+    $changes = @(
+      @{processId=124}, @{schemaVersion=2}, @{phase='starting'}, @{navigationSucceeded=$false}, @{navigationSucceeded='true'},
+      @{recordedAt=$started.AddSeconds(-1).ToString('O')}, @{recordedAt='invalid'}, @{url='about:blank'},
+      @{url='https://example.com/settings/onboarding'}, @{url='http://name:secret@localhost/settings/onboarding'},
+      @{url='http://localhost/settings/onboarding?token=secret'}, @{url='http://localhost/settings/onboarding#secret'}, @{title=''}
+    )
+    foreach ($change in $changes) {
+      $candidate = $good.Clone()
+      foreach ($key in $change.Keys) { $candidate[$key] = $change[$key] }
+      if (Get-VerifiedDesktopNavigation -Snapshot ([pscustomobject]$candidate) -ExpectedProcessId 123 -StartedAfter $started) {
+        throw ('Invalid navigation accepted: ' + ($change | ConvertTo-Json -Compress))
+      }
+    }
+    foreach ($invalid in @($null, [pscustomobject]@{})) {
+      if (Get-VerifiedDesktopNavigation -Snapshot $invalid -ExpectedProcessId 123 -StartedAfter $started) { throw 'Malformed snapshot accepted' }
+    }
+  `,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GOAT_STARTUP_SMOKE_HELPER: path.join(repoRoot, "scripts", "packaging", "lib", "windows-desktop-startup.ps1"),
+        },
+        timeout: 30_000,
+      },
+    );
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+  },
+);
 
 test("installer lifecycle binds and removes the exact protocol handler", () => {
   assert.match(smokeScript, /Software\\Classes\\goatcitadel/);

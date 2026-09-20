@@ -21,6 +21,7 @@ public sealed partial class MainWindow : Window
     private static readonly TimeSpan RuntimePollInterval = TimeSpan.FromSeconds(10);
 
     private readonly LauncherService _launcherService;
+    private readonly DesktopStartupDiagnostics? _startupDiagnostics;
     private readonly RuntimeStatusService _runtimeStatusService;
     private readonly EventStreamService _eventStreamService;
     private readonly NotificationService _notificationService;
@@ -38,12 +39,14 @@ public sealed partial class MainWindow : Window
     private bool _cleanedUp;
     private bool _trayAvailable;
     private bool _webViewReady;
+    private bool _webViewNavigationSucceeded;
 
     public MainWindow()
     {
         InitializeComponent();
 
         _launcherService = new LauncherService();
+        _startupDiagnostics = DesktopStartupDiagnostics.TryCreate(_launcherService);
         _runtimeStatusService = new RuntimeStatusService(_launcherService);
         _eventStreamService = new EventStreamService(_runtimeStatusService);
         _notificationService = new NotificationService(
@@ -174,16 +177,31 @@ public sealed partial class MainWindow : Window
                     "WebView2")
                 : Path.GetFullPath(configuredUserDataFolder);
             Directory.CreateDirectory(userDataFolder);
-            Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", userDataFolder, EnvironmentVariableTarget.Process);
-            await MissionWebView.EnsureCoreWebView2Async();
+            // Elevated WebView2 hosts ignore environment overrides. Supply the selected
+            // profile through the supported API without enabling any debug switches.
+            var environment = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateWithOptionsAsync(
+                null, userDataFolder, null);
+            await MissionWebView.EnsureCoreWebView2Async(environment, null);
+            _startupDiagnostics?.RecordPhase("webview-initialized", browserVersion: environment.BrowserVersionString);
             MissionWebView.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
             MissionWebView.CoreWebView2.NavigationStarting += (_, args) =>
             {
+                _webViewNavigationSucceeded = false;
+                _startupDiagnostics?.RecordPhase("navigating");
                 if (!NavigationPolicy.TryValidateBrowserTarget(args.Uri, out var ignoredUri, out var error))
                 {
                     args.Cancel = true;
                     ShowToast(error);
                 }
+            };
+            MissionWebView.CoreWebView2.NavigationCompleted += (_, args) =>
+            {
+                _webViewNavigationSucceeded = args.IsSuccess;
+                RecordWebViewNavigation();
+            };
+            MissionWebView.CoreWebView2.DocumentTitleChanged += (_, _) =>
+            {
+                if (_webViewNavigationSucceeded) RecordWebViewNavigation();
             };
             MissionWebView.CoreWebView2.NewWindowRequested += (_, args) =>
             {
@@ -217,6 +235,9 @@ public sealed partial class MainWindow : Window
             RenderWebViewRecovery(error);
         }
     }
+
+    private void RecordWebViewNavigation() => _startupDiagnostics?.RecordNavigation(
+        MissionWebView.CoreWebView2.Source, MissionWebView.CoreWebView2.DocumentTitle, _webViewNavigationSucceeded);
 
     private void MissionWebView_WebMessageReceived(
         Microsoft.Web.WebView2.Core.CoreWebView2 sender,
@@ -692,6 +713,7 @@ public sealed partial class MainWindow : Window
 
     private void RenderWebViewRecovery(Exception error)
     {
+        _startupDiagnostics?.RecordPhase("webview-failed", error);
         _deferredRoutes.MarkUnavailable();
         _webViewReady = false;
         _webViewInitializationTask = null;
@@ -700,6 +722,7 @@ public sealed partial class MainWindow : Window
 
     private void RenderRuntimeRecovery(Exception error)
     {
+        _startupDiagnostics?.RecordPhase("runtime-failed", error);
         _deferredRoutes.MarkUnavailable();
         RenderRecovery(error.Message);
     }

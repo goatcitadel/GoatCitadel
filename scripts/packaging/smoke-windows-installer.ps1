@@ -55,6 +55,7 @@ $appHome = Join-Path $installDir "app"
 $runtimeBase = Join-Path $smokeRoot "runtime"
 $webViewDataDir = Join-Path $runtimeBase "webview2"
 $runtimeLogDir = Join-Path $runtimeBase "runtime/logs"
+$desktopStartupPath = Join-Path $runtimeLogDir "desktop-startup.json"
 $launchStdout = Join-Path $smokeRoot "goatcitadel-launch.out.json"
 $launchStderr = Join-Path $smokeRoot "goatcitadel-launch.err.txt"
 $statusStdout = Join-Path $smokeRoot "goatcitadel-status.out.json"
@@ -64,6 +65,7 @@ $protocolRegistryPath = "Registry::HKEY_CURRENT_USER\Software\Classes\goatcitade
 $protocolCommandRegistryPath = "$protocolRegistryPath\shell\open\command"
 $expectedProtocolCommand = '"{0}" "%1"' -f $desktop
 $payloadValidatorPath = Join-Path $PSScriptRoot "validate-windows-bundle.ps1"
+. (Join-Path $PSScriptRoot "lib/windows-desktop-startup.ps1")
 
 if (Test-Path -LiteralPath $protocolRegistryPath) {
   throw "Refusing to overwrite an existing goatcitadel protocol registration during isolated installer smoke."
@@ -79,25 +81,15 @@ $previousGoatCitadelHome = [Environment]::GetEnvironmentVariable("GOATCITADEL_HO
 $previousGoatCitadelAppDir = [Environment]::GetEnvironmentVariable("GOATCITADEL_APP_DIR", "Process")
 $previousDatabaseDriver = [Environment]::GetEnvironmentVariable("GOATCITADEL_DATABASE_DRIVER", "Process")
 $previousWebViewDataFolder = [Environment]::GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", "Process")
-$previousWebViewBrowserArguments = [Environment]::GetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "Process")
 $previousDesktopLauncher = [Environment]::GetEnvironmentVariable("GOATCITADEL_DESKTOP_LAUNCHER", "Process")
 $previousGatewayUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_GATEWAY_URL", "Process")
 $previousMissionControlUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_MISSION_CONTROL_URL", "Process")
-$debugPortListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-try {
-  $debugPortListener.Start()
-  $webViewDebugPort = ([System.Net.IPEndPoint]$debugPortListener.LocalEndpoint).Port
-}
-finally {
-  $debugPortListener.Stop()
-}
 $env:GOATCITADEL_HOME = $runtimeBase
 $env:GOATCITADEL_APP_DIR = $appHome
 # This clean-profile lifecycle fixture has no PostgreSQL cluster. Choose its
 # isolated SQLite database explicitly now that the launcher honors configuration.
 $env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
 $env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
-$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$webViewDebugPort"
 Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
@@ -134,6 +126,7 @@ function Show-RuntimeLogs {
     }
   }
   foreach ($name in @(
+      "desktop-startup.json",
       "gateway.stderr.log",
       "gateway.stdout.log",
       "mission-control.stderr.log",
@@ -339,10 +332,13 @@ try {
   }
 
   $webViewTarget = $null
-  $webViewTargets = @()
+  $desktopStartup = $null
   $expectedWebViewPath = "/settings/onboarding"
   $expectedWebViewTitle = "GoatCitadel Get started"
-  $webViewDeadline = (Get-Date).AddSeconds(40)
+  # Each cold launcher endpoint has a three-minute bound. Allow both plus page
+  # navigation, while rejecting native failures immediately. Debug-port flags are
+  # intentionally ignored by elevated WebView2 hosts on hosted Windows runners.
+  $webViewDeadline = (Get-Date).AddMinutes(7)
   while ((Get-Date) -lt $webViewDeadline) {
     $hostProc.Refresh()
     if ($hostProc.HasExited) {
@@ -350,15 +346,16 @@ try {
       throw "Desktop host exited during embedded Mission Control smoke with code $hex."
     }
     try {
-      $webViewTargets = @(
-        Invoke-RestMethod -Uri "http://127.0.0.1:$webViewDebugPort/json/list" -TimeoutSec 2 -ErrorAction Stop
-      )
-      $webViewTarget = $webViewTargets |
-        Where-Object { $_.type -eq "page" -and $_.url -ne "about:blank" } |
-        Select-Object -First 1
+      $desktopStartup = Get-Content -LiteralPath $desktopStartupPath -Raw -ErrorAction Stop | ConvertFrom-Json
+      $webViewTarget = Get-VerifiedDesktopNavigation -Snapshot $desktopStartup `
+        -ExpectedProcessId $hostProc.Id -StartedAfter $hostProc.StartTime.ToUniversalTime()
     }
     catch {
       $webViewTarget = $null
+    }
+    if ($desktopStartup -and $desktopStartup.processId -eq $hostProc.Id -and
+        $desktopStartup.phase -in @("webview-failed", "runtime-failed")) {
+      throw "Native startup failed: $($desktopStartup.phase) ($($desktopStartup.errorType), $($desktopStartup.errorCode)). See startup and runtime logs."
     }
     if ($webViewTarget) {
       try {
@@ -376,8 +373,7 @@ try {
   }
 
   if (-not $webViewTarget) {
-    $observedTargets = ($webViewTargets | ForEach-Object { "$($_.type):$($_.url)" }) -join ", "
-    throw "Desktop host presented a titled window but its embedded Mission Control target remained blank. Observed WebView targets: $observedTargets"
+    throw "Desktop host presented a titled window but its embedded Mission Control target remained blank. No successful navigation snapshot from the launched native process."
   }
   $webViewUri = [Uri]$webViewTarget.url
   if ($webViewUri.Scheme -notin @("http", "https") -or
@@ -559,6 +555,8 @@ try {
 }
 catch {
   $primaryFailure = $_.Exception.Message
+  try { Show-RuntimeLogs }
+  catch { Write-Warning "Could not read startup diagnostics: $($_.Exception.Message)" }
 }
 finally {
   try {
@@ -669,12 +667,6 @@ finally {
   }
   else {
     $env:GOATCITADEL_DATABASE_DRIVER = $previousDatabaseDriver
-  }
-  if ($null -eq $previousWebViewBrowserArguments) {
-    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousWebViewBrowserArguments
   }
   if ($null -eq $previousDesktopLauncher) {
     Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
