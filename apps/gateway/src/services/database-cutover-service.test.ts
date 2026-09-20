@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseCutoverService, __databaseCutoverServiceInternals } from "./database-cutover-service.js";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -29,6 +31,73 @@ function buildSqliteConfig(dbPath: string): never {
 }
 
 describe("DatabaseCutoverService", () => {
+  function createPostgresHealthService(): DatabaseCutoverService {
+    return new DatabaseCutoverService({
+      config: {
+        assistant: {
+          database: {
+            driver: "postgres",
+            postgres: { mode: "managed", database: "health-test", pool: {} },
+          },
+        },
+      } as never,
+      createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
+    });
+  }
+
+  it("shares overlapping health probes without caching the result of a completed probe", async () => {
+    const ready = { reachable: true, migrationVersion: 196, latencyMs: 10, issues: [] };
+    const degraded = { reachable: true, latencyMs: 10, issues: ["Postgres migration work is in progress"] };
+    let releaseProbe!: (value: typeof ready) => void;
+    const pending = new Promise<typeof ready>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const healthCheck = vi
+      .spyOn(PostgresDatabaseClient.prototype, "healthCheck")
+      .mockReturnValueOnce(pending)
+      .mockResolvedValue(degraded);
+    const close = vi.spyOn(PostgresDatabaseClient.prototype, "close");
+    const service = createPostgresHealthService();
+
+    const publicProbe = service.getHealthSnapshot();
+    const dashboardProbe = service.getHealthSnapshot();
+    const readinessProbe = service.getHealthSnapshot();
+    releaseProbe(ready);
+
+    const snapshots = await Promise.all([publicProbe, dashboardProbe, readinessProbe]);
+    expect(healthCheck).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    for (const snapshot of snapshots) {
+      expect(snapshot).toMatchObject({ driver: "postgres", reachable: true, migrationVersion: 196, issues: [] });
+    }
+
+    await expect(service.getHealthSnapshot()).resolves.toMatchObject(degraded);
+    expect(healthCheck).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a failed shared health probe so the next request can retry", async () => {
+    const healthCheck = vi
+      .spyOn(PostgresDatabaseClient.prototype, "healthCheck")
+      .mockRejectedValueOnce(new Error("health probe failed"))
+      .mockResolvedValue({ reachable: true, migrationVersion: 196, issues: [] });
+    const close = vi.spyOn(PostgresDatabaseClient.prototype, "close");
+    const service = createPostgresHealthService();
+
+    const outcomes = await Promise.allSettled([service.getHealthSnapshot(), service.getHealthSnapshot()]);
+    expect(outcomes).toEqual([
+      { status: "rejected", reason: new Error("health probe failed") },
+      { status: "rejected", reason: new Error("health probe failed") },
+    ]);
+    expect(healthCheck).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+
+    await expect(service.getHealthSnapshot()).resolves.toMatchObject({ reachable: true, issues: [] });
+    expect(healthCheck).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
   it("blocks execute cutover when the runtime has already been flipped to Postgres", async () => {
     const createBackup = vi.fn();
     const service = new DatabaseCutoverService({
