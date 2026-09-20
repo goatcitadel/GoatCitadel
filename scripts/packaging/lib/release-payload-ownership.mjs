@@ -82,6 +82,48 @@ export function removeEmptyDirectories(rootDir) {
   }
 }
 
+export function pruneReleaseResidue(rootDir, removeDirectory) {
+  const resolvedRoot = path.resolve(rootDir);
+  const rootStats = fs.lstatSync(resolvedRoot);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error(`Release payload root must be a regular non-link directory: ${rootDir}`);
+  }
+  const prunedDirectories = new Set([
+    ".codex-temp",
+    ".pytest_cache",
+    "artifacts",
+    "backups",
+    "coverage",
+    "coverage-exercise",
+    "coverage-smoke",
+    "test-results",
+  ]);
+  const prunedExtensions = new Set([".map", ".tsbuildinfo"]);
+  const queue = [resolvedRoot];
+
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor];
+    for (const entry of fs.readdirSync(current)) {
+      const absolutePath = path.join(current, entry);
+      const stats = fs.lstatSync(absolutePath);
+      if (stats.isDirectory() && (prunedDirectories.has(entry) || /^coverage-shard-\d+$/u.test(entry))) {
+        removeDirectory(absolutePath);
+        continue;
+      }
+      if (stats.isSymbolicLink()) {
+        continue;
+      }
+      if (stats.isDirectory()) {
+        queue.push(absolutePath);
+        continue;
+      }
+      if (stats.isFile() && prunedExtensions.has(path.extname(entry))) {
+        fs.rmSync(absolutePath, { force: true });
+      }
+    }
+  }
+}
+
 function compareStrings(left, right) {
   return Buffer.from(left, "utf8").compare(Buffer.from(right, "utf8"));
 }
