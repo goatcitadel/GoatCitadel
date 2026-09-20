@@ -64,20 +64,16 @@ export function registerCellRevocationTests(boundary: "worker" | "mesh_authority
     const verify = (db: DatabaseClient, seed: string) => {
       const h = seedProtectedFenceHarness(db, seed, true);
       const token = D(`${seed}:lease`);
-      // These composed authority fixtures exercise many independent rollback
-      // boundaries; PostgreSQL can exceed a minute without a worker heartbeat.
-      const longRuntimeFixture =
-        kind === "runtime output retention" ||
-        kind === "native file disclosure" ||
-        kind === "installation capacity staging" ||
-        kind === "pool installation capacity staging";
+      // Keep the fixture lease alive through composed revocation checks. V8
+      // coverage can push even SQLite capacity delivery past one minute; lease
+      // expiration has separate assignment-repository tests.
       const { assignmentId, durableRunId } = seedFencedAssignment(
         h,
         seed,
         "cell",
         h.meshFence.admissionGeneration,
         token,
-        longRuntimeFixture ? 300 : 60,
+        300,
         kind === "native file disclosure",
       );
       verifyExchange(
