@@ -52,7 +52,7 @@ an unrelated session. Do not attach secrets or private files outside approved sc
    ```json
    {
      "command": "opencode run --format json --agent plan -- \"Review the retry logic; report findings without editing files.\"",
-     "cwd": "F:\\code\\example-project",
+     "cwd": "C:\\projects\\example-project",
      "timeoutMs": 300000
    }
    ```
