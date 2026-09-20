@@ -266,12 +266,15 @@
   margin-top: -0.32rem;
 }
 
-.mc-next-thread-turn.grouped .mc-next-thread-bubble.user .mc-next-thread-meta strong,
-.mc-next-thread-turn.grouped .mc-next-thread-bubble.assistant .mc-next-thread-meta strong {
+.mc-next-thread-turn.grouped .mc-next-thread-bubble.user .mc-next-thread-meta:not(.mc-next-thread-stop-summary) strong,
+.mc-next-thread-turn.grouped
+  .mc-next-thread-bubble.assistant
+  .mc-next-thread-meta:not(.mc-next-thread-stop-summary)
+  strong {
   display: none;
 }
 
-.mc-next-thread-turn.grouped .mc-next-thread-bubble .mc-next-thread-meta {
+.mc-next-thread-turn.grouped .mc-next-thread-bubble .mc-next-thread-meta:not(.mc-next-thread-stop-summary) {
   opacity: 0.55;
   font-size: var(--text-xs);
 }

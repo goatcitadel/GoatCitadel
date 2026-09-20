@@ -9,7 +9,11 @@ import type {
   ToolPolicyActorContext,
   WardEffect,
 } from "@goatcitadel/contracts";
-import { ToolExecutionPreconditionError, type McpToolPolicyBinding, type MeshToolPolicyBinding } from "@goatcitadel/policy-engine";
+import {
+  ToolExecutionPreconditionError,
+  type McpToolPolicyBinding,
+  type MeshToolPolicyBinding,
+} from "@goatcitadel/policy-engine";
 import { isNativeMcpToolName, type NativeMcpChatToolBinding } from "./native-mcp-chat-binding.js";
 import { isMeshChatToolName, type MeshChatToolBinding } from "./mesh-chat-binding.js";
 import { resolveApprovedExternalRuntimeTarget } from "./approved-external-runtime-target.js";
@@ -27,6 +31,7 @@ type ApprovedExternalRuntimeExecutionOptions =
     }
   | {
       deferResolution: true;
+      beforeExecute?: () => void;
       externalSideEffect: {
         markStarted(): void;
         markNotRequired(): void;
@@ -38,7 +43,9 @@ export interface ApprovedExternalRuntimePendingActionPort {
   resolveNativeMcpChatToolBinding?(request: ToolInvokeRequest): Promise<NativeMcpChatToolBinding | undefined>;
   resolveMeshChatToolBinding?(request: ToolInvokeRequest): Promise<MeshChatToolBinding | undefined>;
   invokeApprovedMeshRuntime?(
-    request: ToolInvokeRequest, policyResult: ToolInvokeResult, approvalId: string,
+    request: ToolInvokeRequest,
+    policyResult: ToolInvokeResult,
+    approvalId: string,
     markExternalCallStarted: () => void | Promise<void>,
   ): Promise<ToolInvokeResult>;
   executeApprovedAction(
@@ -70,10 +77,12 @@ export async function executeApprovedExternalRuntimePendingAction(
     storage: port.storage,
     approvalId,
     request: storedRequest,
-    execute: async (markExternalCallStarted) => {
+    trackToolDispatch: true,
+    execute: async (markExternalCallStarted, markToolDispatchStarted) => {
       if (!requiresApprovedExternalRuntimeAdapter(pending)) {
         const result = await port.executeApprovedAction(approvalId, signal, {
           deferResolution: true,
+          beforeExecute: markToolDispatchStarted,
           externalSideEffect: {
             markStarted: markExternalCallStarted,
             // The canonical runner records the no-boundary outcome after this
@@ -124,7 +133,12 @@ export function isApprovedExternalRuntimePendingAction(
 
 export function requiresApprovedExternalRuntimeAdapter(pending: PendingApprovalAction): boolean {
   const toolName = readRecordString(pending.request, "toolName") ?? "";
-  return pending.request.externalRuntime === true || toolName === "mcp.invoke" || isNativeMcpToolName(toolName) || isMeshChatToolName(toolName);
+  return (
+    pending.request.externalRuntime === true ||
+    toolName === "mcp.invoke" ||
+    isNativeMcpToolName(toolName) ||
+    isMeshChatToolName(toolName)
+  );
 }
 
 export function approvedExternalRuntimeRequestMatches(
@@ -222,11 +236,14 @@ export function toMcpInvokeRequest(
   signal?: AbortSignal,
   target?: Pick<NativeMcpChatToolBinding, "serverId" | "nativeToolName">,
 ): McpInvokeRequest {
-  if (target ? request.toolName !== `mcp.${target.serverId}.${target.nativeToolName}` : request.toolName !== "mcp.invoke") {
+  if (
+    target ? request.toolName !== `mcp.${target.serverId}.${target.nativeToolName}` : request.toolName !== "mcp.invoke"
+  ) {
     throw new ToolExecutionPreconditionError("MCP invocation does not match its explicit target binding");
   }
   const serverId = target?.serverId ?? (typeof request.args.serverId === "string" ? request.args.serverId.trim() : "");
-  const toolName = target?.nativeToolName ?? (typeof request.args.toolName === "string" ? request.args.toolName.trim() : "");
+  const toolName =
+    target?.nativeToolName ?? (typeof request.args.toolName === "string" ? request.args.toolName.trim() : "");
   if (!serverId || !toolName) {
     throw new Error("Invalid MCP invocation payload.");
   }

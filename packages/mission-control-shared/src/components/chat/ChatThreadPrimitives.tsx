@@ -492,7 +492,10 @@ function TurnEvidenceSummary({
     turn.toolRuns.length > 0 ? `${turn.toolRuns.length} tool${turn.toolRuns.length === 1 ? "" : "s"}` : null,
     turn.citations.length > 0 ? `${turn.citations.length} source${turn.citations.length === 1 ? "" : "s"}` : null,
     durableRunId ? `Run ${formatCompactEvidenceId(durableRunId)}` : null,
-    turn.trace.failure ? turn.trace.failure.failureClass : null,
+    turn.trace.failure &&
+    !(turn.trace.status === "cancelled" && turn.trace.failure.failureClass === "approval_required")
+      ? turn.trace.failure.failureClass
+      : null,
     turn.trace.orchestration ? "orchestrated" : null,
   ].filter((chip): chip is string => Boolean(chip));
 
@@ -1150,7 +1153,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const durableRunId = turn.trace.durable?.runId;
   // A published (non-null) preview means the turn is still streaming or
   // settling its final reveal; the cleared preview is the idle signal.
-  const isStreamingTurn = streamingPreview?.turnId === turn.turnId;
+  const isStreamingTurn = streamingPreview?.turnId === turn.turnId && turn.trace.status !== "cancelled";
   // The live activity rail owns rendering tool runs while the turn is in
   // flight; TurnEvidenceSummary's ChatTurnActivityRows takes back over the
   // instant the trace settles, in the same commit the rail unmounts (see
@@ -1169,7 +1172,9 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     ? formatActorTimestamp(turn.assistantMessage.timestamp)
     : isStreamingTurn
       ? "Streaming"
-      : "Running";
+      : turn.trace.status === "cancelled"
+        ? "Stopped"
+        : "Running";
   const assistantPendingLabel = getAssistantPendingLabel(turn.trace, { isStreamingTurn });
   const isPlainChat = mode === "chat";
   const showContextToggle = Boolean(onToggleContextTurn);
@@ -1184,7 +1189,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   // Retry is the primary recovery action, so it stays reachable without
   // opening the menu. Everything else remains secondary and collapsible.
   const showActionMenu =
-    hasStartNewThreadAction || hasEditAction || hasGeneratedArtifactAction || hasGeneratedArtifactVersionAction || Boolean(renderSkillCapture);
+    hasStartNewThreadAction ||
+    hasEditAction ||
+    hasGeneratedArtifactAction ||
+    hasGeneratedArtifactVersionAction ||
+    Boolean(renderSkillCapture);
   const showBranchSwitcher = turn.branch.siblingCount > 1;
   const showActions = showRetryAction || showActionMenu || showBranchSwitcher || Boolean(suggestionSummary);
   const showOperationalDetails =
@@ -1280,7 +1289,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             ) : null}
           </p>
           {turn.trace.status === "cancelled" ? (
-            <p className="mc-next-thread-meta"><strong>Stopped</strong> · Partial output is kept; actions already started may still finish.</p>
+            <p className="mc-next-thread-meta mc-next-thread-stop-summary" role="status">
+              <strong>Stopped</strong> ·{" "}
+              {hasAssistantOutput ? "Partial output is kept;" : "No response text was retained;"} actions already
+              started may still finish.
+            </p>
           ) : null}
           <ChatThinkingSection thinking={turn.thinking} turnStatus={turn.trace.status} />
           {showLiveActivity && !hideLiveActivity ? (

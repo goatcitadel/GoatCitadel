@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildApprovalEvidenceModel,
+  approvalResolutionLabel,
   findTraceMetadata,
   formatInferredIds,
   getCanonicalDurableRunId,
@@ -30,6 +31,18 @@ function approval(
 }
 
 describe("approval helpers", () => {
+  it("renders typed denial and withdrawal without interpreting old notes", () => {
+    const old = approval({
+      approvalId: "legacy",
+      createdAt: "2026-01-01T11:00:00.000Z",
+      status: "rejected",
+      resolutionNote: "Stopped by the user",
+    });
+    expect(approvalResolutionLabel(old)).toBe("rejected");
+    expect(approvalResolutionLabel({ ...old, resolutionOutcome: "denied" })).toBe("denied");
+    expect(approvalResolutionLabel({ ...old, resolutionOutcome: "withdrawn" })).toBe("withdrawn");
+    expect(approvalResolutionLabel({ ...old, resolutionOutcome: "policy_blocked" })).toBe("blocked by policy");
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T12:00:00.000Z"));
@@ -205,7 +218,13 @@ it("exposes exact capability identity and scope before a lifecycle decision", ()
     { candidateId: "candidate-1", versionId: "version-2", title: "Approve candidate" },
     { capabilityLifecycle: { subjectId: "candidate-1", subjectKind: "capability_candidate", scopeKind: "global" } },
   );
-  expect(model?.targets).toEqual(expect.arrayContaining([
-    "Candidate Id: candidate-1", "Version Id: version-2", "Subject Id: candidate-1", "Subject Kind: capability_candidate", "Scope Kind: global",
-  ]));
+  expect(model?.targets).toEqual(
+    expect.arrayContaining([
+      "Candidate Id: candidate-1",
+      "Version Id: version-2",
+      "Subject Id: candidate-1",
+      "Subject Kind: capability_candidate",
+      "Scope Kind: global",
+    ]),
+  );
 });

@@ -9,6 +9,13 @@ import {
 } from "./chat-tool-result-projection.js";
 /* eslint-disable max-lines -- Chat orchestration is still a centralized runtime coordinator pending a larger bounded-interface split. */
 import { createHash, randomUUID } from "node:crypto";
+import {
+  assertChatTurnToolUseOpen,
+  ChatTurnToolUseClosedError,
+  claimArtifactRetry,
+  readChatTurnControl,
+  toolClosureSummary,
+} from "./chat-turn-control.js";
 import { isExplicitLocalMcpTask } from "./chat-local-mcp-intent.js";
 import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
 import { assertNativeMcpChatToolSchema, type NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
@@ -164,15 +171,12 @@ import {
   buildWorkspaceFileDownloadHref,
   buildSafeWriteFallbackPath,
   buildSafeWritePath,
-  buildSyntheticDocumentCreateArgs,
-  buildSyntheticPresentationCreateArgs,
   buildWriteDestinationUserInputPrompt,
   detectDocumentArtifactIntent,
   detectPresentationArtifactIntent,
   getExecutedWorkspaceFileWriteReceipt,
   isWriteDestinationTool,
   isWriteJailBlockReason,
-  mergeDocumentArtifactDeliveryContent,
   mergePresentationArtifactDeliveryContent,
   mergeWorkspaceFileDownloadContent,
   normalizePathForComparison,
@@ -786,6 +790,9 @@ type ChatToolAccessProbe = (
 }>;
 
 export interface ChatTurnAgentRunnerDeps {
+  resolveConfirmedDelegation?: (
+    input: ChatTurnAgentRunnerInput,
+  ) => Promise<import("./chat-confirmed-delegation-service.js").ConfirmedDelegationResult | undefined>;
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
   /** Live callable catalog used only to enforce stricter removals or drift. */
@@ -1262,7 +1269,10 @@ export class ChatTurnAgentRunner {
     return input.canonicalWriteFence ? await input.canonicalWriteFence(work) : await work();
   }
 
-  private async assertExternalDispatch(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">): Promise<void> {
+  private async assertExternalDispatch(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence" | "sessionId" | "turnId">,
+  ): Promise<void> {
+    await assertChatTurnToolUseOpen(this.deps.storage, input.sessionId, input.turnId);
     await this.runCanonicalWrite(input, () => undefined);
   }
 
@@ -1858,6 +1868,36 @@ export class ChatTurnAgentRunner {
 
   private async *runStreamInternal(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
+    const turnControl = await readChatTurnControl(this.deps.storage, input.sessionId, input.turnId);
+    if (turnControl.toolClosure) {
+      const storedTrace = await this.deps.storage.chatTurnTraces.get(input.turnId);
+      if (storedTrace.status === "cancelled") {
+        yield { type: "trace_update", sessionId: input.sessionId, turnId: input.turnId, trace: storedTrace };
+        return;
+      }
+      const trace = await this.patchTurnTrace(input, input.turnId, {
+        status: "completed",
+        pendingUserInput: null,
+        failure: undefined,
+        routing: { ...storedTrace.routing, turnControl },
+        completion: { status: "complete", repaired: false },
+        finishedAt: new Date().toISOString(),
+      });
+      const messageId = input.outputMessageId ?? `assistant-${input.turnId}`;
+      const content = toolClosureSummary(turnControl.toolClosure);
+      yield { type: "message_done", sessionId: input.sessionId, turnId: input.turnId, messageId, content };
+      yield {
+        type: "trace_update",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        trace: {
+          ...trace,
+          toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+        },
+      };
+      yield { type: "done", sessionId: input.sessionId, turnId: input.turnId, messageId };
+      return;
+    }
     const workflowSkillCapture = input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER);
     // Quoted workflow evidence describes past work, not new execution intent.
     const executionIntentContent = workflowSkillCapture ? "" : input.content;
@@ -1960,6 +2000,7 @@ export class ChatTurnAgentRunner {
           capabilityProfileId: input.capabilityProfile?.profileId,
           capabilityProfileHash: input.capabilityProfile?.hashes.profileHash,
           routing: {
+            turnControl,
             executionProfile,
             liveDataIntent: intents.liveData,
             executionBudget: executionBudgetTrace,
@@ -1979,6 +2020,57 @@ export class ChatTurnAgentRunner {
     };
 
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
+    const confirmedDelegation = await this.deps.resolveConfirmedDelegation?.(input);
+    if (confirmedDelegation) {
+      const delegationTrace = await this.patchTurnTrace(
+        input,
+        input.turnId,
+        "prompt" in confirmedDelegation
+          ? {
+              status: "waiting_for_user_input",
+              pendingUserInput: confirmedDelegation.prompt,
+            }
+          : {
+              status: confirmedDelegation.waiting ? "waiting_for_tool" : "completed",
+              pendingUserInput: null,
+              routing: {
+                ...trace.routing,
+                confirmedDelegation: {
+                  runId: confirmedDelegation.result.runId,
+                  proposalId: confirmedDelegation.proposalId,
+                  waiting: confirmedDelegation.waiting,
+                },
+              },
+              citations: confirmedDelegation.result.citations,
+              ...(confirmedDelegation.waiting
+                ? {}
+                : { completion: { status: "complete", repaired: false }, finishedAt: new Date().toISOString() }),
+            },
+      );
+      if ("prompt" in confirmedDelegation) {
+        yield {
+          type: "user_input_required",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          prompt: confirmedDelegation.prompt,
+        };
+      } else if (!confirmedDelegation.waiting) {
+        const messageId = input.outputMessageId ?? `assistant-${input.turnId}`;
+        const content =
+          confirmedDelegation.result.stitchedOutput ||
+          "The delegated work ended without a completed answer. Review its execution details.";
+        yield { type: "message_done", sessionId: input.sessionId, turnId: input.turnId, messageId, content };
+      }
+      yield { type: "trace_update", sessionId: input.sessionId, turnId: input.turnId, trace: delegationTrace };
+      if (!("prompt" in confirmedDelegation) && !confirmedDelegation.waiting)
+        yield {
+          type: "done",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          messageId: input.outputMessageId ?? `assistant-${input.turnId}`,
+        };
+      return;
+    }
     if (workflowSkillCapture) {
       conversationMessages.push({
         role: "system",
@@ -2145,6 +2237,7 @@ export class ChatTurnAgentRunner {
       (run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined,
     );
     let assistantContent = "";
+    let toolUseClosed = false;
     let assistantModel = input.model;
     let routingState: ChatTurnTraceRecord["routing"] = {
       executionProfile,
@@ -4039,6 +4132,36 @@ export class ChatTurnAgentRunner {
             break;
           }
           if (toolCalls.length === 0 || input.toolAutonomy === "manual") {
+            const requestedArtifactTool = intents.presentationArtifact
+              ? "presentations.create"
+              : intents.documentArtifact
+                ? "documents.create"
+                : undefined;
+            if (
+              requestedArtifactTool &&
+              !turnControl.artifactRetryIssued &&
+              toolCalls.length === 0 &&
+              input.toolAutonomy !== "manual" &&
+              !promptLabEvalIntegrityTurn &&
+              completionOutcome.status === "complete" &&
+              toolSchema.canonicalToModel.has(requestedArtifactTool) &&
+              !toolRuns.some((run) => /^(?:documents|presentations)\.create$/u.test(run.toolName)) &&
+              toolRunCount < executionBudget.maxToolRunsPerTurn &&
+              loop + 1 < executionBudget.maxToolLoops &&
+              turnBudgetDeadline - Date.now() > executionBudget.minSynthesisReserveMs &&
+              (await this.runCanonicalWrite(input, () =>
+                claimArtifactRetry(this.deps.storage, input.sessionId, input.turnId),
+              ))
+            ) {
+              turnControl.artifactRetryIssued = true;
+              conversationMessages.push({ role: "assistant", content: extractMessageContent(message) });
+              conversationMessages.push({
+                role: "system",
+                content:
+                  "The user explicitly requested a file, but no artifact tool has run. You have one opportunity to issue a structured artifact tool call using the available tools and normal approvals. Use content relevant to the current request; use previous answers only when the user explicitly referred to them. Do not copy raw tool envelopes or unrelated history. If you cannot create the requested file, say so. Do not claim a file exists without a successful tool result.",
+              });
+              continue;
+            }
             if (
               input.toolAutonomy !== "manual" &&
               promptLabExplicitToolsWithRequiredEvidence &&
@@ -4940,7 +5063,13 @@ export class ChatTurnAgentRunner {
         if (error instanceof Error && error.name === "SystemHeartbeatToolInvocationBlockedError") {
           throw error;
         }
-        if (isChatTurnAbortError(error, input.signal)) {
+        if (error instanceof ChatTurnToolUseClosedError) {
+          toolUseClosed = true;
+          finalStatus = "completed";
+          assistantContent = toolClosureSummary(error.closure);
+          finalFailure = undefined;
+          completionState = { status: "complete", repaired: false };
+        } else if (isChatTurnAbortError(error, input.signal)) {
           finalStatus = "cancelled";
           assistantContent = "";
           finalFailure = undefined;
@@ -5037,186 +5166,13 @@ export class ChatTurnAgentRunner {
       };
     }
 
-    const artifactFallbackSource = buildGroundedArtifactFallbackSource({
-      assistantContent,
-      historyMessages: input.historyMessages,
-      toolRuns,
-    });
-
-    if (
-      !approvalPayload &&
-      !pendingUserInput &&
-      finalStatus === "completed" &&
-      !finalFailure &&
-      artifactFallbackSource !== undefined &&
-      !promptLabEvalIntegrityTurn &&
-      input.toolAutonomy !== "manual" &&
-      intents.presentationArtifact &&
-      toolSchema.canonicalToModel.has("presentations.create") &&
-      !toolRuns.some((run) => run.toolName === "presentations.create" && run.status === "executed") &&
-      !toolRuns.some(isResearchPresentationGateRun) &&
-      toolRuns.filter(
-        (run) =>
-          run.toolName === "presentations.create" &&
-          run.status === "blocked" &&
-          run.error?.includes("presentation content quality gate"),
-      ).length < 2 &&
-      toolRunCount < executionBudget.maxToolRunsPerTurn
-    ) {
-      throwIfChatTurnCancelled(input);
-      // Visual generation is intentionally deferred to the authorized policy
-      // executor hook. Approval persistence therefore contains only this deck
-      // payload and never image bytes.
-      const rawArgs = buildSyntheticPresentationCreateArgs(
-        { ...input, sourceText: artifactFallbackSource },
-        this.deps.safeWriteFallbackDir,
-      );
-      await this.patchTurnTrace(input, input.turnId, {
-        status: "waiting_for_tool",
-      });
-      const syntheticRun = await this.executeToolCall({
-        input,
-        turnId: input.turnId,
-        toolName: "presentations.create",
-        rawArgs,
-        localFileIntent,
-        priorToolRuns: toolRuns,
-        turnBudgetDeadline,
-      });
-      toolRuns.push(syntheticRun.record);
-      rememberToolLoopHistory(loopGuardState, syntheticRun.record);
-      yield {
-        type: "tool_start",
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        toolRun: {
-          ...syntheticRun.record,
-          status: "started",
-        },
-      };
-      if (syntheticRun.chunk) {
-        yield syntheticRun.chunk;
-      }
-      if (syntheticRun.userInputPrompt) {
-        finalStatus = "waiting_for_user_input";
-        pendingUserInput = syntheticRun.userInputPrompt;
-      } else if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
-        finalStatus = "waiting_for_approval";
-        finalFailure = {
-          failureClass: "approval_required",
-          message: "Approval required by policy.",
-          retryable: true,
-          recommendedAction: getChatTurnRecoveryAction("approval_required"),
-        };
-        approvalPayload = {
-          approvalId: syntheticRun.record.approvalId,
-          toolName: syntheticRun.record.toolName,
-          reason: "Approval required by policy.",
-          expiresAt: syntheticRun.approvalExpiresAt,
-        };
-        await this.upsertInlineApproval(input, {
-          approvalId: syntheticRun.record.approvalId,
-          sessionId: input.sessionId,
-          turnId: input.turnId,
-          toolName: syntheticRun.record.toolName,
-          status: "pending",
-          reason: "Approval required by policy.",
-          expiresAt: syntheticRun.approvalExpiresAt,
-        });
-      } else {
-        const preRepairContent = assistantContent;
-        assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
-        if (syntheticRun.record.status === "executed" && assistantContent !== preRepairContent) {
-          markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
-        }
-      }
-    }
-
-    if (
-      !approvalPayload &&
-      !pendingUserInput &&
-      finalStatus === "completed" &&
-      !finalFailure &&
-      artifactFallbackSource !== undefined &&
-      !promptLabEvalIntegrityTurn &&
-      input.toolAutonomy !== "manual" &&
-      intents.documentArtifact &&
-      toolSchema.canonicalToModel.has("documents.create") &&
-      !toolRuns.some((run) => run.toolName === "documents.create" && run.status === "executed") &&
-      toolRunCount < executionBudget.maxToolRunsPerTurn
-    ) {
-      throwIfChatTurnCancelled(input);
-      const rawArgs = buildSyntheticDocumentCreateArgs(
-        { ...input, sourceText: artifactFallbackSource },
-        this.deps.safeWriteFallbackDir,
-      );
-      await this.patchTurnTrace(input, input.turnId, {
-        status: "waiting_for_tool",
-      });
-      const syntheticRun = await this.executeToolCall({
-        input,
-        turnId: input.turnId,
-        toolName: "documents.create",
-        rawArgs,
-        localFileIntent,
-        priorToolRuns: toolRuns,
-        turnBudgetDeadline,
-      });
-      toolRuns.push(syntheticRun.record);
-      rememberToolLoopHistory(loopGuardState, syntheticRun.record);
-      yield {
-        type: "tool_start",
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        toolRun: {
-          ...syntheticRun.record,
-          status: "started",
-        },
-      };
-      if (syntheticRun.chunk) {
-        yield syntheticRun.chunk;
-      }
-      if (syntheticRun.userInputPrompt) {
-        finalStatus = "waiting_for_user_input";
-        pendingUserInput = syntheticRun.userInputPrompt;
-      } else if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
-        finalStatus = "waiting_for_approval";
-        finalFailure = {
-          failureClass: "approval_required",
-          message: "Approval required by policy.",
-          retryable: true,
-          recommendedAction: getChatTurnRecoveryAction("approval_required"),
-        };
-        approvalPayload = {
-          approvalId: syntheticRun.record.approvalId,
-          toolName: syntheticRun.record.toolName,
-          reason: "Approval required by policy.",
-          expiresAt: syntheticRun.approvalExpiresAt,
-        };
-        await this.upsertInlineApproval(input, {
-          approvalId: syntheticRun.record.approvalId,
-          sessionId: input.sessionId,
-          turnId: input.turnId,
-          toolName: syntheticRun.record.toolName,
-          status: "pending",
-          reason: "Approval required by policy.",
-          expiresAt: syntheticRun.approvalExpiresAt,
-        });
-      } else {
-        const preRepairContent = assistantContent;
-        assistantContent = mergeDocumentArtifactDeliveryContent(assistantContent, syntheticRun.record);
-        if (syntheticRun.record.status === "executed" && assistantContent !== preRepairContent) {
-          markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
-        }
-      }
-    }
-
     if (
       !approvalPayload &&
       !pendingUserInput &&
       !terminalProviderFailure &&
       !quickWebProfile &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       toolRuns.length > 0 &&
       (looksLikeDegradedAssistantFallbackContent(assistantContent) ||
@@ -5274,6 +5230,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !pendingUserInput &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       shouldAttemptIncompleteCompletionRepair({
         completionIsIncomplete: completionState.status !== "complete",
@@ -5313,6 +5270,7 @@ export class ChatTurnAgentRunner {
       !pendingUserInput &&
       !terminalProviderFailure &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       assistantContent.trim().length === 0
     ) {
@@ -5365,6 +5323,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !terminalProviderFailure &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       input.mode === "cowork" &&
       !promptLabEvalIntegrityTurn
@@ -5387,6 +5346,7 @@ export class ChatTurnAgentRunner {
       !pendingUserInput &&
       !terminalProviderFailure &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       intents.presentationArtifact &&
       !verifiedPresentationWrite
@@ -5411,6 +5371,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !pendingUserInput &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       intents.presentationArtifact &&
       verifiedPresentationWrite
@@ -5430,6 +5391,7 @@ export class ChatTurnAgentRunner {
       !approvalPayload &&
       !pendingUserInput &&
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       !promptLabEvalIntegrityTurn
     ) {
@@ -5445,7 +5407,7 @@ export class ChatTurnAgentRunner {
         );
       }
     }
-    if (finalStatus !== "cancelled" && !durableFanoutWaiting && !promptLabEvalIntegrityTurn) {
+    if (finalStatus !== "cancelled" && !toolUseClosed && !durableFanoutWaiting && !promptLabEvalIntegrityTurn) {
       assistantContent = appendToolFailureConstraints(
         assistantContent,
         projectToolRunsForModel(toolRuns),
@@ -5465,11 +5427,12 @@ export class ChatTurnAgentRunner {
     // undefined). The failed-file-mutation disclosure is surfaced even when the
     // answer was recovered, because lost writes are independent of answer quality.
     const failedFileMutations =
-      finalStatus !== "cancelled" && !durableFanoutWaiting && !promptLabEvalIntegrityTurn
+      finalStatus !== "cancelled" && !toolUseClosed && !durableFanoutWaiting && !promptLabEvalIntegrityTurn
         ? collectFailedFileMutations(toolRuns)
         : [];
     if (
       finalStatus !== "cancelled" &&
+      !toolUseClosed &&
       !durableFanoutWaiting &&
       !promptLabEvalIntegrityTurn &&
       assistantContent.trim().length > 0
@@ -5524,6 +5487,22 @@ export class ChatTurnAgentRunner {
     }
 
     const finishedAt = new Date().toISOString();
+    if (
+      !toolUseClosed &&
+      finalStatus === "completed" &&
+      !approvalPayload &&
+      !pendingUserInput &&
+      (intents.documentArtifact || intents.presentationArtifact) &&
+      !toolRuns.some(
+        (run) =>
+          Boolean(getExecutedWorkspaceFileWriteReceipt(run)) ||
+          (/^(?:documents|presentations)\.create$/u.test(run.toolName) &&
+            run.status === "executed" &&
+            Boolean(run.result?.path || run.result?.artifactId || run.result?.artifact)),
+      )
+    ) {
+      assistantContent = "The requested file was not created. There is no successful artifact result for this turn.";
+    }
     const finalizedCompletion = finalizeTurnCompletionState({
       completion: completionState,
       finalStatus,
@@ -5554,6 +5533,7 @@ export class ChatTurnAgentRunner {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { completion: finalizedCompletionWithRuntime }),
       routing: {
         ...routingState,
+        turnControl: await readChatTurnControl(this.deps.storage, input.sessionId, input.turnId),
         liveDataIntent: intents.liveData,
         effectiveProviderId: routingState.effectiveProviderId ?? input.providerId,
         effectiveModel: routingState.effectiveModel ?? assistantModel,
@@ -6562,6 +6542,7 @@ export class ChatTurnAgentRunner {
         blockedReason: "Skill capture drafts instructions only; tool execution is unavailable.",
       };
     }
+    await assertChatTurnToolUseOpen(this.deps.storage, input.input.sessionId, input.turnId);
     // Heartbeat policy is re-evaluated before even creating a tool-run row.
     // This is deliberately independent from catalog filtering: policy can
     // narrow or gain an approval requirement after provider admission.
@@ -13477,42 +13458,6 @@ function looksLikeUserSafeFailureMessage(content: string): boolean {
     normalized.startsWith("this turn failed before completion.") ||
     normalized.startsWith("i can't fetch web-backed information for that because web is set to off")
   );
-}
-
-function buildGroundedArtifactFallbackSource(input: {
-  assistantContent: string;
-  historyMessages: ChatCompletionRequest["messages"];
-  toolRuns: ChatToolRunRecord[];
-}): string | undefined {
-  const parts: string[] = [];
-  for (const message of input.historyMessages) {
-    if (message.role !== "assistant" || typeof message.content !== "string") continue;
-    const content = message.content.trim();
-    if (
-      content.length >= 180 &&
-      !looksLikeRecoverableAssistantFallbackContent(content) &&
-      !looksLikeUserSafeFailureMessage(content)
-    ) {
-      parts.push(content);
-    }
-  }
-  for (const run of input.toolRuns) {
-    if (run.status !== "executed" || !run.result || /^(?:presentations|documents)\.create$/u.test(run.toolName)) {
-      continue;
-    }
-    const serialized = JSON.stringify(run.result);
-    if (serialized.length >= 80) parts.push(serialized);
-  }
-  const current = input.assistantContent.trim();
-  if (
-    current.length >= 180 &&
-    !looksLikeRecoverableAssistantFallbackContent(current) &&
-    !looksLikeUserSafeFailureMessage(current)
-  ) {
-    parts.push(current);
-  }
-  const grounded = parts.join("\n\n").trim().slice(-18_000);
-  return grounded.length >= 180 ? grounded : undefined;
 }
 
 function looksLikeRecoverableAssistantFallbackContent(content: string): boolean {

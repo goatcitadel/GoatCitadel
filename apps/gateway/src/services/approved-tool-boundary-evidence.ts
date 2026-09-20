@@ -127,6 +127,7 @@ export async function hasApprovedToolPreDispatchEvidence(
       matching.every(
         (event) =>
           event.payload.sideEffectManaged === true &&
+          event.payload.toolDispatchStarted === false &&
           event.payload.outcome === "blocked" &&
           event.payload.externalRuntime === false &&
           event.payload.externalBoundaryState === "not_required",

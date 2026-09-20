@@ -43,10 +43,7 @@ import {
   type RailSection,
   type WorkspaceSelectionStatus,
 } from "./MissionControlShellChrome";
-import {
-  useBeforeUnloadGuard,
-  useNavigateGuard,
-} from "../features/native-routes/library/use-form-dirty";
+import { useBeforeUnloadGuard, useNavigateGuard } from "../features/native-routes/library/use-form-dirty";
 import {
   AREA_META,
   RAIL_ITEMS,
@@ -872,159 +869,174 @@ export function MissionControlNextApp() {
     );
 
   return (
-    <UnifiedSidebarProvider mobile={isMobileNav} navOpen={navOpen} openNav={() => { setInspectorOpen(false); setNavOpen(true); }} closeNav={() => setNavOpen(false)}>
-    <ShellDetailPanelProvider
-      isOpen={hasVisibleInspector}
-      onOpenPanel={() => {
-        if (shellInspectorAvailable) {
-          setNavOpen(false);
-          setInspectorOpen(true);
-        }
+    <UnifiedSidebarProvider
+      mobile={isMobileNav}
+      navOpen={navOpen}
+      openNav={() => {
+        setInspectorOpen(false);
+        setNavOpen(true);
       }}
-      onClosePanel={() => setInspectorOpen(false)}
-      onActiveEntryChange={(entry) => {
-        if (shellInspectorAvailable) {
-          setDetailEntry(entry);
-        }
-      }}
+      closeNav={() => setNavOpen(false)}
     >
-      <div
-        className={[
-          "mc-next-shell",
-          shellThemeClass,
-          `ui-mode-${mode}`,
-          `ui-density-${density}`,
-          `ui-effects-${effectiveEffectsMode}`,
-          hasVisibleInspector ? "has-shell-inspector" : "",
-          showTechnicalDetails ? "" : "ui-hide-technical",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        data-area={route.area}
-        data-section={route.section ?? "root"}
-        data-route={pageErrorResetKey.split("?")[0]}
+      <ShellDetailPanelProvider
+        isOpen={hasVisibleInspector}
+        onOpenPanel={() => {
+          if (shellInspectorAvailable) {
+            setNavOpen(false);
+            setInspectorOpen(true);
+          }
+        }}
+        onClosePanel={() => setInspectorOpen(false)}
+        onActiveEntryChange={(entry) => {
+          if (shellInspectorAvailable) {
+            setDetailEntry(entry);
+          }
+        }}
       >
-        <a className="mc-next-skip-link" href="#main-content">
-          Skip to content
-        </a>
-        <UnifiedSidebarFrame>
-          <ShellTopbar
-            activeCitadelId={activeCitadelId}
-            activeCitadelName={activeCitadelName}
-            activeWorkspaceId={activeWorkspaceId}
-            activeWorkspaceName={activeWorkspaceName}
-            buildPrimaryAreaRoute={buildPrimaryAreaRoute}
-            citadelOptions={citadelOptions}
-            handleOpenStartHere={handleOpenStartHere}
-            handleSelectCitadel={(id) => scopeLeave.request(() => handleSelectCitadel(id))}
-            handleSelectWorkspace={(id) => scopeLeave.request(() => handleSelectWorkspace(id))}
-            handleToggleMode={handleToggleMode}
-            handleToggleNotificationSound={handleToggleNotificationSound}
-            handleToggleTheme={handleToggleTheme}
-            inspectorOpen={inspectorOpen}
-            inspectorAvailable={shellInspectorAvailable}
-            isCompactTopbar={isCompactTopbar}
-            mode={mode}
-            navigate={navigate}
-            onOpenPalette={openContextualPalette}
-            onOpenNav={() => setNavOpen(true)}
-            onToggleInspector={() => { setNavOpen(false); setInspectorOpen((current) => !current); }}
-            operatorNotificationCount={operatorNotificationCount}
-            pendingApprovals={pendingApprovals}
-            preloadRouteChunk={preloadRouteChunk}
-            realtimeBadge={realtimeStatusCopy.badge}
-            realtimeDegraded={realtimeStatusCopy.degraded}
-            route={route}
-            soundEnabled={soundEnabled}
-            theme={effectiveChromeTheme}
-            workspaceOptions={workspaceOptions}
-            workspaceSelectionStatus={workspaceSelectionStatus}
-          />
-
-          <div className={`mc-next-body${usesFullStageLayout ? " is-work-area" : ""}`}>
-            <ShellRail
+        <div
+          className={[
+            "mc-next-shell",
+            shellThemeClass,
+            `ui-mode-${mode}`,
+            `ui-density-${density}`,
+            `ui-effects-${effectiveEffectsMode}`,
+            hasVisibleInspector ? "has-shell-inspector" : "",
+            showTechnicalDetails ? "" : "ui-hide-technical",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          data-area={route.area}
+          data-section={route.section ?? "root"}
+          data-route={pageErrorResetKey.split("?")[0]}
+        >
+          <a className="mc-next-skip-link" href="#main-content">
+            Skip to content
+          </a>
+          <UnifiedSidebarFrame>
+            <ShellTopbar
               activeCitadelId={activeCitadelId}
               activeCitadelName={activeCitadelName}
               activeWorkspaceId={activeWorkspaceId}
               activeWorkspaceName={activeWorkspaceName}
               buildPrimaryAreaRoute={buildPrimaryAreaRoute}
               citadelOptions={citadelOptions}
-              currentAreaMeta={currentAreaMeta}
-              groupedRailItems={groupedRailItems}
+              handleOpenStartHere={handleOpenStartHere}
               handleSelectCitadel={(id) => scopeLeave.request(() => handleSelectCitadel(id))}
               handleSelectWorkspace={(id) => scopeLeave.request(() => handleSelectWorkspace(id))}
-              isMobileNav={isMobileNav}
-              navOpen={navOpen}
+              handleToggleMode={handleToggleMode}
+              handleToggleNotificationSound={handleToggleNotificationSound}
+              handleToggleTheme={handleToggleTheme}
+              inspectorOpen={inspectorOpen}
+              inspectorAvailable={shellInspectorAvailable}
+              isCompactTopbar={isCompactTopbar}
+              mode={mode}
               navigate={navigate}
-              onClose={() => setNavOpen(false)}
               onOpenPalette={openContextualPalette}
+              onOpenNav={() => setNavOpen(true)}
+              onToggleInspector={() => {
+                setNavOpen(false);
+                setInspectorOpen((current) => !current);
+              }}
+              operatorNotificationCount={operatorNotificationCount}
               pendingApprovals={pendingApprovals}
               preloadRouteChunk={preloadRouteChunk}
-              railSignalLines={railSignalLines}
-              railSignalTitle={railSignalTitle}
+              realtimeBadge={realtimeStatusCopy.badge}
+              realtimeDegraded={realtimeStatusCopy.degraded}
               route={route}
-              taskBacklogCount={taskBacklogCount}
+              soundEnabled={soundEnabled}
+              theme={effectiveChromeTheme}
               workspaceOptions={workspaceOptions}
               workspaceSelectionStatus={workspaceSelectionStatus}
             />
 
-            <ShellRouteStage
-              currentRouteDescription={currentRouteDescription}
-              currentRouteLabel={currentRouteLabel}
-              fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
-              onReturnToChat={() => navigate({ area: "chat", theme: route.theme })}
-              pageErrorResetKey={pageErrorResetKey}
-              usesFullStageLayout={usesFullStageLayout}
-            >
-              {routeContent}
-            </ShellRouteStage>
-          </div>
+            <div className={`mc-next-body${usesFullStageLayout ? " is-work-area" : ""}`}>
+              <ShellRail
+                activeCitadelId={activeCitadelId}
+                activeCitadelName={activeCitadelName}
+                activeWorkspaceId={activeWorkspaceId}
+                activeWorkspaceName={activeWorkspaceName}
+                buildPrimaryAreaRoute={buildPrimaryAreaRoute}
+                citadelOptions={citadelOptions}
+                currentAreaMeta={currentAreaMeta}
+                groupedRailItems={groupedRailItems}
+                handleSelectCitadel={(id) => scopeLeave.request(() => handleSelectCitadel(id))}
+                handleSelectWorkspace={(id) => scopeLeave.request(() => handleSelectWorkspace(id))}
+                isMobileNav={isMobileNav}
+                navOpen={navOpen}
+                navigate={navigate}
+                onClose={() => setNavOpen(false)}
+                onOpenPalette={openContextualPalette}
+                pendingApprovals={pendingApprovals}
+                preloadRouteChunk={preloadRouteChunk}
+                railSignalLines={railSignalLines}
+                railSignalTitle={railSignalTitle}
+                route={route}
+                taskBacklogCount={taskBacklogCount}
+                workspaceOptions={workspaceOptions}
+                workspaceSelectionStatus={workspaceSelectionStatus}
+              />
 
-          <ShellInspectorLayer
-            detailPanelPinned={detailPanelPinned}
-            hasVisibleInspector={hasVisibleInspector}
-            inspectorEntry={inspectorEntry}
-            onClose={() => setInspectorOpen(false)}
-            onTogglePinned={() => setDetailPanelPinned(!detailPanelPinned)}
+              <ShellRouteStage
+                currentRouteDescription={currentRouteDescription}
+                currentRouteLabel={currentRouteLabel}
+                fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
+                onReturnToChat={() => navigate({ area: "chat", theme: route.theme })}
+                pageErrorResetKey={pageErrorResetKey}
+                usesFullStageLayout={usesFullStageLayout}
+              >
+                {routeContent}
+              </ShellRouteStage>
+            </div>
+
+            <ShellInspectorLayer
+              detailPanelPinned={detailPanelPinned}
+              hasVisibleInspector={hasVisibleInspector}
+              inspectorEntry={inspectorEntry}
+              onClose={() => setInspectorOpen(false)}
+              onTogglePinned={() => setDetailPanelPinned(!detailPanelPinned)}
+            />
+
+            <ShellStatusStrip
+              approvalsPill={approvalsPill}
+              buildIdentity={status.runtimeIdentity}
+              buildIdentityError={status.runtimeIdentityError}
+              currentReleaseScope={currentReleaseScope}
+              currentReleaseStatusLabel={currentReleaseStatusLabel}
+              daemonDegraded={daemonStatusUnavailable || daemonNeedsIntervention}
+              daemonStatusValue={daemonStatusValue}
+              gatewayReady={gatewayReady}
+              gatewayMessage={gatewayAccess.message}
+              navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+              navigateBuildProof={() => navigate({ area: "ops", section: "diagnostics", theme: route.theme })}
+              realtimeDegraded={realtimeStatusCopy.degraded}
+              realtimeValue={realtimeStatusCopy.strip}
+              sessionsPill={sessionsPill}
+              spendPill={spendPill}
+            />
+          </UnifiedSidebarFrame>
+
+          <NotificationStack items={notifications} onDismiss={dismissNotification} />
+          <DraftLeaveDialog
+            open={pendingDirtyNavigation !== null}
+            keys={pendingDirtyNavigation?.keys ?? []}
+            onContinue={confirmKeep}
+            onDiscard={confirmDiscard}
+            onCancel={() => {
+              shellHistory.cancel();
+              cancelDiscard();
+            }}
           />
-
-          <ShellStatusStrip
-            approvalsPill={approvalsPill}
-            buildIdentity={status.runtimeIdentity}
-            buildIdentityError={status.runtimeIdentityError}
-            currentReleaseScope={currentReleaseScope}
-            currentReleaseStatusLabel={currentReleaseStatusLabel}
-            daemonDegraded={daemonStatusUnavailable || daemonNeedsIntervention}
-            daemonStatusValue={daemonStatusValue}
-            gatewayMessage={gatewayAccess.message}
-            navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
-            navigateBuildProof={() => navigate({ area: "ops", section: "diagnostics", theme: route.theme })}
-            realtimeDegraded={realtimeStatusCopy.degraded}
-            realtimeValue={realtimeStatusCopy.strip}
-            sessionsPill={sessionsPill}
-            spendPill={spendPill}
-          />
-        </UnifiedSidebarFrame>
-
-        <NotificationStack items={notifications} onDismiss={dismissNotification} />
-        <DraftLeaveDialog
-          open={pendingDirtyNavigation !== null}
-          keys={pendingDirtyNavigation?.keys ?? []}
-          onContinue={confirmKeep}
-          onDiscard={confirmDiscard}
-          onCancel={() => { shellHistory.cancel(); cancelDiscard(); }}
-        />
-        {scopeLeave.dialog}
-        {/* H-7: shell command palette. Cmd/Ctrl+K opens; Esc closes via the
+          {scopeLeave.dialog}
+          {/* H-7: shell command palette. Cmd/Ctrl+K opens; Esc closes via the
             palette's own handler (priority over useShellKeyboardManager). */}
-        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
-        <ShortcutsOverlay
-          open={shortcutsOpen}
-          onClose={() => setShortcutsOpen(false)}
-          routeShortcuts={routeShortcuts}
-        />
-      </div>
-    </ShellDetailPanelProvider>
+          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
+          <ShortcutsOverlay
+            open={shortcutsOpen}
+            onClose={() => setShortcutsOpen(false)}
+            routeShortcuts={routeShortcuts}
+          />
+        </div>
+      </ShellDetailPanelProvider>
     </UnifiedSidebarProvider>
   );
 }

@@ -505,16 +505,20 @@ export function ThreadedTimeline({
     props.composerRef.current?.focus();
   });
   const draftEmpty = !props.draft.trim();
-  const renderSkillCapture = useCallback((turn: ChatThreadTurnRecord) => sessionId ? (
-    <WorkflowSkillCaptureControl
-      turn={turn}
-      sessionId={sessionId}
-      workspaceId={props.workspaceId}
-      draftEmpty={draftEmpty}
-      onReviewPlan={onReviewChangePlanStable}
-      onPrepare={prepareSkillCapture}
-    />
-  ) : null, [sessionId, props.workspaceId, draftEmpty, onReviewChangePlanStable, prepareSkillCapture]);
+  const renderSkillCapture = useCallback(
+    (turn: ChatThreadTurnRecord) =>
+      sessionId ? (
+        <WorkflowSkillCaptureControl
+          turn={turn}
+          sessionId={sessionId}
+          workspaceId={props.workspaceId}
+          draftEmpty={draftEmpty}
+          onReviewPlan={onReviewChangePlanStable}
+          onPrepare={prepareSkillCapture}
+        />
+      ) : null,
+    [sessionId, props.workspaceId, draftEmpty, onReviewChangePlanStable, prepareSkillCapture],
+  );
   useEscapeToStopStream({
     enabled: Boolean(props.sending && props.hasActiveStream),
     onStop: onStopStreamingTurn,
@@ -608,15 +612,17 @@ export function ThreadedTimeline({
   const effectiveStreamStatus =
     hasExplicitNonStreamError && props.streamStatus === "error" ? "idle" : props.streamStatus;
   const hasStreamError = effectiveStreamStatus === "error" || Boolean(streamTransportError?.trim());
-  const liveStatus = props.isStopPending ? "Stopping response. Waiting for confirmation." : hasStreamError
-    ? "Chat response could not be completed. Use the composer to try again or open Activity for details."
-    : effectiveStreamStatus === "streaming"
-      ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
-      : effectiveStreamStatus === "queued"
-        ? `${toTitleCase(props.mode)} turn queued.`
-        : effectiveStreamStatus === "connecting"
-          ? `${toTitleCase(props.mode)} stream connecting.`
-          : "";
+  const liveStatus = props.isStopPending
+    ? "Stopping response. Waiting for confirmation."
+    : hasStreamError
+      ? "Chat response could not be completed. Use the composer to try again or open Activity for details."
+      : effectiveStreamStatus === "streaming"
+        ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
+        : effectiveStreamStatus === "queued"
+          ? `${toTitleCase(props.mode)} turn queued.`
+          : effectiveStreamStatus === "connecting"
+            ? `${toTitleCase(props.mode)} stream connecting.`
+            : "";
   const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(streamingPreview, props.activeStreamingTurnId);
   const activeWorkState = deriveFocusedActiveWorkState({
     // A locally submitted message is new work; a previous terminal turn must
@@ -628,12 +634,16 @@ export function ThreadedTimeline({
     pendingUserInput: props.pendingUserInput,
   });
   const displayActiveWorkState = activeWorkState
-    ? { ...activeWorkState,
-        ...(props.isStopPending && activeWorkState.kind === "running"
-          ? { title: "Stopping…", detail: "Waiting for the Gateway to confirm cancellation." }
+    ? {
+        ...activeWorkState,
+        ...(props.isStopPending
+          ? { kind: "running" as const, title: "Stopping…", detail: "Waiting for the Gateway to confirm cancellation." }
           : visibleOptimisticUserMessage && activeWorkState.kind === "running"
-            ? { title: "Sending…", detail: "Waiting for your request to be accepted." } : {}),
-        canStop: activeWorkState.canStop && props.hasActiveStream && !props.isStopPending }
+            ? { title: "Sending…", detail: "Waiting for your request to be accepted." }
+            : {}),
+        canStop:
+          activeWorkState.canStop && (props.hasActiveStream || Boolean(activeWorkState.turnId)) && !props.isStopPending,
+      }
     : null;
   const openActivity = () => {
     if (onOpenActivity) {
@@ -645,13 +655,18 @@ export function ThreadedTimeline({
     }
   };
   const previewHasText = Boolean(streamingPreview?.visibleText);
-  const conversationMessageIds = useMemo(() => (props.thread?.turns ?? [])
-    .filter((turn) => turn.branch?.isSelectedPath !== false)
-    .flatMap((turn) => [
-      `${turn.turnId}:user`,
-      ...(turn.assistantMessage || (streamingPreview?.turnId === turn.turnId && previewHasText)
-        ? [`${turn.turnId}:assistant`] : []),
-    ]), [props.thread?.turns, streamingPreview?.turnId, previewHasText]);
+  const conversationMessageIds = useMemo(
+    () =>
+      (props.thread?.turns ?? [])
+        .filter((turn) => turn.branch?.isSelectedPath !== false)
+        .flatMap((turn) => [
+          `${turn.turnId}:user`,
+          ...(turn.assistantMessage || (streamingPreview?.turnId === turn.turnId && previewHasText)
+            ? [`${turn.turnId}:assistant`]
+            : []),
+        ]),
+    [props.thread?.turns, streamingPreview?.turnId, previewHasText],
+  );
   const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest, newMessageCount } = useScrollToBottom({
     followOutput: props.followOutput,
     onBottomStateChange: props.onBottomStateChange,
@@ -673,7 +688,9 @@ export function ThreadedTimeline({
     ? "Jump to approval"
     : props.pendingUserInput
       ? "Jump to answer prompt"
-      : newMessageCount > 0 ? `Jump to latest · ${newMessageCount} new message${newMessageCount === 1 ? "" : "s"}` : "Jump to latest";
+      : newMessageCount > 0
+        ? `Jump to latest · ${newMessageCount} new message${newMessageCount === 1 ? "" : "s"}`
+        : "Jump to latest";
   const jumpToCurrentTarget = useCallback(() => {
     if (!pendingBlockerTurnId) {
       jumpToLatest();

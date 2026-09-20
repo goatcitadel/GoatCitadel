@@ -111,6 +111,7 @@ export interface RevealGeneratedArtifactInput {
 export function resolveChatRefreshPlan(
   signal: Pick<RefreshSignal, "eventType" | "reason" | "source">,
   recentLocalPrefMutation = false,
+  hasActiveTurn = false,
 ): ChatRefreshPlan {
   const eventType = (signal.eventType ?? "").toLowerCase();
   const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
@@ -119,7 +120,7 @@ export function resolveChatRefreshPlan(
   if (eventType === "fallback_poll") {
     return {
       refreshSidebar: true,
-      refreshSession: "light",
+      refreshSession: hasActiveTurn ? "full" : "light",
     };
   }
   if (isPrefEcho) {
@@ -563,5 +564,4 @@ export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArt
         }
       : current,
   );
-
 }

@@ -20,6 +20,7 @@ import type {
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatTurnTraceRecord,
+  ChatTurnCapabilityProfileRecord,
   DurableRunRecord,
   DurableChatTurnRequestActorAuthority,
   PermissionProfileRecord,
@@ -229,6 +230,8 @@ export interface ChatDelegationProgressCallbacks {
 }
 
 export interface ChatDelegationRunOptions {
+  /** Confirmed active-turn delegation inherits its immutable admitted posture. */
+  admittedProfile?: ChatTurnCapabilityProfileRecord;
   abortSignal?: AbortSignal;
   /** Server-owned durable aggregate binding; never accepted by public routes. */
   workflowTemplate?: string;
@@ -637,6 +640,7 @@ export interface ChatDelegationServiceHost {
       turnIdentity?: DelegationTurnIdentity;
       assertDispatchOwnership?: () => Promise<void>;
       onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+      returnAfterDurableAdmission?: boolean;
     },
   ): Promise<ChatSendMessageResponse>;
   extractAndPersistLearnedMemory(
@@ -1066,7 +1070,9 @@ export class ChatDelegationService {
     const deps = this.deps;
     const objective = input.objective.trim();
     if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
-      throw new ValidationError({ message: "Skill capture drafts instructions in one Chat turn; delegation is unavailable." });
+      throw new ValidationError({
+        message: "Skill capture drafts instructions in one Chat turn; delegation is unavailable.",
+      });
     }
     if (!objective) {
       throw new Error("objective is required");
@@ -1123,11 +1129,24 @@ export class ChatDelegationService {
       sessionId,
       await deps.storage.chatSessionPrefs.ensure(sessionId),
     );
+    const inheritedPrefs = options.admittedProfile
+      ? {
+          ...basePrefs,
+          providerId: options.admittedProfile.selection.effectiveProviderId,
+          model: options.admittedProfile.selection.effectiveModel,
+          webMode: options.admittedProfile.selection.webMode,
+          memoryMode: options.admittedProfile.selection.memory.mode,
+          retrievalMode: options.admittedProfile.selection.memory.retrievalMode,
+          thinkingLevel: options.admittedProfile.selection.thinkingLevel,
+          speedMode: options.admittedProfile.selection.speedMode,
+          toolAutonomy: options.admittedProfile.selection.toolAutonomy,
+        }
+      : basePrefs;
     const prefs = options.persistedResume
       ? restorePersistedDelegationPreferences(basePrefs, options.persistedResume.request)
       : explorerProfile
         ? buildReadOnlyExplorerSessionPrefs(basePrefs)
-        : basePrefs;
+        : inheritedPrefs;
     const executionMode: ChatMode = "chat";
     const providerId = input.providerId ?? prefs.providerId;
     const model = input.model ?? prefs.model;
@@ -1758,6 +1777,7 @@ export class ChatDelegationService {
               // delegation keeps its existing caller-cancellation behavior.
               abortSignal: composeChatDelegationAbortSignal(signal, explorerProfile ? undefined : options.abortSignal),
               turnIdentity,
+              returnAfterDurableAdmission: options.requireChildWatchers === true,
               assertDispatchOwnership: async () =>
                 await assertDelegationDispatchOwnership(
                   deps,
@@ -2651,7 +2671,9 @@ export class ChatDelegationService {
     await this.deps.getSession(sessionId);
     const objective = (input.objective?.trim() || (await this.inferLatestUserObjective(sessionId))).trim();
     if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
-      throw new ValidationError({ message: "Skill capture drafts instructions in one Chat turn; delegation is unavailable." });
+      throw new ValidationError({
+        message: "Skill capture drafts instructions in one Chat turn; delegation is unavailable.",
+      });
     }
     if (!objective) {
       throw new Error("No objective provided and no recent user request was found.");
@@ -2668,7 +2690,10 @@ export class ChatDelegationService {
       roles,
       mode: "sequential",
       confidence,
-      reason: "Detected multi-role objective and generated delegation plan.",
+      reason:
+        roles.length > 1
+          ? "Generated a delegation plan for multiple roles."
+          : `Generated a single-role plan for ${roles[0]}.`,
       source: "manual",
       createdAt: new Date().toISOString(),
     };

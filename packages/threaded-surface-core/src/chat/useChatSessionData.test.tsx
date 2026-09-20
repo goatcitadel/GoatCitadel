@@ -686,6 +686,38 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.errors).toContain("secondary failed");
   });
 
+  it("recovers a missed durable completion on fallback and stops full polling once settled", async () => {
+    const waiting = makeThread("session-1");
+    waiting.turns[0]!.trace.status = "waiting_for_tool";
+    fetchChatThreadMock.mockResolvedValue(waiting);
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-resume-fallback" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.thread?.turns[0]?.trace.status).toBe("waiting_for_tool");
+    fetchChatThreadMock.mockResolvedValue(makeThread("session-1"));
+    const before = fetchChatThreadMock.mock.calls.length;
+    const signal = {
+      eventType: "fallback_poll",
+      timestamp: Date.now(),
+      reason: "fallback_poll",
+      source: "refresh-hook",
+    };
+    await act(async () => {
+      await latestRefreshSubscription?.callback(signal);
+      await flushEffects();
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledTimes(before + 1);
+    expect(latestHarness?.result.thread?.turns[0]?.trace.status).toBe("completed");
+    await act(async () => {
+      await latestRefreshSubscription?.callback(signal);
+      await flushEffects();
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledTimes(before + 1);
+    renderer?.unmount();
+  });
+
   it("resets selected-session data and applies runtime config overrides", async () => {
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {

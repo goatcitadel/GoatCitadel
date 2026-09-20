@@ -45,6 +45,16 @@ export function deriveThreadPendingApproval(thread: ChatThreadResponse | null): 
   };
 }
 
+export function isApprovalForCancelledTurn(thread: ChatThreadResponse | null, approvalId: string): boolean {
+  return Boolean(
+    thread?.turns.some(
+      (turn) =>
+        turn.trace.status === "cancelled" &&
+        [...(turn.toolRuns ?? []), ...(turn.trace.toolRuns ?? [])].some((run) => run.approvalId === approvalId),
+    ),
+  );
+}
+
 export function mergePendingApproval(
   current: PendingApprovalRecord | null,
   next: PendingApprovalRecord | null,

@@ -1,6 +1,16 @@
 /* eslint-disable max-lines */
-import { runApprovalEffectTransaction, runClaimedApprovalEffectTransaction, lockApprovalMaterializationRun, lockApprovalMaterializationTrace, hasCanonicalAssistantMessage } from "./approval-effect-materialization-store.js";
-import { resolveLinkedTurnWakeTarget, markLinkedChatTurnResumed, buildAlreadyRunningWakeProof } from "./approval-chat-wake-owner.js";
+import {
+  runApprovalEffectTransaction,
+  runClaimedApprovalEffectTransaction,
+  lockApprovalMaterializationRun,
+  lockApprovalMaterializationTrace,
+  hasCanonicalAssistantMessage,
+} from "./approval-effect-materialization-store.js";
+import {
+  resolveLinkedTurnWakeTarget,
+  markLinkedChatTurnResumed,
+  buildAlreadyRunningWakeProof,
+} from "./approval-chat-wake-owner.js";
 import { randomUUID } from "node:crypto";
 import {
   hasApprovedToolCompletionEvidence,
@@ -133,6 +143,7 @@ import {
 export type ApprovalObservabilityEffectInput = ApprovalObservabilityEffectInputContract;
 
 export interface ApprovalResolutionEffectEnqueueOptions {
+  outcome?: import("@goatcitadel/contracts").ApprovalResolutionOutcome;
   /**
    * Expiry reconciliation resolves the canonical approval as a system
    * rejection after its deadline. Those terminal transitions still need to
@@ -362,6 +373,7 @@ export interface ApprovalEffectsServiceDeps {
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
   ): Promise<DurableWakeResult>;
   requestRunProcessing(runId: string): void;
+  reconcileGeneralChatPostCommit?(runId: string): Promise<boolean>;
   resumeDelegatedScopeExpansion?(input: { delegationRunId: string; stepId: string; durableRunId: string }): Promise<{
     runId: string;
     status: ChatDelegationRunStatus;
@@ -815,7 +827,10 @@ export class ApprovalEffectsService {
                 delegatedScopeDurableRunId: asOptionalString(approval.payload.durableRunId),
               }
             : isNativeExecutionApproval(approval) && approval.linkage?.sessionId && approval.linkage.turnId
-              ? { ...wakePayload, nativeRuntimeParent: { runId: approval.linkage.durableRunId, turnId: approval.linkage.turnId } }
+              ? {
+                  ...wakePayload,
+                  nativeRuntimeParent: { runId: approval.linkage.durableRunId, turnId: approval.linkage.turnId },
+                }
               : wakePayload,
         }),
       );
@@ -910,7 +925,8 @@ export class ApprovalEffectsService {
             decision: input.decision,
             approvalStatus: approval.status,
             resolvedBy: input.resolvedBy,
-            inboxState: options.allowExpired ? "expired" : undefined,
+            inboxState:
+              options.outcome === "expired" || (options.allowExpired && !options.outcome) ? "expired" : undefined,
           },
         }),
       );
@@ -1178,7 +1194,12 @@ export class ApprovalEffectsService {
         dispatchGeneration,
         scopeHash,
         requestedPaths,
-        decision: options.allowExpired ? "expired" : input.decision === "approve" ? "approved" : "rejected",
+        decision:
+          options.outcome === "expired" || (options.allowExpired && !options.outcome)
+            ? "expired"
+            : input.decision === "approve"
+              ? "approved"
+              : "rejected",
         resolvedBy: input.resolvedBy,
       },
     });
@@ -2421,11 +2442,18 @@ export class ApprovalEffectsService {
   private async deferNativeRuntimeWaitUntilParentWakes(effect: ApprovalEffectRecord): Promise<boolean> {
     const parent = await readPendingNativeApprovalParentWake(this.ctx.storage, effect);
     if (!parent) return false;
-    await this.deferClaimedEffectForRetry(effect, this.workerId,
-      new Error("Native runtime review is waiting for its parent Chat wake."), {
-        deliveryState: "retry_scheduled", reason: "native_runtime_parent_wake_pending",
-        parentRunId: parent.runId, parentTurnId: parent.turnId,
-      }, APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS);
+    await this.deferClaimedEffectForRetry(
+      effect,
+      this.workerId,
+      new Error("Native runtime review is waiting for its parent Chat wake."),
+      {
+        deliveryState: "retry_scheduled",
+        reason: "native_runtime_parent_wake_pending",
+        parentRunId: parent.runId,
+        parentTurnId: parent.turnId,
+      },
+      APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+    );
     return true;
   }
 
@@ -2615,12 +2643,45 @@ export class ApprovalEffectsService {
       });
       return;
     }
+    // The approval can be answered while the waiting generation's post-commit
+    // work is still settling. Reconcile through its owner before entering the
+    // wake transaction; a transient wait must not become a permanent failure.
+    if (this.deps.reconcileGeneralChatPostCommit) {
+      const waitingRun = await this.ctx.storage.durableRuns.getRun(runId);
+      if (
+        waitingRun.status === "waiting" &&
+        readExactGeneralChatPostCommitPendingMarker(
+          waitingRun.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY],
+        ) &&
+        !(await this.deps.reconcileGeneralChatPostCommit(runId))
+      ) {
+        await this.deferClaimedEffectForRetry(
+          effect,
+          this.workerId,
+          new Error("Chat approval wait finalization is still settling."),
+          {
+            deliveryState: "retry_scheduled",
+            reason: "chat_wait_not_settled",
+            runId,
+          },
+          APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+        );
+        return;
+      }
+    }
     const wake = await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
       if (await this.deps.shouldDeferRemoteWorkerApprovalWake?.(runId, effect.approvalId)) {
-        await this.deferClaimedEffectForRetry(effect, this.workerId,
-          new Error("Worker Chat has not settled its approval wait."), {
-            deliveryState: "retry_scheduled", reason: "remote_worker_wait_not_settled", runId,
-          }, APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS);
+        await this.deferClaimedEffectForRetry(
+          effect,
+          this.workerId,
+          new Error("Worker Chat has not settled its approval wait."),
+          {
+            deliveryState: "retry_scheduled",
+            reason: "remote_worker_wait_not_settled",
+            runId,
+          },
+          APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+        );
         return undefined;
       }
       const wakeResult = await this.deps.wakeDurableRun(runId, {
@@ -2877,11 +2938,17 @@ export class ApprovalEffectsService {
           try {
             await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
               const result = await this.deps.prepareRemoteWorkerApprovalHandoff!(effect.approvalId);
-              if (!await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, { result }))
+              if (
+                !(await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+                  result,
+                }))
+              )
                 throw new Error("Worker approval handoff lost its effect claim.");
             });
             return;
-          } catch (error) { handoffError = error; }
+          } catch (error) {
+            handoffError = error;
+          }
         }
         await this.deferClaimedEffectForRetry(effect, this.workerId, handoffError, {
           deliveryState: "retry_scheduled",
@@ -3213,10 +3280,15 @@ export class ApprovalEffectsService {
         );
         if (
           toolRun &&
-          await hasApprovedToolCompletionEvidence(this.ctx.storage, {
-            effect, pendingAction, toolRun, inlineApproval, actionRecord,
-          })
-        ) completedToolRunId = toolRun.toolRunId;
+          (await hasApprovedToolCompletionEvidence(this.ctx.storage, {
+            effect,
+            pendingAction,
+            toolRun,
+            inlineApproval,
+            actionRecord,
+          }))
+        )
+          completedToolRunId = toolRun.toolRunId;
         if (toolRun && toolRun.status !== "executed") {
           const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "completed" });
           await this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
@@ -3591,9 +3663,28 @@ export class ApprovalEffectsService {
           failureGuidance: beforeDispatch
             ? "Approved execution was blocked before dispatch. Resolve the reported restriction before requesting a new invocation."
             : "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
-          result: input.toolResult,
+          result: {
+            ...input.toolResult,
+            approvalOutcome: "approved",
+            approvalActionOutcome: beforeDispatch ? "policy_blocked" : "delivery_failed",
+          },
           error: input.failure.message,
           finishedAt: input.now,
+        });
+        await this.ctx.storage.approvalEvents.append({
+          approvalId: input.approvalId,
+          eventType: "approved_action_executed",
+          actorId: "system",
+          payload: {
+            toolName: input.toolName,
+            auditEventId: input.actionRecord?.auditEventId,
+            outcome: input.actionRecord?.outcome,
+            actionOutcome: beforeDispatch ? "policy_blocked" : "delivery_failed",
+            failureKind: input.failure.kind,
+            toolRunId: toolRun.toolRunId,
+            sessionId: currentTrace.sessionId,
+            turnId: currentTrace.turnId,
+          },
         });
       }
       await this.ctx.storage.chatInlineApprovals.upsert({
@@ -4598,16 +4689,6 @@ export class ApprovalEffectsService {
     return buildAlreadyRunningWakeProof(this.ctx.storage, effect);
   }
 }
-
-
-
-
-
-
-
-
-
-
 
 function readApprovalMaterializedPostCommitReceipt(
   metadata: Record<string, unknown> | undefined,

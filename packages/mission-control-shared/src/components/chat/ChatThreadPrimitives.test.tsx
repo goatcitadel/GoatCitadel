@@ -91,6 +91,25 @@ function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
 }
 
 describe("ChatThreadPrimitives", () => {
+  it("does not label a cancelled empty turn as running or claim it retained text", () => {
+    const turn = createTurn();
+    turn.trace.status = "cancelled";
+    turn.assistantMessage = null;
+    turn.trace.failure = { failureClass: "approval_required" } as never;
+    const renderer = renderTurn({
+      turn,
+      streamingPreview: { turnId: turn.turnId, visibleText: "stale preview" } as never,
+    });
+    expect(renderedText(renderer)).toContain("No response text was retained");
+    expect(renderedText(renderer)).not.toContain("Running");
+    expect(renderedText(renderer)).not.toContain("stale preview");
+    expect(
+      renderer.root
+        .findAllByProps({ className: "mc-next-turn-evidence-chip" })
+        .some((node) => node.children.includes("approval_required")),
+    ).toBe(false);
+    expect(renderer.root.findAllByProps({ className: "mc-next-live-activity" })).toHaveLength(0);
+  });
   it("labels canonical cancellation alongside retained output after reload", () => {
     const turn = createTurn();
     turn.trace.status = "cancelled";

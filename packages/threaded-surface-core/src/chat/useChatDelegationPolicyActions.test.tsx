@@ -405,7 +405,7 @@ async function flushEffects(times = 4) {
 describe("useChatDelegationPolicyActions", () => {
   beforeEach(() => {
     latestHarness = null;
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     setupApiDefaults();
   });
 
@@ -1520,25 +1520,90 @@ describe("useChatDelegationPolicyActions", () => {
     expect(latestHarness?.result.activeDelegationRun?.runId).toBe("run-stream");
   });
 
-  it("auto-suggests delegation when the session policy asks for useful subagents", async () => {
+  it.each(["ask_when_useful", "auto_when_useful"] as const)(
+    "leaves active-turn planning to the Gateway under %s",
+    async (subagentPolicy) => {
+      let renderer;
+      await act(async () => {
+        renderer = create(
+          <Harness
+            draft=""
+            thread={{ ...makeThread(), turns: [] }}
+            prefs={makePrefs({ subagentPolicy })}
+            messages={makeMessages("Please implement, refactor, test, and review this with several agents.")}
+          />,
+        );
+        await flushEffects();
+      });
+      expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+      expect(runChatDelegationMock).not.toHaveBeenCalled();
+      await act(async () => {
+        renderer.unmount();
+      });
+    },
+  );
+
+  it.each(["ask_when_useful", "auto_when_useful"] as const)(
+    "does not replay completed or stopped work under %s",
+    async (subagentPolicy) => {
+      for (const status of ["completed", "cancelled", "waiting_for_approval", "running"] as const) {
+        const thread = makeThread();
+        thread.turns[0]!.trace.status = status;
+        let renderer: ReturnType<typeof create>;
+        await act(async () => {
+          renderer = create(
+            <Harness draft="" thread={thread} messages={makeMessages()} prefs={makePrefs({ subagentPolicy })} />,
+          );
+          await flushEffects();
+        });
+        expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+        expect(runChatDelegationMock).not.toHaveBeenCalled();
+        await act(async () => renderer!.unmount());
+      }
+    },
+  );
+
+  it.each([
+    "QA browser check 1. The test marker is EMBER-4827. Give 12 numbered desk tips. End with TEST COMPLETE.",
+    "Research, implement, and test this without using subagents.",
+    "Do not delegate to agents. Implement and review this change.",
+    "Answer directly without tools: compare and test the examples in this paragraph.",
+  ])("does not suggest delegation for a simple check or an explicit opt-out: %s", async (objective) => {
     await act(async () => {
       create(
         <Harness
           draft=""
-          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
-          messages={makeMessages("Please implement, refactor, test, and review this end-to-end with several agents.")}
+          thread={{ ...makeThread(), turns: [] }}
+          messages={makeMessages(objective)}
+          prefs={makePrefs({ subagentPolicy: "auto_when_useful" })}
         />,
       );
       await flushEffects();
     });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+    expect(runChatDelegationMock).not.toHaveBeenCalled();
+  });
 
-    expect(suggestChatDelegationMock).toHaveBeenCalledWith("session-1", {
-      objective: "Please implement, refactor, test, and review this end-to-end with several agents.",
+  it("keeps an explicit single-specialist suggestion available", async () => {
+    suggestChatDelegationMock.mockResolvedValueOnce({
+      suggestion: { objective: "QA check", roles: ["QA"], mode: "parallel" },
     });
-    expect(latestHarness?.result.delegationSuggestion?.objective).toBe("Suggested plan");
-    expect(latestHarness?.notices.map((notice) => notice.content)).not.toContain(
-      "Subagents may help with this task. Review the suggested delegation plan in Assist.",
-    );
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          thread={{ ...makeThread(), turns: [] }}
+          messages={makeMessages()}
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+        />,
+      );
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleSuggestDelegation();
+    });
+    expect(latestHarness?.result.delegationSuggestion?.roles).toEqual(["QA"]);
+    expect(runChatDelegationMock).not.toHaveBeenCalled();
   });
 
   it("handles missing sessions, empty objectives, and API failures", async () => {
@@ -1786,56 +1851,6 @@ describe("useChatDelegationPolicyActions", () => {
     expect(latestHarness?.errors).toContain("Delegation finished without a final result payload.");
   });
 
-  it("runs auto delegation policies, deduplicates recommendations, and reports auto failures", async () => {
-    let renderer: ReturnType<typeof create> | null = null;
-    await act(async () => {
-      renderer = create(
-        <Harness
-          draft=""
-          prefs={makePrefs({ subagentPolicy: "auto_when_useful" })}
-          messages={makeMessages("Please implement, refactor, test, review, and ship this full end-to-end workflow.")}
-        />,
-      );
-      await flushEffects();
-    });
-    expect(suggestChatDelegationMock).toHaveBeenCalledWith("session-1", {
-      objective: "Please implement, refactor, test, review, and ship this full end-to-end workflow.",
-    });
-    expect(runChatDelegationMock).toHaveBeenCalledWith(
-      "session-1",
-      expect.objectContaining({ objective: "Suggested plan", roles: ["Architect", "Coder"] }),
-    );
-    expect(latestHarness?.loadSidebar).toHaveBeenCalled();
-    expect(latestHarness?.sending).toBe(false);
-
-    await act(async () => {
-      renderer?.update(
-        <Harness
-          draft=""
-          prefs={makePrefs({ subagentPolicy: "auto_when_useful" })}
-          messages={makeMessages("Please implement, refactor, test, review, and ship this full end-to-end workflow.")}
-        />,
-      );
-      await flushEffects();
-    });
-    expect(suggestChatDelegationMock).toHaveBeenCalledTimes(1);
-
-    suggestChatDelegationMock.mockRejectedValueOnce(new Error("auto suggest down"));
-    await act(async () => {
-      create(
-        <Harness
-          draft=""
-          selectedSession={{ ...makeSession(), sessionId: "session-auto-error" }}
-          prefs={makePrefs({ subagentPolicy: "auto_when_useful" })}
-          messages={makeMessages("Please implement, refactor, test, review, and ship this full error workflow.")}
-        />,
-      );
-      await flushEffects();
-    });
-    expect(latestHarness?.errors).toContain("auto suggest down");
-    expect(latestHarness?.sending).toBe(false);
-  });
-
   it("does not continue auto delegation work after unmount cancellation", async () => {
     let resolveSuggestion!: (value: unknown) => void;
     suggestChatDelegationMock.mockReturnValueOnce(
@@ -1848,6 +1863,7 @@ describe("useChatDelegationPolicyActions", () => {
       renderer = create(
         <Harness
           draft=""
+          thread={{ ...makeThread(), turns: [] }}
           prefs={makePrefs({ subagentPolicy: "auto_when_useful" })}
           messages={makeMessages("Please implement, refactor, test, review, and ship this cancellable workflow.")}
         />,
@@ -1938,19 +1954,20 @@ describe("useChatDelegationPolicyActions", () => {
     },
   );
 
-  it("auto-suggests for cowork surfaces and long chat tasks with few explicit complexity terms", async () => {
+  it("does not infer delegation from a legacy mode or word count alone", async () => {
     await act(async () => {
       create(
         <Harness
           draft=""
           surfaceMode="cowork"
+          thread={{ ...makeThread(), turns: [] }}
           prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
           messages={makeMessages("summarize")}
         />,
       );
       await flushEffects();
     });
-    expect(suggestChatDelegationMock).toHaveBeenCalledWith("session-1", { objective: "summarize" });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
 
     suggestChatDelegationMock.mockClear();
     await act(async () => {
@@ -1959,11 +1976,12 @@ describe("useChatDelegationPolicyActions", () => {
           draft=""
           prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
           messages={makeMessages(Array.from({ length: 60 }, (_unused, index) => `word${index}`).join(" "))}
+          thread={{ ...makeThread(), turns: [] }}
         />,
       );
       await flushEffects();
     });
-    expect(suggestChatDelegationMock).toHaveBeenCalledTimes(1);
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
   });
 
   it("uses request metadata fallbacks when a delegation stream only emits a final payload", async () => {

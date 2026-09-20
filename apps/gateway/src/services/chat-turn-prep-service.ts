@@ -525,6 +525,8 @@ export async function prepareAgentChatTurn(
     capabilityProfileHash?: string;
     /** Original admitted user content when this is a durable continuation. */
     capabilityProfileContent?: string;
+    /** Canonical non-consent settlement needs no retrieval or model compaction. */
+    skipProviderPreparation?: boolean;
     /** Exact server-only posture; never accepted from a client request. */
     serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
   },
@@ -628,7 +630,7 @@ export async function prepareAgentChatTurn(
     : normalizedCandidate;
   const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
   const quickWebTurn = executionProfile === "quick_web";
-  if (!systemHeartbeatPosture && branchKind !== "retry") {
+  if (!options?.skipProviderPreparation && !systemHeartbeatPosture && branchKind !== "retry") {
     await prepCanonicalWrite(host, options?.turnAdmission, () => host.maybeAutoTitleChatSession(sessionId, content));
   }
 
@@ -754,9 +756,10 @@ export async function prepareAgentChatTurn(
         truncated: false,
       } satisfies Partial<ResolvedRuntimeGuidance>)
     : host.resolveRuntimeGuidance(workspaceId);
-  const threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> = quickWebTurn
-    ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
-    : host.resolveThreadKnowledgeContext(sessionId, content);
+  const threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> =
+    quickWebTurn || options?.skipProviderPreparation
+      ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
+      : host.resolveThreadKnowledgeContext(sessionId, content);
   const sideChatSystemInstructionPromise = input.sideChatContext
     ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
     : Promise.resolve(undefined);
@@ -949,7 +952,7 @@ export async function prepareAgentChatTurn(
   const hasExplicitParentTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, "parentTurnId");
   const parentTurnId = hasExplicitParentTurnId ? options?.parentTurnId : sessionState.activeLeafTurnId;
   const pathTurnIds = parentTurnId ? buildSelectedPathTurnIds(sessionState.turnLineageById, parentTurnId) : [];
-  const contextPathTurnIds = quickWebTurn ? [] : pathTurnIds;
+  const contextPathTurnIds = quickWebTurn || options?.skipProviderPreparation ? [] : pathTurnIds;
   const conversationMessages = contextPathTurnIds.flatMap((turnId) => {
     const trace = sessionState.tracesById.get(turnId);
     if (!trace) {
@@ -1001,7 +1004,7 @@ export async function prepareAgentChatTurn(
           // non-mutating history for both profile selection and execution.
           persistState: false,
         });
-  if (systemHeartbeatPosture) {
+  if (systemHeartbeatPosture || options?.skipProviderPreparation) {
     compactionDimension = { ...compactionDimension, persistState: false };
   }
   let history = await host.buildLlmMessagesFromBranchPath(
@@ -1193,7 +1196,7 @@ export async function prepareAgentChatTurn(
 
   const recoveryActorId = resolveCompactionRecoveryActor(input);
   const pendingForceAction =
-    !systemHeartbeatPosture && recoveryActorId
+    !options?.skipProviderPreparation && !systemHeartbeatPosture && recoveryActorId
       ? await host.resolvePendingCompactionBreakerForceAction?.({
           sessionId,
           sealedDimensionHash: sealedCompactionDimension.dimensionHash,
@@ -1692,6 +1695,9 @@ export async function resolvePreparedTurnOrchestration(
     return undefined;
   }
   const mode = prepared.effectiveMode;
+  // Execution stays inside the admitted turn: ask uses the durable prompt and
+  // auto uses the governed agent.fanout path. Advisory planning remains distinct.
+  if (prepared.prefs.planningMode !== "advisory") return undefined;
   const runtime = host.llmService.getRuntimeConfig({
     useCache: true,
   });

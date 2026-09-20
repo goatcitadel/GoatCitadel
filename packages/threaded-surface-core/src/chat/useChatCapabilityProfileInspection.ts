@@ -48,6 +48,8 @@ function traceSelectionSignature(turn: ChatThreadTurnRecord | null): string {
   const trace = turn.trace;
   const routedContext = trace.routing.routedContext;
   return [
+    trace.sessionId,
+    trace.turnId,
     trace.mode,
     trace.webMode,
     trace.memoryMode,
@@ -216,7 +218,14 @@ export function useChatCapabilityProfileInspection(input: {
 
   useEffect(() => {
     const selectedTurn = selectedTurnRef.current;
-    if (!sessionId || !selectedTurn) {
+    // Session navigation can render the previous turn for one frame before
+    // core state clears. Never inspect it through the new session's scope.
+    if (
+      !sessionId ||
+      !selectedTurn ||
+      selectedTurn.trace.sessionId !== sessionId ||
+      selectedTurn.trace.turnId !== selectedTurn.turnId
+    ) {
       setInspection(IDLE_INSPECTION);
       return;
     }

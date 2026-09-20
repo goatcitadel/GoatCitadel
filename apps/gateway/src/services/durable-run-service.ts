@@ -708,6 +708,9 @@ export class DurableRunService {
         "executeWorkflow" | "isWorkflowRecoverable" | "markWorkflowUnrecoverable"
       >;
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
+      /** Runs inside the cancellation transaction, after the Chat trace is fenced. */
+      onChatTurnCancelled?: (sessionId: string, turnId: string, actorId: string) => Promise<void>;
+      reconcileWaitingChatDelegations?: () => Promise<void>;
       onBackgroundAttentionRequired?: (
         input: DurableBackgroundAttentionNotificationInput,
       ) => Promise<boolean | void> | boolean | void;
@@ -2177,12 +2180,24 @@ export class DurableRunService {
       }
       const run = await this.ctx.storage.durableRuns.getRun(binding.durableRunId);
       if (!isTerminalChatRunRecoveryCandidate(run)) {
-        return terminalChatAdmissionOutcome("not_terminal", startedAt, 0, {
-          durableRunId: run.runId,
-          durableRunStatus: run.status,
-          admissionId: canonical.admissionId,
-          admissionStatus: canonical.status,
-        });
+        // A thread refresh can expose the committed final answer just before
+        // its running generation settles. Wait for that exact owner's normal
+        // finalization; a completed projection is never permission to preempt.
+        const trace =
+          run.status === "running" ? await this.ctx.storage.chatTurnTraces.get(canonical.turnId!) : undefined;
+        if (
+          !trace ||
+          trace.sessionId !== canonical.sessionId ||
+          trace.durable?.runId !== run.runId ||
+          !["completed", "partial", "failed", "cancelled"].includes(trace.status)
+        ) {
+          return terminalChatAdmissionOutcome("not_terminal", startedAt, 0, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+            admissionId: canonical.admissionId,
+            admissionStatus: canonical.status,
+          });
+        }
       }
       return this.reconcileExactTerminalChatAdmission({
         runId: run.runId,
@@ -3619,6 +3634,7 @@ export class DurableRunService {
             throw new Error(`Durable Chat run ${runId} cancellation lost the turn-state transition race.`);
           }
         }
+        await this.deps?.onChatTurnCancelled?.(chatLink.sessionId, chatLink.turnId, actorId);
       }
       let cancellationMetadata = lockedCurrent.metadata;
       let cancellationCheckpointState: Record<string, unknown> = {
@@ -3973,10 +3989,17 @@ export class DurableRunService {
     const now = new Date().toISOString();
     let next!: DurableRunRecord;
     try {
-      next = await commitDurableWakeTransition(this.ctx.storage, {
-        prepareMetadata: (run) => this.prepareQueuedTransitionMetadata(run, "wake"),
-        recordTimeline: (id, payload) => this.recordDurableTimelineEvent(id, "run_woken", payload),
-      }, current, runId, event, now);
+      next = await commitDurableWakeTransition(
+        this.ctx.storage,
+        {
+          prepareMetadata: (run) => this.prepareQueuedTransitionMetadata(run, "wake"),
+          recordTimeline: (id, payload) => this.recordDurableTimelineEvent(id, "run_woken", payload),
+        },
+        current,
+        runId,
+        event,
+        now,
+      );
     } catch (error) {
       return {
         runId,
@@ -4400,6 +4423,7 @@ export class DurableRunService {
         watcherLimit: 100,
         eventLimitPerWatcher: 100,
       });
+      await this.deps?.reconcileWaitingChatDelegations?.();
     } catch (error) {
       this.resolveLogger().warn(
         {
@@ -4912,10 +4936,17 @@ export class DurableRunService {
         } else if (isAutonomousDurableRunDisabledError(error)) {
           await this.markAutonomousRunWaitingForKillSwitch(run, error);
         } else {
-          await this.failWorkflowRun(
-            run,
-            error instanceof Error ? error.message : "Durable workflow execution failed.",
-          );
+          try {
+            await this.failWorkflowRun(
+              run,
+              error instanceof Error ? error.message : "Durable workflow execution failed.",
+            );
+          } catch (settlementError) {
+            // Preserve the initiating failure if settlement itself rejects;
+            // ordinary cancellation must not produce a recovery-failure event.
+            await this.reportDurableRunRecoveryFailure(run.runId, error);
+            throw settlementError;
+          }
         }
       } finally {
         const current = await this.ctx.storage.durableRuns.getRun(run.runId);

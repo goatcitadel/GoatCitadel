@@ -68,6 +68,12 @@ describe("chat-page-pure-helpers coverage", () => {
       refreshSidebar: true,
       refreshSession: "light",
     });
+    expect(
+      resolveChatRefreshPlan({ eventType: "fallback_poll", reason: "poll", source: "timer" }, false, true),
+    ).toEqual({
+      refreshSidebar: true,
+      refreshSession: "full",
+    });
     expect(resolveChatRefreshPlan({ eventType: "chat_thread_updated", reason: "assistant", source: "sse" })).toEqual({
       refreshSidebar: false,
       refreshSession: "full",

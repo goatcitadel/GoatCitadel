@@ -18,6 +18,7 @@ import {
   type ChatDelegationService,
 } from "./chat-delegation-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { ChatTurnToolUseClosedError } from "./chat-turn-control.js";
 
 /** Immutable workflow discriminator for the Chat-native durable fan-out bridge. */
 export const CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE = "chat.durable.agent.fanout.v1";
@@ -68,6 +69,7 @@ export interface ChatDurableFanoutServiceHost {
     event: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
   ): Promise<unknown>;
   isEnabled(): Promise<boolean>;
+  assertParentToolUseOpen(parentRunId: string, sessionId: string): Promise<void>;
 }
 
 class FanoutAuthorityError extends Error {
@@ -174,7 +176,7 @@ export class ChatDurableFanoutService {
     } catch (error) {
       const message = formatError(error);
       const cancelled = input.signal?.aborted === true;
-      const authorityLost = error instanceof FanoutAuthorityError;
+      const authorityLost = error instanceof FanoutAuthorityError || error instanceof ChatTurnToolUseClosedError;
       const cancellation = await this.requestChildCancellation(
         activeInvocation,
         cancelled ? "parent_cancelled" : "authority_lost",
@@ -367,6 +369,7 @@ export class ChatDurableFanoutService {
   }
 
   private async assertLiveAuthority(invocation: ChatFanoutInvocationRecord): Promise<void> {
+    await this.host.assertParentToolUseOpen(invocation.parentRunId, invocation.sessionId);
     const project = await this.resolveActiveProject(invocation.sessionId, invocation.workspaceId);
     if (project.projectId !== invocation.projectId) {
       throw new FanoutAuthorityError("The Chat session project changed after fan-out admission.");
@@ -397,6 +400,8 @@ export class ChatDurableFanoutService {
         `The admitted automatic fan-out grant is no longer valid. ${evaluated.blockers.join(" ")}`.trim(),
       );
     }
+    // Grant checks can yield while an operator closes the parent turn.
+    await this.host.assertParentToolUseOpen(invocation.parentRunId, invocation.sessionId);
   }
 
   private async resolveActiveProject(sessionId: string, workspaceId: string): Promise<ChatProjectRecord> {
