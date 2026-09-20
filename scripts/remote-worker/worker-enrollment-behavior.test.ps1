@@ -12,6 +12,21 @@ function Copy-Fields { param($Value); $copy=[ordered]@{}; foreach ($key in $Valu
 $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $sddl = "O:${owner}D:P(A;;FA;;;$owner)"
 try {
+  Assert-WorkerDeferredTicketChoice '' ''
+  Assert-WorkerDeferredTicketChoice 'ticket.json' ('a'*64)
+  Check-Refusal 'deferred-ticket-requires-pin' { Assert-WorkerDeferredTicketChoice 'ticket.json' '' }
+  Check-Refusal 'deferred-ticket-requires-path' { Assert-WorkerDeferredTicketChoice '' ('a'*64) }
+  $ticketBytes=Json-Bytes ([ordered]@{protectedSignerPublicKeySpkiBase64Url='fixture-public';bootstrapSecret='fixture-only-secret'})
+  Assert-WorkerDeferredTicketBytes $ticketBytes (Get-WorkerBytesHash $ticketBytes)
+  Check-Refusal 'deferred-ticket-wrong-pin' { Assert-WorkerDeferredTicketBytes $ticketBytes ('a'*64) }
+  foreach ($bad in @(@{protectedSignerPrivateKeyPem='fixture';protectedSignerPublicKeySpkiBase64Url='public'},@{protectedSignerPublicKeySpkiBase64Url=3},@{protectedSignerPublicKeySpkiBase64Url=''},@{workerId='x'})) {
+    $bytes=Json-Bytes $bad
+    Check-Refusal 'deferred-ticket-private-or-missing-public-key' { Assert-WorkerDeferredTicketBytes $bytes (Get-WorkerBytesHash $bytes) }
+  }
+  $malformed=[Text.Encoding]::UTF8.GetBytes('{"bootstrapSecret":"fixture-secret-do-not-echo",broken')
+  try { Assert-WorkerDeferredTicketBytes $malformed (Get-WorkerBytesHash $malformed); throw 'unexpected success' } catch {
+    Check-Case ($_.Exception.Message -ceq 'REFUSED: invalid admission ticket JSON.') 'deferred-ticket-parser-redacts-secret'
+  }
   $paths = Get-WorkerServicePaths
   $settings = Get-WorkerSettingsBytes $paths '127.0.0.1' 8787 'installed-run'
   $env:GOATCITADEL_CONNECTED_WORKER_CLIENT_KEY_FILE = 'ambient-private-key'

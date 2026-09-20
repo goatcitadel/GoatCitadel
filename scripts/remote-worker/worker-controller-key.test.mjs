@@ -23,6 +23,11 @@ function Check-Descriptor([string]$sddl, [bool]$expected) {
 }
 Check-Descriptor "O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;$sid)" $true
 Check-Descriptor "O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;$sid)" $true
+Check-Descriptor "O:SYD:P(A;;0xd01f01ff;;;SY)(A;;0xd01f01ff;;;$sid)" $true
+Check-Descriptor "O:SYD:P(A;;0xd11f01ff;;;SY)(A;;0xd01f01ff;;;$sid)" $false
+Check-Descriptor "O:SYD:P(A;;0xd01f01fe;;;SY)(A;;0xd01f01ff;;;$sid)" $false
+Check-Descriptor "O:SYD:P(A;;0xd01f01ff;;;SY)(A;;0xd01f01ff;;;BA)" $false
+Check-Descriptor "O:SYD:P(A;;0xd01f01ff;;;SY)(A;;0xd01f01ff;;;$sid)(A;;FA;;;BA)" $false
 Check-Descriptor "O:BAG:SYD:P(A;;GA;;;SY)(A;;GA;;;$sid)" $false
 Check-Descriptor "O:SYG:SYD:(A;;GA;;;SY)(A;;GA;;;$sid)" $false
 Check-Descriptor "O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)" $false

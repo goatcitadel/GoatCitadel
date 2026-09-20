@@ -2061,7 +2061,30 @@ function stopNewManagedProcess(pid, expectedIdentity) {
   return stopManagedProcess(pid);
 }
 
+const MAX_RUNTIME_LOG_BYTES = 64 * 1024 * 1024;
+
+/** Keeps one previous log beside the live one so a runaway process cannot fill the disk. */
+function rotateOversizedLog(logPath) {
+  let size;
+  try {
+    size = fs.statSync(logPath).size;
+  } catch {
+    return; // No existing log yet; nothing to rotate.
+  }
+  if (size <= MAX_RUNTIME_LOG_BYTES) {
+    return;
+  }
+  try {
+    fs.rmSync(logPath + ".1", { force: true });
+    fs.renameSync(logPath, logPath + ".1");
+  } catch {
+    // Best effort: never block a launch because a log could not be rotated.
+  }
+}
+
 function spawnDetachedProcess({ cmd, args, cwd, env, stdoutPath, stderrPath }) {
+  rotateOversizedLog(stdoutPath);
+  rotateOversizedLog(stderrPath);
   const stdoutFd = fs.openSync(stdoutPath, "a");
   const stderrFd = fs.openSync(stderrPath, "a");
   const child = isWindowsBatchCommand(cmd)

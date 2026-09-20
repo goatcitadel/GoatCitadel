@@ -18,11 +18,16 @@ import {
 } from "./remote-worker-attestation-service.js";
 import {
   enumerateRemoteWorkerWindowsDirectory,
+  enumerateRemoteWorkerWindowsDirectories,
+  hashRemoteWorkerWindowsFiles,
+  type RemoteWorkerWindowsFileHashEvidence,
   hashRemoteWorkerWindowsFile,
   readRemoteWorkerWindowsFile,
   type RemoteWorkerWindowsDirectoryEvidence,
   type RemoteWorkerWindowsFileObservation,
 } from "./remote-worker-windows-no-follow.js";
+
+import { parseWindowsPackageLayout, type WindowsPackageLayout } from "./remote-worker-windows-package-layout.js";
 
 const REQUIRED_ROOT_DIRECTORIES = ["bundle", "launcher", "locks", "runtime", "vendor"] as const;
 const SINGLETON_DIRECTORIES = new Map<string, RemoteWorkerInstalledTreeRole>([
@@ -121,10 +126,19 @@ export class RemoteWorkerInstalledTreeScannerError extends Error {
 export class RemoteWorkerInstalledTreeScanner implements RemoteWorkerInstalledTreeScannerPort {
   readonly #runtimeManifestPayloadSha256: string;
   readonly #clock: () => Date;
+  readonly #windowsPackageManifestSha256: string | undefined;
 
-  constructor(runtimeManifestPayloadSha256: string, clock: () => Date = () => new Date()) {
+  constructor(
+    runtimeManifestPayloadSha256: string,
+    clock: () => Date = () => new Date(),
+    options: { readonly windowsPackageManifestSha256?: string } = {},
+  ) {
     this.#runtimeManifestPayloadSha256 = canonicalSha256(runtimeManifestPayloadSha256, "manifest payload digest");
     this.#clock = clock;
+    this.#windowsPackageManifestSha256 =
+      options.windowsPackageManifestSha256 === undefined
+        ? undefined
+        : canonicalSha256(options.windowsPackageManifestSha256, "Windows package manifest digest");
   }
 
   public async scan(input: {
@@ -139,9 +153,11 @@ export class RemoteWorkerInstalledTreeScanner implements RemoteWorkerInstalledTr
     deadline.check();
     const limits = normalizeLimits(input);
     const root = canonicalRoot(input.root);
+    if (this.#windowsPackageManifestSha256 !== undefined && process.platform !== "win32")
+      throw invalid("Windows package scanning requires Windows.");
     const tree =
       process.platform === "win32"
-        ? await scanWindowsTree(root, limits, deadline)
+        ? await scanWindowsTree(root, limits, deadline, this.#windowsPackageManifestSha256)
         : await scanPosixTree(root, limits, deadline);
     deadline.check();
     const scannedAt = canonicalClock(this.#clock());
@@ -472,7 +488,51 @@ function parsePosixScanHelperError(value: unknown, requestId: string): Error | u
   return invalid(record.message);
 }
 
-async function scanWindowsTree(root: string, limits: ScanLimits, deadline: ScanDeadline): Promise<ScannedTree> {
+async function scanWindowsTree(
+  root: string,
+  limits: ScanLimits,
+  deadline: ScanDeadline,
+  packageSha256?: string,
+): Promise<ScannedTree> {
+  let layout: WindowsPackageLayout | undefined;
+  if (packageSha256 !== undefined) {
+    const manifest = await awaitWindowsScanHelper(deadline, (deadlineMs, signal) =>
+      readRemoteWorkerWindowsFile(root, "worker-package.json", MAX_TRUST_FILE_BYTES, { deadlineMs, signal }),
+    );
+    try {
+      layout = parseWindowsPackageLayout(manifest.content, packageSha256);
+    } finally {
+      manifest.content.fill(0);
+    }
+  }
+  const directoryCache = new Map<string, RemoteWorkerWindowsDirectoryEvidence>();
+  const hashCache = new Map<string, RemoteWorkerWindowsFileHashEvidence>();
+  const batchDirectories = async (paths: readonly string[]): Promise<void> => {
+    for (let offset = 0; offset < paths.length; offset += 32) {
+      const batch = paths.slice(offset, offset + 32);
+      const records = await awaitWindowsScanHelper(deadline, (deadlineMs, signal) =>
+        enumerateRemoteWorkerWindowsDirectories(root, batch, { deadlineMs, signal }),
+      );
+      records.forEach((record, index) => directoryCache.set(batch[index] as string, record));
+    }
+  };
+  if (layout) {
+    if (
+      layout.files.size > limits.maxFileCount ||
+      [...layout.files.values()].some((file) => file.sizeBytes > limits.maxFileBytes) ||
+      [...layout.files.values()].reduce((sum, file) => sum + file.sizeBytes, 0) > limits.maxTotalBytes
+    )
+      throw invalid("Windows package exceeds scan limits.");
+    await batchDirectories(["", ...layout.directories]);
+    const paths = [...layout.files.keys()];
+    for (let offset = 0; offset < paths.length; offset += 32) {
+      const batch = paths.slice(offset, offset + 32);
+      const records = await awaitWindowsScanHelper(deadline, (deadlineMs, signal) =>
+        hashRemoteWorkerWindowsFiles(root, batch, limits.maxFileBytes, { deadlineMs, signal }),
+      );
+      records.forEach((record, index) => hashCache.set(batch[index] as string, record));
+    }
+  }
   const visitedDirectories = new Map<string, RemoteWorkerWindowsDirectoryEvidence>();
   const files: RemoteWorkerInstalledTreeFile[] = [];
   const identities = new Set<string>();
@@ -486,12 +546,14 @@ async function scanWindowsTree(root: string, limits: ScanLimits, deadline: ScanD
     expectedDirectory?: RemoteWorkerWindowsFileObservation,
   ): Promise<void> => {
     deadline.check();
-    const evidence = await awaitWindowsScanHelper(deadline, async (deadlineMs, signal) =>
-      enumerateRemoteWorkerWindowsDirectory(root, relativeDirectory, { deadlineMs, signal }),
-    );
+    const evidence =
+      directoryCache.get(relativeDirectory) ??
+      (await awaitWindowsScanHelper(deadline, async (deadlineMs, signal) =>
+        enumerateRemoteWorkerWindowsDirectory(root, relativeDirectory, { deadlineMs, signal }),
+      ));
     assertSafeWindowsDirectory(evidence.rootObservation, rootOwnerSid);
     rootOwnerSid ??= evidence.rootObservation.ownerSid;
-    if (evidence.operatorSid !== rootOwnerSid)
+    if (layout ? rootOwnerSid !== "S-1-5-18" : evidence.operatorSid !== rootOwnerSid)
       throw invalid("Remote worker installed-tree root is not operator-owned.");
     const observedRootIdentity = windowsIdentity(evidence.rootObservation);
     rootIdentity ??= observedRootIdentity;
@@ -503,10 +565,16 @@ async function scanWindowsTree(root: string, limits: ScanLimits, deadline: ScanD
     visitedDirectories.set(relativeDirectory, evidence);
 
     if (relativeDirectory === "") {
-      if (!equalStrings(evidence.secondNames, REQUIRED_ROOT_DIRECTORIES)) {
+      if (
+        !equalStrings(evidence.secondNames, layout ? ["app", "bin", "worker-package.json"] : REQUIRED_ROOT_DIRECTORIES)
+      ) {
         throw invalid("Remote worker installed-tree root layout is invalid.");
       }
-      if (evidence.entries.some((entry) => entry.kind !== "directory")) {
+      if (
+        evidence.entries.some(
+          (entry) => entry.kind !== (layout && entry.name === "worker-package.json" ? "regular_file" : "directory"),
+        )
+      ) {
         throw invalid("Remote worker installed-tree root contains a file or special entry.");
       }
     } else if (evidence.entries.length === 0) {
@@ -520,6 +588,11 @@ async function scanWindowsTree(root: string, limits: ScanLimits, deadline: ScanD
       }
       const relativePath = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
       if (entry.kind === "directory") {
+        if (layout) {
+          if (!layout.directories.has(relativePath)) throw invalid("Unexpected Windows package directory.");
+          await walk(relativePath, undefined, entry.observation);
+          continue;
+        }
         if (relativeDirectory === "") {
           const recursiveRole = RECURSIVE_DIRECTORIES.get(entry.name);
           const singletonRole = SINGLETON_DIRECTORIES.get(entry.name);
@@ -534,13 +607,22 @@ async function scanWindowsTree(root: string, limits: ScanLimits, deadline: ScanD
         deadline.check();
         continue;
       }
-      const effectiveRole = role ?? roleForRootFile(relativeDirectory);
+      const effectiveRole = layout
+        ? layout.files.get(relativePath)?.role
+        : (role ?? roleForRootFile(relativeDirectory));
       if (effectiveRole === undefined) throw invalid("Remote worker installed-tree file role is invalid.");
-      const hashed = await awaitWindowsScanHelper(deadline, async (deadlineMs, signal) =>
-        hashRemoteWorkerWindowsFile(root, relativePath, limits.maxFileBytes, { deadlineMs, signal }),
-      );
-      if (hashed.operatorSid !== rootOwnerSid)
+      const hashed =
+        hashCache.get(relativePath) ??
+        (await awaitWindowsScanHelper(deadline, async (deadlineMs, signal) =>
+          hashRemoteWorkerWindowsFile(root, relativePath, limits.maxFileBytes, { deadlineMs, signal }),
+        ));
+      if (layout ? rootOwnerSid !== "S-1-5-18" : hashed.operatorSid !== rootOwnerSid)
         throw invalid("Remote worker installed-tree root is not operator-owned.");
+      if (layout) {
+        const expected = layout.files.get(relativePath);
+        if (!expected || hashed.sha256 !== expected.sha256 || hashed.sizeBytes !== expected.sizeBytes)
+          throw invalid("Windows package file differs from its pinned inventory.");
+      }
       const ancestorPaths = windowsAncestorPaths(relativeDirectory);
       if (ancestorPaths.length !== hashed.ancestorsBefore.length) {
         throw invalid("Remote worker Windows file ancestry is incomplete.");
@@ -581,12 +663,18 @@ async function scanWindowsTree(root: string, limits: ScanLimits, deadline: ScanD
 
   await walk("");
   deadline.check();
+  if (layout && files.length !== layout.files.size) throw invalid("Windows package inventory is incomplete.");
   assertRoleCardinality(files);
+  directoryCache.clear();
+  hashCache.clear();
+  if (layout) await batchDirectories([...visitedDirectories.keys()]);
   for (const [relativeDirectory, initial] of visitedDirectories) {
     deadline.check();
-    const repeated = await awaitWindowsScanHelper(deadline, async (deadlineMs, signal) =>
-      enumerateRemoteWorkerWindowsDirectory(root, relativeDirectory, { deadlineMs, signal }),
-    );
+    const repeated =
+      directoryCache.get(relativeDirectory) ??
+      (await awaitWindowsScanHelper(deadline, async (deadlineMs, signal) =>
+        enumerateRemoteWorkerWindowsDirectory(root, relativeDirectory, { deadlineMs, signal }),
+      ));
     if (
       rootIdentity !== windowsIdentity(repeated.rootObservation) ||
       !equalStrings(initial.secondNames, repeated.secondNames) ||

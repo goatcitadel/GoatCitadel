@@ -14,6 +14,16 @@ $script:CellControllerParentSddl = "O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;$scr
 $script:WorkerPackageSchema = 'goatcitadel.remote-worker-windows-package.v3'
 $script:WorkerMaximumFileBytes = 268435456L
 
+function Assert-WorkerEnrollmentInputChoice {
+  param([string]$TicketFile, [switch]$DeferEnrollment)
+  if ($DeferEnrollment -and -not [string]::IsNullOrWhiteSpace($TicketFile)) {
+    throw 'REFUSED: deferred enrollment cannot accept a ticket.'
+  }
+  if (-not $DeferEnrollment -and [string]::IsNullOrWhiteSpace($TicketFile)) {
+    throw 'REFUSED: supply a ticket or explicitly defer enrollment.'
+  }
+}
+
 function Initialize-WorkerInstallNative {
   Initialize-BrokerCoordinatorNativeType
   if (-not ('GoatCitadel.RemoteWorker.Install.NativeFiles' -as [type])) {
@@ -141,6 +151,25 @@ function ConvertFrom-WorkerJson {
     if ($null -eq $value -or $value -is [array] -or $value -isnot [pscustomobject]) { throw 'object required' }
     return $value
   } catch { throw 'REFUSED: input is not a valid UTF-8 JSON object.' }
+}
+function Assert-WorkerProtectedKeyInput {
+  param([byte[]]$Bytes, [string]$PackageRoot)
+  # The runtime consumes a canonical GCTK identifier, not a JSON object. Validate
+  # with the same decoder from the already inventory-verified package.
+  if ($Bytes.Length -eq 0 -or $Bytes.Length -gt 5000) { throw 'REFUSED: protected key reference size is invalid.' }
+  $code = @'
+import { pathToFileURL } from 'node:url';
+const { decodeWindowsTlsKeyIdentifier } = await import(pathToFileURL(process.argv[1]).href);
+try {
+  const bytes = Buffer.from(process.argv[2], 'base64');
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  if (!Buffer.from(text, 'utf8').equals(bytes)) throw Error('noncanonical encoding');
+  decodeWindowsTlsKeyIdentifier(text);
+} catch { process.exitCode = 2; }
+'@
+  $decoder = Join-Path $PackageRoot 'app/worker/node_modules/@goatcitadel/remote-worker-provisioner/dist/windows-tls-key-identifier.js'
+  & (Join-Path $PackageRoot 'app/runtime/node.exe') --input-type=module -e $code $decoder ([Convert]::ToBase64String($Bytes))
+  if ($LASTEXITCODE -ne 0) { throw 'REFUSED: protected key input is not a canonical public TLS key identifier.' }
 }
 function Get-WorkerPackage {
   param([string]$Root, [string]$ManifestSha256, [string]$Target)
@@ -386,6 +415,24 @@ function Assert-WorkerCellRuntimeCustody {
       (ConvertTo-CanonicalFileSddl ([GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::GetFileSddl($Paths.RuntimeCustody))) -cne
         (ConvertTo-CanonicalFileSddl $script:WorkerReadOnlySddl)) { throw 'REFUSED: installed runtime custody differs.' }
 }
+function Assert-WorkerCellParentSecurity {
+  param([string]$Sddl)
+  $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
+  $expectedDescriptor = [Security.AccessControl.RawSecurityDescriptor]::new($script:CellControllerParentSddl)
+  # Windows may mark the explicit mandatory-label SACL auto-inherited. Ignore
+  # only that bookkeeping flag, not ACE inheritance flags, protection or rights.
+  $flags = [int]$descriptor.ControlFlags -band (-bnot [int][Security.AccessControl.ControlFlags]::SystemAclAutoInherited)
+  $descriptor.SetFlags([Security.AccessControl.ControlFlags]$flags)
+  # GetSddlForm(All) may omit mandatory-label ACEs; compare serialized bytes
+  # so label SID, policy and ACE inheritance flags cannot disappear from proof.
+  $actualBytes=[byte[]]::new($descriptor.BinaryLength)
+  $expectedBytes=[byte[]]::new($expectedDescriptor.BinaryLength)
+  $descriptor.GetBinaryForm($actualBytes,0)
+  $expectedDescriptor.GetBinaryForm($expectedBytes,0)
+  if ([Convert]::ToBase64String($actualBytes) -cne [Convert]::ToBase64String($expectedBytes)) {
+    throw 'REFUSED: cell parent owner, group, DACL or integrity label differs.'
+  }
+}
 function Assert-WorkerCellControllerCustody {
   param($Paths, $Inventory)
   $expected = Get-WorkerCellControllerCustodyBytes $Paths $Inventory
@@ -395,12 +442,7 @@ function Assert-WorkerCellControllerCustody {
         (ConvertTo-CanonicalFileSddl $script:WorkerReadOnlySddl)) { throw 'REFUSED: installed controller custody differs.' }
   $parent = [GoatCitadel.RemoteWorker.BrokerCoordinator.NativeRecipe]::PinDirectory($Paths.Cells)
   try {
-    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new([GoatCitadel.RemoteWorker.Install.NativeFiles]::GetCellDirectorySddl($parent))
-    $expectedDescriptor = [Security.AccessControl.RawSecurityDescriptor]::new($script:CellControllerParentSddl)
-    if ($descriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::All) -cne
-        $expectedDescriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::All)) {
-      throw 'REFUSED: cell parent owner, group, DACL or integrity label differs.'
-    }
+    Assert-WorkerCellParentSecurity ([GoatCitadel.RemoteWorker.Install.NativeFiles]::GetCellDirectorySddl($parent))
   } finally { $parent.Dispose() }
 }
 function Assert-WorkerCellControllerServiceReadBack {

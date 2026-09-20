@@ -25,14 +25,14 @@ namespace GoatCitadel.RemoteWorker.Install
         private static extern int NCryptExportKey(IntPtr key, IntPtr wrapping, string format, IntPtr parameters, byte[] value, uint size, out uint written, uint flags);
         [DllImport("ncrypt.dll")]
         private static extern int NCryptFreeObject(IntPtr handle);
-        private static void Check(int status)
+        private static void Check(int status, string stage)
         {
-            if (status != 0) throw new InvalidOperationException("Controller key operation refused (0x" + unchecked((uint)status).ToString("x8") + "). Preserve any created key for operator recovery.");
+            if (status != 0) throw new InvalidOperationException("Controller key operation refused at " + stage + " (0x" + unchecked((uint)status).ToString("x8") + "). Preserve any created key for operator recovery.");
         }
         private static byte[] Get(IntPtr key, string property, uint flags)
         {
             byte[] bytes = new byte[4096]; uint count;
-            Check(NCryptGetProperty(key, property, bytes, (uint)bytes.Length, out count, flags));
+            Check(NCryptGetProperty(key, property, bytes, (uint)bytes.Length, out count, flags), "read property: " + property);
             if (count == 0 || count > bytes.Length) throw new InvalidOperationException("Invalid controller key property length.");
             Array.Resize(ref bytes, (int)count); return bytes;
         }
@@ -53,7 +53,11 @@ namespace GoatCitadel.RemoteWorker.Install
             {
                 CommonAce ace = item as CommonAce;
                 if (ace == null || ace.IsCallback || ace.AceQualifier != AceQualifier.AccessAllowed || ace.AceFlags != AceFlags.None ||
-                    (ace.AccessMask != 0x10000000 && ace.AccessMask != 0x1f01ff)) throw new InvalidOperationException("Controller signing key grants differ.");
+                    // The software KSP may return generic read/write/all bits
+                    // alongside mapped file-full-access bits. Accept only the
+                    // exact observed provider form, never a subset/superset.
+                    (ace.AccessMask != 0x10000000 && ace.AccessMask != 0x1f01ff &&
+                     ace.AccessMask != unchecked((int)0xd01f01ff))) throw new InvalidOperationException("Controller signing key grants differ.");
                 if (ace.SecurityIdentifier.Value == "S-1-5-18" && !system) system = true;
                 else if (ace.SecurityIdentifier.Value == ControllerSid && !controller) controller = true;
                 else throw new InvalidOperationException("Unexpected controller key principal.");
@@ -65,20 +69,20 @@ namespace GoatCitadel.RemoteWorker.Install
             IntPtr provider = IntPtr.Zero, key = IntPtr.Zero;
             try
             {
-                Check(NCryptOpenStorageProvider(out provider, Provider, 0));
+                Check(NCryptOpenStorageProvider(out provider, Provider, 0), "open software provider");
                 // No overwrite/reuse flag. An existing key must be reviewed by
                 // an operator, never silently adopted by a fresh installation.
-                Check(NCryptCreatePersistedKey(provider, out key, "ECDSA_P256", Name, 0, 0x20 | 0x40));
-                Check(NCryptSetProperty(key, "Export Policy", BitConverter.GetBytes((uint)0), 4, 0));
-                Check(NCryptSetProperty(key, "Key Usage", BitConverter.GetBytes((uint)2), 4, 0));
-                Check(NCryptFinalizeKey(key, 0x40));
+                Check(NCryptCreatePersistedKey(provider, out key, "ECDSA_P256", Name, 0, 0x20 | 0x40), "create named machine key (no overwrite)");
+                Check(NCryptSetProperty(key, "Export Policy", BitConverter.GetBytes((uint)0), 4, 0), "set non-exportable policy");
+                Check(NCryptSetProperty(key, "Key Usage", BitConverter.GetBytes((uint)2), 4, 0), "set signing-only usage");
+                Check(NCryptFinalizeKey(key, 0x40), "finalize machine key");
                 RawSecurityDescriptor descriptor = new RawSecurityDescriptor("O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;" + ControllerSid + ")");
                 byte[] security = new byte[descriptor.BinaryLength]; descriptor.GetBinaryForm(security, 0);
-                Check(NCryptSetProperty(key, "Security Descr", security, (uint)security.Length, 0x7));
+                Check(NCryptSetProperty(key, "Security Descr", security, (uint)security.Length, 0x7), "set SYSTEM/controller owner and permissions");
                 ValidateSecurity(Get(key, "Security Descr", 0x5));
                 AssertDword(key, "Export Policy", 0); AssertDword(key, "Key Usage", 2); AssertDword(key, "Key Type", 0x20);
                 byte[] publicBlob = new byte[72]; uint count;
-                Check(NCryptExportKey(key, IntPtr.Zero, "ECCPUBLICBLOB", IntPtr.Zero, publicBlob, 72, out count, 0));
+                Check(NCryptExportKey(key, IntPtr.Zero, "ECCPUBLICBLOB", IntPtr.Zero, publicBlob, 72, out count, 0), "export public point only");
                 if (count != 72 || BitConverter.ToUInt32(publicBlob, 0) != 0x31534345 || BitConverter.ToUInt32(publicBlob, 4) != 32)
                     throw new InvalidOperationException("Controller key is not ECDSA P-256.");
                 return "04" + BitConverter.ToString(publicBlob, 8, 64).Replace("-", "").ToLowerInvariant();

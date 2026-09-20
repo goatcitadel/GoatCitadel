@@ -3,6 +3,28 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'worker-install-common.ps1')
 $script:WorkerEnrollmentSddl = 'O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'
 
+# The operator pins the complete ticket, including its one-time secret. Never emit its bytes.
+function Assert-WorkerDeferredTicketChoice {
+  param([string]$TicketFile,[string]$TicketSha256)
+  if ([string]::IsNullOrWhiteSpace($TicketFile) -ne [string]::IsNullOrWhiteSpace($TicketSha256)) {
+    throw 'REFUSED: deferred ticket requires both its path and SHA-256.'
+  }
+}
+function Assert-WorkerDeferredTicketBytes {
+  param([byte[]]$Bytes,[string]$ExpectedSha256)
+  if ($ExpectedSha256 -cnotmatch '^[a-f0-9]{64}$' -or (Get-WorkerBytesHash $Bytes) -cne $ExpectedSha256) {
+    throw 'REFUSED: deferred admission ticket hash differs.'
+  }
+  # Do not surface JSON parser errors, which may contain the bootstrap secret.
+  try { $ticket=ConvertFrom-WorkerJson $Bytes } catch { throw 'REFUSED: invalid admission ticket JSON.' }
+  if ($null -eq $ticket -or $ticket -isnot [pscustomobject] -or
+      $ticket.PSObject.Properties.Name -contains 'protectedSignerPrivateKeyPem' -or
+      $ticket.PSObject.Properties.Name -notcontains 'protectedSignerPublicKeySpkiBase64Url' -or
+      $ticket.protectedSignerPublicKeySpkiBase64Url -isnot [string] -or
+      [string]::IsNullOrWhiteSpace($ticket.protectedSignerPublicKeySpkiBase64Url)) {
+    throw 'REFUSED: admission ticket must use the protected public signing key.'
+  }
+}
 function Get-WorkerInstalledSettings {
   param($Paths, [byte[]]$Settings)
   if ($Settings.Length -lt 4 -or $Settings.Length -gt 65534 -or $Settings.Length % 2 -ne 0) { throw 'REFUSED: invalid enrollment settings.' }

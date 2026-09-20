@@ -16,6 +16,8 @@ param(
   [Parameter(Mandatory=$true)][ValidateSet('windows-x64','windows-arm64')][string]$Target,
   [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{64}$')][string]$ManifestSha256,
   [Parameter(Mandatory=$true)][string]$OutputRoot,
+  [string]$TicketFile,
+  [ValidatePattern('^[a-f0-9]{64}$')][string]$TicketSha256,
   [switch]$Preflight
 )
 Set-StrictMode -Version Latest
@@ -32,6 +34,7 @@ if ($OutputRoot.Equals($paths.Root,[StringComparison]::OrdinalIgnoreCase) -or
     $OutputRoot.StartsWith($paths.Root+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'REFUSED: evidence must be outside the installation.' }
 New-Item -ItemType Directory -Path $OutputRoot -ErrorAction Stop | Out-Null
 $verdict='refused'; $detail=''; $transfer=$null; $proof=$null; $networkAttempted=$false
+$ticketTransfer=$null; $ticketSource=$null; $ticketRecord=$null
 $runId='enroll-'+[guid]::NewGuid().ToString('N')
 
 function Hold-EnrollmentDirectory {
@@ -80,8 +83,25 @@ try {
   }
   $binding = [ordered]@{schemaVersion='goatcitadel.remote-worker.enrollment-binding.v1';installationId=$receipt.installationId;
     manifestSha256=$ManifestSha256;settingsSha256=$receipt.settingsSha256;configuration=[ordered]@{}}
+  Assert-WorkerDeferredTicketChoice $TicketFile $TicketSha256
+  $ticketDestination=Join-Path $paths.Configuration 'ticket.json'
+  if (-not [string]::IsNullOrWhiteSpace($TicketFile)) {
+    $ticketSource=[IO.Path]::GetFullPath($TicketFile)
+    $leases.Add($files::OpenRead($ticketSource,2097152))
+    $ticketBytes=Read-WorkerBytes $ticketSource
+    Assert-WorkerDeferredTicketBytes $ticketBytes $TicketSha256
+    $ticketRecord=[pscustomobject]@{sha256=$TicketSha256;sizeBytes=$ticketBytes.Length}
+    if (Test-Path -LiteralPath $ticketDestination) {
+      $existing=Hold-EnrollmentFile $ticketDestination $script:WorkerReadOnlySddl
+      if ($existing.sha256 -cne $TicketSha256) { throw 'REFUSED: existing admission ticket differs; preserve it.' }
+    }
+    $selectedTicketRecord=$ticketRecord
+  } else {
+    $selectedTicketRecord=Hold-EnrollmentFile $ticketDestination $script:WorkerReadOnlySddl
+  }
   foreach ($name in @('client-cert.pem','ca.pem','ticket.json','protected-key.json','worker.environment')) {
-    $binding.configuration[$name] = Hold-EnrollmentFile (Join-Path $paths.Configuration $name) $script:WorkerReadOnlySddl
+    if ($name -ceq 'ticket.json') { $binding.configuration[$name]=$selectedTicketRecord }
+    else { $binding.configuration[$name] = Hold-EnrollmentFile (Join-Path $paths.Configuration $name) $script:WorkerReadOnlySddl }
   }
   $settings = Read-WorkerBytes (Join-Path $paths.Configuration 'worker.environment')
   if ((Get-WorkerBytesHash $settings) -cne $receipt.settingsSha256) { throw 'REFUSED: installed settings changed.' }
@@ -124,14 +144,23 @@ try {
   if ($Preflight) { $verdict='passed'; $detail='Enrollment preflight passed; no admission or credential transfer performed.' }
   else {
     $verdict='failed'
-    if ($stateDirectory -cne $paths.State) {
+    if ($stateDirectory -cne $paths.State -or $null -ne $ticketSource) {
       # Both installed services hold read leases before admitting any work.
       # OPEN_EXISTING plus share-none closes the stopped-service/startup race.
       $leases.Add($files::AcquireInstalledStateWriterGate($paths.StateWriterGate))
       if ((ConvertTo-CanonicalFileSddl ($native::GetFileSddl($paths.StateWriterGate))) -cne
           (ConvertTo-CanonicalFileSddl $script:WorkerReadOnlySddl)) { throw 'REFUSED: state writer gate security differs.' }
     }
+    Assert-WorkerServiceReadBack $paths
+    if ($stateDirectory -cne $paths.State) { Assert-WorkerCellControllerServiceReadBack $paths }
     $native::EnablePrivilege('SeRestorePrivilege')
+    if ($null -ne $ticketSource) {
+      $ticketTransfer=Publish-WorkerEnrollmentCredential $ticketSource $ticketDestination $ticketRecord $script:WorkerReadOnlySddl
+      $publishedTicket=Hold-EnrollmentFile $ticketDestination $script:WorkerReadOnlySddl
+      if ($publishedTicket.sha256 -cne $ticketRecord.sha256 -or $publishedTicket.sizeBytes -ne $ticketRecord.sizeBytes) {
+        throw 'REFUSED: published admission ticket differs.'
+      }
+    }
     if (-not (Test-Path -LiteralPath $paths.Enrollment)) {
       $native::CreateProtectedDirectory($paths.Enrollment,$script:WorkerEnrollmentSddl)
       Hold-EnrollmentDirectory $paths.Enrollment $script:WorkerEnrollmentSddl
@@ -176,7 +205,7 @@ finally {
   for ($index=$leases.Count-1; $index -ge 0; $index--) { $leases[$index].Dispose() }
   $evidence=[ordered]@{schemaVersion='goatcitadel.remote-worker.enrollment-evidence.v1';verdict=$verdict;preflight=[bool]$Preflight;
     runId=$runId;target=$Target;manifestSha256=$ManifestSha256;detail=$detail;credentialTransfer=$transfer;credential=$proof;
-    admissionAttempted=$networkAttempted;privateStateRetained=$true;scmMutated=$false;assignmentsRequested=$false}
+    ticketTransfer=$ticketTransfer;admissionAttempted=$networkAttempted;privateStateRetained=$true;scmMutated=$false;assignmentsRequested=$false}
   [IO.File]::WriteAllText((Join-Path $OutputRoot 'worker-enrollment-evidence.json'),($evidence | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
   $evidence | ConvertTo-Json -Depth 5
 }
