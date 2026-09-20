@@ -39,6 +39,33 @@ const CONTENT_TYPES = new Map<string, string>([
 ]);
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
+
+// `pnpm test` is the only script here that does not run `build:deps` first, so
+// without this alias vitest resolves the shared package through its export map
+// into `dist/`. A source export that has not been compiled yet then surfaces as a
+// misleading "No <name> export is defined on the mock" failure from any
+// `vi.mock` that spreads `importOriginal()`, pointing at the mock rather than at
+// the stale build. Resolving to source keeps tests honest without making `test`
+// depend on `build:deps`. Test-only: `vite dev` and `vite build` still go
+// through the export maps, which `build:deps` refreshes.
+//
+// Only packages whose export map is subpath-faithful (`./x/y` -> `./dist/x/y.js`)
+// belong here, so that `src/x/y` is the same module the map would have picked.
+// `threaded-surface-core` is deliberately absent: it remaps subpaths
+// (`./work-trust` -> `./dist/chat/work-trust.js`), so a source alias would
+// silently resolve to a different file. The guard in vite.config.test.ts fails if
+// an aliased package ever gains a remapping export.
+export const WORKSPACE_SOURCE_PACKAGES = ["mission-control-shared"] as const;
+
+export function buildWorkspaceSourceAliases(
+  workspaceRoot: string = repoRoot,
+): Array<{ find: RegExp; replacement: string }> {
+  return WORKSPACE_SOURCE_PACKAGES.map((packageName) => ({
+    find: new RegExp("^@goatcitadel/" + packageName + "(?:/(.*))?$"),
+    replacement: path.resolve(workspaceRoot, "packages", packageName, "src").replaceAll("\\", "/") + "/$1",
+  }));
+}
+
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(configDir, "./package.json"), "utf8")) as {
   version?: string;
 };
@@ -255,6 +282,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     test: {
+      alias: buildWorkspaceSourceAliases(),
       exclude: RESTORED_TEST_EXCLUDE,
       setupFiles: "./src/test/setup.ts",
       testTimeout: 20000,
