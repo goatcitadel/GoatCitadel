@@ -15,8 +15,21 @@ import { RemoteWorkerChatTaskRepository } from "./remote-worker-chat-task-repo.j
 function bridge(raw: DatabaseSync): DatabaseClient {
   let savepoint = 0;
   return {
-    dialect: "sqlite", prepare: (sql) => raw.prepare(sql) as unknown as DbStatement,
-    exec: (sql) => raw.exec(sql), close: () => raw.close(),
+    dialect: "sqlite",
+    prepare: (sql) => {
+      // Seed v213 with only the statements used by that history. Current owners
+      // also prepare queries for later features which do not exist yet. Any
+      // attempted use still prepares and validates the SQL against the old DB.
+      let statement: DbStatement | undefined;
+      const prepare = () => (statement ??= raw.prepare(sql) as unknown as DbStatement);
+      return {
+        run: (...params: unknown[]) => prepare().run(...params),
+        get: <T>(...params: unknown[]) => prepare().get<T>(...params),
+        all: <T>(...params: unknown[]) => prepare().all<T>(...params),
+      };
+    },
+    exec: (sql) => raw.exec(sql),
+    close: () => raw.close(),
     transaction: (mode, callback) => {
       const nested = raw.isTransaction;
       const name = `fixture_${++savepoint}`;
@@ -35,16 +48,24 @@ function bridge(raw: DatabaseSync): DatabaseClient {
 
 function oldHistory(raw: DatabaseSync): void {
   raw.exec("PRAGMA foreign_keys = ON");
-  runSqliteMigrations(raw, Array.from({ length: 213 }, (_, index) => ({
-    version: index + 1, name: __sqliteInternals.getSchemaMigrationNameForTest(index + 1),
-    up: (db: DatabaseSync) => __sqliteInternals.applySchemaMigrationForTest(index + 1, db),
-  })));
+  runSqliteMigrations(
+    raw,
+    Array.from({ length: 213 }, (_, index) => ({
+      version: index + 1,
+      name: __sqliteInternals.getSchemaMigrationNameForTest(index + 1),
+      up: (db: DatabaseSync) => __sqliteInternals.applySchemaMigrationForTest(index + 1, db),
+    })),
+  );
 }
 
 function retainedObjects(db: DatabaseClient) {
-  return db.prepare(`SELECT type, name, sql FROM sqlite_schema WHERE type IN ('trigger', 'index')
+  return db
+    .prepare(
+      `SELECT type, name, sql FROM sqlite_schema WHERE type IN ('trigger', 'index')
     AND tbl_name IN ('remote_worker_assignment_generations', 'remote_worker_mesh_join_authorities')
-    AND sql IS NOT NULL ORDER BY type, name`).all();
+    AND sql IS NOT NULL ORDER BY type, name`,
+    )
+    .all();
 }
 
 describe("remote-worker canonical bounds forward migration", () => {
@@ -66,21 +87,41 @@ describe("remote-worker canonical bounds forward migration", () => {
       } finally {
         legacyTaskLookup.mock.restore();
       }
-      assert.equal(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'remote_worker_chat_tasks'").get(), undefined);
-      const aggregate = new RemoteWorkerAssignmentRepository(db).findAssignmentAggregate("default", fixture.assignmentId);
+      assert.equal(
+        db.prepare("SELECT name FROM sqlite_schema WHERE name = 'remote_worker_chat_tasks'").get(),
+        undefined,
+      );
+      const aggregate = new RemoteWorkerAssignmentRepository(db).findAssignmentAggregate(
+        "default",
+        fixture.assignmentId,
+      );
       assert.equal(aggregate?.generation?.dispatchAuthority.durableRunAttempt, 1);
       const objects = retainedObjects(db);
       const ledger = db.prepare("SELECT * FROM schema_migrations ORDER BY version").all();
-      db.close(); db = undefined; raw = undefined;
+      db.close();
+      db = undefined;
+      raw = undefined;
       db = createDatabase({ dbPath });
-      assert.deepEqual(new RemoteWorkerAssignmentRepository(db).findAssignmentAggregate("default", fixture.assignmentId), aggregate);
+      assert.deepEqual(
+        new RemoteWorkerAssignmentRepository(db).findAssignmentAggregate("default", fixture.assignmentId),
+        aggregate,
+      );
       assert.deepEqual(retainedObjects(db), objects);
-      assert.deepEqual(db.prepare("SELECT * FROM schema_migrations WHERE version <= 213 ORDER BY version").all(), ledger);
-      assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get<{ version: number }>()!.version, 217);
+      assert.deepEqual(
+        db.prepare("SELECT * FROM schema_migrations WHERE version <= 213 ORDER BY version").all(),
+        ledger,
+      );
+      // Normal startup must reach the reviewed current SQLite registry, not stop
+      // at the historical migration under test.
+      assert.equal(
+        db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get<{ version: number }>()!.version,
+        250,
+      );
       assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
       assert.equal(db.prepare("PRAGMA foreign_keys").get<{ foreign_keys: number }>()!.foreign_keys, 1);
     } finally {
-      if (db) db.close(); else raw?.close();
+      if (db) db.close();
+      else raw?.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -98,20 +139,38 @@ describe("remote-worker canonical bounds forward migration", () => {
           expires_at TEXT CHECK((julianday(expires_at) - julianday(issued_at)) * 86400 BETWEEN 1 AND 600));
         INSERT INTO remote_worker_assignment_generations VALUES (1, 1, 'exact old authority bytes');
         INSERT INTO retained_lease VALUES (1, 1);`);
-      assert.throws(() => raw.prepare("INSERT INTO remote_worker_assignment_generations VALUES (2, 0, 'first')").run(), /CHECK/u);
+      assert.throws(
+        () => raw.prepare("INSERT INTO remote_worker_assignment_generations VALUES (2, 0, 'first')").run(),
+        /CHECK/u,
+      );
       db.transaction("immediate", () => upgradeRemoteWorkerCanonicalBounds(raw));
       raw.prepare("INSERT INTO remote_worker_assignment_generations VALUES (2, 0, 'first')").run();
-      for (const invalid of [-1, 0.5]) assert.throws(() => raw.prepare("INSERT INTO remote_worker_assignment_generations VALUES (3, ?, 'bad')").run(invalid), /CHECK/u);
-      assert.throws(() => raw.prepare("UPDATE remote_worker_assignment_generations SET bytes = 'changed' WHERE id = 1").run(), /immutable/u);
-      assert.equal(raw.prepare("SELECT bytes FROM remote_worker_assignment_generations WHERE id = 1").get()?.bytes, "exact old authority bytes");
+      for (const invalid of [-1, 0.5])
+        assert.throws(
+          () => raw.prepare("INSERT INTO remote_worker_assignment_generations VALUES (3, ?, 'bad')").run(invalid),
+          /CHECK/u,
+        );
+      assert.throws(
+        () => raw.prepare("UPDATE remote_worker_assignment_generations SET bytes = 'changed' WHERE id = 1").run(),
+        /immutable/u,
+      );
+      assert.equal(
+        raw.prepare("SELECT bytes FROM remote_worker_assignment_generations WHERE id = 1").get()?.bytes,
+        "exact old authority bytes",
+      );
       assert.equal(raw.prepare("SELECT parent_id FROM retained_lease").get()?.parent_id, 1);
       const start = Date.parse("2026-09-10T09:00:00.123Z");
       const insert = raw.prepare("INSERT INTO remote_worker_mesh_join_authorities VALUES (?, ?, ?)");
       for (const [index, milliseconds] of [1000, 1001, 599999, 600000].entries())
         insert.run(index, new Date(start).toISOString(), new Date(start + milliseconds).toISOString());
       for (const milliseconds of [0, 999, 600001])
-        assert.throws(() => insert.run(10, new Date(start).toISOString(), new Date(start + milliseconds).toISOString()), /CHECK/u);
+        assert.throws(
+          () => insert.run(10, new Date(start).toISOString(), new Date(start + milliseconds).toISOString()),
+          /CHECK/u,
+        );
       assert.deepEqual(raw.prepare("PRAGMA foreign_key_check").all(), []);
-    } finally { raw.close(); }
+    } finally {
+      raw.close();
+    }
   });
 });

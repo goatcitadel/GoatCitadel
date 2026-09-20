@@ -183,7 +183,14 @@ describe("McpRequesterScopedTurnContextHandle (HX-415 slice 7d)", () => {
     )!;
     for (const field of Object.keys(context) as Array<keyof McpRequesterScopedToolCallTurnContext>) {
       const value = context[field];
-      const changed = field === "actorSource" ? "basic" : typeof value === "number" ? value + 1 : /^[a-f0-9]{64}$/u.test(value) ? "0".repeat(64) : `${value}-changed`;
+      const changed =
+        field === "actorSource"
+          ? "basic"
+          : typeof value === "number"
+            ? value + 1
+            : /^[a-f0-9]{64}$/u.test(value)
+              ? "0".repeat(64)
+              : `${value}-changed`;
       const handle = createMcpRequesterScopedTurnContext({ ...context, [field]: changed });
       expect(matchesMcpRequesterScopedTurnContextProfile(handle, profile), field).toBe(false);
     }
@@ -236,7 +243,12 @@ describe("McpRequesterScopedTurnContextHandle (HX-415 slice 7d)", () => {
 });
 
 const TURN_CONTEXT_DEFINITION_SITE = "services/mcp-requester-resolution-service.ts";
-const TURN_CONTEXT_ALLOWED_CALL_SITES = new Set(["services/chat-turn-agent-runner.ts", "services/gateway-service.ts"]);
+const TURN_CONTEXT_ALLOWED_CALL_SITES = new Set([
+  "services/chat-turn-agent-runner.ts",
+  "services/gateway-service.ts",
+  // Recovery rebuilds the handle from the frozen profile read by the Gateway host.
+  "services/mcp-requester-runtime-composition.ts",
+]);
 
 function assertTurnContextConstructionScoped(
   inventory: ReadonlyArray<{ relativePath: string; content: string }>,

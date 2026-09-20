@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import { registerIntegrationControlRoutes } from "./integrations-control-routes.js";
 import { mediaRoutes } from "./media.js";
 import { registerObsidianIntegrationRoutes } from "./integrations-obsidian-routes.js";
@@ -8,6 +9,7 @@ import { toolsRoutes } from "./tools.js";
 const connectionId = "00000000-0000-4000-8000-000000000001";
 const pairingId = "00000000-0000-4000-8000-000000000002";
 const grantId = "00000000-0000-4000-8000-000000000003";
+const expectedRevision = "a".repeat(64);
 
 describe("Loop 21 route facade coverage", () => {
   let app: FastifyInstance | null = null;
@@ -107,37 +109,54 @@ describe("Loop 21 route facade coverage", () => {
       statusCode: 400,
     });
     integrations.createIntegrationConnection.mockImplementationOnce(() => {
-      throw new Error("duplicate connection");
+      throw new ValidationError({ message: "Unknown integration catalog id: missing" });
     });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/integrations/connections", payload: { catalogId: "slack" } }),
+      app.inject({ method: "POST", url: "/api/v1/integrations/connections", payload: { catalogId: "missing" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
+    integrations.createIntegrationConnection.mockImplementationOnce(() => {
+      throw new Error("private integration failure detail");
+    });
+    const unavailable = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections",
+      payload: { catalogId: "slack" },
+    });
+    expect(unavailable.statusCode).toBe(500);
+    expect(unavailable.json()).toEqual({ error: "Internal server error" });
 
     await app.inject({
       method: "PATCH",
       url: `/api/v1/integrations/connections/${connectionId}`,
-      payload: { status: "connected", lastSyncAt: "2026-05-14T00:00:00.000Z" },
+      payload: { expectedRevision, status: "connected", lastSyncAt: "2026-05-14T00:00:00.000Z" },
     });
     expect(integrations.updateIntegrationConnection).toHaveBeenCalledWith(
       connectionId,
       expect.objectContaining({ status: "connected" }),
+      expect.any(Function),
     );
     await expect(
       app.inject({ method: "PATCH", url: "/api/v1/integrations/connections/not-a-uuid", payload: { label: "" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
     integrations.updateIntegrationConnection.mockImplementationOnce(() => {
-      throw new Error("connection disabled");
+      throw new ConflictError({ message: "connection revision changed" });
     });
     await expect(
       app.inject({
         method: "PATCH",
         url: `/api/v1/integrations/connections/${connectionId}`,
-        payload: { label: "New" },
+        payload: { expectedRevision, label: "New" },
       }),
-    ).resolves.toMatchObject({ statusCode: 400 });
+    ).resolves.toMatchObject({ statusCode: 409 });
 
     expect(
-      (await app.inject({ method: "DELETE", url: `/api/v1/integrations/connections/${connectionId}` })).json(),
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/v1/integrations/connections/${connectionId}`,
+          payload: { expectedRevision },
+        })
+      ).json(),
     ).toEqual({
       deleted: true,
     });
@@ -590,13 +609,27 @@ describe("Loop 21 route facade coverage", () => {
       }),
     ).resolves.toMatchObject({ statusCode: 403 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/safe/archive", payload: { expectedRevision: "a".repeat(64) } }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/permission-profiles/safe/archive",
+        payload: { expectedRevision: "a".repeat(64) },
+      }),
     ).resolves.toMatchObject({ statusCode: 403 });
     await expect(
-      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-other/archive", payload: { expectedRevision: "a".repeat(64) } }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/permission-profiles/profile-other/archive",
+        payload: { expectedRevision: "a".repeat(64) },
+      }),
     ).resolves.toMatchObject({ statusCode: 403 });
     expect(
-      (await app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-owned/archive", payload: { expectedRevision: "a".repeat(64) } })).json(),
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/tools/permission-profiles/profile-owned/archive",
+          payload: { expectedRevision: "a".repeat(64) },
+        })
+      ).json(),
     ).toEqual({
       archived: true,
       profileId: "profile-owned",
@@ -612,7 +645,14 @@ describe("Loop 21 route facade coverage", () => {
     await app.inject({
       method: "POST",
       url: "/api/v1/tools/permission-profiles/activate",
-      payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64), profileId: "safe", operatorId: "spoofed", workspaceId: "workspace-1", surface: "code" },
+      payload: {
+        expectedProfileRevision: "a".repeat(64),
+        expectedSelectionRevision: "b".repeat(64),
+        profileId: "safe",
+        operatorId: "spoofed",
+        workspaceId: "workspace-1",
+        surface: "code",
+      },
     });
     expect(tools.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", operatorId: "operator-test", createdBy: "operator-test" }),

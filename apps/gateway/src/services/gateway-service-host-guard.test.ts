@@ -91,6 +91,7 @@ const EXTRACTED_GATEWAY_SERVICE_SYMBOLS = [
 ];
 
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
+  "mcpAdministration",
   "addonsService",
   "addonSlotService",
   "approvalRuntime",
@@ -362,10 +363,15 @@ describe("gateway service host guard", () => {
     // Bumped to 187 for the latest Chat route capabilities, including the
     // narrow aggregate-stop control for durable fan-out and runtime settings
     // reads and compatibility owner used by governed Chat change plans.
-    // Three reviewed owner methods were added for permission-selection reviews
-    // and MCP environment/OAuth preparation; none is an untyped service escape hatch.
-    for (const member of ["reviewPermissionProfileSelection", "prepareMcpStaticEnvironment", "resolveMcpOAuthClientId"]) {
-      expect(portSource).toContain(`${member}: gateway.${member}.bind(gateway),`);
+    expect(portSource).toContain(
+      "reviewPermissionProfileSelection: gateway.reviewPermissionProfileSelection.bind(gateway),",
+    );
+    // MCP preparation moved behind the typed, private administration owner.
+    expect(portSource).toContain("mcpAdministration: privateDependencies.mcpAdministration,");
+    expect(source).toContain("const mcpAdminDeps = gateway.mcpAdministration;");
+    for (const member of ["prepareMcpStaticEnvironment", "resolveMcpOAuthClientId"]) {
+      expect(portSource).not.toContain(`${member}: gateway.${member}.bind(gateway),`);
+      expect(source).toContain(`"${member}"`);
     }
     expect(portMemberCount).toBeLessThanOrEqual(190);
     const portFactory = portSource.slice(

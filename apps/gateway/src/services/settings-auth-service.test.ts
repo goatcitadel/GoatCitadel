@@ -2649,18 +2649,21 @@ describe("settings-auth-service companion session lifecycle", () => {
   });
 
   it("issues and validates companion credentials from database time under host-clock skew", async () => {
-    const databaseNowBefore = Date.now();
     const harness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(harness);
     const keys = createCompanionSigningKeys();
 
+    const databaseNowBefore = Date.now();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
     try {
       const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
         signingPublicKeyPem: keys.publicKeyPem,
       });
-      expect(Math.abs(Date.parse(session.issuedAt) - databaseNowBefore)).toBeLessThan(5_000);
+      // Bound issuance by the real clock around the call, allowing SQLite's
+      // second precision without imposing a CPU-speed limit on the fixture.
+      expect(Date.parse(session.issuedAt)).toBeGreaterThanOrEqual(databaseNowBefore - 1_000);
+      expect(Date.parse(session.issuedAt)).toBeLessThanOrEqual(vi.getRealSystemTime());
       expect(Date.parse(session.accessTokenExpiresAt) - Date.parse(session.issuedAt)).toBe(
         COMPANION_ACCESS_TOKEN_TTL_MS,
       );

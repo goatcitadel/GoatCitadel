@@ -35,7 +35,7 @@ function writePoolFixture(directory, count) {
   fs.mkdirSync(directory);
   const histories = Array.from({ length: count }, (_, seed) => objectInventoryHistoryFixture(seed))
     .sort((a, b) => a.assignmentId < b.assignmentId ? -1 : a.assignmentId > b.assignmentId ? 1 : 0);
-  const members = histories.map(({ schemaVersion, registryWorkspaceId, assignmentId, assignmentGeneration, leaseRevision, ...history }) => ({
+  const members = histories.map(({ schemaVersion: _schemaVersion, registryWorkspaceId: _registryWorkspaceId, assignmentId, assignmentGeneration, leaseRevision: _leaseRevision, ...history }) => ({
     assignmentId, assignmentGeneration, workerGeneration: 1, cellId: `cell-${assignmentId}`, profileSha256: history.plan.profileSha256, history,
   }));
   const current = histories[0];

@@ -50,15 +50,20 @@ jobs:
           jq -e --arg sha "$CANDIDATE" '.conclusion == "success" and .event == "push" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/verification-fast.yml"' fast.json
           sequence=$((GITHUB_RUN_ID * 1000 + GITHUB_RUN_ATTEMPT))
           test "$sequence" -lt 9007199254740991
-          echo "commit=$CANDIDATE" >> "$GITHUB_OUTPUT"
-          echo "sequence=$sequence" >> "$GITHUB_OUTPUT"
-          echo "version=0.1.0-preview.$sequence.0" >> "$GITHUB_OUTPUT"
-          echo "tag=preview-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          {
+            echo "commit=$CANDIDATE"
+            echo "sequence=$sequence"
+            echo "version=0.1.0-preview.$sequence.0"
+            echo "tag=preview-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
 
   windows:
     needs: identity
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
     strategy:
       fail-fast: false
       matrix:

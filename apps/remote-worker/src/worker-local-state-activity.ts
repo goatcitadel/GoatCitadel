@@ -51,16 +51,31 @@ export class WorkerLocalStateActivity {
       if (this.externalWriters) throw new Error("Worker external writer cleanup is not verified.");
       this.observing = true;
       try {
-        try { this.gate?.pause(); }
-        catch (error) { this.failed = true; throw error; }
-        try { return await work(); }
-        finally {
-          try { await this.gate?.resume(); }
-          catch (error) { this.failed = true; throw error; }
+        try {
+          this.gate?.pause();
+        } catch (error) {
+          this.failed = true;
+          throw error;
         }
+        try {
+          return await work();
+        } finally {
+          // A custody failure takes precedence even if the observation failed.
+          await this.resumeWriters();
+        }
+      } finally {
+        this.observing = false;
       }
-      finally { this.observing = false; }
     }, signal);
+  }
+
+  private async resumeWriters(): Promise<void> {
+    try {
+      await this.gate?.resume();
+    } catch (error) {
+      this.failed = true;
+      throw error;
+    }
   }
 
   private async run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -69,7 +84,9 @@ export class WorkerLocalStateActivity {
     if (this.scope.getStore()?.active) throw new Error("Worker state activity cannot be nested.");
     const previous = this.tail;
     let release!: () => void;
-    this.tail = new Promise<void>(resolve => { release = resolve; });
+    this.tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     try {
       await waitForTurn(previous, signal);
     } catch (error) {
@@ -94,7 +111,10 @@ export class WorkerLocalStateActivity {
 function waitForTurn(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
   if (!signal) return previous;
   return new Promise<void>((resolve, reject) => {
-    const abort = () => { signal.removeEventListener("abort", abort); reject(signal.reason); };
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
     void previous.then(() => {

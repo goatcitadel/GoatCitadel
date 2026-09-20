@@ -80,7 +80,9 @@ jobs:
   tests:
     name: Tests (${{ matrix.slice }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Storage runs serially to preserve database custody between test files. The
+    # expanded suite was cancelled at 30 minutes before it could emit evidence.
+    timeout-minutes: ${{ matrix.slice == 'storage' && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:

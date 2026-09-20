@@ -1,3 +1,4 @@
+/* global document, requestAnimationFrame, Event -- callbacks evaluated in the browser by Playwright. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { createRunContext, finalizeRunContext, releaseRunContext } from "./lib/shared.mjs";
