@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { GATEWAY_COVERAGE_SHARD_COUNT, gatewayCoverageShardDirectory } from "../../../coverage-shard-contract.mjs";
+import { GATEWAY_COVERAGE_SHARD_COUNT, STORAGE_COVERAGE_SHARD_COUNT, gatewayCoverageShardDirectory } from "../../../coverage-shard-contract.mjs";
 import { clampString, maybeParseBool, repoRoot, runCommand, runScenario, sanitizeFilePart } from "../shared.mjs";
 import { prepareVerificationRuntime } from "../runtime.mjs";
 // The lane runs each package's `test:coverage` script rather than `test` so the
@@ -21,6 +21,9 @@ const FAST_LANE_UI_VITEST_MAX_WORKERS = 2;
 const FAST_LANE_LIBRARY_VITEST_MAX_WORKERS = 1;
 const GATEWAY_TEST_SHARDS = Object.freeze(
   Array.from({ length: GATEWAY_COVERAGE_SHARD_COUNT }, (_unused, index) => index + 1),
+);
+const STORAGE_TEST_SHARDS = Object.freeze(
+  Array.from({ length: STORAGE_COVERAGE_SHARD_COUNT }, (_unused, index) => index + 1),
 );
 const FAST_LANE_LIBRARY_TEST_FILTERS = Object.freeze([
   "@goatcitadel/contracts",
@@ -90,16 +93,16 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     args: ["--filter", "@goatcitadel/gateway", "coverage:exercise"],
     env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
   },
-  {
-    id: "fast.test.storage",
-    title: "Storage tests",
-    args: ["--filter", "@goatcitadel/storage", "test:coverage"],
+  ...STORAGE_TEST_SHARDS.map((shard) => ({
+    id: `fast.test.storage.shard${shard}`,
+    title: `Storage tests (shard ${shard}/${STORAGE_COVERAGE_SHARD_COUNT})`,
+    args: ["--filter", "@goatcitadel/storage", "test:coverage", `--shard=${shard}/${STORAGE_COVERAGE_SHARD_COUNT}`],
     // The suite creates ~1,200 SQLite databases and replaying the migration
     // registry costs ~600ms each, which was about two thirds of this scenario.
     // The template snapshots the migrated schema once per process; the ledger is
     // still validated on every database.
     env: { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" },
-  },
+  })),
   {
     id: "fast.test.mission-control-next",
     title: "Mission Control Next tests",
@@ -167,7 +170,7 @@ export const FAST_LANE_STAGES = Object.freeze([
   {
     id: "fast.test.storage",
     mode: "serial",
-    commands: ["fast.test.storage"],
+    commands: STORAGE_TEST_SHARDS.map((shard) => `fast.test.storage.shard${shard}`),
   },
   {
     id: "fast.test.policy-engine",

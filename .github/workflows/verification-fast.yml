@@ -80,9 +80,9 @@ jobs:
   tests:
     name: Tests (${{ matrix.slice }})
     runs-on: ubuntu-latest
-    # Storage runs serially to preserve database custody between test files. The
-    # expanded suite was cancelled at 30 minutes before it could emit evidence.
-    timeout-minutes: ${{ matrix.slice == 'storage' && 60 || 30 }}
+    # Storage shards use separate runners while retaining serial file execution
+    # within each shard. The complete unsharded suite exceeded a 60-minute job.
+    timeout-minutes: ${{ startsWith(matrix.slice, 'storage-') && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,8 +98,14 @@ jobs:
             commands: fast.test.gateway.shard3
           - slice: gateway-4
             commands: fast.test.gateway.shard4,fast.test.gateway.node
-          - slice: storage
-            commands: fast.test.storage
+          - slice: storage-1
+            commands: fast.test.storage.shard1
+          - slice: storage-2
+            commands: fast.test.storage.shard2
+          - slice: storage-3
+            commands: fast.test.storage.shard3
+          - slice: storage-4
+            commands: fast.test.storage.shard4
           - slice: ui
             commands: fast.test.mission-control-next,fast.test.policy-engine,fast.test.libraries
     steps:

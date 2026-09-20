@@ -506,7 +506,9 @@ describe("coverage tooling", () => {
       fs.readFileSync(path.join(scriptsDir, "..", "packages", "storage", "package.json"), "utf8"),
     );
 
-    assert.match(storagePackage.scripts["test:coverage"], /node --test --test-concurrency=1/);
+    assert.equal(storagePackage.scripts["test:coverage"], "node ../../scripts/storage-coverage.mjs");
+    const runner = fs.readFileSync(path.join(scriptsDir, "storage-coverage.mjs"), "utf8");
+    assert.match(runner, /"--test",\s*"--test-concurrency=1"/);
   });
 
   it("rejects non-Linux artifacts as production coverage evidence", async () => {
@@ -1141,6 +1143,32 @@ describe("coverage tooling", () => {
         } else {
           assert.notEqual(result.status, 0, testCase.label);
           assert.match(`${result.stderr}\n${result.stdout}`, testCase.expected, testCase.label);
+        }
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("requires all storage shards and rejects mixed or unexpected storage reports", () => {
+    for (const testCase of [
+      { reports: ["coverage"], shouldPass: true },
+      { reports: [1, 2, 3, 4].map((shard) => `coverage-shard-${shard}`), shouldPass: true },
+      { reports: [1, 3, 4].map((shard) => `coverage-shard-${shard}`), expected: /requires exactly 4 Storage shard reports[\s\S]*coverage-shard-2/ },
+      { reports: [1, 2, 3, 4, 5].map((shard) => `coverage-shard-${shard}`), expected: /Unexpected: coverage-shard-5/ },
+      { reports: ["coverage", ...[1, 2, 3, 4].map((shard) => `coverage-shard-${shard}`)], expected: /both unsharded packages\/storage\/coverage and sharded Storage/ },
+    ]) {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-storage-reuse-shards-"));
+      try {
+        writeReusableWorkspace(tempDir, [{ dir: "packages/storage", name: "@goatcitadel/storage",
+          reports: testCase.reports.map((name) => ({ name })) }]);
+        const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+          cwd: tempDir, encoding: "utf8",
+        });
+        if (testCase.shouldPass) assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+        else {
+          assert.notEqual(result.status, 0);
+          assert.match(`${result.stderr}\n${result.stdout}`, testCase.expected);
         }
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
