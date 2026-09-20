@@ -1,4 +1,5 @@
 import type { ChatToolRunRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import { readOpenCodeRunSummary } from "@goatcitadel/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -29,6 +30,17 @@ function readNumber(...values: unknown[]): number | undefined {
 }
 
 function summarizeResult(result: Record<string, unknown>): string | undefined {
+  const agent = readOpenCodeRunSummary(result.externalAgent);
+  if (agent) {
+    if (typeof result.exitCode === "number" && result.exitCode !== 0) {
+      return `OpenCode exited with code ${result.exitCode}. Inspect partial output before retrying.`;
+    }
+    if (agent.error) return agent.error;
+    return `${agent.steps.length} reported steps · ${agent.files.length} reported files${agent.truncated ? " · partial output" : ""}`;
+  }
+  if (typeof result.exitCode === "number" && result.exitCode !== 0) {
+    return `Command exited with code ${result.exitCode}. Open details for output.`;
+  }
   const artifactSummary = readString(result.artifactSummary);
   if (artifactSummary) {
     return artifactSummary;
@@ -80,7 +92,12 @@ export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
     originalByteLength: readNumber(result?.originalByteLength, result?.byteLength),
     fallbackAttemptCount: fallbackChain.length > 1 ? fallbackChain.length - 1 : 0,
     hasFailureSignal:
-      run.status === "failed" || run.status === "blocked" || Boolean(run.error) || Boolean(browserFailureClass),
+      run.status === "failed" ||
+      run.status === "blocked" ||
+      Boolean(run.error) ||
+      Boolean(browserFailureClass) ||
+      (typeof result?.exitCode === "number" && result.exitCode !== 0) ||
+      Boolean(readOpenCodeRunSummary(result?.externalAgent)?.error),
   };
 }
 

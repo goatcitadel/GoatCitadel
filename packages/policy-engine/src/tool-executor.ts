@@ -19,6 +19,8 @@ import {
   buildScrubbedSpawnEnv,
   coerceRetryAfterMs,
   isChangePlanRequest,
+  isOpenCodeJsonInvocation,
+  parseOpenCodeRunOutput,
   splitUtf8HeadTail,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -43,6 +45,7 @@ import {
 } from "./tool-registry.js";
 import type { AcquireLocalEmbeddingLease, PrepareEmbeddingUsageDispatch } from "./local-embeddings.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
+import { resolveShellExecTimeout } from "./tool-executor/shell-timeout.js";
 import {
   killBackgroundProcess,
   registerBackgroundProcess,
@@ -619,6 +622,7 @@ async function shellExec(
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
+  const timeoutMs = resolveShellExecTimeout(args.timeoutMs, shellExecTimeoutMs);
   const command = required(args.command, "command");
   const cwd = await resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
@@ -631,14 +635,26 @@ async function shellExec(
   const parsed = parseExecFileCommand(command);
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
   await assertBeforeProcessSpawn(runtimeHooks, request, "shell.exec", cwd);
-  const outcome = await runShellExecToCompletion(executable, cwd, request.signal, buildModelSpawnEnv(config));
-  const stdout = boundShellStream(scrubSensitiveOutput(outcome.stdout));
+  const outcome = await runShellExecToCompletion(
+    executable,
+    cwd,
+    request.signal,
+    buildModelSpawnEnv(config),
+    timeoutMs,
+  );
+  const redactedStdout = scrubSensitiveOutput(outcome.stdout);
+  const externalAgent = isOpenCodeJsonInvocation(parsed.file, parsed.args)
+    ? parseOpenCodeRunOutput(redactedStdout)
+    : undefined;
+  const stdout = boundShellStream(redactedStdout);
   const stderr = boundShellStream(scrubSensitiveOutput(outcome.stderr));
   return {
     command,
     cwd,
     executable: parsed.file,
     argv: parsed.args,
+    timeoutMs,
+    ...(externalAgent ? { externalAgent } : {}),
     ...(typeof outcome.pid === "number" ? { pid: outcome.pid } : {}),
     stdout: stdout.text,
     stderr: stderr.text,
@@ -668,12 +684,16 @@ function runShellExecToCompletion(
   cwd: string | undefined,
   signal: AbortSignal | undefined,
   env: Record<string, string>,
+  timeoutMs: number,
 ): Promise<ShellExecOutcome> {
   return new Promise<ShellExecOutcome>((resolve) => {
     const posixProcessGroup = process.platform !== "win32";
     const child = spawn(executable.file, executable.args, {
       cwd,
       env,
+      // Foreground tools have no interactive stdin. Deliver EOF to CLIs that
+      // otherwise wait for piped input even when their prompt is in argv.
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       detached: posixProcessGroup,
     });
@@ -717,7 +737,7 @@ function runShellExecToCompletion(
     const timer = setTimeout(() => {
       timedOut = true;
       killTree("shell.exec timeout");
-    }, shellExecTimeoutMs);
+    }, timeoutMs);
     timer.unref?.();
 
     const onAbort = () => {
@@ -752,7 +772,7 @@ function runShellExecToCompletion(
     });
     child.once("close", (code, closeSignal) => {
       if (timedOut) {
-        finish(-1, `shell.exec timed out after ${shellExecTimeoutMs}ms; process tree killed.`);
+        finish(-1, `shell.exec timed out after ${timeoutMs}ms; process tree killed.`);
         return;
       }
       if (aborted) {

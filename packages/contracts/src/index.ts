@@ -219,3 +219,4 @@ export * from "./remote-worker-runtime-install.js";
 export * from "./remote-worker-runtime-install-outcome.js";
 export * from "./remote-worker-runtime-install-exchange.js";
 export * from "./remote-worker-installation-rpc.js";
+export * from "./opencode.js";

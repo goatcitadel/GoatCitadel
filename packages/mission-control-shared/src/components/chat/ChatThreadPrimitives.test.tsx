@@ -339,7 +339,8 @@ describe("ChatThreadPrimitives", () => {
     });
 
     const text = renderedText(renderer);
-    expect(text).toContain("memory.search");
+    expect(text).toContain("Search memory");
+    expect(renderer.root.findByProps({ "aria-label": "Open execution detail for memory.search" })).toBeTruthy();
     expect(text).toContain("2 results returned.");
     expect(text).toContain("artifact.write");
     expect(text).toContain("approval");
