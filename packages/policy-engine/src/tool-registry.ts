@@ -1126,6 +1126,13 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       properties: {
         command: { type: "string" },
         cwd: { type: "string" },
+        timeoutMs: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 900000,
+          description:
+            "Foreground time limit; defaults to 20000 ms. Use an explicit bounded limit for coding agents or long verification runs.",
+        },
       },
       required: ["command"],
     },
@@ -1138,7 +1145,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["run_command", "verify_change", "project_task"],
-    usageHints: ["Use for foreground commands where captured stdout/stderr matters."],
+    usageHints: [
+      "Use for foreground commands where captured stdout/stderr matters. For OpenCode use the opencode skill, run --format json, and an explicit timeoutMs.",
+    ],
   },
   {
     name: "shell.exec_background",
