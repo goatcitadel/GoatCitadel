@@ -151,6 +151,42 @@ public class DesktopUpdateTests
     }
 
     [TestMethod]
+    public async Task StartupRefreshesPersistedOfferBeforeItsNextAutomaticDeadline()
+    {
+        var now = DateTimeOffset.UtcNow;
+        using (var first = CreateService(now: () => now)) await first.CheckAsync();
+        using var restarted = CreateService(sequence: 3, now: () => now.AddMinutes(1));
+        var notices = 0;
+        restarted.Notification += _ => notices++;
+        await restarted.CheckAsync();
+        Assert.AreEqual("available", restarted.Status.Phase);
+        Assert.AreEqual(3L, restarted.Status.AvailableRelease!.BuildSequence);
+        Assert.AreEqual(now.AddMinutes(1), restarted.Status.LastSuccessfulCheck);
+        Assert.AreEqual(0, notices, "A startup refresh must preserve the existing notification snooze.");
+    }
+
+    [TestMethod]
+    public async Task FailedStartupAttemptKeepsItsAutomaticRetryBackoff()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var requests = 0;
+        using var http = new DesktopUpdateHttp(new Handler(_ => {
+            requests++;
+            throw new HttpRequestException("offline");
+        }));
+        using var service = new DesktopUpdateService(_root, http, () => now, "x64");
+        await service.CheckAsync();
+        Assert.AreEqual("error", service.Status.Phase);
+        now = now.AddMinutes(1);
+        await service.CheckAsync();
+        Assert.AreEqual(1, requests);
+        now = service.Status.NextCheckAt!.Value;
+        await service.CheckAsync();
+        Assert.AreEqual(2, requests);
+        Assert.IsNull(service.Status.LastSuccessfulCheck);
+    }
+
+    [TestMethod]
     public async Task ChecksumMismatchAndWrongOfferNeverPublishAnInstaller()
     {
         using var service = CreateService(installer: Encoding.UTF8.GetBytes(new string('x', Installer.Length)));
@@ -227,7 +263,7 @@ public class DesktopUpdateTests
         await service.DownloadAsync("preview-2-1");
         Assert.AreEqual("downloaded", service.Status.Phase);
         using var restarted = CreateService();
-        await restarted.CheckAsync(true);
+        await restarted.CheckAsync();
         Assert.AreEqual("downloaded", restarted.Status.Phase);
     }
 
