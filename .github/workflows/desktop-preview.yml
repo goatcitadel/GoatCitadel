@@ -1,0 +1,191 @@
+name: Windows Preview Updates
+
+on:
+  workflow_run:
+    workflows: ["Verification Fast"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: windows-preview-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  NODE_VERSION: 22.23.1
+  PNPM_VERSION: 10.31.0
+  DOTNET_VERSION: 10.0.300
+
+jobs:
+  identity:
+    if: >-
+      github.repository == 'goatcitadel/GoatCitadel' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.identity.outputs.commit }}
+      sequence: ${{ steps.identity.outputs.sequence }}
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - name: Validate successful main commit
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          FAST_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$FAST_RUN_ID" =~ ^[0-9]+$ ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$CANDIDATE"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAST_RUN_ID" > fast.json
+          jq -e --arg sha "$CANDIDATE" '.conclusion == "success" and .event == "push" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/verification-fast.yml"' fast.json
+          sequence=$((GITHUB_RUN_ID * 1000 + GITHUB_RUN_ATTEMPT))
+          test "$sequence" -lt 9007199254740991
+          echo "commit=$CANDIDATE" >> "$GITHUB_OUTPUT"
+          echo "sequence=$sequence" >> "$GITHUB_OUTPUT"
+          echo "version=0.1.0-preview.$sequence.0" >> "$GITHUB_OUTPUT"
+          echo "tag=preview-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: identity
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: windows-arm64
+            runner: windows-11-arm
+    env:
+      PREVIEW_COMMIT: ${{ needs.identity.outputs.commit }}
+      PREVIEW_SEQUENCE: ${{ needs.identity.outputs.sequence }}
+      PREVIEW_VERSION: ${{ needs.identity.outputs.version }}
+      PREVIEW_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.identity.outputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - name: Setup desktop toolchain
+        run: |
+          rustup toolchain install "1.94.0" --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default "1.94.0"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify desktop at the packaged commit
+        run: pnpm verify:desktop
+      - name: Build native host
+        run: pnpm package:windows-host --target $env:PREVIEW_TARGET
+      - name: Build optional unsigned identity
+        run: pnpm package:windows-msix --allow-unsigned
+      - name: Build versioned bundle
+        run: pnpm package:bundle --target $env:PREVIEW_TARGET --version $env:PREVIEW_VERSION
+      - name: Install pinned Inno Setup
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-6.7.3.exe"
+          Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe" -OutFile $installer
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732") { throw "Inno Setup checksum mismatch." }
+          $result = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -WindowStyle Hidden -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Inno Setup failed: $($result.ExitCode)" }
+      - name: Build unsigned Preview installer
+        run: pnpm package:windows --target $env:PREVIEW_TARGET --version $env:PREVIEW_VERSION
+      - name: Smoke test the exact installer
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          & ./scripts/packaging/smoke-windows-installer.ps1 -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-$env:PREVIEW_TARGET.exe" -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$env:PREVIEW_VERSION-$env:PREVIEW_TARGET/app/release-manifest.json" -Target $env:PREVIEW_TARGET -TrustMode unsigned
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage passed installer evidence
+        shell: pwsh
+        run: |
+          $stage = "artifacts/preview/$env:PREVIEW_TARGET"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          $installer = "artifacts/installers/windows/GoatCitadel-Setup-$env:PREVIEW_TARGET.exe"
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          Copy-Item -LiteralPath $installer -Destination $stage
+          Set-Content -LiteralPath "$stage/GoatCitadel-Setup-$env:PREVIEW_TARGET.exe.sha256" -Value "$hash *GoatCitadel-Setup-$env:PREVIEW_TARGET.exe" -Encoding utf8NoBOM
+          Copy-Item -LiteralPath "artifacts/installers/bundles/GoatCitadel-$env:PREVIEW_VERSION-$env:PREVIEW_TARGET/app/release-manifest.json" -Destination "$stage/release-manifest.json"
+          @{ sourceCommit = $env:PREVIEW_COMMIT; target = $env:PREVIEW_TARGET; buildSequence = [long]$env:PREVIEW_SEQUENCE; desktop = "success"; installerSmoke = "success" } | ConvertTo-Json | Set-Content -LiteralPath "$stage/preview-proof.json" -Encoding utf8NoBOM
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: preview-${{ matrix.target }}
+          path: artifacts/preview/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [identity, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREVIEW_COMMIT: ${{ needs.identity.outputs.commit }}
+      PREVIEW_SEQUENCE: ${{ needs.identity.outputs.sequence }}
+      PREVIEW_VERSION: ${{ needs.identity.outputs.version }}
+      PREVIEW_TAG: ${{ needs.identity.outputs.tag }}
+      FAST_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Checkout trusted publisher only
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/release/build-desktop-preview-manifest.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: preview-windows-x64
+          path: preview-input/windows-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: preview-windows-arm64
+          path: preview-input/windows-arm64
+      - name: Recheck fast gate and prevent superseded builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$PREVIEW_COMMIT"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAST_RUN_ID" > fast.json
+          jq -e --arg sha "$PREVIEW_COMMIT" '.conclusion == "success" and .event == "push" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/verification-fast.yml"' fast.json
+      - name: Validate both installers and assemble immutable update manifest
+        run: node scripts/release/build-desktop-preview-manifest.mjs preview-input preview-release
+      - name: Upload everything to a draft, then publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$PREVIEW_TAG" -f "sha=$PREVIEW_COMMIT" > created-tag.json
+          gh release create "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease --title "Unsigned Windows Preview $PREVIEW_VERSION" --notes-file preview-release/release-notes.md
+          gh release upload "$PREVIEW_TAG" preview-release/* --repo "$GITHUB_REPOSITORY"
+          gh release view "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --json assets > uploaded.json
+          node --input-type=module -e 'import fs from "node:fs"; const actual = JSON.parse(fs.readFileSync("uploaded.json")).assets; for (const name of fs.readdirSync("preview-release")) { const found = actual.filter(a => a.name === name); if (found.length !== 1 || found[0].state !== "uploaded" || found[0].size !== fs.statSync("preview-release/" + name).size) throw new Error("Incomplete upload: " + name); }'
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$PREVIEW_TAG" --jq .object.sha)" = "$PREVIEW_COMMIT"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$PREVIEW_COMMIT"
+          gh release edit "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false

@@ -25,5 +25,8 @@
     <Compile Include="..\Services\LauncherService.cs" Link="Services\LauncherService.cs" />
     <Compile Include="..\Services\NavigationPolicy.cs" Link="Services\NavigationPolicy.cs" />
     <Compile Include="..\Services\RuntimeStatusService.cs" Link="Services\RuntimeStatusService.cs" />
+    <Compile Include="..\Models\DesktopUpdateStatus.cs" Link="Models\DesktopUpdateStatus.cs" />
+    <Compile Include="..\Services\DesktopUpdate*.cs" Link="Services\%(Filename)%(Extension)" />
+    <Compile Include="..\Services\DesktopStableReleaseVerifier.cs" Link="Services\DesktopStableReleaseVerifier.cs" />
   </ItemGroup>
 </Project>

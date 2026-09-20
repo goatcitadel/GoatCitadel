@@ -118,6 +118,10 @@ async function main() {
     path.join(appRoot, "scripts", "lib", "managed-runtime-lifecycle.mjs"),
   );
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
+  copyFile(
+    path.join(repoRoot, "scripts", "lib", "installed-runtime-settings.mjs"),
+    path.join(appRoot, "scripts", "lib", "installed-runtime-settings.mjs"),
+  );
   copyDirectory(uiTarget.distDir, missionControlDistDir);
   writeUiTargetManifest(appRoot);
   if (includeDesktopHost) {
@@ -133,11 +137,16 @@ async function main() {
     path.join(appRoot, "runtime", "ui-static-server.mjs"),
   );
   await installEmbeddedNodeRuntime({
+    // The standalone update verifier uses the same pinned release policy as the Gateway.
     target,
     nodeVersion,
     destinationDir: runtimeNodeDir,
   });
   writeLaunchers(bundleRoot);
+  copyFile(
+    path.join(scriptDir, "runtime", "verify-stable-update.mjs"),
+    path.join(appRoot, "runtime", "verify-stable-update.mjs"),
+  );
   const removedEmptyDirectories = removeEmptyDirectories(bundleRoot);
   if (removedEmptyDirectories > 0) {
     console.log(`Removed ${removedEmptyDirectories} empty release payload directories.`);

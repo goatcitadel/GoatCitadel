@@ -75,6 +75,7 @@ reports/visual-rebaseline-*/
 
 # Local runtime state and run logs (process PIDs, gateway/UI logs, curator run reports)
 runtime/
+!scripts/packaging/runtime/
 logs/
 
 # design-sync (claude.ai/design): staged converter, build output, machine state, and

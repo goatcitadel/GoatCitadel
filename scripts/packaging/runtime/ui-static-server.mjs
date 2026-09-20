@@ -10,6 +10,7 @@ const distDir = process.env.GOATCITADEL_UI_DIST_DIR
   ? path.resolve(process.env.GOATCITADEL_UI_DIST_DIR)
   : path.resolve(process.cwd(), "mission-control", "dist");
 const managedInstanceId = resolveManagedInstanceId(process.env, "mission-control");
+const gatewayOrigin = resolveGatewayOrigin(process.env.GOATCITADEL_UI_GATEWAY_ORIGIN);
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -59,6 +60,13 @@ const server = http.createServer((request, response) => {
     return sendJson(response, 404, { error: "Not found" });
   }
   const extension = path.extname(finalPath).toLowerCase();
+  if (extension === ".html" && gatewayOrigin) {
+    const html = fs.readFileSync(finalPath, "utf8");
+    response.writeHead(200, { "Content-Type": contentTypes[extension], "Cache-Control": "no-store" });
+    response.end(html.replace(/<head(?:\s[^>]*)?>/iu, (head) =>
+      `${head}<meta name="goatcitadel-gateway-origin" content="${gatewayOrigin}">`));
+    return;
+  }
   response.writeHead(200, {
     "Content-Type": contentTypes[extension] || "application/octet-stream",
     "Cache-Control": resolveCacheControl(finalPath, requestUrl),
@@ -82,6 +90,16 @@ function resolveManagedInstanceId(env, expectedService) {
     return undefined;
   }
   return instanceId;
+}
+
+function resolveGatewayOrigin(value) {
+  if (!value) return undefined;
+  const parsed = new URL(value);
+  if (parsed.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)
+    || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== "/") {
+    throw new Error("Packaged Mission Control requires a loopback Gateway origin.");
+  }
+  return parsed.origin;
 }
 
 function resolveStaticPath(candidatePath) {

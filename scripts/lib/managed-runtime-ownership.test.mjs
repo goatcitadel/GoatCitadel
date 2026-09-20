@@ -335,6 +335,7 @@ test("real concurrent packaged launches serialize and start one process per mana
     GOATCITADEL_HOME: installRoot,
     GC_TEST_MANAGED_START_LOG: startLogPath,
     GC_TEST_MANAGED_START_DELAY_MS: "250",
+    GOATCITADEL_DATABASE_DRIVER: "postgres",
   };
   t.after(async () => {
     await runLauncher(["stop", "--json"], launcherEnv, fixtureLauncher).catch(() => undefined);
@@ -350,6 +351,16 @@ test("real concurrent packaged launches serialize and start one process per mana
     }
     removeOwnedTestRoot(installRoot);
   });
+
+  const heldProfile = path.join(installRoot, "runtime-root");
+  fs.mkdirSync(heldProfile, { recursive: true });
+  const reviewMarker = path.join(heldProfile, ".daily-profile-pending-review");
+  fs.writeFileSync(reviewMarker, "Review pending");
+  const heldLaunch = await runLauncher(["launch", "--json", "--no-open"], launcherEnv, fixtureLauncher);
+  assert.notEqual(heldLaunch.status, 0);
+  assert.match(heldLaunch.stdout + heldLaunch.stderr, /migration is awaiting review/);
+  assert.equal(fs.existsSync(startLogPath), false);
+  fs.unlinkSync(reviewMarker);
 
   const [first, second] = await Promise.all([
     runLauncher(["launch", "--json", "--no-open"], launcherEnv, fixtureLauncher),
@@ -382,6 +393,8 @@ test("real concurrent packaged launches serialize and start one process per mana
     .map((line) => JSON.parse(line));
   assert.equal(starts.filter((entry) => entry.service === "gateway").length, 1);
   assert.equal(starts.filter((entry) => entry.service === "mission-control").length, 1);
+  assert.equal(starts.find((entry) => entry.service === "gateway").databaseDriver, "postgres");
+  assert.equal(starts.find((entry) => entry.service === "mission-control").gatewayOrigin, `http://127.0.0.1:${gatewayPort}`);
   for (const entry of starts) {
     const identity = queryProcessCreationIdentity(entry.pid);
     assert.equal(identity.status, "running");
@@ -617,7 +630,7 @@ function materializeManagedPackagedFixture(installRoot) {
     "const service = process.env.GOATCITADEL_MANAGED_SERVICE;",
     'const port = Number(service === "gateway" ? process.env.GATEWAY_PORT : process.env.GOATCITADEL_UI_PORT);',
     'const host = service === "gateway" ? process.env.GATEWAY_HOST : process.env.GOATCITADEL_UI_HOST;',
-    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid }) + "\\n");',
+    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN }) + "\\n");',
     "const server = http.createServer((request, response) => {",
     '  response.setHeader("content-type", "application/json");',
     '  if (request.url === "/health") {',
@@ -643,16 +656,13 @@ function materializeLauncherCodeFixture(codeRoot, gatewayPort, uiPort) {
   const helperDir = path.join(codeRoot, "scripts", "lib");
   fs.mkdirSync(launcherDir, { recursive: true });
   fs.mkdirSync(helperDir, { recursive: true });
-  const source = fs
-    .readFileSync(launcherPath, "utf8")
-    .replace(
-      'const defaultGatewayUrl = "http://127.0.0.1:8787";',
-      `const defaultGatewayUrl = "http://127.0.0.1:${gatewayPort}";`,
-    )
-    .replace('const defaultUiUrl = "http://127.0.0.1:5173";', `const defaultUiUrl = "http://127.0.0.1:${uiPort}";`);
+  const runtimeDir = path.join(path.dirname(codeRoot), "runtime");
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, "launcher-settings.json"), JSON.stringify({ schemaVersion: 1, gatewayPort, uiPort }));
+  const source = fs.readFileSync(launcherPath, "utf8");
   const fixtureLauncher = path.join(launcherDir, "goatcitadel.mjs");
   fs.writeFileSync(fixtureLauncher, source, "utf8");
-  for (const helper of ["managed-runtime-lifecycle.mjs", "managed-runtime-ownership.mjs", "ui-target.mjs"]) {
+  for (const helper of ["managed-runtime-lifecycle.mjs", "managed-runtime-ownership.mjs", "ui-target.mjs", "installed-runtime-settings.mjs"]) {
     fs.copyFileSync(path.join(repoRoot, "scripts", "lib", helper), path.join(helperDir, helper));
   }
   return fixtureLauncher;

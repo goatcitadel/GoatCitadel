@@ -13,6 +13,10 @@ This process covers the artifacts published by `.github/workflows/release-instal
 
 Windows signed installers are the current public-trust installer surface. macOS and Linux stay experimental until a release workflow run emits signed/notarized evidence where applicable, checksums, smoke evidence, and an explicit support-matrix promotion. Manual unsigned workflow-dispatch runs are development packaging smoke only: they may prove Windows x64/arm64 build and install/uninstall behavior, Linux archive smoke, or ad-hoc macOS DMG smoke, but they are workflow artifacts, are not automatically published as a GitHub release, and never count as public-trust signed release proof. They may be manually attached only as clearly labeled unsigned or experimental convenience assets.
 
+## Unsigned Windows Preview lane
+
+`.github/workflows/desktop-preview.yml` automatically publishes clearly labeled unsigned Windows Preview prereleases after successful exact-commit fast verification, desktop checks, and x64/ARM64 installer smoke tests. It uses unique versioned tags, stages all installers/checksums/update metadata in a draft, and publishes only after every asset is present. This separate lane does not use release signing credentials or count as signed public-trust evidence. See [Windows daily installation and updates](desktop-updates.md) for discovery, manual downloads, and profile migration.
+
 ## External Release Trust Gate
 
 The signed public release gate is closed until repository administrators establish all of the controls below. The workflow's local event checks, live peeled-tag check, protected-environment hook, concurrency, and no-overwrite publication setting are defense in depth; repository code cannot establish or prove the GitHub control-plane settings that make an arbitrary same-repository tag untrusted.
@@ -96,7 +100,7 @@ node scripts/release/assemble-runtime-release-evidence.mjs --certificate artifac
 ## Environment Notes
 
 - Installer and bundle builds run on GitHub-hosted Windows, macOS, and Linux runners.
-- Public tag builds fail before credential use unless the `release` environment exposes `GOATCITADEL_RELEASE_TRUST_READY=true`; that marker must remain unset until every external gate above is configured and the signing/notarization credentials have been migrated into the environment. Unsigned output is reserved for explicit manual/dev workflow runs, is not automatically published as a GitHub release, and may only be attached manually as clearly labeled unsigned convenience assets that do not count as public-trust signed release proof.
+- Public tag builds fail before credential use unless the `release` environment exposes `GOATCITADEL_RELEASE_TRUST_READY=true`; that marker must remain unset until every external gate above is configured and the signing/notarization credentials have been migrated into the environment. Manual unsigned runs of this signed-release workflow remain smoke-only. The separate Windows Preview lane may publish unsigned prereleases, which do not count as public-trust signed release proof.
 - Public tag builds fail if macOS notarization secrets are missing from the protected `release` environment for the experimental macOS DMG lane. Manual `allow_unsigned=true` macOS output is ad-hoc signed, non-notarized, and friend-smoke only.
 - The embedded Node archive is verified against a pinned `--node-sha256` value or the upstream Node `SHASUMS256.txt` entry before it is copied into the bundle.
 - The final release package is assembled on Ubuntu after the per-platform artifacts are downloaded.

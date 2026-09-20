@@ -46,6 +46,7 @@
                         Text="Starting the local runtime..."
                         TextWrapping="Wrap" />
                     <ProgressBar x:Name="ProgressBar" IsIndeterminate="True" AutomationProperties.Name="Starting local runtime" />
+                    <Button Click="CheckUpdatesButton_Click" Content="Check for updates" />
                     <Expander Header="Runtime details" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <TextBlock
                         x:Name="RuntimeMeta"

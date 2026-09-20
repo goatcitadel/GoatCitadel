@@ -983,6 +983,23 @@ function evaluateReleaseIdentity(
   });
 }
 
+/** Checks authenticated certificate evidence without requiring an installed payload or Gateway. */
+export function hasCompleteReleaseCertificateEvidence(certificate: Record<string, unknown>): boolean {
+  if (!isValidCertificateShape(certificate) || (certificate.acceptedFailures as unknown[]).length > 0) {
+    return false;
+  }
+  const commit = normalizeGitSha(readString(certificate.commit));
+  const proof = summarizeRequiredProof(certificate.requiredLanes as unknown[], commit);
+  return (
+    proof.total > 0 &&
+    proof.passed === proof.total &&
+    hasValidExactShaSummary(certificate.exactShaStatus, commit) &&
+    Boolean(readValidIsoTimestamp(certificate.generatedAt)) &&
+    hasValidReleaseAssets(certificate.releaseAssets) &&
+    hasValidProofBundle(certificate.proofBundle)
+  );
+}
+
 function isValidCertificateShape(certificate: Record<string, unknown>): boolean {
   if (
     (certificate.schemaVersion !== 1 && certificate.schemaVersion !== 2) ||

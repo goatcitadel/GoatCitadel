@@ -593,7 +593,7 @@ export class RuntimeReleaseTrustService implements RuntimeReleaseTrustReader {
   }
 }
 
-function buildFulcioCertificateOidPolicy(input: {
+export function buildFulcioCertificateOidPolicy(input: {
   tag: string;
   commit: string;
   workflowIdentity: string;

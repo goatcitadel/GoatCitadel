@@ -8,6 +8,7 @@ public sealed class TrayActions
     public required Action OpenMissionControl { get; init; }
     public required Action OpenInBrowser { get; init; }
     public required Action RuntimeStatus { get; init; }
+    public required Action CheckForUpdates { get; init; }
     public required Action RestartRuntime { get; init; }
     public required Action StopRuntime { get; init; }
     public required Action OpenLogs { get; init; }
@@ -33,6 +34,7 @@ public sealed class TrayService : IDisposable
         _menuActions[1006] = actions.OpenLogs;
         _menuActions[1007] = actions.OpenInstallFolder;
         _menuActions[1008] = actions.Quit;
+        _menuActions[1009] = actions.CheckForUpdates;
 
         _contextMenu = BuildContextMenu();
         _notifyIcon = new NotifyIcon
@@ -68,6 +70,7 @@ public sealed class TrayService : IDisposable
         AddMenuItem(menu, "Open Mission Control", 1001);
         AddMenuItem(menu, "Open in Browser", 1002);
         AddMenuItem(menu, "Runtime Status", 1003);
+        AddMenuItem(menu, "Check for updates", 1009);
         menu.Items.Add(new ToolStripSeparator());
         AddMenuItem(menu, "Restart Runtime", 1004);
         AddMenuItem(menu, "Stop Runtime", 1005);

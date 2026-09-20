@@ -57,6 +57,7 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => CleanupForExit();
         _webViewInitializationTask = InitializeWebViewAsync();
         _ = LaunchRuntimeAsync();
+        InitializeUpdates();
     }
 
     public void ShowAndFocus()
@@ -131,6 +132,7 @@ public sealed partial class MainWindow : Window
             OpenMissionControl = () => DispatcherQueue.TryEnqueue(ShowAndFocus),
             OpenInBrowser = () => DispatcherQueue.TryEnqueue(OpenBrowserFallback),
             RuntimeStatus = () => DispatcherQueue.TryEnqueue(() => _ = RefreshRuntimeStatusAsync(notify: true, syncShell: true)),
+            CheckForUpdates = () => DispatcherQueue.TryEnqueue(() => _ = ShowUpdatesAsync()),
             RestartRuntime = () => DispatcherQueue.TryEnqueue(() => _ = RestartRuntimeAsync()),
             StopRuntime = () => DispatcherQueue.TryEnqueue(() => _ = StopRuntimeAsync()),
             OpenLogs = () => DispatcherQueue.TryEnqueue(OpenLogs),
@@ -222,6 +224,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            if (TryHandleUpdateMessage(args.Source, args.WebMessageAsJson)) return;
             if (!Uri.TryCreate(args.Source, UriKind.Absolute, out var source)
                 || !source.IsLoopback
                 || (source.Scheme != Uri.UriSchemeHttp && source.Scheme != Uri.UriSchemeHttps))
@@ -274,6 +277,10 @@ public sealed partial class MainWindow : Window
         catch (NotSupportedException)
         {
             // Unsupported path formats remain unselected.
+        }
+        catch (InvalidOperationException)
+        {
+            // JSON fields with the wrong value kind are not bridge requests.
         }
     }
 
@@ -648,6 +655,7 @@ public sealed partial class MainWindow : Window
         StopEventStream();
         StopRuntimeStatusPolling();
         _notificationService.Dispose();
+        StopUpdates();
         _trayService.Dispose();
     }
 

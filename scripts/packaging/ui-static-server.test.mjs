@@ -14,7 +14,7 @@ test("packaged Mission Control health exposes the exact managed launcher identit
   const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-ui-health-"));
   const distDir = path.join(testRoot, "dist");
   fs.mkdirSync(distDir, { recursive: true });
-  fs.writeFileSync(path.join(distDir, "index.html"), "<!doctype html><title>fixture</title>\n", "utf8");
+  fs.writeFileSync(path.join(distDir, "index.html"), "<!doctype html><head><title>fixture</title></head>\n", "utf8");
 
   const child = spawn(process.execPath, [serverEntry], {
     cwd: repoRoot,
@@ -25,6 +25,7 @@ test("packaged Mission Control health exposes the exact managed launcher identit
       GOATCITADEL_UI_DIST_DIR: distDir,
       GOATCITADEL_UI_HOST: "127.0.0.1",
       GOATCITADEL_UI_PORT: "0",
+      GOATCITADEL_UI_GATEWAY_ORIGIN: "http://127.0.0.1:8788",
     },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -35,6 +36,9 @@ test("packaged Mission Control health exposes the exact managed launcher identit
   });
 
   const baseUrl = await waitForListeningUrl(child);
+  const html = await fetch(`${baseUrl}/settings/general`);
+  assert.equal(html.headers.get("cache-control"), "no-store");
+  assert.match(await html.text(), /<meta name="goatcitadel-gateway-origin" content="http:\/\/127\.0\.0\.1:8788">/u);
   const response = await fetch(`${baseUrl}/health`);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store, max-age=0, must-revalidate");

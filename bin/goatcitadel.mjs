@@ -24,6 +24,7 @@ import {
   safeEndpointOrigin,
 } from "../scripts/lib/managed-runtime-ownership.mjs";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
+import { readInstalledRuntimeSettings } from "../scripts/lib/installed-runtime-settings.mjs";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
 const preferredBaseDir = resolvePreferredBaseDir();
@@ -104,8 +105,9 @@ const runtimeStateDir = path.join(baseDir, "runtime");
 const runtimeLogDir = path.join(runtimeStateDir, "logs");
 const gatewayPidPath = path.join(runtimeStateDir, "gateway.pid");
 const uiPidPath = path.join(runtimeStateDir, "ui.pid");
-const defaultGatewayUrl = "http://127.0.0.1:8787";
-const defaultUiUrl = "http://127.0.0.1:5173";
+const managedPorts = readInstalledRuntimeSettings(baseDir);
+const defaultGatewayUrl = `http://127.0.0.1:${managedPorts.gatewayPort}`;
+const defaultUiUrl = `http://127.0.0.1:${managedPorts.uiPort}`;
 const rest = installArgs.passthrough;
 const taskTitle = resolveTaskTitle(command);
 const verboseEnv = installArgs.verbose ? { GOATCITADEL_VERBOSE: "1" } : {};
@@ -588,6 +590,9 @@ async function launchGoatCitadel(extraArgs = []) {
     ensureLaunchRuntimeDirectories();
 
     if (isPackagedInstall()) {
+      if (fs.existsSync(path.join(packagedRuntimeRoot, ".daily-profile-pending-review"))) {
+        throw new Error("Daily profile migration is awaiting review. Verify the backup, schema, credentials and copied unfinished runs in daily-migration-review.json before removing .daily-profile-pending-review. Your development instance is unchanged.");
+      }
       seedPackagedRuntimeRoot();
       const nodeExecutable = resolvePackagedNodeExecutable();
       await ensureGatewayReady({
@@ -1855,7 +1860,6 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
       ...runtimeProcessEnv,
       GOATCITADEL_APP_DIR: appDir,
       GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
-      GOATCITADEL_DATABASE_DRIVER: "sqlite",
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
     },
@@ -1878,6 +1882,7 @@ function startPackagedUi(nodeExecutable, uiUrl, expectedFingerprint) {
       GOATCITADEL_UI_DIST_DIR: packagedUiDistDir,
       GOATCITADEL_UI_HOST: "127.0.0.1",
       GOATCITADEL_UI_PORT: port,
+      GOATCITADEL_UI_GATEWAY_ORIGIN: resolveLauncherRuntimeEndpoints().gateway.url,
     },
     stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
     stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),

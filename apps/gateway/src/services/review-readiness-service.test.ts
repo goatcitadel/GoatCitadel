@@ -11,7 +11,11 @@ import type {
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
 import { verifyEvidenceRecords } from "./review-readiness-release-evidence.js";
-import { REQUIRED_RELEASE_PROOF_LANE_NAMES, ReviewReadinessService } from "./review-readiness-service.js";
+import {
+  hasCompleteReleaseCertificateEvidence,
+  REQUIRED_RELEASE_PROOF_LANE_NAMES,
+  ReviewReadinessService,
+} from "./review-readiness-service.js";
 import type { RuntimeReleaseTrustReader, RuntimeReleaseTrustSnapshot } from "./runtime-release-trust-service.js";
 
 const SHA_A = "a".repeat(40);
@@ -22,6 +26,32 @@ const REPORTED_SIGNATURE_CONTENT = "renamed bytes without cryptographic verifica
 const ASSET_SHA = createHash("sha256").update(ASSET_CONTENT).digest("hex");
 const PROOF_SHA = createHash("sha256").update(PROOF_CONTENT).digest("hex");
 const REPORTED_SIGNATURE_SHA = createHash("sha256").update(REPORTED_SIGNATURE_CONTENT).digest("hex");
+
+describe("standalone desktop release evidence", () => {
+  it("accepts the complete runtime proof contract", () => {
+    expect(hasCompleteReleaseCertificateEvidence(validCertificate())).toBe(true);
+  });
+
+  it.each([
+    "missing lane",
+    "duplicate lane",
+    "stale proof",
+    "wrong exact SHA",
+    "failed proof",
+    "accepted failure",
+    "missing bundle",
+  ])("rejects %s before advertising a stable update", (fault) => {
+    const certificate = validCertificate();
+    if (fault === "missing lane") certificate.requiredLanes.pop();
+    if (fault === "duplicate lane") certificate.requiredLanes.push(certificate.requiredLanes[0]);
+    if (fault === "stale proof") certificate.requiredLanes[0].directRun.headSha = SHA_B;
+    if (fault === "wrong exact SHA") certificate.exactShaStatus.targetCommit = SHA_B;
+    if (fault === "failed proof") certificate.requiredLanes[0].directRun.conclusion = "failure";
+    if (fault === "accepted failure") certificate.acceptedFailures.push("Pending verification");
+    if (fault === "missing bundle") delete certificate.proofBundle;
+    expect(hasCompleteReleaseCertificateEvidence(certificate)).toBe(false);
+  });
+});
 
 describe("ReviewReadinessService", () => {
   const tempDirs: string[] = [];

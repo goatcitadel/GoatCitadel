@@ -52,6 +52,9 @@ public sealed class NotificationService : IDisposable
         Show("GoatCitadel approval waiting", body, route);
     }
 
+    public void ShowUpdateAvailable(string version) =>
+        Show("GoatCitadel update available", $"Version {version} is ready to download when you choose.", "/settings/general#updates");
+
     public void ShowOperatorAttention(OperatorAttentionPayload payload) =>
         Show(payload.Title, payload.Body, payload.RoutePath ?? "/ops/notifications");
 

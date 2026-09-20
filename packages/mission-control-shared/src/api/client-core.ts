@@ -24,8 +24,35 @@ import {
   unwrapApiResponse,
 } from "./http-internal";
 
-const RAW_API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
+const RAW_API_BASE = readPackagedGatewayOrigin() ?? import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
 export const API_BASE = normalizeGatewayBaseUrl(RAW_API_BASE);
+
+export function readPackagedGatewayOrigin(): string | undefined {
+  if (
+    typeof document === "undefined" ||
+    typeof window === "undefined" ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(window.location.hostname)
+  )
+    return undefined;
+  const value = document.querySelector('meta[name="goatcitadel-gateway-origin"]')?.getAttribute("content");
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol === "http:" &&
+      ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname === "/"
+    )
+      return url.origin;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
