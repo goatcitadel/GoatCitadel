@@ -77,6 +77,7 @@ if (-not (Test-Path -LiteralPath $payloadValidatorPath -PathType Leaf)) {
 
 $previousGoatCitadelHome = [Environment]::GetEnvironmentVariable("GOATCITADEL_HOME", "Process")
 $previousGoatCitadelAppDir = [Environment]::GetEnvironmentVariable("GOATCITADEL_APP_DIR", "Process")
+$previousDatabaseDriver = [Environment]::GetEnvironmentVariable("GOATCITADEL_DATABASE_DRIVER", "Process")
 $previousWebViewDataFolder = [Environment]::GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", "Process")
 $previousWebViewBrowserArguments = [Environment]::GetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "Process")
 $previousDesktopLauncher = [Environment]::GetEnvironmentVariable("GOATCITADEL_DESKTOP_LAUNCHER", "Process")
@@ -92,6 +93,9 @@ finally {
 }
 $env:GOATCITADEL_HOME = $runtimeBase
 $env:GOATCITADEL_APP_DIR = $appHome
+# This clean-profile lifecycle fixture has no PostgreSQL cluster. Choose its
+# isolated SQLite database explicitly now that the launcher honors configuration.
+$env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
 $env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$webViewDebugPort"
 Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
@@ -337,7 +341,7 @@ try {
   $webViewTarget = $null
   $webViewTargets = @()
   $expectedWebViewPath = "/settings/onboarding"
-  $expectedWebViewTitle = "GoatCitadel Start Here"
+  $expectedWebViewTitle = "GoatCitadel Get started"
   $webViewDeadline = (Get-Date).AddSeconds(40)
   while ((Get-Date) -lt $webViewDeadline) {
     $hostProc.Refresh()
@@ -659,6 +663,12 @@ finally {
   }
   else {
     $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewDataFolder
+  }
+  if ($null -eq $previousDatabaseDriver) {
+    Remove-Item Env:GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:GOATCITADEL_DATABASE_DRIVER = $previousDatabaseDriver
   }
   if ($null -eq $previousWebViewBrowserArguments) {
     Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue

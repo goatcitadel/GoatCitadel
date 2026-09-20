@@ -94,7 +94,7 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
   assert.match(smokeScript, /embedded Mission Control target remained blank/);
   assert.match(smokeScript, /WebView navigated to/);
   assert.match(smokeScript, /\$expectedWebViewPath = "\/settings\/onboarding"/);
-  assert.match(smokeScript, /GoatCitadel Start Here/);
+  assert.match(smokeScript, /GoatCitadel Get started/);
   assert.match(smokeScript, /did not place Gateway and Mission Control logs under the isolated runtime home/);
   assert.match(
     smokeScript,
@@ -155,6 +155,7 @@ test("shared installer smoke bounds destructive cleanup to its validated scratch
 test("desktop launch and cleanup are pinned to an isolated runtime before host startup", () => {
   const homeAssignment = smokeScript.indexOf("$env:GOATCITADEL_HOME = $runtimeBase");
   const appAssignment = smokeScript.indexOf("$env:GOATCITADEL_APP_DIR = $appHome");
+  const databaseAssignment = smokeScript.indexOf('$env:GOATCITADEL_DATABASE_DRIVER = "sqlite"');
   const webViewAssignment = smokeScript.indexOf("$env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir");
   const webViewDebugAssignment = smokeScript.indexOf(
     '$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$webViewDebugPort"',
@@ -166,6 +167,8 @@ test("desktop launch and cleanup are pinned to an isolated runtime before host s
 
   assert.ok(homeAssignment >= 0 && homeAssignment < hostLaunch);
   assert.ok(appAssignment >= 0 && appAssignment < hostLaunch);
+  assert.ok(databaseAssignment >= 0 && databaseAssignment < hostLaunch);
+  assert.match(smokeScript, /\$env:GOATCITADEL_DATABASE_DRIVER = \$previousDatabaseDriver/);
   assert.ok(webViewAssignment >= 0 && webViewAssignment < hostLaunch);
   assert.ok(webViewDebugAssignment >= 0 && webViewDebugAssignment < hostLaunch);
   assert.ok(launcherClear >= 0 && launcherClear < hostLaunch);
