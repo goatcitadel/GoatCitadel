@@ -1,15 +1,30 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION, REMOTE_WORKER_PROTOCOL_VERSION,
-  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION, REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_SCHEMA_VERSION,
-  canonicalJsonString, remoteWorkerProtectedAdmissionContextSha256, remoteWorkerProtectedAdmissionRemoteCallerBindingSha256,
-  type CreateRemoteWorkerBootstrapCommand, type FinalizeRemoteWorkerBootstrapAdmissionCommand,
-  type RemoteWorkerBootstrapRecord, type RemoteWorkerRuntimeCredentialRecord, type RemoteWorkerProtectedAdmissionSignerPin } from "@goatcitadel/contracts";
+import {
+  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_SCHEMA_VERSION,
+  canonicalJsonString,
+  remoteWorkerProtectedAdmissionContextSha256,
+  remoteWorkerProtectedAdmissionRemoteCallerBindingSha256,
+  type CreateRemoteWorkerBootstrapCommand,
+  type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+  type RemoteWorkerBootstrapRecord,
+  type RemoteWorkerRuntimeCredentialRecord,
+  type RemoteWorkerProtectedAdmissionSignerPin,
+} from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { TaskRepository } from "./task-repo.js";
-import { RemoteWorkerAdmissionRepository, type FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput } from "./remote-worker-admission-repo.js";
-import { RemoteWorkerAssignmentRepository, type RemoteWorkerAssignmentProtectedCommitFence } from "./remote-worker-assignment-repo.js";
+import {
+  RemoteWorkerAdmissionRepository,
+  type FinalizeRemoteWorkerBootstrapAdmissionWithNonceInput,
+} from "./remote-worker-admission-repo.js";
+import {
+  RemoteWorkerAssignmentRepository,
+  type RemoteWorkerAssignmentProtectedCommitFence,
+} from "./remote-worker-assignment-repo.js";
 import { RemoteWorkerMeshNodeAdmissionRepository } from "./remote-worker-mesh-node-admission-repo.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import type { RemoteWorkerNonceConsumeInput } from "./remote-worker-nonce-repo.js";
@@ -54,7 +69,6 @@ export function bootstrapInput(seed: string): CreateRemoteWorkerBootstrapCommand
     bootstrapSecretSha256: D(`${seed}:bootstrap-secret`),
   };
 }
-
 
 export function postgresNonceClock(db: DatabaseClient): { timestamp: string; expiresAt: string } {
   const timestamp = new DurableRunRepository(db).readDatabaseNow();
@@ -229,15 +243,23 @@ export function protectedFinalizeInput(
   return { nonce, command };
 }
 
-export function seedProtectedFenceHarness(setupDb: DatabaseClient, suffix: string, tools = false) {
+export function seedProtectedFenceHarness(
+  setupDb: DatabaseClient,
+  suffix: string,
+  tools = false,
+  joinAuthorityTtlSeconds = 300,
+) {
   const tasks = new TaskRepository(setupDb);
   const durableRuns = new DurableRunRepository(setupDb);
   const workerAdmissions = new RemoteWorkerAdmissionRepository(setupDb);
   const meshNodeAdmissions = new RemoteWorkerMeshNodeAdmissionRepository(setupDb);
   const capabilityAdmissions = new MeshCapabilityNodeAdmissionRepository(setupDb);
   const assignments = new RemoteWorkerAssignmentRepository(setupDb);
-  const bootstrap = workerAdmissions.createBootstrap({ ...protectedBootstrapInput(suffix),
-    ...(tools ? { capabilityClasses: ["artifact_stage", "durable_compute", "gateway_inference", "governed_tool"] as const } : {}),
+  const bootstrap = workerAdmissions.createBootstrap({
+    ...protectedBootstrapInput(suffix),
+    ...(tools
+      ? { capabilityClasses: ["artifact_stage", "durable_compute", "gateway_inference", "governed_tool"] as const }
+      : {}),
   }).record;
   const finalizeInput = protectedFinalizeInput(setupDb, bootstrap, suffix, tools ? `${suffix}:tool-first` : "first");
   const finalized = workerAdmissions.finalizeBootstrapAdmissionWithNonce(finalizeInput);
@@ -255,10 +277,12 @@ export function seedProtectedFenceHarness(setupDb: DatabaseClient, suffix: strin
     workspaceId: "default",
     // Must expire BEFORE the backing 600s runtime credential: the M2 fence
     // selector requires the credential to outlive the issued join authority.
-    expiresInSeconds: 300,
+    expiresInSeconds: joinAuthorityTtlSeconds,
     issuedByActorId: "operator-a",
   } as const;
-  const rawMeshNodeCredential = tools ? Buffer.from(D(`${suffix}:mesh-credential`), "hex").toString("base64url") : "a".repeat(43);
+  const rawMeshNodeCredential = tools
+    ? Buffer.from(D(`${suffix}:mesh-credential`), "hex").toString("base64url")
+    : "a".repeat(43);
   const issued = meshNodeAdmissions.issueJoinAuthority({
     ...joinAuthorityInput,
     idempotencyKey: `${suffix}:mesh-authority:1`,
@@ -345,4 +369,3 @@ export function seedProtectedFenceHarness(setupDb: DatabaseClient, suffix: strin
     fence,
   };
 }
-

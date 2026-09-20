@@ -62,18 +62,19 @@ export function registerCellRevocationTests(boundary: "worker" | "mesh_authority
     { kind: "preparation", verifyExchange: verifyNativeCellPreparation },
   ]) {
     const verify = (db: DatabaseClient, seed: string) => {
-      const h = seedProtectedFenceHarness(db, seed, true);
+      // Composed staging can exceed five minutes under coverage. Keep both
+      // database-backed authorities alive beyond the eight-minute test budget,
+      // while remaining below the backing credential's ten-minute lifetime.
+      const authorityTtlSeconds = 540;
+      const h = seedProtectedFenceHarness(db, seed, true, authorityTtlSeconds);
       const token = D(`${seed}:lease`);
-      // Keep the fixture lease alive through composed revocation checks. V8
-      // coverage can push even SQLite capacity delivery past one minute; lease
-      // expiration has separate assignment-repository tests.
       const { assignmentId, durableRunId } = seedFencedAssignment(
         h,
         seed,
         "cell",
         h.meshFence.admissionGeneration,
         token,
-        300,
+        authorityTtlSeconds,
         kind === "native file disclosure",
       );
       verifyExchange(
@@ -116,7 +117,7 @@ export function registerCellRevocationTests(boundary: "worker" | "mesh_authority
         },
       );
     };
-    it(`cell ${kind} rejects ${boundary} revocation on SQLite`, () => {
+    it(`cell ${kind} rejects ${boundary} revocation on SQLite`, { timeout: 480_000 }, () => {
       const db = createDatabase({
         dbPath: kind.endsWith("capacity staging")
           ? join(mkdtempSync(join(tmpdir(), "gc-native-capacity-staging-")), "proof.db")
