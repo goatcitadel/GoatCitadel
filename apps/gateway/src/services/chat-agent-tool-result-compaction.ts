@@ -1,5 +1,5 @@
 import type { ChatNormalizationProfile, ChatToolRunRecord, ToolInvokeRequest } from "@goatcitadel/contracts";
-import { truncateUtf8Bytes } from "@goatcitadel/contracts";
+import { readOpenCodeRunSummary, truncateUtf8Bytes } from "@goatcitadel/contracts";
 
 const TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES = 12_000;
 const COMPACT_METADATA_STRING_MAX_BYTES = 2_048;
@@ -213,6 +213,9 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
     compacted.localBusinessResearch = localBusinessResearch;
   }
   const renderManifest = compactPresentationRenderManifest(result.renderManifest);
+  // Preserve bounded, redacted agent evidence when raw JSONL becomes an artifact.
+  const externalAgent = readOpenCodeRunSummary(result.externalAgent);
+  if (externalAgent) compacted.externalAgent = externalAgent;
   if (renderManifest) {
     compacted.renderManifest = renderManifest;
   }

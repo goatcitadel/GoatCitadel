@@ -36,6 +36,7 @@ import { useEscapeToStopStream } from "./useEscapeToStopStream";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
 import { FocusedActiveWorkSummary, deriveFocusedActiveWorkState } from "./FocusedActiveWorkSummary";
 import "./styles/focused-active-work.css";
+import "./styles/tool-result-preview.css";
 
 /**
  * The persisted turn array retains branch siblings, so its tail is not

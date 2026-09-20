@@ -60,8 +60,14 @@
   gap: 0.54rem;
 }
 
+.mc-next-thread-view {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .mc-next-thread-list {
   display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.34rem;
 }
 

@@ -59,6 +59,14 @@
       "catalogExposure": "suggestable"
     },
     {
+      "skillId": "bundled:opencode",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "high",
+      "expectedTests": ["packages/skills/src/opencode-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:operations",
       "owner": "ops",
       "source": "bundled",
