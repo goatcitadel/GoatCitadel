@@ -8,6 +8,7 @@ import {
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatOptimisticUserMessage } from "@goatcitadel/mission-control-shared/components/chat/ChatOptimisticUserMessage";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
+import { focusPendingUserInputControl } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
 import {
   formatMemoryCitationMeta,
   formatMemorySignals,
@@ -24,6 +25,7 @@ import {
   THREAD_WINDOW_SIZE,
   buildThreadWindow,
   resolveEffectiveWindowStart,
+  stepWindowStartBack,
   type ChatThreadWindowItem,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
@@ -709,8 +711,10 @@ export function ThreadedTimeline({
   }, [jumpToLatest, onSelectTurn, pendingBlockerTurnId, scrollRef]);
 
   const showHiddenTurns = useCallback(() => {
-    setManualWindowStart(0);
-  }, []);
+    // Step back one page rather than jumping to index 0: expanding history should
+    // stay bounded instead of abandoning the window and mounting the whole thread.
+    setManualWindowStart((current) => stepWindowStartBack(current, effectiveWindowStart));
+  }, [effectiveWindowStart]);
 
   /*
    * Reset windowing state on an actual session change, not on mount: the
@@ -757,6 +761,12 @@ export function ThreadedTimeline({
         <FocusedActiveWorkSummary
           state={displayActiveWorkState}
           onFocusComposer={() => props.composerRef.current?.focus()}
+          onFocusPendingInput={() => {
+            // Fall back to the composer only when no prompt panel is mounted.
+            if (!focusPendingUserInputControl()) {
+              props.composerRef.current?.focus();
+            }
+          }}
           onOpenActivity={openActivity}
           onOpenApprovals={props.onOpenApprovals}
           onRetry={onRetryTurn}

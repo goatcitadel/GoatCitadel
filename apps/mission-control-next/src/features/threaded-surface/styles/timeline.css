@@ -272,13 +272,11 @@
   margin-top: -0.32rem;
 }
 
-.mc-next-thread-turn.grouped .mc-next-thread-bubble.user .mc-next-thread-meta:not(.mc-next-thread-stop-summary) strong,
-.mc-next-thread-turn.grouped
-  .mc-next-thread-bubble.assistant
-  .mc-next-thread-meta:not(.mc-next-thread-stop-summary)
-  strong {
-  display: none;
-}
+/* Grouping compresses spacing only. It used to hide the speaker name on both
+   bubbles, but a "group" here is two adjacent TURNS from the same user — and a
+   turn is a user message plus an assistant reply, so the speaker always
+   alternates across the boundary. Hiding the name there removed authorship
+   exactly where it was needed. Quiet the meta line instead (rule below). */
 
 .mc-next-thread-turn.grouped .mc-next-thread-bubble .mc-next-thread-meta:not(.mc-next-thread-stop-summary) {
   opacity: 0.55;
@@ -790,6 +788,10 @@
 
 .mc-assistant-markdown {
   font-size: var(--text-sm);
+  /* Owned as a token so an outer surface can retune prose density: setting
+     line-height on the container alone cannot win against the explicit value
+     the p/li rule below assigns to those children. */
+  --chat-prose-line-height: 1.44;
 }
 
 .mc-assistant-renderer-shell {
@@ -813,7 +815,7 @@
 
 .mc-assistant-markdown p,
 .mc-assistant-markdown li {
-  line-height: 1.44;
+  line-height: var(--chat-prose-line-height);
 }
 
 /* B5: cap the prose measure (~72ch) so assistant text stays readable even when

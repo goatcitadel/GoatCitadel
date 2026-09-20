@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { create as createRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPendingApprovalPanel } from "./ChatPendingApprovalPanel";
-import { ChatPendingUserInputPanel } from "./ChatPendingUserInputPanel";
+import { ChatPendingUserInputPanel, focusPendingUserInputControl } from "./ChatPendingUserInputPanel";
 
 describe("chat pending blocking panels", () => {
   let container: HTMLDivElement | null = null;
@@ -415,5 +415,83 @@ describe("chat pending blocking panels", () => {
       buttons.find((item) => item.textContent === "Allow once")?.click();
     });
     expect(onApprove).toHaveBeenCalledWith("once");
+  });
+
+  it("labels every answer control with the blocking question", async () => {
+    await act(async () => {
+      root?.render(
+        <ChatPendingUserInputPanel
+          pending={false}
+          pendingUserInput={{
+            turnId: "turn-label",
+            promptId: "prompt-label",
+            kind: "text",
+            title: "Need detail",
+            question: "Which database should I migrate first?",
+            placeholder: "Type a name",
+          }}
+          onSubmit={vi.fn()}
+        />,
+      );
+    });
+
+    const field = container?.querySelector("input[type='text']");
+    const labelledBy = field?.getAttribute("aria-labelledby");
+    expect(labelledBy).toBeTruthy();
+    expect(container?.querySelector(`#${labelledBy}`)?.textContent).toBe("Which database should I migrate first?");
+  });
+
+  it("focuses the text field that submits the answer, not the page", async () => {
+    await act(async () => {
+      root?.render(
+        <ChatPendingUserInputPanel
+          pending={false}
+          pendingUserInput={{
+            turnId: "turn-focus",
+            promptId: "prompt-focus",
+            kind: "text",
+            title: "Need detail",
+            question: "What should happen next?",
+          }}
+          onSubmit={vi.fn()}
+        />,
+      );
+    });
+
+    expect(focusPendingUserInputControl()).toBe(true);
+    expect(document.activeElement).toBe(container?.querySelector("input[type='text']"));
+  });
+
+  it("focuses an option without choosing it for a selection prompt", async () => {
+    const onSubmit = vi.fn();
+    await act(async () => {
+      root?.render(
+        <ChatPendingUserInputPanel
+          pending={false}
+          pendingUserInput={{
+            turnId: "turn-select",
+            promptId: "prompt-select",
+            kind: "single_select",
+            title: "Pick one",
+            question: "Which environment?",
+            options: [
+              { optionId: "staging", label: "Staging" },
+              { optionId: "production", label: "Production" },
+            ],
+          }}
+          onSubmit={onSubmit}
+        />,
+      );
+    });
+
+    expect(focusPendingUserInputControl()).toBe(true);
+    const radios = [...(container?.querySelectorAll("input[type='radio']") ?? [])];
+    expect(document.activeElement).toBe(radios[0]);
+    expect(radios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("reports no pending control when the panel is not mounted", () => {
+    expect(focusPendingUserInputControl()).toBe(false);
   });
 });

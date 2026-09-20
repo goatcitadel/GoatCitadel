@@ -1936,12 +1936,22 @@ describe("ThreadedTimeline", () => {
     expect(text).not.toContain("User message 30");
 
     const showHidden = renderer.root.find(
-      (node) => node.type === "button" && node.children.join("") === "Show hidden turns",
+      (node) => node.type === "button" && node.children.join("").startsWith("Show "),
     );
     TestRenderer.act(() => {
       showHidden.props.onClick();
     });
 
+    // One step reveals a bounded page of earlier turns rather than the whole thread.
+    expect(renderedText(renderer)).toContain("User message 41");
+    expect(renderedText(renderer)).not.toContain("User message 30");
+
+    const showMore = renderer.root.findAll(
+      (node) => node.type === "button" && node.children.join("").startsWith("Show "),
+    );
+    TestRenderer.act(() => {
+      showMore[0]!.props.onClick();
+    });
     expect(renderedText(renderer)).toContain("User message 30");
   });
 
@@ -2078,7 +2088,7 @@ describe("ThreadedTimeline", () => {
       expect(renderedText(renderer)).toContain("User message 61");
     });
 
-    it("still widens the window when 'Show hidden turns' is used while frozen", () => {
+    it("widens the window by a bounded page when history is expanded while frozen", () => {
       const props = buildLongThreadProps();
       const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
       expect(renderedText(renderer)).toContain("hidden for performance");
@@ -2090,17 +2100,34 @@ describe("ThreadedTimeline", () => {
       expect(renderedText(renderer)).toContain("User message 41");
 
       const showHidden = renderer.root.find(
-        (node) => node.type === "button" && node.children.join("") === "Show hidden turns",
+        (node) => node.type === "button" && node.children.join("").startsWith("Show "),
       );
       TestRenderer.act(() => {
         showHidden.props.onClick();
       });
 
-      // Manual expansion wins over the freeze: the very first turn is now visible,
-      // and the frozen oldest-visible turn is still mounted too (widen, not shift).
-      expect(renderedText(renderer)).not.toContain("hidden for performance");
-      expect(renderedText(renderer)).toContain("User message 1G");
+      // Manual expansion wins over the freeze and widens rather than shifting: the
+      // frozen oldest-visible turn stays mounted and older turns join it. Expansion
+      // is bounded, so one step reveals a page, not the whole retained thread.
       expect(renderedText(renderer)).toContain("User message 41");
+      expect(renderedText(renderer)).toContain("User message 11G");
+      expect(renderedText(renderer)).not.toContain("User message 1G");
+      expect(renderedText(renderer)).toContain("hidden for performance");
+
+      // Stepping repeatedly still reaches the beginning of the thread.
+      for (let step = 0; step < 10; step += 1) {
+        const next = renderer.root.findAll(
+          (node) => node.type === "button" && node.children.join("").startsWith("Show "),
+        );
+        if (next.length === 0) {
+          break;
+        }
+        TestRenderer.act(() => {
+          next[0]!.props.onClick();
+        });
+      }
+      expect(renderedText(renderer)).toContain("User message 1G");
+      expect(renderedText(renderer)).not.toContain("hidden for performance");
     });
 
     it("keeps an early context-pinned turn mounted through buildThreadWindow's own pinning while the window is frozen", () => {

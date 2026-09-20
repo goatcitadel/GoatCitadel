@@ -467,13 +467,25 @@
 
 .mc-next-threaded-surface.unified .mc-assistant-markdown {
   font-size: var(--text-sm);
+  /* Retunes the token the p/li rule in timeline.css actually reads. A bare
+     line-height here only reaches text that is not inside a p or li. */
+  --chat-prose-line-height: 1.58;
   line-height: 1.58;
 }
 
-.mc-next-threaded-surface.unified .mc-next-turn-evidence-summary {
+/* The pull-up belongs to the footer row now, not to one control inside it:
+   leaving it on the evidence child offset it from the Sources control sharing
+   the row. */
+.mc-next-threaded-surface.unified .mc-next-turn-footer {
   justify-self: start;
   max-width: min(100%, 46rem);
   margin-top: -0.32rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-turn-evidence-summary,
+.mc-next-threaded-surface.unified .mc-next-turn-sources-summary {
+  justify-self: start;
+  max-width: min(100%, 46rem);
   color: var(--text-secondary);
 }
 

@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
-import { isInteractiveChatEventTarget } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
+import {
+  hasActiveTextSelection,
+  isInteractiveChatEventTarget,
+} from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { ChatToolResultPreview } from "@goatcitadel/mission-control-shared/components/chat/ChatToolResultPreview";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 
@@ -358,9 +361,10 @@ function DemoTurnCard({
       <div
         className="mc-next-thread-turn-surface"
         onClick={(event) => {
-          if (!isInteractiveChatEventTarget(event.target, event.currentTarget)) {
-            onSelect(turn.id);
+          if (isInteractiveChatEventTarget(event.target, event.currentTarget) || hasActiveTextSelection()) {
+            return;
           }
+          onSelect(turn.id);
         }}
       >
         <button

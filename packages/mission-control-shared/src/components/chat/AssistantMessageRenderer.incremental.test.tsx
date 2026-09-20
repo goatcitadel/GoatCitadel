@@ -143,7 +143,8 @@ describe("StreamingMarkdown incremental wiring", () => {
   }
 
   it("renders the same settled markup whether streamed incrementally or rendered whole", () => {
-    const full = "## Heading\n\n- First\n- Second\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |\n\n```ts\nconst v = 1;\n```\n\n[Safe](https://example.com) and [unsafe](javascript:alert(1)).\n\n<script>alert(1)</script>\n\nPara two closing.";
+    const full =
+      "## Heading\n\n- First\n- Second\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |\n\n```ts\nconst v = 1;\n```\n\n[Safe](https://example.com) and [unsafe](javascript:alert(1)).\n\n<script>alert(1)</script>\n\nPara two closing.";
 
     // Stream it token-by-token through the running renderer with a stable turn id.
     renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-stream" />);
@@ -169,7 +170,9 @@ describe("StreamingMarkdown incremental wiring", () => {
     expect(streamedFinal).toBe(directFinal);
     expect(renderer.root.findAllByType("table")).toHaveLength(1);
     expect(renderer.root.findAllByType("script")).toHaveLength(0);
-    expect(renderer.root.findAllByType("a").some((link) => String(link.props.href).startsWith("javascript:"))).toBe(false);
+    expect(renderer.root.findAllByType("a").some((link) => String(link.props.href).startsWith("javascript:"))).toBe(
+      false,
+    );
   });
 
   it("does not leak fence parsing across a turn-id change while running", () => {
@@ -189,5 +192,67 @@ describe("StreamingMarkdown incremental wiring", () => {
     expect(expected.stable).toBe("clean para.\n\nsecond clean para to finalize.\n\n");
     // Stable text (sans markdown newlines) shows up in the rendered tree.
     expect(shape).toContain("second clean para to finalize.");
+  });
+});
+
+describe("link reference definitions across the stable/tail split", () => {
+  function hrefs(r: ReactTestRenderer): string[] {
+    return r.root.findAllByType("a").map((link) => String(link.props.href));
+  }
+
+  it("resolves a reference whose definition sits in the other chunk", () => {
+    // Definition lands in the tail and is newline-terminated (a wrapped line follows),
+    // so it is carried into the stable chunk where the reference is used.
+    const full = "See [the spec][spec] for details.\n\n[spec]: https://example.com/spec\nand that is all.";
+    const { stable, tail } = splitStreamingMarkdown(full);
+    expect(stable).toContain("[the spec][spec]");
+    expect(stable).not.toContain("https://example.com/spec");
+
+    const streaming = create(
+      <AssistantMessageRenderer role="assistant" content={full} running streamTurnId="turn-ref" />,
+    );
+    const settled = create(<AssistantMessageRenderer role="assistant" content={full} running={false} />);
+    try {
+      expect(hrefs(settled)).toEqual(["https://example.com/spec"]);
+      expect(hrefs(streaming)).toEqual(hrefs(settled));
+      expect(JSON.stringify(streaming.toJSON())).not.toContain("[the spec][spec]");
+      expect(tail).toContain("[spec]: https://example.com/spec");
+    } finally {
+      streaming.unmount();
+      settled.unmount();
+    }
+  });
+
+  it("never renders a link to a half-arrived destination", () => {
+    const full = "See [the spec][spec].\n\n[spec]: https://example.com/spec";
+    const renderer = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="turn-safe" />);
+    try {
+      for (let length = 1; length <= full.length; length += 1) {
+        renderer.update(
+          <AssistantMessageRenderer
+            role="assistant"
+            content={full.slice(0, length)}
+            running
+            streamTurnId="turn-safe"
+          />,
+        );
+        // A truncated URL must never become a clickable destination.
+        expect(hrefs(renderer).every((href) => href === "https://example.com/spec")).toBe(true);
+      }
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("does not hoist a definition that lives inside a fenced code block", () => {
+    const state = createIncrementalSplitState();
+    splitIncremental(state, "Intro.\n\n```md\n[spec]: https://evil.example/pwn\n```\n\nMore text.\n");
+    expect(state.definitions).toEqual([]);
+  });
+
+  it("carries a definition that appears before its use", () => {
+    const state = createIncrementalSplitState();
+    splitIncremental(state, "[spec]: https://example.com/spec\n\nNow see [the spec][spec].");
+    expect(state.definitions).toEqual(["[spec]: https://example.com/spec"]);
   });
 });

@@ -15,6 +15,7 @@ import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
 import { ChatOptionsPopover } from "./ChatOptionsPopover";
+import { buildActiveChatOptionSettings } from "./chat-option-settings";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
@@ -755,6 +756,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     Boolean(props.delegatedScopeControls?.pendingApprovalId);
   const researchArmed = props.currentWebMode === "quick" || props.currentWebMode === "deep";
   const reviewArmed = props.currentReviewDepth !== "off";
+  const activeChatOptionSettings = buildActiveChatOptionSettings({
+    planningMode: props.planningMode,
+    webMode: props.currentWebMode,
+    reviewDepth: props.currentReviewDepth,
+    modelCouncilEnabled: Boolean(props.modelCouncilEnabled),
+  });
   const workspaceSnapshotArmed = Boolean(props.workspaceSnapshotRequest);
   const contextArmed = Boolean(
     props.contextSelection ||
@@ -1080,9 +1087,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <ComposerBlockingPrompt props={props} />
 
-      <ChatOptionsPopover
-        active={Boolean(props.planningMode === "advisory" || researchArmed || reviewArmed || props.modelCouncilEnabled)}
-      >
+      <ChatOptionsPopover activeSettings={activeChatOptionSettings}>
         {composerV2Enabled ? (
           <div className="mc-next-composer-context-strip">
             <ContextStrip

@@ -19,6 +19,10 @@ export function ChatPendingUserInputPanel(props: {
   });
 
   const promptKey = pendingUserInput?.promptId ?? "none";
+  // Every answer control is labelled by the question itself: the panel is a
+  // separate form from the composer, so without this the field a screen reader
+  // lands on announces only its placeholder (which is optional).
+  const questionId = `chat-user-input-question-${promptKey}`;
   const secureValue = secureEntry.promptKey === promptKey ? secureEntry.value : "";
   const trimmedText = useMemo(() => textValue.trim(), [textValue]);
 
@@ -75,6 +79,7 @@ export function ChatPendingUserInputPanel(props: {
     <div
       className={`chat-approval-card chat-user-input-card chat-blocking-prompt chat-blocking-prompt-user-input${variant === "compact" ? " compact" : ""}`}
       data-variant={variant ?? "default"}
+      data-pending-user-input="true"
       role="alert"
       aria-live="assertive"
       key={promptKey}
@@ -84,7 +89,9 @@ export function ChatPendingUserInputPanel(props: {
         <p className="chat-approval-title">{activePrompt.title}</p>
         <span className="chat-approval-countdown">Answer required</span>
       </div>
-      <p className="chat-approval-reason">{activePrompt.question}</p>
+      <p id={questionId} className="chat-approval-reason">
+        {activePrompt.question}
+      </p>
       {activePrompt.secureConfiguration ? (
         <div className="chat-user-input-secure">
           <label className="chat-user-input-option-row" htmlFor={`chat-secure-configuration-${activePrompt.promptId}`}>
@@ -120,7 +127,7 @@ export function ChatPendingUserInputPanel(props: {
           ) : null}
         </div>
       ) : activePrompt.kind === "single_select" ? (
-        <div className="chat-user-input-options" role="radiogroup" aria-label={activePrompt.question}>
+        <div className="chat-user-input-options" role="radiogroup" aria-labelledby={questionId}>
           {(activePrompt.options ?? []).map((option) => (
             <label key={option.optionId} className="chat-user-input-option">
               <input
@@ -151,6 +158,7 @@ export function ChatPendingUserInputPanel(props: {
       ) : activePrompt.multiline ? (
         <textarea
           className="chat-user-input-textarea"
+          aria-labelledby={questionId}
           value={textValue}
           placeholder={activePrompt.placeholder}
           disabled={pending}
@@ -161,6 +169,7 @@ export function ChatPendingUserInputPanel(props: {
         <input
           className="chat-user-input-input"
           type="text"
+          aria-labelledby={questionId}
           value={textValue}
           placeholder={activePrompt.placeholder}
           disabled={pending}
@@ -185,5 +194,39 @@ export function ChatPendingUserInputPanel(props: {
       {activePrompt.expiresAt ? <p className="chat-approval-id">Expires {activePrompt.expiresAt}</p> : null}
       <IdentifierChip className="chat-approval-id" value={activePrompt.promptId} label="Prompt" />
     </div>
+  );
+}
+
+export const PENDING_USER_INPUT_PANEL_SELECTOR = "[data-pending-user-input='true']";
+
+/**
+ * Brings the blocking question into view and focuses the control whose value
+ * will be submitted as the answer. Returns false when no panel is mounted, so
+ * callers can fall back to the composer.
+ *
+ * Focusing a radio does not select it, and this never submits: the user still
+ * makes the choice.
+ */
+export function focusPendingUserInputControl(): boolean {
+  const panel = globalThis.document?.querySelector(PENDING_USER_INPUT_PANEL_SELECTOR);
+  if (!(panel instanceof HTMLElement)) {
+    return false;
+  }
+  panel.scrollIntoView({ block: "nearest", behavior: "auto" });
+  const target = resolvePendingUserInputTarget(panel);
+  if (!target) {
+    return false;
+  }
+  target.focus();
+  return true;
+}
+
+function resolvePendingUserInputTarget(panel: HTMLElement): HTMLElement | null {
+  const radios = Array.from(panel.querySelectorAll<HTMLInputElement>("input[type='radio']:not([disabled])"));
+  if (radios.length > 0) {
+    return radios.find((radio) => radio.checked) ?? radios[0] ?? null;
+  }
+  return panel.querySelector<HTMLElement>(
+    "textarea:not([disabled]), input[type='text']:not([disabled]), input[type='password']:not([disabled])",
   );
 }

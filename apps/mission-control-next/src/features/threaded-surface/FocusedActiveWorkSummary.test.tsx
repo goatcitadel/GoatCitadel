@@ -30,6 +30,7 @@ describe("FocusedActiveWorkSummary", () => {
           <FocusedActiveWorkSummary
             state={state}
             onFocusComposer={vi.fn()}
+            onFocusPendingInput={vi.fn()}
             onOpenActivity={vi.fn()}
             onOpenApprovals={onOpenApprovals}
             onRetry={vi.fn()}
@@ -100,6 +101,7 @@ describe("FocusedActiveWorkSummary", () => {
         <FocusedActiveWorkSummary
           state={state}
           onFocusComposer={onFocusComposer}
+          onFocusPendingInput={vi.fn()}
           onOpenActivity={vi.fn()}
           onOpenApprovals={vi.fn()}
           onRetry={vi.fn()}
@@ -151,6 +153,7 @@ describe("FocusedActiveWorkSummary", () => {
         <FocusedActiveWorkSummary
           state={deriveFocusedActiveWorkState({ turn: failedFolderTurn(), streamStatus: "idle" })}
           onFocusComposer={onFocusComposer}
+          onFocusPendingInput={vi.fn()}
           onOpenActivity={vi.fn()}
           onOpenApprovals={vi.fn()}
           onRetry={onRetry}
@@ -179,6 +182,7 @@ describe("FocusedActiveWorkSummary", () => {
     const secondState = { ...firstState, turnId: "turn-2" };
     const callbacks = {
       onFocusComposer: vi.fn(),
+      onFocusPendingInput: vi.fn(),
       onOpenActivity: vi.fn(),
       onOpenApprovals: vi.fn(),
       onRetry: vi.fn(),
@@ -249,3 +253,39 @@ function findButton(renderer: ReactTestRenderer, label: string) {
   }
   return button;
 }
+
+describe("FocusedActiveWorkSummary answer routing", () => {
+  it("sends 'Answer request' to the pending prompt, never to the composer", () => {
+    const onFocusComposer = vi.fn();
+    const onFocusPendingInput = vi.fn();
+    const state = deriveFocusedActiveWorkState({
+      turn: null,
+      streamStatus: "idle",
+      pendingUserInput: { question: "Which database should I migrate first?" },
+    });
+
+    expect(state).toMatchObject({ kind: "input" });
+
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <FocusedActiveWorkSummary
+          state={state}
+          onFocusComposer={onFocusComposer}
+          onFocusPendingInput={onFocusPendingInput}
+          onOpenActivity={vi.fn()}
+          onOpenApprovals={vi.fn()}
+          onRetry={vi.fn()}
+          onStop={vi.fn()}
+        />,
+      );
+    });
+
+    act(() => {
+      findButton(renderer, "Answer request").props.onClick();
+    });
+
+    expect(onFocusPendingInput).toHaveBeenCalledOnce();
+    expect(onFocusComposer).not.toHaveBeenCalled();
+  });
+});

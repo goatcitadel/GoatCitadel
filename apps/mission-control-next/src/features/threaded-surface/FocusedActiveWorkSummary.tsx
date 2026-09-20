@@ -223,6 +223,12 @@ function humanizeFailureDetail(failureClass?: ChatTurnFailureClass, toolStatus?:
 type FocusedActiveWorkSummaryProps = {
   state: FocusedActiveWorkState | null;
   onFocusComposer: () => void;
+  /**
+   * Focuses the blocking question's own answer control. Distinct from
+   * onFocusComposer: the pending prompt is a separate form, so sending the
+   * caret to the composer leaves the user typing into the wrong field.
+   */
+  onFocusPendingInput: () => void;
   onOpenActivity: () => void;
   onOpenApprovals: (approvalId?: string) => void;
   onRetry: (turnId: string) => void;
@@ -237,6 +243,7 @@ export function FocusedActiveWorkSummary(props: FocusedActiveWorkSummaryProps) {
 function FocusedActiveWorkSummaryContents({
   state,
   onFocusComposer,
+  onFocusPendingInput,
   onOpenActivity,
   onOpenApprovals,
   onRetry,
@@ -261,7 +268,7 @@ function FocusedActiveWorkSummaryContents({
       <button
         type="button"
         className="mc-next-thread-inline-button mc-next-active-work-primary"
-        onClick={onFocusComposer}
+        onClick={onFocusPendingInput}
       >
         Answer request
       </button>

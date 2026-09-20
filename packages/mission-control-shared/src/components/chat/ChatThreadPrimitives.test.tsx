@@ -8,8 +8,14 @@ import {
   ChatThreadTurnCard,
   StreamingAssistantSkeleton,
   buildThreadWindow,
+  buildTurnActivityChips,
+  hasActiveTextSelection,
+  isRoutineTurnOutcome,
   isInteractiveChatEventTarget,
   resolveEffectiveWindowStart,
+  stepWindowStartBack,
+  THREAD_HISTORY_PAGE_SIZE,
+  THREAD_WINDOW_THRESHOLD,
 } from "./ChatThreadPrimitives";
 
 function createTurn(overrides: Partial<ChatThreadTurnRecord> = {}): ChatThreadTurnRecord {
@@ -176,6 +182,7 @@ describe("ChatThreadPrimitives", () => {
       selected: true,
       contextSelected: true,
       turn: createTurn({
+        citations: [{ citationId: "cite-1", url: "https://example.com/spec", title: "The spec" }],
         branch: {
           siblingTurnIds: ["turn-prev", "turn-1", "turn-next"],
           siblingCount: 3,
@@ -216,6 +223,10 @@ describe("ChatThreadPrimitives", () => {
     expect(onSwitchBranch).toHaveBeenCalledWith("turn-prev");
     expect(onSwitchBranch).toHaveBeenCalledWith("turn-next");
     expect(onToggleContextTurn).toHaveBeenCalledWith("turn-1");
+    // Sources render behind their own control, separate from execution detail.
+    expect(
+      renderer.root.findAll((node) => String(node.props.className ?? "").includes("mc-next-turn-sources-summary")),
+    ).toHaveLength(1);
     expect(renderer.root.findByProps({ "aria-label": "citation slot" })).toBeTruthy();
   });
 
@@ -1239,5 +1250,176 @@ describe("ChatThreadPrimitives", () => {
     });
     expect(renderSpy).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(renderer.toJSON())).toBe(firstJson);
+  });
+});
+
+describe("turn surface text selection", () => {
+  function withSelection<T>(selection: { isCollapsed: boolean; text: string } | null, run: () => T): T {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "getSelection");
+    Object.defineProperty(globalThis, "getSelection", {
+      configurable: true,
+      writable: true,
+      value: () => (selection ? { isCollapsed: selection.isCollapsed, toString: () => selection.text } : null),
+    });
+    try {
+      return run();
+    } finally {
+      if (original) {
+        Object.defineProperty(globalThis, "getSelection", original);
+      } else {
+        delete (globalThis as { getSelection?: unknown }).getSelection;
+      }
+    }
+  }
+
+  it("treats a collapsed caret and a whitespace-only range as no selection", () => {
+    expect(withSelection(null, hasActiveTextSelection)).toBe(false);
+    expect(withSelection({ isCollapsed: true, text: "" }, hasActiveTextSelection)).toBe(false);
+    expect(withSelection({ isCollapsed: false, text: "   \n " }, hasActiveTextSelection)).toBe(false);
+    expect(withSelection({ isCollapsed: false, text: "the patch" }, hasActiveTextSelection)).toBe(true);
+  });
+
+  it("does not select the turn when the click ends a text selection", () => {
+    const onSelectTurn = vi.fn();
+    const renderer = renderTurn({ onSelectTurn });
+    const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
+    const click = { target: { closest: () => null }, currentTarget: {} };
+
+    withSelection({ isCollapsed: false, text: "Inspect the patch." }, () => {
+      TestRenderer.act(() => {
+        turnSurface.props.onClick(click);
+      });
+    });
+    expect(onSelectTurn).not.toHaveBeenCalled();
+
+    // A plain click with no highlighted range still selects the turn.
+    withSelection({ isCollapsed: true, text: "" }, () => {
+      TestRenderer.act(() => {
+        turnSurface.props.onClick(click);
+      });
+    });
+    expect(onSelectTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+  });
+});
+
+describe("bounded history expansion", () => {
+  it("steps back one page at a time instead of jumping to the start", () => {
+    // First step walks back from whatever is currently on screen.
+    expect(stepWindowStartBack(null, 200)).toBe(200 - THREAD_HISTORY_PAGE_SIZE);
+    // Subsequent steps continue from the manual start, not the live default.
+    expect(stepWindowStartBack(170, 200)).toBe(170 - THREAD_HISTORY_PAGE_SIZE);
+    // And it never runs past the beginning of the thread.
+    expect(stepWindowStartBack(10, 200)).toBe(0);
+    expect(stepWindowStartBack(0, 200)).toBe(0);
+  });
+
+  it("keeps the mounted turn count bounded after one expansion of a long thread", () => {
+    const turns = Array.from({ length: 400 }, (_, index) =>
+      createTurn({ turnId: `turn-${index}`, userMessage: { ...createTurn().userMessage, messageId: `user-${index}` } }),
+    );
+    expect(turns.length).toBeGreaterThan(THREAD_WINDOW_THRESHOLD);
+
+    const firstStep = stepWindowStartBack(null, 340);
+    const items = buildThreadWindow({
+      turns,
+      windowStart: firstStep,
+      selectedTurnId: null,
+      contextTurnIds: [],
+      streamingTurnId: null,
+    });
+    const mounted = items.filter((item) => item.kind === "turn").length;
+
+    expect(mounted).toBe(turns.length - firstStep);
+    // The whole point: one expansion must not mount the entire retained thread.
+    expect(mounted).toBeLessThan(turns.length);
+    expect(items.some((item) => item.kind === "gap")).toBe(true);
+  });
+});
+
+describe("sources separated from execution detail", () => {
+  function findAllByClass(renderer: TestRenderer.ReactTestRenderer, cls: string) {
+    return renderer.root.findAll(
+      (node) =>
+        node.type === "details" &&
+        String(node.props.className ?? "")
+          .split(" ")
+          .includes(cls),
+    );
+  }
+
+  it("gives sources their own control beside activity", () => {
+    const renderer = renderTurn({
+      turn: createTurn({
+        citations: [{ citationId: "cite-1", url: "https://example.com/a", title: "A" }],
+      }),
+      renderCitationList: () => <div aria-label="citation slot">cards</div>,
+    });
+
+    // Two sibling disclosures, not one "Evidence" bucket holding both tasks.
+    expect(findAllByClass(renderer, "mc-next-turn-sources-summary")).toHaveLength(1);
+    expect(findAllByClass(renderer, "mc-next-turn-evidence-summary")).toHaveLength(1);
+
+    const titles = renderer.root
+      .findAll((node) => String(node.props.className ?? "").includes("mc-next-turn-evidence-title"))
+      .map((node) => node.children.join(""));
+    expect(titles).toEqual(["Sources", "Activity"]);
+  });
+
+  it("omits the sources control entirely when a turn cited nothing", () => {
+    const renderer = renderTurn({
+      turn: createTurn({ citations: [] }),
+      renderCitationList: () => <div aria-label="citation slot">cards</div>,
+    });
+    expect(findAllByClass(renderer, "mc-next-turn-sources-summary")).toHaveLength(0);
+    expect(findAllByClass(renderer, "mc-next-turn-evidence-summary")).toHaveLength(1);
+  });
+
+  it("opens sources without opening execution detail", () => {
+    const renderer = renderTurn({
+      turn: createTurn({
+        citations: [{ citationId: "cite-1", url: "https://example.com/a", title: "A" }],
+      }),
+      renderCitationList: () => <div aria-label="citation slot">cards</div>,
+    });
+    const sources = () => findAllByClass(renderer, "mc-next-turn-sources-summary")[0]!;
+    const activity = () => findAllByClass(renderer, "mc-next-turn-evidence-summary")[0]!;
+
+    expect(sources().props.open).toBe(false);
+    expect(activity().props.open).toBe(false);
+
+    TestRenderer.act(() => {
+      sources().props.onToggle({ currentTarget: { open: true } });
+    });
+    expect(sources().props.open).toBe(true);
+    // Verifying the answer must not drag the diagnostics open with it.
+    expect(activity().props.open).toBe(false);
+  });
+});
+
+describe("turn outcome chips", () => {
+  it("stays quiet for a plain successful exchange", () => {
+    const turn = createTurn({ trace: { ...createTurn().trace, status: "completed", failure: undefined } });
+    expect(isRoutineTurnOutcome(turn)).toBe(true);
+    expect(buildTurnActivityChips(turn)).toEqual([]);
+  });
+
+  it("names the outcome when the turn did not simply succeed", () => {
+    const turn = createTurn({ trace: { ...createTurn().trace, status: "failed" } });
+    expect(isRoutineTurnOutcome(turn)).toBe(false);
+    expect(buildTurnActivityChips(turn)).toContain("failed");
+  });
+
+  it("counts steps rather than repeating the source count", () => {
+    const base = createTurn();
+    const turn = createTurn({
+      citations: [{ citationId: "c1", url: "https://example.com/a" }],
+      toolRuns: [
+        { ...base.toolRuns[0], toolRunId: "t1", toolName: "fs.read", status: "completed" },
+        { ...base.toolRuns[0], toolRunId: "t2", toolName: "fs.read", status: "completed" },
+      ] as typeof base.toolRuns,
+    });
+    const chips = buildTurnActivityChips(turn);
+    expect(chips).toContain("2 steps");
+    expect(chips.join(" ")).not.toContain("source");
   });
 });
