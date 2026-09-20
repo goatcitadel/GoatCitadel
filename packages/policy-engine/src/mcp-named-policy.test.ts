@@ -55,6 +55,8 @@ describe("named MCP policy execution", () => {
   let root: string;
   let storage: Storage;
   let asyncStorage: AsyncStorage;
+  // Apply the full SQLite migration registry before each isolated policy test.
+  // V8 coverage on shared CI runners can exceed the default 10-second hook budget.
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-native-mcp-policy-"));
     storage = new Storage({
@@ -63,7 +65,7 @@ describe("named MCP policy execution", () => {
       auditDir: path.join(root, "audit"),
     });
     asyncStorage = createSqliteAsyncStorage(storage);
-  });
+  }, 30_000);
   afterEach(async () => {
     await asyncStorage?.close();
     await fs.rm(root, { recursive: true, force: true });
