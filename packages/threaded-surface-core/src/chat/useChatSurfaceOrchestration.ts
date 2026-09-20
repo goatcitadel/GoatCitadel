@@ -8,6 +8,7 @@ import type {
   RunTemplateInvocation,
 } from "@goatcitadel/contracts";
 import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
+import { isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
@@ -119,6 +120,7 @@ export function useChatSurfaceOrchestration(input: {
     value: ChatAttachmentRecord[] | ((current: ChatAttachmentRecord[]) => ChatAttachmentRecord[]),
   ) => void;
   setPendingApproval: (value: null) => void;
+  setPendingUserInput: (value: null) => void;
   setError: (value: string | null) => void;
   onOutboundContextConsumed?: () => void;
   consumeModelCouncilArming?: () => ChatModelCouncilRequest | undefined;
@@ -148,6 +150,8 @@ export function useChatSurfaceOrchestration(input: {
   const drainingQueueItemIdRef = useRef<string | null>(null);
   const stopRequestRef = useRef<string | null>(null);
   const [stoppingStreamToken, setStoppingStreamToken] = useState<string | null>(null);
+  const latestInputRef = useRef(input);
+  latestInputRef.current = input;
 
   // The controller intentionally supplies this as a render-current callback.
   // Keep the callback in a ref so the public queue setter remains stable for
@@ -247,24 +251,43 @@ export function useChatSurfaceOrchestration(input: {
       return;
     }
     const activeStream = input.activeStreamRef.current;
-    if (!activeStream) {
-      return;
-    }
-    if (activeStream.sessionId !== input.selectedSessionId || stopRequestRef.current === activeStream.streamToken) return;
-    stopRequestRef.current = activeStream.streamToken;
-    setStoppingStreamToken(activeStream.streamToken);
-    const isCurrent = () => input.activeStreamRef.current === activeStream;
+    const waitingTurn = !activeStream
+      ? [...(input.thread?.turns ?? [])]
+          .reverse()
+          .find((turn) => turn.trace && isChatTurnActiveStatus(turn.trace.status))
+      : undefined;
+    if (!activeStream && !waitingTurn) return;
+    const sessionId = input.selectedSessionId;
+    const requestKey = activeStream?.streamToken ?? `${sessionId}:${waitingTurn!.turnId}`;
+    if ((activeStream && activeStream.sessionId !== sessionId) || stopRequestRef.current === requestKey) return;
+    stopRequestRef.current = requestKey;
+    setStoppingStreamToken(requestKey);
+    const isCurrent = () =>
+      latestInputRef.current.selectedSessionId === sessionId &&
+      (activeStream
+        ? input.activeStreamRef.current === activeStream
+        : !input.activeStreamRef.current || input.activeStreamRef.current.turnId === waitingTurn!.turnId);
     try {
-      if (activeStream.turnId) {
-        const result = await cancelChatTurn(activeStream.sessionId, activeStream.turnId, "mission-control");
+      // A Send can already be admitted while its identity is still in flight.
+      // Keep observing until that identity arrives, then stop the Gateway run.
+      while (isCurrent() && activeStream && !activeStream.turnId && !activeStream.controller.signal.aborted) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+      if (!isCurrent() || activeStream?.controller.signal.aborted) return;
+      const turnId = activeStream?.turnId ?? waitingTurn?.turnId;
+      if (turnId) {
+        const result = await cancelChatTurn(sessionId, turnId, "mission-control");
         if (!isCurrent()) return;
-        if (result.sessionId !== activeStream.sessionId || result.turnId !== activeStream.turnId) {
+        if (result.sessionId !== sessionId || result.turnId !== turnId) {
           throw new Error("Cancellation response did not match the active turn. Refresh its status before retrying.");
         }
         const confirmed = result.cancelled && result.trace.status === "cancelled";
-        input.pushLocalNoticeRef.current?.(confirmed
-          ? `Stopped turn ${activeStream.turnId.slice(-6)}.`
-          : "Cancellation was not confirmed. Refreshing the turn status.", "warning");
+        input.pushLocalNoticeRef.current?.(
+          confirmed
+            ? `Stopped turn ${turnId.slice(-6)}.`
+            : "Cancellation was not confirmed. Refreshing the turn status.",
+          "warning",
+        );
         const reloadSession = input.loadSessionCoreStateRef.current;
         if (reloadSession) {
           void reloadSession(input.selectedSessionId, {
@@ -272,15 +295,16 @@ export function useChatSurfaceOrchestration(input: {
             includeThread: true,
           }).catch(() => undefined);
         }
-        if (confirmed) input.abortActiveChatStream(activeStream);
-      } else {
-        input.pushLocalNoticeRef.current?.("Stopped the local connection before the turn id was assigned.", "warning");
-        input.abortActiveChatStream(activeStream);
+        if (confirmed) {
+          input.setPendingApproval(null);
+          input.setPendingUserInput(null);
+          if (activeStream) input.abortActiveChatStream(activeStream);
+        }
       }
     } catch (err) {
       if (isCurrent()) input.setError((err as Error).message);
     } finally {
-      if (stopRequestRef.current === activeStream.streamToken) {
+      if (stopRequestRef.current === requestKey) {
         stopRequestRef.current = null;
         setStoppingStreamToken(null);
       }
@@ -368,7 +392,10 @@ export function useChatSurfaceOrchestration(input: {
     handleSend,
     handleRetryTurn,
     handleStopActiveTurn,
-    isStopPending: stoppingStreamToken !== null && stoppingStreamToken === input.activeStreamRef.current?.streamToken,
+    isStopPending:
+      stoppingStreamToken !== null &&
+      (stoppingStreamToken === input.activeStreamRef.current?.streamToken ||
+        stoppingStreamToken.startsWith(`${input.selectedSessionId}:`)),
     handleBeginEditTurn,
     handleResumeQueue,
     handleRemoveQueuedItem,

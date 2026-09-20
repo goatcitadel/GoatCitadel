@@ -66,6 +66,18 @@ export class GatewayChatStreamRuntime {
     return this.host.chatTurnExecutionRegistry.getActiveStream(turnId);
   }
 
+  public captureCancelledOutput(
+    sessionId: string,
+    turnId: string,
+  ): { throughSequence: number; tail: string } | undefined {
+    const active = this.getActiveChatTurnStream(turnId);
+    if (!active?.isActive() || active.sessionId !== sessionId) return undefined;
+    return {
+      throughSequence: active.nextSequence - 1,
+      tail: this.secretProjector.snapshotAssistantTail(sessionId, turnId),
+    };
+  }
+
   public completeActiveChatTurnStream(turnId: string, registrationId: string): boolean {
     return this.host.chatTurnExecutionRegistry.completeActiveStream(turnId, registrationId);
   }

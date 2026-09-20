@@ -922,7 +922,7 @@ describe("agentSendChatMessage", () => {
     expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
-  it("inherits actor, permission profile, and override context for automatic proactive suggestions", async () => {
+  it("does not launch proactive delegation after a completed answer mentions multiple roles", async () => {
     const host = createHost({
       assistantContent: "Architect and QA can split the work.",
       assistantModel: "primary-model",
@@ -946,17 +946,7 @@ describe("agentSendChatMessage", () => {
       localOperatorOverrideId: "override-1",
     });
 
-    expect(host.triggerChatSessionProactive).toHaveBeenCalledWith(
-      "session-1",
-      expect.objectContaining({
-        source: "chat",
-        operatorId: "operator-1",
-        authActorId: "operator-1",
-        authActorSource: "token",
-        permissionProfileId: "profile-1",
-        localOperatorOverrideId: "override-1",
-      }),
-    );
+    expect(host.triggerChatSessionProactive).not.toHaveBeenCalled();
   });
 
   it("fails a non-durable approval wait closed instead of orphaning a request lease", async () => {
@@ -1475,6 +1465,24 @@ describe("agentSendChatMessage", () => {
     await expect(collectChunks(resumeAgentChatTurnStream(host, "session-1", "turn-1"))).rejects.toThrow(
       /does not belong/,
     );
+  });
+
+  it("keeps abort listeners intact until durable cancellation commits", async () => {
+    const host = createHost({});
+    host.storage.chatTurnTraces.get = vi.fn(() => createTrace({ durable: { runId: "durable-stop" } })) as never;
+    const controller = host.getActiveChatTurnExecution("turn-1")!.controller;
+    const snapshot = vi.fn();
+    controller.signal.addEventListener("abort", () => snapshot("cleared"));
+    host.cancelDurableChatRun = vi.fn(async () => {
+      expect(controller.signal.aborted).toBe(false);
+      snapshot("captured");
+      throw new Error("injected cancellation persistence failure");
+    });
+    host.storage.durableRuns.getRun = vi.fn(() => ({ status: "running" })) as never;
+    await expect(cancelChatTurn(host, "session-1", "turn-1")).rejects.toThrow("persistence failure");
+    expect(controller.signal.aborted).toBe(false);
+    expect(snapshot.mock.calls).toEqual([["captured"]]);
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
   });
 
   it("cancels a just-launched durable stream before its trace row is visible", async () => {

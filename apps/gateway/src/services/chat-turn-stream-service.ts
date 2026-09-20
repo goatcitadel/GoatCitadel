@@ -1790,15 +1790,22 @@ export async function* streamPreparedAgentChatTurn(
   if (options?.remoteWorkerExecution && (!options.canonicalWriteFence || !deferGeneralPostCommit))
     throw new Error("Worker Chat output requires canonical durable completion ownership.");
   const completionTaskId = options?.remoteWorkerExecution?.taskId ?? input.policyTaskId;
-  if (options?.remoteWorkerExecution && (!completionTaskId ||
-    (input.policyTaskId !== undefined && input.policyTaskId !== completionTaskId)))
+  if (
+    options?.remoteWorkerExecution &&
+    (!completionTaskId || (input.policyTaskId !== undefined && input.policyTaskId !== completionTaskId))
+  )
     throw new Error("Worker Chat output task differs from its admitted execution.");
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
-  host.steerService?.registerActiveTurn?.({ sessionId, turnId,
-    ...(options?.remoteWorkerExecution ? {
-      unavailableReason: "This worker task uses its saved instructions. Stop it and send a new message to change the task.",
-    } : {}),
+  host.steerService?.registerActiveTurn?.({
+    sessionId,
+    turnId,
+    ...(options?.remoteWorkerExecution
+      ? {
+          unavailableReason:
+            "This worker task uses its saved instructions. Stop it and send a new message to change the task.",
+        }
+      : {}),
   });
 
   try {
@@ -2218,47 +2225,49 @@ export async function* streamPreparedAgentChatTurn(
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
     const streamCitations: ChatCitationRecord[] = [...(prepared.threadKnowledgeCitations ?? [])];
     const drainedSteers = options?.remoteWorkerExecution
-      ? [] : host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
+      ? []
+      : host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
     const steerHistoryMessages = drainedSteers.map((item) => ({
       role: "user" as const,
       content: `[Steer] ${item.instruction}`,
     }));
     const historyWithSteers =
       drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
-    if (!options?.remoteWorkerExecution) await recordRuntimeDecision(
-      host,
-      {
-        kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
-        scope: {
-          workspaceId: prepared.workspaceId,
-          sessionId,
-          turnId,
-        },
-        selected: prepared.modelRouterDecision.requiresTools
-          ? "Use direct tool-capable turn runtime"
-          : "Answer directly",
-        rationale:
-          prepared.modelRouterDecision.orchestration?.reason ??
-          "The turn did not enter the governed mode-orchestration workflow.",
-        alternatives: [
-          {
-            label: "Mode orchestration workflow",
-            outcome: "not_chosen",
-            reasonNotChosen:
-              prepared.modelRouterDecision.orchestration?.reason ??
-              "Router and preference signals did not require a multi-step workflow.",
+    if (!options?.remoteWorkerExecution)
+      await recordRuntimeDecision(
+        host,
+        {
+          kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
+          scope: {
+            workspaceId: prepared.workspaceId,
+            sessionId,
+            turnId,
           },
-        ],
-        signals: [
-          { source: "routing", key: "mode", value: resolvePreparedTurnMode(prepared), weight: "strong" },
-          { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
-          { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
-          { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
-        ],
-        evidenceRefs: [{ refType: "turn", refId: turnId }],
-      },
-      canonicalWriteFence,
-    );
+          selected: prepared.modelRouterDecision.requiresTools
+            ? "Use direct tool-capable turn runtime"
+            : "Answer directly",
+          rationale:
+            prepared.modelRouterDecision.orchestration?.reason ??
+            "The turn did not enter the governed mode-orchestration workflow.",
+          alternatives: [
+            {
+              label: "Mode orchestration workflow",
+              outcome: "not_chosen",
+              reasonNotChosen:
+                prepared.modelRouterDecision.orchestration?.reason ??
+                "Router and preference signals did not require a multi-step workflow.",
+            },
+          ],
+          signals: [
+            { source: "routing", key: "mode", value: resolvePreparedTurnMode(prepared), weight: "strong" },
+            { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
+            { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
+            { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
+          ],
+          evidenceRefs: [{ refType: "turn", refId: turnId }],
+        },
+        canonicalWriteFence,
+      );
     for (const steerItem of drainedSteers) {
       let steerCommitted = false;
       await host.ingestEvent(
@@ -2288,93 +2297,95 @@ export async function* streamPreparedAgentChatTurn(
     const directStream = options?.remoteWorkerExecution
       ? options.remoteWorkerExecution.stream({ signal: controller.signal, canonicalWriteFence })
       : input.modelCouncil?.enabled
-      ? await streamChatModelCouncil(host, prepared, controller.signal, canonicalWriteFence)
-      : await runDirectTurnStreamWithSubagentFanout(
-          host,
-          prepared,
-          {
-            signal: controller.signal,
-            operatorId: input.operatorId,
-            authActorId: input.authActorId,
-            authActorSource: input.authActorSource,
-            permissionProfileId: effectivePermissionProfileId,
-            localOperatorOverrideId: input.localOperatorOverrideId,
-            policyContext: inputPolicyContext,
-            fullWebAccess: input.fullWebAccess,
-            canonicalWriteFence,
-          },
-          () => {
-            const runnerInput: ChatTurnAgentRunnerInput = {
-              sessionId,
-              turnId,
-              userMessageId: prepared.userEventId,
-              ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
-              parentTurnId: prepared.parentTurnId,
-              branchKind: prepared.branchKind,
-              sourceTurnId: prepared.sourceTurnId,
-              outputMessageId: assistantMessageId,
-              content: prepared.content,
-              mode: resolvePreparedTurnMode(prepared),
-              providerId:
-                prepared.capabilityProfile?.selection.effectiveProviderId ??
-                input.providerId ??
-                prepared.prefs.providerId,
-              model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
-              webMode:
-                prepared.capabilityProfile?.selection.webMode ?? prepared.normalized.webMode ?? prepared.prefs.webMode,
-              memoryMode:
-                prepared.capabilityProfile?.selection.memory.mode ??
-                prepared.normalized.memoryMode ??
-                prepared.prefs.memoryMode,
-              retrievalMode:
-                prepared.capabilityProfile?.selection.memory.retrievalMode ?? prepared.autonomy.retrievalMode,
-              thinkingLevel:
-                prepared.capabilityProfile?.selection.thinkingLevel ??
-                prepared.normalized.thinkingLevel ??
-                prepared.prefs.thinkingLevel,
-              speedMode:
-                prepared.capabilityProfile?.selection.speedMode ??
-                prepared.normalized.speedMode ??
-                prepared.prefs.speedMode,
-              subagentPolicy:
-                prepared.capabilityProfile?.selection.subagentPolicy ??
-                prepared.normalized.subagentPolicy ??
-                prepared.prefs.subagentPolicy,
-              normalizationProfile: prepared.normalized.normalizationProfile,
-              toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
-              routedContextRequested: Boolean(prepared.routedContextSnapshot),
-              operatorId: prepared.capabilityProfile
-                ? prepared.capabilityProfile.identity.operatorId
-                : input.operatorId,
-              authActorId: prepared.capabilityProfile
-                ? prepared.capabilityProfile.identity.authActorId
-                : input.authActorId,
-              authActorSource: prepared.capabilityProfile
-                ? prepared.capabilityProfile.identity.authActorSource
-                : input.authActorSource,
-              permissionProfileId:
-                prepared.capabilityProfile?.governance.permission.profileId ?? effectivePermissionProfileId,
-              policyContext: inputPolicyContext,
-              localOperatorOverrideId: prepared.capabilityProfile
-                ? prepared.capabilityProfile.governance.permission.localOperatorOverrideId
-                : input.localOperatorOverrideId,
-              policyRunId: input.policyRunId,
-              policyTaskId: input.policyTaskId,
-              fullWebAccess: input.fullWebAccess,
-              historyMessages: historyWithSteers,
-              modelRouter: prepared.modelRouterDecision,
-              runVariableEvidence: input.runVariableEvidence,
+        ? await streamChatModelCouncil(host, prepared, controller.signal, canonicalWriteFence)
+        : await runDirectTurnStreamWithSubagentFanout(
+            host,
+            prepared,
+            {
               signal: controller.signal,
+              operatorId: input.operatorId,
+              authActorId: input.authActorId,
+              authActorSource: input.authActorSource,
+              permissionProfileId: effectivePermissionProfileId,
+              localOperatorOverrideId: input.localOperatorOverrideId,
+              policyContext: inputPolicyContext,
+              fullWebAccess: input.fullWebAccess,
               canonicalWriteFence,
-              capabilityProfile: prepared.capabilityProfile,
-              ...(prepared.serverOnlyPosture ? { serverOnlyPosture: prepared.serverOnlyPosture } : {}),
-              capabilityProfileContent: prepared.capabilityProfileContent,
-              compactionDimensionHash: prepared.compactionDimensionHash,
-              ...(serverContextUsageAttribution ? { serverContextUsageAttribution } : {}),
-            };
-            return host.turnRuntime.runStream(runnerInput);
-          },
-        );
+            },
+            () => {
+              const runnerInput: ChatTurnAgentRunnerInput = {
+                sessionId,
+                turnId,
+                userMessageId: prepared.userEventId,
+                ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
+                parentTurnId: prepared.parentTurnId,
+                branchKind: prepared.branchKind,
+                sourceTurnId: prepared.sourceTurnId,
+                outputMessageId: assistantMessageId,
+                content: prepared.content,
+                mode: resolvePreparedTurnMode(prepared),
+                providerId:
+                  prepared.capabilityProfile?.selection.effectiveProviderId ??
+                  input.providerId ??
+                  prepared.prefs.providerId,
+                model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+                webMode:
+                  prepared.capabilityProfile?.selection.webMode ??
+                  prepared.normalized.webMode ??
+                  prepared.prefs.webMode,
+                memoryMode:
+                  prepared.capabilityProfile?.selection.memory.mode ??
+                  prepared.normalized.memoryMode ??
+                  prepared.prefs.memoryMode,
+                retrievalMode:
+                  prepared.capabilityProfile?.selection.memory.retrievalMode ?? prepared.autonomy.retrievalMode,
+                thinkingLevel:
+                  prepared.capabilityProfile?.selection.thinkingLevel ??
+                  prepared.normalized.thinkingLevel ??
+                  prepared.prefs.thinkingLevel,
+                speedMode:
+                  prepared.capabilityProfile?.selection.speedMode ??
+                  prepared.normalized.speedMode ??
+                  prepared.prefs.speedMode,
+                subagentPolicy:
+                  prepared.capabilityProfile?.selection.subagentPolicy ??
+                  prepared.normalized.subagentPolicy ??
+                  prepared.prefs.subagentPolicy,
+                normalizationProfile: prepared.normalized.normalizationProfile,
+                toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
+                routedContextRequested: Boolean(prepared.routedContextSnapshot),
+                operatorId: prepared.capabilityProfile
+                  ? prepared.capabilityProfile.identity.operatorId
+                  : input.operatorId,
+                authActorId: prepared.capabilityProfile
+                  ? prepared.capabilityProfile.identity.authActorId
+                  : input.authActorId,
+                authActorSource: prepared.capabilityProfile
+                  ? prepared.capabilityProfile.identity.authActorSource
+                  : input.authActorSource,
+                permissionProfileId:
+                  prepared.capabilityProfile?.governance.permission.profileId ?? effectivePermissionProfileId,
+                policyContext: inputPolicyContext,
+                localOperatorOverrideId: prepared.capabilityProfile
+                  ? prepared.capabilityProfile.governance.permission.localOperatorOverrideId
+                  : input.localOperatorOverrideId,
+                policyRunId: input.policyRunId,
+                policyTaskId: input.policyTaskId,
+                fullWebAccess: input.fullWebAccess,
+                historyMessages: historyWithSteers,
+                modelRouter: prepared.modelRouterDecision,
+                runVariableEvidence: input.runVariableEvidence,
+                signal: controller.signal,
+                canonicalWriteFence,
+                capabilityProfile: prepared.capabilityProfile,
+                ...(prepared.serverOnlyPosture ? { serverOnlyPosture: prepared.serverOnlyPosture } : {}),
+                capabilityProfileContent: prepared.capabilityProfileContent,
+                compactionDimensionHash: prepared.compactionDimensionHash,
+                ...(serverContextUsageAttribution ? { serverContextUsageAttribution } : {}),
+              };
+              return host.turnRuntime.runStream(runnerInput);
+            },
+          );
     for await (const chunk of directStream) {
       if (chunk.type === "message_done" && chunk.content) {
         finalText = chunk.content;
@@ -2441,7 +2452,13 @@ export async function* streamPreparedAgentChatTurn(
 
     await assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
-    if (!approvalRequired && !userInputRequired && !finalText.trim()) {
+    const settledTrace = await host.storage.chatTurnTraces.get(turnId);
+    const delegationWaiting =
+      deferGeneralPostCommit &&
+      Boolean(settledTrace.durable?.runId) &&
+      settledTrace.status === "waiting_for_tool" &&
+      settledTrace.routing.confirmedDelegation?.waiting === true;
+    if (!approvalRequired && !userInputRequired && !delegationWaiting && !finalText.trim()) {
       if (options?.remoteWorkerExecution) throw new Error("Worker Chat completion has no verified response.");
       const preRepairContent = finalText;
       finalText = buildEmptyAssistantTurnFallbackText();
@@ -2574,11 +2591,13 @@ export async function* streamPreparedAgentChatTurn(
       return;
     }
 
-    if (userInputRequired && pendingUserInput) {
+    if ((userInputRequired && pendingUserInput) || delegationWaiting) {
       const traceWithMeta = await canonicalWriteFence(async () => {
         const trace = await host.storage.chatTurnTraces.patch(turnId, {
-          status: "waiting_for_user_input",
-          pendingUserInput,
+          // A confirmed delegation parks through its keyed durable wake event.
+          // Ordinary waiting_for_tool traces remain transient and cannot settle.
+          status: delegationWaiting ? "waiting_for_tool" : "waiting_for_user_input",
+          pendingUserInput: delegationWaiting ? null : pendingUserInput,
           retrieval: prepared.retrievalTrace,
           reflection: {
             attempted: false,
@@ -2662,10 +2681,12 @@ export async function* streamPreparedAgentChatTurn(
       const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
         assistantMessageId,
         status: "completed",
-        ...(options?.remoteWorkerExecution ? {
-          usage: assistantUsage,
-          completion: { status: "complete" as const, repaired: false },
-        } : {}),
+        ...(options?.remoteWorkerExecution
+          ? {
+              usage: assistantUsage,
+              completion: { status: "complete" as const, repaired: false },
+            }
+          : {}),
         ...(streamLayerRepaired
           ? {
               completion: {

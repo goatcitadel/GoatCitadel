@@ -164,6 +164,43 @@ export async function reconcileInterruptedDurableChatTurn(
   return result;
 }
 
+/** Preserve already emitted text when the durable owner has committed Stop.
+ * This restores a prefix only; it never upgrades cancellation to completion. */
+export async function preserveCancelledChatTurnOutput(
+  storage: ChatTurnInterruptionRecoveryDeps["storage"],
+  sessionId: string,
+  turnId: string,
+  snapshot?: { throughSequence: number; tail: string },
+): Promise<void> {
+  const trace = await storage.chatTurnTraces.get(turnId);
+  if (trace.sessionId !== sessionId || trace.status !== "cancelled") return;
+  const source = await resolveRecoveredAssistantSource(storage, trace, snapshot);
+  if (source) {
+    if (trace.assistantMessageId && trace.assistantMessageId !== source.messageId) {
+      throw new Error("Cancelled turn output does not match its admitted assistant message.");
+    }
+    const existing = await storage.chatMessages.get(source.messageId);
+    if (existing && (existing.sessionId !== sessionId || existing.role !== "assistant")) {
+      throw new Error("Cancelled turn output belongs to a different message owner.");
+    }
+    await persistRecoveredAssistantSource(
+      { storage },
+      trace,
+      { ...source, final: false },
+      trace.finishedAt ?? new Date().toISOString(),
+      "cancelled",
+    );
+  }
+  // An in-flight append has not necessarily advanced the selected branch yet.
+  // Retain the stopped turn across reload without overriding a newer selection.
+  await storage.chatSessionBranchState.setActiveLeafIfCurrent(
+    sessionId,
+    trace.parentTurnId,
+    turnId,
+    trace.finishedAt ?? new Date().toISOString(),
+  );
+}
+
 function createInterruptionRecoveryResult(): ChatTurnInterruptionRecoveryResult {
   return {
     interruptedTurnIds: [],
@@ -382,6 +419,7 @@ interface RecoveredAssistantSource {
 async function resolveRecoveredAssistantSource(
   storage: ChatTurnInterruptionRecoveryDeps["storage"],
   trace: ChatTurnTraceRecord,
+  snapshot?: { throughSequence: number; tail: string },
 ): Promise<RecoveredAssistantSource | undefined> {
   const existingMessage = trace.assistantMessageId
     ? await storage.chatMessages.get(trace.assistantMessageId)
@@ -417,6 +455,7 @@ async function resolveRecoveredAssistantSource(
       break;
     }
     for (const event of page) {
+      if (snapshot && event.sequence > snapshot.throughSequence) break;
       if (expectedSequence === undefined) {
         sourceIncomplete = event.sequence > 1;
       } else if (event.sequence !== expectedSequence) {
@@ -459,9 +498,15 @@ async function resolveRecoveredAssistantSource(
       break;
     }
     afterSequence = nextSequence;
-    if (page.length < 5_000) {
+    if (page.length < 5_000 || (snapshot && afterSequence >= snapshot.throughSequence)) {
       break;
     }
+  }
+
+  if (snapshot?.tail && !prefixTruncated && !finalContent) {
+    const appended = appendRecoveredPrefix(completedPrefix, snapshot.tail);
+    completedPrefix = appended.content;
+    prefixTruncated = appended.truncated;
   }
 
   if (messageId && finalContent?.trim()) {
@@ -528,11 +573,11 @@ async function hasAuthoritativeDurableFinalOutput(
 }
 
 async function persistRecoveredAssistantSource(
-  deps: ChatTurnInterruptionRecoveryDeps,
+  deps: Pick<ChatTurnInterruptionRecoveryDeps, "storage">,
   trace: ChatTurnTraceRecord,
   source: RecoveredAssistantSource,
   now: string,
-  interruptedStatus: "partial" | "failed" = "partial",
+  interruptedStatus: "partial" | "failed" | "cancelled" = "partial",
 ): Promise<boolean> {
   const session = await deps.storage.sessions.getBySessionId(trace.sessionId);
   const message: ChatMessageRecord = {
@@ -565,7 +610,7 @@ async function persistRecoveredAssistantSource(
     await deps.storage.chatTurnTraces.patch(trace.turnId, {
       assistantMessageId: source.messageId,
       status: source.final ? "completed" : interruptedStatus,
-      failure: source.final ? undefined : buildInterruptedByRestartFailure(true),
+      failure: source.final || interruptedStatus === "cancelled" ? undefined : buildInterruptedByRestartFailure(true),
       completion: {
         status: source.final ? "complete" : "interrupted",
         repaired: source.final ? Boolean(source.repaired) : false,

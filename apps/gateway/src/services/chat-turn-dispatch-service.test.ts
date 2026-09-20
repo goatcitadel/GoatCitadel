@@ -14,12 +14,67 @@ const {
   executePreparedAgentChatTurnBackground,
   launchPreparedAgentChatTurnStream,
   shouldUseDurableExecution,
+  consumePreparedAgentChatTurn,
 } = await import("./chat-turn-dispatch-service.js");
 const chatTurnStreamService = await import("./chat-turn-stream-service.js");
 const { sendPreparedIntegrationChatTurn, streamPreparedIntegrationChatTurn } =
   await import("./chat-turn-dispatch-service.js");
 
 describe("chat turn dispatch durable ownership", () => {
+  it("acknowledges a watched durable child without waiting on the occupied parent worker", async () => {
+    const durableRun = { runId: "child-run" } as DurableRunRecord;
+    const host = createHost({
+      beginDurableChatRun: vi.fn(() => durableRun),
+      traceState: {
+        turnId: "turn-1",
+        sessionId: "session-1",
+        status: "running",
+        durable: { runId: "child-run", status: "queued" },
+      } as ChatTurnTraceRecord,
+    });
+    const onChildDurableRunLaunched = vi.fn(async () => undefined);
+    const response = await consumePreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "Review the plan" },
+      createPrepared("chat"),
+      "chat_thread_turn_appended",
+      undefined,
+      {
+        requireDurableExecution: true,
+        returnAfterDurableAdmission: true,
+        onChildDurableRunLaunched,
+      },
+    );
+    expect(onChildDurableRunLaunched).toHaveBeenCalledWith("child-run");
+    expect(response.trace?.durable?.runId).toBe("child-run");
+    expect(response.assistantMessage).toBeUndefined();
+    expect(host.streamPersistedChatTurnEvents).not.toHaveBeenCalled();
+  });
+
+  it("does not acknowledge an unbound or mismatched durable child", async () => {
+    const host = createHost({ beginDurableChatRun: vi.fn(() => ({ runId: "child-run" }) as DurableRunRecord) });
+    const consume = (options: Parameters<typeof consumePreparedAgentChatTurn>[6]) =>
+      consumePreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "Review" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+        undefined,
+        options,
+      );
+    await expect(consume({ returnAfterDurableAdmission: true })).rejects.toThrow("bound watcher");
+    expect(host.beginDurableChatRun).not.toHaveBeenCalled();
+    await expect(
+      consume({
+        returnAfterDurableAdmission: true,
+        requireDurableExecution: true,
+        onChildDurableRunLaunched: async () => undefined,
+      }),
+    ).rejects.toThrow("exact canonical durable trace");
+  });
+
   it("treats shipped chat, cowork, and code surfaces as durable-owned when the 1.0 defaults are on", async () => {
     const host = createHost();
     await expect(shouldUseDurableExecution(host, createPrepared("chat"), { content: "hello" })).resolves.toBe(true);

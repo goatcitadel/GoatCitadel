@@ -75,21 +75,6 @@ const CODE_DELEGATION_PRESETS = {
   },
 } as const;
 
-function shouldRecommendSubagents(objective: string, surfaceMode: ChatMode): boolean {
-  if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) return false;
-  const normalized = objective.toLowerCase();
-  const complexitySignals = [
-    /\bimplement\b|\brefactor\b|\bfix\b|\bdebug\b|\btest\b|\breview\b/,
-    /\bresearch\b|\binvestigate\b|\bcompare\b|\baudit\b|\bqa\b/,
-    /\bplan\b.*\bimplement\b|\bimplement\b.*\btest\b|\breview\b.*\bfix\b/,
-    /\bparallel\b|\bsubagent\b|\bdelegate\b|\bagents\b/,
-    /\bmultiple\b|\bseveral\b|\bend[- ]to[- ]end\b|\bfull\b|\bthorough\b/,
-  ];
-  const signalCount = complexitySignals.filter((pattern) => pattern.test(normalized)).length;
-  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
-  return surfaceMode !== "chat" || signalCount >= 2 || wordCount >= 60;
-}
-
 export interface ActiveChatDelegationStep {
   stepId: string;
   runId?: string;
@@ -430,7 +415,6 @@ export function useChatDelegationPolicyActions(input: {
   const [activeDelegationRun, setActiveDelegationRun] = useState<ActiveChatDelegationRun | null>(null);
   const [proactivePolicyDraft, setProactivePolicyDraft] = useState<ChatProactivePolicyPatch | null>(null);
   const [proactivePolicyConflict, setProactivePolicyConflict] = useState(false);
-  const subagentRecommendationKeyRef = useRef<string>("");
   const directDelegationGenerationRef = useRef(0);
   const activeExplorerObservationRef = useRef<ActiveExplorerObservation | null>(null);
   const explorerAttentionGenerationRef = useRef(0);
@@ -1179,94 +1163,6 @@ export function useChatDelegationPolicyActions(input: {
     sending,
     setError,
     setSending,
-  ]);
-
-  useEffect(() => {
-    const subagentPolicy = prefs?.subagentPolicy ?? "ask_when_useful";
-    const activeWorkflowHasDelegation = Boolean(activeWorkflowTurn?.trace.orchestration?.runId);
-    if (
-      subagentPolicy === "off" ||
-      !selectedSession ||
-      sending ||
-      activeWorkflowHasDelegation ||
-      activeDelegationRun?.status === "running" ||
-      delegationSuggestion
-    ) {
-      return;
-    }
-    if (draft.trim()) {
-      return;
-    }
-    const objective =
-      messages
-        .filter((item) => item.role === "user")
-        .at(-1)
-        ?.content?.trim() || "";
-    if (!objective || !shouldRecommendSubagents(objective, surfaceMode)) {
-      return;
-    }
-    const recommendationKey = `${selectedSession.sessionId}:${subagentPolicy}:${objective.slice(0, 160)}`;
-    if (subagentRecommendationKeyRef.current === recommendationKey) {
-      return;
-    }
-    subagentRecommendationKeyRef.current = recommendationKey;
-    let cancelled = false;
-    let didSetSending = false;
-    void (async () => {
-      try {
-        const suggested = await suggestChatDelegation(selectedSession.sessionId, { objective });
-        if (cancelled) {
-          return;
-        }
-        if (subagentPolicy === "ask_when_useful") {
-          setDelegationSuggestion(suggested.suggestion);
-          return;
-        }
-        setSending(true);
-        didSetSending = true;
-        pushLocalNotice("Subagent policy is auto. Starting a delegated run because this task looks parallelizable.");
-        const accepted = await runDelegationAction(
-          selectedSession.sessionId,
-          buildDelegationRequest(suggested.suggestion.objective, suggested.suggestion.roles, suggested.suggestion.mode),
-          "Delegation",
-        );
-        if (!cancelled) {
-          const notice = formatDelegationNotice("Delegation", accepted);
-          pushLocalNotice(notice.message, notice.tone);
-          await loadSidebar();
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError((err as Error).message);
-        }
-      } finally {
-        // Always release the flag THIS invocation set, even if the effect was cancelled
-        // (deps changed / unmount) mid-run — otherwise the parent-owned `sending` stays stuck
-        // true with no operation running and wedges the composer.
-        if (didSetSending) {
-          setSending(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeDelegationRun?.status,
-    activeWorkflowTurn?.trace.orchestration?.runId,
-    buildDelegationRequest,
-    delegationSuggestion,
-    draft,
-    loadSidebar,
-    messages,
-    prefs?.subagentPolicy,
-    pushLocalNotice,
-    runDelegationAction,
-    selectedSession,
-    sending,
-    setError,
-    setSending,
-    surfaceMode,
   ]);
 
   return {

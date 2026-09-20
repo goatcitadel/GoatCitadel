@@ -24,6 +24,7 @@ function renderStatusStrip(overrides: Partial<ComponentProps<typeof ShellStatusS
       currentReleaseStatusLabel="Ship"
       daemonDegraded={false}
       daemonStatusValue="Serving"
+      gatewayReady={true}
       gatewayMessage="Gateway ready"
       navigateApprovals={vi.fn()}
       navigateBuildProof={vi.fn()}
@@ -48,6 +49,7 @@ describe("shell build identity chip", () => {
         currentReleaseStatusLabel="Ship"
         daemonDegraded={false}
         daemonStatusValue="Serving"
+        gatewayReady={true}
         gatewayMessage="Gateway ready"
         navigateApprovals={vi.fn()}
         navigateBuildProof={navigateBuildProof}
@@ -102,7 +104,7 @@ describe("shell build identity chip", () => {
         detailLabel: "Daemon: Needs intervention (unavailable)",
       },
       {
-        props: { gatewayMessage: "Gateway unavailable" },
+        props: { gatewayReady: false, gatewayMessage: "Gateway unavailable" },
         detailLabel: "Gateway: Gateway unavailable (unavailable)",
       },
     ];
@@ -117,6 +119,28 @@ describe("shell build identity chip", () => {
       expect(renderer.root.findByProps({ "aria-label": detailLabel }).props["data-status"]).toBe("degraded");
       renderer.unmount();
     }
+  });
+
+  it.each(["Gateway reachability and access checks passed.", "Connected"])(
+    "uses ready state independently of the Gateway message: %s",
+    (gatewayMessage) => {
+      const renderer = renderStatusStrip({ gatewayReady: true, gatewayMessage });
+      expect(renderer.root.findByProps({ "aria-label": "Mission Control status strip" }).props["data-status"]).toBe(
+        "healthy",
+      );
+      expect(renderer.root.findByProps({ "aria-label": `Gateway: ${gatewayMessage}` }).props["data-status"]).not.toBe(
+        "degraded",
+      );
+      renderer.unmount();
+    },
+  );
+
+  it("does not let stale ready wording override unavailable state", () => {
+    const renderer = renderStatusStrip({ gatewayReady: false, gatewayMessage: "Gateway ready" });
+    expect(renderer.root.findByProps({ "aria-label": "Mission Control status strip" }).props["data-status"]).toBe(
+      "attention",
+    );
+    renderer.unmount();
   });
 
   it("keeps the closed System details popover out of layout", () => {

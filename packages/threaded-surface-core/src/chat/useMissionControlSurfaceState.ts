@@ -260,8 +260,7 @@ export function useMissionControlSurfaceState(input: {
     // Retrying a terminal cancellation uses the existing retry branch path,
     // which admits a new turn from the source instead of replaying its dispatch.
     const action =
-      selectedTurn?.trace.failure?.recommendedAction ??
-      (selectedTurn?.trace.status === "cancelled" ? "retry" : undefined);
+      selectedTurn?.trace.status === "cancelled" ? "retry" : selectedTurn?.trace.failure?.recommendedAction;
     if (!action) {
       return null;
     }

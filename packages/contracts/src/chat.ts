@@ -1,5 +1,6 @@
 /* eslint-disable max-lines */
 import type { DurableRunStatus } from "./durable.js";
+import type { ApprovalResolutionOutcome, ApprovalActionOutcome } from "./approvals.js";
 import type { ThreadKnowledgeCitationRecord } from "./knowledge.js";
 import type { MemoryCitationProvenance } from "./memory.js";
 import type { MobileContextEnvelope } from "./mobile.js";
@@ -888,7 +889,10 @@ export interface ChatToolRunRecord {
   startedAt: string;
   finishedAt?: string;
   args?: Record<string, unknown>;
-  result?: Record<string, unknown>;
+  result?: Record<string, unknown> & {
+    approvalOutcome?: ApprovalResolutionOutcome;
+    approvalActionOutcome?: ApprovalActionOutcome;
+  };
   reused?: boolean;
   reusedFromToolRunId?: string;
   reuseReason?: string;
@@ -1510,6 +1514,17 @@ export interface ChatTurnTraceRecord {
   toolRuns: ChatToolRunRecord[];
   citations: ChatCitationRecord[];
   routing: {
+    confirmedDelegation?: { runId: string; proposalId: string; waiting: boolean };
+    /** Compatibility projection only; admitted turns use durable metadata. */
+    turnControl?: {
+      artifactRetryIssued?: boolean;
+      toolClosure?: {
+        outcome: import("./approvals.js").ApprovalResolutionOutcome;
+        approvalId?: string;
+        actorId: string;
+        closedAt: string;
+      };
+    };
     executionProfile?: ChatTurnExecutionProfile;
     promptContextBudget?: ChatPromptContextBudgetReceipt;
     routedContext?: import("./routed-context.js").ChatRoutedContextBindingReceipt;

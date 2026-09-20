@@ -1,4 +1,5 @@
 import {
+  CHAT_TURN_ACTIVE_STATUSES,
   type ChatMode,
   type ChatHistoryWindowResponse,
   type ChatSessionSearchHitRecord,
@@ -775,7 +776,12 @@ export function useChatSessionData(input: {
         return;
       }
       const now = Date.now();
-      const plan = resolveChatRefreshPlan(signal, now - lastLocalPrefMutationAtRef.current < 2500);
+      const plan = resolveChatRefreshPlan(
+        signal,
+        now - lastLocalPrefMutationAtRef.current < 2500,
+        thread?.sessionId === selectedSessionId &&
+          thread.turns.some((turn) => CHAT_TURN_ACTIVE_STATUSES.some((status) => status === turn.trace.status)),
+      );
       recordChatRefreshPhase({
         phase: "plan_resolved",
         sessionId: selectedSessionId,
@@ -793,6 +799,12 @@ export function useChatSessionData(input: {
     {
       enabled: !loading,
       coalesceMs: 800,
+      signalPriority: (signal) => {
+        const plan = resolveChatRefreshPlan(signal);
+        return (
+          (plan.refreshSession === "full" ? 4 : plan.refreshSession === "light" ? 2 : 0) + Number(plan.refreshSidebar)
+        );
+      },
       staleMs: 20000,
       pollIntervalMs: 15000,
     },

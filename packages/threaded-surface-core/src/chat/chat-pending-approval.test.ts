@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveThreadPendingApproval, mergePendingApproval } from "./chat-pending-approval";
+import { deriveThreadPendingApproval, isApprovalForCancelledTurn, mergePendingApproval } from "./chat-pending-approval";
 
 function threadWithStatus(status: string, toolRuns: unknown[]) {
   return {
@@ -19,6 +19,13 @@ function threadWithStatus(status: string, toolRuns: unknown[]) {
 }
 
 describe("chat-pending-approval", () => {
+  it("recognizes only approvals linked to a cancelled turn when filtering stale queue snapshots", () => {
+    const runs = [{ status: "approval_required", approvalId: "approval-stopped" }];
+    expect(isApprovalForCancelledTurn(threadWithStatus("cancelled", runs) as never, "approval-stopped")).toBe(true);
+    expect(isApprovalForCancelledTurn(threadWithStatus("cancelled", runs) as never, "another-approval")).toBe(false);
+    expect(isApprovalForCancelledTurn(threadWithStatus("completed", runs) as never, "approval-stopped")).toBe(false);
+    expect(isApprovalForCancelledTurn(null, "approval-stopped")).toBe(false);
+  });
   it("derives pending approvals from the selected waiting turn", () => {
     expect(deriveThreadPendingApproval(null)).toBeNull();
     expect(deriveThreadPendingApproval(threadWithStatus("completed", []) as never)).toBeNull();

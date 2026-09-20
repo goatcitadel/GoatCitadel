@@ -5,6 +5,26 @@ export interface ApprovalEvidenceBlock {
   content: string;
 }
 
+/** Display canonical reasons without treating legacy notes as operator intent. */
+export function approvalResolutionLabel(approval: ApprovalRequest): string {
+  if (isExpiredApproval(approval)) return "expired";
+  if (approval.status === "pending") return "pending";
+  switch (approval.resolutionOutcome) {
+    case "denied":
+      return "denied";
+    case "withdrawn":
+      return "withdrawn";
+    case "expired":
+      return "expired";
+    case "policy_blocked":
+      return "blocked by policy";
+    case "delivery_failed":
+      return "delivery failed";
+    default:
+      return approval.status;
+  }
+}
+
 export interface ApprovalEvidenceModel {
   targets: string[];
   commands: string[];

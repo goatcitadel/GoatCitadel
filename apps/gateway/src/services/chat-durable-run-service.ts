@@ -74,6 +74,7 @@ import {
   type HeartbeatDecisionReceipt,
 } from "./chat-durable-runtime-authority.js";
 import { assertDurableRetryPolicyMatchesRun, DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import { CHAT_TURN_CONTROL_KEY, type ChatTurnControl } from "./chat-turn-control.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
   computeFrozenChatTurnAdmissionMaterialSha256,
@@ -238,6 +239,9 @@ export interface CanonicalChatDurableWaitForEvent {
  * fall back to eventKey-only so the run is still wakeable by its real waker.
  */
 export function resolveCanonicalChatDurableWaitForEvent(trace: ChatTurnTraceRecord): CanonicalChatDurableWaitForEvent {
+  if (trace.status === "waiting_for_tool" && trace.routing.confirmedDelegation?.waiting) {
+    return { eventKey: "chat.confirmed_delegation.resolved", correlationId: trace.routing.confirmedDelegation.runId };
+  }
   if (trace.status === "waiting_for_approval") {
     // Mirror orchestration-phase-execution-service.ts: prefer the (hydration-only)
     // pendingApprovalSummary, then the persisted approval_required tool run.
@@ -969,9 +973,13 @@ export async function finalizeDurableChatRun(
   const checkpointState = await buildDurableCheckpointState(deps, prepared, effectiveTrace, {
     systemHeartbeat: Boolean(heartbeatIdentity),
   });
-  const postCommitEligibility = heartbeatIdentity
-    ? SYSTEM_HEARTBEAT_POST_COMMIT_ELIGIBILITY
-    : await deps.resolvePostCommitEligibility(prepared.session.sessionId);
+  // Durable control is authoritative even when the runner's trace projection
+  // predates a denial. Inherited child closure is also projected by the runner.
+  const durableControl = currentRun?.metadata?.[CHAT_TURN_CONTROL_KEY] as ChatTurnControl | undefined;
+  const postCommitEligibility =
+    heartbeatIdentity || durableControl?.toolClosure || effectiveTrace.routing?.turnControl?.toolClosure
+      ? SYSTEM_HEARTBEAT_POST_COMMIT_ELIGIBILITY
+      : await deps.resolvePostCommitEligibility(prepared.session.sessionId);
   if (heartbeatApprovalBlocked) {
     assertNoSystemHeartbeatDecisionEvidence(currentRun!);
     await runChatFinalizeTransaction(deps, async () => {
