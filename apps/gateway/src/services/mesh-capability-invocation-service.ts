@@ -1,6 +1,13 @@
 import { MeshCapabilityInvocationServiceError } from "./mesh-capability-invocation-errors.js";
-export { MeshCapabilityInvocationServiceError, type MeshCapabilityInvocationServiceErrorCode } from "./mesh-capability-invocation-errors.js";
-import { requireMeshInvocationIntentForNode, prepareMeshInvocationInputRead, type InputVaultEntry } from "./mesh-invocation-read-authority-service.js";
+export {
+  MeshCapabilityInvocationServiceError,
+  type MeshCapabilityInvocationServiceErrorCode,
+} from "./mesh-capability-invocation-errors.js";
+import {
+  requireMeshInvocationIntentForNode,
+  prepareMeshInvocationInputRead,
+  type InputVaultEntry,
+} from "./mesh-invocation-read-authority-service.js";
 /**
  * HX-408 M3: the generation-fenced mesh capability invocation owner.
  *
@@ -32,7 +39,8 @@ import { requireMeshInvocationIntentForNode, prepareMeshInvocationInputRead, typ
  * originating attempt lineage from the immutable intent (server truth). The
  * dispatch itself fabricates NO model-usage record.
  */
-import { createHash } from "node:crypto";
+import { activationMatchesIntent, deriveMeshCapabilityInvocationId, sha256Utf8 } from "./mesh-invocation-identity.js";
+export { deriveMeshCapabilityInvocationId } from "./mesh-invocation-identity.js";
 import {
   ConflictError,
   NotFoundError,
@@ -44,7 +52,6 @@ import {
   type ChatTurnCapabilityToolMeshPublicationBinding,
   type MeshCapabilityActivationRecord,
   type MeshCapabilityDescriptor,
-  type MeshCapabilityInvocationDispatchEnvelope,
   type MeshCapabilityInvocationInputResponse,
   type MeshCapabilityInvocationPendingList,
   type MeshCapabilityInvocationIntentRecord,
@@ -56,9 +63,16 @@ import {
   type MeshReplicationRecord,
   type ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
-import { MeshSchemaValidationError, validateMeshCapabilityInput, validateMeshCapabilityOutput } from "@goatcitadel/contracts/mesh-schema-node";
+import {
+  MeshSchemaValidationError,
+  validateMeshCapabilityInput,
+  validateMeshCapabilityOutput,
+} from "@goatcitadel/contracts/mesh-schema-node";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
-import { resolveMeshCapabilityNodeAuthorityFence, type MeshCapabilityAuthenticatedNodeIdentity } from "./mesh-capability-publication-service.js";
+import {
+  resolveMeshCapabilityNodeAuthorityFence,
+  type MeshCapabilityAuthenticatedNodeIdentity,
+} from "./mesh-capability-publication-service.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 export {
@@ -156,7 +170,6 @@ export interface MeshCapabilityInvocationServiceOptions {
   deadlineSafetyMarginMs?: number;
 }
 
-
 /**
  * Only the exact node-facing invocation paths below carry admitted-node
  * credentials instead of operator authority. The auth plugin defers them to
@@ -165,8 +178,10 @@ export interface MeshCapabilityInvocationServiceOptions {
  */
 export function isMeshCapabilityNodeInvocationPath(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
-  return pathname === "/api/v1/mesh/capabilities/invocations/pending" ||
-    /^\/api\/v1\/mesh\/capabilities\/invocations\/[^/]{1,256}\/(?:input|progress|settlement)$/u.test(pathname);
+  return (
+    pathname === "/api/v1/mesh/capabilities/invocations/pending" ||
+    /^\/api\/v1\/mesh\/capabilities\/invocations\/[^/]{1,256}\/(?:input|progress|settlement)$/u.test(pathname)
+  );
 }
 
 export class MeshCapabilityInvocationService {
@@ -262,20 +277,36 @@ export class MeshCapabilityInvocationService {
       return this.buildSettledOutcome(normalized.workspaceId, intent, invocationId, existingSettlement);
     }
 
-    const activation = await this.resolveCallableActivation(normalized.workspaceId, normalized.binding, normalized.capabilityId);
+    const activation = await this.resolveCallableActivation(
+      normalized.workspaceId,
+      normalized.binding,
+      normalized.capabilityId,
+    );
     const descriptor = await this.resolveDeclaredDescriptor(activation);
-    if (Buffer.byteLength(inputCanonicalJson, "utf8") >
-      Math.min(descriptor.resourceLimits.maxRequestBytes, MAX_SETTLEMENT_OUTPUT_BYTES))
+    if (
+      Buffer.byteLength(inputCanonicalJson, "utf8") >
+      Math.min(descriptor.resourceLimits.maxRequestBytes, MAX_SETTLEMENT_OUTPUT_BYTES)
+    )
       throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_input_invalid");
-    try { await validateMeshCapabilityInput(descriptor, inputCanonicalJson, options.signal); }
-    catch (error) {
-      throw new MeshCapabilityInvocationServiceError(error instanceof MeshSchemaValidationError && error.reason === "invalid"
-        ? "mesh_capability_invocation_input_invalid" : "mesh_capability_invocation_not_callable");
+    try {
+      await validateMeshCapabilityInput(descriptor, inputCanonicalJson, options.signal);
+    } catch (error) {
+      throw new MeshCapabilityInvocationServiceError(
+        error instanceof MeshSchemaValidationError && error.reason === "invalid"
+          ? "mesh_capability_invocation_input_invalid"
+          : "mesh_capability_invocation_not_callable",
+      );
     }
     options.signal?.throwIfAborted();
-    if (!intent) intent = await this.createIntentForCallableActivation(
-      normalized, invocationId, idempotencyKey, inputSha256, activation, descriptor,
-    );
+    if (!intent)
+      intent = await this.createIntentForCallableActivation(
+        normalized,
+        invocationId,
+        idempotencyKey,
+        inputSha256,
+        activation,
+        descriptor,
+      );
     assertDispatchIntentMatches(intent, normalized, invocationId, idempotencyKey, inputSha256);
 
     // Vault storage is a purely in-process staging write with no external
@@ -294,7 +325,8 @@ export class MeshCapabilityInvocationService {
       if (Date.parse(intent.deadlineAt) <= this.now().getTime())
         throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_callable");
     } catch (error) {
-      if (!stagedInput.dispatchStarted && this.inputVault.get(stagedKey) === stagedInput) this.inputVault.delete(stagedKey);
+      if (!stagedInput.dispatchStarted && this.inputVault.get(stagedKey) === stagedInput)
+        this.inputVault.delete(stagedKey);
       throw error;
     }
     // Only input belonging to a dispatch that actually starts can be read by
@@ -311,8 +343,12 @@ export class MeshCapabilityInvocationService {
         payload: envelope as unknown as Record<string, unknown>,
         idempotencyKey: intent.idempotencyKey,
       });
-      if (event.sourceNodeId !== sourceNodeId || event.eventType !== MESH_CAPABILITY_INVOCATION_DISPATCH_EVENT_TYPE ||
-        event.idempotencyKey !== intent.idempotencyKey || canonicalJsonString(event.payload) !== canonicalJsonString(envelope))
+      if (
+        event.sourceNodeId !== sourceNodeId ||
+        event.eventType !== MESH_CAPABILITY_INVOCATION_DISPATCH_EVENT_TYPE ||
+        event.idempotencyKey !== intent.idempotencyKey ||
+        canonicalJsonString(event.payload) !== canonicalJsonString(envelope)
+      )
         throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_conflict");
       const currentInput = this.inputVault.get(stagedKey);
       if (currentInput) currentInput.dispatchEnvelope = Object.freeze({ ...envelope });
@@ -381,8 +417,10 @@ export class MeshCapabilityInvocationService {
       try {
         prepared.push((await this.prepareNodeInputRead(identity, envelope.invocationId)).intent);
       } catch (error) {
-        if (!(error instanceof MeshCapabilityInvocationServiceError) ||
-          !["mesh_capability_invocation_not_found", "mesh_capability_invocation_not_callable"].includes(error.code))
+        if (
+          !(error instanceof MeshCapabilityInvocationServiceError) ||
+          !["mesh_capability_invocation_not_found", "mesh_capability_invocation_not_callable"].includes(error.code)
+        )
           throw error;
       }
     }
@@ -390,12 +428,23 @@ export class MeshCapabilityInvocationService {
     // Read current callability once, after gathering immutable identities and
     // settlement state. Revocation, health, admission and lease checks remain
     // owned by storage's database-clock projection.
-    const activations = new Map((await this.storage.meshCapabilityPublications.listCallableActivations(identity.workspaceId))
-      .map((activation) => [activation.activationId, activation]));
-    return { items: prepared.filter((intent) => {
-      const activation = activations.get(intent.activationId);
-      return activation && activationMatchesIntent(activation, intent) && Date.parse(intent.deadlineAt) > this.now().getTime();
-    }).map(buildDispatchEnvelope) };
+    const activations = new Map(
+      (await this.storage.meshCapabilityPublications.listCallableActivations(identity.workspaceId)).map(
+        (activation) => [activation.activationId, activation],
+      ),
+    );
+    return {
+      items: prepared
+        .filter((intent) => {
+          const activation = activations.get(intent.activationId);
+          return (
+            activation &&
+            activationMatchesIntent(activation, intent) &&
+            Date.parse(intent.deadlineAt) > this.now().getTime()
+          );
+        })
+        .map(buildDispatchEnvelope),
+    };
   }
 
   /**
@@ -468,7 +517,9 @@ export class MeshCapabilityInvocationService {
       const canonical = canonicalJsonString(submission);
       if (Buffer.byteLength(canonical, "utf8") > MAX_SETTLEMENT_OUTPUT_BYTES + 16 * 1024) throw new Error();
       submission = JSON.parse(canonical) as MeshCapabilityNodeSettlementSubmission;
-    } catch { throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid"); }
+    } catch {
+      throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid");
+    }
     const authorityFence = resolveMeshCapabilityNodeAuthorityFence(identity);
     const intent = await this.requireIntentForNode(identity, submission.invocationId);
     if (
@@ -481,10 +532,14 @@ export class MeshCapabilityInvocationService {
       identity.workspaceId,
       submission.invocationId,
     );
-    if (existing && (existing.disposition !== submission.disposition ||
-      existing.outputSha256 !== submission.outputSha256 || existing.errorCode !== submission.errorCode ||
-      existing.settlementSha256 !== submission.settlementSha256 ||
-      existing.effectiveCostAttributionSha256 !== submission.effectiveCostAttributionSha256))
+    if (
+      existing &&
+      (existing.disposition !== submission.disposition ||
+        existing.outputSha256 !== submission.outputSha256 ||
+        existing.errorCode !== submission.errorCode ||
+        existing.settlementSha256 !== submission.settlementSha256 ||
+        existing.effectiveCostAttributionSha256 !== submission.effectiveCostAttributionSha256)
+    )
       throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_conflict");
     const output = await this.verifySettlementOutput(intent, submission);
     let settlement: MeshCapabilityInvocationSettlementRecord;
@@ -504,7 +559,10 @@ export class MeshCapabilityInvocationService {
         idempotencyKey: `mesh-capability-settlement:node:${identity.nodeId}:${submission.invocationId}`,
       };
       settlement = authorityFence
-        ? await this.storage.meshCapabilityPublications.settleRemoteWorkerInvocation({ authorityFence, settlement: settlementInput })
+        ? await this.storage.meshCapabilityPublications.settleRemoteWorkerInvocation({
+            authorityFence,
+            settlement: settlementInput,
+          })
         : await this.storage.meshCapabilityPublications.settleInvocation(settlementInput);
     } catch (error) {
       throw await this.mapSettlementWriteError(identity.workspaceId, submission.invocationId, error);
@@ -658,9 +716,19 @@ export class MeshCapabilityInvocationService {
     return activation;
   }
 
-  private async resolveDeclaredDescriptor(activation: Pick<MeshCapabilityActivationRecord,
-    "workspaceId" | "nodeId" | "publisherGeneration" | "manifestSha256" | "capabilityId" |
-    "entrySha256" | "descriptorSha256" | "permissionEnvelopeSha256">): Promise<MeshCapabilityDescriptor> {
+  private async resolveDeclaredDescriptor(
+    activation: Pick<
+      MeshCapabilityActivationRecord,
+      | "workspaceId"
+      | "nodeId"
+      | "publisherGeneration"
+      | "manifestSha256"
+      | "capabilityId"
+      | "entrySha256"
+      | "descriptorSha256"
+      | "permissionEnvelopeSha256"
+    >,
+  ): Promise<MeshCapabilityDescriptor> {
     let entryDescriptor: MeshCapabilityDescriptor;
     try {
       const manifest = await this.storage.meshCapabilityPublications.getManifest(
@@ -673,10 +741,16 @@ export class MeshCapabilityInvocationService {
         (candidate) =>
           candidate.capabilityId === activation.capabilityId && candidate.entrySha256 === activation.entrySha256,
       );
-      if (!entry || manifest.workspaceId !== activation.workspaceId || manifest.nodeId !== activation.nodeId ||
-        manifest.publisherGeneration !== activation.publisherGeneration || manifest.manifestSha256 !== activation.manifestSha256 ||
-        entry.descriptorSha256 !== activation.descriptorSha256 || entry.permissionEnvelopeSha256 !== activation.permissionEnvelopeSha256 ||
-        entry.descriptor.kind === "skill") {
+      if (
+        !entry ||
+        manifest.workspaceId !== activation.workspaceId ||
+        manifest.nodeId !== activation.nodeId ||
+        manifest.publisherGeneration !== activation.publisherGeneration ||
+        manifest.manifestSha256 !== activation.manifestSha256 ||
+        entry.descriptorSha256 !== activation.descriptorSha256 ||
+        entry.permissionEnvelopeSha256 !== activation.permissionEnvelopeSha256 ||
+        entry.descriptor.kind === "skill"
+      ) {
         throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_not_callable");
       }
       entryDescriptor = entry.descriptor;
@@ -886,8 +960,11 @@ export class MeshCapabilityInvocationService {
     }
     const canonical = canonicalJsonString(submission.output);
     let descriptor: MeshCapabilityDescriptor;
-    try { descriptor = await this.resolveDeclaredDescriptor(intent); }
-    catch { throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid"); }
+    try {
+      descriptor = await this.resolveDeclaredDescriptor(intent);
+    } catch {
+      throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid");
+    }
     const maxResponseBytes = Math.min(descriptor.resourceLimits.maxResponseBytes, MAX_SETTLEMENT_OUTPUT_BYTES);
     if (Buffer.byteLength(canonical, "utf8") > maxResponseBytes) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid");
@@ -895,8 +972,11 @@ export class MeshCapabilityInvocationService {
     if (sha256Utf8(canonical) !== submission.outputSha256) {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid");
     }
-    try { await validateMeshCapabilityOutput(descriptor, canonical); }
-    catch { throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid"); }
+    try {
+      await validateMeshCapabilityOutput(descriptor, canonical);
+    } catch {
+      throw new MeshCapabilityInvocationServiceError("mesh_capability_settlement_invalid");
+    }
     // Validation can await its isolated worker. Commit the bytes it checked,
     // never a caller-owned object that may have changed during that wait.
     return JSON.parse(canonical) as Record<string, unknown>;
@@ -975,39 +1055,6 @@ export class MeshCapabilityInvocationService {
   }
 }
 
-function activationMatchesIntent(
-  activation: MeshCapabilityActivationRecord,
-  intent: MeshCapabilityInvocationIntentRecord,
-): boolean {
-  return (["workspaceId", "activationId", "activationRevision", "capabilityId", "nodeId", "publisherGeneration",
-    "healthGeneration", "publicationLeaseFencingToken", "manifestSha256", "entrySha256", "descriptorSha256",
-    "permissionEnvelopeSha256"] as const).every((key) => activation[key] === intent[key]);
-}
-
-export function deriveMeshCapabilityInvocationId(input: {
-  workspaceId: string;
-  toolRunId: string;
-  capabilityId: string;
-  binding: Pick<
-    ChatTurnCapabilityToolMeshPublicationBinding,
-    "activationId" | "activationRevision" | "publisherGeneration" | "publicationLeaseFencingToken"
-  >;
-  inputSha256: string;
-}): string {
-  const material = canonicalJsonString({
-    schemaVersion: MESH_CAPABILITY_INVOCATION_ENVELOPE_SCHEMA_VERSION,
-    workspaceId: input.workspaceId,
-    toolRunId: input.toolRunId,
-    capabilityId: input.capabilityId,
-    activationId: input.binding.activationId,
-    activationRevision: input.binding.activationRevision,
-    publisherGeneration: input.binding.publisherGeneration,
-    publicationLeaseFencingToken: input.binding.publicationLeaseFencingToken,
-    inputSha256: input.inputSha256,
-  });
-  return `mesh-invocation-${sha256Utf8(material).slice(0, 48)}`;
-}
-
 function buildReceipt(
   intent: MeshCapabilityInvocationIntentRecord | undefined,
   invocationId: string,
@@ -1040,14 +1087,25 @@ function assertDispatchIntentMatches(
   // Invocation IDs intentionally remain stable per tool run. They cannot stand
   // in for the immutable execution and approval lineage retained by storage.
   const expected = {
-    workspaceId: input.workspaceId, invocationId, idempotencyKey, inputSha256,
-    sessionId: input.sessionId, turnId: input.turnId, runId: input.runId, approvalId: input.approvalId,
-    executionProfileSha256: input.executionProfileSha256, capabilityId: input.capabilityId,
-    nodeId: input.binding.nodeId, activationId: input.binding.activationId,
-    activationRevision: input.binding.activationRevision, publisherGeneration: input.binding.publisherGeneration,
+    workspaceId: input.workspaceId,
+    invocationId,
+    idempotencyKey,
+    inputSha256,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    runId: input.runId,
+    approvalId: input.approvalId,
+    executionProfileSha256: input.executionProfileSha256,
+    capabilityId: input.capabilityId,
+    nodeId: input.binding.nodeId,
+    activationId: input.binding.activationId,
+    activationRevision: input.binding.activationRevision,
+    publisherGeneration: input.binding.publisherGeneration,
     publicationLeaseFencingToken: input.binding.publicationLeaseFencingToken,
-    manifestSha256: input.binding.manifestSha256, entrySha256: input.binding.entrySha256,
-    permissionEnvelopeSha256: input.binding.permissionEnvelopeSha256, healthGeneration: input.binding.healthGeneration,
+    manifestSha256: input.binding.manifestSha256,
+    entrySha256: input.binding.entrySha256,
+    permissionEnvelopeSha256: input.binding.permissionEnvelopeSha256,
+    healthGeneration: input.binding.healthGeneration,
   } satisfies Partial<MeshCapabilityInvocationIntentRecord>;
   if ((Object.keys(expected) as Array<keyof typeof expected>).some((key) => intent[key] !== expected[key])) {
     throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_conflict");
@@ -1079,10 +1137,6 @@ function normalizeDispatchInput(input: MeshCapabilityInvocationDispatchInput): M
 function vaultKey(workspaceId: string, invocationId: string): string {
   return `${workspaceId}
 ${invocationId}`;
-}
-
-function sha256Utf8(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

@@ -145,7 +145,6 @@ import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as commsService from "./comms-service.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
-import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpServerStore } from "./mcp-server-store.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
@@ -177,7 +176,10 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     syntheticPermissionProfiles: new Map(),
     // Real store over the harness's map-backed systemSettings (B5a): MCP
     // read/write behavior assertions keep flowing through systemSettingsStore.
-    mcpServerStore: new McpServerStore({ systemSettings, runImmediateTransaction: async (callback) => await callback() }),
+    mcpServerStore: new McpServerStore({
+      systemSettings,
+      runImmediateTransaction: async (callback) => await callback(),
+    }),
     closing: false,
     configGenerationService: {
       assertRuntimeReadsReady: vi.fn(),
@@ -1145,8 +1147,10 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     await expect(GatewayService.prototype.requireMcpServer.call(gateway, "missing")).rejects.toThrow(
       /Unknown MCP server/,
     );
-    await gateway.mcpServerStore.writeServers([{ serverId: "server-2" }] as never,
-      await GatewayService.prototype.readMcpServers.call(gateway));
+    await gateway.mcpServerStore.writeServers(
+      [{ serverId: "server-2" }] as never,
+      await GatewayService.prototype.readMcpServers.call(gateway),
+    );
     expect(systemSettingsStore.get("mcp_servers_v1")).toEqual([
       expect.objectContaining({ serverId: "server-2", configurationBindingId: expect.any(String) }),
     ]);
@@ -1154,7 +1158,8 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     expect(systemSettingsStore.get("mcp_auth_state_v1")).toEqual({});
     // The deleted incarnation no longer retains these rows; seed the next read fixture explicitly.
     systemSettingsStore.set("mcp_tools_v1", [
-      { serverId: "server-1", toolName: "z.tool" }, { serverId: "server-1", toolName: "a.tool" },
+      { serverId: "server-1", toolName: "z.tool" },
+      { serverId: "server-1", toolName: "a.tool" },
     ]);
     systemSettingsStore.set("mcp_auth_state_v1", { "server-1": { connected: true } });
     systemSettingsStore.set("mcp_servers_v1", [
@@ -1181,14 +1186,15 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       { serverId: "server-1", toolName: "z.tool" },
       { serverId: "server-1", toolName: "a.tool" },
     ]);
-    await gateway.mcpServerStore.writeTools([
-      { serverId: "server-1", toolName: "new.tool" },
-    ] as never);
+    await gateway.mcpServerStore.writeTools([{ serverId: "server-1", toolName: "new.tool" }] as never);
     expect(gateway.storage.systemSettings.set).toHaveBeenCalledWith("mcp_tools_v1", [
       { serverId: "server-1", toolName: "new.tool" },
     ]);
     expect(await gateway.mcpServerStore.readAuthState()).toEqual({ "server-1": { connected: true } });
-    const authServer = { ...await GatewayService.prototype.requireMcpServer.call(gateway, "server-1"), authType: "oauth2" as const };
+    const authServer = {
+      ...(await GatewayService.prototype.requireMcpServer.call(gateway, "server-1")),
+      authType: "oauth2" as const,
+    };
     delete authServer.authState;
     systemSettingsStore.set("mcp_servers_v1", [authServer]);
     const expectedAuth = { updatedAt: "2026-09-11T00:00:00.000Z" };

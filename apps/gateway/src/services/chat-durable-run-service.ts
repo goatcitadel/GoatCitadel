@@ -1,6 +1,16 @@
 import { prepareDurableChatWorkerContext, retainDurableChatWorkerContext } from "./durable-chat-worker-adapter.js";
-import { buildDurableCheckpointState, readCanonicalDurableChatTerminalOutput, summarizeDurableChatAssistantOutput, mergeCanonicalDurableChatTerminalOutputMetadata, SYSTEM_HEARTBEAT_ACTOR_ID, type CanonicalDurableChatTerminalOutput } from "./chat-durable-checkpoint-output.js";
-export { readCanonicalDurableChatTerminalOutput, summarizeDurableChatAssistantOutput, mergeCanonicalDurableChatTerminalOutputMetadata, type CanonicalDurableChatTerminalOutput } from "./chat-durable-checkpoint-output.js";
+import {
+  buildDurableCheckpointState,
+  readCanonicalDurableChatTerminalOutput,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
+  SYSTEM_HEARTBEAT_ACTOR_ID,
+} from "./chat-durable-checkpoint-output.js";
+export {
+  readCanonicalDurableChatTerminalOutput,
+  summarizeDurableChatAssistantOutput,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
+  type CanonicalDurableChatTerminalOutput,
+} from "./chat-durable-checkpoint-output.js";
 /* eslint-disable max-lines -- Durable Chat finalization remains co-located until its authority contract is stable. */
 import { randomUUID } from "node:crypto";
 import type {
@@ -497,7 +507,13 @@ export async function beginDurableChatRun(
     const remoteWorkerParentContext = remoteWorkerParentContextInput
       ? buildRemoteWorkerAssignmentParentContext(remoteWorkerParentContextInput)
       : undefined;
-    const remoteWorkerChatContext = prepareDurableChatWorkerContext(deps, prepared, runId, durablePayload, Boolean(input.policyTaskId));
+    const remoteWorkerChatContext = prepareDurableChatWorkerContext(
+      deps,
+      prepared,
+      runId,
+      durablePayload,
+      Boolean(input.policyTaskId),
+    );
     run = await deps.createDurableRun({
       runId,
       workflowKey: "chat.turn.execute",
@@ -1933,16 +1949,6 @@ function checkpointKindForTerminalDurableChatRunStatus(
   }
   return "run_failed";
 }
-
-
-
-
-
-
-
-
-
-
 
 function markAutonomousChatPostCommitPending(
   metadata: Record<string, unknown> | undefined,

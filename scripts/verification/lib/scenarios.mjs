@@ -3460,7 +3460,9 @@ export async function runUiParityLane(context, _options = {}) {
               baseUrl: nextUi.uiUrl,
               href: "/ops/runtime",
               route: { expectedArea: "ops", expectedSection: "runtime", readyText: "Services" },
-              prepare: async (page) => { await page.getByRole("button", { name: "Gateway details", exact: true }).click(); },
+              prepare: async (page) => {
+                await page.getByRole("button", { name: "Gateway details", exact: true }).click();
+              },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3471,7 +3473,9 @@ export async function runUiParityLane(context, _options = {}) {
               baseUrl: nextUi.uiUrl,
               href: "/ops/diagnostics",
               route: { expectedArea: "ops", expectedSection: "diagnostics", readyText: "Diagnostics directory" },
-              prepare: async (page) => { await page.getByLabel("About Diagnostics directory", { exact: true }).click(); },
+              prepare: async (page) => {
+                await page.getByLabel("About Diagnostics directory", { exact: true }).click();
+              },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3503,7 +3507,9 @@ export async function runUiParityLane(context, _options = {}) {
               baseUrl: nextUi.uiUrl,
               href: "/settings/mcp",
               route: { expectedArea: "settings", expectedSection: "mcp", readyText: "MCP servers" },
-              prepare: async (page) => { await page.getByRole("button", { name: "MCP diagnostics", exact: true }).click(); },
+              prepare: async (page) => {
+                await page.getByRole("button", { name: "MCP diagnostics", exact: true }).click();
+              },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3589,12 +3595,17 @@ export async function runMemoryTruthLane(context, _options = {}) {
   try {
     const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-memory-truth`);
     llmStub = await startDeterministicLlmStub();
-    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
     const configPath = path.join(runtimeRoot, "config", "goatcitadel.json");
-    const fixtureConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+    // Clean checkouts have only the example config. Seed the isolated runtime
+    // before configuring its local provider, without requiring an operator profile.
+    const fixtureConfig = await readJson(configPath).catch(async (error) => {
+      if (error?.code !== "ENOENT") throw error;
+      return readJson(path.join(runtimeRoot, "config", "goatcitadel.example.json"));
+    });
     fixtureConfig.assistant.dataDir = "./data";
     delete fixtureConfig.generation;
     await fs.writeFile(configPath, `${JSON.stringify(fixtureConfig, null, 2)}\n`);
+    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
     stack = await startVerificationStack(context, {
       includeUi: true,
       runtimeRoot,
@@ -3800,14 +3811,19 @@ export async function runMemoryTruthLane(context, _options = {}) {
             NEXT_UI_PACKAGE,
           );
           await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
-          await page.getByRole("button", { name: `Memory item ${memoryTitle} in namespace memory-truth,`, exact: false }).click();
+          await page
+            .getByRole("button", { name: `Memory item ${memoryTitle} in namespace memory-truth,`, exact: false })
+            .click();
           await page.getByRole("heading", { name: memoryTitle, exact: false }).first().waitFor({ timeout: 15000 });
           if ((await page.getByText(foreignTitle, { exact: false }).count()) > 0) {
             throw new Error(`memory-truth Library exposed foreign workspace item ${foreignTitle}`);
           }
-          await page.getByRole("button", {
-            name: `Memory item ${memoryTitle} in namespace memory-truth, lifecycle expired,`, exact: false,
-          }).waitFor({ timeout: 15000 });
+          await page
+            .getByRole("button", {
+              name: `Memory item ${memoryTitle} in namespace memory-truth, lifecycle expired,`,
+              exact: false,
+            })
+            .waitFor({ timeout: 15000 });
           await page.getByText("expired · memory-truth", { exact: true }).waitFor({ timeout: 15000 });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
@@ -3852,7 +3868,11 @@ export async function runMemoryTruthLane(context, _options = {}) {
     try {
       if (stack) await stopVerificationStack(stack);
     } finally {
-      try { await llmStub?.close(); } finally { restoreUiPackage(); }
+      try {
+        await llmStub?.close();
+      } finally {
+        restoreUiPackage();
+      }
     }
   }
 }
@@ -4974,14 +4994,18 @@ async function driveChangePlanToTerminal(gatewayUrl, planId, workspaceId, label,
     if (action?.actionNonce && Number.isSafeInteger(revision) && action.actionId !== lastActionId) {
       lastActionId = action.actionId ?? null;
       if (action.kind === "confirmation") {
-        const confirmed = await requestJson(gatewayUrl, `/api/v1/change-plans/${encodeURIComponent(planId)}/confirmations`, {
-          method: "POST",
-          body: {
-            workspaceId,
-            expectedRevision: revision,
-            actionNonce: action.actionNonce,
+        const confirmed = await requestJson(
+          gatewayUrl,
+          `/api/v1/change-plans/${encodeURIComponent(planId)}/confirmations`,
+          {
+            method: "POST",
+            body: {
+              workspaceId,
+              expectedRevision: revision,
+              actionNonce: action.actionNonce,
+            },
           },
-        });
+        );
         assertOk(confirmed, `confirm ${label} change plan`);
         continue;
       }
@@ -4989,16 +5013,20 @@ async function driveChangePlanToTerminal(gatewayUrl, planId, workspaceId, label,
         if (action.kind === "approval" && action.approvalId) {
           await resolveCapabilityLifecycleApproval(gatewayUrl, { approvalId: action.approvalId }, label);
         }
-        const responded = await requestJson(gatewayUrl, `/api/v1/change-plans/${encodeURIComponent(planId)}/responses`, {
-          method: "POST",
-          body: {
-            workspaceId,
-            expectedRevision: revision,
-            actionId: action.actionId,
-            actionNonce: action.actionNonce,
-            values: {},
+        const responded = await requestJson(
+          gatewayUrl,
+          `/api/v1/change-plans/${encodeURIComponent(planId)}/responses`,
+          {
+            method: "POST",
+            body: {
+              workspaceId,
+              expectedRevision: revision,
+              actionId: action.actionId,
+              actionNonce: action.actionNonce,
+              values: {},
+            },
           },
-        });
+        );
         assertOk(responded, `acknowledge ${label} change plan ${action.kind} action`);
         continue;
       }
