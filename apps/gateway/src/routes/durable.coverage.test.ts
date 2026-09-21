@@ -328,8 +328,8 @@ describe("durable routes additional coverage", () => {
       payload: {},
     });
     // Fastify may reject an overlong path parameter at the router boundary
-    // (404, or 414 since fastify 5.12) before the route-level byte validator
-    // runs. Every outcome is fail-closed.
+    // before the route-level byte validator runs (404, or 414 from fastify >=5.12
+    // when the param exceeds maxParamLength). All outcomes are fail-closed.
     expect([400, 404, 414]).toContain(detached.statusCode);
     expect(durable.detachChildWatcher).not.toHaveBeenCalled();
 
