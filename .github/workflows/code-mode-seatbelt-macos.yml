@@ -100,20 +100,26 @@ jobs:
             echo "[$label] exit=$? out=$(echo "$out" | head -c 300 | tr '\n' ' ')"
           }
           try base ''
-          try dynamic-code '(allow dynamic-code-generation)'
-          try metadata '(allow file-read-metadata)'
           try all-reads '(allow file-read*)'
-          try iokit '(allow iokit-open)'
-          try ipc '(allow ipc-posix-shm*) (allow ipc-sysv*)'
-          try sysctl-write '(allow sysctl*)'
-          try process-info '(allow process-info*)'
-          try system '(allow system*)'
-          try jit+metadata '(allow dynamic-code-generation) (allow file-read-metadata)'
-          printf '%s\n' "$base" > /tmp/diag.sb
-          out=$(sandbox-exec -f /tmp/diag.sb "$NODE_REAL" --jitless -e 'process.stdout.write("ok")' 2>&1)
-          echo "[base --jitless] exit=$? out=$(echo "$out" | head -c 300 | tr '\n' ' ')"
-          echo "[allow-default]"; printf '(version 1)\n(allow default)\n(deny network*)\n' > /tmp/diag.sb
-          sandbox-exec -f /tmp/diag.sb "$NODE_REAL" -e 'process.stdout.write("ok")' 2>&1 | head -c 300; echo
+          # Forward: which single extra read grant is enough?
+          for p in /dev /private/etc /private/var /private/var/db /private/tmp /Library /Library/Preferences \
+                   /Library/Apple /usr/libexec /usr/local /Users /Applications /Volumes /cores /private; do
+            try "add $p" "(allow file-read* (subpath \"$p\"))"
+          done
+          try 'add / literal' '(allow file-read* (literal "/"))'
+          try 'add metadata+/dev' '(allow file-read-metadata) (allow file-read* (subpath "/dev"))'
+          # Reverse: with all reads allowed, which single denial breaks startup?
+          for p in /dev /private/etc /private/var /private/tmp /Library /usr/libexec /usr/local /Users /Applications /Volumes /opt; do
+            try "all-but $p" "(allow file-read*) (deny file-read* (subpath \"$p\"))"
+            try "all-but-data $p" "(allow file-read*) (deny file-read-data (subpath \"$p\"))"
+          done
+          try 'all-but / literal' '(allow file-read*) (deny file-read* (literal "/"))'
+          # Force-report every denial so the unified log names the path.
+          try 'base with report' '(deny file-read* (with report))'
+          sleep 3
+          log show --last 3m --style compact --predicate 'sender == "Sandbox"' 2>/dev/null \
+            | grep -E '(node|sandbox-exec)\([0-9]+\) deny' | sed -E 's/^.*\) (deny\([0-9]+\) .*)$/\1/' \
+            | sort | uniq -c | sort -rn | head -n 40
           mkdir -p artifacts/verification/crash-reports
           cp ~/Library/Logs/DiagnosticReports/node* artifacts/verification/crash-reports/ 2>/dev/null
           ls -la ~/Library/Logs/DiagnosticReports/ | tail -n 10
