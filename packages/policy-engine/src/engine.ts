@@ -30,8 +30,16 @@ import {
   splitUtf8HeadTail,
 } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
-import type { AsyncStorage, NativePolicyReservationLookup } from "@goatcitadel/storage";
-import { channelDeliveryPartRequestHash, isChannelDeliveryPartId, snapshotRemoteWorkerCellCapacityAuthority } from "@goatcitadel/storage";
+import type {
+  AsyncStorage,
+  NativePolicyReservationLookup,
+  RemoteWorkerRuntimeAdmissionResult,
+} from "@goatcitadel/storage";
+import {
+  channelDeliveryPartRequestHash,
+  isChannelDeliveryPartId,
+  snapshotRemoteWorkerCellCapacityAuthority,
+} from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ApprovalGate, type ApprovalCreateAuthority, type ApprovalCreateCommitPort } from "./approval-gate.js";
@@ -55,7 +63,11 @@ import {
   readMcpPolicyTargetFromWrapper,
   type McpToolPolicyBinding,
 } from "./mcp-tool-policy-binding.js";
-import { readMeshToolPolicyBinding, MESH_TOOL_POLICY_DEFINITION, type MeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
+import {
+  readMeshToolPolicyBinding,
+  MESH_TOOL_POLICY_DEFINITION,
+  type MeshToolPolicyBinding,
+} from "./mesh-tool-policy-binding.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import {
   assertHostAllowed,
@@ -104,7 +116,9 @@ interface AccessEvaluation {
   wardEffect?: WardEffect;
 }
 
-type NativeExecutionReservation = Awaited<ReturnType<AsyncStorage["remoteWorkerNativePolicyReservations"]["readForAssignment"]>>;
+type NativeExecutionReservation = Awaited<
+  ReturnType<AsyncStorage["remoteWorkerNativePolicyReservations"]["readForAssignment"]>
+>;
 
 function toToolAccessEvaluateResponse(toolName: string, evaluation: AccessEvaluation): ToolAccessEvaluateResponse {
   return {
@@ -393,8 +407,11 @@ export class ToolPolicyEngine {
     return toToolAccessEvaluateResponse(input.toolName, evaluation);
   }
 
-  public async admitNativeRuntime(request: ToolAccessEvaluateRequest, input: NativeRuntimePolicyAdmissionInput) {
-    return admitNativeRuntimeWithPolicy(this.storage, value => this.inspectAccess(value), request, input);
+  public async admitNativeRuntime(
+    request: ToolAccessEvaluateRequest,
+    input: NativeRuntimePolicyAdmissionInput,
+  ): Promise<RemoteWorkerRuntimeAdmissionResult> {
+    return admitNativeRuntimeWithPolicy(this.storage, (value) => this.inspectAccess(value), request, input);
   }
 
   /** Read-only infrastructure inspection. Ordinary tool APIs cannot select this
@@ -407,8 +424,12 @@ export class ToolPolicyEngine {
   }
 
   public async inspectNativeRuntime(input: ToolAccessEvaluateRequest, authority: NativePolicyReservationLookup) {
-    const request = structuredClone(input), key = { ...snapshotRemoteWorkerCellCapacityAuthority(authority),
-      nonce: authority.nonce, requestSha256: authority.requestSha256 };
+    const request = structuredClone(input),
+      key = {
+        ...snapshotRemoteWorkerCellCapacityAuthority(authority),
+        nonce: authority.nonce,
+        requestSha256: authority.requestSha256,
+      };
     return this.storage.runImmediateTransaction(async () => {
       const reservation = await this.storage.remoteWorkerNativePolicyReservations.readForAssignment(key);
       if (remoteWorkerAssignmentCanonicalSha256(request) !== reservation.policyRequestSha256)
@@ -421,18 +442,31 @@ export class ToolPolicyEngine {
     });
   }
 
-  private async evaluateInvocationAccess(request: ToolInvokeRequest, options: ToolPolicyEvaluateOptions = {}, approved = false) {
+  private async evaluateInvocationAccess(
+    request: ToolInvokeRequest,
+    options: ToolPolicyEvaluateOptions = {},
+    approved = false,
+  ) {
     const identity = this.resolveInvocationPolicy(request, options);
     return this.storage.runImmediateTransaction(async () => {
       const evaluation = await this.evaluateAccessInternal(request, options);
       await this.storage.toolAccessDecisions.record({
-        toolName: identity.accountingToolName, policyToolName: identity.mappedTarget?.policyToolName,
-        agentId: request.agentId, sessionId: request.sessionId, workspaceId: request.workspaceId,
-        taskId: request.taskId, runId: request.runId, allowed: evaluation.allowed,
-        reasonCodes: evaluation.reasonCodes, matchedGrantId: evaluation.matchedGrantId,
-        requiresApproval: approved ? false : evaluation.requiresApproval, riskLevel: evaluation.riskLevel,
-        permissionProfileId: evaluation.permissionProfileId, localOperatorOverrideId: evaluation.localOperatorOverrideId,
-        countsTowardLimits: evaluation.allowed && (approved || (!evaluation.requiresApproval && request.dryRun !== true)),
+        toolName: identity.accountingToolName,
+        policyToolName: identity.mappedTarget?.policyToolName,
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        workspaceId: request.workspaceId,
+        taskId: request.taskId,
+        runId: request.runId,
+        allowed: evaluation.allowed,
+        reasonCodes: evaluation.reasonCodes,
+        matchedGrantId: evaluation.matchedGrantId,
+        requiresApproval: approved ? false : evaluation.requiresApproval,
+        riskLevel: evaluation.riskLevel,
+        permissionProfileId: evaluation.permissionProfileId,
+        localOperatorOverrideId: evaluation.localOperatorOverrideId,
+        countsTowardLimits:
+          evaluation.allowed && (approved || (!evaluation.requiresApproval && request.dryRun !== true)),
       });
       return evaluation;
     });
@@ -989,8 +1023,13 @@ export class ToolPolicyEngine {
       toolDef,
       capabilityPolicy,
       evaluationRequest: request,
-    } = nativeInstallation ? { mappedTarget: undefined, toolDef: NATIVE_INSTALLATION_POLICY,
-      capabilityPolicy: deriveToolCapabilityPolicy(NATIVE_INSTALLATION_POLICY.name, NATIVE_INSTALLATION_POLICY), evaluationRequest: input }
+    } = nativeInstallation
+      ? {
+          mappedTarget: undefined,
+          toolDef: NATIVE_INSTALLATION_POLICY,
+          capabilityPolicy: deriveToolCapabilityPolicy(NATIVE_INSTALLATION_POLICY.name, NATIVE_INSTALLATION_POLICY),
+          evaluationRequest: input,
+        }
       : this.resolveInvocationPolicy(input, options);
     const toolNames = mappedTarget ? [request.toolName, mappedTarget.policyToolName] : [request.toolName];
     const riskLevel = toolDef?.riskLevel ?? "caution";
@@ -1423,9 +1462,15 @@ export class ToolPolicyEngine {
     );
     const reservedGrant = reservation?.grant;
     if (reservedGrant) {
-      const index = scoped.findIndex(candidate => candidate.scope === reservedGrant.scope && candidate.scopeRef === reservedGrant.scopeRef);
-      if (index >= 0 && matchesToolPattern(reservedGrant.toolPattern, request.toolName) &&
-          !grantsByScope[index]!.some(grant => grant.grantId === reservedGrant.grantId)) grantsByScope[index]!.push(reservedGrant);
+      const index = scoped.findIndex(
+        (candidate) => candidate.scope === reservedGrant.scope && candidate.scopeRef === reservedGrant.scopeRef,
+      );
+      if (
+        index >= 0 &&
+        matchesToolPattern(reservedGrant.toolPattern, request.toolName) &&
+        !grantsByScope[index]!.some((grant) => grant.grantId === reservedGrant.grantId)
+      )
+        grantsByScope[index]!.push(reservedGrant);
     }
     const matchingGrants = grantsByScope.flat();
 
