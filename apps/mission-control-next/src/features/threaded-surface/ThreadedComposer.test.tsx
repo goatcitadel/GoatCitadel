@@ -1,12 +1,13 @@
-vi.mock("./ChatOptionsPopover", () => ({
-  ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
 import React, { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ThreadedComposer } from "./ThreadedComposer";
+
+vi.mock("./ChatOptionsPopover", () => ({
+  ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 
 vi.mock("@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu", async () => {
   const ReactModule = await import("react");

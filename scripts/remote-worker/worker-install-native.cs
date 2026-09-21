@@ -345,7 +345,7 @@ namespace GoatCitadel.RemoteWorker.Install
         {
             string full = CanonicalPath(image);
             string drive = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.Windows));
-            string expected = Path.Combine(drive, @"ProgramData\GoatCitadel\RemoteWorker\payload\app\worker\native\GoatCitadelRemoteWorkerCellController.exe");
+            string expected = drive + @"ProgramData\GoatCitadel\RemoteWorker\payload\app\worker\native\GoatCitadelRemoteWorkerCellController.exe";
             if (!string.Equals(full, expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("REFUSED: the controller service image has the wrong installed path.");
             IntPtr manager = OpenSCManagerW(null, null, 3);

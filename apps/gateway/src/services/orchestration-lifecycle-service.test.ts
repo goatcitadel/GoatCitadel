@@ -1513,10 +1513,11 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
     const runtime = createRuntimeDeps();
+    const existingDurableRun = await host.getDurableRun("durable-run-1");
     const durableRun = {
-      ...host.getDurableRun("durable-run-1"),
+      ...existingDurableRun,
       payload: {
-        ...(host.getDurableRun("durable-run-1").payload ?? {}),
+        ...(existingDurableRun.payload ?? {}),
         workspaceId: "../bad workspace",
       },
     } as DurableRunRecord;
@@ -1576,10 +1577,11 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
     const runtime = createRuntimeDeps();
+    const existingDurableRun = await host.getDurableRun("durable-run-1");
     const durableRun = {
-      ...host.getDurableRun("durable-run-1"),
+      ...existingDurableRun,
       payload: {
-        ...(host.getDurableRun("durable-run-1").payload ?? {}),
+        ...(existingDurableRun.payload ?? {}),
         workspaceId: 42,
       },
     } as DurableRunRecord;

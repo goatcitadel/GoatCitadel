@@ -107,7 +107,7 @@ namespace GoatCitadel.RemoteWorker.BrokerCoordinator
                 try
                 {
                     if (io.Information.ToUInt64() != 2u) throw new InvalidOperationException("State directory was not newly created.");
-                    result = new StateDirectoryLease(file, System.IO.Path.Combine(parent.path, name), true);
+                    result = new StateDirectoryLease(file, parent.path + "\\" + name, true);
                     if (result.ReadEntries().Length != 0) throw new InvalidOperationException("New state directory is not empty.");
                     // Normalize only this newly created empty directory. ProgramData
                     // commonly propagates NOT_CONTENT_INDEXED, which the signer refuses

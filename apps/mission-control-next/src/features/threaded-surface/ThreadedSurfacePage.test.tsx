@@ -1,4 +1,3 @@
-vi.mock("./ChatOptionsPopover", () => ({ ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 import { readFileSync } from "node:fs";
 import React from "react";
 import { createRef } from "react";
@@ -6,6 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+
+vi.mock("./ChatOptionsPopover", () => ({
+  ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 
 const mediaQueryMock = vi.hoisted(() => ({
   matches: new Map<string, boolean>(),
@@ -534,12 +537,23 @@ describe("ThreadedSurfacePage", () => {
     input.sessionRailOpen = true;
     input.onSessionRailOpenChange = vi.fn();
     let finish!: () => void;
-    input.sessionRail.onCreateSession = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    input.sessionRail.onCreateSession = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<ThreadedSurfacePage surface="chat" input={input} />); });
-    await act(async () => { findButton(renderer.root, "New chat").props.onClick(); });
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+    await act(async () => {
+      findButton(renderer.root, "New chat").props.onClick();
+    });
     expect(input.onSessionRailOpenChange).not.toHaveBeenCalledWith(false);
-    await act(async () => { finish(); });
+    await act(async () => {
+      finish();
+    });
     expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
     act(() => renderer.unmount());
   });
@@ -1513,7 +1527,9 @@ describe("ThreadedSurfacePage", () => {
     expect(collectText(renderer!.root)).toContain("src/app.ts");
 
     await act(async () => {
-      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "terminal" } });
+      renderer!.root
+        .findByProps({ "aria-label": "More Chat details" })
+        .props.onChange({ target: { value: "terminal" } });
     });
     expect(collectText(renderer!.root)).toContain("Run log");
     expect(collectText(renderer!.root)).toContain("Validation passed.");
@@ -1527,7 +1543,9 @@ describe("ThreadedSurfacePage", () => {
     expect(onSelectFile).toHaveBeenCalledWith("src/app.ts");
 
     await act(async () => {
-      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "background" } });
+      renderer!.root
+        .findByProps({ "aria-label": "More Chat details" })
+        .props.onChange({ target: { value: "background" } });
     });
     await act(async () => {
       findButton(renderer!.root, "Open task board").props.onClick();
