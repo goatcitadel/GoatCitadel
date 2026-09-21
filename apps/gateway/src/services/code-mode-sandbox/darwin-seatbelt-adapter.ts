@@ -141,6 +141,10 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     // must be allowed — for exactly the resolved Node binary and nothing else.
     `(allow process-exec ${literal(input.nodePath)})`,
     `(allow file-read* ${literal(input.nodePath)})`,
+    // Node aborts at startup unless it can read the root directory entry itself
+    // (verified by bisecting on a real macOS runner, #145). A `literal` grant
+    // exposes only the top-level directory names, never anything beneath them.
+    '(allow file-read* (literal "/"))',
     `(allow file-read* ${literal(input.harnessPath)})`,
     // SECURITY (#145): restrict read scope to the runtime essentials Node needs to
     // start, instead of broad `/usr` + `/Library`. `/System` carries the OS

@@ -39,6 +39,11 @@ describe("darwin seatbelt profile read scope", () => {
     expect(profile.match(/process-exec/g)).toHaveLength(1);
   });
 
+  it("grants the root directory entry as a literal, never as a subpath", () => {
+    expect(profile).toContain('(allow file-read* (literal "/"))');
+    expect(profile).not.toContain('(subpath "/")');
+  });
+
   it("still allows read+write to the run temp root only", () => {
     expect(profile).toContain('(allow file-read* (subpath "/tmp/run-1"))');
     expect(profile).toContain('(allow file-write* (subpath "/tmp/run-1"))');
