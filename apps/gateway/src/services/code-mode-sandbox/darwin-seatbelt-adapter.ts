@@ -64,13 +64,20 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
     assertCodeModeSyntheticLaunchEnv(input.env);
 
     await fs.mkdir(input.runTempRoot, { recursive: true });
+    const profileInput = await canonicalizeLaunchPaths(input);
     const profilePath = path.join(input.runTempRoot, "code-mode-seatbelt.sb");
-    await fs.writeFile(profilePath, buildSeatbeltProfile(input), "utf8");
+    await fs.writeFile(profilePath, buildSeatbeltProfile(profileInput), "utf8");
 
     return {
       transport: "node_ipc",
       executable: sandboxExecPath,
-      args: ["-f", profilePath, input.nodePath, `--max-old-space-size=${input.heapMb}`, input.harnessPath],
+      args: [
+        "-f",
+        profilePath,
+        profileInput.nodePath,
+        `--max-old-space-size=${input.heapMb}`,
+        profileInput.harnessPath,
+      ],
       cwd: input.runTempRoot,
       env: input.env,
       shell: false,
@@ -79,6 +86,18 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
       advisoryUnsandboxed: false,
     };
   }
+}
+
+// Seatbelt matches filters against the kernel's resolved vnode path, so a grant
+// for `/var/folders/...` or `/tmp/...` never matches the real `/private/var/...`
+// target and the harness cannot even be read. Resolve every path the profile
+// names (and that we exec) to its canonical form; a path that does not exist yet
+// keeps its given spelling.
+async function canonicalizeLaunchPaths(input: CodeModeSandboxLaunchInput): Promise<CodeModeSandboxLaunchInput> {
+  const [runTempRoot, harnessPath, nodePath] = await Promise.all(
+    [input.runTempRoot, input.harnessPath, input.nodePath].map((value) => fs.realpath(value).catch(() => value)),
+  );
+  return { ...input, runTempRoot, harnessPath, nodePath };
 }
 
 // Test-only export for darwin-seatbelt-adapter.security.test.ts.
