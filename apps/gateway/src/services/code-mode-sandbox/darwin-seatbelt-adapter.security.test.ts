@@ -32,6 +32,11 @@ describe("darwin seatbelt profile read scope", () => {
     expect(profile).not.toContain('(subpath "/usr")');
   });
 
+  it("does not grant /bin or /sbin (the real-macOS proof shows Node never needs them)", () => {
+    expect(profile).not.toContain('(subpath "/bin")');
+    expect(profile).not.toContain('(subpath "/sbin")');
+  });
+
   it("allows exec of exactly the Node binary and nothing else", () => {
     // sandbox-exec applies the profile BEFORE it execs Node, so without this the
     // harness can never start (verified on a real macOS runner, #145).

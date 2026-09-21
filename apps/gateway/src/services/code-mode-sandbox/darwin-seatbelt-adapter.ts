@@ -159,11 +159,10 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     // operator secrets/configs) are not needed by a minimal Node runtime, so they
     // are no longer readable from inside the sandbox. A Node that resolves under a
     // package-manager prefix gets that prefix granted conditionally below so dyld
-    // can load its linked dylibs. `/bin` and `/sbin` are retained (OS binaries, no
-    // secret value) pending macOS canary confirmation that they can also be
-    // dropped; the hostile-canary proof lane is the verification path for any
-    // further narrowing.
-    '(allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/bin") (subpath "/sbin"))',
+    // can load its linked dylibs. `/bin` and `/sbin` are not granted either: the
+    // real-macOS proof lane (code-mode-seatbelt-macos.yml) showed Node never needs
+    // them. Any further change here must stay green on that lane.
+    '(allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share"))',
     ...(dependencyGrant ? [dependencyGrant] : []),
     `(allow file-read* (subpath ${quoteSeatbeltString(input.runTempRoot)}))`,
     `(allow file-write* (subpath ${quoteSeatbeltString(input.runTempRoot)}))`,

@@ -2,9 +2,7 @@
 // macOS host: it launches the production Code Mode harness and a hostile probe
 // harness under `sandbox-exec` with the exact profile the adapter generates, and
 // records whether Node starts, runs a guest script over the node_ipc transport,
-// and is denied host reads/writes/network. It also re-runs everything with a
-// candidate narrowed profile (no `/bin` + `/sbin`) so the next narrowing step is
-// decided by evidence rather than guesswork.
+// and is denied host reads/writes/network.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -16,10 +14,7 @@ import { DarwinSeatbeltSandboxAdapter } from "./services/code-mode-sandbox/darwi
 import type { CodeModeSandboxLaunchSpec } from "./services/code-mode-sandbox/types.js";
 
 const LAUNCH_TIMEOUT_MS = 20_000;
-const BIN_SBIN_GRANT = ' (subpath "/bin") (subpath "/sbin")';
 const HOST_SECRET_ENV_KEY = "GOATCITADEL_SEATBELT_PROOF_HOST_SECRET";
-
-type ProfileVariant = "shipped" | "without_bin_sbin";
 
 interface CliOptions {
   output: string;
@@ -36,7 +31,6 @@ interface LaunchResult {
 }
 
 interface ScenarioResult {
-  variant: ProfileVariant;
   harness: "production" | "hostile_probe";
   passed: boolean;
   failures: string[];
@@ -96,29 +90,22 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const nodePath = await fs.realpath(options.nodePath);
   process.env[HOST_SECRET_ENV_KEY] = "host-secret-must-not-reach-the-sandbox";
 
-  const scenarios: ScenarioResult[] = [];
-  for (const variant of ["shipped", "without_bin_sbin"] as const) {
-    scenarios.push(await runProductionHarness(variant, nodePath));
-    scenarios.push(await runHostileProbe(variant, nodePath));
-  }
-
-  const shippedPassed = scenarios.filter((s) => s.variant === "shipped").every((s) => s.passed);
-  const narrowedPassed = scenarios.filter((s) => s.variant === "without_bin_sbin").every((s) => s.passed);
+  const scenarios = [await runProductionHarness(nodePath), await runHostileProbe(nodePath)];
+  const passed = scenarios.every((scenario) => scenario.passed);
   const proof = {
     label: options.label,
     nodePath,
     nodeVersion: process.version,
     osRelease: os.release(),
     arch: process.arch,
-    shippedProfilePassed: shippedPassed,
-    withoutBinSbinPassed: narrowedPassed,
+    passed,
     scenarios,
   };
   await fs.mkdir(path.dirname(options.output), { recursive: true });
   await fs.writeFile(options.output, `${JSON.stringify(proof, null, 2)}\n`, "utf8");
   process.stdout.write(`${JSON.stringify(proof, null, 2)}\n`);
-  if (!shippedPassed) {
-    throw new Error("The shipped Seatbelt profile failed the live macOS proof; see scenarios above.");
+  if (!passed) {
+    throw new Error("The Seatbelt profile failed the live macOS proof; see scenarios above.");
   }
 }
 
@@ -138,11 +125,11 @@ export function parseCliOptions(args: string[]): CliOptions {
   };
 }
 
-async function runProductionHarness(variant: ProfileVariant, nodePath: string): Promise<ScenarioResult> {
+async function runProductionHarness(nodePath: string): Promise<ScenarioResult> {
   return withRunRoot(async (runTempRoot) => {
     const harnessPath = path.join(runTempRoot, "code-mode-harness.mjs");
     await fs.writeFile(harnessPath, CODE_MODE_CHILD_SOURCE, "utf8");
-    const launch = await prepareVariantLaunch(variant, { runTempRoot, harnessPath, nodePath, extraArgs: [] });
+    const launch = await prepareProofLaunch({ runTempRoot, harnessPath, nodePath, extraArgs: [] });
     const result = await runLaunch(launch, {
       jsonrpc: "2.0",
       id: "seatbelt-proof-run",
@@ -163,7 +150,6 @@ async function runProductionHarness(variant: ProfileVariant, nodePath: string): 
     else if (response.error) failures.push(`harness returned error: ${JSON.stringify(response.error)}`);
     else if (response.result?.answer !== 42) failures.push(`unexpected result: ${JSON.stringify(response.result)}`);
     return {
-      variant,
       harness: "production",
       passed: failures.length === 0,
       failures,
@@ -172,7 +158,7 @@ async function runProductionHarness(variant: ProfileVariant, nodePath: string): 
   });
 }
 
-async function runHostileProbe(variant: ProfileVariant, nodePath: string): Promise<ScenarioResult> {
+async function runHostileProbe(nodePath: string): Promise<ScenarioResult> {
   return withRunRoot(async (runTempRoot) => {
     const hostDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-seatbelt-host-")));
     try {
@@ -180,7 +166,7 @@ async function runHostileProbe(variant: ProfileVariant, nodePath: string): Promi
       await fs.writeFile(outsideSecretPath, "host secret", "utf8");
       const harnessPath = path.join(runTempRoot, "hostile-probe.mjs");
       await fs.writeFile(harnessPath, PROBE_HARNESS_SOURCE, "utf8");
-      const launch = await prepareVariantLaunch(variant, {
+      const launch = await prepareProofLaunch({
         runTempRoot,
         harnessPath,
         nodePath,
@@ -188,14 +174,15 @@ async function runHostileProbe(variant: ProfileVariant, nodePath: string): Promi
       });
       const result = await runLaunch(launch);
       const report = result.messages.find(isRecord);
-      const failures = report ? evaluateProbe(report, runTempRoot, nodePath) : ["probe harness never reported"];
+      const failures = report
+        ? evaluateProbe(report, await fs.realpath(runTempRoot), nodePath)
+        : ["probe harness never reported"];
       const outsideWriteLanded = await fs
         .access(path.join(hostDir, "probe-outside.txt"))
         .then(() => true)
         .catch(() => false);
       if (outsideWriteLanded) failures.push("probe wrote a file outside the run root");
       return {
-        variant,
         harness: "hostile_probe",
         passed: failures.length === 0,
         failures,
@@ -213,6 +200,7 @@ function evaluateProbe(report: Record<string, unknown>, runTempRoot: string, nod
     if (report[key] === "allowed") failures.push(`${key} was allowed`);
   };
   if (report.insideWrite !== "allowed") failures.push(`insideWrite was ${String(report.insideWrite)}`);
+  // runTempRoot arrives canonicalized (/private/var/...), matching what Node reports.
   if (typeof report.cwd === "string" && path.resolve(report.cwd) !== path.resolve(runTempRoot)) {
     failures.push(`cwd ${report.cwd} is not the run root`);
   }
@@ -232,10 +220,12 @@ function evaluateProbe(report: Record<string, unknown>, runTempRoot: string, nod
   return failures;
 }
 
-async function prepareVariantLaunch(
-  variant: ProfileVariant,
-  input: { runTempRoot: string; harnessPath: string; nodePath: string; extraArgs: string[] },
-): Promise<CodeModeSandboxLaunchSpec> {
+async function prepareProofLaunch(input: {
+  runTempRoot: string;
+  harnessPath: string;
+  nodePath: string;
+  extraArgs: string[];
+}): Promise<CodeModeSandboxLaunchSpec> {
   const adapter = new DarwinSeatbeltSandboxAdapter({
     platform: "darwin",
     resolveCommand: defaultCommandResolver,
@@ -249,15 +239,6 @@ async function prepareVariantLaunch(
     heapMb: 128,
     env: { GOATCITADEL_CODE_MODE: "1", TZ: "UTC" },
   });
-  if (variant === "without_bin_sbin") {
-    const profilePath = launch.generatedArtifacts[0];
-    if (!profilePath) throw new Error("Seatbelt adapter did not report its generated profile.");
-    const profile = await fs.readFile(profilePath, "utf8");
-    if (!profile.includes(BIN_SBIN_GRANT)) {
-      throw new Error("Shipped profile no longer carries the /bin + /sbin grant; update this proof.");
-    }
-    await fs.writeFile(profilePath, profile.replace(BIN_SBIN_GRANT, ""), "utf8");
-  }
   return { ...launch, args: [...launch.args, ...input.extraArgs] };
 }
 
