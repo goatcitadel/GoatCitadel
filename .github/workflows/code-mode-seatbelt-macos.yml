@@ -83,7 +83,10 @@ jobs:
           mkdir -p artifacts/verification
           log show --last 10m --style compact --predicate 'sender == "Sandbox"' \
             > "artifacts/verification/seatbelt-denials-${{ matrix.node }}.log" 2>&1 || true
-          tail -n 80 "artifacts/verification/seatbelt-denials-${{ matrix.node }}.log"
+          # Only the sandboxed Node (and sandbox-exec itself) matter; the rest
+          # of the Sandbox subsystem log is other system daemons.
+          grep -E '(node|sandbox-exec)\([0-9]+\) deny' "artifacts/verification/seatbelt-denials-${{ matrix.node }}.log" \
+            | sed -E 's/^.*\) (deny\([0-9]+\) .*)$/\1/' | sort | uniq -c | sort -rn | head -n 60 || true
 
       - name: Upload proof artifacts
         if: always()

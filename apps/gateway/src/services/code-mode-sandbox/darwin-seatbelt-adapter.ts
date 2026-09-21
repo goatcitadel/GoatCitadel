@@ -137,6 +137,9 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     "(allow signal)",
     "(allow sysctl-read)",
     "(allow mach-lookup)",
+    // sandbox-exec applies this profile and THEN execs Node, so the exec itself
+    // must be allowed — for exactly the resolved Node binary and nothing else.
+    `(allow process-exec ${literal(input.nodePath)})`,
     `(allow file-read* ${literal(input.nodePath)})`,
     `(allow file-read* ${literal(input.harnessPath)})`,
     // SECURITY (#145): restrict read scope to the runtime essentials Node needs to

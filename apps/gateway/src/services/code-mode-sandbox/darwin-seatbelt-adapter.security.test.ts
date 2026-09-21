@@ -32,6 +32,13 @@ describe("darwin seatbelt profile read scope", () => {
     expect(profile).not.toContain('(subpath "/usr")');
   });
 
+  it("allows exec of exactly the Node binary and nothing else", () => {
+    // sandbox-exec applies the profile BEFORE it execs Node, so without this the
+    // harness can never start (verified on a real macOS runner, #145).
+    expect(profile).toContain('(allow process-exec (literal "/usr/local/bin/node"))');
+    expect(profile.match(/process-exec/g)).toHaveLength(1);
+  });
+
   it("still allows read+write to the run temp root only", () => {
     expect(profile).toContain('(allow file-read* (subpath "/tmp/run-1"))');
     expect(profile).toContain('(allow file-write* (subpath "/tmp/run-1"))');
