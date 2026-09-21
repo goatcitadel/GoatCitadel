@@ -146,6 +146,10 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     // exposes only the top-level directory names, never anything beneath them.
     '(allow file-read* (literal "/"))',
     `(allow file-read* ${literal(input.harnessPath)})`,
+    // Node's module loader realpath()s the harness, which lstat()s every parent
+    // directory. Grant metadata only (stat, never listing or contents) on exactly
+    // the ancestors of the paths Node must resolve.
+    ancestorMetadataGrant([input.harnessPath, input.runTempRoot, input.nodePath]),
     // SECURITY (#145): restrict read scope to the runtime essentials Node needs to
     // start, instead of broad `/usr` + `/Library`. `/System` carries the OS
     // frameworks and the dyld shared cache; `/usr/lib` carries dyld and the system
@@ -166,6 +170,21 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     '(allow file-write* (literal "/dev/null"))',
     "",
   ].join("\n");
+}
+
+function ancestorMetadataGrant(paths: string[]): string {
+  const ancestors = new Set<string>();
+  for (const value of paths) {
+    let current = path.posix.dirname(value);
+    while (!ancestors.has(current)) {
+      ancestors.add(current);
+      const parent = path.posix.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  const filters = [...ancestors].sort().map(literal).join(" ");
+  return `(allow file-read-metadata ${filters})`;
 }
 
 function literal(value: string): string {

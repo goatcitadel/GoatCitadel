@@ -44,6 +44,15 @@ describe("darwin seatbelt profile read scope", () => {
     expect(profile).not.toContain('(subpath "/")');
   });
 
+  it("grants metadata-only access to exactly the ancestors Node must realpath", () => {
+    const grant = profile.split("\n").find((line) => line.startsWith("(allow file-read-metadata"));
+    expect(grant).toBe(
+      '(allow file-read-metadata (literal "/") (literal "/tmp") (literal "/tmp/run-1") (literal "/usr") (literal "/usr/local") (literal "/usr/local/bin"))',
+    );
+    // Metadata grants never become subtree grants.
+    expect(grant).not.toContain("subpath");
+  });
+
   it("still allows read+write to the run temp root only", () => {
     expect(profile).toContain('(allow file-read* (subpath "/tmp/run-1"))');
     expect(profile).toContain('(allow file-write* (subpath "/tmp/run-1"))');
