@@ -328,8 +328,9 @@ describe("durable routes additional coverage", () => {
       payload: {},
     });
     // Fastify may reject an overlong path parameter at the router boundary
-    // before the route-level byte validator runs. Both outcomes are fail-closed.
-    expect([400, 404]).toContain(detached.statusCode);
+    // before the route-level byte validator runs (404, or 414 from fastify >=5.12
+    // when the param exceeds maxParamLength). All outcomes are fail-closed.
+    expect([400, 404, 414]).toContain(detached.statusCode);
     expect(durable.detachChildWatcher).not.toHaveBeenCalled();
 
     const oversizedRunId = encodeURIComponent("r".repeat(DURABLE_CHILD_WATCHER_LIMITS.runIdBytes + 1));
@@ -337,7 +338,7 @@ describe("durable routes additional coverage", () => {
       method: "GET",
       url: `/api/v1/durable/runs/${oversizedRunId}/child-watchers`,
     });
-    expect([400, 404]).toContain(listed.statusCode);
+    expect([400, 404, 414]).toContain(listed.statusCode);
     expect(durable.listChildWatchers).not.toHaveBeenCalled();
   });
 
