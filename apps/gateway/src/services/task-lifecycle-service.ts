@@ -815,10 +815,10 @@ export class TaskLifecycleService {
   }): Promise<AgenticRunListItem[]> {
     const projection = this.createCoworkProjectionService();
     return (
-      projection?.listAgenticRuns({
+      (await projection?.listAgenticRuns({
         ...input,
         status: input.status,
-      }) ?? []
+      })) ?? []
     );
   }
 

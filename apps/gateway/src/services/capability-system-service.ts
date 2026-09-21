@@ -125,7 +125,12 @@ import {
 } from "./skill-content-integrity.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import { CodeModeVerificationService } from "./code-mode-verification-service.js";
-import { listWorkspaceCandidateSkills, readCandidateCatalogArtifacts, skillLifecycleProjectionMatches, isSkillCallable } from "./candidate-skill-catalog-service.js";
+import {
+  listWorkspaceCandidateSkills,
+  readCandidateCatalogArtifacts,
+  skillLifecycleProjectionMatches,
+  isSkillCallable,
+} from "./candidate-skill-catalog-service.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
@@ -451,7 +456,10 @@ export class CapabilitySystemService {
     }
   }
 
-  public async listSkills(effectiveSkills: EffectiveCapabilitySet = "ALL", workspaceId?: string): Promise<SkillListItem[]> {
+  public async listSkills(
+    effectiveSkills: EffectiveCapabilitySet = "ALL",
+    workspaceId?: string,
+  ): Promise<SkillListItem[]> {
     await this.ensureSkillLifecycleBackfill();
     const stateMap = await this.options.readSkillStates();
     const all: SkillListItem[] = await Promise.all(
@@ -479,7 +487,7 @@ export class CapabilitySystemService {
       }),
     );
     if (workspaceId) {
-      all.push(...await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap));
+      all.push(...(await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap)));
     }
     return filterSkillItemsByEffectiveSet(all, effectiveSkills);
   }
@@ -755,7 +763,8 @@ export class CapabilitySystemService {
 
   public async getCandidateArtifactReview(candidateId: string, versionId: string, workspaceId: string) {
     const version = await this.requireCandidateVersion(candidateId, versionId);
-    if (version.workspaceId !== workspaceId) throw new ConflictError({ message: "Candidate is outside this workspace." });
+    if (version.workspaceId !== workspaceId)
+      throw new ConflictError({ message: "Candidate is outside this workspace." });
     const detail = await this.buildCandidateDetail(candidateId);
     return readCandidateCatalogArtifacts(this.options, this.candidateRoot, version, detail.revision);
   }
@@ -3292,7 +3301,7 @@ export class CapabilitySystemService {
     const hydrated = await this.hydrateCodeModeRunLinkage(
       await this.terminalizeExpiredCodeModeRun(await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run)),
     );
-    return this.codeModeVerification?.refreshRun(hydrated) ?? hydrated;
+    return (await this.codeModeVerification?.refreshRun(hydrated)) ?? hydrated;
   }
 
   private async terminalizeCodeModeRunForMissingPendingAction(

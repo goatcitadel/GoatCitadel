@@ -115,10 +115,11 @@ public sealed class DesktopUpdateService : IDisposable
             using var document = JsonDocument.Parse(text);
             if (document.RootElement.ValueKind != JsonValueKind.Array) throw new IOException("GitHub returned invalid update metadata.");
             var inspected = 0;
-            foreach (var release in document.RootElement.EnumerateArray())
+            var channelReleases = document.RootElement.EnumerateArray().Where(release =>
+                !release.GetProperty("draft").GetBoolean()
+                && release.GetProperty("prerelease").GetBoolean() == (Status.Channel == "preview"));
+            foreach (var release in channelReleases)
             {
-                if (release.GetProperty("draft").GetBoolean()
-                    || release.GetProperty("prerelease").GetBoolean() != (Status.Channel == "preview")) continue;
                 var tag = release.GetProperty("tag_name").GetString() ?? "";
                 if (Status.Channel == "preview" && !tag.StartsWith("preview-", StringComparison.Ordinal)) continue;
                 if (++inspected > 8) break;
