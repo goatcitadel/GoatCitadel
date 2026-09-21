@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { encodeWindowsTlsKeyIdentifier } from '../../apps/remote-worker-provisioner/dist/windows-tls-key-identifier.js';
 
-for (const engine of ['powershell.exe', 'pwsh.exe']) test(`${engine}: installer accepts runtime identifier and refuses JSON and corrupt references`, t => {
+for (const engine of ['powershell.exe', 'pwsh.exe']) test(`${engine}: installer accepts runtime identifier and refuses JSON and corrupt references`,{ skip: process.platform !== "win32" }, t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'goat-key-input-'));
   t.after(()=>{
     assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep+'goat-key-input-'));

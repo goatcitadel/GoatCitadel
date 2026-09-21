@@ -7,7 +7,7 @@ const file=path.resolve(import.meta.dirname,'resume-goatbox-worker-install.ps1')
 const source=fs.readFileSync(file,'utf8');
 const evidence=source.slice(source.indexOf('  $failed=ConvertFrom-WorkerJson'),source.indexOf('  # Validate the partial v2 recovery'));
 for(const engine of ['powershell.exe','pwsh.exe']) {
-  test(`${engine}: recovery evidence accepts exact incident and refuses substitutions`,()=>{
+  test(`${engine}: recovery evidence accepts exact incident and refuses substitutions`,{ skip: process.platform !== "win32" },()=>{
     const code=String.raw`$ErrorActionPreference='Stop'; Set-StrictMode -Version Latest;
 $failedFixture=[pscustomobject]@{verdict='failed';preflight=$false;installationId='81877965c3b140539617e7699cd4e3e8';
 manifestSha256='d80b8d70375b40962947689e2cfc4787ae28aa9dc64a8ebc9e0fed3c5559256b';
@@ -38,7 +38,7 @@ if ($errors.Count) { throw ($errors | Out-String) }; 'PASS: exact incident accep
     const result=spawnSync(engine,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true,timeout:20000});
     assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/PASS/);
   });
-  test(`${engine}: wrong-host apply refuses before mutations`,()=>{
+  test(`${engine}: wrong-host apply refuses before mutations`,{ skip: process.platform !== "win32" },()=>{
     assert.notEqual(process.env.COMPUTERNAME,'GOATBOX');
     const result=spawnSync(engine,['-NoProfile','-NonInteractive','-File',file,'-Apply'],{encoding:'utf8',windowsHide:true,timeout:10000});
     assert.notEqual(result.status,0);assert.match(result.stderr,/GOATBOX only/);
@@ -50,7 +50,7 @@ test('recovery has no key recreation, service start, payload copy or cleanup del
 });
 
 for (const engine of ['powershell.exe','pwsh.exe']) {
- test(engine+': partial recovery rejects changed state',()=>{
+ test(engine+': partial recovery rejects changed state',{ skip: process.platform !== "win32" },()=>{
   const block=source.slice(source.indexOf('  $partial=ConvertFrom-WorkerJson'),source.indexOf('  # Service state is checked again'));
   const code=String.raw`$ErrorActionPreference='Stop'; Set-StrictMode -Version Latest;
 $f=[pscustomobject]@{schemaVersion='goatcitadel.goatbox-worker-recovery.v1';verdict='failed';stage='create stopped worker service';apply=$true;createdWorker=$false;createdController=$true;servicesStarted=$false;keyChanged=$false;payloadReplaced=$false;newConfigurationFiles=@('C:\ProgramData\GoatCitadel\RemoteWorker\configuration\controller-signing-enrollment.json','C:\ProgramData\GoatCitadel\RemoteWorker\configuration\install-receipt.json')};

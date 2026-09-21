@@ -49,7 +49,7 @@ test('inspection mismatch retains mutation receipt without success claim',async 
   assert.ok(fs.existsSync(path.join(f.args.output,'creation-result.json')));
   assert.equal(fs.existsSync(path.join(f.args.output,'verified-public-keyset.json')),false);
 });
-for(const engine of ['powershell.exe','pwsh.exe'])test(engine+' refuses wrong host before loading files',()=>{
+for(const engine of ['powershell.exe','pwsh.exe'])test(engine+' refuses wrong host before loading files',{ skip: process.platform !== "win32" },()=>{
   const r=spawnSync(engine,['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('scripts/remote-worker/initialize-goatbox-keyset.ps1')],{encoding:'utf8',timeout:10000,windowsHide:true});
   assert.notEqual(r.status,0);assert.match(r.stderr+r.stdout,/GOATBOX only/);
 });

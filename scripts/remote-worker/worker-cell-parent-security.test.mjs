@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 for(const engine of ['powershell.exe','pwsh.exe']) {
-  test(`${engine}: cell parent permits SACL AI metadata only`,()=>{
+  test(`${engine}: cell parent permits SACL AI metadata only`,{ skip: process.platform !== "win32" },()=>{
     const common=path.resolve(import.meta.dirname,'worker-install-common.ps1').replaceAll("'","''");
     const code=`$ErrorActionPreference='Stop'; . '${common}';
 $exact=$script:CellControllerParentSddl;

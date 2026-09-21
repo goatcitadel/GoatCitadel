@@ -8,7 +8,7 @@ const file=path.resolve(import.meta.dirname,'verify-goatbox-controller-key-syste
 const source=fs.readFileSync(file,'utf8');
 const worker=source.match(/\$worker=@'\r?\n([\s\S]*?)\r?\n'@/)[1];
 for (const engine of ['powershell.exe','pwsh.exe']) {
-  test(`${engine}: SYSTEM review enforces exact permissions and public blob shape`,()=>{
+  test(`${engine}: SYSTEM review enforces exact permissions and public blob shape`,{ skip: process.platform !== "win32" },()=>{
     const commands=worker.split('# Execute only')[0]+`
 $sid='S-1-5-80-1810587747-2867442932-4204439414-1143594691-3479143721'
 function Descriptor([string]$sddl) {
@@ -53,7 +53,7 @@ if ($errors.Count) { throw ($errors | Out-String) }
     const result=spawnSync(engine,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(commands,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true,timeout:20000});
     assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/PASS/);
   });
-  test(`${engine}: wrong-host launch refuses before directory or task creation`,()=>{
+  test(`${engine}: wrong-host launch refuses before directory or task creation`,{ skip: process.platform !== "win32" },()=>{
     assert.notEqual(process.env.COMPUTERNAME,'GOATBOX');
     const result=spawnSync(engine,['-NoProfile','-NonInteractive','-File',file],{encoding:'utf8',windowsHide:true,timeout:10000});
     assert.notEqual(result.status,0);assert.match(result.stderr,/GOATBOX only/);

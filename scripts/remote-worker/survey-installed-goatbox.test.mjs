@@ -6,7 +6,7 @@ import test from 'node:test';
 const source=fs.readFileSync(path.join(import.meta.dirname,'survey-installed-goatbox.ps1'),'utf8');
 const helper=source.slice(source.indexOf('function Invoke-SurveyProcess'),source.indexOf('function Hold-SurveyFile'));
 for(const engine of ['powershell.exe','pwsh.exe']){
- test(engine+': survey preserves child stdout, stderr and exact exit code',()=>{
+ test(engine+': survey preserves child stdout, stderr and exact exit code',{ skip: process.platform !== "win32" },()=>{
   const code=`$ErrorActionPreference='Stop'; ${helper}
 foreach($exit in @(0,7)) {
  $start=[Diagnostics.ProcessStartInfo]::new(); $start.FileName=(Get-Process -Id $PID).Path;
