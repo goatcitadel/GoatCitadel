@@ -94,10 +94,16 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
 // names (and that we exec) to its canonical form; a path that does not exist yet
 // keeps its given spelling.
 async function canonicalizeLaunchPaths(input: CodeModeSandboxLaunchInput): Promise<CodeModeSandboxLaunchInput> {
-  const [runTempRoot, harnessPath, nodePath] = await Promise.all(
-    [input.runTempRoot, input.harnessPath, input.nodePath].map((value) => fs.realpath(value).catch(() => value)),
-  );
+  const [runTempRoot, harnessPath, nodePath] = await Promise.all([
+    canonicalPath(input.runTempRoot),
+    canonicalPath(input.harnessPath),
+    canonicalPath(input.nodePath),
+  ]);
   return { ...input, runTempRoot, harnessPath, nodePath };
+}
+
+function canonicalPath(value: string): Promise<string> {
+  return fs.realpath(value).catch(() => value);
 }
 
 // Test-only export for darwin-seatbelt-adapter.security.test.ts.
@@ -115,9 +121,7 @@ export const __buildSeatbeltProfileForTests = buildSeatbeltProfile;
 const RUNTIME_DEPENDENCY_PREFIXES = ["/usr/local", "/opt/homebrew"] as const;
 
 function runtimeDependencyReadGrant(nodePath: string): string | null {
-  const match = RUNTIME_DEPENDENCY_PREFIXES.find(
-    (prefix) => nodePath === prefix || nodePath.startsWith(`${prefix}/`),
-  );
+  const match = RUNTIME_DEPENDENCY_PREFIXES.find((prefix) => nodePath === prefix || nodePath.startsWith(`${prefix}/`));
   return match ? `(allow file-read* (subpath ${quoteSeatbeltString(match)}))` : null;
 }
 
