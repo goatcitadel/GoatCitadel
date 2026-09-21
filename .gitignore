@@ -2,6 +2,9 @@
 node_modules
 dist
 dist-node
+# tsc run without --noEmit writes maps beside the sources; never real source.
+apps/*/src/**/*.js.map
+packages/*/src/**/*.js.map
 target/
 apps/*/src-tauri/gen/schemas/
 .env
