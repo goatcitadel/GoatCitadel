@@ -57,6 +57,7 @@ const repoRoot = path.resolve(configDir, "../..");
 // an aliased package ever gains a remapping export.
 export const WORKSPACE_SOURCE_PACKAGES = ["mission-control-shared"] as const;
 
+/** Test-only vitest aliases mapping each WORKSPACE_SOURCE_PACKAGES import to that package's `src/`. */
 export function buildWorkspaceSourceAliases(
   workspaceRoot: string = repoRoot,
 ): Array<{ find: RegExp; replacement: string }> {
