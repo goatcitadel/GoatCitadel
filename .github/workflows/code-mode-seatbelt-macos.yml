@@ -77,6 +77,54 @@ jobs:
           --label "${{ matrix.node }}"
           --output "$GITHUB_WORKSPACE/artifacts/verification/seatbelt-live-proof-${{ matrix.node }}.json"
 
+      - name: Bisect Seatbelt profile grants (diagnostic)
+        if: always()
+        run: |
+          set +e
+          NODE_REAL=$(realpath "$SANDBOX_NODE")
+          base='(version 1)
+          (deny default)
+          (deny network*)
+          (allow signal)
+          (allow sysctl-read)
+          (allow mach-lookup)
+          (allow process-exec (literal "'"$NODE_REAL"'"))
+          (allow file-read* (literal "'"$NODE_REAL"'"))
+          (allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/bin") (subpath "/sbin"))
+          (allow file-read* (subpath "/opt/homebrew"))
+          (allow file-write* (literal "/dev/null"))'
+          try() {
+            label="$1"; extra="$2"
+            printf '%s\n%s\n' "$base" "$extra" > /tmp/diag.sb
+            out=$(sandbox-exec -f /tmp/diag.sb "$NODE_REAL" -e 'process.stdout.write("ok")' 2>&1)
+            echo "[$label] exit=$? out=$(echo "$out" | head -c 300 | tr '\n' ' ')"
+          }
+          try base ''
+          try dynamic-code '(allow dynamic-code-generation)'
+          try metadata '(allow file-read-metadata)'
+          try all-reads '(allow file-read*)'
+          try iokit '(allow iokit-open)'
+          try ipc '(allow ipc-posix-shm*) (allow ipc-sysv*)'
+          try sysctl-write '(allow sysctl*)'
+          try process-info '(allow process-info*)'
+          try system '(allow system*)'
+          try jit+metadata '(allow dynamic-code-generation) (allow file-read-metadata)'
+          printf '%s\n' "$base" > /tmp/diag.sb
+          out=$(sandbox-exec -f /tmp/diag.sb "$NODE_REAL" --jitless -e 'process.stdout.write("ok")' 2>&1)
+          echo "[base --jitless] exit=$? out=$(echo "$out" | head -c 300 | tr '\n' ' ')"
+          echo "[allow-default]"; printf '(version 1)\n(allow default)\n(deny network*)\n' > /tmp/diag.sb
+          sandbox-exec -f /tmp/diag.sb "$NODE_REAL" -e 'process.stdout.write("ok")' 2>&1 | head -c 300; echo
+          mkdir -p artifacts/verification/crash-reports
+          cp ~/Library/Logs/DiagnosticReports/node* artifacts/verification/crash-reports/ 2>/dev/null
+          ls -la ~/Library/Logs/DiagnosticReports/ | tail -n 10
+          for f in artifacts/verification/crash-reports/*; do
+            [ -f "$f" ] || continue
+            echo "== $f"
+            grep -E '"(exception|termination|asi|reason|indicator|signal|codes|subtype)"' "$f" | head -n 12
+            grep -A6 -E '"termination"' "$f" | head -n 12
+          done
+          exit 0
+
       - name: Collect Seatbelt denials
         if: always()
         run: |
