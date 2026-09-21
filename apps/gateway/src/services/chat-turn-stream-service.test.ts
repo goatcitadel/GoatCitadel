@@ -101,6 +101,39 @@ function createTestStreamRegistration() {
 }
 
 describe("streamPreparedAgentChatTurn", () => {
+  it("parks a confirmed durable delegation without inventing an empty completion", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      const trace = host.storage.chatTurnTraces.patch("turn-1", {
+        status: "waiting_for_tool",
+        durable: { runId: "parent-run", status: "running" },
+        routing: { confirmedDelegation: { runId: "delegation-run", proposalId: "stored-plan", waiting: true } },
+      });
+      yield { type: "trace_update" as const, sessionId: "session-1", turnId: "turn-1", trace };
+    });
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "Use a QA specialist" },
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      {
+        deferGeneralPostCommit: true,
+        canonicalWriteFence: async (work) => await work(),
+      },
+    ))
+      chunks.push(chunk);
+    expect(host.storage.chatTurnTraces.get("turn-1").status).toBe("waiting_for_tool");
+    expect(host.ingestEvent).not.toHaveBeenCalled();
+    expect(chunks.filter((chunk) => ["delta", "message_done", "done"].includes(chunk.type))).toEqual([]);
+    expect(chunks.some((chunk) => chunk.type === "trace_update" && chunk.trace.status === "waiting_for_tool")).toBe(
+      true,
+    );
+    expect(host.updateActiveLeafOrThrow).toHaveBeenCalledWith("session-1", "turn-0", "turn-1");
+  });
+
   it("commits verified worker output through Chat without a second local, council, or delegated execution", async () => {
     const host = createHost();
     const prepared = createPreparedTurn({ subagentPolicy: "auto_when_useful" });
@@ -108,26 +141,57 @@ describe("streamPreparedAgentChatTurn", () => {
     let insideFence = 0;
     const canonicalWriteFence = async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => {
       insideFence++;
-      try { return await work(); } finally { insideFence--; }
+      try {
+        return await work();
+      } finally {
+        insideFence--;
+      }
     };
-    const recordAssistantCommit = vi.fn(async () => { expect(insideFence).toBeGreaterThan(0); });
+    const recordAssistantCommit = vi.fn(async () => {
+      expect(insideFence).toBeGreaterThan(0);
+    });
     const chunks = [];
     for await (const chunk of streamPreparedAgentChatTurn(
-      host, "session-1", { content: "hello", modelCouncil: { enabled: true } } as never,
-      prepared, "chat_thread_turn_appended", undefined,
-      { canonicalWriteFence, deferGeneralPostCommit: true, remoteWorkerExecution: {
-        taskId: "worker-generated-task",
-        async *stream({ canonicalWriteFence: fence }) {
-          await fence(() => undefined);
-          expect(host.steerService.enqueue({ sessionId: "session-1", instruction: "Changed instructions" }))
-            .toMatchObject({ accepted: false, turnId: "turn-1", reason: expect.stringContaining("saved instructions") });
-          yield { type: "usage", sessionId: "session-1", turnId: "turn-1",
-            usage: { inputTokens: 12, outputTokens: 8, costUsd: 0.002 }, modelUsageEventIds: ["worker-usage"] };
-          yield { type: "message_done", sessionId: "session-1", turnId: "turn-1",
-            messageId: "assistant-1", content: "Verified worker answer." };
-        }, recordAssistantCommit,
-      } },
-    )) chunks.push(chunk);
+      host,
+      "session-1",
+      { content: "hello", modelCouncil: { enabled: true } } as never,
+      prepared,
+      "chat_thread_turn_appended",
+      undefined,
+      {
+        canonicalWriteFence,
+        deferGeneralPostCommit: true,
+        remoteWorkerExecution: {
+          taskId: "worker-generated-task",
+          async *stream({ canonicalWriteFence: fence }) {
+            await fence(() => undefined);
+            expect(
+              host.steerService.enqueue({ sessionId: "session-1", instruction: "Changed instructions" }),
+            ).toMatchObject({
+              accepted: false,
+              turnId: "turn-1",
+              reason: expect.stringContaining("saved instructions"),
+            });
+            yield {
+              type: "usage",
+              sessionId: "session-1",
+              turnId: "turn-1",
+              usage: { inputTokens: 12, outputTokens: 8, costUsd: 0.002 },
+              modelUsageEventIds: ["worker-usage"],
+            };
+            yield {
+              type: "message_done",
+              sessionId: "session-1",
+              turnId: "turn-1",
+              messageId: "assistant-1",
+              content: "Verified worker answer.",
+            };
+          },
+          recordAssistantCommit,
+        },
+      },
+    ))
+      chunks.push(chunk);
     expect(host.turnRuntime.runStream).not.toHaveBeenCalled();
     expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
     expect(host.createChatCompletion).not.toHaveBeenCalled();
@@ -135,13 +199,22 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.agentSendChatMessageStream).not.toHaveBeenCalled();
     expect(drain).not.toHaveBeenCalled();
     expect(recordAssistantCommit).toHaveBeenCalledExactlyOnceWith("assistant-1", "Verified worker answer.");
-    expect(host.ingestEvent).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      eventId: "assistant-1", message: { role: "assistant", content: "Verified worker answer." },
-      taskId: "worker-generated-task",
-      usage: expect.objectContaining({ canonicalUsageEventIds: ["worker-usage"] }),
-    }), expect.objectContaining({ onCommit: expect.any(Function) }));
-    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({ status: "completed", assistantMessageId: "assistant-1",
-      usage: { inputTokens: 12, outputTokens: 8, costUsd: 0.002 }, completion: { status: "complete", repaired: false } });
+    expect(host.ingestEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        eventId: "assistant-1",
+        message: { role: "assistant", content: "Verified worker answer." },
+        taskId: "worker-generated-task",
+        usage: expect.objectContaining({ canonicalUsageEventIds: ["worker-usage"] }),
+      }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
+    );
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+      status: "completed",
+      assistantMessageId: "assistant-1",
+      usage: { inputTokens: 12, outputTokens: 8, costUsd: 0.002 },
+      completion: { status: "complete", repaired: false },
+    });
     expect(chunks.filter((chunk) => chunk.type === "message_done")).toHaveLength(1);
   });
 
@@ -151,11 +224,20 @@ describe("streamPreparedAgentChatTurn", () => {
     const stream = vi.fn(async function* () {});
     const consume = async () => {
       for await (const _chunk of streamPreparedAgentChatTurn(
-        host, "session-1", { content: "hello", policyTaskId: "caller-task" }, createPreparedTurn(),
-        "chat_thread_turn_appended", undefined,
-        { canonicalWriteFence: async (work) => await work(), deferGeneralPostCommit: true,
-          remoteWorkerExecution: { taskId: "other-task", stream, recordAssistantCommit } },
-      )) { /* drain */ }
+        host,
+        "session-1",
+        { content: "hello", policyTaskId: "caller-task" },
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+        undefined,
+        {
+          canonicalWriteFence: async (work) => await work(),
+          deferGeneralPostCommit: true,
+          remoteWorkerExecution: { taskId: "other-task", stream, recordAssistantCommit },
+        },
+      )) {
+        /* drain */
+      }
     };
     await expect(consume()).rejects.toThrow("task differs from its admitted execution");
     expect(stream).not.toHaveBeenCalled();
@@ -168,10 +250,19 @@ describe("streamPreparedAgentChatTurn", () => {
     const recordAssistantCommit = vi.fn();
     const consume = async () => {
       for await (const chunk of streamPreparedAgentChatTurn(
-        host, "session-1", { content: "hello" }, createPreparedTurn(), "chat_thread_turn_appended", undefined,
-        { canonicalWriteFence: async (work) => await work(), deferGeneralPostCommit: true,
-          remoteWorkerExecution: { taskId: "worker-generated-task", async *stream() {}, recordAssistantCommit } },
-      )) expect(chunk.type).not.toBe("message_done");
+        host,
+        "session-1",
+        { content: "hello" },
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+        undefined,
+        {
+          canonicalWriteFence: async (work) => await work(),
+          deferGeneralPostCommit: true,
+          remoteWorkerExecution: { taskId: "worker-generated-task", async *stream() {}, recordAssistantCommit },
+        },
+      ))
+        expect(chunk.type).not.toBe("message_done");
     };
     await expect(consume()).rejects.toThrow("no verified response");
     expect(recordAssistantCommit).not.toHaveBeenCalled();

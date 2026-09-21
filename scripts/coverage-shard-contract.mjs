@@ -4,7 +4,12 @@
  * evidence set.
  */
 export const GATEWAY_COVERAGE_SHARD_COUNT = 4;
+export const STORAGE_COVERAGE_SHARD_COUNT = 4;
 
 export function gatewayCoverageShardDirectory(shard) {
+  return `coverage-shard-${shard}`;
+}
+
+export function storageCoverageShardDirectory(shard) {
   return `coverage-shard-${shard}`;
 }

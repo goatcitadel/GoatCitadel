@@ -15,6 +15,7 @@ import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
 import { ChatOptionsPopover } from "./ChatOptionsPopover";
+import { buildActiveChatOptionSettings } from "./chat-option-settings";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
@@ -65,14 +66,31 @@ function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
 }
 
 export function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["thread"]) {
-  let tokens=0, costUsd=0, tokenFields=0, costFields=0, messages=0;
-  for (const turn of thread?.turns ?? []) for (const message of [turn.userMessage,turn.assistantMessage]) {
-    if (!message) continue;
-    messages += 1;
-    for (const value of [message.tokenInput,message.tokenOutput]) if(typeof value === "number" && Number.isFinite(value) && value >= 0) {tokens += value;tokenFields += 1;}
-    if(typeof message.costUsd === "number" && Number.isFinite(message.costUsd) && message.costUsd >= 0) {costUsd += message.costUsd;costFields += 1;}
-  }
-  return {tokens:tokenFields?tokens:null,costUsd:costFields?costUsd:null,partialTokens:tokenFields<messages*2,partialCost:costFields<messages};
+  let tokens = 0,
+    costUsd = 0,
+    tokenFields = 0,
+    costFields = 0,
+    messages = 0;
+  for (const turn of thread?.turns ?? [])
+    for (const message of [turn.userMessage, turn.assistantMessage]) {
+      if (!message) continue;
+      messages += 1;
+      for (const value of [message.tokenInput, message.tokenOutput])
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+          tokens += value;
+          tokenFields += 1;
+        }
+      if (typeof message.costUsd === "number" && Number.isFinite(message.costUsd) && message.costUsd >= 0) {
+        costUsd += message.costUsd;
+        costFields += 1;
+      }
+    }
+  return {
+    tokens: tokenFields ? tokens : null,
+    costUsd: costFields ? costUsd : null,
+    partialTokens: tokenFields < messages * 2,
+    partialCost: costFields < messages,
+  };
 }
 
 export function formatTokenLabel(tokens: number | null): string {
@@ -607,7 +625,9 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         : props.currentWebMode === "quick"
           ? "Quick web"
           : "Web auto";
-  const thinkingLabel = props.currentThinkingLevel ? `Think ${props.currentThinkingLevel}` : "Thinking setting unavailable";
+  const thinkingLabel = props.currentThinkingLevel
+    ? `Think ${props.currentThinkingLevel}`
+    : "Thinking setting unavailable";
   const speedLabel = props.currentSpeedMode === "fast" ? "Fast" : "Standard";
   const composerStatus =
     props.hasActiveStream && props.midTurnDisposition === "steer"
@@ -736,6 +756,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     Boolean(props.delegatedScopeControls?.pendingApprovalId);
   const researchArmed = props.currentWebMode === "quick" || props.currentWebMode === "deep";
   const reviewArmed = props.currentReviewDepth !== "off";
+  const activeChatOptionSettings = buildActiveChatOptionSettings({
+    planningMode: props.planningMode,
+    webMode: props.currentWebMode,
+    reviewDepth: props.currentReviewDepth,
+    modelCouncilEnabled: Boolean(props.modelCouncilEnabled),
+  });
   const workspaceSnapshotArmed = Boolean(props.workspaceSnapshotRequest);
   const contextArmed = Boolean(
     props.contextSelection ||
@@ -747,11 +773,15 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   );
   const personality = getComposerPersonality(props);
   const plusActions = [
-    ...(props.externalSourceControls ? [{
-      label: "Attach imported item",
-      disabled: composerActionDisabled,
-      onSelect: () => setExternalSourceOpenToken((current) => current + 1),
-    }] : []),
+    ...(props.externalSourceControls
+      ? [
+          {
+            label: "Attach imported item",
+            disabled: composerActionDisabled,
+            onSelect: () => setExternalSourceOpenToken((current) => current + 1),
+          },
+        ]
+      : []),
     {
       label: "Browse personalities",
       disabled: !props.onOpenPersonalitiesSettings,
@@ -1057,123 +1087,133 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <ComposerBlockingPrompt props={props} />
 
-      <ChatOptionsPopover active={Boolean(props.planningMode === "advisory" || researchArmed || reviewArmed || props.modelCouncilEnabled)}>
-      {composerV2Enabled ? (
-        <div className="mc-next-composer-context-strip">
-          <ContextStrip
-            model={contextStripModel}
-            mode={contextStripMode}
-            memory={memoryLabel}
-            tokens={formatTokenLabel(usageTotals.tokens)+(usageTotals.partialTokens && usageTotals.tokens !== null ? " recorded" : "")}
-            cost={formatCostLabel(usageTotals.costUsd)+(usageTotals.partialCost && usageTotals.costUsd !== null ? " recorded" : "")}
-          />
-        </div>
-      ) : null}
+      <ChatOptionsPopover activeSettings={activeChatOptionSettings}>
+        {composerV2Enabled ? (
+          <div className="mc-next-composer-context-strip">
+            <ContextStrip
+              model={contextStripModel}
+              mode={contextStripMode}
+              memory={memoryLabel}
+              tokens={
+                formatTokenLabel(usageTotals.tokens) +
+                (usageTotals.partialTokens && usageTotals.tokens !== null ? " recorded" : "")
+              }
+              cost={
+                formatCostLabel(usageTotals.costUsd) +
+                (usageTotals.partialCost && usageTotals.costUsd !== null ? " recorded" : "")
+              }
+            />
+          </div>
+        ) : null}
 
-      <div className="mc-next-composer-head">
-        <div className="mc-next-composer-title">
-          {/*
-           * The kicker carries the visible surface label. The legacy h3
-           * ("Send the next instruction" / recovery label) was hidden by the
-           * unified-shell CSS and the recovery state surfaces via its dedicated
-           * banner below, so the heading was dead text.
-           */}
-          <ThreadedModeControl
-            mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-            preview={props.surfaceRoutePreview}
-            variant="compact"
-            interactive={false}
-          />
+        <div className="mc-next-composer-head">
+          <div className="mc-next-composer-title">
+            {/*
+             * The kicker carries the visible surface label. The legacy h3
+             * ("Send the next instruction" / recovery label) was hidden by the
+             * unified-shell CSS and the recovery state surfaces via its dedicated
+             * banner below, so the heading was dead text.
+             */}
+            <ThreadedModeControl
+              mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
+              preview={props.surfaceRoutePreview}
+              variant="compact"
+              interactive={false}
+            />
+          </div>
+          <div className="mc-next-composer-chip-row">
+            {capabilityUseChips.map((chip) => (
+              <span key={chip} className="mc-next-composer-chip subtle">
+                {chip}
+              </span>
+            ))}
+            <span className="mc-next-composer-chip">{sessionStateLabel}</span>
+            {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
+            {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web</span> : null}
+            <span className="mc-next-composer-chip subtle">{thinkingLabel}</span>
+            <span className="mc-next-composer-chip subtle">{speedLabel}</span>
+            <span className="mc-next-composer-chip subtle">{routeLabel}</span>
+            <span className="mc-next-composer-chip subtle">{usageLabel}</span>
+            {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
+            {props.hasActiveStream && props.midTurnDisposition === "steer" ? (
+              <span className="mc-next-composer-chip emphasis">Steering</span>
+            ) : null}
+            {props.hasActiveStream && props.midTurnDisposition === "queue" ? (
+              <span className="mc-next-composer-chip subtle">Queued</span>
+            ) : null}
+          </div>
         </div>
-        <div className="mc-next-composer-chip-row">
-          {capabilityUseChips.map((chip) => (
-            <span key={chip} className="mc-next-composer-chip subtle">
-              {chip}
-            </span>
-          ))}
-          <span className="mc-next-composer-chip">{sessionStateLabel}</span>
-          {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
-          {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web</span> : null}
-          <span className="mc-next-composer-chip subtle">{thinkingLabel}</span>
-          <span className="mc-next-composer-chip subtle">{speedLabel}</span>
-          <span className="mc-next-composer-chip subtle">{routeLabel}</span>
-          <span className="mc-next-composer-chip subtle">{usageLabel}</span>
-          {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
-          {props.hasActiveStream && props.midTurnDisposition === "steer" ? (
-            <span className="mc-next-composer-chip emphasis">Steering</span>
-          ) : null}
-          {props.hasActiveStream && props.midTurnDisposition === "queue" ? (
-            <span className="mc-next-composer-chip subtle">Queued</span>
-          ) : null}
-        </div>
-      </div>
 
-      {!runtimeBlockerActive ? (
-        <div className="mc-next-composer-suggestion-row" aria-label="Composer send options">
-          <button
-            type="button"
-            className="mc-next-composer-suggestion"
-            aria-pressed={props.planningMode === "advisory"}
-            disabled={composerActionDisabled}
-            onClick={props.onTogglePlanningMode}
-            title={props.planningMode === "advisory" ? "Planning is armed for Send" : "Plan before sending"}
-          >
-            Plan
-          </button>
-          <button
-            type="button"
-            className="mc-next-composer-suggestion"
-            aria-pressed={researchArmed}
-            disabled={composerActionDisabled}
-            onClick={props.onToggleResearchMode}
-            title={researchArmed ? "Research is armed for Send" : "Use research with the next send"}
-          >
-            Research
-          </button>
-          <button
-            type="button"
-            className="mc-next-composer-suggestion"
-            aria-pressed={reviewArmed}
-            disabled={composerActionDisabled}
-            onClick={props.onToggleReviewMode}
-            title={reviewArmed ? "Review is armed for Send" : "Request review posture with the next send"}
-          >
-            Review
-          </button>
-          <button
-            type="button"
-            className="mc-next-composer-suggestion"
-            aria-pressed={Boolean(props.modelCouncilEnabled)}
-            disabled={composerActionDisabled || !props.onToggleModelCouncil}
-            onClick={props.onToggleModelCouncil}
-            title={
-              props.modelCouncilEnabled
-                ? "Read-only model council is armed for Send"
-                : "Ask a governed read-only model council, then return one Chat answer"
-            }
-          >
-            Council
-          </button>
-          <button
-            type="button"
-            className="mc-next-composer-suggestion"
-            aria-pressed={contextArmed}
-            disabled={composerActionDisabled}
-            onClick={props.onAttachFiles}
-            title={contextArmed ? "Context is attached for Send" : "Attach files or context before sending"}
-          >
-            Attach context
-          </button>
-        </div>
-      ) : null}
-
-
+        {!runtimeBlockerActive ? (
+          <div className="mc-next-composer-suggestion-row" aria-label="Composer send options">
+            <button
+              type="button"
+              className="mc-next-composer-suggestion"
+              aria-pressed={props.planningMode === "advisory"}
+              disabled={composerActionDisabled}
+              onClick={props.onTogglePlanningMode}
+              title={props.planningMode === "advisory" ? "Planning is armed for Send" : "Plan before sending"}
+            >
+              Plan
+            </button>
+            <button
+              type="button"
+              className="mc-next-composer-suggestion"
+              aria-pressed={researchArmed}
+              disabled={composerActionDisabled}
+              onClick={props.onToggleResearchMode}
+              title={researchArmed ? "Research is armed for Send" : "Use research with the next send"}
+            >
+              Research
+            </button>
+            <button
+              type="button"
+              className="mc-next-composer-suggestion"
+              aria-pressed={reviewArmed}
+              disabled={composerActionDisabled}
+              onClick={props.onToggleReviewMode}
+              title={reviewArmed ? "Review is armed for Send" : "Request review posture with the next send"}
+            >
+              Review
+            </button>
+            <button
+              type="button"
+              className="mc-next-composer-suggestion"
+              aria-pressed={Boolean(props.modelCouncilEnabled)}
+              disabled={composerActionDisabled || !props.onToggleModelCouncil}
+              onClick={props.onToggleModelCouncil}
+              title={
+                props.modelCouncilEnabled
+                  ? "Read-only model council is armed for Send"
+                  : "Ask a governed read-only model council, then return one Chat answer"
+              }
+            >
+              Council
+            </button>
+            <button
+              type="button"
+              className="mc-next-composer-suggestion"
+              aria-pressed={contextArmed}
+              disabled={composerActionDisabled}
+              onClick={props.onAttachFiles}
+              title={contextArmed ? "Context is attached for Send" : "Attach files or context before sending"}
+            >
+              Attach context
+            </button>
+          </div>
+        ) : null}
       </ChatOptionsPopover>
-      {contextArmed || props.fullWebAccess || props.pinnedGoal ? <div className="mc-next-composer-active-context" aria-label="Active context and overrides">
-      {props.contextSelection ? <button type="button" className="mc-next-composer-chip action" onClick={props.onClearContextSelection}>Context: {props.contextSelection.label} ×</button> : null}
-      {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web access</span> : null}
-      {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
-      </div> : null}
+      {contextArmed || props.fullWebAccess || props.pinnedGoal ? (
+        <div className="mc-next-composer-active-context" aria-label="Active context and overrides">
+          {props.contextSelection ? (
+            <button type="button" className="mc-next-composer-chip action" onClick={props.onClearContextSelection}>
+              Context: {props.contextSelection.label} ×
+            </button>
+          ) : null}
+          {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web access</span> : null}
+          {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
+        </div>
+      ) : null}
       {props.selectedTurnRecovery ? (
         <div className="mc-next-composer-banner warning">
           <StatusChip tone={props.selectedTurn?.trace.status === "failed" ? "critical" : "warning"}>
@@ -1537,8 +1577,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             </span>
           ) : null}
           {props.sending && props.hasActiveStream ? (
-            <button type="button" className="mc-next-composer-primary" disabled={props.isStopPending} onClick={props.onStopActiveTurn}>
-              {props.isStopPending ? "Stopping…" : props.activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}
+            <button
+              type="button"
+              className="mc-next-composer-primary"
+              disabled={props.isStopPending}
+              onClick={props.onStopActiveTurn}
+            >
+              {props.isStopPending ? "Stopping…" : "Stop turn"}
             </button>
           ) : (
             <button type="button" className="mc-next-composer-primary" disabled={!props.canSend} onClick={props.onSend}>

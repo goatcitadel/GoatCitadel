@@ -254,10 +254,12 @@ function hasIncompleteLocation(location) {
     location?.start?.line === undefined ||
     location?.start?.column === null ||
     location?.start?.column === undefined ||
+    location?.start?.column === -1 ||
     location?.end?.line === null ||
     location?.end?.line === undefined ||
     location?.end?.column === null ||
-    location?.end?.column === undefined
+    location?.end?.column === undefined ||
+    location?.end?.column === -1
   );
 }
 
@@ -367,7 +369,10 @@ function sourceLine(value) {
 }
 
 function sourceColumnOrNull(value) {
-  if (value === null || value === undefined) {
+  // V8/source-map remapping can retain a line but emit -1 for its column.
+  // Preserve that uncertainty instead of treating it as column zero or dropping
+  // the counter. Incomplete locations stay separate across collectors.
+  if (value === null || value === undefined || value === -1) {
     return null;
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {

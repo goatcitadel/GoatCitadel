@@ -915,7 +915,7 @@ revocation or cancellation discards both observations.
 
 `pnpm verify:remote-worker:windows-cell-job` passes 6,149 assertions in each normal
 and AddressSanitizer build (`.tmp/native-paired-collection-job-v1.log`; native
-receipts in `C:\Users\spurn\AppData\Local\Temp\Goat Worker Cell Job AiUtO1`).
+receipts in `%TEMP%\Goat Worker Cell Job AiUtO1`).
 The paired-capture tests control the journal/backing boundary while exercising
 the real stopped job and guest tree scan. Attachment, layout, formatting, root
 protection and mounting flags are false. This proves local paired collection.
@@ -956,7 +956,7 @@ protocol behavior are unchanged. Delayed final checks succeed with the endpoint
 held open; deliberate premature closure still fails without losing the committed
 result or authorizing replay. The corrected lane passes 13 cases per build
 (`.tmp/native-retention-owner-join-v2.log`; receipts in
-`C:\Users\spurn\AppData\Local\Temp\Goat Native Retention ZQ28Pk`).
+`%TEMP%\Goat Native Retention ZQ28Pk`).
 Per-case state and logs are retained before assertions. Earlier paired logs are
 `.tmp/native-backing-result-{contracts-v1,worker-v1,chat-v1,typecheck-v2,native-v2,job-v1,retention-v2}.log`;
 the failed run remains `.tmp/native-backing-result-retention-v1.log`.
@@ -1246,7 +1246,7 @@ read-only operations:
   and deliver the resulting complete capacity inventory to admission.
   The named capacity lane passes 1,420 checks per normal/AddressSanitizer build
   and compiles for ARM64 (`.tmp/native-capacity-areas-v4.log`; native receipts in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Capacity e0cLlh`). Tests use actual
+  `%TEMP%\Goat Cell Capacity e0cLlh`). Tests use actual
   temporary NTFS trees and verify that an early area's file remains pinned
   through the last authority callback. No volume or installed-service operation
   is exercised.
@@ -1262,7 +1262,7 @@ read-only operations:
   connected; this class does not assert that an installation covers every area.
   The capacity lane passes 1,517 checks in normal and AddressSanitizer builds
   and compiles for ARM64 (`.tmp/native-capacity-layout-v2.log`; receipts in
-  `C:\Users\spurn\AppData\Local\Temp\Goat Cell Capacity 7oR9sG`). Protection tests
+  `%TEMP%\Goat Cell Capacity 7oR9sG`). Protection tests
   create their own temporary directories with ACLs applied at creation.
 - `CellMountedWorkspace::ObserveFootprint` and `ObserveInventory` bind those reads to their exact
   acknowledged workspace checkpoints, original volume and mount, frozen

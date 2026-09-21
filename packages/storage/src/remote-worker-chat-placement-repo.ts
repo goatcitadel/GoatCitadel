@@ -129,16 +129,39 @@ export class RemoteWorkerChatPlacementRepository {
         remoteWorkerInferenceCanonicalSha256(run.payload) !== remoteWorkerInferenceCanonicalSha256(observed.payload)
       )
         throw conflict("Chat placement lost its active execution claim.");
+      // User-input answers extend a turn through immutable continuation seals;
+      // they do not select another runner. The admission check above validates
+      // every response against those seals before excluding them from identity.
+      const { userInputResponses, ...admittedPayload } = run.payload;
       const identity = {
         durableRunId: run.runId,
         workspaceId: payload.workspaceId,
         sessionId: payload.sessionId,
         turnId: payload.turnId,
-        payloadSha256: remoteWorkerInferenceCanonicalSha256(run.payload),
+        payloadSha256: remoteWorkerInferenceCanonicalSha256(admittedPayload),
       };
       const existing = this.get(run.runId);
       if (existing) {
-        if (Object.entries(identity).some(([key, value]) => existing[key as keyof ChatExecutionPlacement] !== value))
+        // Older ledgers hashed the full payload. Accept only a prefix of the
+        // now-verified continuation set, retaining every other payload byte.
+        const compatibleHashes = new Set([identity.payloadSha256]);
+        if (Array.isArray(userInputResponses)) {
+          for (let count = 0; count <= userInputResponses.length; count++) {
+            compatibleHashes.add(
+              remoteWorkerInferenceCanonicalSha256({
+                ...admittedPayload,
+                userInputResponses: userInputResponses.slice(0, count),
+              }),
+            );
+          }
+        }
+        if (
+          Object.entries(identity).some(([key, value]) =>
+            key === "payloadSha256"
+              ? !compatibleHashes.has(existing.payloadSha256)
+              : existing[key as keyof ChatExecutionPlacement] !== value,
+          )
+        )
           throw conflict("Chat execution placement differs from its admitted identity.");
         if (requested) this.assertRemoteAllowed(run.runId, requested.registryWorkspaceId, requested.assignmentId);
         return existing;

@@ -4,19 +4,47 @@ import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { FocusedActiveWorkSummary, deriveFocusedActiveWorkState } from "./FocusedActiveWorkSummary";
 
 describe("FocusedActiveWorkSummary", () => {
-  it.each([undefined, "approval-focused"])("opens the approval without forwarding the click event (%s)", (approvalId) => {
-    const onOpenApprovals = vi.fn();
-    const state = deriveFocusedActiveWorkState({
-      turn: null, streamStatus: "idle", pendingApproval: { approvalId, reason: "Review this action." },
-    });
-    let renderer!: ReactTestRenderer;
-    act(() => { renderer = create(<FocusedActiveWorkSummary state={state}
-      onFocusComposer={vi.fn()} onOpenActivity={vi.fn()} onOpenApprovals={onOpenApprovals}
-      onRetry={vi.fn()} onStop={vi.fn()} />); });
-    act(() => { findButton(renderer, "Review approval").props.onClick({ type: "click", currentTarget: {} }); });
-    expect(onOpenApprovals.mock.calls).toEqual([approvalId ? [approvalId] : []]);
-    act(() => renderer.unmount());
+  it("lets canonical cancellation override stale approval and streaming snapshots", () => {
+    const turn = failedFolderTurn();
+    turn.trace.status = "cancelled";
+    expect(
+      deriveFocusedActiveWorkState({
+        turn,
+        streamStatus: "streaming",
+        pendingApproval: { approvalId: "cancelled-approval" },
+      }),
+    ).toBeNull();
   });
+  it.each([undefined, "approval-focused"])(
+    "opens the approval without forwarding the click event (%s)",
+    (approvalId) => {
+      const onOpenApprovals = vi.fn();
+      const state = deriveFocusedActiveWorkState({
+        turn: null,
+        streamStatus: "idle",
+        pendingApproval: { approvalId, reason: "Review this action." },
+      });
+      let renderer!: ReactTestRenderer;
+      act(() => {
+        renderer = create(
+          <FocusedActiveWorkSummary
+            state={state}
+            onFocusComposer={vi.fn()}
+            onFocusPendingInput={vi.fn()}
+            onOpenActivity={vi.fn()}
+            onOpenApprovals={onOpenApprovals}
+            onRetry={vi.fn()}
+            onStop={vi.fn()}
+          />,
+        );
+      });
+      act(() => {
+        findButton(renderer, "Review approval").props.onClick({ type: "click", currentTarget: {} });
+      });
+      expect(onOpenApprovals.mock.calls).toEqual([approvalId ? [approvalId] : []]);
+      act(() => renderer.unmount());
+    },
+  );
   it("turns a missing project folder into a human-first recovery path", () => {
     const state = deriveFocusedActiveWorkState({
       turn: failedFolderTurn(),
@@ -73,6 +101,7 @@ describe("FocusedActiveWorkSummary", () => {
         <FocusedActiveWorkSummary
           state={state}
           onFocusComposer={onFocusComposer}
+          onFocusPendingInput={vi.fn()}
           onOpenActivity={vi.fn()}
           onOpenApprovals={vi.fn()}
           onRetry={vi.fn()}
@@ -124,6 +153,7 @@ describe("FocusedActiveWorkSummary", () => {
         <FocusedActiveWorkSummary
           state={deriveFocusedActiveWorkState({ turn: failedFolderTurn(), streamStatus: "idle" })}
           onFocusComposer={onFocusComposer}
+          onFocusPendingInput={vi.fn()}
           onOpenActivity={vi.fn()}
           onOpenApprovals={vi.fn()}
           onRetry={onRetry}
@@ -152,6 +182,7 @@ describe("FocusedActiveWorkSummary", () => {
     const secondState = { ...firstState, turnId: "turn-2" };
     const callbacks = {
       onFocusComposer: vi.fn(),
+      onFocusPendingInput: vi.fn(),
       onOpenActivity: vi.fn(),
       onOpenApprovals: vi.fn(),
       onRetry: vi.fn(),
@@ -222,3 +253,39 @@ function findButton(renderer: ReactTestRenderer, label: string) {
   }
   return button;
 }
+
+describe("FocusedActiveWorkSummary answer routing", () => {
+  it("sends 'Answer request' to the pending prompt, never to the composer", () => {
+    const onFocusComposer = vi.fn();
+    const onFocusPendingInput = vi.fn();
+    const state = deriveFocusedActiveWorkState({
+      turn: null,
+      streamStatus: "idle",
+      pendingUserInput: { question: "Which database should I migrate first?" },
+    });
+
+    expect(state).toMatchObject({ kind: "input" });
+
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <FocusedActiveWorkSummary
+          state={state}
+          onFocusComposer={onFocusComposer}
+          onFocusPendingInput={onFocusPendingInput}
+          onOpenActivity={vi.fn()}
+          onOpenApprovals={vi.fn()}
+          onRetry={vi.fn()}
+          onStop={vi.fn()}
+        />,
+      );
+    });
+
+    act(() => {
+      findButton(renderer, "Answer request").props.onClick();
+    });
+
+    expect(onFocusPendingInput).toHaveBeenCalledOnce();
+    expect(onFocusComposer).not.toHaveBeenCalled();
+  });
+});

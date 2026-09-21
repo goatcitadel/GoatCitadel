@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- Windows no-follow traversal keeps its reparse-point, handle, and
+   path-normalization policy co-located so the symlink/junction guarantees cannot drift apart. */
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { win32 as path } from "node:path";
@@ -26,6 +28,10 @@ const POWERSHELL_BOOTSTRAP = [
   "& ([ScriptBlock]::Create($program))",
 ].join(";");
 const POWERSHELL_ENCODED_BOOTSTRAP = Buffer.from(POWERSHELL_BOOTSTRAP, "utf16le").toString("base64");
+
+/** Bounded helper stderr retained only to explain a nonzero helper exit. */
+const MAX_HELPER_DIAGNOSTIC_BYTES = 2_048;
+const MAX_HELPER_DIAGNOSTIC_TEXT = 240;
 
 let helperRunning = false;
 
@@ -157,6 +163,66 @@ export async function hashRemoteWorkerWindowsFile(
   return parseHashResponse(raw, root, relative, maxBytes);
 }
 
+/** Bounded homogeneous batches amortize native helper compilation without relaxing per-item validation. */
+export async function enumerateRemoteWorkerWindowsDirectories(
+  root: string,
+  paths: readonly string[],
+  options: RemoteWorkerWindowsNoFollowOptions = {},
+): Promise<readonly RemoteWorkerWindowsDirectoryEvidence[]> {
+  const canonical = canonicalLocalDrivePath(root);
+  const relatives = paths.map((path) => canonicalRelativePath(path, true));
+  const results = await invokeBatch(canonical, relatives, "enumerate", undefined, options);
+  return results.map((result, index) => parseEnumerateResponse(result, canonical, relatives[index] as string));
+}
+export async function hashRemoteWorkerWindowsFiles(
+  root: string,
+  paths: readonly string[],
+  maximumBytes: number,
+  options: RemoteWorkerWindowsNoFollowOptions = {},
+): Promise<readonly RemoteWorkerWindowsFileHashEvidence[]> {
+  const canonical = canonicalLocalDrivePath(root);
+  const relatives = paths.map((path) => canonicalRelativePath(path, false));
+  const maxBytes = boundedInteger(maximumBytes, 1, MAX_HASH_FILE_BYTES, "hash file byte limit");
+  const results = await invokeBatch(canonical, relatives, "hash_file", maxBytes, options);
+  return results.map((result, index) => parseHashResponse(result, canonical, relatives[index] as string, maxBytes));
+}
+async function invokeBatch(
+  rootPath: string,
+  paths: readonly string[],
+  operation: "enumerate" | "hash_file",
+  maxBytes: number | undefined,
+  options: RemoteWorkerWindowsNoFollowOptions,
+): Promise<readonly unknown[]> {
+  if (paths.length < 1 || paths.length > 32 || new Set(paths).size !== paths.length)
+    throw invalid("Windows inspection batch size or paths are invalid.");
+  const raw = await invokeFixedHelper(
+    {
+      schemaVersion: SCHEMA_VERSION,
+      operation: "batch",
+      requests: paths.map((relativePath) => ({
+        schemaVersion: SCHEMA_VERSION,
+        operation,
+        rootPath,
+        relativePath,
+        maxBytes,
+      })),
+    },
+    options,
+  );
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw invalid("Windows inspection batch response is invalid.");
+  const result = raw as Record<string, unknown>;
+  if (
+    Object.keys(result).sort().join(",") !== "operation,results,schemaVersion" ||
+    result.schemaVersion !== SCHEMA_VERSION ||
+    result.operation !== "batch" ||
+    !Array.isArray(result.results) ||
+    result.results.length !== paths.length
+  )
+    throw invalid("Windows inspection batch response is invalid.");
+  return result.results;
+}
+
 /** Pure protocol validation for deterministic tests. It is not filesystem authority. */
 export function validateRemoteWorkerWindowsNoFollowResponse(
   value: unknown,
@@ -244,7 +310,7 @@ async function invokeFixedHelper(
         ],
         {
           windowsHide: true,
-          stdio: ["pipe", "pipe", "ignore"],
+          stdio: ["pipe", "pipe", "pipe"],
           env: {
             SystemRoot: "C:\\Windows",
             [PROGRAM_ENV_NAME]: POWERSHELL_PROGRAM_GZIP,
@@ -252,6 +318,8 @@ async function invokeFixedHelper(
         },
       );
       const chunks: Buffer[] = [];
+      const diagnosticChunks: Buffer[] = [];
+      let diagnosticBytes = 0;
       let received = 0;
       let settled = false;
       let acceptingOutput = true;
@@ -268,6 +336,26 @@ async function invokeFixedHelper(
           return;
         }
         chunks.push(Buffer.from(chunk));
+      };
+      const onStderrData = (chunk: Buffer): void => {
+        if (diagnosticBytes >= MAX_HELPER_DIAGNOSTIC_BYTES) return;
+        const slice = chunk.subarray(0, MAX_HELPER_DIAGNOSTIC_BYTES - diagnosticBytes);
+        diagnosticBytes += slice.byteLength;
+        diagnosticChunks.push(Buffer.from(slice));
+      };
+      const discardDiagnostic = (): void => {
+        for (const chunk of diagnosticChunks) chunk.fill(0);
+        diagnosticChunks.length = 0;
+        diagnosticBytes = 0;
+      };
+      const readDiagnostic = (): string => {
+        const joined = Buffer.concat(diagnosticChunks);
+        try {
+          return sanitizeHelperDiagnostic(joined.toString("utf8"));
+        } finally {
+          joined.fill(0);
+          discardDiagnostic();
+        }
       };
       const finish = (error?: Error, value?: unknown): void => {
         if (settled) return;
@@ -300,20 +388,34 @@ async function invokeFixedHelper(
         stopAndPoison(invalid("Windows no-follow request could not be delivered."));
       });
       child.stdout.on("data", onStdoutData);
+      child.stderr.on("data", onStderrData);
       child.once("close", (code) => {
         helperRunning = false;
         acceptingOutput = false;
         child.stdout.off("data", onStdoutData);
-        if (settled) return;
+        child.stderr.off("data", onStderrData);
+        if (settled) {
+          discardDiagnostic();
+          return;
+        }
         if (pendingError !== undefined) {
+          discardDiagnostic();
           finish(pendingError);
           return;
         }
         if (code !== 0) {
           discardChunks();
-          finish(invalid("Windows no-follow inspection failed."));
+          const detail = readDiagnostic();
+          finish(
+            invalid(
+              detail
+                ? `Windows no-follow inspection failed. Helper exit ${code}: ${detail}`
+                : `Windows no-follow inspection failed. Helper exit ${code} produced no diagnostic output.`,
+            ),
+          );
           return;
         }
+        discardDiagnostic();
         const responseFrame = Buffer.concat(chunks);
         discardChunks();
         try {
@@ -781,6 +883,19 @@ function fixedPowerShellPath(): string {
   return path.join("C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+/** Collapses helper stderr (including PowerShell CLIXML noise) to a short printable excerpt. */
+function sanitizeHelperDiagnostic(text: string): string {
+  const withoutClixml = text.replace(/#<\s*CLIXML/gu, " ").replace(/<[^>]*>/gu, " ");
+  const printable = withoutClixml
+    .replace(/[^\x20-\x7e]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (printable.length === 0) return "";
+  return printable.length > MAX_HELPER_DIAGNOSTIC_TEXT
+    ? `${printable.slice(0, MAX_HELPER_DIAGNOSTIC_TEXT)}...`
+    : printable;
+}
+
 function invalid(message: string): RemoteWorkerWindowsNoFollowError {
   return new RemoteWorkerWindowsNoFollowError(message);
 }
@@ -942,23 +1057,31 @@ public static class GoatWorkerNoFollow {
 '@
 Add-Type -TypeDefinition $source -Language CSharp
 function Frame([object]$value) { $json=$value|ConvertTo-Json -Depth 20 -Compress; $bytes=[Text.Encoding]::UTF8.GetBytes($json); [Console]::Out.Write($bytes.Length.ToString()+[char]10+[Convert]::ToBase64String($bytes)+[char]10) }
-try {
-  $lengthLine=[Console]::In.ReadLine(); $encoded=[Console]::In.ReadLine(); if($null -eq $lengthLine -or $null -eq $encoded){throw 'frame'}
-  $bytes=[Convert]::FromBase64String($encoded); if($bytes.Length -ne [int]$lengthLine -or $bytes.Length -gt 16384){throw 'frame'}
-  $request=[Text.Encoding]::UTF8.GetString($bytes)|ConvertFrom-Json
-  if($request.schemaVersion -ne '${SCHEMA_VERSION}'){throw 'schema'}
+function Inspect-One($request) {
+  if($request.schemaVersion -ne '${SCHEMA_VERSION}' -or $request.operation -notin @('enumerate','hash_file','read_file')){throw 'request'}
   $finalDirectory=$request.operation -eq 'enumerate'
   $walk=[GoatWorkerNoFollow+Walk]::new([string]$request.rootPath,[string]$request.relativePath,$finalDirectory)
   try {
     if($request.operation -eq 'enumerate'){
       $rootBefore=[GoatWorkerNoFollow]::Observe($walk.Root);$directoryBefore=[GoatWorkerNoFollow]::Observe($walk.Final);$first=[GoatWorkerNoFollow]::Enumerate($walk.Final); $entries=@(); foreach($name in $first){$childPath=(@($request.relativePath,$name)|Where-Object{$_ -ne ''}) -join '/';$child=$null;try{try{$child=[GoatWorkerNoFollow+Walk]::new([string]$request.rootPath,$childPath,$true)}catch{$child=[GoatWorkerNoFollow+Walk]::new([string]$request.rootPath,$childPath,$false)};$o=[GoatWorkerNoFollow]::Observe($child.Final);$attrs=[uint32]$o.attributes;$kind=if(($attrs-band 0x400)-ne 0){'reparse'}elseif(($attrs-band 0x10)-ne 0){'directory'}else{'regular_file'};$entries+=@{name=$name;kind=$kind;observation=$o}}finally{if($null -ne $child){$child.Dispose()}}}
-      $second=[GoatWorkerNoFollow]::Enumerate($walk.Final);$rootAfter=[GoatWorkerNoFollow]::Observe($walk.Root);$directoryAfter=[GoatWorkerNoFollow]::Observe($walk.Final);Frame @{schemaVersion='${SCHEMA_VERSION}';operation='enumerate';operatorSid=[GoatWorkerNoFollow]::OperatorSid();rootPath=$request.rootPath;relativePath=$request.relativePath;rootBefore=$rootBefore;rootAfter=$rootAfter;directoryBefore=$directoryBefore;directoryAfter=$directoryAfter;firstNames=$first;secondNames=$second;entries=$entries}
+      $second=[GoatWorkerNoFollow]::Enumerate($walk.Final);$rootAfter=[GoatWorkerNoFollow]::Observe($walk.Root);$directoryAfter=[GoatWorkerNoFollow]::Observe($walk.Final);return @{schemaVersion='${SCHEMA_VERSION}';operation='enumerate';operatorSid=[GoatWorkerNoFollow]::OperatorSid();rootPath=$request.rootPath;relativePath=$request.relativePath;rootBefore=$rootBefore;rootAfter=$rootAfter;directoryBefore=$directoryBefore;directoryAfter=$directoryAfter;firstNames=$first;secondNames=$second;entries=$entries}
     } elseif($request.operation -eq 'read_file') {
-      $ancestorsBefore=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsBefore+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};$before=[GoatWorkerNoFollow]::Observe($walk.Final);$content=[GoatWorkerNoFollow]::Read($walk.Final,[int]$request.maxBytes);try{$after=[GoatWorkerNoFollow]::Observe($walk.Final);$ancestorsAfter=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsAfter+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};Frame @{schemaVersion='${SCHEMA_VERSION}';operation='read_file';operatorSid=[GoatWorkerNoFollow]::OperatorSid();rootPath=$request.rootPath;relativePath=$request.relativePath;ancestorsBefore=$ancestorsBefore;ancestorsAfter=$ancestorsAfter;before=$before;after=$after;contentBase64=[Convert]::ToBase64String($content)}}finally{[Array]::Clear($content,0,$content.Length)}
+      $ancestorsBefore=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsBefore+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};$before=[GoatWorkerNoFollow]::Observe($walk.Final);$content=[GoatWorkerNoFollow]::Read($walk.Final,[int]$request.maxBytes);try{$after=[GoatWorkerNoFollow]::Observe($walk.Final);$ancestorsAfter=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsAfter+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};return @{schemaVersion='${SCHEMA_VERSION}';operation='read_file';operatorSid=[GoatWorkerNoFollow]::OperatorSid();rootPath=$request.rootPath;relativePath=$request.relativePath;ancestorsBefore=$ancestorsBefore;ancestorsAfter=$ancestorsAfter;before=$before;after=$after;contentBase64=[Convert]::ToBase64String($content)}}finally{[Array]::Clear($content,0,$content.Length)}
     } elseif($request.operation -eq 'hash_file') {
-      $ancestorsBefore=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsBefore+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};$before=[GoatWorkerNoFollow]::Observe($walk.Final);[long]$size=0;$hash=[GoatWorkerNoFollow]::Hash($walk.Final,[int]$request.maxBytes,[ref]$size);$after=[GoatWorkerNoFollow]::Observe($walk.Final);$ancestorsAfter=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsAfter+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};Frame @{schemaVersion='${SCHEMA_VERSION}';operation='hash_file';operatorSid=[GoatWorkerNoFollow]::OperatorSid();rootPath=$request.rootPath;relativePath=$request.relativePath;ancestorsBefore=$ancestorsBefore;ancestorsAfter=$ancestorsAfter;before=$before;after=$after;sizeBytes=$size;sha256=$hash}
+      $ancestorsBefore=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsBefore+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};$before=[GoatWorkerNoFollow]::Observe($walk.Final);[long]$size=0;$hash=[GoatWorkerNoFollow]::Hash($walk.Final,[int]$request.maxBytes,[ref]$size);$after=[GoatWorkerNoFollow]::Observe($walk.Final);$ancestorsAfter=@();for($i=$walk.RootIndex;$i -lt $walk.Handles.Count-1;$i++){$ancestorsAfter+=,[GoatWorkerNoFollow]::Observe($walk.Handles[$i])};return @{schemaVersion='${SCHEMA_VERSION}';operation='hash_file';operatorSid=[GoatWorkerNoFollow]::OperatorSid();rootPath=$request.rootPath;relativePath=$request.relativePath;ancestorsBefore=$ancestorsBefore;ancestorsAfter=$ancestorsAfter;before=$before;after=$after;sizeBytes=$size;sha256=$hash}
     } else { throw 'operation' }
   } finally { $walk.Dispose() }
+}
+try {
+  $lengthLine=[Console]::In.ReadLine(); $encoded=[Console]::In.ReadLine(); if($null -eq $lengthLine -or $null -eq $encoded){throw 'frame'}
+  $bytes=[Convert]::FromBase64String($encoded); if($bytes.Length -ne [int]$lengthLine -or $bytes.Length -gt 16384){throw 'frame'}
+  $request=[Text.Encoding]::UTF8.GetString($bytes)|ConvertFrom-Json
+  if($request.schemaVersion -ne '${SCHEMA_VERSION}'){throw 'schema'}
+  if ($request.operation -eq 'batch') {
+    if ($request.requests.Count -lt 1 -or $request.requests.Count -gt 32) { throw 'batch' }
+    $results=@(foreach($item in $request.requests){if($item.operation -notin @('enumerate','hash_file')){throw 'batch operation'}; Inspect-One $item})
+    Frame @{schemaVersion='${SCHEMA_VERSION}';operation='batch';results=$results}
+  } else { Frame (Inspect-One $request) }
 } catch { exit 73 }
 `;
 }

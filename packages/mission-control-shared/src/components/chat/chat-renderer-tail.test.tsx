@@ -355,14 +355,33 @@ describe("chat rendering tail coverage", () => {
     ).toBeUndefined();
   });
 
-  it("disables response copy while the assistant is still streaming", async () => {
+  it("copies the response so far while the assistant is still streaming", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
 
     renderer = create(<AssistantMessageRenderer role="assistant" content="Partial response" running />);
     const copyButton = renderer.root.findByType("button");
+    // Copying a long answer mid-stream is useful; the partialness must be stated
+    // rather than the action being silently unavailable.
+    expect(copyButton.props.disabled).toBe(false);
+    expect(copyButton.props["aria-label"]).toBe("Copy the response so far; it is still being written");
+    expect(copyButton.props.title).toBe("Copy so far");
+
+    await act(async () => {
+      copyButton.props.onClick();
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledWith("Partial response");
+    expect(copyButton.props["aria-label"]).toBe("Partial response copied to clipboard");
+  });
+
+  it("still refuses to copy an empty response", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    renderer = create(<AssistantMessageRenderer role="assistant" content="   " running />);
+    const copyButton = renderer.root.findByType("button");
     expect(copyButton.props.disabled).toBe(true);
-    expect(copyButton.props["aria-label"]).toBe("Copy available when response completes");
 
     await act(async () => {
       copyButton.props.onClick();

@@ -31,6 +31,8 @@ export function deriveFocusedActiveWorkState({
   pendingApproval?: PendingApprovalSummary;
   pendingUserInput?: PendingInputSummary;
 }): FocusedActiveWorkState | null {
+  // Cancellation wins over stale transport and operator-prompt projections.
+  if (turn?.trace.status === "cancelled") return null;
   if (pendingApproval) {
     return {
       kind: "approval",
@@ -39,7 +41,7 @@ export function deriveFocusedActiveWorkState({
       turnId: turn?.turnId,
       ...(pendingApproval.approvalId ? { approvalId: pendingApproval.approvalId } : {}),
       canRetry: false,
-      canStop: false,
+      canStop: turn?.trace.status === "waiting_for_approval",
     };
   }
 
@@ -53,7 +55,7 @@ export function deriveFocusedActiveWorkState({
         "Answer the request in the composer to continue this chat.",
       turnId: turn?.turnId,
       canRetry: false,
-      canStop: false,
+      canStop: turn?.trace.status === "waiting_for_user_input",
     };
   }
 
@@ -85,7 +87,7 @@ export function deriveFocusedActiveWorkState({
       detail: "Review the requested action to continue.",
       turnId: turn.turnId,
       canRetry: false,
-      canStop: false,
+      canStop: true,
     };
   }
 
@@ -99,7 +101,7 @@ export function deriveFocusedActiveWorkState({
         "Answer the request in the composer to continue this chat.",
       turnId: turn.turnId,
       canRetry: false,
-      canStop: false,
+      canStop: true,
     };
   }
 
@@ -129,11 +131,6 @@ export function deriveFocusedActiveWorkState({
       canRetry: canRetryTurn(turn),
       canStop: false,
     };
-  }
-
-  // A cancellation is terminal even when a transport snapshot lags behind it.
-  if (turn.trace.status === "cancelled") {
-    return null;
   }
 
   // A transport error can arrive before the Gateway has persisted a terminal
@@ -226,6 +223,12 @@ function humanizeFailureDetail(failureClass?: ChatTurnFailureClass, toolStatus?:
 type FocusedActiveWorkSummaryProps = {
   state: FocusedActiveWorkState | null;
   onFocusComposer: () => void;
+  /**
+   * Focuses the blocking question's own answer control. Distinct from
+   * onFocusComposer: the pending prompt is a separate form, so sending the
+   * caret to the composer leaves the user typing into the wrong field.
+   */
+  onFocusPendingInput: () => void;
   onOpenActivity: () => void;
   onOpenApprovals: (approvalId?: string) => void;
   onRetry: (turnId: string) => void;
@@ -240,6 +243,7 @@ export function FocusedActiveWorkSummary(props: FocusedActiveWorkSummaryProps) {
 function FocusedActiveWorkSummaryContents({
   state,
   onFocusComposer,
+  onFocusPendingInput,
   onOpenActivity,
   onOpenApprovals,
   onRetry,
@@ -256,7 +260,7 @@ function FocusedActiveWorkSummaryContents({
       <button
         type="button"
         className="mc-next-thread-inline-button mc-next-active-work-primary"
-        onClick={() => state.approvalId ? onOpenApprovals(state.approvalId) : onOpenApprovals()}
+        onClick={() => (state.approvalId ? onOpenApprovals(state.approvalId) : onOpenApprovals())}
       >
         Review approval
       </button>
@@ -264,7 +268,7 @@ function FocusedActiveWorkSummaryContents({
       <button
         type="button"
         className="mc-next-thread-inline-button mc-next-active-work-primary"
-        onClick={onFocusComposer}
+        onClick={onFocusPendingInput}
       >
         Answer request
       </button>

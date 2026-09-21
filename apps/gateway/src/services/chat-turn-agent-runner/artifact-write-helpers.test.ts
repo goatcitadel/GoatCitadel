@@ -39,6 +39,19 @@ describe("artifact creation intent", () => {
     "Compare these slides in the presentation file.",
     "Open the PowerPoint deck and describe the last slide.",
     "Parse the JSON file and check its schema.",
+    "Use web access to open https://example.com. Report the page title and explain its purpose in two short sentences, with a source link. Do not use subagents, change files, or write long-term memory.",
+    "Report the page title. Do not write long-term memory.",
+    "Write the answer in chat. Do not create a PDF document.",
+    "Explain presentations without creating files or writing memory.",
+    "Do not create a report; answer directly.",
+    "Write a short report directly in this chat.",
+    "Write a Markdown table comparing three colors.",
+    "Write a JSON example in your answer.",
+    "Draft slide titles in chat.",
+    "Write a Markdown summary of existing report.pdf.",
+    "Create a table using existing notes.docx.",
+    "Write a report about file permissions.",
+    "Make a summary of these presentation slides.",
   ])("does not infer output from an input format: %s", (content) => {
     expect(detectDocumentArtifactIntent(content)).toBe(false);
     expect(detectPresentationArtifactIntent(content)).toBe(false);
@@ -48,6 +61,8 @@ describe("artifact creation intent", () => {
     "Read source.txt and create a PDF report.",
     "Review the notes, then export a Markdown document.",
     "Summarize the findings and save a text file.",
+    "Create a PDF report. Do not write long-term memory.",
+    "Write a summary of notes.txt and create a PDF report.",
   ])("retains an explicit document request: %s", (content) => {
     expect(detectDocumentArtifactIntent(content)).toBe(true);
   });

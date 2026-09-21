@@ -20,7 +20,11 @@ import {
   renderWindowsLaunchers,
 } from "./lib/package-renderers.mjs";
 import { assertDesktopArtifactProvenance } from "./lib/desktop-artifact-provenance.mjs";
-import { materializeHardLinkedFiles, removeEmptyDirectories } from "./lib/release-payload-ownership.mjs";
+import {
+  materializeHardLinkedFiles,
+  pruneReleaseResidue,
+  removeEmptyDirectories,
+} from "./lib/release-payload-ownership.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -708,44 +712,7 @@ function pruneGatewayDeploy(targetDir) {
     }
   }
   removeDirectory(path.join(targetDir, "node_modules", ".pnpm", "node_modules", "@goatcitadel", "gateway"));
-  pruneReleaseResidue(targetDir);
-}
-
-function pruneReleaseResidue(targetDir) {
-  const prunedDirectories = new Set([
-    ".codex-temp",
-    ".pytest_cache",
-    "artifacts",
-    "backups",
-    "coverage",
-    "coverage-exercise",
-    "coverage-smoke",
-    "test-results",
-  ]);
-  const prunedExtensions = new Set([".map", ".tsbuildinfo"]);
-  const queue = [targetDir];
-
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const current = queue[cursor];
-    for (const entry of fs.readdirSync(current)) {
-      const absolutePath = path.join(current, entry);
-      const stats = fs.lstatSync(absolutePath);
-      if (stats.isDirectory() && prunedDirectories.has(entry)) {
-        removeDirectory(absolutePath);
-        continue;
-      }
-      if (stats.isSymbolicLink()) {
-        continue;
-      }
-      if (stats.isDirectory()) {
-        queue.push(absolutePath);
-        continue;
-      }
-      if (stats.isFile() && prunedExtensions.has(path.extname(entry))) {
-        fs.rmSync(absolutePath, { force: true });
-      }
-    }
-  }
+  pruneReleaseResidue(targetDir, removeDirectory);
 }
 
 function removeDirectory(targetPath) {

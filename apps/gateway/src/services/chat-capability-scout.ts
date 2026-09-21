@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
-import { hasArtifactInspectionOnlyIntent } from "./chat-artifact-intent.js";
+import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatTurnTraceRecord,
@@ -95,6 +95,7 @@ const GAP_SIGNAL =
 export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
 ): Promise<ChatCapabilityUpgradeSuggestion[]> {
+  if (input.trace?.routing?.turnControl?.toolClosure || input.trace?.status === "cancelled") return [];
   const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
   const documentArtifactIntent = !presentationArtifactIntent && detectDocumentArtifactIntent(input.content);
   if (!looksToolOrientedRequest(input.content) && !presentationArtifactIntent && !documentArtifactIntent) {
@@ -339,25 +340,6 @@ function looksLikeMissingRequestedDocumentArtifact(input: CapabilityScoutInput, 
     ) &&
     /\b(created|saved|exported|attached|workspace|artifact|\.(?:docx|pdf|md|html|csv|json|txt))\b/.test(assistantText);
   return !claimsCreatedDocument;
-}
-
-function detectPresentationArtifactIntent(content: string): boolean {
-  if (hasArtifactInspectionOnlyIntent(content)) return false;
-  const normalized = content.toLowerCase();
-  return (
-    /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
-    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
-  );
-}
-
-function detectDocumentArtifactIntent(content: string): boolean {
-  if (hasArtifactInspectionOnlyIntent(content)) return false;
-  const normalized = content.toLowerCase();
-  return (
-    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(
-      normalized,
-    ) && /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
-  );
 }
 
 function rankToolMatches(content: string, catalog: ToolCatalogEntry[]): Array<ToolCatalogEntry & { score: number }> {

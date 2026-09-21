@@ -201,6 +201,22 @@ function setScrollMetrics(
 }
 
 describe("ThreadedTimeline", () => {
+  it.each(["waiting_for_approval", "waiting_for_user_input"] as const)(
+    "keeps Stop available for a reloaded %s turn",
+    (status) => {
+      const props = buildProps({ mode: "chat", streamStatus: "idle", hasActiveStream: false });
+      props.thread.turns[0].trace.status = status;
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
+      expect(
+        renderer.root.findAllByType("button").filter((button) => button.children.join("") === "Stop"),
+      ).toHaveLength(1);
+      renderer.update(<ThreadedTimeline props={{ ...props, isStopPending: true }} />);
+      expect(renderedText(renderer)).toContain("Stopping…");
+      expect(
+        renderer.root.findAllByType("button").filter((button) => button.children.join("") === "Review approval"),
+      ).toHaveLength(0);
+    },
+  );
   it("shows one stopping summary while canonical cancellation is pending", () => {
     const props = buildProps({ mode: "chat", streamStatus: "streaming", hasActiveStream: true, isStopPending: true });
     props.thread.turns[0].trace.status = "running";
@@ -208,7 +224,9 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("Stopping…");
     expect(renderedText(renderer)).toContain("Waiting for the Gateway to confirm cancellation.");
     expect(renderer.root.findAllByProps({ "aria-label": "Current work" })).toHaveLength(1);
-    expect(renderer.root.findAllByType("button").filter((button) => button.children.join("") === "Stop")).toHaveLength(0);
+    expect(renderer.root.findAllByType("button").filter((button) => button.children.join("") === "Stop")).toHaveLength(
+      0,
+    );
   });
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
@@ -272,12 +290,20 @@ describe("ThreadedTimeline", () => {
   });
 
   it("does not read completed answer content again for streaming updates to another turn", () => {
-    const props = buildProps({ mode: "chat", streamStatus: "streaming", activeStreamingTurnId: "turn-2", hasActiveStream: true });
+    const props = buildProps({
+      mode: "chat",
+      streamStatus: "streaming",
+      activeStreamingTurnId: "turn-2",
+      hasActiveStream: true,
+    });
     const completed = props.thread.turns[0];
     const content = completed.assistantMessage.content;
     const readContent = vi.fn(() => content);
     Object.defineProperty(completed.assistantMessage, "content", { get: readContent });
-    props.thread.turns.push({ ...completed, turnId: "turn-2", assistantMessage: undefined,
+    props.thread.turns.push({
+      ...completed,
+      turnId: "turn-2",
+      assistantMessage: undefined,
       userMessage: { ...completed.userMessage, messageId: "user-2" },
       trace: { ...completed.trace, turnId: "turn-2", status: "running" },
     });
@@ -286,16 +312,37 @@ describe("ThreadedTimeline", () => {
     const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
     const baselineReads = readContent.mock.calls.length;
     expect(baselineReads).toBeGreaterThan(0);
-    TestRenderer.act(() => renderer.update(<ThreadedTimeline props={{ ...props,
-      streamingPreview: { turnId: "turn-2", sessionId: "session-1", visibleText: "A new delta", status: "streaming" },
-    }} />));
+    TestRenderer.act(() =>
+      renderer.update(
+        <ThreadedTimeline
+          props={{
+            ...props,
+            streamingPreview: {
+              turnId: "turn-2",
+              sessionId: "session-1",
+              visibleText: "A new delta",
+              status: "streaming",
+            },
+          }}
+        />,
+      ),
+    );
     expect(readContent).toHaveBeenCalledTimes(baselineReads);
     renderer.unmount();
   });
 
   it.each(["cancelled", "failed"])("shows new admission feedback after a %s turn", (status) => {
-    const props = buildProps({ mode: "chat", streamStatus: "connecting", hasActiveStream: true,
-      optimisticUserMessage: { queueItemId: "new", messageId: "local-new", sessionId: "session-1", content: "New request", timestamp: "2026-09-14T00:00:00.000Z" },
+    const props = buildProps({
+      mode: "chat",
+      streamStatus: "connecting",
+      hasActiveStream: true,
+      optimisticUserMessage: {
+        queueItemId: "new",
+        messageId: "local-new",
+        sessionId: "session-1",
+        content: "New request",
+        timestamp: "2026-09-14T00:00:00.000Z",
+      },
     });
     props.thread.turns[0].trace.status = status;
     const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
@@ -1889,12 +1936,22 @@ describe("ThreadedTimeline", () => {
     expect(text).not.toContain("User message 30");
 
     const showHidden = renderer.root.find(
-      (node) => node.type === "button" && node.children.join("") === "Show hidden turns",
+      (node) => node.type === "button" && node.children.join("").startsWith("Show "),
     );
     TestRenderer.act(() => {
       showHidden.props.onClick();
     });
 
+    // One step reveals a bounded page of earlier turns rather than the whole thread.
+    expect(renderedText(renderer)).toContain("User message 41");
+    expect(renderedText(renderer)).not.toContain("User message 30");
+
+    const showMore = renderer.root.findAll(
+      (node) => node.type === "button" && node.children.join("").startsWith("Show "),
+    );
+    TestRenderer.act(() => {
+      showMore[0]!.props.onClick();
+    });
     expect(renderedText(renderer)).toContain("User message 30");
   });
 
@@ -2031,7 +2088,7 @@ describe("ThreadedTimeline", () => {
       expect(renderedText(renderer)).toContain("User message 61");
     });
 
-    it("still widens the window when 'Show hidden turns' is used while frozen", () => {
+    it("widens the window by a bounded page when history is expanded while frozen", () => {
       const props = buildLongThreadProps();
       const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
       expect(renderedText(renderer)).toContain("hidden for performance");
@@ -2043,17 +2100,34 @@ describe("ThreadedTimeline", () => {
       expect(renderedText(renderer)).toContain("User message 41");
 
       const showHidden = renderer.root.find(
-        (node) => node.type === "button" && node.children.join("") === "Show hidden turns",
+        (node) => node.type === "button" && node.children.join("").startsWith("Show "),
       );
       TestRenderer.act(() => {
         showHidden.props.onClick();
       });
 
-      // Manual expansion wins over the freeze: the very first turn is now visible,
-      // and the frozen oldest-visible turn is still mounted too (widen, not shift).
-      expect(renderedText(renderer)).not.toContain("hidden for performance");
-      expect(renderedText(renderer)).toContain("User message 1G");
+      // Manual expansion wins over the freeze and widens rather than shifting: the
+      // frozen oldest-visible turn stays mounted and older turns join it. Expansion
+      // is bounded, so one step reveals a page, not the whole retained thread.
       expect(renderedText(renderer)).toContain("User message 41");
+      expect(renderedText(renderer)).toContain("User message 11G");
+      expect(renderedText(renderer)).not.toContain("User message 1G");
+      expect(renderedText(renderer)).toContain("hidden for performance");
+
+      // Stepping repeatedly still reaches the beginning of the thread.
+      for (let step = 0; step < 10; step += 1) {
+        const next = renderer.root.findAll(
+          (node) => node.type === "button" && node.children.join("").startsWith("Show "),
+        );
+        if (next.length === 0) {
+          break;
+        }
+        TestRenderer.act(() => {
+          next[0]!.props.onClick();
+        });
+      }
+      expect(renderedText(renderer)).toContain("User message 1G");
+      expect(renderedText(renderer)).not.toContain("hidden for performance");
     });
 
     it("keeps an early context-pinned turn mounted through buildThreadWindow's own pinning while the window is frozen", () => {

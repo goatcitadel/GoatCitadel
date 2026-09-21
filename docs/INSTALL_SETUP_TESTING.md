@@ -33,6 +33,8 @@ Packaged Windows desktop smoke should cover the native host, not only the browse
 - approval or operator-attention events remain visible in the shell; do not claim Windows notification click proof until an actual notification click routes into the app for the exact build
 - signed package-identity proof must additionally verify package registration, app identity, protocol manifest registration, notification click routing, signed artifacts, and uninstall cleanup
 
+The shared installer smoke verifies successful WebView navigation and the onboarding page title using `runtime/logs/desktop-startup.json`, written by the native host. Evidence must match the launched process and its start time; a window title alone is insufficient. This avoids depending on DevTools environment flags, which [elevated WebView2 hosts intentionally ignore](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5640#issuecomment-4923662109). Startup failures print this bounded snapshot and redacted runtime log tails before cleanup. The snapshot excludes URL credentials, query strings, fragments, and exception messages.
+
 The installer-safe launcher surface is the packaged runtime surface: `help`, `status`, `launch`, `up`, `stop`, and `uninstall`. Source-tree commands that shell out to workspace tooling, such as deep verification lanes, require a raw clone with `pnpm install` unless a release note explicitly says that command has been packaged.
 
 When GoatCitadel installs or repairs local tooling for you, it should describe:

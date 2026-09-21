@@ -23,7 +23,8 @@ param(
   [Parameter(Mandatory=$true)][ValidateRange(1,65535)][int]$GatewayPort,
   [Parameter(Mandatory=$true)][string]$ClientCertificateFile,
   [Parameter(Mandatory=$true)][string]$TrustAnchorFile,
-  [Parameter(Mandatory=$true)][string]$TicketFile,
+  [string]$TicketFile,
+  [switch]$DeferEnrollment,
   [Parameter(Mandatory=$true)][string]$ProtectedKeyFile,
   [Parameter(Mandatory=$true)][string]$OutputRoot,
   [switch]$Preflight
@@ -31,6 +32,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'worker-install-common.ps1')
+Assert-WorkerEnrollmentInputChoice -TicketFile $TicketFile -DeferEnrollment:$DeferEnrollment
 Initialize-WorkerInstallNative
 $paths = Get-WorkerServicePaths
 $capacityAreas = Get-WorkerCellCapacityPaths $paths.Root
@@ -93,9 +95,9 @@ try {
   $inputs = [ordered]@{
     'client-cert.pem' = Read-WorkerBytes ([IO.Path]::GetFullPath($ClientCertificateFile))
     'ca.pem' = Read-WorkerBytes ([IO.Path]::GetFullPath($TrustAnchorFile))
-    'ticket.json' = Read-WorkerBytes ([IO.Path]::GetFullPath($TicketFile))
     'protected-key.json' = Read-WorkerBytes ([IO.Path]::GetFullPath($ProtectedKeyFile))
   }
+  if (-not $DeferEnrollment) { $inputs['ticket.json'] = Read-WorkerBytes ([IO.Path]::GetFullPath($TicketFile)) }
   foreach ($name in $inputs.Keys) {
     if ([Text.Encoding]::UTF8.GetString($inputs[$name]) -match '(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----') {
       throw 'REFUSED: private PEM material is not an installed worker input.'
@@ -106,12 +108,14 @@ try {
       throw 'REFUSED: a public certificate input is missing.'
     }
   }
-  $ticket = ConvertFrom-WorkerJson $inputs['ticket.json']
-  if ($ticket.PSObject.Properties.Name -contains 'protectedSignerPrivateKeyPem' -or
-      $ticket.PSObject.Properties.Name -notcontains 'protectedSignerPublicKeySpkiBase64Url') {
-    throw 'REFUSED: ticket must reference the public protected signing key.'
+  if (-not $DeferEnrollment) {
+    $ticket = ConvertFrom-WorkerJson $inputs['ticket.json']
+    if ($ticket.PSObject.Properties.Name -contains 'protectedSignerPrivateKeyPem' -or
+        $ticket.PSObject.Properties.Name -notcontains 'protectedSignerPublicKeySpkiBase64Url') {
+      throw 'REFUSED: ticket must reference the public protected signing key.'
+    }
   }
-  $null = ConvertFrom-WorkerJson $inputs['protected-key.json']
+  Assert-WorkerProtectedKeyInput -Bytes $inputs['protected-key.json'] -PackageRoot $PackageRoot
   $settings = Get-WorkerSettingsBytes $paths $GatewayHost $GatewayPort ('service-' + $installationId) -CapacityLayout
   $settingsHash = Get-WorkerBytesHash $settings
   if ($refusals.Count -gt 0) { $verdict = 'refused' }
@@ -211,6 +215,18 @@ try {
     Assert-WorkerCellControllerServiceReadBack $paths
     Assert-WorkerCellControllerCustody $paths $inventory
     Assert-WorkerCellRuntimeCustody $paths $inventory
+    # Report public installation facts only. These are not an admission receipt.
+    # Enrollment remains impossible without a separately issued ticket.
+    $publicInstallation = [ordered]@{
+      schemaVersion='goatcitadel.remote-worker.pending-enrollment.v1'
+      computerName=$env:COMPUTERNAME; installationId=$installationId
+      packageManifestSha256=$ManifestSha256; installedPayload=$paths.Payload
+      fileCount=@($inventory.Files).Count; totalBytes=$inventory.TotalBytes
+      controllerEnrollment=$controllerEnrollment
+      enrollmentDeferred=[bool]$DeferEnrollment; workerStarted=$false; controllerStarted=$false
+    }
+    [IO.File]::WriteAllText((Join-Path $OutputRoot 'pending-enrollment.json'),
+      ($publicInstallation | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
     $verdict = 'passed'; $detail = 'Verified package and custody installed; worker and cell controller services are stopped.'
   }
 } catch {
@@ -289,6 +305,7 @@ try {
     serviceName=$script:WorkerServiceName; installedRoot=$paths.Root; detail=$detail
     refusals=@($refusals.ToArray()); cleanupFailures=@($cleanupFailures.ToArray())
     createdService=$createdService; serviceStarted=$false; inputContentsInEvidence=$false
+    enrollmentDeferred=[bool]$DeferEnrollment
     createdController=$createdController; createdCells=$createdCells; controllerStarted=$false; controllerCustodySha256=$custodyHash
   }
   [IO.File]::WriteAllText((Join-Path $OutputRoot 'worker-install-evidence.json'), ($evidence | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))

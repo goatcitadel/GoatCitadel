@@ -52,7 +52,11 @@ public sealed class DesktopUpdateService : IDisposable
                     + _preferences.RateLimitedUntil.Value.ToLocalTime().ToString("t") + "." });
                 return;
             }
-            if (Status.NextCheckAt > _now() && (!manual || Status.Phase == "error")) return;
+            // Refresh once after startup: persisted metadata is not an offer until
+            // this process has revalidated it. Later ticks still respect deadlines,
+            // including backoff after a failed first attempt.
+            if ((_checkedThisProcess || Status.Phase == "error")
+                && Status.NextCheckAt > _now() && (!manual || Status.Phase == "error")) return;
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(60));
             await CheckCoreAsync(deadline.Token);

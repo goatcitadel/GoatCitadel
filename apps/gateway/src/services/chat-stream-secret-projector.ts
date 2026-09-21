@@ -76,6 +76,12 @@ export class ChatStreamSecretProjector {
     return pending;
   }
 
+  /** Snapshot the safe terminal tail without consuming it before a commit. */
+  public snapshotAssistantTail(sessionId: string, turnId: string): string {
+    const state = this.textStates.get(`${turnId}\u0000delta`);
+    return state?.sessionId === sessionId && !state.suppressed ? redactSecretText(state.pending).value : "";
+  }
+
   public resetTurn(turnId: string): void {
     this.suppressTextTurns.delete(turnId);
     const prefix = `${turnId}\u0000`;

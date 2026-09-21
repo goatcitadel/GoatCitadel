@@ -10,6 +10,8 @@ interface UseRefreshSubscriptionOptions {
   pollIntervalMs?: number;
   runWhenHidden?: boolean;
   onFallbackStateChange?: (active: boolean) => void;
+  /** Preserve the strongest invalidation when several events share a batch. */
+  signalPriority?: (signal: RefreshSignal) => number;
 }
 
 export function useRefreshSubscription(
@@ -19,6 +21,7 @@ export function useRefreshSubscription(
 ): void {
   const callbackRef = useRef(callback);
   const onFallbackStateChangeRef = useRef(options.onFallbackStateChange);
+  const signalPriorityRef = useRef(options.signalPriority);
   const latestSignalRef = useRef<RefreshSignal | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -37,7 +40,8 @@ export function useRefreshSubscription(
   useEffect(() => {
     callbackRef.current = callback;
     onFallbackStateChangeRef.current = options.onFallbackStateChange;
-  }, [callback, options.onFallbackStateChange]);
+    signalPriorityRef.current = options.signalPriority;
+  }, [callback, options.onFallbackStateChange, options.signalPriority]);
 
   useEffect(() => {
     const timers = getTimerApi();
@@ -67,13 +71,14 @@ export function useRefreshSubscription(
         return;
       }
 
-      const signal = latestSignalRef.current ?? {
+      const signal = (source === "event" ? latestSignalRef.current : null) ?? {
         topic,
         timestamp: Date.now(),
         reason: "fallback_poll",
         source: "refresh-hook",
         eventType: "fallback_poll",
       };
+      if (source === "event") latestSignalRef.current = null;
 
       inFlightRef.current = true;
       recordClientDiagnostic({
@@ -124,7 +129,9 @@ export function useRefreshSubscription(
     };
 
     const unsubscribe = subscribeRefresh(topic, (signal) => {
-      latestSignalRef.current = signal;
+      const pending = latestSignalRef.current;
+      const priority = signalPriorityRef.current;
+      if (!pending || !priority || priority(signal) >= priority(pending)) latestSignalRef.current = signal;
       lastSignalAtRef.current = signal.timestamp;
       setFallbackActive(false);
       recordClientDiagnostic({

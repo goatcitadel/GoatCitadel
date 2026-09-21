@@ -1468,7 +1468,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
-  it("uses model-router to bypass planner work for long direct Chat summaries", async () => {
+  it("records the direct Chat bypass without planner work for long summaries", async () => {
     const harness = createHost("chat");
     const prepared = createPreparedTurnForOrchestration({
       planningMode: "off",
@@ -1486,7 +1486,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     });
   });
 
-  it("records trace truth when the orchestration router keeps live-data chat on the tool-backed path", async () => {
+  it("records trace truth when non-advisory Chat keeps live data inside the admitted turn", async () => {
     const harness = createHost("chat");
     const prepared = createPreparedTurnForOrchestration({
       planningMode: "off",
@@ -1502,7 +1502,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
         decision: "bypassed",
       },
     });
-    expect(prepared.modelRouterDecision.orchestration?.reason).toContain("tool-backed or live-data");
+    expect(prepared.modelRouterDecision.orchestration?.reason).toContain("inside the admitted turn");
   });
 
   it("maps orchestration summary status and step evidence for running, failed, partial, and advisory outcomes", () => {

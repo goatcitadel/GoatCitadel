@@ -13,6 +13,8 @@ For `1.0` governance language:
 
 GoatCitadel `1.0` is a local-first AI workbench for technical users who need to plan, supervise, and execute AI-assisted work across conversation, structured workflows, and code.
 
+OpenCode is an optional external coding agent through the bundled `opencode` skill and the existing approved `shell.exec` path. The operator supplies a locally installed, independently authenticated CLI. Foreground commands retain the 20-second default and may request a bounded `timeoutMs` of 1–900 seconds; cancellation still terminates the owned process tree. Direct `opencode run --format json` output is redacted and projected into bounded Chat result cards with agent steps, reported files, and expandable diff previews. The projection survives raw-output artifact compaction. Progress within OpenCode is captured at process completion, not streamed as individual Gateway tool calls. OpenCode's internal permissions and provider configuration remain its own; approving the parent process does not establish per-action Gateway enforcement or hostile-code sandboxing. See [OpenCode integration](./OPENCODE_INTEGRATION.md).
+
 The `1.0` promise is:
 
 - human-in-the-loop approvals for risky actions

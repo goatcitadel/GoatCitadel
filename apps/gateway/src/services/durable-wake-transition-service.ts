@@ -1,6 +1,7 @@
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { recordRemoteWorkerChatApprovalWake } from "./remote-worker-chat-approval-resume.js";
+import { resumeConfirmedDelegationWait } from "./chat-confirmed-delegation-service.js";
 
 interface DurableWakeTransitionPort {
   prepareMetadata(current: DurableRunRecord): Promise<Record<string, unknown>>;
@@ -20,6 +21,7 @@ export async function commitDurableWakeTransition(
   await storage.runImmediateTransaction(async () => {
     await recordRemoteWorkerChatApprovalWake(storage, current, event);
     const metadata = await port.prepareMetadata(current);
+    await resumeConfirmedDelegationWait(storage, current, event);
     next = await storage.durableRuns.updateRun({
       runId,
       status: "queued",

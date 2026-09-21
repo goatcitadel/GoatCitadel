@@ -75,6 +75,40 @@ describe("useRefreshSubscription", () => {
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves a thread invalidation over trailing noise and polls with a fresh fallback signal", async () => {
+    const callback = vi.fn();
+    const renderer = create(
+      <Harness
+        callback={callback}
+        options={{
+          coalesceMs: 50,
+          staleMs: 100,
+          pollIntervalMs: 100,
+          signalPriority: (signal) => (signal.eventType === "chat_thread_updated" ? 1 : 0),
+        }}
+      />,
+    );
+    emitRefresh("chat", { reason: "thread", eventType: "chat_thread_updated", source: "chat" });
+    emitRefresh("chat", { reason: "system", eventType: "system", source: "llm" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ eventType: "chat_thread_updated" }));
+    // Once consumed, a strong signal must not mask a later independent event.
+    emitRefresh("chat", { reason: "system", eventType: "system", source: "llm" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ eventType: "system" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(callback).toHaveBeenLastCalledWith(
+      expect.objectContaining({ eventType: "fallback_poll", source: "refresh-hook" }),
+    );
+    renderer.unmount();
+  });
+
   it("queues one more event refresh when a callback is already in flight", async () => {
     let releaseFirst!: () => void;
     const callback = vi.fn().mockImplementationOnce(

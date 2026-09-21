@@ -41,7 +41,6 @@ import {
   buildEmptyAssistantTurnFallbackText,
   ChatTurnCancelledError,
   dedupeChatCitations,
-  detectDelegationRoles,
   inferDegradedAssistantTurnFailure,
   patchChatTurnTraceIfStatus,
 } from "./chat-turn-helpers.js";
@@ -105,6 +104,8 @@ export interface AgentChatTurnIdentity {
 
 export interface AgentChatTurnRequestOptions {
   abortSignal?: AbortSignal;
+  /** Internal delegation only; the parent resumes through its durable watcher. */
+  returnAfterDurableAdmission?: boolean;
   onChildDurableRunLaunched?: (runId: string) => Promise<void>;
   turnIdentity?: AgentChatTurnIdentity;
   /** Pre-admitted authority used only by deterministic internal callers/recovery. */
@@ -486,6 +487,7 @@ export async function agentSendChatMessage(
           {
             abortSignal: options?.abortSignal,
             onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
+            returnAfterDurableAdmission: options?.returnAfterDurableAdmission,
             assertDispatchOwnership: options?.assertDispatchOwnership,
             durableRunId: options?.turnIdentity
               ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
@@ -509,6 +511,7 @@ export async function agentSendChatMessage(
           {
             abortSignal: options?.abortSignal,
             onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
+            returnAfterDurableAdmission: options?.returnAfterDurableAdmission,
             assertDispatchOwnership: options?.assertDispatchOwnership,
             durableRunId: options?.turnIdentity
               ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
@@ -1216,23 +1219,6 @@ async function runAgentSendChatMessageLlmPath(
       },
       buildChatTurnRealtimeOptions({ sessionId, turnId }),
     );
-    const delegationDetection = detectDelegationRoles(prepared.content);
-    if (
-      !(await host.isReplayScratchSession(sessionId)) &&
-      prepared.prefs.planningMode !== "advisory" &&
-      delegationDetection.length > 1
-    ) {
-      await host.triggerChatSessionProactive(sessionId, {
-        source: "chat",
-        reason: "Detected multi-role phrasing; generated delegation suggestion.",
-        operatorId: input.operatorId,
-        authActorId: input.authActorId,
-        authActorSource: input.authActorSource,
-        permissionProfileId: input.permissionProfileId,
-        localOperatorOverrideId: input.localOperatorOverrideId,
-      });
-    }
-
     return {
       sessionId,
       userMessage: prepared.userMessage,
@@ -2129,9 +2115,6 @@ export async function cancelChatTurn(
     }
   }
   const active = host.getActiveChatTurnExecution(turnId);
-  if (active?.sessionId === sessionId && !active.controller.signal.aborted) {
-    active.controller.abort(new ChatTurnCancelledError(turnId));
-  }
   const durableRunId = current?.durable?.runId ?? activeStream?.runId;
   let durableCancellation: DurableRunRecord | undefined;
   let durableCancellationError: unknown;
@@ -2179,6 +2162,11 @@ export async function cancelChatTurn(
       cancelled: false,
       trace,
     };
+  }
+  // The durable owner snapshots output and commits withdrawal before abort
+  // listeners can discard buffered text. A failed commit leaves work intact.
+  if (trace.status === "cancelled" && active?.sessionId === sessionId && !active.controller.signal.aborted) {
+    active.controller.abort(new ChatTurnCancelledError(turnId));
   }
   await host.persistChatStreamChunk(
     {

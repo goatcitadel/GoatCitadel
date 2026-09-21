@@ -32,7 +32,10 @@ public sealed partial class MainWindow
             _updates.Notification += release => DispatcherQueue.TryEnqueue(() =>
                 _notificationService.ShowUpdateAvailable(release.Version));
             _updateTimer = DispatcherQueue.CreateTimer();
-            _updateTimer.Interval = TimeSpan.FromMinutes(30);
+            // The service owns the 30-minute network deadline and rate-limit backoff.
+            // Wake more often so a manual check cannot make a fixed timer skip the
+            // next deadline and postpone discovery for nearly another 30 minutes.
+            _updateTimer.Interval = TimeSpan.FromMinutes(1);
             _updateTimer.Tick += (_, _) => _ = _updates.CheckAsync(cancellationToken: _updateCts.Token);
             _updateTimer.Start();
             _ = _updates.CheckAsync(cancellationToken: _updateCts.Token);

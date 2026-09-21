@@ -391,7 +391,7 @@ namespace GoatCitadel.RemoteWorker.Install
             {
                 IntPtr service = CreateServiceW(manager, "GoatCitadelRemoteWorker", "GoatCitadel Remote Worker",
                     0x000f01ffu, 16, 3, 1, "\"" + full + "\"", null, IntPtr.Zero, null,
-                    @"NT SERVICE\GoatCitadelRemoteWorker", "");
+                    @"NT SERVICE\GoatCitadelRemoteWorker", null);
                 if (service == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
                 // Keep the SCM name reserved through configuration and rollback.
                 return new ServiceLease(service);

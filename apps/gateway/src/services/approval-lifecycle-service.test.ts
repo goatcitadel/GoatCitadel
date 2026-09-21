@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
+import { assertChatTurnToolUseOpen } from "./chat-turn-control.js";
 import type {
   ApprovalEffectRecord,
   ApprovalRequest,
@@ -16,6 +21,7 @@ import {
   resolveApproval,
   resolveApprovalsBulk,
   resolveChatToolApproval,
+  rejectPendingChatTurnApprovals,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
   type ApprovalLifecycleHost,
 } from "./approval-lifecycle-service.js";
@@ -29,9 +35,245 @@ import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 
 describe("approval lifecycle service", () => {
+  it("durably withdraws sibling approvals on denial and rejects late or duplicate decisions", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-approval-denial-"));
+    if (!path.basename(root).startsWith("gc-approval-denial-")) throw new Error("Unexpected test cleanup path");
+    const options = {
+      dbPath: path.join(root, "test.sqlite"),
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    };
+    let db = new Storage(options);
+    try {
+      const host = createApprovalHarness();
+      Object.assign(host, { storage: createSqliteAsyncStorage(db) });
+      const seed = (turnId: string, parentDelegationStepId?: string) => {
+        const sessionId = `session-${turnId}`;
+        db.chatMessages.upsert({
+          messageId: `user-${turnId}`,
+          sessionId,
+          role: "user",
+          actorType: "user",
+          actorId: "operator",
+          sourceAuthority: "operator",
+          content: "test",
+          timestamp: new Date().toISOString(),
+          parentDelegationStepId,
+        });
+        const run = db.durableRuns.createRun({
+          workflowKey: "chat.turn.execute",
+          status: "waiting",
+          payload: { sessionId, turnId },
+        });
+        db.chatTurnTraces.create({
+          turnId,
+          sessionId,
+          userMessageId: `user-${turnId}`,
+          status: "waiting_for_tool",
+          mode: "chat",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "standard",
+          startedAt: new Date().toISOString(),
+          durable: { runId: run.runId, status: "waiting" },
+        });
+        return { turnId, sessionId, runId: run.runId };
+      };
+      const parent = seed("parent"),
+        child = seed("child", "step-child"),
+        next = seed("next");
+      db.chatDelegationRuns.create({
+        runId: "delegation",
+        parentRunId: parent.runId,
+        sessionId: parent.sessionId,
+        taskId: "task",
+        objective: "test",
+        roles: ["qa"],
+        mode: "sequential",
+      });
+      db.chatDelegationSteps.create({
+        stepId: "step-child",
+        runId: "delegation",
+        role: "qa",
+        index: 0,
+        status: "running",
+        childSessionId: child.sessionId,
+        childTurnId: child.turnId,
+        durableRunId: child.runId,
+      });
+      const requests = [parent, parent, child, next].map((turn) =>
+        db.approvals.create({
+          kind: "tool.invoke",
+          riskLevel: "caution",
+          payload: { toolName: "documents.create" },
+          preview: {},
+          linkage: { sessionId: turn.sessionId, turnId: turn.turnId },
+        }),
+      );
+      await resolveApproval(host, requests[0]!.approvalId, { decision: "reject", resolvedBy: "operator" });
+      expect(requests.map((request) => db.approvals.get(request.approvalId).status)).toEqual([
+        "rejected",
+        "rejected",
+        "rejected",
+        "pending",
+      ]);
+      expect(
+        db.approvalEvents.listByApprovalId(requests[0]!.approvalId).filter((event) => event.eventType === "resolved")[0]
+          ?.payload.outcome,
+      ).toBe("denied");
+      expect(
+        db.approvalEvents.listByApprovalId(requests[2]!.approvalId).filter((event) => event.eventType === "resolved")[0]
+          ?.payload.outcome,
+      ).toBe("withdrawn");
+      await expect(
+        resolveApproval(host, requests[0]!.approvalId, { decision: "reject", resolvedBy: "operator" }),
+      ).rejects.toThrow("already resolved");
+      db.close();
+      db = new Storage(options);
+      Object.assign(host, { storage: createSqliteAsyncStorage(db) });
+      await expect(
+        resolveApproval(host, requests[1]!.approvalId, { decision: "approve", resolvedBy: "operator" }),
+      ).rejects.toThrow("already resolved");
+      await expect(assertChatTurnToolUseOpen(host.storage, child.sessionId, child.turnId)).rejects.toThrow(
+        "You denied",
+      );
+      await expect(
+        createApproval(host, {
+          kind: "tool.invoke",
+          riskLevel: "caution",
+          payload: { toolName: "presentations.create" },
+          linkage: { sessionId: parent.sessionId, turnId: parent.turnId },
+        }),
+      ).rejects.toThrow("You denied");
+      await expect(assertChatTurnToolUseOpen(host.storage, next.sessionId, next.turnId)).resolves.toBeUndefined();
+      expect(host.policyEngine.executeApprovedAction).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("preserves legacy approval admission before its Chat trace is projected", async () => {
+    const host = createApprovalHarness();
+    host.storage.chatTurnTraces.get.mockImplementation(() => {
+      throw new NotFoundError({ entity: "Chat turn trace", id: "turn-1" });
+    });
+    await createApproval(host, {
+      kind: "tool.invoke",
+      riskLevel: "caution",
+      payload: { toolName: "documents.create" },
+      linkage: { sessionId: "session-1", turnId: "turn-1" },
+    });
+    expect(host.storage.approvals.create).toHaveBeenCalledOnce();
+  });
+
+  it("rejects cancelled-turn approvals through the canonical owner, including an unprojected approval", async () => {
+    const host = createApprovalHarness({
+      approvalLinkage: { sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1" },
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "tool.invoke",
+        request: { toolName: "documents.create" },
+        createdAt: "2026-09-19T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+    });
+    const approval = host.storage.approvals.get("approval-1");
+    host.storage.approvals.listPage.mockReturnValue({ items: [approval], nextCursor: undefined } as never);
+    await host.storage.runImmediateTransaction(() =>
+      rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop"),
+    );
+    expect(host.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected", resolvedBy: "operator-stop" });
+    expect(host.storage.remoteActionTokens.expirePendingByApprovalId).toHaveBeenCalledWith("approval-1");
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "rejected",
+      expect.any(Object),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ decision: "reject" }),
+      { allowExpired: true, outcome: "withdrawn" },
+    );
+    expect(host.policyEngine.executeApprovedAction).not.toHaveBeenCalled();
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.approvals.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves another turn's approval untouched during cancellation", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-other" } });
+    host.storage.approvals.listPage.mockReturnValue({
+      items: [host.storage.approvals.get("approval-1")],
+      nextCursor: undefined,
+    } as never);
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("settles the cancelled tool row without changing another session's projection", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    host.storage.chatToolRuns.listByTurn.mockReturnValue([
+      { toolRunId: "tool-cancelled", sessionId: "session-1", approvalId: "approval-1", status: "approval_required" },
+      { toolRunId: "tool-foreign", sessionId: "session-other", approvalId: "approval-1", status: "approval_required" },
+    ] as never);
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.chatToolRuns.patch).toHaveBeenCalledExactlyOnceWith("tool-cancelled", {
+      status: "blocked",
+      error: "Approval withdrawn before execution.",
+      effectPotential: "unknown",
+      effectDisposition: "none",
+      effectOutcomeKind: "none",
+      effectEvidence: expect.objectContaining({ outcomeKind: "none", reason: "skipped_before_dispatch", refs: [] }),
+      result: { approvalOutcome: "withdrawn" },
+      failureGuidance: "This action did not execute. Send a new message to request further work.",
+      finishedAt: expect.any(String),
+    });
+  });
+
+  it("blocks approval acceptance and creation when Stop wins the durable lock", async () => {
+    const linkage = { sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1" };
+    const host = createApprovalHarness({ approvalLinkage: linkage });
+    host.storage.durableRuns.getRunForUpdate.mockImplementation(() => {
+      host.storage.chatTurnTraces.get.mockReturnValue({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        status: "cancelled",
+        durable: { runId: "durable-turn-1" },
+      });
+      return { runId: "durable-turn-1", status: "cancelled" };
+    });
+    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" })).rejects.toThrow(
+      /stopped or finished/,
+    );
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+    await expect(
+      createApproval(host, {
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: { toolName: "documents.create" },
+        linkage,
+      }),
+    ).rejects.toThrow(/stopped or finished/);
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the rejection if its effect ledger cannot commit", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    host.storage.approvals.listPage.mockReturnValue({
+      items: [host.storage.approvals.get("approval-1")],
+      nextCursor: undefined,
+    } as never);
+    host.enqueueApprovalResolutionEffects.mockRejectedValueOnce(new Error("effect commit failed") as never);
+    await expect(
+      host.storage.runImmediateTransaction(() =>
+        rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop"),
+      ),
+    ).rejects.toThrow("effect commit failed");
+    expect(host.storage.approvals.get("approval-1").status).toBe("pending");
+  });
+
   it("keeps a created tool grant committed when realtime projection fails", async () => {
     const host = createApprovalHarness();
     const input: ToolGrantCreateInput = {
@@ -1085,7 +1327,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "approval-1", status: "rejected" }),
       expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
-      { allowExpired: true },
+      { allowExpired: true, outcome: "expired" },
     );
     expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledWith(
       "approval-1",
@@ -1285,7 +1527,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ decision: "reject" }),
-      { allowExpired: true },
+      { allowExpired: true, outcome: "expired" },
     );
     expect(markWaitResolved).toHaveBeenCalledWith("approval-1", expect.any(String));
     expect(requestRunProcessing).toHaveBeenCalledWith("approval-wait-1");
@@ -1346,7 +1588,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ decision: "reject" }),
-      { allowExpired: true },
+      { allowExpired: true, outcome: "expired" },
     );
   });
 
@@ -1928,7 +2170,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ decision: "reject" }),
-      { allowExpired: true },
+      { allowExpired: true, outcome: "expired" },
     );
   });
 
@@ -1959,7 +2201,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ decision: "reject" }),
-      { allowExpired: true },
+      { allowExpired: true, outcome: "expired" },
     );
   });
 
@@ -2177,7 +2419,7 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
-      { allowExpired: true },
+      { allowExpired: true, outcome: "expired" },
     );
     expect(getRunId).toHaveBeenCalledWith("approval-1");
     expect(host.wakeDurableRun).not.toHaveBeenCalled();
@@ -3167,6 +3409,9 @@ function createApprovalHarness(input?: {
   };
 
   const approvals = {
+    withdrawPendingChatTurn: vi.fn((approvalId: string, request: { resolvedBy: string; resolutionNote: string }) =>
+      approvals.resolve(approvalId, { ...request, decision: "reject" }),
+    ),
     create: vi.fn((request: Record<string, unknown>) => {
       approval = {
         ...approval,
@@ -3309,6 +3554,7 @@ function createApprovalHarness(input?: {
       },
       chatInlineApprovals: {
         get: vi.fn(() => undefined),
+        listByTurn: vi.fn(() => []),
         upsert: vi.fn(),
       },
       chatSessionMeta: {
@@ -3318,10 +3564,28 @@ function createApprovalHarness(input?: {
         get: vi.fn(() => ({
           turnId: "turn-1",
           sessionId: "session-1",
+          status: "waiting_for_approval",
           durable: { runId: "durable-turn-1" },
         })),
       },
+      durableRuns: {
+        getRunForUpdate: vi.fn(() => ({
+          runId: "durable-turn-1",
+          status: "waiting",
+          version: 1,
+          payload: { sessionId: "session-1", turnId: "turn-1" },
+        })),
+        getRun: vi.fn((runId: string) => ({
+          runId,
+          status: "waiting",
+          version: 1,
+          payload: { sessionId: "session-1", turnId: "turn-1" },
+        })),
+        updateRun: vi.fn((input: unknown) => input),
+      },
       chatToolRuns: {
+        listByTurn: vi.fn(() => []),
+        patch: vi.fn(),
         listBySession: vi.fn(() =>
           input?.chatToolName
             ? ([{ approvalId: "approval-1", turnId: "turn-1", toolName: input.chatToolName }] as never)

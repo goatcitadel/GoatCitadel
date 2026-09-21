@@ -4,6 +4,16 @@ import type { RemoteWorkerNativeFileStaging } from "./remote-worker-native-file-
 export const APPROVAL_EXPIRY_ACTOR_ID = "system:approval-expiry" as const;
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "edited";
+/** Canonical resolution reason; distinct from execution/delivery success. */
+export type ApprovalResolutionOutcome =
+  | "approved"
+  | "denied"
+  | "withdrawn"
+  | "expired"
+  | "policy_blocked"
+  | "delivery_failed"
+  | "unknown";
+export type ApprovalActionOutcome = "executed" | "policy_blocked" | "delivery_failed" | "unknown";
 export type ApprovalExplanationStatus = "not_requested" | "pending" | "completed" | "failed";
 
 export interface ApprovalLinkage {
@@ -77,6 +87,10 @@ export interface ShellCommandExplanation {
 }
 
 export interface ApprovalRequest {
+  /** Derived from canonical resolution events; absence means legacy/unknown. */
+  resolutionOutcome?: ApprovalResolutionOutcome;
+  /** Execution truth is independent of the operator's approval decision. */
+  actionOutcome?: ApprovalActionOutcome;
   approvalId: string;
   kind: string;
   riskLevel: "safe" | "caution" | "danger" | "nuclear";
@@ -295,8 +309,15 @@ export interface ApprovalNativeRuntimeReview {
   commandLine: string;
   workingDirectory: string;
   environment: Readonly<Record<string, string>>;
-  limits: Readonly<{ processLimit: number; memoryBytes: number; cpuMilli: number; wallMs: number;
-    rawOutputBytes: number; diagnosticBytes: number; inputBytes: number }>;
+  limits: Readonly<{
+    processLimit: number;
+    memoryBytes: number;
+    cpuMilli: number;
+    wallMs: number;
+    rawOutputBytes: number;
+    diagnosticBytes: number;
+    inputBytes: number;
+  }>;
 }
 
 export interface ApprovalReplaySnapshot {

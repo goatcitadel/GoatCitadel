@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   enumerateRemoteWorkerWindowsDirectory,
+  enumerateRemoteWorkerWindowsDirectories,
+  hashRemoteWorkerWindowsFiles,
   hashRemoteWorkerWindowsFile,
   readRemoteWorkerWindowsFile,
   remoteWorkerWindowsNoFollowHelperDiagnostics,
@@ -366,3 +368,24 @@ describe("remote worker Windows no-follow protocol", () => {
     30_000,
   );
 });
+
+it.skipIf(process.platform !== "win32")(
+  "batches native reads with per-file hashes and directory evidence",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "goat-worker-batch-"));
+    cleanupRoots.push(root);
+    await mkdir(join(root, "nested"));
+    await writeFile(join(root, "one.txt"), "one");
+    await writeFile(join(root, "nested", "two.txt"), "two");
+    const directories = await enumerateRemoteWorkerWindowsDirectories(root, ["", "nested"]);
+    expect(directories.map((item) => item.relativeDirectory)).toEqual(["", "nested"]);
+    const hashes = await hashRemoteWorkerWindowsFiles(root, ["one.txt", "nested/two.txt"], 1024);
+    expect(hashes.map((item) => item.sha256)).toEqual(
+      ["one", "two"].map((text) => createHash("sha256").update(text).digest("hex")),
+    );
+    expect(hashes[1]?.ancestorsBefore).toHaveLength(2);
+    await expect(hashRemoteWorkerWindowsFiles(root, ["one.txt", "missing.txt"], 1024)).rejects.toThrow();
+    await expect(hashRemoteWorkerWindowsFiles(root, ["one.txt", "one.txt"], 1024)).rejects.toThrow();
+  },
+  30000,
+);

@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ConflictError,
-  type ChatCompletionResponse,
   type MemoryContextAccessReceipt,
   type MemoryContextAssemblyReport,
   type MemoryContextComposeRequest,
@@ -22,14 +21,12 @@ import {
   collectMemoryCandidates,
   composeDistilledContext,
   composeFallbackContext,
-  parseDistillerJson,
   rankMemoryCandidates,
   selectMemoryCandidatesForDistillation,
   validateCitations,
   type MemoryFileSource,
   type MemoryItemSource,
   type MemorySourceInput,
-  type ParsedDistillation,
 } from "@goatcitadel/memory-core";
 import {
   assertWritePathInJail,
@@ -49,7 +46,10 @@ import {
   MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
   sanitizeMemoryContextWrite,
 } from "./memory-context-safety.js";
-import { createUtilityModelUsageAttribution, type TrustedUtilityModelUsageLineage } from "./utility-model-usage-attribution.js";
+import {
+  createUtilityModelUsageAttribution,
+  type TrustedUtilityModelUsageLineage,
+} from "./utility-model-usage-attribution.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { runBoundedUtilityModelCall } from "./utility-model-call.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
@@ -57,15 +57,26 @@ import {
   resolveMemoryContextAccessReceipt,
   resolveTrustedMemoryUsageWorkspaceId,
 } from "./memory-context-access-policy.js";
+import {
+  calculateSavings,
+  isMemoryContextAbort,
+  parseDistillerResponse,
+  reserveMemoryContextBudget,
+  throwIfMemoryContextAborted,
+  truncate,
+} from "./memory-context-utils.js";
 
 const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 
 export class MemoryContextService {
-  private readonly queryEmbeddingCache = new Map<string, {
-    embedding: number[];
-    providerIsReal: boolean;
-    expiresAt: number;
-  }>();
+  private readonly queryEmbeddingCache = new Map<
+    string,
+    {
+      embedding: number[];
+      providerIsReal: boolean;
+      expiresAt: number;
+    }
+  >();
   public constructor(
     private readonly storage: Storage,
     private readonly llmService: LlmService,
@@ -74,12 +85,18 @@ export class MemoryContextService {
     private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
     private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
   ) {}
-  public async compose(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
+  public async compose(
+    input: MemoryContextComposeRequest,
+    usageLineage?: TrustedUtilityModelUsageLineage,
+  ): Promise<MemoryContextPack> {
     const pack = await this.composeInternal(input, usageLineage);
     return this.degradeUnsafeMemoryContext(input, pack);
   }
 
-  private async composeInternal(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
+  private async composeInternal(
+    input: MemoryContextComposeRequest,
+    usageLineage?: TrustedUtilityModelUsageLineage,
+  ): Promise<MemoryContextPack> {
     throwIfMemoryContextAborted(input.signal);
     const startedAt = Date.now();
     const memoryConfig = this.config.assistant.memory;
@@ -586,12 +603,23 @@ export class MemoryContextService {
     // read on every composition so edits, deletions and access changes take effect.
     // Hash exact prompt bytes: embedding providers need not be case-insensitive.
     const profile = currentEmbeddingProfile();
-    const cacheKey = createHash("sha256").update(JSON.stringify({
-      prompt, profile, endpoint: process.env.GOATCITADEL_EMBEDDINGS_URL,
-      scope: input.scope, workspaceId: input.workspaceId, workspace: input.workspace,
-      sessionId: input.sessionId, taskId: input.taskId, runId: input.runId,
-      phaseId: input.phaseId, accessFingerprint,
-    })).digest("hex");
+    const cacheKey = createHash("sha256")
+      .update(
+        JSON.stringify({
+          prompt,
+          profile,
+          endpoint: process.env.GOATCITADEL_EMBEDDINGS_URL,
+          scope: input.scope,
+          workspaceId: input.workspaceId,
+          workspace: input.workspace,
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          runId: input.runId,
+          phaseId: input.phaseId,
+          accessFingerprint,
+        }),
+      )
+      .digest("hex");
     const now = Date.now();
     for (const [key, entry] of this.queryEmbeddingCache) {
       if (entry.expiresAt <= now) this.queryEmbeddingCache.delete(key);
@@ -622,9 +650,13 @@ export class MemoryContextService {
       throwIfMemoryContextAborted(input.signal);
       const ttlMs = Math.min(300_000, this.config.assistant.memory.qmd.cacheTtlSeconds * 1000);
       // Never retain a degraded result: a recovered provider must be retried.
-      if (ttlMs > 0 && generated.embedding.length > 0
-        && profile.status === "active" && generated.profile.status === "active"
-        && generated.metadata.provider === profile.provider) {
+      if (
+        ttlMs > 0 &&
+        generated.embedding.length > 0 &&
+        profile.status === "active" &&
+        generated.profile.status === "active" &&
+        generated.metadata.provider === profile.provider
+      ) {
         if (this.queryEmbeddingCache.size >= 128) {
           const oldest = this.queryEmbeddingCache.keys().next().value;
           if (oldest !== undefined) this.queryEmbeddingCache.delete(oldest);
@@ -1039,86 +1071,4 @@ async function walkRecursive(
       modifiedAt: stat.mtime.toISOString(),
     });
   }
-}
-
-function parseDistillerResponse(response: ChatCompletionResponse): ParsedDistillation {
-  const content = extractMessageContent(response);
-  if (!content.trim()) {
-    throw new Error("memory distiller returned empty content");
-  }
-  return parseDistillerJson(content);
-}
-
-function extractMessageContent(response: ChatCompletionResponse): string {
-  const choice = response.choices?.[0];
-  const message = choice?.message;
-  if (!message) {
-    return "";
-  }
-
-  const raw = (message as Record<string, unknown>).content;
-  if (typeof raw === "string") {
-    return raw;
-  }
-  if (Array.isArray(raw)) {
-    return raw
-      .map((part) => {
-        const text = (part as Record<string, unknown>).text;
-        if (typeof text === "string") {
-          return text;
-        }
-        return JSON.stringify(part);
-      })
-      .join("\n");
-  }
-  return "";
-}
-
-function throwIfMemoryContextAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw toMemoryContextAbortError(signal);
-  }
-}
-
-function toMemoryContextAbortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) {
-    return signal.reason;
-  }
-  const error = new Error("memory context composition aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-function isMemoryContextAbort(error: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) return false;
-  if (error === signal.reason) return true;
-  const record = error as { name?: unknown; message?: unknown };
-  return (
-    record.name === "AbortError" ||
-    String(record.message ?? "")
-      .toLowerCase()
-      .includes("abort")
-  );
-}
-
-function calculateSavings(originalTokens: number, distilledTokens: number): number {
-  if (originalTokens <= 0) {
-    return 0;
-  }
-  return Number((((originalTokens - distilledTokens) / originalTokens) * 100).toFixed(2));
-}
-
-function reserveMemoryContextBudget(maxContextTokens: number): number {
-  if (maxContextTokens <= 160) {
-    return maxContextTokens;
-  }
-  const reserved = Math.max(96, Math.ceil(maxContextTokens * 0.12));
-  return Math.max(128, maxContextTokens - reserved);
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength)}...`;
 }

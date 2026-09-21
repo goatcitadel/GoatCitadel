@@ -48,7 +48,7 @@ const approvalHarness = vi.hoisted(() => {
     explanationStatus: "completed",
     explanationError: "",
     followUp: { status: "completed", reason: "Worker resumed." },
-    expiresAt: "expired",
+    expiresAt: "2000-01-01T00:00:00.000Z",
   };
   return {
     approval,
@@ -157,7 +157,8 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useApprovalQueue", () => ({
   useApprovalQueue: () => buildQueue(),
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/content/approval-helpers", () => ({
+vi.mock("@goatcitadel/mission-control-shared/content/approval-helpers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/content/approval-helpers")>()),
   buildApprovalEvidenceModel: (preview: any) =>
     preview?.noEvidence
       ? null
@@ -171,7 +172,6 @@ vi.mock("@goatcitadel/mission-control-shared/content/approval-helpers", () => ({
   formatInferredIds: (items: string[] = [], canonical?: string) =>
     items.filter((item) => item !== canonical).length ? items.filter((item) => item !== canonical).join(", ") : "none",
   getCanonicalDurableRunId: () => "durable-run-42",
-  isExpiredApproval: (approval: any) => approval.expiresAt === "expired",
 }));
 
 function renderPage(extras: Record<string, unknown> = {}) {
@@ -256,34 +256,82 @@ beforeEach(() => {
 });
 
 describe("ApprovalsRoutePage", () => {
-  it.each(["available", "missing", "mismatched", "disclosure", "disclosure-missing", "disclosure-mismatched"])("requires matching native launch details before approval: %s", mode => {
-    const requestSha256 = "a".repeat(64);
-    const approval = { ...approvalHarness.approval, kind: "remote_worker.native_runtime", payload: { nativeRuntime: { expectation: { requestSha256 } },
-      ...(mode.startsWith("disclosure") ? { nativeFileDisclosure: { destination: "gateway_artifacts", executionWorkspaceId: "reviewed-workspace" } } : {}) } };
-    const review = { requestSha256: mode === "mismatched" ? "b".repeat(64) : requestSha256,
-      imagePath: "C:\\cell\\runtime\\entry.exe", commandLine: '"C:\\cell\\runtime\\entry.exe" serve', workingDirectory: "C:\\cell\\work",
-      environment: { TEMP: "C:\\cell\\work" }, limits: { processLimit: 1, memoryBytes: 67108864, cpuMilli: 1000, wallMs: 60000,
-        rawOutputBytes: 65536, diagnosticBytes: 1024, inputBytes: 4096 },
-      fileStaging: { paths: ["report.txt", "nested/result.json"], maximumFileBytes: 1024, maximumTotalBytes: 2048 },
-      ...(mode === "disclosure" || mode === "disclosure-mismatched" ? { fileDisclosure: { destination: "gateway_artifacts",
-        workspaceId: mode === "disclosure" ? "reviewed-workspace" : "foreign-workspace" } } : {}) };
-    approvalHarness.overrides = { selectedApproval: approval, pendingItems: [approval], visibleItems: [approval],
-      replayById: { [approval.approvalId]: { approval, events: [], effects: [], ...(mode === "missing" ? {} : { nativeRuntimeReview: review }) } } };
-    let renderer!: ReactTestRenderer;
-    act(() => { renderer = create(renderPage()); });
-    const text = collectText(renderer.root);
-    expect(findButton(renderer.root, "Approve now").props.disabled).toBe(!["available", "disclosure"].includes(mode));
-    expect(findButton(renderer.root, "Reject").props.disabled).toBe(false);
-    if (mode === "available") {
-      expect(text).toContain(review.commandLine); expect(text).toMatch(/64\s+MiB/u); expect(text).toContain("Execution limits");
-      expect(text).toContain("Files to collect"); expect(text).toContain("nested/result.json");
-      expect(text).toContain("1,024"); expect(text).toContain("2,048"); expect(text).toContain("separate authorization");
-    } else if (mode === "disclosure") {
-      expect(text).toContain("Approval also authorizes transfer"); expect(text).toContain("reviewed-workspace");
-      expect(text).toContain("does not authorize model, channel or external publication access");
-    } else expect(text).toContain("Launch details are unavailable");
-    act(() => renderer.unmount());
-  });
+  it.each(["available", "missing", "mismatched", "disclosure", "disclosure-missing", "disclosure-mismatched"])(
+    "requires matching native launch details before approval: %s",
+    (mode) => {
+      const requestSha256 = "a".repeat(64);
+      const approval = {
+        ...approvalHarness.approval,
+        kind: "remote_worker.native_runtime",
+        payload: {
+          nativeRuntime: { expectation: { requestSha256 } },
+          ...(mode.startsWith("disclosure")
+            ? { nativeFileDisclosure: { destination: "gateway_artifacts", executionWorkspaceId: "reviewed-workspace" } }
+            : {}),
+        },
+      };
+      const review = {
+        requestSha256: mode === "mismatched" ? "b".repeat(64) : requestSha256,
+        imagePath: "C:\\cell\\runtime\\entry.exe",
+        commandLine: '"C:\\cell\\runtime\\entry.exe" serve',
+        workingDirectory: "C:\\cell\\work",
+        environment: { TEMP: "C:\\cell\\work" },
+        limits: {
+          processLimit: 1,
+          memoryBytes: 67108864,
+          cpuMilli: 1000,
+          wallMs: 60000,
+          rawOutputBytes: 65536,
+          diagnosticBytes: 1024,
+          inputBytes: 4096,
+        },
+        fileStaging: { paths: ["report.txt", "nested/result.json"], maximumFileBytes: 1024, maximumTotalBytes: 2048 },
+        ...(mode === "disclosure" || mode === "disclosure-mismatched"
+          ? {
+              fileDisclosure: {
+                destination: "gateway_artifacts",
+                workspaceId: mode === "disclosure" ? "reviewed-workspace" : "foreign-workspace",
+              },
+            }
+          : {}),
+      };
+      approvalHarness.overrides = {
+        selectedApproval: approval,
+        pendingItems: [approval],
+        visibleItems: [approval],
+        replayById: {
+          [approval.approvalId]: {
+            approval,
+            events: [],
+            effects: [],
+            ...(mode === "missing" ? {} : { nativeRuntimeReview: review }),
+          },
+        },
+      };
+      let renderer!: ReactTestRenderer;
+      act(() => {
+        renderer = create(renderPage());
+      });
+      const text = collectText(renderer.root);
+      expect(findButton(renderer.root, "Approve now").props.disabled).toBe(!["available", "disclosure"].includes(mode));
+      expect(findButton(renderer.root, "Reject").props.disabled).toBe(false);
+      if (mode === "available") {
+        expect(text).toContain(review.commandLine);
+        expect(text).toMatch(/64\s+MiB/u);
+        expect(text).toContain("Execution limits");
+        expect(text).toContain("Files to collect");
+        expect(text).toContain("nested/result.json");
+        expect(text).toContain("1,024");
+        expect(text).toContain("2,048");
+        expect(text).toContain("separate authorization");
+      } else if (mode === "disclosure") {
+        expect(text).toContain("Approval also authorizes transfer");
+        expect(text).toContain("reviewed-workspace");
+        expect(text).toContain("does not authorize model, channel or external publication access");
+      } else expect(text).toContain("Launch details are unavailable");
+      act(() => renderer.unmount());
+    },
+  );
   it("renders the canonical queue, inspector, evidence, recovery, trace, lifecycle, and replay surfaces", () => {
     const text = renderText();
 
@@ -617,7 +665,11 @@ describe("ApprovalsRoutePage", () => {
 
   it("keeps a completed rejection follow-up distinct from successful execution", () => {
     approvalHarness.overrides = {
-      selectedApproval: { ...approvalHarness.approval, status: "rejected", followUp: { status: "completed", reason: "woke" } },
+      selectedApproval: {
+        ...approvalHarness.approval,
+        status: "rejected",
+        followUp: { status: "completed", reason: "woke" },
+      },
     };
     const text = renderText();
     expect(text).toContain("rejected");
@@ -801,7 +853,7 @@ describe("ApprovalsRoutePage", () => {
         explanationStatus: undefined,
         explanationError: "",
         followUp: { status: "none" },
-        expiresAt: "expired",
+        expiresAt: "2000-01-01T00:00:00.000Z",
       },
       replayById: {},
       lifecycleByApprovalId: {},

@@ -29,11 +29,11 @@ describe("fast lane command selection", () => {
   });
 
   it("keeps only the selected commands and drops emptied stages", () => {
-    const selection = resolveFastLaneSelection("fast.test.storage,fast.docs");
+    const selection = resolveFastLaneSelection("fast.test.storage.shard1,fast.docs");
     const stages = selectFastLaneStages(FAST_LANE_STAGES, selection);
     assert.deepEqual(
       stages.flatMap((stage) => stage.commands),
-      ["fast.test.storage", "fast.docs"],
+      ["fast.test.storage.shard1", "fast.docs"],
     );
     for (const stage of stages) {
       assert.ok(stage.commands.length > 0);
@@ -41,7 +41,7 @@ describe("fast lane command selection", () => {
   });
 
   it("covers every command exactly once when the shards are unioned", () => {
-    const shards = ["fast.test.gateway.shard1", "fast.test.storage"];
+    const shards = ["fast.test.gateway.shard1", "fast.test.storage.shard1"];
     const rest = allCommandIds.filter((id) => !shards.includes(id));
     const scheduled = [
       ...selectFastLaneStages(FAST_LANE_STAGES, resolveFastLaneSelection(shards.join(","))),

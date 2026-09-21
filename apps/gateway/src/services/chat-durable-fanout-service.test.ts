@@ -7,6 +7,7 @@ import {
   type ChatDurableFanoutServiceHost,
 } from "./chat-durable-fanout-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { ChatTurnToolUseClosedError } from "./chat-turn-control.js";
 
 const now = "2026-08-13T12:00:00.000Z";
 
@@ -55,6 +56,7 @@ function createHost(
     reserveError?: Error;
     invalidateDuringDispatch?: boolean;
     mutateGrantBindingDuringDispatch?: boolean;
+    denyDuringDispatch?: boolean;
     responseStatus?: "completed" | "running" | "partial";
     childStatuses?: Array<"completed" | "running" | "failed">;
   } = {},
@@ -62,6 +64,7 @@ function createHost(
   const invocations = new Map<string, ChatFanoutInvocationRecord>();
   const delegationSteps = new Map<string, Array<Record<string, unknown>>>();
   let authorityValid = true;
+  let denied = false;
   let liveGrant = grant();
   const reserves = vi.fn(async () => {
     if (input.reserveError) throw input.reserveError;
@@ -89,6 +92,7 @@ function createHost(
       })),
     );
     if (input.invalidateDuringDispatch) authorityValid = false;
+    if (input.denyDuringDispatch) denied = true;
     if (input.mutateGrantBindingDuringDispatch) {
       liveGrant = { ...liveGrant, expiresAt: "2026-08-15T12:00:00.000Z", updatedAt: "2026-08-13T12:00:01.000Z" };
     }
@@ -138,6 +142,10 @@ function createHost(
     },
   );
   const host: ChatDurableFanoutServiceHost = {
+    assertParentToolUseOpen: async (runId, sessionId) => {
+      expect([runId, sessionId]).toEqual(["parent-run-1", "session-1"]);
+      if (denied) throw new ChatTurnToolUseClosedError({ outcome: "denied", actorId: "operator", closedAt: now });
+    },
     isEnabled: async () => input.enabled ?? true,
     storage: {
       chatFanoutInvocations: {
@@ -303,6 +311,18 @@ describe("ChatDurableFanoutService", () => {
     expect(result).toMatchObject({ status: "blocked" });
     expect(String(result.terminalReason)).toMatch(/grant binding changed/i);
     expect(cancelDurableChatRun).toHaveBeenCalledWith("child-run-1", "fanout:authority_lost");
+  });
+
+  it("closes child dispatch when the operator denies the parent during fan-out", async () => {
+    const { host, cancelDurableChatRun } = createHost({
+      denyDuringDispatch: true,
+      childStatuses: ["completed", "running"],
+    });
+    const result = await execute(new ChatDurableFanoutService(host), [subtask("A"), subtask("B")]);
+    expect(result).toMatchObject({ status: "blocked" });
+    expect(result.terminalReason).toMatch(/denied the action/);
+    expect(cancelDurableChatRun).toHaveBeenCalledWith("child-run-2", "fanout:authority_lost");
+    expect((result.results as Array<Record<string, unknown>>)[0]).toMatchObject({ output: "committed output 1" });
   });
 
   it("stops every active aggregate using a revoked grant without retrying child effects", async () => {

@@ -2,14 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
-import { isInteractiveChatEventTarget } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
+import {
+  hasActiveTextSelection,
+  isInteractiveChatEventTarget,
+} from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
+import { ChatToolResultPreview } from "@goatcitadel/mission-control-shared/components/chat/ChatToolResultPreview";
+import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 
 import "@next/styles/mission-control-next-tokens.css";
 import "@next/styles/mission-control-next-foundation.css";
+import "@next/styles/mission-control-next-theme-bridge.css";
 import "@next/styles/mission-control-next.css";
 import "@next/features/native-routes/primitives/primitives.css";
 import "@next/features/threaded-surface/styles/timeline.css";
 import "@next/features/threaded-surface/styles/code-highlight.css";
+import "@next/features/threaded-surface/styles/tool-result-preview.css";
 import "@next/features/threaded-surface/styles/composer.css";
 import "./chat-demo.css";
 import sampleImageUrl from "./assets/sample-image.png";
@@ -17,6 +24,40 @@ import sampleAudioUrl from "./assets/sample-audio.mp3";
 import sampleVideoUrl from "./assets/sample-video.mp4";
 
 type Theme = "theme-signal-noir" | "theme-citadel-light";
+
+const OPENCODE_DEMO_RUN: ChatToolRunRecord = {
+  toolRunId: "tool-visual-fixture",
+  turnId: "turn-visual-fixture",
+  sessionId: "session-visual-fixture",
+  startedAt: "2026-09-19T00:00:00.000Z",
+  finishedAt: "2026-09-19T00:00:08.000Z",
+  toolName: "shell.exec",
+  status: "executed",
+  result: {
+    exitCode: 0,
+    externalAgent: {
+      engine: "opencode",
+      version: 1,
+      sessionId: "ses_visual_fixture",
+      truncated: false,
+      text: "Added a bounded retry for temporary connection failures. The timeout remains configurable.",
+      steps: [
+        { id: "read", tool: "read", title: "Read src/client.ts", status: "completed" },
+        { id: "edit", tool: "edit", title: "Update retry handling", status: "completed" },
+        { id: "test", tool: "bash", title: "Run focused client tests", status: "completed" },
+      ],
+      files: [
+        {
+          path: "src/client.ts",
+          additions: 3,
+          deletions: 1,
+          patch:
+            "--- a/src/client.ts\n+++ b/src/client.ts\n@@ -1 +1,3 @@\n-return await request(url);\n+return await retry(() => request(url), {\n+  attempts: 3,\n+});",
+        },
+      ],
+    },
+  },
+};
 
 interface DemoTurn {
   id: string;
@@ -320,9 +361,10 @@ function DemoTurnCard({
       <div
         className="mc-next-thread-turn-surface"
         onClick={(event) => {
-          if (!isInteractiveChatEventTarget(event.target, event.currentTarget)) {
-            onSelect(turn.id);
+          if (isInteractiveChatEventTarget(event.target, event.currentTarget) || hasActiveTextSelection()) {
+            return;
           }
+          onSelect(turn.id);
         }}
       >
         <button
@@ -495,11 +537,14 @@ function ChatDemo() {
   });
 
   return (
-    <div className={`mc-next-shell ${theme} demo-shell`}>
+    <div className={`mc-next-shell ${theme} demo-shell`} data-area="chat">
       <header className="demo-header">
         <span className="demo-header-title">Chat display polish — live preview</span>
         <div className="demo-header-actions">
           <span className="demo-header-theme">{theme.replace("theme-", "")}</span>
+          <button type="button" className="mc-next-thread-inline-button" onClick={toggleTheme}>
+            Toggle theme
+          </button>
           <button
             type="button"
             className="mc-next-thread-inline-button"
@@ -517,6 +562,10 @@ function ChatDemo() {
                 {turns.map((turn) => (
                   <DemoTurnCard key={turn.id} turn={turn} onSelect={handleSelectTurn} onOpenLightbox={setLightbox} />
                 ))}
+                <section aria-label="OpenCode presentation fixture">
+                  <p>OpenCode integration · sample output</p>
+                  <ChatToolResultPreview run={OPENCODE_DEMO_RUN} />
+                </section>
                 <ChatStreamStatusBar mode="chat" status={streamStatus} queuedCount={0} error={null} />
               </div>
             </div>

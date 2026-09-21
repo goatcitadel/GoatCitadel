@@ -358,8 +358,44 @@
   line-height: 1;
 }
 
-.mc-next-turn-evidence-summary[open] > .mc-next-turn-evidence-summary-trigger::before {
+.mc-next-turn-evidence-summary[open] > .mc-next-turn-evidence-summary-trigger::before,
+.mc-next-turn-sources-summary[open] > .mc-next-turn-evidence-summary-trigger::before {
   content: "-";
+}
+
+/* Sources sit beside Activity rather than inside it: verifying an answer and
+   inspecting a run are different tasks, so only one of them should cost a dig
+   through execution detail. */
+.mc-next-turn-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.28rem 0.75rem;
+}
+
+.mc-next-turn-sources-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  /* Same box metrics as the compact evidence control beside it, so the two
+     triggers sit on exactly the same baseline. */
+  padding: 0.08rem 0;
+  border: 1px solid transparent;
+}
+
+/* The stacked-layout top margin would offset the two triggers from each other
+   now that they share a flex row; the row gap handles the spacing instead. */
+.mc-next-turn-footer > .mc-next-turn-evidence-summary {
+  margin-top: 0;
+}
+
+.mc-next-turn-sources-body {
+  padding-top: 0.28rem;
+}
+
+/* Once either disclosure is open it takes the full row so its body is not
+   squeezed into a column beside the other control. */
+.mc-next-turn-footer > details[open] {
+  flex: 1 0 100%;
 }
 
 .mc-next-turn-evidence-title {

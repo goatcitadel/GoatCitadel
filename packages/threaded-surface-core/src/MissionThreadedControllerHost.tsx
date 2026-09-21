@@ -4,6 +4,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -852,7 +853,9 @@ export interface MissionThreadedCodeWorkflowPanelProps {
   onExpandedPathsChange: (nextPaths: string[]) => void;
   onRefresh: () => void;
   onSaveFile: () => void;
-  onFileOperationPreview?: (input: ChatSessionWorkbenchFileOperationPreviewRequest) => Promise<ChatSessionWorkbenchFileOperationPreviewResponse | null>;
+  onFileOperationPreview?: (
+    input: ChatSessionWorkbenchFileOperationPreviewRequest,
+  ) => Promise<ChatSessionWorkbenchFileOperationPreviewResponse | null>;
   onFileOperation?: (input: ChatSessionWorkbenchFileOperationRequest) => Promise<boolean>;
   onDiscardDraft: () => void;
   onRunValidationCommand?: (input: ChatSessionWorkbenchCommandRunRequest) => void;
@@ -1627,7 +1630,17 @@ export function MissionThreadedControllerHost({
     visibleSessionLabelById,
     availableFolders,
   } = threadController;
-  const { panel: sessionStatusPanel, refresh: refreshSessionStatus, stopFanout: stopSessionFanout, close: closeSessionStatus } = useChatSessionStatus({ sessionId: selectedSessionId, workspaceId: selectedSession?.workspaceId ?? workspaceId, enabled: sessionStatusEnabled, pushLocalNotice });
+  const {
+    panel: sessionStatusPanel,
+    refresh: refreshSessionStatus,
+    stopFanout: stopSessionFanout,
+    close: closeSessionStatus,
+  } = useChatSessionStatus({
+    sessionId: selectedSessionId,
+    workspaceId: selectedSession?.workspaceId ?? workspaceId,
+    enabled: sessionStatusEnabled,
+    pushLocalNotice,
+  });
   useEffect(() => {
     if (sessionStatusPanel.open && sessionStatusEnabled) void refreshSessionStatus(false);
     // Thread and attention changes are fed by the existing realtime refresh path.
@@ -1951,7 +1964,8 @@ export function MissionThreadedControllerHost({
   const documentWorkspaceId = selectedSession?.workspaceId ?? workspaceId;
   const documentScope = JSON.stringify([documentWorkspaceId, selectedSessionId, documentEditingEnabled]);
   const documentOwner = useRef({ scope: documentScope, generation: 0 });
-  if (documentOwner.current.scope !== documentScope) documentOwner.current = { scope: documentScope, generation: documentOwner.current.generation + 1 };
+  if (documentOwner.current.scope !== documentScope)
+    documentOwner.current = { scope: documentScope, generation: documentOwner.current.generation + 1 };
   const documentGeneration = documentOwner.current.generation;
   const documentRequest = useRef(0);
   const ownsDocuments = () => documentOwner.current.generation === documentGeneration;
@@ -1962,9 +1976,12 @@ export function MissionThreadedControllerHost({
   const refreshDocuments = useCallback(async () => {
     if (documentOwner.current.generation !== documentGeneration) return;
     const request = ++documentRequest.current;
-    const current = () => documentOwner.current.generation === documentGeneration && documentRequest.current === request;
+    const current = () =>
+      documentOwner.current.generation === documentGeneration && documentRequest.current === request;
     if (!documentEditingEnabled || !selectedSessionId) {
-      setDocumentNotes([]); setDocumentProposals([]); setDocumentLoading(false);
+      setDocumentNotes([]);
+      setDocumentProposals([]);
+      setDocumentLoading(false);
       return;
     }
     setDocumentLoading(true);
@@ -1983,9 +2000,13 @@ export function MissionThreadedControllerHost({
     }
   }, [documentEditingEnabled, documentGeneration, documentWorkspaceId, selectedSessionId, setUiError]);
   useEffect(() => {
-    setPendingDocumentContextRefs([]); setDocumentNotes([]); setDocumentProposals([]);
+    setPendingDocumentContextRefs([]);
+    setDocumentNotes([]);
+    setDocumentProposals([]);
     void refreshDocuments();
-    return () => { documentRequest.current += 1; };
+    return () => {
+      documentRequest.current += 1;
+    };
   }, [refreshDocuments]);
   const toggleDocumentContext = useCallback((ref: ChatRoutedContextRef) => {
     setPendingDocumentContextRefs((current) => {
@@ -1996,6 +2017,10 @@ export function MissionThreadedControllerHost({
     });
   }, []);
 
+  const operatorPromptSettersRef = useRef<{
+    setPendingApproval: (value: null) => void;
+    setPendingUserInput: (value: null) => void;
+  } | null>(null);
   const {
     queuedOutbound,
     setQueuedOutbound,
@@ -2022,7 +2047,8 @@ export function MissionThreadedControllerHost({
     pushLocalNoticeRef,
     setDraft,
     setPendingAttachments,
-    setPendingApproval: () => undefined,
+    setPendingApproval: (value) => operatorPromptSettersRef.current?.setPendingApproval(value),
+    setPendingUserInput: (value) => operatorPromptSettersRef.current?.setPendingUserInput(value),
     setError: setUiError,
     onOutboundContextConsumed: handleOutboundContextConsumed,
     consumeModelCouncilArming,
@@ -2482,6 +2508,7 @@ export function MissionThreadedControllerHost({
     optimisticUserMessage,
     prefsRef,
   } = outbound;
+  operatorPromptSettersRef.current = { setPendingApproval, setPendingUserInput };
   runtimeBlockerActiveRef.current = Boolean(pendingApproval || pendingUserInput);
 
   useChatApprovalController({
@@ -3196,12 +3223,7 @@ export function MissionThreadedControllerHost({
 
       runNavigation();
     },
-    [
-      activeGeneratedArtifact?.artifactId,
-      onNavigateSurface,
-      selectedSessionId,
-      selectedTurnId,
-    ],
+    [activeGeneratedArtifact?.artifactId, onNavigateSurface, selectedSessionId, selectedTurnId],
   );
 
   const handleCloseGeneratedArtifact = useCallback(() => {
@@ -3218,7 +3240,7 @@ export function MissionThreadedControllerHost({
       const generation = documentOwner.current.generation;
       await revealGeneratedArtifactInSurface({
         isCurrent: () => documentOwner.current.generation === generation,
-        onOpenArtifact: () => setActivityOpenRequest(current => current + 1),
+        onOpenArtifact: () => setActivityOpenRequest((current) => current + 1),
         artifact,
         compactSurfaceLayout,
         messageMode,
@@ -3255,14 +3277,21 @@ export function MissionThreadedControllerHost({
       try {
         await runWithSelectedSessionId(selectedSessionId, async () => {
           const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
-          const existingArtifactId = artifactId ? targetTurn?.generatedArtifacts?.find(item => item.artifactId === artifactId)?.artifactId : targetTurn?.generatedArtifacts?.[0]?.artifactId;
+          const existingArtifactId = artifactId
+            ? targetTurn?.generatedArtifacts?.find((item) => item.artifactId === artifactId)?.artifactId
+            : targetTurn?.generatedArtifacts?.[0]?.artifactId;
           if (!existingArtifactId) {
             pushLocalNotice("Create an artifact from this turn before opening it.", "warning");
             return;
           }
           const artifact = (await fetchChatGeneratedArtifact(existingArtifactId, workspaceId)).item;
           if (documentOwner.current.generation !== generation) return;
-          if (artifact.artifactId !== existingArtifactId || artifact.sessionId !== selectedSessionId || artifact.turnId !== turnId) throw new Error("The returned artifact does not match this turn.");
+          if (
+            artifact.artifactId !== existingArtifactId ||
+            artifact.sessionId !== selectedSessionId ||
+            artifact.turnId !== turnId
+          )
+            throw new Error("The returned artifact does not match this turn.");
           await revealGeneratedArtifact(artifact);
         });
       } catch (err) {
@@ -4106,10 +4135,11 @@ export function MissionThreadedControllerHost({
       [attachmentId]: mode,
     }));
   }, []);
-  const requiresThreadKnowledge = pendingAttachments.some((attachment) => {
-    const mode = pendingAttachmentModes[attachment.attachmentId] ?? "message";
-    return isDocumentAttachment(attachment) && mode !== "message";
-  }) || knowledgeUrlDraft.trim().length > 0;
+  const requiresThreadKnowledge =
+    pendingAttachments.some((attachment) => {
+      const mode = pendingAttachmentModes[attachment.attachmentId] ?? "message";
+      return isDocumentAttachment(attachment) && mode !== "message";
+    }) || knowledgeUrlDraft.trim().length > 0;
   const attachPendingKnowledgeSources = useCallback(async () => {
     const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
     if (!requiresThreadKnowledge) {
@@ -4806,7 +4836,7 @@ export function MissionThreadedControllerHost({
     await sendDraftAsChat();
   }, [draft, failedAutoImageRecovery, selectedSessionId, sendDraftAsChat, setUiError]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     composerSendHandlerRef.current = async () => {
       if (historicalModeActive) {
         pushLocalNotice("Return to the latest conversation before sending a message.", "warning");
@@ -5562,7 +5592,7 @@ export function MissionThreadedControllerHost({
               hasRemoteChanges: workbenchHasRemoteChanges,
               retainedDraftPaths: workbenchDraftPaths,
               onRebaseDraft: rebaseWorkbenchDraft,
-              onSaveDraftForLeave: async () => !blockHistoricalMutation() && await saveWorkbenchFile(),
+              onSaveDraftForLeave: async () => !blockHistoricalMutation() && (await saveWorkbenchFile()),
               generatedArtifact: activeGeneratedArtifact,
               onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
               availableProjects: activeCodeProjects,
@@ -5777,9 +5807,14 @@ export function MissionThreadedControllerHost({
               });
               if (ownsDocuments()) {
                 setActiveGeneratedArtifact(response.item);
-                await loadSessionSecondaryState(selectedSession.sessionId, { background: true }).catch((error: unknown) => {
-                  if (ownsDocuments()) setUiError(error instanceof Error ? error.message : "Artifact saved; refreshed evidence is unavailable.");
-                });
+                await loadSessionSecondaryState(selectedSession.sessionId, { background: true }).catch(
+                  (error: unknown) => {
+                    if (ownsDocuments())
+                      setUiError(
+                        error instanceof Error ? error.message : "Artifact saved; refreshed evidence is unavailable.",
+                      );
+                  },
+                );
               }
               return response.item;
             },
@@ -5794,12 +5829,16 @@ export function MissionThreadedControllerHost({
             },
             onApplyProposal: async (proposalId) => {
               const response = await applyDocumentPatchProposal(proposalId, documentWorkspaceId);
-              if (ownsDocuments()) await Promise.all([
-                refreshDocuments(),
-                loadSessionSecondaryState(selectedSession.sessionId, { background: true }),
-              ]).catch((error: unknown) => {
-                if (ownsDocuments()) setUiError(error instanceof Error ? error.message : "Proposal applied; refreshed evidence is unavailable.");
-              });
+              if (ownsDocuments())
+                await Promise.all([
+                  refreshDocuments(),
+                  loadSessionSecondaryState(selectedSession.sessionId, { background: true }),
+                ]).catch((error: unknown) => {
+                  if (ownsDocuments())
+                    setUiError(
+                      error instanceof Error ? error.message : "Proposal applied; refreshed evidence is unavailable.",
+                    );
+                });
               return response.item;
             },
             onRejectProposal: async (proposalId) => {

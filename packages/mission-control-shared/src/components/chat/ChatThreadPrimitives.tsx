@@ -74,6 +74,10 @@ export interface ChatDelegationRunView {
 export const THREAD_WINDOW_THRESHOLD = 80;
 export const THREAD_WINDOW_SIZE = 60;
 export const THREAD_PIN_OVERSCAN = 4;
+/** How many older turns one "show earlier" step reveals. Expanding used to jump the
+ *  window start to 0, which mounts every retained turn at once — the opposite of what
+ *  the windowing is for. Stepping keeps the cost of looking back bounded. */
+export const THREAD_HISTORY_PAGE_SIZE = 30;
 
 export type ChatThreadWindowItem =
   | { kind: "turn"; turn: ChatThreadTurnRecord; index: number }
@@ -239,6 +243,19 @@ export function isInteractiveChatEventTarget(target: EventTarget | null, current
     'a, button, input, select, textarea, summary, details, [role="button"], [role="link"], [contenteditable="true"]',
   );
   return Boolean(interactiveAncestor && interactiveAncestor !== currentTarget);
+}
+
+/**
+ * True while the user has a non-empty range selected. A click that ends a
+ * drag-select still fires on mouseup, so without this check reading a turn by
+ * highlighting its text also selects the turn.
+ */
+export function hasActiveTextSelection(): boolean {
+  const selection = globalThis.getSelection?.();
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+  return selection.toString().trim().length > 0;
 }
 
 export function isThreadScrollNearBottom(element: HTMLElement): boolean {
@@ -419,17 +436,55 @@ function NoticeContent({ content }: { content: string }) {
   );
 }
 
+/**
+ * Next window start after one "show earlier" step. `current` is the manual start
+ * (null until the operator has stepped at all), `effectiveStart` the start in force
+ * right now, so the first step walks back from what is actually on screen.
+ */
+export function stepWindowStartBack(current: number | null, effectiveStart: number): number {
+  return Math.max(0, (current ?? effectiveStart) - THREAD_HISTORY_PAGE_SIZE);
+}
+
 export function ChatThreadWindowGap({ hiddenCount, onExpand }: { hiddenCount: number; onExpand: () => void }) {
+  const step = Math.min(hiddenCount, THREAD_HISTORY_PAGE_SIZE);
   return (
     <div className="mc-next-thread-window-gap">
       <span>
         {hiddenCount} earlier turn{hiddenCount === 1 ? "" : "s"} hidden for performance.
       </span>
       <button type="button" className="mc-next-thread-inline-button" onClick={onExpand}>
-        Show hidden turns
+        Show {step} earlier turn{step === 1 ? "" : "s"}
       </button>
     </div>
   );
+}
+
+/**
+ * True when a turn finished the ordinary way. A plain successful exchange does not
+ * need a "completed" badge — the answer being there says so. Reserving a visible
+ * outcome chip for the cases that are NOT routine is what makes it worth reading.
+ */
+export function isRoutineTurnOutcome(turn: ChatThreadTurnRecord): boolean {
+  return turn.trace.status === "completed" && !turn.trace.failure;
+}
+
+/**
+ * Chips for the Activity disclosure. Source counts deliberately live on the Sources
+ * control instead: "can I verify this answer?" and "what happened inside this run?"
+ * are different questions and should not share one summary line.
+ */
+export function buildTurnActivityChips(turn: ChatThreadTurnRecord, durableRunId?: string): string[] {
+  const toolCount = turn.toolRuns.length;
+  return [
+    isRoutineTurnOutcome(turn) ? null : turn.trace.status,
+    toolCount > 0 ? `${toolCount} step${toolCount === 1 ? "" : "s"}` : null,
+    durableRunId ? `Run ${formatCompactEvidenceId(durableRunId)}` : null,
+    turn.trace.failure &&
+    !(turn.trace.status === "cancelled" && turn.trace.failure.failureClass === "approval_required")
+      ? turn.trace.failure.failureClass
+      : null,
+    turn.trace.orchestration ? "orchestrated" : null,
+  ].filter((chip): chip is string => Boolean(chip));
 }
 
 function TurnEvidenceSummary({
@@ -487,113 +542,142 @@ function TurnEvidenceSummary({
     userToggledRef.current = false;
     setOpen(expandedByDefaultRef.current);
   }, [turn.turnId]);
-  const summaryChips = [
-    turn.trace.status,
-    turn.toolRuns.length > 0 ? `${turn.toolRuns.length} tool${turn.toolRuns.length === 1 ? "" : "s"}` : null,
-    turn.citations.length > 0 ? `${turn.citations.length} source${turn.citations.length === 1 ? "" : "s"}` : null,
-    durableRunId ? `Run ${formatCompactEvidenceId(durableRunId)}` : null,
-    turn.trace.failure ? turn.trace.failure.failureClass : null,
-    turn.trace.orchestration ? "orchestrated" : null,
-  ].filter((chip): chip is string => Boolean(chip));
+  const summaryChips = buildTurnActivityChips(turn, durableRunId);
+
+  const sourceCount = turn.citations.length;
 
   return (
-    <details
-      className={`mc-next-turn-evidence-summary${showOperationalDetails ? "" : " compact"}`}
-      open={open}
-      onToggle={(event) => {
-        const nextOpen = event.currentTarget.open;
-        if (nextOpen !== open) {
-          userToggledRef.current = true;
-        }
-        setOpen(nextOpen);
-      }}
-    >
-      <summary className="mc-next-turn-evidence-summary-trigger" aria-expanded={open} aria-controls={evidenceBodyId}>
-        <span className="mc-next-turn-evidence-title">Evidence</span>
-        {summaryChips.map((chip, index) => (
-          <span key={`${chip}-${index}`} className="mc-next-turn-evidence-chip">
-            {chip}
-          </span>
-        ))}
-      </summary>
-      <div className="mc-next-turn-evidence-body" id={evidenceBodyId}>
-        <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
-          {showContextToggle ? (
-            <label className="mc-next-thread-context-toggle">
-              <input
-                type="checkbox"
-                checked={contextSelected}
-                aria-label={`${contextSelected ? "Remove" : "Add"} turn ${turn.turnId} as context`}
-                onChange={() => onToggleContextTurn?.(turn.turnId)}
-              />
-              <span>Context</span>
-            </label>
-          ) : null}
-          {showContextToggle && contextSelected ? (
-            <span className="mc-next-thread-context-pin">Context pinned</span>
-          ) : null}
-          {showOperationalDetails ? (
-            <>
-              <PrimitiveStatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</PrimitiveStatusChip>
-              {recoveryLabel ? (
-                <span>{recoveryLabel}</span>
-              ) : turn.trace.failure ? (
-                <span>{turn.trace.failure.failureClass}</span>
-              ) : null}
-              {routingSummary.map((item, index) => (
-                <span key={index}>{item}</span>
-              ))}
-              {durableRunId ? (
-                <span className="mc-next-thread-activity-chip">Run {formatCompactEvidenceId(durableRunId)}</span>
-              ) : null}
-              {turn.trace.guidance?.truncated ? (
-                <span className="mc-next-thread-activity-chip">context trimmed</span>
-              ) : null}
-              {turn.toolRuns.length > 0 ? (
-                <span>
-                  {turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}
-                </span>
-              ) : null}
-              {turn.citations.length > 0 ? (
-                <span>
-                  {turn.citations.length} citation{turn.citations.length === 1 ? "" : "s"}
-                </span>
-              ) : null}
-              {turn.trace.orchestration ? <span>orchestrated</span> : null}
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="mc-next-thread-inline-button"
-            aria-label={`Open execution detail for turn ${turn.turnId}`}
-            onClick={() => onOpenRunDetails(turn.turnId)}
-          >
-            {mode === "cowork" ? "Run details" : "Details"}
-          </button>
-          {durableRunId && onOpenUniversalRunDetail ? (
+    <div className="mc-next-turn-footer">
+      {citationList && sourceCount > 0 ? (
+        <TurnSourcesDisclosure turnId={turn.turnId} sourceCount={sourceCount}>
+          {citationList}
+        </TurnSourcesDisclosure>
+      ) : null}
+      <details
+        className={`mc-next-turn-evidence-summary${showOperationalDetails ? "" : " compact"}`}
+        open={open}
+        onToggle={(event) => {
+          const nextOpen = event.currentTarget.open;
+          if (nextOpen !== open) {
+            userToggledRef.current = true;
+          }
+          setOpen(nextOpen);
+        }}
+      >
+        <summary className="mc-next-turn-evidence-summary-trigger" aria-expanded={open} aria-controls={evidenceBodyId}>
+          <span className="mc-next-turn-evidence-title">Activity</span>
+          {summaryChips.map((chip, index) => (
+            <span key={`${chip}-${index}`} className="mc-next-turn-evidence-chip">
+              {chip}
+            </span>
+          ))}
+        </summary>
+        <div className="mc-next-turn-evidence-body" id={evidenceBodyId}>
+          <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
+            {showContextToggle ? (
+              <label className="mc-next-thread-context-toggle">
+                <input
+                  type="checkbox"
+                  checked={contextSelected}
+                  aria-label={`${contextSelected ? "Remove" : "Add"} turn ${turn.turnId} as context`}
+                  onChange={() => onToggleContextTurn?.(turn.turnId)}
+                />
+                <span>Context</span>
+              </label>
+            ) : null}
+            {showContextToggle && contextSelected ? (
+              <span className="mc-next-thread-context-pin">Context pinned</span>
+            ) : null}
+            {showOperationalDetails ? (
+              <>
+                <PrimitiveStatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</PrimitiveStatusChip>
+                {recoveryLabel ? (
+                  <span>{recoveryLabel}</span>
+                ) : turn.trace.failure ? (
+                  <span>{turn.trace.failure.failureClass}</span>
+                ) : null}
+                {routingSummary.map((item, index) => (
+                  <span key={index}>{item}</span>
+                ))}
+                {durableRunId ? (
+                  <span className="mc-next-thread-activity-chip">Run {formatCompactEvidenceId(durableRunId)}</span>
+                ) : null}
+                {turn.trace.guidance?.truncated ? (
+                  <span className="mc-next-thread-activity-chip">context trimmed</span>
+                ) : null}
+                {turn.toolRuns.length > 0 ? (
+                  <span>
+                    {turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}
+                  </span>
+                ) : null}
+                {/* Citation count lives on the Sources control now, not in execution detail. */}
+                {turn.trace.orchestration ? <span>orchestrated</span> : null}
+              </>
+            ) : null}
             <button
               type="button"
               className="mc-next-thread-inline-button"
-              aria-label={`Open durable run trace ${durableRunId}`}
-              onClick={() => onOpenUniversalRunDetail(durableRunId)}
+              aria-label={`Open execution detail for turn ${turn.turnId}`}
+              onClick={() => onOpenRunDetails(turn.turnId)}
             >
-              Run trace
+              {mode === "cowork" ? "Run details" : "Details"}
             </button>
-          ) : null}
-        </div>
-        {citationList ? (
-          <div className="mc-next-turn-evidence-section">
-            <span className="mc-next-turn-evidence-section-title">Sources</span>
-            {citationList}
+            {durableRunId && onOpenUniversalRunDetail ? (
+              <button
+                type="button"
+                className="mc-next-thread-inline-button"
+                aria-label={`Open durable run trace ${durableRunId}`}
+                onClick={() => onOpenUniversalRunDetail(durableRunId)}
+              >
+                Run trace
+              </button>
+            ) : null}
           </div>
-        ) : null}
-        {suppressActivityRows ? null : (
-          <ChatTurnActivityRows
-            mode={mode}
-            toolRuns={turn.toolRuns}
-            onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
-          />
-        )}
+          {suppressActivityRows ? null : (
+            <ChatTurnActivityRows
+              mode={mode}
+              toolRuns={turn.toolRuns}
+              onOpenRunDetails={() => onOpenRunDetails(turn.turnId)}
+            />
+          )}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/**
+ * Sources get their own control beside Activity rather than sharing one "Evidence"
+ * disclosure with execution detail. Verifying an answer and inspecting a run are
+ * different tasks, and only one of them should cost the reader a diagnostics dig.
+ */
+function TurnSourcesDisclosure({
+  turnId,
+  sourceCount,
+  children,
+}: {
+  turnId: string;
+  sourceCount: number;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  useEffect(() => {
+    // A new turn reusing this component starts closed again.
+    setOpen(false);
+  }, [turnId]);
+  return (
+    <details
+      className="mc-next-turn-sources-summary"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="mc-next-turn-evidence-summary-trigger" aria-expanded={open} aria-controls={bodyId}>
+        <span className="mc-next-turn-evidence-title">Sources</span>
+        <span className="mc-next-turn-evidence-chip">{sourceCount}</span>
+      </summary>
+      <div className="mc-next-turn-sources-body" id={bodyId}>
+        {children}
       </div>
     </details>
   );
@@ -1150,7 +1234,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const durableRunId = turn.trace.durable?.runId;
   // A published (non-null) preview means the turn is still streaming or
   // settling its final reveal; the cleared preview is the idle signal.
-  const isStreamingTurn = streamingPreview?.turnId === turn.turnId;
+  const isStreamingTurn = streamingPreview?.turnId === turn.turnId && turn.trace.status !== "cancelled";
   // The live activity rail owns rendering tool runs while the turn is in
   // flight; TurnEvidenceSummary's ChatTurnActivityRows takes back over the
   // instant the trace settles, in the same commit the rail unmounts (see
@@ -1169,7 +1253,9 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     ? formatActorTimestamp(turn.assistantMessage.timestamp)
     : isStreamingTurn
       ? "Streaming"
-      : "Running";
+      : turn.trace.status === "cancelled"
+        ? "Stopped"
+        : "Running";
   const assistantPendingLabel = getAssistantPendingLabel(turn.trace, { isStreamingTurn });
   const isPlainChat = mode === "chat";
   const showContextToggle = Boolean(onToggleContextTurn);
@@ -1184,7 +1270,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   // Retry is the primary recovery action, so it stays reachable without
   // opening the menu. Everything else remains secondary and collapsible.
   const showActionMenu =
-    hasStartNewThreadAction || hasEditAction || hasGeneratedArtifactAction || hasGeneratedArtifactVersionAction || Boolean(renderSkillCapture);
+    hasStartNewThreadAction ||
+    hasEditAction ||
+    hasGeneratedArtifactAction ||
+    hasGeneratedArtifactVersionAction ||
+    Boolean(renderSkillCapture);
   const showBranchSwitcher = turn.branch.siblingCount > 1;
   const showActions = showRetryAction || showActionMenu || showBranchSwitcher || Boolean(suggestionSummary);
   const showOperationalDetails =
@@ -1229,9 +1319,15 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
       <div
         className="mc-next-thread-turn-surface"
         onClick={(event: ReactMouseEvent<HTMLDivElement>) => {
-          if (!isInteractiveChatEventTarget(event.target, event.currentTarget)) {
-            onSelectTurn(turn.turnId);
+          if (isInteractiveChatEventTarget(event.target, event.currentTarget)) {
+            return;
           }
+          // Reading by highlighting must not count as picking the turn; the
+          // explicit "Open turn" button below is the deliberate way in.
+          if (hasActiveTextSelection()) {
+            return;
+          }
+          onSelectTurn(turn.turnId);
         }}
       >
         <button
@@ -1280,7 +1376,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             ) : null}
           </p>
           {turn.trace.status === "cancelled" ? (
-            <p className="mc-next-thread-meta"><strong>Stopped</strong> · Partial output is kept; actions already started may still finish.</p>
+            <p className="mc-next-thread-meta mc-next-thread-stop-summary" role="status">
+              <strong>Stopped</strong> ·{" "}
+              {hasAssistantOutput ? "Partial output is kept;" : "No response text was retained;"} actions already
+              started may still finish.
+            </p>
           ) : null}
           <ChatThinkingSection thinking={turn.thinking} turnStatus={turn.trace.status} />
           {showLiveActivity && !hideLiveActivity ? (

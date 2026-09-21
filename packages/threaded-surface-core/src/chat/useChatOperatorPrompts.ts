@@ -10,7 +10,12 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { recordChatApprovalPhase } from "./chat-causality";
-import { deriveThreadPendingApproval, mergePendingApproval, type PendingApprovalRecord } from "./chat-pending-approval";
+import {
+  deriveThreadPendingApproval,
+  isApprovalForCancelledTurn,
+  mergePendingApproval,
+  type PendingApprovalRecord,
+} from "./chat-pending-approval";
 import {
   deriveThreadPendingUserInput,
   mergePendingUserInput,
@@ -48,10 +53,14 @@ export function useChatOperatorPrompts({
   const [pendingUserInput, setPendingUserInput] = useState<PendingUserInputRecord | null>(null);
   const [userInputPending, setUserInputPending] = useState(false);
   const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
 
   const refreshPendingApprovalQueue = useCallback(async (sessionId: string, isCancelled?: () => boolean) => {
     const response = await fetchChatPendingApprovals(sessionId);
-    const activeItems = response.items.filter((item) => !item.stale);
+    const activeItems = response.items.filter(
+      (item) => !item.stale && !isApprovalForCancelledTurn(threadRef.current, item.approvalId),
+    );
     const riskCounts = activeItems.reduce<Record<string, number>>((counts, item) => {
       const key = item.riskLevel ?? "unknown";
       counts[key] = (counts[key] ?? 0) + 1;
@@ -174,6 +183,7 @@ export function useChatOperatorPrompts({
         if (!current) {
           return null;
         }
+        if (isApprovalForCancelledTurn(thread, current.approvalId)) return null;
         // The persisted approval queue is authoritative. A repaired or briefly
         // stale thread snapshot can say `completed` while the approval remains
         // pending, so do not hide an actionable prompt from the same session.

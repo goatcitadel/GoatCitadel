@@ -1,5 +1,12 @@
-import { resolveChatMeshProfileToolSchemas, resolveFrozenMeshPublicationBinding } from "./chat-mesh-profile-binding-service.js";
-import { discoverChatMcpProfileCandidates, bindChatMcpProfileCandidates, isMcpRequesterScopeAuthActorSource } from "./chat-mcp-profile-binding-service.js";
+import {
+  resolveChatMeshProfileToolSchemas,
+  resolveFrozenMeshPublicationBinding,
+} from "./chat-mesh-profile-binding-service.js";
+import {
+  discoverChatMcpProfileCandidates,
+  bindChatMcpProfileCandidates,
+  isMcpRequesterScopeAuthActorSource,
+} from "./chat-mcp-profile-binding-service.js";
 import { createHash } from "node:crypto";
 import {
   CHAT_TURN_CAPABILITY_PROFILE_VERSION,
@@ -26,6 +33,7 @@ import {
   type McpRequesterResolutionBinding,
   type McpNormalizedRequesterDiscoveryCatalog,
   type ToolPolicyActorContext,
+  type ToolGrantRecord,
   type WorkPassportRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -37,9 +45,7 @@ import {
 } from "@goatcitadel/storage";
 import type { ResolvedChatTurnToolSchema } from "./chat-turn-agent-runner.js";
 import type { ChatTurnRoute } from "./chat-turn-prep-service.js";
-import {
-  type NativeMcpChatToolSchema,
-} from "./gateway/native-mcp-chat-catalog.js";
+import { type NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
 import type {
   McpRequesterScopedCatalogDiscoveryHookInput,
   McpRequesterScopedCatalogFreezeHookInput,
@@ -68,6 +74,8 @@ export interface ChatTurnCapabilityRouteResolution {
 }
 
 export interface ChatTurnCapabilityProfileResolveInput {
+  /** Internal parent ceiling for a confirmed delegation; never accepted from HTTP. */
+  inheritedProfile?: ChatTurnCapabilityProfileRecord;
   sessionId: string;
   turnId: string;
   workspaceId: string;
@@ -148,7 +156,10 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     options: { signal: AbortSignal },
   ): Promise<McpRequesterResolutionBinding[] | undefined>;
   discoverStaticMcpCatalogs?(input: McpRequesterScopedCatalogDiscoveryHookInput): Promise<StaticMcpCatalogSnapshot[]>;
-  assertStaticMcpCatalogCurrent?(snapshot: StaticMcpCatalogSnapshot, input: McpRequesterScopedCatalogDiscoveryHookInput): Promise<void>;
+  assertStaticMcpCatalogCurrent?(
+    snapshot: StaticMcpCatalogSnapshot,
+    input: McpRequesterScopedCatalogDiscoveryHookInput,
+  ): Promise<void>;
   resolveToolPolicyContext(input: {
     operatorId?: string;
     authActorId?: string;
@@ -306,11 +317,16 @@ export async function resolveChatTurnCapabilityProfile(
   };
   // Enumerate using authenticated discovery, then pin the exact descriptors to
   // the final catalog. Manual turns and unsupported actors skip discovery.
-  const nativeAdmissionAllowed = Boolean(requesterScopeSha256 &&
+  const nativeAdmissionAllowed = Boolean(
+    requesterScopeSha256 &&
     input.toolAutonomy !== "manual" &&
-    baseCallableEntries.some((entry) => entry.kind === "tool" && entry.toolName === "mcp.invoke" && entry.callable));
+    baseCallableEntries.some((entry) => entry.kind === "tool" && entry.toolName === "mcp.invoke" && entry.callable),
+  );
   const nativeCandidates = await discoverChatMcpProfileCandidates(
-    deps, nativeAdmissionAllowed, discoveryHook, baseInspectableEntries,
+    deps,
+    nativeAdmissionAllowed,
+    discoveryHook,
+    baseInspectableEntries,
   );
   const inspectableEntries = sortCatalogEntries([
     ...baseInspectableEntries,
@@ -328,7 +344,14 @@ export async function resolveChatTurnCapabilityProfile(
     createdAt,
   };
   const nativeTools = await bindChatMcpProfileCandidates(
-    deps, nativeCandidates, discoveryHook, input, policyContext, capabilityProfileId, snapshotId, callableHash,
+    deps,
+    nativeCandidates,
+    discoveryHook,
+    input,
+    policyContext,
+    capabilityProfileId,
+    snapshotId,
+    callableHash,
   );
   const nativeToolsByName = new Map(nativeTools.map((tool) => [tool.canonicalName, tool]));
   const schemaInput = {
@@ -366,11 +389,12 @@ export async function resolveChatTurnCapabilityProfile(
     if (meshToolsByName.has(tool.canonicalName)) throw new Error("Duplicate mesh Chat schema");
     meshToolsByName.set(tool.canonicalName, tool);
   }
-  const toolSchema = meshTools.length > 0
-    ? await deps.resolveToolSchema(schemaInput, nativeTools, meshTools)
-    : nativeTools.length > 0
-      ? await deps.resolveToolSchema(schemaInput, nativeTools)
-      : await deps.resolveToolSchema(schemaInput);
+  const toolSchema =
+    meshTools.length > 0
+      ? await deps.resolveToolSchema(schemaInput, nativeTools, meshTools)
+      : nativeTools.length > 0
+        ? await deps.resolveToolSchema(schemaInput, nativeTools)
+        : await deps.resolveToolSchema(schemaInput);
   const callableToolsByName = new Map(
     callableEntries
       .filter((entry) => entry.kind === "tool" && entry.callable && Boolean(entry.toolName))
@@ -389,106 +413,114 @@ export async function resolveChatTurnCapabilityProfile(
       .map((entry) => [entry.capabilityId, entry]),
   );
   const tools = await Promise.all(
-    toolSchema.tools.map(async (providerDefinition) => {
-      const modelName = readProviderToolName(providerDefinition);
-      const canonicalName = toolSchema.modelToCanonical.get(modelName);
-      if (!canonicalName) {
-        throw new Error(`Resolved provider tool ${modelName} is outside the server-owned allow-map.`);
-      }
-      const meshCatalogEntry = callableToolsByName.has(canonicalName)
-        ? undefined
-        : meshCallableByCapabilityId.get(canonicalName);
-      const catalogEntry = callableToolsByName.get(canonicalName) ?? meshCatalogEntry;
-      if (!catalogEntry) {
-        throw new Error(`Resolved provider tool ${canonicalName} is outside the canonical callable catalog.`);
-      }
-      const meshPublication = meshCatalogEntry
-        ? await resolveFrozenMeshPublicationBinding(deps, input.workspaceId, canonicalName, meshCatalogEntry)
-        : undefined;
-      const meshTool = meshToolsByName.get(canonicalName);
-      if (meshCatalogEntry && (!meshTool || meshTool.modelName !== modelName ||
-        digest(meshTool.providerDefinition) !== digest(providerDefinition) ||
-        digest(meshTool.publication) !== digest(meshPublication) ||
-        digest(meshTool.entry.mesh) !== digest(meshCatalogEntry.mesh))) {
-        throw new Error("Mesh Chat schema changed after its publication binding.");
-      }
-      const runtimeOwner =
-        deps.resolveToolRuntimeOwnerBinding?.(canonicalName) ?? buildToolRuntimeOwnerBinding("builtin");
-      const nativeTool = nativeToolsByName.get(canonicalName);
-      if (
-        nativeCandidates.some(({ tool }) => tool.canonicalToolName === canonicalName) &&
-        (!nativeTool ||
-          nativeTool.modelName !== modelName ||
-          digest(nativeTool.providerDefinition) !== digest(providerDefinition))
-      ) {
-        throw new Error("Native MCP schema changed after its final discovery binding.");
-      }
-      const resolvedMcpRequesterResolution =
-        nativeTool?.requesterBinding ??
-        (canonicalName.startsWith("mcp.") && !nativeTool?.staticBinding
-          ? await deps.resolveMcpRequesterResolutionBinding?.({
-              profileId: capabilityProfileId,
-              turnId: input.turnId,
-              sessionId: input.sessionId,
-              workspaceId: input.workspaceId,
-              authActorId: policyContext.authActorId,
-              authActorSource: policyContext.authActorSource,
-              catalogSnapshotId: snapshotId,
-              callableCatalogSha256: callableHash,
-              requesterScopeSha256,
-              canonicalToolName: canonicalName,
-              modelToolName: modelName,
-            })
-          : undefined);
-      const mcpRequesterResolution = resolvedMcpRequesterResolution
-        ? copyAndFreezeMcpRequesterResolutionBinding(resolvedMcpRequesterResolution)
-        : undefined;
-      return {
-        canonicalName,
-        modelName,
-        definitionHash: digest(providerDefinition),
-        providerDefinition,
-        runtimeOwner,
-        ...(mcpRequesterResolution ? { mcpRequesterResolution } : {}),
-        ...(nativeTool?.staticBinding ? { mcpStaticBinding: nativeTool.staticBinding } : {}),
-        ...(meshPublication ? { meshPublication } : {}),
-        effectPotential: meshPublication
-          ? // A mesh-published callable executes on a remote node: its recovery
-            // upper bound is always the conservative remote classification.
-            classifyToolEffectPotential({
-              toolName: canonicalName,
-              trustedBuiltin: false,
-              sourceKind: "remote",
-            })
-          : toolCallBeforeInterposition.count > 0 || runtimeOwner.kind === "plugin"
-            ? classifyToolEffectPotential({
-                toolName: canonicalName,
-                trustedBuiltin: false,
-                sourceKind: runtimeOwner.kind === "plugin" ? "plugin" : "remote",
+    toolSchema.tools
+      .filter(
+        (definition) =>
+          !input.inheritedProfile ||
+          input.inheritedProfile.selection.tools.some(
+            (tool) => tool.canonicalName === toolSchema.modelToCanonical.get(readProviderToolName(definition)),
+          ),
+      )
+      .map(async (providerDefinition) => {
+        const modelName = readProviderToolName(providerDefinition);
+        const canonicalName = toolSchema.modelToCanonical.get(modelName);
+        if (!canonicalName) {
+          throw new Error(`Resolved provider tool ${modelName} is outside the server-owned allow-map.`);
+        }
+        const meshCatalogEntry = callableToolsByName.has(canonicalName)
+          ? undefined
+          : meshCallableByCapabilityId.get(canonicalName);
+        const catalogEntry = callableToolsByName.get(canonicalName) ?? meshCatalogEntry;
+        if (!catalogEntry) {
+          throw new Error(`Resolved provider tool ${canonicalName} is outside the canonical callable catalog.`);
+        }
+        const meshPublication = meshCatalogEntry
+          ? await resolveFrozenMeshPublicationBinding(deps, input.workspaceId, canonicalName, meshCatalogEntry)
+          : undefined;
+        const meshTool = meshToolsByName.get(canonicalName);
+        if (
+          meshCatalogEntry &&
+          (!meshTool ||
+            meshTool.modelName !== modelName ||
+            digest(meshTool.providerDefinition) !== digest(providerDefinition) ||
+            digest(meshTool.publication) !== digest(meshPublication) ||
+            digest(meshTool.entry.mesh) !== digest(meshCatalogEntry.mesh))
+        ) {
+          throw new Error("Mesh Chat schema changed after its publication binding.");
+        }
+        const runtimeOwner =
+          deps.resolveToolRuntimeOwnerBinding?.(canonicalName) ?? buildToolRuntimeOwnerBinding("builtin");
+        const nativeTool = nativeToolsByName.get(canonicalName);
+        if (
+          nativeCandidates.some(({ tool }) => tool.canonicalToolName === canonicalName) &&
+          (!nativeTool ||
+            nativeTool.modelName !== modelName ||
+            digest(nativeTool.providerDefinition) !== digest(providerDefinition))
+        ) {
+          throw new Error("Native MCP schema changed after its final discovery binding.");
+        }
+        const resolvedMcpRequesterResolution =
+          nativeTool?.requesterBinding ??
+          (canonicalName.startsWith("mcp.") && !nativeTool?.staticBinding
+            ? await deps.resolveMcpRequesterResolutionBinding?.({
+                profileId: capabilityProfileId,
+                turnId: input.turnId,
+                sessionId: input.sessionId,
+                workspaceId: input.workspaceId,
+                authActorId: policyContext.authActorId,
+                authActorSource: policyContext.authActorSource,
+                catalogSnapshotId: snapshotId,
+                callableCatalogSha256: callableHash,
+                requesterScopeSha256,
+                canonicalToolName: canonicalName,
+                modelToolName: modelName,
               })
-            : (catalogEntry.effectPotential ??
+            : undefined);
+        const mcpRequesterResolution = resolvedMcpRequesterResolution
+          ? copyAndFreezeMcpRequesterResolutionBinding(resolvedMcpRequesterResolution)
+          : undefined;
+        return {
+          canonicalName,
+          modelName,
+          definitionHash: digest(providerDefinition),
+          providerDefinition,
+          runtimeOwner,
+          ...(mcpRequesterResolution ? { mcpRequesterResolution } : {}),
+          ...(nativeTool?.staticBinding ? { mcpStaticBinding: nativeTool.staticBinding } : {}),
+          ...(meshPublication ? { meshPublication } : {}),
+          effectPotential: meshPublication
+            ? // A mesh-published callable executes on a remote node: its recovery
+              // upper bound is always the conservative remote classification.
               classifyToolEffectPotential({
                 toolName: canonicalName,
                 trustedBuiltin: false,
-                readOnly: catalogEntry.wrapperVisibility?.readOnly,
-              })),
-      };
-    }),
+                sourceKind: "remote",
+              })
+            : toolCallBeforeInterposition.count > 0 || runtimeOwner.kind === "plugin"
+              ? classifyToolEffectPotential({
+                  toolName: canonicalName,
+                  trustedBuiltin: false,
+                  sourceKind: runtimeOwner.kind === "plugin" ? "plugin" : "remote",
+                })
+              : (catalogEntry.effectPotential ??
+                classifyToolEffectPotential({
+                  toolName: canonicalName,
+                  trustedBuiltin: false,
+                  readOnly: catalogEntry.wrapperVisibility?.readOnly,
+                })),
+        };
+      }),
   );
   const modelNameAllowMap = tools.map(({ modelName, canonicalName }) => ({ modelName, canonicalName }));
-  const trustedSkills = buildTrustedSkillSnapshot(callableEntries, await deps.storage.skillLifecycle.list());
+  const trustedSkills = buildTrustedSkillSnapshot(callableEntries, await deps.storage.skillLifecycle.list()).filter(
+    (skill) =>
+      !input.inheritedProfile ||
+      input.inheritedProfile.selection.trustedSkills.some(
+        (parent) => parent.skillId === skill.skillId && digest(parent) === digest(skill),
+      ),
+  );
   const activatedSkills = (await deps.resolveActivatedSkills?.({ content: input.content, trustedSkills })) ?? [];
-  const activeGrants = (await collectActiveGrants(deps.storage, input)).map((grant) => ({
-    grantId: grant.grantId,
-    toolPattern: grant.toolPattern,
-    decision: grant.decision,
-    scope: grant.scope,
-    scopeRef: grant.scopeRef,
-    grantType: grant.grantType,
-    ...(grant.constraints ? { constraints: grant.constraints } : {}),
-    ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}),
-    ...(grant.usesRemaining !== undefined ? { usesRemaining: grant.usesRemaining } : {}),
-  }));
+  const activeGrants = (await collectActiveGrants(deps.storage, input)).map(projectGrantAuthority);
   const permissionProfile = policyContext.permissionProfile;
   const permissionProfileHash = digest(
     permissionProfile ?? {
@@ -497,6 +529,65 @@ export async function resolveChatTurnCapabilityProfile(
     },
   );
   const approvalMode = permissionProfile?.approvalMode ?? "approve_all";
+  if (input.inheritedProfile) {
+    const parentProfile = input.inheritedProfile;
+    const liveParentSessionGrants = (
+      await deps.storage.toolGrants.listActive("session", parentProfile.identity.sessionId)
+    ).map(projectGrantAuthority);
+    const changes = {
+      permission:
+        input.inheritedProfile.governance.permission.profileHash !== permissionProfileHash ||
+        input.inheritedProfile.governance.permission.profileId !== resolvedPermissionProfileId ||
+        input.inheritedProfile.governance.permission.approvalMode !== approvalMode,
+      model:
+        input.inheritedProfile.selection.effectiveProviderId !== input.routeResolution.effectiveProviderId ||
+        input.inheritedProfile.selection.effectiveModel !== input.routeResolution.effectiveModel,
+      interposition: input.inheritedProfile.catalog.runtimeInterpositionHash !== toolCallBeforeInterposition.hash,
+      tools: tools.some(
+        (tool) =>
+          !input.inheritedProfile!.selection.tools.some(
+            (parent) =>
+              parent.canonicalName === tool.canonicalName &&
+              parent.definitionHash === tool.definitionHash &&
+              digest(parent.runtimeOwner) === digest(tool.runtimeOwner) &&
+              digest(parent.meshPublication ?? null) === digest(tool.meshPublication ?? null),
+          ),
+      ),
+      grants: activeGrants.some(
+        (grant) =>
+          grant.decision === "allow" &&
+          !parentProfile.governance.activeGrants.some((parent) => {
+            if (grantWithinAuthority(grant, parent)) return true;
+            // The existing delegation owner copies durable session grants with a
+            // fresh ID and child-only scope. Validate that narrowing against both
+            // the frozen grant and its still-active parent, never a creator label.
+            if (
+              parent.grantType === "one_time" ||
+              parent.scope !== "session" ||
+              grant.scope !== "session" ||
+              parent.scopeRef !== parentProfile.identity.sessionId ||
+              grant.scopeRef !== input.sessionId
+            )
+              return false;
+            const live = liveParentSessionGrants.find((item) => item.grantId === parent.grantId);
+            const rebound = { ...grant, grantId: parent.grantId, scopeRef: parent.scopeRef };
+            return Boolean(live && grantWithinAuthority(live, parent) && grantWithinAuthority(rebound, live));
+          }),
+      ),
+      approval: input.inheritedProfile.governance.approval.toolsRequiringApproval.some(
+        (toolName) =>
+          tools.some((tool) => tool.canonicalName === toolName) &&
+          !toolSchema.policyDecisions.some((decision) => decision.toolName === toolName && decision.requiresApproval),
+      ),
+    };
+    const changed = Object.entries(changes)
+      .filter(([, value]) => value)
+      .map(([key]) => key);
+    if (changed.length)
+      throw new Error(
+        `Confirmed delegation cannot widen or replace its admitted capability posture (${changed.join(", ")}).`,
+      );
+  }
   const localOperatorOverride = policyContext.localOperatorOverride;
   const toolsRequiringApproval = tools
     .filter((tool) =>
@@ -787,6 +878,31 @@ async function collectActiveGrants(storage: CapabilityProfileStorage, input: Cha
       .map((grant) => [grant.grantId, grant]),
   );
   return [...byId.values()].sort((left, right) => left.grantId.localeCompare(right.grantId));
+}
+
+type GrantAuthority = ChatTurnCapabilityProfileRecord["governance"]["activeGrants"][number];
+
+function projectGrantAuthority(grant: ToolGrantRecord): GrantAuthority {
+  return {
+    grantId: grant.grantId,
+    toolPattern: grant.toolPattern,
+    decision: grant.decision,
+    scope: grant.scope,
+    scopeRef: grant.scopeRef,
+    grantType: grant.grantType,
+    ...(grant.constraints ? { constraints: grant.constraints } : {}),
+    ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}),
+    ...(grant.usesRemaining !== undefined ? { usesRemaining: grant.usesRemaining } : {}),
+  };
+}
+
+function grantWithinAuthority(grant: GrantAuthority, parent: GrantAuthority): boolean {
+  const { usesRemaining: parentUses, ...parentAuthority } = parent;
+  const { usesRemaining: childUses, ...childAuthority } = grant;
+  return (
+    digest(parentAuthority) === digest(childAuthority) &&
+    (parentUses === undefined || (childUses !== undefined && childUses <= parentUses))
+  );
 }
 
 function sortCatalogEntries(entries: CapabilityCatalogEntry[]): CapabilityCatalogEntry[] {

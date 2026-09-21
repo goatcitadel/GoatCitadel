@@ -13,6 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  buildToolEffectEvidence,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   canonicalJsonString,
   assertMeshCapabilityActivationApprovalPayload,
@@ -21,6 +22,9 @@ import {
   type ApprovalListResponse,
   type ApprovalReplayEvent,
   ConflictError,
+  isChatTurnTerminalStatus,
+  NotFoundError,
+  type ChatTurnTraceRecord,
   type ApprovalBulkResolveInput,
   type ApprovalBulkResolveResult,
   type ApprovalCreateInput,
@@ -37,6 +41,7 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "./device-access-helpers.js";
+import { assertChatTurnToolUseOpen, closeChatTurnToolUse, resolveChatTurnControlOwner } from "./chat-turn-control.js";
 import type { ApprovalReplayResult, ApprovalResolutionContext, ApprovalResolveResult } from "./approval-types.js";
 import type { HooksService } from "./hooks-service.js";
 import type { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -51,7 +56,11 @@ import {
   buildApprovalCreatedObservabilityEffects,
   buildApprovalResolutionObservabilityEffects,
 } from "./approval-observability.js";
-import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-follow-up.js";
+import {
+  buildApprovalResolveResult,
+  withApprovalFollowUp,
+  withCanonicalApprovalOutcome,
+} from "./approval-follow-up.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import {
   isOfficialResearchSearchInvocation,
@@ -116,10 +125,12 @@ export interface ApprovalLifecycleHost {
     | "chatSessionMeta"
     | "chatTurnTraces"
     | "chatToolRuns"
+    | "durableRuns"
     | "codeModeRuns"
     | "governanceJourneyEvents"
     | "runImmediateTransaction"
-  >;
+  > &
+    Partial<Pick<Storage, "chatMessages" | "chatDelegationRuns">>;
 
   // ── services ───────────────────────────────────────────────────────
   readonly policyEngine: Pick<
@@ -392,7 +403,10 @@ export async function listApprovals(
   const approvals = await host.storage.approvals.list(status, limit, workspaceId);
   return Promise.all(
     approvals.map(async (approval) =>
-      withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+      withCanonicalApprovalOutcome(
+        host.storage,
+        withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+      ),
     ),
   );
 }
@@ -410,7 +424,10 @@ export async function listApprovalsPage(
   return {
     items: await Promise.all(
       page.items.map(async (approval) =>
-        withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+        withCanonicalApprovalOutcome(
+          host.storage,
+          withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+        ),
       ),
     ),
     nextCursor: page.nextCursor,
@@ -500,7 +517,7 @@ export async function getApprovalReplay(
 ): Promise<ApprovalReplayResult> {
   const storedApproval = await host.storage.approvals.get(approvalId);
   const effects = await host.storage.approvalEffects.listByApproval(approvalId);
-  const approval = withApprovalFollowUp(storedApproval, effects);
+  const approval = await withCanonicalApprovalOutcome(host.storage, withApprovalFollowUp(storedApproval, effects));
 
   await host.storage.approvalEvents.append({
     approvalId,
@@ -687,6 +704,7 @@ export async function createApproval(
 
   let approval!: ApprovalRequest;
   await host.storage.runImmediateTransaction(async () => {
+    await assertLinkedChatTurnActive(host, transactionalCreateInput.linkage);
     approval =
       authority?.ttlMs !== undefined
         ? await host.storage.approvals.createWithTtlDuration(transactionalCreateInput, authority.ttlMs)
@@ -774,6 +792,7 @@ export async function resolveApproval(
   let expiredMutationCommitted = false;
   try {
     await storage.runImmediateTransaction(async () => {
+      if (input.decision !== "reject") await assertLinkedChatTurnActive(host, initial.linkage);
       const current = await storage.approvals.get(approvalId);
       if (current.status !== "pending") {
         throw new ConflictError({
@@ -834,6 +853,87 @@ export async function resolveApproval(
   }
 }
 
+// Serialize approval admission with the Chat owner's cancellation transaction.
+// approval.linkage.durableRunId may identify the approval wait, not the Chat run.
+async function assertLinkedChatTurnActive(host: ApprovalLifecycleHost, linkage?: ApprovalLinkage): Promise<void> {
+  if (!linkage?.turnId || !linkage.sessionId) return;
+  const owner = await resolveChatTurnControlOwner(host.storage, linkage.sessionId, linkage.turnId);
+  if (owner.turnId !== linkage.turnId) {
+    const rootTrace = await host.storage.chatTurnTraces.get(owner.turnId);
+    if (rootTrace.durable?.runId) await host.storage.durableRuns.getRunForUpdate(rootTrace.durable.runId);
+  }
+  let trace: ChatTurnTraceRecord;
+  try {
+    trace = await host.storage.chatTurnTraces.get(linkage.turnId);
+  } catch (error) {
+    // Legacy/imported approvals may precede their Chat projection. Fence an
+    // existing canonical turn without imposing a new trace-creation order.
+    if (error instanceof NotFoundError) return;
+    throw error;
+  }
+  if (trace.durable?.runId) {
+    await host.storage.durableRuns.getRunForUpdate(trace.durable.runId);
+    trace = await host.storage.chatTurnTraces.get(linkage.turnId);
+  }
+  if (trace.sessionId !== linkage.sessionId || isChatTurnTerminalStatus(trace.status)) {
+    throw new ConflictError({
+      message: "This chat turn has already stopped or finished; its action cannot be approved or requested again.",
+    });
+  }
+  await assertChatTurnToolUseOpen(host.storage, linkage.sessionId, linkage.turnId);
+}
+
+/** Called inside the durable Chat cancellation transaction. Reuse the normal
+ * rejection owner so pending actions, inline state, tokens, and follow-up effects
+ * settle together. Effect processing runs after commit through its durable queue. */
+export async function rejectPendingChatTurnApprovals(
+  host: ApprovalLifecycleHost,
+  sessionId: string,
+  turnId: string,
+  actorId: string,
+  includeDelegationFamily = false,
+): Promise<void> {
+  const owner = includeDelegationFamily
+    ? await resolveChatTurnControlOwner(host.storage, sessionId, turnId)
+    : { sessionId, turnId };
+  const inline = await host.storage.chatInlineApprovals.listByTurn(turnId);
+  const toolRuns = await host.storage.chatToolRuns.listByTurn(turnId);
+  const approvalIds = new Set([
+    ...inline.filter((item) => item.sessionId === sessionId).map((item) => item.approvalId),
+    ...toolRuns.filter((item) => item.sessionId === sessionId && item.approvalId).map((item) => item.approvalId!),
+  ]);
+  // An approval can be committed before its tool/inline projection arrives.
+  let cursor: string | undefined;
+  do {
+    const page = await host.storage.approvals.listPage({ status: "pending", limit: 200, cursor, includeExpired: true });
+    for (const approval of page.items) {
+      if (!approval.linkage?.sessionId || !approval.linkage.turnId) continue;
+      const target = await resolveChatTurnControlOwner(
+        host.storage,
+        approval.linkage.sessionId,
+        approval.linkage.turnId,
+        owner.turnId,
+      );
+      if (target.sessionId === owner.sessionId && target.turnId === owner.turnId) approvalIds.add(approval.approvalId);
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  for (const approvalId of approvalIds) {
+    const approval = await host.storage.approvals.get(approvalId);
+    if (approval.status !== "pending") continue;
+    await commitStandardApprovalResolution(
+      host,
+      approvalId,
+      {
+        decision: "reject",
+        resolvedBy: actorId,
+        resolutionNote: "Withdrawn because tool use for this turn has ended. The pending action was not authorized.",
+      },
+      { allowExpired: true, outcome: "withdrawn" },
+    );
+  }
+}
+
 function isApprovalExpiryConflict(error: unknown, approvalId: string): error is ConflictError {
   return (
     error instanceof ConflictError &&
@@ -865,6 +965,7 @@ async function commitStandardApprovalResolution(
   options: {
     allowExpired?: boolean;
     expiration?: ApprovalExpirationContext;
+    outcome?: import("@goatcitadel/contracts").ApprovalResolutionOutcome;
   } = {},
 ): Promise<ApprovalResolveResult> {
   const storage = host.storage;
@@ -892,11 +993,37 @@ async function commitStandardApprovalResolution(
   }
 
   const pendingAction = await storage.pendingApprovalActions.find(approvalId);
-  const approval = await storage.approvals.resolve(
-    approvalId,
-    input,
-    options.allowExpired ? { allowExpired: true } : undefined,
-  );
+  const outcome =
+    options.outcome ??
+    (options.expiration
+      ? "expired"
+      : input.decision === "approve"
+        ? "approved"
+        : input.decision === "edit"
+          ? "withdrawn"
+          : isSystemActor(input.resolvedBy)
+            ? "policy_blocked"
+            : "denied");
+  if (outcome === "denied" && current.linkage?.sessionId && current.linkage.turnId) {
+    await closeChatTurnToolUse(storage, current.linkage.sessionId, current.linkage.turnId, {
+      outcome,
+      approvalId,
+      actorId: input.resolvedBy,
+      closedAt: new Date().toISOString(),
+    });
+  }
+  const approval =
+    options.outcome === "withdrawn" &&
+    input.decision === "reject" &&
+    current.linkage?.sessionId &&
+    current.linkage.turnId
+      ? await storage.approvals.withdrawPendingChatTurn(approvalId, {
+          sessionId: current.linkage.sessionId,
+          turnId: current.linkage.turnId,
+          resolvedBy: input.resolvedBy,
+          resolutionNote: input.resolutionNote ?? "Approval withdrawn.",
+        })
+      : await storage.approvals.resolve(approvalId, input, options.allowExpired ? { allowExpired: true } : undefined);
   const expiredRemoteTokenCount = await storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
 
   const resolutionEvent = await storage.approvalEvents.append({
@@ -906,6 +1033,7 @@ async function commitStandardApprovalResolution(
     payload: {
       decision: input.decision,
       status: approval.status,
+      outcome,
       editedPayload: input.editedPayload,
       expiredRemoteTokenCount,
       ...(options.expiration
@@ -922,6 +1050,38 @@ async function commitStandardApprovalResolution(
   await recordApprovalResolutionJourney(storage, approval, input, resolutionEvent, options.expiration);
 
   await markChatInlineApprovalResolved(host, approval, input);
+
+  if (outcome !== "approved" && current.linkage?.turnId) {
+    const toolRuns = await storage.chatToolRuns.listByTurn(current.linkage.turnId);
+    for (const tool of toolRuns) {
+      if (
+        tool.approvalId !== approvalId ||
+        tool.status !== "approval_required" ||
+        tool.sessionId !== current.linkage.sessionId
+      )
+        continue;
+      const summary =
+        outcome === "denied"
+          ? "Denied by the operator."
+          : outcome === "withdrawn"
+            ? "Approval withdrawn before execution."
+            : outcome === "expired"
+              ? "Approval expired before execution."
+              : "Action blocked by policy.";
+      const effect = buildToolEffectEvidence({ potential: tool.effectPotential ?? "unknown", phase: "skipped" });
+      await storage.chatToolRuns.patch(tool.toolRunId, {
+        status: "blocked",
+        error: summary,
+        effectPotential: tool.effectPotential ?? "unknown",
+        effectDisposition: effect.disposition ?? null,
+        effectOutcomeKind: effect.outcomeKind,
+        effectEvidence: effect.evidence,
+        result: { ...tool.result, approvalOutcome: outcome },
+        failureGuidance: "This action did not execute. Send a new message to request further work.",
+        finishedAt: new Date().toISOString(),
+      });
+    }
+  }
 
   if (options.expiration && pendingAction?.resolutionStatus === "pending") {
     const terminalizedCodeModeRun = await markCodeModeRunTerminalForPendingApproval(
@@ -969,6 +1129,7 @@ async function commitStandardApprovalResolution(
     );
     await storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
       decision: input.decision,
+      outcome,
       ...(terminalizedCodeModeRun?.runId ? { runId: terminalizedCodeModeRun.runId } : {}),
       ...(terminalizedCodeModeRun?.pendingRunId !== undefined
         ? { pendingRunId: terminalizedCodeModeRun.pendingRunId }
@@ -977,7 +1138,7 @@ async function commitStandardApprovalResolution(
   }
 
   if (options.allowExpired) {
-    await host.enqueueApprovalResolutionEffects(approval, input, { allowExpired: true });
+    await host.enqueueApprovalResolutionEffects(approval, input, { allowExpired: true, outcome });
   } else {
     await host.enqueueApprovalResolutionEffects(approval, input);
   }
@@ -986,6 +1147,15 @@ async function commitStandardApprovalResolution(
     buildApprovalResolutionObservabilityEffects(approval, input),
   );
 
+  if (outcome === "denied" && current.linkage?.sessionId && current.linkage.turnId) {
+    await rejectPendingChatTurnApprovals(
+      host,
+      current.linkage.sessionId,
+      current.linkage.turnId,
+      input.resolvedBy,
+      true,
+    );
+  }
   const effects = await storage.approvalEffects.listByApproval(approvalId);
   return await buildApprovalResolveResult(storage, approval, effects);
 }

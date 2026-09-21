@@ -487,6 +487,7 @@ export function ShellStatusStrip({
   currentReleaseStatusLabel,
   daemonDegraded,
   daemonStatusValue,
+  gatewayReady,
   gatewayMessage,
   navigateApprovals,
   navigateBuildProof,
@@ -502,6 +503,7 @@ export function ShellStatusStrip({
   currentReleaseStatusLabel: string;
   daemonDegraded: boolean;
   daemonStatusValue: string;
+  gatewayReady: boolean;
   gatewayMessage: string;
   navigateApprovals: () => void;
   navigateBuildProof: () => void;
@@ -522,7 +524,7 @@ export function ShellStatusStrip({
     spendPill.degraded ||
     realtimeDegraded ||
     daemonDegraded ||
-    gatewayMessage !== "Gateway ready",
+    !gatewayReady,
   );
   const systemStatus =
     hasBlockingApproval || hasRuntimeIssue ? "attention" : pendingApprovalCount === null ? "checking" : "healthy";
@@ -559,7 +561,7 @@ export function ShellStatusStrip({
             icon={<ShieldCheck size={15} />}
             label="Gateway"
             value={gatewayMessage}
-            degraded={gatewayMessage !== "Gateway ready"}
+            degraded={!gatewayReady}
           />
           <StatusPill
             icon={<Activity size={15} />}

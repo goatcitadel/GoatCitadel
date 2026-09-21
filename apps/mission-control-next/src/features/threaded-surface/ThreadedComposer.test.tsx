@@ -1,4 +1,6 @@
-vi.mock("./ChatOptionsPopover", () => ({ ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
+vi.mock("./ChatOptionsPopover", () => ({
+  ChatOptionsPopover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 import React, { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
@@ -1360,7 +1362,7 @@ describe("ThreadedComposer", () => {
       activeStreamTurnAssigned: false,
       onStopActiveTurn,
     });
-    await click(findButton(renderer.root, "Stop stream"));
+    await click(findButton(renderer.root, "Stop turn"));
 
     renderer = await renderComposer({
       sending: true,

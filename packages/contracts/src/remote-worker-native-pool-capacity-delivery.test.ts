@@ -44,6 +44,8 @@ describe("independently retained complete-pool delivery", () => {
       const f = fixture();
       expect(() => f.read({ ...f.delivery, [key]: null })).toThrow();
     },
+    // The independently reconstructed fixture alone exceeds five seconds under CI coverage.
+    30_000,
   );
   it("recomposes totals even when an attacker supplies matching forged inventory hashes", () => {
     const f = fixture(),
@@ -58,7 +60,7 @@ describe("independently retained complete-pool delivery", () => {
         },
       }),
     ).toThrow();
-  });
+  }, 30_000);
   it("requires the original pool and window even when current lease authority has renewed", () => {
     const f = fixture();
     expect(() =>

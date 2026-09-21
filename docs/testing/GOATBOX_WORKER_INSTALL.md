@@ -25,7 +25,7 @@ the corrected public inspection still requires a GOATBOX retry.
 ## Current handoff: client token-query correction
 
 Copy the whole ZIP
-`F:\code\personal-ai\.tmp\GoatCitadel-GOATBOX-client-token-fix.zip` to
+`<checkout>\.tmp\GoatCitadel-GOATBOX-client-token-fix.zip` to
 `C:\worker-candidates\GoatCitadel-GOATBOX-client-token-fix.zip` on GOATBOX.
 It is 40,019,494 bytes; all 1,782 ZIP files were verified against staging.
 Use a fresh Administrator Windows PowerShell window:
@@ -128,7 +128,7 @@ the token grant is a required narrow counterpart, not an observed token-DACL cla
 Historical procedure, completed successfully at 20:25. Do not execute it again.
 
 Copy the **whole ZIP** from
-`F:\code\personal-ai\.tmp\GoatCitadel-GOATBOX-broker-inspection-fix.zip`
+`<checkout>\.tmp\GoatCitadel-GOATBOX-broker-inspection-fix.zip`
 to `C:\worker-candidates\GoatCitadel-GOATBOX-broker-inspection-fix.zip` on GOATBOX.
 It is 40,018,573 bytes. All 1,782 archive files were checked against staging.
 The ZIP includes the complete replacement payload plus the maintenance helpers.
@@ -412,7 +412,7 @@ GOATBOX observation and actual broker failure remain pending.
 Copy this whole small ZIP to `C:\worker-candidates\GoatCitadel-GOATBOX-state-repair.zip`:
 
 ```text
-F:\code\personal-ai\.tmp\worker-goatbox-state-repair-20260917\GoatCitadel-GOATBOX-state-repair.zip
+<checkout>\.tmp\worker-goatbox-state-repair-20260917\GoatCitadel-GOATBOX-state-repair.zip
 ```
 
 ZIP SHA-256: `98b0260aec46cfaba5cd93d4583529e406e7e071f8d927e0b01997dead19c599`.

@@ -20,7 +20,8 @@ export interface ApprovedExternalRuntimeSideEffectInput {
   >;
   approvalId: string;
   request: ToolInvokeRequest;
-  execute(markExternalCallStarted: () => Promise<void>): Promise<ToolInvokeResult>;
+  trackToolDispatch?: boolean;
+  execute(markExternalCallStarted: () => Promise<void>, markToolDispatchStarted: () => void): Promise<ToolInvokeResult>;
 }
 
 export async function executeApprovedExternalRuntimeSideEffect(
@@ -47,6 +48,7 @@ export async function executeApprovedExternalRuntimeSideEffect(
 async function executeApprovedExternalRuntimeSideEffectOnce(
   input: ApprovedExternalRuntimeSideEffectInput,
 ): Promise<ToolInvokeResult> {
+  let toolDispatchStarted = input.trackToolDispatch ? false : undefined;
   const sideEffect = await runIdempotentExternalSideEffect({
     mutationStore: input.storage.mutationIdempotency,
     sideEffectRunStore: input.storage.externalSideEffectRuns,
@@ -73,13 +75,21 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
     },
     requireDurableBoundaryRecord: true,
     execute: async (claim) => {
-      const result = await input.execute(() => claim.markExternalCallStarted());
+      const result = await input.execute(
+        async () => {
+          await claim.markExternalCallStarted();
+          toolDispatchStarted = true;
+        },
+        () => {
+          toolDispatchStarted = true;
+        },
+      );
       if (!claim.externalCallStarted) {
         claim.markExternalCallNotRequired();
       }
       return result;
     },
-    commitCompleted: (claim, result) => commitApprovedResult(input, claim, result),
+    commitCompleted: (claim, result) => commitApprovedResult(input, claim, result, toolDispatchStarted),
   });
 
   if (sideEffect.status === "executed") {
@@ -150,6 +160,7 @@ async function commitApprovedResult(
     externalCallNotRequired: boolean;
   },
   result: ToolInvokeResult,
+  toolDispatchStarted?: boolean,
 ): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -186,7 +197,12 @@ async function commitApprovedResult(
             result.outcome === "executed" ? "executed" : "failed",
             toolInvokeResultRecord(result),
           );
-          await appendApprovedActionEvent(input, result, readApprovedSideEffectBoundaryState(input.request, claim));
+          await appendApprovedActionEvent(
+            input,
+            result,
+            readApprovedSideEffectBoundaryState(input.request, claim),
+            toolDispatchStarted,
+          );
         }
       });
       return;
@@ -218,6 +234,7 @@ async function appendApprovedActionEvent(
   input: ApprovedExternalRuntimeSideEffectInput,
   result: ToolInvokeResult,
   externalBoundaryState: ApprovedSideEffectBoundaryState,
+  toolDispatchStarted?: boolean,
 ): Promise<void> {
   await input.storage.approvalEvents.append({
     approvalId: input.approvalId,
@@ -231,6 +248,15 @@ async function appendApprovedActionEvent(
       sideEffectManaged: true,
       externalBoundaryState,
       externalRuntime: externalBoundaryState === "crossed",
+      ...(toolDispatchStarted !== undefined ? { toolDispatchStarted } : {}),
+      actionOutcome:
+        result.outcome === "executed"
+          ? "executed"
+          : toolDispatchStarted === false
+            ? "policy_blocked"
+            : toolDispatchStarted === true
+              ? "delivery_failed"
+              : "unknown",
     },
   });
 }
@@ -256,8 +282,12 @@ function readResultExternalBoundaryState(result: ToolInvokeResult): ApprovedSide
 }
 
 function usesApprovedExternalRuntimeAdapter(request: ToolInvokeRequest): boolean {
-  return request.externalRuntime === true || request.toolName === "mcp.invoke" ||
-    isNativeMcpToolName(request.toolName) || isMeshChatToolName(request.toolName);
+  return (
+    request.externalRuntime === true ||
+    request.toolName === "mcp.invoke" ||
+    isNativeMcpToolName(request.toolName) ||
+    isMeshChatToolName(request.toolName)
+  );
 }
 
 function pendingResultMatches(pending: PendingApprovalAction, result: ToolInvokeResult): boolean {

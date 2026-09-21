@@ -870,13 +870,21 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("models one canonical final shape after bootstrap replacement and dynamic catalog normalization", () => {
     const manifest = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    // Reviewed committed registry through v195; keep independent drift tripwires.
+    // Reviewed committed registry through v196; keep independent drift tripwires.
     assert.equal(manifest.tables.length, 364);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
       5_024,
     );
     assert.equal(manifest.indexes.length, 758);
+    assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_memory_items_enumeration")?.keys, [
+      "updated_at desc",
+      "item_id desc",
+    ]);
+    assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_tool_access_decisions_policy_time")?.keys, [
+      "policy_tool_name",
+      "timestamp desc",
+    ]);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "chat_heartbeat_occurrences")

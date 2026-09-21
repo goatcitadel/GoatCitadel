@@ -6,7 +6,9 @@ import ts from "typescript";
 import { collectorGroupKey, mergeCoverageEntries } from "./coverage-merge.mjs";
 import {
   GATEWAY_COVERAGE_SHARD_COUNT,
+  STORAGE_COVERAGE_SHARD_COUNT,
   gatewayCoverageShardDirectory,
+  storageCoverageShardDirectory,
 } from "./coverage-shard-contract.mjs";
 import { normalizeCoveragePathForLookup as normalizePathForLookup } from "./coverage-paths.mjs";
 import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
@@ -422,9 +424,16 @@ async function assertReusedCoverageIsUsable(coverageFiles, sourceFiles) {
     );
   }
 
-  const gatewayLayoutError = validateReusedGatewayCoverageLayout(reportsByPackage.get("apps/gateway") ?? []);
-  if (gatewayLayoutError) {
-    await failCollection("Coverage reuse failed: Gateway coverage inputs are incomplete or mixed.", gatewayLayoutError);
+  for (const [packageDir, label, shardCount, shardDirectory] of [
+    ["apps/gateway", "Gateway", GATEWAY_COVERAGE_SHARD_COUNT, gatewayCoverageShardDirectory],
+    ["packages/storage", "Storage", STORAGE_COVERAGE_SHARD_COUNT, storageCoverageShardDirectory],
+  ]) {
+    const layoutError = validateReusedCoverageLayout(reportsByPackage.get(packageDir) ?? [], {
+      packageDir, label, shardCount, shardDirectory,
+    });
+    if (layoutError) {
+      await failCollection(`Coverage reuse failed: ${label} coverage inputs are incomplete or mixed.`, layoutError);
+    }
   }
 
   const sourcedAt = new Map();
@@ -464,27 +473,27 @@ async function assertReusedCoverageIsUsable(coverageFiles, sourceFiles) {
   }
 }
 
-function validateReusedGatewayCoverageLayout(reports) {
+function validateReusedCoverageLayout(reports, { packageDir, label, shardCount, shardDirectory }) {
   if (reports.length === 0) {
     return undefined;
   }
   const reportDirectories = new Set(reports.map((report) => report.reportDirectory));
   const regularCoveragePresent = reportDirectories.has("coverage");
-  const expectedShardDirectories = Array.from({ length: GATEWAY_COVERAGE_SHARD_COUNT }, (_unused, index) =>
-    gatewayCoverageShardDirectory(index + 1),
+  const expectedShardDirectories = Array.from({ length: shardCount }, (_unused, index) =>
+    shardDirectory(index + 1),
   );
   const shardLikeDirectories = [...reportDirectories].filter((directory) => directory.startsWith("coverage-shard-"));
 
   if (regularCoveragePresent && shardLikeDirectories.length > 0) {
     return new Error(
-      "[coverage:collect] --skip-run found both unsharded apps/gateway/coverage and sharded Gateway reports. " +
+      `[coverage:collect] --skip-run found both unsharded ${packageDir}/coverage and sharded ${label} reports. ` +
         "They can come from different runs and must not be merged as one collector.",
     );
   }
   if (!regularCoveragePresent && shardLikeDirectories.length === 0) {
     return new Error(
-      "[coverage:collect] --skip-run found Gateway auxiliary coverage but no primary suite report. Expected " +
-        "apps/gateway/coverage or all Gateway shard reports.",
+      `[coverage:collect] --skip-run found ${label} auxiliary coverage but no primary suite report. Expected ` +
+        `${packageDir}/coverage or all ${label} shard reports.`,
     );
   }
   if (shardLikeDirectories.length > 0) {
@@ -492,7 +501,7 @@ function validateReusedGatewayCoverageLayout(reports) {
     const unexpectedShards = shardLikeDirectories.filter((directory) => !expectedShardDirectories.includes(directory));
     if (missingShards.length > 0 || unexpectedShards.length > 0) {
       return new Error(
-        `[coverage:collect] --skip-run requires exactly ${GATEWAY_COVERAGE_SHARD_COUNT} Gateway shard reports. ` +
+        `[coverage:collect] --skip-run requires exactly ${shardCount} ${label} shard reports. ` +
           `Missing: ${missingShards.join(", ") || "none"}. Unexpected: ${unexpectedShards.join(", ") || "none"}.`,
       );
     }

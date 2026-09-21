@@ -47,7 +47,7 @@ The launcher honors the profile's database configuration, passes its actual Gate
 Use scripts/packaging/windows-daily-profile.mjs after building the Gateway. The tool supports the standard local bundled PostgreSQL layout and the older standard SQLite profile. It fails on linked profile paths, custom data layouts, pending config transactions, shared destination paths, existing destinations, and unsupported newer schemas.
 
 ~~~powershell
-node scripts/packaging/windows-daily-profile.mjs backup --source 'F:\code\personal-ai' --output '<independent backup directory>\development.backup' --pg-bin 'C:\Program Files\PostgreSQL\16\bin'
+node scripts/packaging/windows-daily-profile.mjs backup --source '<development checkout>' --output '<independent backup directory>\development.backup' --pg-bin 'C:\Program Files\PostgreSQL\16\bin'
 node scripts/packaging/windows-daily-profile.mjs backup --source "$env:LOCALAPPDATA\GoatCitadel\runtime-root" --output '<independent backup directory>\installed-sqlite.backup'
 node scripts/packaging/windows-daily-profile.mjs verify --backup '<independent backup directory>\development.backup'
 node scripts/packaging/windows-daily-profile.mjs restore --backup '<independent backup directory>\development.backup' --profile '<new empty staging directory>' --pg-bin 'C:\Program Files\PostgreSQL\16\bin' --port 45433

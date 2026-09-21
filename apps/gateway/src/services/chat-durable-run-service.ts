@@ -1,6 +1,16 @@
 import { prepareDurableChatWorkerContext, retainDurableChatWorkerContext } from "./durable-chat-worker-adapter.js";
-import { buildDurableCheckpointState, readCanonicalDurableChatTerminalOutput, summarizeDurableChatAssistantOutput, mergeCanonicalDurableChatTerminalOutputMetadata, SYSTEM_HEARTBEAT_ACTOR_ID, type CanonicalDurableChatTerminalOutput } from "./chat-durable-checkpoint-output.js";
-export { readCanonicalDurableChatTerminalOutput, summarizeDurableChatAssistantOutput, mergeCanonicalDurableChatTerminalOutputMetadata, type CanonicalDurableChatTerminalOutput } from "./chat-durable-checkpoint-output.js";
+import {
+  buildDurableCheckpointState,
+  readCanonicalDurableChatTerminalOutput,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
+  SYSTEM_HEARTBEAT_ACTOR_ID,
+} from "./chat-durable-checkpoint-output.js";
+export {
+  readCanonicalDurableChatTerminalOutput,
+  summarizeDurableChatAssistantOutput,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
+  type CanonicalDurableChatTerminalOutput,
+} from "./chat-durable-checkpoint-output.js";
 /* eslint-disable max-lines -- Durable Chat finalization remains co-located until its authority contract is stable. */
 import { randomUUID } from "node:crypto";
 import type {
@@ -64,6 +74,7 @@ import {
   type HeartbeatDecisionReceipt,
 } from "./chat-durable-runtime-authority.js";
 import { assertDurableRetryPolicyMatchesRun, DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import { CHAT_TURN_CONTROL_KEY, type ChatTurnControl } from "./chat-turn-control.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
   computeFrozenChatTurnAdmissionMaterialSha256,
@@ -228,6 +239,9 @@ export interface CanonicalChatDurableWaitForEvent {
  * fall back to eventKey-only so the run is still wakeable by its real waker.
  */
 export function resolveCanonicalChatDurableWaitForEvent(trace: ChatTurnTraceRecord): CanonicalChatDurableWaitForEvent {
+  if (trace.status === "waiting_for_tool" && trace.routing.confirmedDelegation?.waiting) {
+    return { eventKey: "chat.confirmed_delegation.resolved", correlationId: trace.routing.confirmedDelegation.runId };
+  }
   if (trace.status === "waiting_for_approval") {
     // Mirror orchestration-phase-execution-service.ts: prefer the (hydration-only)
     // pendingApprovalSummary, then the persisted approval_required tool run.
@@ -497,7 +511,13 @@ export async function beginDurableChatRun(
     const remoteWorkerParentContext = remoteWorkerParentContextInput
       ? buildRemoteWorkerAssignmentParentContext(remoteWorkerParentContextInput)
       : undefined;
-    const remoteWorkerChatContext = prepareDurableChatWorkerContext(deps, prepared, runId, durablePayload, Boolean(input.policyTaskId));
+    const remoteWorkerChatContext = prepareDurableChatWorkerContext(
+      deps,
+      prepared,
+      runId,
+      durablePayload,
+      Boolean(input.policyTaskId),
+    );
     run = await deps.createDurableRun({
       runId,
       workflowKey: "chat.turn.execute",
@@ -953,9 +973,13 @@ export async function finalizeDurableChatRun(
   const checkpointState = await buildDurableCheckpointState(deps, prepared, effectiveTrace, {
     systemHeartbeat: Boolean(heartbeatIdentity),
   });
-  const postCommitEligibility = heartbeatIdentity
-    ? SYSTEM_HEARTBEAT_POST_COMMIT_ELIGIBILITY
-    : await deps.resolvePostCommitEligibility(prepared.session.sessionId);
+  // Durable control is authoritative even when the runner's trace projection
+  // predates a denial. Inherited child closure is also projected by the runner.
+  const durableControl = currentRun?.metadata?.[CHAT_TURN_CONTROL_KEY] as ChatTurnControl | undefined;
+  const postCommitEligibility =
+    heartbeatIdentity || durableControl?.toolClosure || effectiveTrace.routing?.turnControl?.toolClosure
+      ? SYSTEM_HEARTBEAT_POST_COMMIT_ELIGIBILITY
+      : await deps.resolvePostCommitEligibility(prepared.session.sessionId);
   if (heartbeatApprovalBlocked) {
     assertNoSystemHeartbeatDecisionEvidence(currentRun!);
     await runChatFinalizeTransaction(deps, async () => {
@@ -1933,16 +1957,6 @@ function checkpointKindForTerminalDurableChatRunStatus(
   }
   return "run_failed";
 }
-
-
-
-
-
-
-
-
-
-
 
 function markAutonomousChatPostCommitPending(
   metadata: Record<string, unknown> | undefined,

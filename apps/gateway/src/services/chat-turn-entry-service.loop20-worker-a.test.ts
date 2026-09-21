@@ -351,7 +351,7 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
     expect(chunks.map((chunk) => chunk.type)).toEqual(["trace_update", "done"]);
   });
 
-  it("persists empty-response fallback text, suggestions, and proactive delegation hints on completed LLM turns", async () => {
+  it("persists empty-response fallback text and suggestions without launching proactive delegation", async () => {
     const capabilitySuggestion: ChatCapabilityUpgradeSuggestion = {
       suggestionId: "capability-1",
       capabilityId: "browser.search",
@@ -396,10 +396,7 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
         specialistCandidateSuggestions: [specialistSuggestion],
       }),
     );
-    expect(host.triggerChatSessionProactive).toHaveBeenCalledWith("session-1", {
-      source: "chat",
-      reason: "Detected multi-role phrasing; generated delegation suggestion.",
-    });
+    expect(host.triggerChatSessionProactive).not.toHaveBeenCalled();
   });
 
   it("persists capability suggestions on approval waits without assistant messages", async () => {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ChatToolRunRecord, ChatCompletionRequest, ChatUserInputPromptRecord } from "@goatcitadel/contracts";
 import { extractPrimaryUserTaskContent } from "../chat-agent-prompt-lab-contract.js";
-import { hasArtifactInspectionOnlyIntent } from "../chat-artifact-intent.js";
+export { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "../chat-artifact-intent.js";
 
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";
@@ -87,36 +87,6 @@ const PRESENTATION_STOP_WORDS = new Set([
   "would",
   "your",
 ]);
-
-export function detectPresentationArtifactIntent(content: string): boolean {
-  if (hasArtifactInspectionOnlyIntent(content)) return false;
-  const normalized = content.toLowerCase();
-  const presentationPhrase =
-    /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized);
-  if (!presentationPhrase) {
-    return false;
-  }
-  return (
-    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver)\b/.test(normalized) ||
-    /\b(file|format|artifact|download|power\s?point|pptx?)\b/.test(normalized)
-  );
-}
-
-export function detectDocumentArtifactIntent(content: string): boolean {
-  if (hasArtifactInspectionOnlyIntent(content)) return false;
-  const normalized = content.toLowerCase();
-  const documentPhrase =
-    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(
-      normalized,
-    );
-  if (!documentPhrase) {
-    return false;
-  }
-  return (
-    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver)\b/.test(normalized) ||
-    /\b(file|format|artifact|download|docx?|pdf|markdown|html|csv|json)\b/.test(normalized)
-  );
-}
 
 export function buildSyntheticPresentationCreateArgs(
   input: ArtifactIntentInput,

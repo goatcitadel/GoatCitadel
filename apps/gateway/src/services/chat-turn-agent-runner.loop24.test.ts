@@ -213,7 +213,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(schema.policyDecisions.map((decision) => decision.toolName)).toEqual(toolNames);
   });
 
-  it("probes presentation access with safe args and creates a PPTX fallback when the model answers with text", async () => {
+  it("probes presentation access with safe args without synthesizing a PPTX from model prose", async () => {
     let capturedRequest: ChatCompletionRequest | undefined;
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
       capturedRequest = request;
@@ -268,21 +268,9 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       skillId: "design-intelligence",
     });
     expect(extractRequestToolNames(capturedRequest)).toContain("presentations_create");
-    expect(invokeTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "presentations.create",
-        args: expect.objectContaining({
-          path: expect.stringContaining("top-10-things-to-do-in-free-time"),
-          title: "Top 10 Things to Do in Free Time",
-          design: expect.objectContaining({
-            mode: "polished",
-            skillId: "design-intelligence",
-          }),
-        }),
-      }),
-    );
-    expect(result.assistantContent).toContain("Created the PowerPoint presentation artifact");
-    expect(result.assistantContent).toContain(".pptx");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("No downloadable PowerPoint was produced");
   });
 
   it.each(["presentations.create", "documents.create"])(
@@ -1157,10 +1145,11 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     );
   });
 
-  it("defers synthetic presentation visuals until after policy authorization", async () => {
-    const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => {
-      return completion("Here is an outline, but I did not create a deck.");
-    });
+  it("defers model-authored presentation visuals until after policy authorization", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", walkingPresentationArgs()))
+      .mockResolvedValue(completion("The presentation was created."));
     const generateImage = vi.fn(async () => ({
       providerId: "openai",
       model: "gpt-image-2",
@@ -1916,7 +1905,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(chunks.some((chunk) => chunk.type === "message_done")).toBe(false);
   });
 
-  it("probes document access with safe args and creates a document fallback when the model answers with text", async () => {
+  it("probes document access with safe args without synthesizing a document from model prose", async () => {
     let capturedRequest: ChatCompletionRequest | undefined;
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
       capturedRequest = request;
@@ -1966,22 +1955,9 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       skillId: "design-intelligence",
     });
     expect(extractRequestToolNames(capturedRequest)).toContain("documents_create");
-    expect(invokeTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "documents.create",
-        args: expect.objectContaining({
-          path: expect.stringContaining("top-10-things-to-do-in-free-time"),
-          format: "pdf",
-          title: "Top 10 Things To Do In Free Time",
-          design: expect.objectContaining({
-            mode: "polished",
-            skillId: "design-intelligence",
-          }),
-        }),
-      }),
-    );
-    expect(result.assistantContent).toContain("Created the document artifact");
-    expect(result.assistantContent).toContain(".pdf");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("file was not created");
   });
 
   it.each([
@@ -2001,13 +1977,29 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       modelContent: WALKING_RESEARCH,
       historyMessages: undefined,
     },
-  ])("parks a synthetic $toolName fallback when artifact creation needs approval", async (scenario) => {
+  ])("parks a model-authored $toolName retry when artifact creation needs approval", async (scenario) => {
     const approvalId = `approval-${scenario.toolName}`;
     const storage = createMockStorage() as {
       chatInlineApprovals: { upsert: ReturnType<typeof vi.fn> };
     };
     storage.chatInlineApprovals.upsert = vi.fn();
-    const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => completion(scenario.modelContent));
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(completion(scenario.modelContent))
+      .mockResolvedValueOnce(
+        namedToolCallCompletion(
+          scenario.toolName,
+          scenario.toolName === "presentations.create"
+            ? walkingPresentationArgs()
+            : {
+                path: "./workspace/goatcitadel_out/daily-walking.pdf",
+                format: "pdf",
+                title: "Daily Walking",
+                content: WALKING_RESEARCH,
+              },
+        ),
+      )
+      .mockResolvedValue(completion("The artifact is awaiting approval."));
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
       outcome: "approval_required",
       policyReason: "Artifact creation requires operator approval",
@@ -2260,6 +2252,37 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.assistantContent).not.toContain("Source URLs:");
   });
 });
+
+function walkingPresentationArgs(): Record<string, unknown> {
+  return {
+    path: "./workspace/goatcitadel_out/daily-walking.pptx",
+    title: "Daily Walking",
+    design: { mode: "polished", skillId: "design-intelligence" },
+    slides: [
+      {
+        title: "Health Benefits",
+        bullets: [
+          "Regular walking supports cardiovascular health, mobility, energy, and mood when it becomes a repeatable habit.",
+          "Gradual duration increases help establish a sustainable routine without unnecessary starting friction.",
+        ],
+      },
+      {
+        title: "Practical Routine",
+        bullets: [
+          "Choose a consistent time, comfortable route, supportive shoes, and a realistic duration that fits the day.",
+          "Track consistency and how the walk feels rather than treating speed as the only sign of progress.",
+        ],
+      },
+      {
+        title: "Safety and Progression",
+        bullets: [
+          "Increase duration gradually and adapt the route for weather and mobility needs.",
+          "Seek medical guidance when symptoms make exercise unsafe and adjust the routine to remain sustainable.",
+        ],
+      },
+    ],
+  };
+}
 
 function structuredCcgPresentationArgs(): Record<string, unknown> {
   const competitors = [

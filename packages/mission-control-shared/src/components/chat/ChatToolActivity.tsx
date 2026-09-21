@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   isChatTurnActiveStatus,
+  readOpenCodeRunSummary,
   type ChatMode,
   type ChatThreadTurnRecord,
   type ChatToolRunRecord,
@@ -9,6 +10,7 @@ import {
 import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "./chat-tool-effect-truth";
 import { parseTimestamp } from "./chat-display-helpers";
+import { ChatToolResultPreview, chatToolDisplayName } from "./ChatToolResultPreview";
 
 export function ChatTurnActivityRows({
   mode,
@@ -24,10 +26,16 @@ export function ChatTurnActivityRows({
   }
 
   const limit = mode === "chat" ? 3 : 6;
-  // Keep failed/blocked evidence visible even when later successful steps finish.
-  const prioritized = [...toolRuns].sort((a, b) =>
-    Number(getChatToolRunDiagnostics(b).hasFailureSignal || b.status === "failed" || b.status === "blocked")
-    - Number(getChatToolRunDiagnostics(a).hasFailureSignal || a.status === "failed" || a.status === "blocked"));
+  // Failures and approvals win; retain the agent result after prerequisite calls.
+  const priority = (run: ChatToolRunRecord) =>
+    getChatToolRunDiagnostics(run).hasFailureSignal
+      ? 4
+      : run.status === "approval_required" || run.status === "started"
+        ? 3
+        : readOpenCodeRunSummary(run.result?.externalAgent)
+          ? 2
+          : 1;
+  const prioritized = [...toolRuns].sort((a, b) => priority(b) - priority(a));
   const visibleIds = new Set(prioritized.slice(0, limit).map((run) => run.toolRunId));
   const visibleRuns = toolRuns.filter((run) => visibleIds.has(run.toolRunId));
   const hiddenCount = toolRuns.length - visibleRuns.length;
@@ -52,25 +60,35 @@ export function ChatTurnActivityRows({
         const elapsed = formatToolRunElapsed(run.startedAt, run.finishedAt);
 
         return (
-          <button
-            key={run.toolRunId}
-            type="button"
-            className={`mc-next-thread-tool-activity-row tone-${tone}`}
-            onClick={onOpenRunDetails}
-            aria-label={`Open execution detail for ${run.toolName}`}
-          >
-            <span className="mc-next-thread-tool-activity-status">{formatToolRunStatus(run.status)}</span>
-            <span className="mc-next-thread-tool-activity-name">{run.toolName}</span>
-            <span className="mc-next-thread-tool-activity-summary" title={summary}>
-              {summary}
-            </span>
-            {effectTruth?.tone === "uncertain" ? (
-              <span className="mc-next-thread-tool-activity-badge">effect uncertain</span>
-            ) : null}
-            {diagnostics.storedAsArtifact ? <span className="mc-next-thread-tool-activity-badge">artifact</span> : null}
-            {run.approvalId ? <span className="mc-next-thread-tool-activity-badge">approval</span> : null}
-            {elapsed ? <span className="mc-next-thread-tool-activity-elapsed">{elapsed}</span> : null}
-          </button>
+          <Fragment key={run.toolRunId}>
+            <button
+              type="button"
+              className={`mc-next-thread-tool-activity-row tone-${tone}`}
+              onClick={onOpenRunDetails}
+              aria-label={`Open execution detail for ${run.toolName}`}
+            >
+              <span className="mc-next-thread-tool-activity-status">
+                {diagnostics.hasFailureSignal && run.status === "executed"
+                  ? "needs review"
+                  : formatToolRunStatus(run.status, run.result?.approvalOutcome)}
+              </span>
+              <span className="mc-next-thread-tool-activity-name" title={run.toolName}>
+                {chatToolDisplayName(run)}
+              </span>
+              <span className="mc-next-thread-tool-activity-summary" title={summary}>
+                {summary}
+              </span>
+              {effectTruth?.tone === "uncertain" ? (
+                <span className="mc-next-thread-tool-activity-badge">effect uncertain</span>
+              ) : null}
+              {diagnostics.storedAsArtifact ? (
+                <span className="mc-next-thread-tool-activity-badge">artifact</span>
+              ) : null}
+              {run.approvalId ? <span className="mc-next-thread-tool-activity-badge">approval</span> : null}
+              {elapsed ? <span className="mc-next-thread-tool-activity-elapsed">{elapsed}</span> : null}
+            </button>
+            <ChatToolResultPreview run={run} />
+          </Fragment>
         );
       })}
       {hiddenCount > 0 ? (
@@ -106,7 +124,12 @@ function getToolRunActivityTone(
   return "neutral";
 }
 
-function formatToolRunStatus(status: ChatThreadTurnRecord["toolRuns"][number]["status"]): string {
+function formatToolRunStatus(
+  status: ChatThreadTurnRecord["toolRuns"][number]["status"],
+  outcome?: import("@goatcitadel/contracts").ApprovalResolutionOutcome,
+): string {
+  if (status === "blocked" && outcome && outcome !== "approved" && outcome !== "unknown")
+    return outcome.replaceAll("_", " ");
   switch (status) {
     case "approval_required":
       return "approval";
@@ -285,7 +308,9 @@ function LiveActivityRow({
       aria-label={`Open execution detail for ${run.toolName}`}
     >
       <LiveActivityRowGlyph run={run} hasFailureSignal={diagnostics.hasFailureSignal} />
-      <span className="mc-next-live-activity-name">{run.toolName}</span>
+      <span className="mc-next-live-activity-name" title={run.toolName}>
+        {chatToolDisplayName(run)}
+      </span>
       <span className="mc-next-live-activity-summary" title={summary}>
         {summary}
       </span>
@@ -345,11 +370,13 @@ export function ChatLiveActivityRail({
     return () => clearInterval(intervalId);
   }, [hasRunningTool]);
 
-  const phase = hidePhase ? null : deriveLiveActivityPhase({
-    traceStatus: turn.trace.status,
-    toolRuns: turn.toolRuns,
-    hasVisibleAssistantText,
-  });
+  const phase = hidePhase
+    ? null
+    : deriveLiveActivityPhase({
+        traceStatus: turn.trace.status,
+        toolRuns: turn.toolRuns,
+        hasVisibleAssistantText,
+      });
 
   if (turn.toolRuns.length === 0 && !phase) {
     return null;

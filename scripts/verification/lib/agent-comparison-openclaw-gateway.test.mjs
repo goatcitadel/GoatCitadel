@@ -70,12 +70,21 @@ async function fixture(t, fail = false) {
   });
   // Argument/process fixture only. The opt-in native conformance command runs
   // the actual pinned OpenClaw Gateway and CLI separately.
+  // Like the real pair, the fake CLI reaches the fake Gateway through the
+  // configured port and fails when nothing is listening. A CLI that answered
+  // without a Gateway let readiness race the owned child's exit: the probe
+  // could succeed before the exit was observed, reporting a dead Gateway ready.
+  // A probe is only logged once it has reached the Gateway.
   await writeFile(
     path.join(root, "openclaw.mjs"),
     `import fs from "node:fs";
+import net from "node:net";
 const args = process.argv.slice(2);
-if (args[0] === "gateway") { ${fail ? 'console.error("fixture startup refused"); process.exit(1);' : "setInterval(() => {}, 1000);"} }
-else { for await (const chunk of process.stdin) { void chunk; } fs.appendFileSync("commands.jsonl", JSON.stringify(args) + "\\n");
+if (args[0] === "gateway") { ${fail ? 'setTimeout(() => { console.error("fixture startup refused"); process.exit(1); }, 750);' : 'net.createServer((socket) => socket.end()).listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");'} }
+else { const port = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")).gateway.port;
+await new Promise((resolve) => { const socket = net.connect(port, "127.0.0.1", () => { socket.destroy(); resolve(); });
+socket.on("error", (error) => { console.error("fixture gateway unreachable: " + error.code); process.exit(1); }); });
+for await (const chunk of process.stdin) { void chunk; } fs.appendFileSync("commands.jsonl", JSON.stringify(args) + "\\n");
 console.log(JSON.stringify(args[1] === "pending" ? {approvals: []} : {approval: {decision: args.at(-1)}})); }
 `,
     { flag: "wx" },

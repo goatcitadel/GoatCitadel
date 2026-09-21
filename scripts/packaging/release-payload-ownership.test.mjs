@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { materializeHardLinkedFiles, removeEmptyDirectories } from "./lib/release-payload-ownership.mjs";
+import {
+  materializeHardLinkedFiles,
+  pruneReleaseResidue,
+  removeEmptyDirectories,
+} from "./lib/release-payload-ownership.mjs";
+import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 test("bundle ownership materialization severs deployed workspace hard links", (context) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-payload-ownership-"));
@@ -43,4 +48,34 @@ test("bundle ownership cleanup removes unmanifested empty directories", (context
   assert.equal(fs.existsSync(populated), true);
   assert.equal(fs.existsSync(payloadRoot), true);
   assert.equal(removeEmptyDirectories(payloadRoot), 0);
+});
+
+test("bundles exclude nested shard coverage while preserving similarly named runtime files", (context) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-payload-residue-"));
+  const cleanup = (target) => removeDirectorySafely(target, { repoRoot: process.cwd(), allowedRoot: tempRoot });
+  context.after(() => cleanup(tempRoot));
+  const payloadRoot = path.join(tempRoot, "deploy");
+  const storage = path.join(payloadRoot, "node_modules", "@goatcitadel", "storage");
+  const discarded = ["coverage-shard-1/tmp/v8.json", "coverage-shard-4/coverage-final.json", "coverage/snapshot.json"];
+  const retained = [
+    "dist/runtime.js",
+    "dist/coverage-shard-1",
+    "coverage-tools/index.js",
+    "coverage-shard-runtime/index.js",
+  ];
+  for (const relative of [...discarded, ...retained]) {
+    const file = path.join(storage, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "fixture\n");
+  }
+  const sourceCoverage = path.join(tempRoot, "workspace-source", "coverage-shard-1", "coverage-final.json");
+  fs.mkdirSync(path.dirname(sourceCoverage), { recursive: true });
+  fs.writeFileSync(sourceCoverage, "keep workspace evidence\n");
+
+  pruneReleaseResidue(payloadRoot, cleanup);
+
+  for (const relative of discarded) assert.equal(fs.existsSync(path.join(storage, relative)), false, relative);
+  for (const relative of retained)
+    assert.equal(fs.readFileSync(path.join(storage, relative), "utf8"), "fixture\n", relative);
+  assert.equal(fs.readFileSync(sourceCoverage, "utf8"), "keep workspace evidence\n");
 });

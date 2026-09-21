@@ -91,6 +91,10 @@ export interface ApprovalRuntime {
 export class ApprovalRuntimeService implements ApprovalRuntime {
   public constructor(private readonly host: ApprovalLifecycleHost & ApprovalRemoteActionContext) {}
 
+  public rejectPendingChatTurnApprovals(sessionId: string, turnId: string, actorId: string): Promise<void> {
+    return approvalLifecycleService.rejectPendingChatTurnApprovals(this.host, sessionId, turnId, actorId);
+  }
+
   public async listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
     return approvalLifecycleService.listToolGrants(this.host, scope, scopeRef, limit);
   }

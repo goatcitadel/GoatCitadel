@@ -28,5 +28,6 @@
     <Compile Include="..\Models\DesktopUpdateStatus.cs" Link="Models\DesktopUpdateStatus.cs" />
     <Compile Include="..\Services\DesktopUpdate*.cs" Link="Services\%(Filename)%(Extension)" />
     <Compile Include="..\Services\DesktopStableReleaseVerifier.cs" Link="Services\DesktopStableReleaseVerifier.cs" />
+    <Compile Include="..\Services\DesktopStartupDiagnostics.cs" Link="Services\DesktopStartupDiagnostics.cs" />
   </ItemGroup>
 </Project>

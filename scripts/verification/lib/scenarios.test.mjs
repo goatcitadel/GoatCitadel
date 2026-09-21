@@ -19,7 +19,7 @@ import {
   writeAutonomyGrantRuntimeToolPolicy,
 } from "./scenarios.mjs";
 import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
-import { GATEWAY_COVERAGE_SHARD_COUNT } from "../../coverage-shard-contract.mjs";
+import { GATEWAY_COVERAGE_SHARD_COUNT, STORAGE_COVERAGE_SHARD_COUNT } from "../../coverage-shard-contract.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
 
 test("autonomy-grant verification override drops the stale unified-config generation", async (t) => {
@@ -515,7 +515,8 @@ test("fast verification lane keeps required fast commands", () => {
     "fast.test.gateway.node",
     "fast.coverage.gateway.smoke",
     "fast.coverage.gateway.exercise",
-    "fast.test.storage",
+    "fast.test.storage.shard1",
+    "fast.test.storage.shard4",
     "fast.test.mission-control-next",
     "fast.test.policy-engine",
     "fast.test.libraries",
@@ -565,7 +566,11 @@ test("fast verification split tests preserve recursive package coverage", () => 
     "@goatcitadel/gateway",
     "coverage:exercise",
   ]);
-  assert.deepEqual(commandById.get("fast.test.storage")?.args, ["--filter", "@goatcitadel/storage", "test:coverage"]);
+  for (let shard = 1; shard <= STORAGE_COVERAGE_SHARD_COUNT; shard++) {
+    assert.deepEqual(commandById.get(`fast.test.storage.shard${shard}`)?.args, [
+      "--filter", "@goatcitadel/storage", "test:coverage", `--shard=${shard}/${STORAGE_COVERAGE_SHARD_COUNT}`,
+    ]);
+  }
   assert.deepEqual(commandById.get("fast.test.mission-control-next")?.args, [
     "--filter",
     "@goatcitadel/mission-control-next",
@@ -620,7 +625,7 @@ test("fast verification test commands instrument coverage so the gate can reuse 
     "fast.test.libraries",
     "fast.test.mission-control-next",
     "fast.test.policy-engine",
-    "fast.test.storage",
+    ...Array.from({ length: STORAGE_COVERAGE_SHARD_COUNT }, (_unused, index) => `fast.test.storage.shard${index + 1}`),
   ];
   assert.deepEqual(
     testCommands.map((command) => command.id).sort(),
@@ -677,7 +682,7 @@ test("fast verification stage plan isolates policy and schedules every command e
     {
       id: "fast.test.storage",
       mode: "serial",
-      commands: ["fast.test.storage"],
+      commands: ["fast.test.storage.shard1", "fast.test.storage.shard2", "fast.test.storage.shard3", "fast.test.storage.shard4"],
     },
     {
       id: "fast.test.policy-engine",

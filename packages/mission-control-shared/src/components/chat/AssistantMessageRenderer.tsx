@@ -468,7 +468,10 @@ function AssistantMessageContainer({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const resetTimerRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
   const isStreamingAssistant = role === "assistant" && Boolean(running);
-  const copyDisabled = role !== "assistant" || isStreamingAssistant || !content.trim();
+  // A long answer is worth copying before it finishes. The button stays live while
+  // streaming, but says "so far" everywhere it is announced so nobody mistakes a
+  // partial copy for the finished response.
+  const copyDisabled = role !== "assistant" || !content.trim();
 
   useEffect(() => {
     return () => {
@@ -499,20 +502,26 @@ function AssistantMessageContainer({
     }
   }
 
-  const copyButtonLabel = isStreamingAssistant
-    ? "Copy available when response completes"
-    : copyState === "copied"
-      ? "Response copied to clipboard"
+  const copyButtonLabel =
+    copyState === "copied"
+      ? isStreamingAssistant
+        ? "Partial response copied to clipboard"
+        : "Response copied to clipboard"
       : copyState === "failed"
         ? "Copy unavailable from this browser"
-        : "Copy response to clipboard";
-  const copyButtonTitle = isStreamingAssistant
-    ? "Copy available when complete"
-    : copyState === "copied"
-      ? "Copied"
+        : isStreamingAssistant
+          ? "Copy the response so far; it is still being written"
+          : "Copy response to clipboard";
+  const copyButtonTitle =
+    copyState === "copied"
+      ? isStreamingAssistant
+        ? "Copied so far"
+        : "Copied"
       : copyState === "failed"
         ? "Copy unavailable"
-        : "Copy";
+        : isStreamingAssistant
+          ? "Copy so far"
+          : "Copy";
   return (
     <div className="mc-assistant-renderer-shell" aria-busy={isStreamingAssistant ? true : undefined}>
       <div className="mc-assistant-renderer-body">{children}</div>
@@ -555,17 +564,26 @@ function StreamingMarkdown({
   // splitStreamingMarkdown(content) for every prefix.
   const splitStateRef = useRef<IncrementalSplitState | undefined>(undefined);
   const splitTurnRef = useRef<string | undefined>(undefined);
-  const { stable, tail } = useMemo(() => {
+  const { stable, tail, stableSource, tailSource } = useMemo(() => {
     if (splitStateRef.current === undefined || splitTurnRef.current !== streamTurnId) {
       splitStateRef.current = createIncrementalSplitState();
       splitTurnRef.current = streamTurnId;
     }
-    return splitIncremental(splitStateRef.current, content);
+    const split = splitIncremental(splitStateRef.current, content);
+    // Each chunk is its own Markdown document, so a reference link whose definition
+    // landed in the other chunk would render as raw [text][label] until the turn
+    // settled. Re-attach the definitions the message has produced so far.
+    const definitions = splitStateRef.current.definitions;
+    return {
+      ...split,
+      stableSource: split.stable + buildDefinitionSuffix(definitions, split.stable),
+      tailSource: split.tail + buildDefinitionSuffix(definitions, split.tail),
+    };
   }, [content, streamTurnId]);
   return (
     <div className="mc-assistant-streaming-markdown">
       {stable ? (
-        <MemoizedMarkdownBlock content={stable} role="assistant" components={assistantMarkdownComponents} />
+        <MemoizedMarkdownBlock content={stableSource} role="assistant" components={assistantMarkdownComponents} />
       ) : null}
       {tail ? (
         <div
@@ -575,7 +593,7 @@ function StreamingMarkdown({
           )}
         >
           <AssistantStreamingTailContext.Provider value={true}>
-            <MemoizedMarkdownBlock content={tail} role="assistant" components={assistantMarkdownComponents} />
+            <MemoizedMarkdownBlock content={tailSource} role="assistant" components={assistantMarkdownComponents} />
           </AssistantStreamingTailContext.Provider>
         </div>
       ) : null}
@@ -714,6 +732,18 @@ export interface IncrementalSplitState {
   bestSplitEnd: number;
   /** Index from which the most recent push began its scan (for perf instrumentation). */
   lastScanStart: number;
+  /** Link reference definitions seen on completed, non-fenced lines, in order.
+   *  `stable` and `tail` are parsed as separate Markdown documents, so a definition
+   *  only resolves in the chunk that physically contains it. Carrying them lets both
+   *  chunks be re-parsed with the full definition map (see buildDefinitionSuffix).
+   *  Collected here rather than in a second pass so the scan stays O(delta).
+   *
+   *  Only newline-terminated lines qualify. A definition on the still-growing trailing
+   *  line is deliberately NOT carried: its destination is half-arrived, so carrying it
+   *  would turn the reference into a link pointing at a truncated URL. Leaving it out
+   *  keeps today's behaviour for that case — the raw [text][label] shows briefly and
+   *  resolves when the turn settles — which is wrong-looking but never wrong-going. */
+  definitions: string[];
 }
 
 export function createIncrementalSplitState(): IncrementalSplitState {
@@ -725,7 +755,28 @@ export function createIncrementalSplitState(): IncrementalSplitState {
     fenceLength: 0,
     bestSplitEnd: -1,
     lastScanStart: 0,
+    definitions: [],
   };
+}
+
+// CommonMark link reference definition: up to 3 leading spaces (4+ is an indented code
+// block), a label, a colon, then a destination. Deliberately conservative — an exotic
+// multi-line definition simply is not carried, which is today's behaviour.
+const MARKDOWN_LINK_DEFINITION = /^ {0,3}\[[^\]\n]+\]:\s*\S/;
+
+/**
+ * Markdown to append to a chunk so it parses with the whole message's definition map.
+ * Definitions render no output, so appending them is invisible and idempotent.
+ */
+export function buildDefinitionSuffix(definitions: readonly string[], chunk: string): string {
+  if (definitions.length === 0 || chunk.length === 0) {
+    return "";
+  }
+  const missing = definitions.filter((definition) => !chunk.includes(definition));
+  if (missing.length === 0) {
+    return "";
+  }
+  return `${chunk.endsWith("\n\n") ? "" : "\n\n"}${missing.join("\n")}\n`;
 }
 
 /**
@@ -740,6 +791,7 @@ export function splitIncremental(state: IncrementalSplitState, content: string):
     state.fenceChar = null;
     state.fenceLength = 0;
     state.bestSplitEnd = -1;
+    state.definitions = [];
   }
 
   let { inFence, fenceChar, fenceLength, bestSplitEnd } = state;
@@ -788,6 +840,16 @@ export function splitIncremental(state: IncrementalSplitState, content: string):
     // Only newline-terminated lines (index < length) are immutable; the EOF "line" is a
     // still-growing partial that the next token may extend, so we must NOT advance the
     // resume point past it. Snapshot state strictly at completed newlines.
+    // Newline-terminated only: see the `definitions` field note on why a trailing
+    // partial definition must not be carried.
+    if (
+      !inFence &&
+      index < content.length &&
+      MARKDOWN_LINK_DEFINITION.test(line) &&
+      !state.definitions.includes(line)
+    ) {
+      state.definitions.push(line);
+    }
     if (index < content.length) {
       nextResumeIndex = index + 1;
       nextInFence = inFence;

@@ -416,6 +416,49 @@ describe("coverage tooling", () => {
     );
   });
 
+  it("keeps V8 remapped negative-one columns conservative across collectors", () => {
+    for (const endpoint of ["start", "end"]) {
+      const remapped = location(110);
+      remapped[endpoint].column = -1;
+      const entry = {
+        path: "/repo/src/remapped.ts",
+        statementMap: { 0: remapped },
+        s: { 0: 0 },
+        fnMap: { 0: { name: "remapped", decl: remapped, loc: remapped } },
+        f: { 0: 0 },
+        branchMap: { 0: { type: "branch", line: 110, loc: remapped, locations: [remapped] } },
+        b: { 0: [0] },
+      };
+      const hit = { ...entry, s: { 0: 1 }, f: { 0: 1 }, b: { 0: [1] } };
+      const independent = mergeCoverageEntries(entry, hit);
+      assert.deepEqual(Object.values(independent.s).sort(), [0, 1]);
+      assert.deepEqual(Object.values(independent.f).sort(), [0, 1]);
+      assert.deepEqual(Object.values(independent.b).flat().sort(), [0, 1]);
+
+      const sameCollector = mergeCoverageEntries(entry, hit, { sameCollector: true });
+      assert.deepEqual(Object.values(sameCollector.s), [1]);
+      assert.deepEqual(Object.values(sameCollector.f), [1]);
+      assert.deepEqual(Object.values(sameCollector.b), [[1]]);
+
+      const known = structuredClone(hit);
+      known.statementMap[0][endpoint].column = 0;
+      known.fnMap[0].decl[endpoint].column = 0;
+      known.fnMap[0].loc[endpoint].column = 0;
+      known.branchMap[0].loc[endpoint].column = 0;
+      known.branchMap[0].locations[0][endpoint].column = 0;
+      const distinct = mergeCoverageEntries(entry, known, { sameCollector: true });
+      assert.deepEqual(Object.values(distinct.s).sort(), [0, 1]);
+      assert.deepEqual(Object.values(distinct.f).sort(), [0, 1]);
+      assert.deepEqual(Object.values(distinct.b).flat().sort(), [0, 1]);
+    }
+  });
+
+  it("rejects negative source columns other than the remapped negative-one value", () => {
+    const invalid = location(110, -2);
+    const entry = { path: "/repo/src/invalid.ts", statementMap: { 0: invalid }, s: { 0: 1 } };
+    assert.throws(() => mergeCoverageEntries(entry, entry), /invalid source column/i);
+  });
+
   it("rejects malformed source coordinates instead of merging them as unknown locations", () => {
     const malformedLeft = location(41);
     malformedLeft.end.column = "collector-a-invalid";
@@ -506,7 +549,9 @@ describe("coverage tooling", () => {
       fs.readFileSync(path.join(scriptsDir, "..", "packages", "storage", "package.json"), "utf8"),
     );
 
-    assert.match(storagePackage.scripts["test:coverage"], /node --test --test-concurrency=1/);
+    assert.equal(storagePackage.scripts["test:coverage"], "node ../../scripts/storage-coverage.mjs");
+    const runner = fs.readFileSync(path.join(scriptsDir, "storage-coverage.mjs"), "utf8");
+    assert.match(runner, /"--test",\s*"--test-concurrency=1"/);
   });
 
   it("rejects non-Linux artifacts as production coverage evidence", async () => {
@@ -1141,6 +1186,44 @@ describe("coverage tooling", () => {
         } else {
           assert.notEqual(result.status, 0, testCase.label);
           assert.match(`${result.stderr}\n${result.stdout}`, testCase.expected, testCase.label);
+        }
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("requires all storage shards and rejects mixed or unexpected storage reports", () => {
+    for (const testCase of [
+      { reports: ["coverage"], shouldPass: true },
+      { reports: [1, 2, 3, 4].map((shard) => `coverage-shard-${shard}`), shouldPass: true },
+      {
+        reports: [1, 3, 4].map((shard) => `coverage-shard-${shard}`),
+        expected: /requires exactly 4 Storage shard reports[\s\S]*coverage-shard-2/,
+      },
+      { reports: [1, 2, 3, 4, 5].map((shard) => `coverage-shard-${shard}`), expected: /Unexpected: coverage-shard-5/ },
+      {
+        reports: ["coverage", ...[1, 2, 3, 4].map((shard) => `coverage-shard-${shard}`)],
+        expected: /both unsharded packages\/storage\/coverage and sharded Storage/,
+      },
+    ]) {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-storage-reuse-shards-"));
+      try {
+        writeReusableWorkspace(tempDir, [
+          {
+            dir: "packages/storage",
+            name: "@goatcitadel/storage",
+            reports: testCase.reports.map((name) => ({ name })),
+          },
+        ]);
+        const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+          cwd: tempDir,
+          encoding: "utf8",
+        });
+        if (testCase.shouldPass) assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+        else {
+          assert.notEqual(result.status, 0);
+          assert.match(`${result.stderr}\n${result.stdout}`, testCase.expected);
         }
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });

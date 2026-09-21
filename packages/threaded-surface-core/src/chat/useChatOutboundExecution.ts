@@ -674,11 +674,16 @@ export function useChatOutboundExecution(
           };
           let streamErrorChunkReceived = false;
           let terminalStreamStateReceived = false;
+          let cancelledStreamStateReceived = false;
           const onChunk = (chunk: ChatStreamChunk) => {
             const liveStream = activeStreamRef.current;
             if (
               liveStream?.streamToken !== streamToken ||
+              liveStream.controller.signal.aborted ||
+              cancelledStreamStateReceived ||
               liveStream.sessionId !== session!.sessionId ||
+              chunk.sessionId !== liveStream.sessionId ||
+              (liveStream.turnId && chunk.turnId && chunk.turnId !== liveStream.turnId) ||
               selectedSessionIdRef.current !== session!.sessionId
             ) {
               return;
@@ -769,6 +774,11 @@ export function useChatOutboundExecution(
             }
             if (chunk.type === "trace_update" && chunk.trace.capabilityUpgradeSuggestions !== undefined) {
               setCapabilitySuggestions(chunk.trace.capabilityUpgradeSuggestions);
+            }
+            if (chunk.type === "trace_update" && chunk.trace.status === "cancelled") {
+              cancelledStreamStateReceived = true;
+              setPendingApproval(null);
+              setPendingUserInput(null);
             }
             if (chunk.type === "trace_update" && chunk.trace.specialistCandidateSuggestions !== undefined) {
               setSpecialistSuggestions(chunk.trace.specialistCandidateSuggestions);

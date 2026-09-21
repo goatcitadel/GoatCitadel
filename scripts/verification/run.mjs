@@ -154,7 +154,7 @@ const USABILITY_FAST_EVIDENCE_COMMAND_IDS = Object.freeze(
   FAST_LANE_COMMANDS.map((command) => command.id).filter(
     (id) =>
       id.startsWith("fast.test.gateway.") ||
-      id === "fast.test.storage" ||
+      id.startsWith("fast.test.storage.") ||
       id === "fast.test.mission-control-next" ||
       id === "fast.test.policy-engine" ||
       id === "fast.test.libraries",

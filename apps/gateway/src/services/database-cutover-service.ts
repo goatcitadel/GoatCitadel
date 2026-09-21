@@ -82,6 +82,7 @@ const SQLITE_IMPORT_EXCLUDED_TABLES = new Set(["schema_migrations"]);
 
 export class DatabaseCutoverService {
   private readonly activeStorageDriver: "sqlite" | "postgres";
+  private healthSnapshotInFlight?: Promise<DatabaseHealthSnapshot>;
 
   public constructor(private readonly deps: DatabaseCutoverServiceDeps) {
     // Storage is constructed before this service and is not hot-swapped by a
@@ -315,6 +316,23 @@ export class DatabaseCutoverService {
   }
 
   public async getHealthSnapshot(): Promise<DatabaseHealthSnapshot> {
+    // A Postgres health probe holds the migration advisory lock while reading
+    // schema state. Overlapping health/ops/dashboard requests must share that
+    // probe instead of mistaking each other's inspection for an active migration.
+    // Share only in-flight work; the next request always probes current state.
+    if (this.healthSnapshotInFlight) {
+      return this.healthSnapshotInFlight;
+    }
+    const pending = this.readHealthSnapshot();
+    this.healthSnapshotInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      this.healthSnapshotInFlight = undefined;
+    }
+  }
+
+  private async readHealthSnapshot(): Promise<DatabaseHealthSnapshot> {
     // Health describes the already-created Storage owner, not merely the
     // next-start driver persisted by a completed cutover.
     const driver = this.activeStorageDriver;

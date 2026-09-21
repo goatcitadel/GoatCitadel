@@ -6352,6 +6352,36 @@ describe("executeTool", () => {
     ).rejects.toThrow(/secret-like material/i);
   });
 
+  it("supports bounded long tasks and delivers EOF to noninteractive CLI stdin", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const command = `"${process.execPath}" -e "process.stdin.resume(); process.stdin.on('end', () => setTimeout(() => console.log('stdin-closed'), 150))"`;
+    setShellExecTimeoutMsForTesting(20);
+    try {
+      const result = await executeTool(
+        toolRequest("shell.exec", { command, timeoutMs: 5000 }),
+        policyConfig,
+        storageStub,
+      );
+      expect(result).toMatchObject({ exitCode: 0, timeoutMs: 5000 });
+      expect(result.stdout).toContain("stdin-closed");
+    } finally {
+      setShellExecTimeoutMsForTesting();
+    }
+  }, 10000);
+
+  it("rejects an invalid long-task timeout before reaching the process boundary", async () => {
+    const beforeProcessSpawn = vi.fn();
+    await expect(
+      executeTool(
+        toolRequest("shell.exec", { command: "opencode --version", timeoutMs: 900001 }),
+        policyConfig,
+        storageStub,
+        { beforeProcessSpawn },
+      ),
+    ).rejects.toThrow("timeoutMs");
+    expect(beforeProcessSpawn).not.toHaveBeenCalled();
+  });
+
   it("hard-kills a shell.exec command tree that exceeds the timeout", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     // A child that holds an interval open forever; only a tree kill (taskkill /T
