@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-21T14:32:22.714Z",
-  "measuredSourceSha256": "9dc285a02716a48bcb779a14678d73393ebc99e8c89e99acf1ef5b45d0a52264",
+  "generatedAt": "2026-09-21T15:34:52.374Z",
+  "measuredSourceSha256": "831e69e68c0065081f0588f001e71a8490d061a83c777bbf4be1ff5f92077fd2",
   "gatewayLineCount": 13179,
   "largeServiceDebt": [
     {
@@ -721,8 +721,8 @@
     "apps/gateway/src/services/workspaces-route-service.ts"
   ],
   "sourceTreeState": "clean",
-  "hostCallbackCollectorCorrectedAt": "2026-09-21T14:32:22.714Z",
-  "hostCallbackSourceRevision": "1eaec259a676b2d173c2b451c641e948f69b4e14",
-  "dependencyMemberCollectorCapturedAt": "2026-09-21T14:32:22.714Z",
-  "dependencyMemberSourceRevision": "1eaec259a676b2d173c2b451c641e948f69b4e14"
+  "hostCallbackCollectorCorrectedAt": "2026-09-21T15:34:52.374Z",
+  "hostCallbackSourceRevision": "7350a26b780497d4c3e55ef6632e86d1d9794ee2",
+  "dependencyMemberCollectorCapturedAt": "2026-09-21T15:34:52.374Z",
+  "dependencyMemberSourceRevision": "7350a26b780497d4c3e55ef6632e86d1d9794ee2"
 }
