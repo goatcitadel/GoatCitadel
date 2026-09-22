@@ -16,6 +16,13 @@ function fixture(modelEfforts: readonly string[]) {
           authReadiness: { status: "ready" },
           capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
         },
+        {
+          providerId: "llamacpp",
+          label: "llama.cpp",
+          defaultModel: "gemma-4-local",
+          authReadiness: { status: "ready" },
+          capabilities: { reasoning: false },
+        },
       ],
     },
   } as any;
@@ -35,7 +42,7 @@ function fixture(modelEfforts: readonly string[]) {
     updateChatSessionPrefs,
     getSettings: vi.fn(async () => settings),
     updateSettings,
-    listModels: vi.fn(async () => [{ id: "gpt-5" }, { id: "gpt-5-mini" }] as any),
+    listModels: vi.fn(async () => [{ id: "gpt-5" }, { id: "gpt-5-mini" }, { id: "gemma-4-local" }] as any),
     getModelReasoningMetadata: vi.fn(() => ({ supportedEfforts: modelEfforts }) as any),
   });
   const context = {
@@ -59,8 +66,36 @@ describe("ModelChangePlanAdapter", () => {
       }),
     ).rejects.toMatchObject({
       httpStatus: 422,
-      details: expect.objectContaining({ requestedEffort: "deep", supportedEfforts: ["minimal"] }),
+      details: expect.objectContaining({ requestedEffort: "deep", supportedEfforts: ["off", "minimal"] }),
     });
+  });
+
+  it("tells the operator to use Off effort for local runtimes without reasoning support", async () => {
+    const { adapter, context } = fixture(["low", "medium"]);
+    await expect(
+      adapter.prepare(context, {
+        kind: "installation_default_model",
+        providerId: "llamacpp",
+        model: "gemma-4-local",
+        thinkingLevel: "standard",
+      }),
+    ).rejects.toMatchObject({
+      httpStatus: 422,
+      message: "llama.cpp / gemma-4-local does not support standard effort. Choose off effort instead.",
+      details: expect.objectContaining({ supportedEfforts: ["off"] }),
+    });
+  });
+
+  it("accepts Off effort for local runtimes without reasoning support", async () => {
+    const { adapter, context } = fixture(["low", "medium"]);
+    await expect(
+      adapter.prepare(context, {
+        kind: "installation_default_model",
+        providerId: "llamacpp",
+        model: "gemma-4-local",
+        thinkingLevel: "off",
+      }),
+    ).resolves.toMatchObject({ status: "awaiting_confirmation" });
   });
 
   it("offers verified model alternatives when the requested model is unavailable", async () => {
@@ -73,7 +108,7 @@ describe("ModelChangePlanAdapter", () => {
       }),
     ).rejects.toMatchObject({
       httpStatus: 422,
-      details: expect.objectContaining({ alternatives: ["gpt-5", "gpt-5-mini"] }),
+      details: expect.objectContaining({ alternatives: ["gpt-5", "gpt-5-mini", "gemma-4-local"] }),
     });
   });
 });

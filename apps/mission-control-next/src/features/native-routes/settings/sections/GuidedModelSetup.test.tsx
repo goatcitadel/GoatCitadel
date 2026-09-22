@@ -52,7 +52,17 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await act(async () => root.unmount());
   document.body.replaceChildren();
 });
-async function mount(status = "ready", reload = vi.fn(async () => {})) {
+async function mount(
+  status = "ready",
+  reload = vi.fn(async () => {}),
+  provider: {
+    providerId?: string;
+    label?: string;
+    baseUrl?: string;
+    defaultModel?: string;
+    capabilities?: object;
+  } = {},
+) {
   mocks.catalog.mockReturnValue({
     providers: [
       {
@@ -61,6 +71,7 @@ async function mount(status = "ready", reload = vi.fn(async () => {})) {
         hasApiKey: true,
         authReadiness: { status },
         defaultModel: "test-model",
+        ...provider,
       },
     ],
     config: { defaultThinkingLevel: "standard" },
@@ -77,7 +88,11 @@ async function mount(status = "ready", reload = vi.fn(async () => {})) {
     root.render(
       <GuidedModelSetup
         workspaceId={workspaceId}
-        onboarding={{ settings: { llm: { activeProviderId: "test", activeModel: "test-model" } } } as OnboardingState}
+        onboarding={
+          {
+            settings: { llm: { activeProviderId: provider.providerId ?? "test", activeModel: "test-model" } },
+          } as OnboardingState
+        }
         route={{ area: "settings", section: "onboarding", theme: "dark" }}
         navigate={navigate}
         reloadOnboarding={reload}
@@ -93,7 +108,9 @@ async function mount(status = "ready", reload = vi.fn(async () => {})) {
     navigate,
     notice,
     reload,
-    changeWorkspace: async (workspaceId: string) => { await act(async () => render(workspaceId)); },
+    changeWorkspace: async (workspaceId: string) => {
+      await act(async () => render(workspaceId));
+    },
     unmount: async () => {
       roots.splice(roots.indexOf(root), 1);
       await act(async () => root.unmount());
@@ -133,6 +150,46 @@ describe("guided first model setup", () => {
       }),
     );
   });
+  it("submits Off effort and guides setup for a local runtime without reasoning support", async () => {
+    mocks.models.mockResolvedValue(["gemma-4-local"]);
+    const view = await mount("missing", undefined, {
+      providerId: "llamacpp",
+      label: "llama.cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      defaultModel: "gemma-4-local",
+      capabilities: { reasoning: false },
+    });
+    expect(view.host.textContent).toContain("Start llama.cpp before connecting");
+    expect(view.host.textContent).toContain("does not report reasoning effort");
+    const effort = [...view.host.querySelectorAll("select")].find((select) => select.value === "off")!;
+    expect([...effort.options].map((option) => option.value)).toEqual(["off"]);
+    await view.unmount();
+    const ready = await mount("ready", undefined, {
+      providerId: "llamacpp",
+      label: "llama.cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      defaultModel: "gemma-4-local",
+      capabilities: { reasoning: false },
+    });
+    const modelSelect = [...ready.host.querySelectorAll("select")].find((select) =>
+      [...select.options].some((option) => option.value === "gemma-4-local"),
+    )!;
+    await act(async () => {
+      modelSelect.value = "gemma-4-local";
+      modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => ready.button("Confirm model")!.click());
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: {
+          kind: "installation_default_model",
+          providerId: "llamacpp",
+          model: "gemma-4-local",
+          thinkingLevel: "off",
+        },
+      }),
+    );
+  });
   it("refreshes onboarding before navigation and preserves a failed refresh as an error", async () => {
     const reload = vi.fn(async () => {
       throw new Error("State refresh failed");
@@ -145,7 +202,11 @@ describe("guided first model setup", () => {
   });
   it.each(["unmount", "workspace change"])("ignores late Chat entry after %s", async (interruption) => {
     let resolve!: () => void;
-    mocks.complete.mockReturnValue(new Promise<void>((done) => { resolve = done; }));
+    mocks.complete.mockReturnValue(
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+    );
     const view = await mount();
     await act(async () => view.button("Enter Chat")!.click());
     expect(mocks.complete).toHaveBeenCalledTimes(1);
@@ -159,7 +220,12 @@ describe("guided first model setup", () => {
   });
   it("does not navigate when the screen closes during the onboarding refresh", async () => {
     let resolve!: () => void;
-    const reload = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
+    const reload = vi.fn(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        }),
+    );
     const view = await mount("ready", reload);
     await act(async () => view.button("Enter Chat")!.click());
     expect(reload).toHaveBeenCalledTimes(1);
@@ -170,14 +236,24 @@ describe("guided first model setup", () => {
   it.each(["receipt", "error"])("ignores a prior workspace's late plan %s", async (outcome) => {
     let resolve!: (value: ChangePlanRecord) => void;
     let reject!: (reason: Error) => void;
-    mocks.create.mockReturnValueOnce(new Promise<ChangePlanRecord>((done, fail) => { resolve = done; reject = fail; }));
+    mocks.create.mockReturnValueOnce(
+      new Promise<ChangePlanRecord>((done, fail) => {
+        resolve = done;
+        reject = fail;
+      }),
+    );
     const view = await mount("missing");
     await act(async () => view.button("Connect provider")!.click());
     await view.changeWorkspace("other-workspace");
     await act(async () => {
       if (outcome === "error") reject(new Error("Old workspace failure"));
-      else resolve({ planId: "old-plan", status: "awaiting_confirmation", origin: { workspaceId: "default" },
-        request: { kind: "provider_connection", providerId: "test" } } as ChangePlanRecord);
+      else
+        resolve({
+          planId: "old-plan",
+          status: "awaiting_confirmation",
+          origin: { workspaceId: "default" },
+          request: { kind: "provider_connection", providerId: "test" },
+        } as ChangePlanRecord);
     });
     expect(view.host.querySelector('[role="alert"]')).toBeNull();
     await act(async () => view.button("Connect provider")!.click());

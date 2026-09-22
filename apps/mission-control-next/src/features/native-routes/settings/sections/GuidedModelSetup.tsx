@@ -29,16 +29,12 @@ import {
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton } from "../../primitives";
-
-const GUIDED_THINKING_LEVELS: ReadonlyArray<{ value: ChatThinkingLevel; label: string }> = [
-  { value: "off", label: "Off" },
-  { value: "minimal", label: "Minimal" },
-  { value: "standard", label: "Standard" },
-  { value: "extended", label: "Extended" },
-  { value: "deep", label: "Deep" },
-  { value: "max", label: "Max" },
-  { value: "ultra", label: "Ultra" },
-];
+import {
+  clampGuidedThinkingLevel,
+  GUIDED_THINKING_LEVELS,
+  localRuntimeSetupGuide,
+  supportedGuidedThinkingLevels,
+} from "./guided-model-setup-support";
 
 const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
   "completed",
@@ -90,7 +86,7 @@ export function GuidedModelSetup({
     JSON.stringify(canonicalSelection),
     { label: "First Chat model", available: !catalog.loading },
   );
-  const { providerId, model, thinkingLevel } = modelDraft.value;
+  const { providerId, model, thinkingLevel: requestedThinkingLevel } = modelDraft.value;
   const setProviderId = (id: string) =>
     modelDraft.setValue((current) => ({
       ...current,
@@ -112,6 +108,19 @@ export function GuidedModelSetup({
     () => catalog.providers.find((provider) => provider.providerId === providerId) ?? null,
     [catalog.providers, providerId],
   );
+  const supportedThinkingLevels = useMemo(
+    () => supportedGuidedThinkingLevels(selectedProvider?.capabilities),
+    [selectedProvider?.capabilities],
+  );
+  // Submit only an effort the selected provider accepts; the draft keeps the
+  // operator's preference so switching back to a reasoning provider restores it.
+  const thinkingLevel = clampGuidedThinkingLevel(requestedThinkingLevel, supportedThinkingLevels);
+  const savedThinkingLevel = clampGuidedThinkingLevel(
+    catalog.config?.defaultThinkingLevel ?? "standard",
+    supportedThinkingLevels,
+  );
+  const effortLimited = supportedThinkingLevels.length < GUIDED_THINKING_LEVELS.length;
+  const localGuide = localRuntimeSetupGuide(selectedProvider);
   const providerReady = Boolean(
     selectedProvider &&
     (selectedProvider.authReadiness
@@ -124,7 +133,7 @@ export function GuidedModelSetup({
     ((Boolean(activeProviderId && activeModel) &&
       activeProviderId === providerId &&
       activeModel === model &&
-      thinkingLevel === (catalog.config?.defaultThinkingLevel ?? "standard")) ||
+      thinkingLevel === savedThinkingLevel) ||
       (latestPlan?.request.kind === "installation_default_model" &&
         latestPlan.status === "completed" &&
         latestPlan.request.providerId === providerId &&
@@ -392,6 +401,23 @@ export function GuidedModelSetup({
           </p>
         </SettingsField>
       </SettingsFieldGrid>
+      {localGuide && !defaultPlanCompleted ? (
+        <section aria-label={localGuide.title}>
+          <p>
+            <strong>{localGuide.title}</strong>
+          </p>
+          <ol className="mc-next-settings-field-note">
+            {localGuide.steps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          {localGuide.command ? (
+            <div className="mc-next-settings-code-block">
+              <code>{localGuide.command}</code>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       <NativeDisclosureCard
         id="onboarding-advanced-model"
         title="Advanced model settings"
@@ -407,14 +433,20 @@ export function GuidedModelSetup({
                 setThinkingLevel(event.currentTarget.value as ChatThinkingLevel);
               }}
             >
-              {GUIDED_THINKING_LEVELS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
+              {GUIDED_THINKING_LEVELS.filter((option) => supportedThinkingLevels.includes(option.value)).map(
+                (option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ),
+              )}
             </select>
             <p className="mc-next-settings-field-note">
-              Unsupported model-specific effort is rejected before confirmation and valid alternatives are returned.
+              {supportedThinkingLevels.length === 1
+                ? `${selectedProvider?.label ?? "This provider"} does not report reasoning effort, so effort stays Off.`
+                : effortLimited
+                  ? `Showing only the effort levels ${selectedProvider?.label ?? "this provider"} supports.`
+                  : "Unsupported model-specific effort is rejected before confirmation and valid alternatives are returned."}
             </p>
           </SettingsField>
         </SettingsFieldGrid>

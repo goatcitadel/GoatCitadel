@@ -227,12 +227,19 @@ export class ModelChangePlanAdapter implements EvolutionControlPlaneAdapter<Mode
     const supported = modelReasoning?.supportedEfforts ?? provider.capabilities?.reasoningEfforts;
     if (requested === "none") return;
     if (provider.capabilities?.reasoning === false || (supported && !supported.includes(requested))) {
-      throw new SemanticValidationError(`${provider.label} / ${model} does not support ${level} effort.`, {
-        providerId: provider.providerId,
-        model,
-        requestedEffort: level,
-        supportedEfforts: thinkingLevelsForReasoningEfforts(supported ?? ["none"]),
-      });
+      const supportedEfforts =
+        provider.capabilities?.reasoning === false
+          ? (["off"] as ChatThinkingLevel[])
+          : thinkingLevelsForReasoningEfforts(["none", ...(supported ?? [])]);
+      throw new SemanticValidationError(
+        `${provider.label} / ${model} does not support ${level} effort. Choose ${formatEffortChoices(supportedEfforts)}.`,
+        {
+          providerId: provider.providerId,
+          model,
+          requestedEffort: level,
+          supportedEfforts,
+        },
+      );
     }
   }
 
@@ -305,5 +312,10 @@ function thinkingLevelsForReasoningEfforts(efforts: readonly ChatCompletionReaso
     max: "max",
     ultra: "ultra",
   };
-  return efforts.flatMap((effort) => (mapping[effort] ? [mapping[effort]!] : []));
+  return [...new Set(efforts.flatMap((effort) => (mapping[effort] ? [mapping[effort]!] : [])))];
+}
+
+function formatEffortChoices(levels: readonly ChatThinkingLevel[]): string {
+  if (levels.length <= 1) return `${levels[0] ?? "off"} effort instead`;
+  return `one of: ${levels.join(", ")}`;
 }
