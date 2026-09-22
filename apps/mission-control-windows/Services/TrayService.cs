@@ -18,8 +18,11 @@ public sealed class TrayActions
 
 public sealed class TrayService : IDisposable
 {
+    private const string TrayIconResourceName = "GoatCitadel.MissionControl.Windows.Assets.tray.ico";
+
     private readonly Dictionary<int, Action> _menuActions = new();
     private NotifyIcon? _notifyIcon;
+    private Icon? _ownedTrayIcon;
     private ContextMenuStrip? _contextMenu;
 
     public void Initialize(TrayActions actions)
@@ -37,10 +40,11 @@ public sealed class TrayService : IDisposable
         _menuActions[1009] = actions.CheckForUpdates;
 
         _contextMenu = BuildContextMenu();
+        _ownedTrayIcon = LoadTrayIcon();
         _notifyIcon = new NotifyIcon
         {
             ContextMenuStrip = _contextMenu,
-            Icon = SystemIcons.Application,
+            Icon = _ownedTrayIcon ?? SystemIcons.Application,
             Text = "GoatCitadel Mission Control",
             Visible = true,
         };
@@ -57,11 +61,36 @@ public sealed class TrayService : IDisposable
             _notifyIcon = null;
         }
 
+        _ownedTrayIcon?.Dispose();
+        _ownedTrayIcon = null;
+
         if (_contextMenu is not null)
         {
             _contextMenu.Dispose();
             _contextMenu = null;
         }
+    }
+
+    // Picks the frame matching the current DPI's small-icon size. Returns null (the caller
+    // uses the shared stock icon) so a missing or corrupt resource never blocks tray startup.
+    private static Icon? LoadTrayIcon()
+    {
+        try
+        {
+            using var stream = typeof(TrayService).Assembly.GetManifestResourceStream(TrayIconResourceName);
+            if (stream is not null)
+            {
+                return new Icon(stream, SystemInformation.SmallIconSize);
+            }
+
+            System.Diagnostics.Debug.WriteLine($"Tray icon resource '{TrayIconResourceName}' not found; using default icon.");
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or InvalidOperationException)
+        {
+            System.Diagnostics.Debug.WriteLine($"Tray icon failed to load; using default icon. {ex.Message}");
+        }
+
+        return null;
     }
 
     private ContextMenuStrip BuildContextMenu()
