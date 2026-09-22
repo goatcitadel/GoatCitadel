@@ -1,0 +1,97 @@
+name: Code Mode Seatbelt macOS Proof
+
+# Real-macOS verification of the Code Mode Seatbelt profile (#145). The required
+# Code Mode Sandbox Canary runs on Linux/Windows and never calls `sandbox-exec`,
+# so this lane is the only thing that proves the narrowed profile still lets Node
+# start and still denies host reads, writes and network.
+#
+# It is path-filtered to the Seatbelt adapter and must therefore NOT be added to
+# the Protect Main required checks: a path-filtered required check never reports
+# on unrelated PRs and blocks them as perpetually pending.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/gateway/src/services/code-mode-sandbox/darwin-seatbelt-adapter.ts
+      - apps/gateway/src/services/code-mode-sandbox/types.ts
+      - apps/gateway/src/services/code-mode-child-source.ts
+      - apps/gateway/src/code-mode-seatbelt-live-proof.ts
+      - .github/workflows/code-mode-seatbelt-macos.yml
+  pull_request:
+    paths:
+      - apps/gateway/src/services/code-mode-sandbox/darwin-seatbelt-adapter.ts
+      - apps/gateway/src/services/code-mode-sandbox/types.ts
+      - apps/gateway/src/services/code-mode-child-source.ts
+      - apps/gateway/src/code-mode-seatbelt-live-proof.ts
+      - .github/workflows/code-mode-seatbelt-macos.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seatbelt-live-proof:
+    name: Seatbelt live proof (${{ matrix.node }} Node)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # bundled = a Node outside any package-manager prefix (the production
+        # posture); homebrew = dev/source installs that need the conditional
+        # prefix grant for their linked dylibs.
+        node: [bundled, homebrew]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Homebrew Node
+        if: matrix.node == 'homebrew'
+        run: |
+          brew install node
+          echo "SANDBOX_NODE=$(brew --prefix)/bin/node" >> "$GITHUB_ENV"
+
+      - name: Use setup-node Node
+        if: matrix.node == 'bundled'
+        run: echo "SANDBOX_NODE=$(command -v node)" >> "$GITHUB_ENV"
+
+      - name: Run Seatbelt live proof
+        run: >
+          pnpm --filter @goatcitadel/gateway exec tsx src/code-mode-seatbelt-live-proof.ts
+          --node-path "$SANDBOX_NODE"
+          --label "${{ matrix.node }}"
+          --output "$GITHUB_WORKSPACE/artifacts/verification/seatbelt-live-proof-${{ matrix.node }}.json"
+
+      - name: Collect Seatbelt denials
+        if: always()
+        run: |
+          mkdir -p artifacts/verification
+          log show --last 10m --style compact --predicate 'sender == "Sandbox"' \
+            > "artifacts/verification/seatbelt-denials-${{ matrix.node }}.log" 2>&1 || true
+          # Only the sandboxed Node (and sandbox-exec itself) matter; the rest
+          # of the Sandbox subsystem log is other system daemons.
+          grep -E '(node|sandbox-exec)\([0-9]+\) deny' "artifacts/verification/seatbelt-denials-${{ matrix.node }}.log" \
+            | sed -E 's/^.*\) (deny\([0-9]+\) .*)$/\1/' | sort | uniq -c | sort -rn | head -n 60 || true
+
+      - name: Upload proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-mode-seatbelt-macos-${{ matrix.node }}
+          path: artifacts/verification
+          if-no-files-found: error

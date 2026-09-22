@@ -64,13 +64,20 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
     assertCodeModeSyntheticLaunchEnv(input.env);
 
     await fs.mkdir(input.runTempRoot, { recursive: true });
+    const profileInput = await canonicalizeLaunchPaths(input);
     const profilePath = path.join(input.runTempRoot, "code-mode-seatbelt.sb");
-    await fs.writeFile(profilePath, buildSeatbeltProfile(input), "utf8");
+    await fs.writeFile(profilePath, buildSeatbeltProfile(profileInput), "utf8");
 
     return {
       transport: "node_ipc",
       executable: sandboxExecPath,
-      args: ["-f", profilePath, input.nodePath, `--max-old-space-size=${input.heapMb}`, input.harnessPath],
+      args: [
+        "-f",
+        profilePath,
+        profileInput.nodePath,
+        `--max-old-space-size=${input.heapMb}`,
+        profileInput.harnessPath,
+      ],
       cwd: input.runTempRoot,
       env: input.env,
       shell: false,
@@ -79,6 +86,24 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
       advisoryUnsandboxed: false,
     };
   }
+}
+
+// Seatbelt matches filters against the kernel's resolved vnode path, so a grant
+// for `/var/folders/...` or `/tmp/...` never matches the real `/private/var/...`
+// target and the harness cannot even be read. Resolve every path the profile
+// names (and that we exec) to its canonical form; a path that does not exist yet
+// keeps its given spelling.
+async function canonicalizeLaunchPaths(input: CodeModeSandboxLaunchInput): Promise<CodeModeSandboxLaunchInput> {
+  const [runTempRoot, harnessPath, nodePath] = await Promise.all([
+    canonicalPath(input.runTempRoot),
+    canonicalPath(input.harnessPath),
+    canonicalPath(input.nodePath),
+  ]);
+  return { ...input, runTempRoot, harnessPath, nodePath };
+}
+
+function canonicalPath(value: string): Promise<string> {
+  return fs.realpath(value).catch(() => value);
 }
 
 // Test-only export for darwin-seatbelt-adapter.security.test.ts.
@@ -96,9 +121,7 @@ export const __buildSeatbeltProfileForTests = buildSeatbeltProfile;
 const RUNTIME_DEPENDENCY_PREFIXES = ["/usr/local", "/opt/homebrew"] as const;
 
 function runtimeDependencyReadGrant(nodePath: string): string | null {
-  const match = RUNTIME_DEPENDENCY_PREFIXES.find(
-    (prefix) => nodePath === prefix || nodePath.startsWith(`${prefix}/`),
-  );
+  const match = RUNTIME_DEPENDENCY_PREFIXES.find((prefix) => nodePath === prefix || nodePath.startsWith(`${prefix}/`));
   return match ? `(allow file-read* (subpath ${quoteSeatbeltString(match)}))` : null;
 }
 
@@ -114,8 +137,19 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     "(allow signal)",
     "(allow sysctl-read)",
     "(allow mach-lookup)",
+    // sandbox-exec applies this profile and THEN execs Node, so the exec itself
+    // must be allowed — for exactly the resolved Node binary and nothing else.
+    `(allow process-exec ${literal(input.nodePath)})`,
     `(allow file-read* ${literal(input.nodePath)})`,
+    // Node aborts at startup unless it can read the root directory entry itself
+    // (verified by bisecting on a real macOS runner, #145). A `literal` grant
+    // exposes only the top-level directory names, never anything beneath them.
+    '(allow file-read* (literal "/"))',
     `(allow file-read* ${literal(input.harnessPath)})`,
+    // Node's module loader realpath()s the harness, which lstat()s every parent
+    // directory. Grant metadata only (stat, never listing or contents) on exactly
+    // the ancestors of the paths Node must resolve.
+    ancestorMetadataGrant([input.harnessPath, input.runTempRoot, input.nodePath]),
     // SECURITY (#145): restrict read scope to the runtime essentials Node needs to
     // start, instead of broad `/usr` + `/Library`. `/System` carries the OS
     // frameworks and the dyld shared cache; `/usr/lib` carries dyld and the system
@@ -125,17 +159,31 @@ function buildSeatbeltProfile(input: CodeModeSandboxLaunchInput): string {
     // operator secrets/configs) are not needed by a minimal Node runtime, so they
     // are no longer readable from inside the sandbox. A Node that resolves under a
     // package-manager prefix gets that prefix granted conditionally below so dyld
-    // can load its linked dylibs. `/bin` and `/sbin` are retained (OS binaries, no
-    // secret value) pending macOS canary confirmation that they can also be
-    // dropped; the hostile-canary proof lane is the verification path for any
-    // further narrowing.
-    '(allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/bin") (subpath "/sbin"))',
+    // can load its linked dylibs. `/bin` and `/sbin` are not granted either: the
+    // real-macOS proof lane (code-mode-seatbelt-macos.yml) showed Node never needs
+    // them. Any further change here must stay green on that lane.
+    '(allow file-read* (subpath "/System") (subpath "/usr/lib") (subpath "/usr/share"))',
     ...(dependencyGrant ? [dependencyGrant] : []),
     `(allow file-read* (subpath ${quoteSeatbeltString(input.runTempRoot)}))`,
     `(allow file-write* (subpath ${quoteSeatbeltString(input.runTempRoot)}))`,
     '(allow file-write* (literal "/dev/null"))',
     "",
   ].join("\n");
+}
+
+function ancestorMetadataGrant(paths: string[]): string {
+  const ancestors = new Set<string>();
+  for (const value of paths) {
+    let current = path.posix.dirname(value);
+    while (!ancestors.has(current)) {
+      ancestors.add(current);
+      const parent = path.posix.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  const filters = [...ancestors].sort().map(literal).join(" ");
+  return `(allow file-read-metadata ${filters})`;
 }
 
 function literal(value: string): string {

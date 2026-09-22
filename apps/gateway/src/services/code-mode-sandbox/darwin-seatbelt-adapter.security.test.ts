@@ -32,6 +32,32 @@ describe("darwin seatbelt profile read scope", () => {
     expect(profile).not.toContain('(subpath "/usr")');
   });
 
+  it("does not grant /bin or /sbin (the real-macOS proof shows Node never needs them)", () => {
+    expect(profile).not.toContain('(subpath "/bin")');
+    expect(profile).not.toContain('(subpath "/sbin")');
+  });
+
+  it("allows exec of exactly the Node binary and nothing else", () => {
+    // sandbox-exec applies the profile BEFORE it execs Node, so without this the
+    // harness can never start (verified on a real macOS runner, #145).
+    expect(profile).toContain('(allow process-exec (literal "/usr/local/bin/node"))');
+    expect(profile.match(/process-exec/g)).toHaveLength(1);
+  });
+
+  it("grants the root directory entry as a literal, never as a subpath", () => {
+    expect(profile).toContain('(allow file-read* (literal "/"))');
+    expect(profile).not.toContain('(subpath "/")');
+  });
+
+  it("grants metadata-only access to exactly the ancestors Node must realpath", () => {
+    const grant = profile.split("\n").find((line) => line.startsWith("(allow file-read-metadata"));
+    expect(grant).toBe(
+      '(allow file-read-metadata (literal "/") (literal "/tmp") (literal "/tmp/run-1") (literal "/usr") (literal "/usr/local") (literal "/usr/local/bin"))',
+    );
+    // Metadata grants never become subtree grants.
+    expect(grant).not.toContain("subpath");
+  });
+
   it("still allows read+write to the run temp root only", () => {
     expect(profile).toContain('(allow file-read* (subpath "/tmp/run-1"))');
     expect(profile).toContain('(allow file-write* (subpath "/tmp/run-1"))');
