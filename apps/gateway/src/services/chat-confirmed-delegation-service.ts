@@ -174,6 +174,7 @@ export async function resolveConfirmedDelegation(
   host: ConfirmedDelegationHost,
   input: ChatTurnAgentRunnerInput,
 ): Promise<ConfirmedDelegationResult | undefined> {
+  const storage = host.storage;
   if (
     input.subagentPolicy !== "ask_when_useful" ||
     input.parentDelegationStepId ||
@@ -181,12 +182,12 @@ export async function resolveConfirmedDelegation(
   )
     return;
   const content = input.capabilityProfileContent ?? input.content;
-  const control = await readChatTurnControl(host.storage, input.sessionId, input.turnId);
+  const control = await readChatTurnControl(storage, input.sessionId, input.turnId);
   let proposal = control.delegationProposal;
   if (proposal?.declined) return;
   const roles = proposal?.roles ?? suggestActiveTurnDelegationRoles(content);
   if (!roles.length) return;
-  const trace = await host.storage.chatTurnTraces.get(input.turnId);
+  const trace = await storage.chatTurnTraces.get(input.turnId);
   if (!trace.durable?.runId || !input.capabilityProfile) return;
   const runId = trace.durable.runId;
   const expectedHash = bindingHash(input);
@@ -197,7 +198,7 @@ export async function resolveConfirmedDelegation(
       objective: content,
       roles,
     };
-    const state = await updateChatTurnControl(host.storage, input.sessionId, input.turnId, (current) => ({
+    const state = await updateChatTurnControl(storage, input.sessionId, input.turnId, (current) => ({
       ...current,
       delegationProposal: current.delegationProposal ?? proposed,
     }));
@@ -205,8 +206,8 @@ export async function resolveConfirmedDelegation(
   }
   if (proposal.bindingHash !== expectedHash)
     throw new ConflictError({ message: "The delegation proposal no longer matches its admitted turn." });
-  await assertChatTurnToolUseOpen(host.storage, input.sessionId, input.turnId);
-  const run = await host.storage.durableRuns.getRun(runId);
+  await assertChatTurnToolUseOpen(storage, input.sessionId, input.turnId);
+  const run = await storage.durableRuns.getRun(runId);
   const answers = Array.isArray(run.payload.userInputResponses) ? run.payload.userInputResponses : [];
   const answer = answers.find((value) => value && typeof value === "object" && value.promptId === proposal!.promptId);
   if (!answer)
@@ -236,7 +237,7 @@ export async function resolveConfirmedDelegation(
   if (answer.response?.kind !== "single_select" || !["run_plan", "answer_directly"].includes(answer.response.optionId))
     throw new ConflictError({ message: "The delegation confirmation is invalid." });
   if (answer.response.optionId === "answer_directly") {
-    await updateChatTurnControl(host.storage, input.sessionId, input.turnId, (current) => ({
+    await updateChatTurnControl(storage, input.sessionId, input.turnId, (current) => ({
       ...current,
       delegationProposal: { ...proposal!, declined: true },
     }));
@@ -276,8 +277,8 @@ export async function resolveConfirmedDelegation(
       stableRunKey: proposal.promptId,
       requireChildWatchers: true,
       preDispatchGuard: async () => {
-        await assertChatTurnToolUseOpen(host.storage, input.sessionId, input.turnId);
-        const latest = await readChatTurnControl(host.storage, input.sessionId, input.turnId);
+        await assertChatTurnToolUseOpen(storage, input.sessionId, input.turnId);
+        const latest = await readChatTurnControl(storage, input.sessionId, input.turnId);
         if (latest.delegationProposal?.bindingHash !== frozenProposal.bindingHash || latest.delegationProposal.declined)
           throw new ConflictError({ message: "Delegation confirmation is no longer current." });
       },
@@ -332,12 +333,13 @@ export async function reconcileConfirmedDelegationChild(
   },
 ): Promise<void> {
   if (!["completed", "failed", "partial", "cancelled"].includes(input.trace.status)) return;
-  const step = await host.storage.chatDelegationSteps.get(input.parentDelegationStepId);
-  const delegation = await host.storage.chatDelegationRuns.get(step.runId);
+  const storage = host.storage;
+  const step = await storage.chatDelegationSteps.get(input.parentDelegationStepId);
+  const delegation = await storage.chatDelegationRuns.get(step.runId);
   if (delegation.workflowTemplate !== CONFIRMED_DELEGATION_WORKFLOW || !delegation.parentRunId) return;
-  const parent = await host.storage.durableRuns.getRun(delegation.parentRunId);
+  const parent = await storage.durableRuns.getRun(delegation.parentRunId);
   if (typeof parent.payload.turnId !== "string" || parent.payload.sessionId !== delegation.sessionId) return;
-  const control = await readChatTurnControl(host.storage, delegation.sessionId, parent.payload.turnId);
+  const control = await readChatTurnControl(storage, delegation.sessionId, parent.payload.turnId);
   if (control.delegationProposal?.promptId !== delegation.executionPlanId)
     throw new ConflictError({ message: "Delegation completion has a mismatched proposal." });
   const settled = await host.materialize({ ...input, delegationRunId: delegation.runId, stepId: step.stepId });
@@ -355,13 +357,14 @@ export async function reconcileConfirmedDelegationChild(
 export async function reconcileWaitingConfirmedDelegations(
   host: Parameters<typeof reconcileConfirmedDelegationChild>[0],
 ): Promise<void> {
+  const storage = host.storage;
   const failures: unknown[] = [];
-  for (const runId of await host.storage.durableRuns.listRunIdsByStatus("waiting")) {
+  for (const runId of await storage.durableRuns.listRunIdsByStatus("waiting")) {
     try {
-      const parent = await host.storage.durableRuns.getRun(runId);
+      const parent = await storage.durableRuns.getRun(runId);
       const wait = parent.metadata?.waitForEvent as { eventKey?: string; correlationId?: string } | undefined;
       if (wait?.eventKey !== CONFIRMED_DELEGATION_WAKE_EVENT || !wait.correlationId) continue;
-      const delegation = await host.storage.chatDelegationRuns.get(wait.correlationId);
+      const delegation = await storage.chatDelegationRuns.get(wait.correlationId);
       if (
         delegation.parentRunId !== runId ||
         delegation.workflowTemplate !== CONFIRMED_DELEGATION_WORKFLOW ||
@@ -369,16 +372,14 @@ export async function reconcileWaitingConfirmedDelegations(
         parent.payload.sessionId !== delegation.sessionId
       )
         throw new ConflictError({ message: "Waiting delegation has a mismatched durable owner." });
-      const control = await readChatTurnControl(host.storage, delegation.sessionId, parent.payload.turnId);
+      const control = await readChatTurnControl(storage, delegation.sessionId, parent.payload.turnId);
       if (control.delegationProposal?.promptId !== delegation.executionPlanId)
         throw new ConflictError({ message: "Waiting delegation has a mismatched plan." });
-      for (const step of await host.storage.chatDelegationSteps.listByRun(delegation.runId)) {
+      for (const step of await storage.chatDelegationSteps.listByRun(delegation.runId)) {
         if (step.status !== "running" || !step.durableRunId || !step.childTurnId || !step.childSessionId) continue;
-        const trace = await host.storage.chatTurnTraces.get(step.childTurnId);
+        const trace = await storage.chatTurnTraces.get(step.childTurnId);
         if (!["completed", "failed", "partial", "cancelled"].includes(trace.status)) continue;
-        const message = trace.assistantMessageId
-          ? await host.storage.chatMessages.get(trace.assistantMessageId)
-          : undefined;
+        const message = trace.assistantMessageId ? await storage.chatMessages.get(trace.assistantMessageId) : undefined;
         await host.materialize({
           delegationRunId: delegation.runId,
           stepId: step.stepId,
@@ -389,7 +390,7 @@ export async function reconcileWaitingConfirmedDelegations(
           output: message?.content,
         });
       }
-      const steps = await host.storage.chatDelegationSteps.listByRun(delegation.runId);
+      const steps = await storage.chatDelegationSteps.listByRun(delegation.runId);
       if (!control.toolClosure && steps.some((step) => step.status === "running")) continue;
       if (!(await host.reconcileWaiting(runId))) continue; // The next owner tick retries the same stored plan.
       await host.wake(runId, {
