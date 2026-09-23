@@ -117,6 +117,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
     expect(worktreeManagerMocks.constructor).toHaveBeenCalledWith({
       repoRoot: rootDir,
       worktreesRoot: path.join(rootDir, ".worktrees", "orchestration"),
+      spawnEnvPassthrough: [],
     });
     expect(worktreeManagerMocks.create).toHaveBeenCalledWith("run-1", "HEAD");
   });

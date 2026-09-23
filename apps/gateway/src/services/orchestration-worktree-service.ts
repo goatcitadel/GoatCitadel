@@ -502,6 +502,7 @@ export class OrchestrationWorktreeService {
     return new WorktreeManager({
       repoRoot: this.deps.config.rootDir,
       worktreesRoot,
+      spawnEnvPassthrough: this.deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
     });
   }
 

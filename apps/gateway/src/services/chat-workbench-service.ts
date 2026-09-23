@@ -117,6 +117,7 @@ export async function createChatSessionWorkbenchWorktree(
     const manager = new WorktreeManager({
       repoRoot: context.repoRoot,
       worktreesRoot,
+      spawnEnvPassthrough: deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
     });
     await manager.create(sessionId, baseRef);
   }

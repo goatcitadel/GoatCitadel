@@ -54,7 +54,7 @@ Origin: hook secret custody destroyed `secretRef`s when the OS keychain was mere
 
 ## Never hand a child process the ambient environment
 
-Model-driven spawns (shell, git, test/lint/build runners) receive a scrubbed env — `process.env` minus `SECRET_ENV_KEY_PATTERN` keys (`buildScrubbedSpawnEnv` in `@goatcitadel/contracts`) — so harness and operator credentials cannot leak into tool output, persisted artifacts, or audit rows. `sandbox.spawnEnvPassthrough` is the explicit operator opt-out; results carry `envScrubbed: true`. Chat workbench validation commands (which honor the same opt-out) and its git calls on an existing worktree (status, diff, apply, restore and similar) use the same scrubbed env; `WorktreeManager` (worktree create/remove, shared with orchestration) still inherits the ambient env. Fully synthetic envs (Code Mode) remain the stronger posture where workflows allow it.
+Model-driven spawns (shell, git, test/lint/build runners) receive a scrubbed env — `process.env` minus `SECRET_ENV_KEY_PATTERN` keys (`buildScrubbedSpawnEnv` in `@goatcitadel/contracts`) — so harness and operator credentials cannot leak into tool output, persisted artifacts, or audit rows. `sandbox.spawnEnvPassthrough` is the explicit operator opt-out; results carry `envScrubbed: true`. Chat workbench commands and git calls, and `WorktreeManager` worktree create/remove/prune (checkout runs repository hooks and filters), use the same scrubbed env. Workbench commands and `WorktreeManager` honor the opt-out, and `WorktreeManager` always keeps `SSH_AUTH_SOCK` (an agent socket path, not a credential) so Git LFS over SSH still works. Fully synthetic envs (Code Mode) remain the stronger posture where workflows allow it.
 
 ## Redact before truncating
 
