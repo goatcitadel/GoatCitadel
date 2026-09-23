@@ -2555,6 +2555,58 @@ describe("CapabilitySystemService", () => {
     ).toBe(false);
   });
 
+  it("marks an approved candidate whose reviewed bundle no longer loads as quarantined", async () => {
+    const QUARANTINE_WARNING = /did not load when last checked at \d{4}-\d{2}-\d{2}T[\d:.]+Z \(ENOENT\)/;
+    const harness = await createHarness();
+    const artifact = (name: string) => ({
+      artifactId: `missing-${name}`,
+      relPath: `data/capability-candidates/missing-bundle/${name}`,
+      sha256: "0".repeat(64),
+      bytes: 1,
+      mimeType: "text/plain",
+      createdAt: "2026-09-22T00:00:00.000Z",
+    });
+    const version = {
+      candidateId: "candidate-missing-bundle",
+      versionId: "version-missing-bundle",
+      sourceKind: "workflow_capture" as const,
+      lineageStatus: "governed" as const,
+      workspaceId: "default",
+      title: "Missing bundle",
+      bundleRoot: "data/capability-candidates/missing-bundle",
+      lifecycleState: "approved" as const,
+      manifestArtifact: artifact("manifest.json"),
+      instructionArtifact: artifact("SKILL.md"),
+      proofArtifact: artifact("proof.json"),
+      createdAt: "2026-09-22T00:00:00.000Z",
+      updatedAt: "2026-09-22T00:00:00.000Z",
+    };
+    harness.storage.candidateSkillVersions.upsert(version);
+
+    for (let build = 0; build < 2; build += 1) {
+      const inspectable = await harness.service.listCatalog("inspectable", "ALL", "default");
+      expect(inspectable.find((entry) => entry.candidateId === version.candidateId)).toMatchObject({
+        kind: "candidate_skill",
+        callable: false,
+        trustLabel: "Quarantined",
+        reviewWarning: expect.stringMatching(QUARANTINE_WARNING),
+      });
+      expect(
+        inspectable.some((entry) => entry.sourceRef === `candidate:${version.candidateId}:${version.versionId}`),
+      ).toBe(false);
+    }
+
+    // Library reads and frozen snapshots are unscoped: they carry the last observation with its check time.
+    const library = await harness.service.listCatalog("inspectable");
+    const snapshot = await harness.service.freezeCatalogSnapshot();
+    for (const entries of [library, snapshot.inspectableEntries]) {
+      expect(entries.find((entry) => entry.candidateId === version.candidateId)).toMatchObject({
+        trustLabel: "Quarantined",
+        reviewWarning: expect.stringMatching(QUARANTINE_WARNING),
+      });
+    }
+  });
+
   it("lists catalog snapshots, runs, proposals, and inline approval queue items", async () => {
     const harness = await createHarness({
       toolCatalog: [createTool("tool.safe_read"), createTool("tool.write", { readOnly: false })],
@@ -6438,6 +6490,23 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       },
       list(limit = 100) {
         return [...candidateVersions.values()].slice(0, limit);
+      },
+      // Mirrors the repository query: scope to the workspace before limiting.
+      listApprovedInstructions(workspaceId: string, limit = 200) {
+        return [...candidateVersions.values()]
+          .filter(
+            (version) =>
+              version.workspaceId === workspaceId &&
+              ["workflow_capture", "capability_pack"].includes(version.sourceKind) &&
+              ["approved", "trusted"].includes(version.lifecycleState) &&
+              !version.programArtifact &&
+              !version.schemaArtifact,
+          )
+          .sort(
+            (left, right) =>
+              right.updatedAt.localeCompare(left.updatedAt) || right.versionId.localeCompare(left.versionId),
+          )
+          .slice(0, limit);
       },
       listByCandidateId(candidateId: string, limit = 100) {
         return [...candidateVersions.values()]

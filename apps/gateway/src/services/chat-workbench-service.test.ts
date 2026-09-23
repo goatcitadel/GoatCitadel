@@ -2,7 +2,10 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import type { ChatSessionWorkbenchRecord, ChatSessionWorkbenchFileOperationPreviewRequest } from "@goatcitadel/contracts";
+import type {
+  ChatSessionWorkbenchRecord,
+  ChatSessionWorkbenchFileOperationPreviewRequest,
+} from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyChatSessionWorkbenchPatch,
@@ -25,7 +28,11 @@ import {
   type ChatWorkbenchDependencies,
 } from "./chat-workbench-service.js";
 
-async function runReviewedOperation(deps: ChatWorkbenchDependencies, sessionId: string, input: ChatSessionWorkbenchFileOperationPreviewRequest) {
+async function runReviewedOperation(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  input: ChatSessionWorkbenchFileOperationPreviewRequest,
+) {
   const review = await previewChatSessionWorkbenchFileOperation(deps, sessionId, input);
   return runChatSessionWorkbenchFileOperation(deps, sessionId, { ...input, expectedRevision: review.revision });
 }
@@ -43,13 +50,22 @@ afterEach(async () => {
 describe("chat workbench helpers", () => {
   it("rejects Windows aliases and protected descendants before offering a path review", async () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
-    for (const filePath of [".git.", "node_modules ", ".goatcitadel-workbench.lock.", "NUL", "con.txt", "index.ts:hidden"]) {
-      await expect(previewChatSessionWorkbenchFileOperation(deps, "sess-1", { operation: "create_file", path: filePath }))
-        .rejects.toThrow(/cannot/);
+    for (const filePath of [
+      ".git.",
+      "node_modules ",
+      ".goatcitadel-workbench.lock.",
+      "NUL",
+      "con.txt",
+      "index.ts:hidden",
+    ]) {
+      await expect(
+        previewChatSessionWorkbenchFileOperation(deps, "sess-1", { operation: "create_file", path: filePath }),
+      ).rejects.toThrow(/cannot/);
     }
     await fs.mkdir(path.join(projectRoot, "folder", "node_modules"), { recursive: true });
-    await expect(previewChatSessionWorkbenchFileOperation(deps, "sess-1", { operation: "delete", path: "folder" }))
-      .rejects.toThrow(/cannot mutate node_modules/);
+    await expect(
+      previewChatSessionWorkbenchFileOperation(deps, "sess-1", { operation: "delete", path: "folder" }),
+    ).rejects.toThrow(/cannot mutate node_modules/);
     expect((await fs.stat(path.join(projectRoot, "folder", "node_modules"))).isDirectory()).toBe(true);
   }, 30_000);
 
@@ -58,8 +74,9 @@ describe("chat workbench helpers", () => {
     const input = { operation: "rename" as const, path: "index.ts", targetPath: "renamed.ts" };
     const reviewed = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", input);
     await fs.writeFile(path.join(projectRoot, "index.ts"), "new writer\n");
-    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, expectedRevision: reviewed.revision }))
-      .rejects.toMatchObject({ code: "WRITE_CONFLICT", details: { reason: "WORKBENCH_PATH_REVISION_CONFLICT" } });
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, expectedRevision: reviewed.revision }),
+    ).rejects.toMatchObject({ code: "WRITE_CONFLICT", details: { reason: "WORKBENCH_PATH_REVISION_CONFLICT" } });
     expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe("new writer\n");
     await expect(fs.stat(path.join(projectRoot, "renamed.ts"))).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -69,8 +86,9 @@ describe("chat workbench helpers", () => {
     const folderReview = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", removal);
     expect(folderReview.affectedPaths.map((entry) => entry.path)).toEqual(["notes", "notes/first.txt"]);
     await fs.writeFile(path.join(projectRoot, "notes", "later.txt"), "keep me");
-    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...removal, expectedRevision: folderReview.revision }))
-      .rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...removal, expectedRevision: folderReview.revision }),
+    ).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
     expect(await fs.readFile(path.join(projectRoot, "notes", "later.txt"), "utf8")).toBe("keep me");
     const current = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", removal);
     await runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...removal, expectedRevision: current.revision });
@@ -81,17 +99,24 @@ describe("chat workbench helpers", () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
     const input = { operation: "create_file" as const, path: "new.txt", content: "reviewed" };
     const review = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", input);
-    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, content: "unreviewed", expectedRevision: review.revision }))
-      .rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        ...input,
+        content: "unreviewed",
+        expectedRevision: review.revision,
+      }),
+    ).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
     await fs.writeFile(path.join(projectRoot, "new.txt"), "another writer");
-    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, expectedRevision: review.revision }))
-      .rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...input, expectedRevision: review.revision }),
+    ).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
     expect(await fs.readFile(path.join(projectRoot, "new.txt"), "utf8")).toBe("another writer");
     const deletion = { operation: "delete" as const, path: "new.txt" };
     const deletionReview = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", deletion);
     vi.mocked(deps.publishRealtime).mockRejectedValueOnce(new Error("publication failed"));
-    await expect(runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...deletion, expectedRevision: deletionReview.revision }))
-      .rejects.toMatchObject({ mutationCommitted: true });
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...deletion, expectedRevision: deletionReview.revision }),
+    ).rejects.toMatchObject({ mutationCommitted: true });
     await expect(fs.stat(path.join(projectRoot, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 
@@ -101,7 +126,11 @@ describe("chat workbench helpers", () => {
     const operation = { operation: "rename" as const, path: "index.ts", targetPath: "renamed.ts" };
     const review = await previewChatSessionWorkbenchFileOperation(deps, "sess-1", operation);
     const results = await Promise.allSettled([
-      saveChatSessionWorkbenchFile(deps, "sess-1", { path: "index.ts", content: "winner", expectedRevision: file.revision }),
+      saveChatSessionWorkbenchFile(deps, "sess-1", {
+        path: "index.ts",
+        content: "winner",
+        expectedRevision: file.revision,
+      }),
       runChatSessionWorkbenchFileOperation(deps, "sess-1", { ...operation, expectedRevision: review.revision }),
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -194,6 +223,30 @@ describe("chat workbench helpers", () => {
       expect.any(Object),
     );
   }, 30_000);
+
+  it("runs workbench commands without inheriting credentials or a repository location", async () => {
+    vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_TOKEN", "workbench-parent-secret");
+    vi.stubEnv("GIT_DIR", path.join(os.tmpdir(), "goatcitadel-workbench-invoking-repo", ".git"));
+    vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_API_KEY", "workbench-passthrough-secret");
+    vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY", "ordinary-value");
+    const envPresence = async (deps: ChatWorkbenchDependencies) =>
+      (
+        await runChatSessionWorkbenchCommand(deps, "sess-1", {
+          command: "npm",
+          args: ["--silent", "run", "test:env"],
+          timeoutMs: 30_000,
+        })
+      ).run.stdoutPreview;
+    try {
+      expect(await envPresence((await createWorkbenchFixture()).deps)).toBe("false,false,true,false");
+      const { deps } = await createWorkbenchFixture({
+        spawnEnvPassthrough: ["GOATCITADEL_WORKBENCH_FIXTURE_API_KEY"],
+      });
+      expect(await envPresence(deps)).toBe("false,true,true,false");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 60_000);
 
   it("marks timed out workbench commands as failed validation", async () => {
     const { deps } = await createWorkbenchFixture();
@@ -507,11 +560,13 @@ describe("chat workbench helpers", () => {
     const reviewed = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
     await fs.writeFile(path.join(projectRoot, "index.ts"), "export const winner = true;\n", "utf8");
 
-    await expect(saveChatSessionWorkbenchFile(deps, "sess-1", {
-      path: "index.ts",
-      content: "export const stale = true;\n",
-      expectedRevision: reviewed.revision,
-    })).rejects.toMatchObject({
+    await expect(
+      saveChatSessionWorkbenchFile(deps, "sess-1", {
+        path: "index.ts",
+        content: "export const stale = true;\n",
+        expectedRevision: reviewed.revision,
+      }),
+    ).rejects.toMatchObject({
       code: "WRITE_CONFLICT",
     });
     expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe("export const winner = true;\n");
@@ -520,10 +575,15 @@ describe("chat workbench helpers", () => {
   it("allows only one simultaneous Gateway save of the same reviewed file", async () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
     const before = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
-    const outcomes = await Promise.allSettled(["first", "second"].map((label) =>
-      saveChatSessionWorkbenchFile({ ...deps }, "sess-1", {
-        path: "index.ts", content: `export const writer = "${label}";\n`, expectedRevision: before.revision,
-      })));
+    const outcomes = await Promise.allSettled(
+      ["first", "second"].map((label) =>
+        saveChatSessionWorkbenchFile({ ...deps }, "sess-1", {
+          path: "index.ts",
+          content: `export const writer = "${label}";\n`,
+          expectedRevision: before.revision,
+        }),
+      ),
+    );
     const saved = outcomes.filter((outcome) => outcome.status === "fulfilled");
     expect(saved).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([
@@ -542,7 +602,9 @@ describe("chat workbench helpers", () => {
       }
     });
     const saved = await saveChatSessionWorkbenchFile(deps, "sess-1", {
-      path: "index.ts", content: "export const submitted = true;\n", expectedRevision: before.revision,
+      path: "index.ts",
+      content: "export const submitted = true;\n",
+      expectedRevision: before.revision,
     });
     expect(saved.content).toBe("export const submitted = true;\n");
     const current = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
@@ -554,9 +616,13 @@ describe("chat workbench helpers", () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
     const before = await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
     vi.mocked(deps.publishRealtime).mockRejectedValue(new Error("publication failed"));
-    await expect(saveChatSessionWorkbenchFile(deps, "sess-1", {
-      path: "index.ts", content: "export const saved = true;\n", expectedRevision: before.revision,
-    })).rejects.toMatchObject({ mutationCommitted: true });
+    await expect(
+      saveChatSessionWorkbenchFile(deps, "sess-1", {
+        path: "index.ts",
+        content: "export const saved = true;\n",
+        expectedRevision: before.revision,
+      }),
+    ).rejects.toMatchObject({ mutationCommitted: true });
     expect(await fs.readFile(path.join(projectRoot, "index.ts"), "utf8")).toBe("export const saved = true;\n");
   }, 30_000);
 
@@ -921,7 +987,7 @@ describe("chat workbench package manager hydration", () => {
 });
 
 async function createWorkbenchFixture(
-  options: { worktreeReady?: boolean } = {},
+  options: { worktreeReady?: boolean; spawnEnvPassthrough?: string[] } = {},
 ): Promise<{ deps: ChatWorkbenchDependencies }> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-workbench-command-"));
   tempRoots.push(rootDir);
@@ -938,6 +1004,8 @@ async function createWorkbenchFixture(
             "test:pass": "node -e \"process.stdout.write('ok'); process.stderr.write('warn');\"",
             "test:timeout": 'node -e "setTimeout(() => {}, 1000);"',
             "test:large-output": "node -e \"process.stdout.write('x'.repeat(70000));\"",
+            "test:env":
+              "node -e \"process.stdout.write([process.env.GOATCITADEL_WORKBENCH_FIXTURE_TOKEN, process.env.GOATCITADEL_WORKBENCH_FIXTURE_API_KEY, process.env.GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY, process.env.GIT_DIR].map(Boolean).join(','));\"",
           },
         },
         null,
@@ -972,6 +1040,7 @@ async function createWorkbenchFixture(
         sandbox: {
           writeJailRoots: [rootDir],
           readOnlyRoots: [],
+          ...(options.spawnEnvPassthrough ? { spawnEnvPassthrough: options.spawnEnvPassthrough } : {}),
         },
       },
     } as ChatWorkbenchDependencies["config"],
@@ -1139,7 +1208,9 @@ async function createDirectorySymlink(linkPath: string, targetPath: string): Pro
 
 async function removeTestWorkspace(target: string): Promise<void> {
   const resolved = path.resolve(target);
-  const ownedPrefix = path.basename(resolved).startsWith("goatcitadel-workbench-") || path.basename(resolved).startsWith("goatcitadel-pm-");
+  const ownedPrefix =
+    path.basename(resolved).startsWith("goatcitadel-workbench-") ||
+    path.basename(resolved).startsWith("goatcitadel-pm-");
   if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !ownedPrefix) {
     throw new Error("Refusing cleanup outside a task-owned temporary Workbench fixture.");
   }

@@ -15,11 +15,19 @@ const DIAGNOSTIC_MAX_DEPTH = 8;
 const DIAGNOSTIC_MAX_NODES = 4_096;
 const DIAGNOSTIC_MAX_KEYS = 128;
 const SECRET_NORMALIZATION_MAX_DEPTH = 4;
+// A larger floor would silently stop scrubbing ordinary credentials.
+const MAX_MINIMUM_LITERAL_LENGTH = 32;
 const REDACTED = "[REDACTED]";
 
 export interface McpResolutionSecretGuardInput {
-  url: string;
+  /** Endpoint whose pieces are connection material; omitted for transports without one (stdio). */
+  url?: string;
   headers: ReadonlyArray<Readonly<McpEphemeralResolvedHeaderInput>>;
+  /**
+   * Opt-in floor: values and derived encodings shorter than this are not literal secrets.
+   * Omitted, every non-empty piece is connection material, as requester resolution requires.
+   */
+  minimumLiteralLength?: number;
 }
 
 export interface McpResolutionSecretGuard {
@@ -133,9 +141,19 @@ class McpResolutionSecretGuardValue implements McpResolutionSecretGuard {
 
 export function createMcpResolutionSecretGuard(input: McpResolutionSecretGuardInput): McpResolutionSecretGuard {
   try {
-    if (typeof input.url !== "string" || !Array.isArray(input.headers)) throw new TypeError();
+    if ((input.url !== undefined && typeof input.url !== "string") || !Array.isArray(input.headers)) {
+      throw new TypeError();
+    }
+    const minimumLiteralLength = input.minimumLiteralLength ?? 1;
+    if (
+      !Number.isSafeInteger(minimumLiteralLength) ||
+      minimumLiteralLength < 1 ||
+      minimumLiteralLength > MAX_MINIMUM_LITERAL_LENGTH
+    ) {
+      throw new TypeError();
+    }
     const seeds = collectSeeds(input);
-    const patterns = buildDerivedPatterns(seeds);
+    const patterns = buildDerivedPatterns(seeds, minimumLiteralLength);
     return new McpResolutionSecretGuardValue(patterns);
   } catch {
     throw new McpRequesterResolutionError("secret_guard_failed");
@@ -199,9 +217,26 @@ export function createMcpRequesterDiscoverySecretScanner(): McpRequesterDiscover
 }
 
 function collectSeeds(input: McpResolutionSecretGuardInput): string[] {
-  const parsed = new URL(input.url);
   const seeds = new Set<string>();
-  addSeed(seeds, input.url);
+  if (input.url !== undefined) collectUrlSeeds(seeds, input.url);
+  for (const header of input.headers) {
+    if (!header || typeof header.name !== "string" || typeof header.value !== "string") throw new TypeError();
+    addSeed(seeds, header.value);
+    const schemeMatch = /^(basic|bearer|token|apikey)\s+(.+)$/iu.exec(header.value);
+    if (schemeMatch) {
+      addSeed(seeds, schemeMatch[2]);
+    } else if (header.name.toLowerCase() === "authorization") {
+      for (const scheme of ["Bearer", "Basic", "Token", "ApiKey"] as const) {
+        addSeed(seeds, `${scheme} ${header.value}`);
+      }
+    }
+  }
+  return [...seeds];
+}
+
+function collectUrlSeeds(seeds: Set<string>, url: string): void {
+  const parsed = new URL(url);
+  addSeed(seeds, url);
   addSeed(seeds, parsed.href);
   addSeed(seeds, parsed.origin);
   addSeed(seeds, parsed.host);
@@ -228,27 +263,13 @@ function collectSeeds(input: McpResolutionSecretGuardInput): string[] {
     addSeed(seeds, key);
     addSeed(seeds, value);
   }
-
-  for (const header of input.headers) {
-    if (!header || typeof header.name !== "string" || typeof header.value !== "string") throw new TypeError();
-    addSeed(seeds, header.value);
-    const schemeMatch = /^(basic|bearer|token|apikey)\s+(.+)$/iu.exec(header.value);
-    if (schemeMatch) {
-      addSeed(seeds, schemeMatch[2]);
-    } else if (header.name.toLowerCase() === "authorization") {
-      for (const scheme of ["Bearer", "Basic", "Token", "ApiKey"] as const) {
-        addSeed(seeds, `${scheme} ${header.value}`);
-      }
-    }
-  }
-  return [...seeds];
 }
 
-function buildDerivedPatterns(seeds: readonly string[]): string[] {
+function buildDerivedPatterns(seeds: readonly string[], minimumLiteralLength: number): string[] {
   const patterns = new Set<string>();
   let totalBytes = 0;
   const add = (value: string | undefined): void => {
-    if (!value || patterns.has(value)) return;
+    if (!value || value.length < minimumLiteralLength || patterns.has(value)) return;
     const bytes = Buffer.byteLength(value, "utf8");
     if (
       patterns.size + 1 > MCP_RESOLUTION_SECRET_GUARD_ENTRY_LIMIT ||
@@ -262,6 +283,8 @@ function buildDerivedPatterns(seeds: readonly string[]): string[] {
 
   for (const seed of seeds) {
     for (const normalized of buildNormalizationClosure(seed, add)) {
+      // Encodings of a sub-floor literal are no more secret than the literal itself.
+      if (normalized.length < minimumLiteralLength) continue;
       const encoded = safeEncodeURIComponent(normalized);
       const json = safeJsonString(normalized);
       add(encoded);

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { exerciseWorkbenchPathReview } from "./workbench-path-revision-scenario.mjs";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import fs from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 
 /** Uses a temporary Git repository, real Gateway writes, and the canonical build editor. */
 export async function runWorkbenchFileRevisionScenario(context, deps) {
-  const { path, prepareVerificationRuntime, startDeterministicLlmStub, writeDeterministicLlmProviderConfig,
+  const { path, startDeterministicLlmStub,
     startVerificationStack, stopVerificationStack, forceVerificationUiPackage, NEXT_UI_PACKAGE,
     ensureOnboardingComplete, runScenario, requestJson, assertOk, chromium, installMissionControlNextBrowserState,
     attachBrowserLogging, buildVerificationUiUrl, captureBrowserArtifacts, assertBrowserConsoleHealthy,
@@ -13,9 +14,9 @@ export async function runWorkbenchFileRevisionScenario(context, deps) {
   let stack; let llmStub; let runtimeRoot;
   const restoreUi = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   try {
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-workbench-revision`);
     llmStub = await startDeterministicLlmStub();
-    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
+    // Clean checkouts have no config/goatcitadel.json (it is gitignored operator state): seed shipped defaults.
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-workbench-revision`, llmStub.baseUrl);
     const configPath = path.join(runtimeRoot, "config", "goatcitadel.json");
     const config = JSON.parse(await fs.readFile(configPath, "utf8"));
     config.assistant.dataDir = "./data";

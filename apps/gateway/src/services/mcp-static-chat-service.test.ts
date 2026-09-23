@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,21 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0)) await close();
 });
+
+const STDIO_FIXTURE_SCRIPT = `
+  const fs = require('node:fs');
+  require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+    const request = JSON.parse(line);
+    if (request.id === undefined) return;
+    const fixture = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+    const result = request.method === 'tools/list'
+      ? { tools: [fixture.tool] }
+      : request.method === 'tools/call'
+        ? { content: [{ type: 'text', text: fixture.outputPrefix + ' ' + process.env.MCP_STATIC_TOKEN }] }
+        : {};
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
+  });
+`;
 
 it("freezes real discovery into an immutable Chat profile and executes the exact dotted native target", async () => {
   const f = await fixture();
@@ -192,7 +207,23 @@ it("skips metadata discovery for a manual turn", async () => {
   expect(f.methods).toEqual([]);
 });
 
-async function fixture() {
+it.each(["http", "stdio"] as const)(
+  "keeps %s catalog and output text that only shares short connection fragments",
+  async (transport) => {
+    const f = await fixture({ transport });
+    f.tool.description = "Echo a value; the mcp server validates it against https://json-schema.org/draft-07/schema.";
+    f.tool.inputSchema.$schema = "http://json-schema.org/draft-07/schema#";
+    f.outputPrefix = "wrote /tmp/mcp/output.json";
+    const profile = await f.freeze();
+    expect(profile.selection.tools[0]?.mcpStaticBinding).toMatchObject({ transport, nativeToolName: "echo.value" });
+    const result = await f.invoke(profile, { value: "test value" });
+    expect(result.ok, result.error).toBe(true);
+    expect(result.contentItems).toEqual([{ type: "text", text: "wrote /tmp/mcp/output.json [REDACTED]" }]);
+    expect(JSON.stringify(result)).not.toContain(f.env.MCP_STATIC_TOKEN);
+  },
+);
+
+async function fixture(options: { transport?: "http" | "stdio" } = {}) {
   const directory = mkdtempSync(path.join(os.tmpdir(), "gc-static-mcp-chat-"));
   const storage = createSqliteAsyncStorage(
     new Storage({
@@ -222,7 +253,12 @@ async function fixture() {
     },
   });
   const pool = new McpStdioSessionPool<StdioClient>();
-  const tool = {
+  const stdioFixturePath = path.join(directory, "stdio-fixture.json");
+  const tool: {
+    name: string;
+    description: string;
+    inputSchema: { $schema?: string; type: string; properties: { value: { type: string } } };
+  } = {
     name: "echo.value",
     description: "Echo a fixture value.",
     inputSchema: { type: "object", properties: { value: { type: "string" } } },
@@ -248,12 +284,17 @@ async function fixture() {
     allowed: true,
     duplicate: false,
     dropToolReply: false,
+    outputPrefix: "fixture output",
     onList: () => {},
     live: [shared],
     service: undefined as unknown as McpStaticChatService,
     options: undefined as unknown as McpStaticChatServiceOptions,
     url: "",
+    // The stdio child re-reads this file per request, mirroring the HTTP fixture's live reads of f.tool.
+    syncStdioFixture: () =>
+      writeFileSync(stdioFixturePath, JSON.stringify({ tool: f.tool, outputPrefix: f.outputPrefix })),
     freeze: async (patch: Partial<ChatTurnCapabilityProfileResolveInput> = {}) => {
+      f.syncStdioFixture();
       const result = await resolveChatTurnCapabilityProfile(
         {
           storage,
@@ -357,8 +398,9 @@ async function fixture() {
       profile: Awaited<ReturnType<typeof storage.chatTurnCapabilityProfiles.get>>,
       args: Record<string, unknown> = {},
       mark = async () => {},
-    ) =>
-      f.service.invoke(
+    ) => {
+      f.syncStdioFixture();
+      return f.service.invoke(
         {
           server: await store.requireServer("static.with.dots"),
           toolName: "echo.value",
@@ -366,7 +408,8 @@ async function fixture() {
           mcpRequesterTurnContext: buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile),
         },
         { effectDispatch: mark },
-      ),
+      );
+    },
   };
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -397,7 +440,7 @@ async function fixture() {
         message.method === "tools/list"
           ? { tools: f.duplicate ? [tool, tool] : [tool] }
           : message.method === "tools/call"
-            ? { content: [{ type: "text", text: `fixture output ${env.MCP_STATIC_TOKEN}` }] }
+            ? { content: [{ type: "text", text: `${f.outputPrefix} ${env.MCP_STATIC_TOKEN}` }] }
             : {};
       response
         .writeHead(200, { "content-type": "application/json" })
@@ -417,9 +460,14 @@ async function fixture() {
   const record: McpServerRecord = {
     serverId: "static.with.dots",
     label: "Static MCP fixture",
-    transport: "http",
-    url: f.url,
-    authType: "token",
+    ...(options.transport === "stdio"
+      ? {
+          transport: "stdio" as const,
+          command: process.execPath,
+          args: ["-e", STDIO_FIXTURE_SCRIPT, stdioFixturePath],
+          authType: "none" as const,
+        }
+      : { transport: "http" as const, url: f.url, authType: "token" as const }),
     enabled: true,
     status: "connected",
     category: "development",
