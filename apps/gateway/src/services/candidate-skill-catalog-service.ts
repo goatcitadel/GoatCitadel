@@ -1,4 +1,10 @@
-import type { CandidateSkillVersionRecord, SkillLifecycleRecord, SkillListItem, SkillRuntimeState, SkillStateRecord } from "@goatcitadel/contracts";
+import type {
+  CandidateSkillVersionRecord,
+  SkillLifecycleRecord,
+  SkillListItem,
+  SkillRuntimeState,
+  SkillStateRecord,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { loadApprovedCandidateSkill } from "./candidate-runtime-skills.js";
 import { readCandidateSkillArtifacts } from "./candidate-skill-artifact-review.js";
@@ -37,7 +43,8 @@ export async function listWorkspaceCandidateSkills(
       trustLabel: loaded.lifecycle.trustLabel,
       reviewWarning: loaded.lifecycle.reviewWarning,
       state: state?.state ?? "enabled",
-      revision: state?.revision ??
+      revision:
+        state?.revision ??
         (await deps.storage.skillAggregateRevisions.ensure("runtime_skill", loaded.skill.skillId)).revision,
       callable: isSkillCallable(loaded.lifecycle, state?.state ?? "enabled"),
       note: state?.note,
@@ -76,4 +83,3 @@ export function isSkillCallable(lifecycle: SkillLifecycleRecord, state: SkillRun
   }
   return lifecycle.lifecycleState === "approved" || lifecycle.lifecycleState === "trusted";
 }
-
