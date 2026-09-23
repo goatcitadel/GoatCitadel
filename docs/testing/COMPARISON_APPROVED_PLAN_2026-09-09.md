@@ -37,6 +37,15 @@ C0 gate-reconciliation scope exceptions in the same allowance document, each wit
 zero host callbacks. Every original baseline-owner limit remains unchanged; this
 does not exempt other cross-plan owners or permit future growth above these caps.
 
+Additional operator clarification, September 22: resolve the architecture regressions
+introduced by the chat-delegation change `5a1b7b244` by consolidating the existing
+owners and moving its new responsibilities into reviewed new owners. Record the
+dependency/host caps of **16/6** for `chat-confirmed-delegation-service.ts`, **3/3**
+for `gateway/chat-turn-control-composition.ts` and **1/0** for
+`approval-canonical-outcome.ts` as explicit C0 gate-reconciliation scope exceptions.
+Every original baseline-owner limit remains unchanged; this does not permit future
+growth above these caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:
