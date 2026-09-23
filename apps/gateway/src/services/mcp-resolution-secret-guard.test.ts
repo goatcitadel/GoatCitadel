@@ -96,6 +96,19 @@ describe("MCP resolution secret guard", () => {
     for (const canary of canaries) expect(scrubbed).not.toContain(canary);
   });
 
+  it("scrubs a literal at the minimum length and skips one a character shorter", () => {
+    const guard = createMcpResolutionSecretGuard({
+      headers: [
+        { name: "X-MCP-Environment-SHORT", value: "short-value" },
+        { name: "X-MCP-Environment-EXACT", value: "twelve-chars" },
+      ],
+      minimumLiteralLength: 12,
+    });
+
+    expect("short-value").toHaveLength(11);
+    expect(guard.scrubText("short-value twelve-chars")).toBe("short-value [REDACTED]");
+  });
+
   it.each([0, 33, 1.5, Number.NaN])("fails closed for minimum literal length %s", (minimumLiteralLength) => {
     expect(() =>
       createMcpResolutionSecretGuard({ url: "https://mcp.example.test/", headers: [], minimumLiteralLength }),
