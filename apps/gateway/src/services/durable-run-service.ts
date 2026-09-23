@@ -2157,15 +2157,16 @@ export class DurableRunService {
         admissionStatus: activeAdmission.status,
       });
     }
+    const storage = this.ctx.storage;
     try {
-      const canonical = await this.ctx.storage.sessionMutationAdmissions.require(activeAdmission.admissionId);
+      const canonical = await storage.sessionMutationAdmissions.require(activeAdmission.admissionId);
       if (!sameTurnAdmissionIdentity(canonical, activeAdmission)) {
         return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, 0, {
           admissionId: canonical.admissionId,
           admissionStatus: canonical.status,
         });
       }
-      const binding = await this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
+      const binding = await storage.sessionMutationAdmissions.findDurableRunBinding({
         admissionId: canonical.admissionId,
         workspaceId: canonical.workspaceId,
         sessionId: canonical.sessionId,
@@ -2178,13 +2179,12 @@ export class DurableRunService {
           admissionStatus: canonical.status,
         });
       }
-      const run = await this.ctx.storage.durableRuns.getRun(binding.durableRunId);
+      const run = await storage.durableRuns.getRun(binding.durableRunId);
       if (!isTerminalChatRunRecoveryCandidate(run)) {
         // A thread refresh can expose the committed final answer just before
         // its running generation settles. Wait for that exact owner's normal
         // finalization; a completed projection is never permission to preempt.
-        const trace =
-          run.status === "running" ? await this.ctx.storage.chatTurnTraces.get(canonical.turnId!) : undefined;
+        const trace = run.status === "running" ? await storage.chatTurnTraces.get(canonical.turnId!) : undefined;
         if (
           !trace ||
           trace.sessionId !== canonical.sessionId ||
