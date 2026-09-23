@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConflictError } from "@goatcitadel/contracts";
 import { listWorkspaceCandidateSkills } from "./candidate-skill-catalog-service.js";
 
 const load = vi.hoisted(() => vi.fn());
+const warn = vi.hoisted(() => vi.fn());
 vi.mock("./candidate-runtime-skills.js", () => ({ loadApprovedCandidateSkill: load }));
+vi.mock("@goatcitadel/gateway-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@goatcitadel/gateway-core")>();
+  return { ...actual, logger: { ...actual.logger, warn } };
+});
 
 function fixture() {
   const version = { versionId: "version-a" };
@@ -21,7 +27,7 @@ function fixture() {
   };
   const deps = { storage, rootDir: "fixture-root" } as unknown as Parameters<typeof listWorkspaceCandidateSkills>[0];
   load.mockResolvedValue(loaded);
-  return { deps, storage, version, lifecycle };
+  return { deps, storage, version, lifecycle, loaded };
 }
 
 describe("candidate skill catalog projection", () => {
@@ -48,6 +54,36 @@ describe("candidate skill catalog projection", () => {
     expect(f.storage.skillLifecycle.find).not.toHaveBeenCalled();
     expect(f.storage.skillLifecycle.upsert).not.toHaveBeenCalled();
     expect(f.storage.skillAggregateRevisions.ensure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a bundle changed after review",
+      new ConflictError({ message: "Approved skill bundle changed after artifact review." }),
+      "Approved skill bundle changed after artifact review.",
+    ],
+    [
+      "a deleted bundle file",
+      Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
+      "ENOENT",
+    ],
+  ])("quarantines %s without failing the rest of the workspace catalog", async (_label, failure, reason) => {
+    const f = fixture();
+    const broken = { versionId: "version-broken", candidateId: "candidate-broken" };
+    f.storage.candidateSkillVersions.listApprovedInstructions.mockResolvedValue([broken, f.version]);
+    load.mockImplementation(async ({ version }: { version: unknown }) => {
+      if (version === broken) throw failure;
+      return f.loaded;
+    });
+    const result = await listWorkspaceCandidateSkills(f.deps, "candidate-root", "workspace-a", new Map());
+    expect(result).toMatchObject([{ skillId: "candidate-a", callable: true }]);
+    expect(result).toHaveLength(1);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Quarantined"), {
+      workspaceId: "workspace-a",
+      candidateId: "candidate-broken",
+      versionId: "version-broken",
+      reason,
+    });
   });
 
   it("preserves disabled state and its existing revision while repairing stale lifecycle projection", async () => {
