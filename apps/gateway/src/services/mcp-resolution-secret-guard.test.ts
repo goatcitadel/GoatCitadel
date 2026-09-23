@@ -61,6 +61,47 @@ describe("MCP resolution secret guard", () => {
     expect(scrubbed).toContain("[REDACTED]");
   });
 
+  it("treats a connection without a URL as header-only material", () => {
+    const guard = createMcpResolutionSecretGuard({
+      headers: [{ name: "X-MCP-Environment-TOKEN", value: "stdio-environment-secret" }],
+    });
+    const ordinary = 'Validates {"$schema":"http://json-schema.org/draft-07/schema#"} and writes /tmp/output.json';
+
+    expect(guard.scrubText(ordinary)).toBe(ordinary);
+    expect(guard.scrubText("token stdio-environment-secret")).toBe("token [REDACTED]");
+  });
+
+  it("ignores literal values and derived encodings shorter than an opted-in minimum length", () => {
+    const querySecret = "long-query-secret-value";
+    const url = `https://mcp.example.test/sse?format=json&token=${querySecret}`;
+    const guard = createMcpResolutionSecretGuard({
+      url,
+      headers: [
+        { name: "X-MCP-Environment-DEBUG", value: "1" },
+        { name: "X-MCP-Environment-TOKEN", value: "environment-secret-value" },
+      ],
+      minimumLiteralLength: 12,
+    });
+    const ordinary = "Processes addresses as json over sse; see /docs/mcp, item 1, token format.";
+    const canaries = [
+      url,
+      querySecret,
+      Buffer.from(querySecret, "utf8").toString("base64"),
+      "environment-secret-value",
+      "mcp.example.test",
+    ];
+    const scrubbed = guard.scrubText(canaries.join(" | "));
+
+    expect(guard.scrubText(ordinary)).toBe(ordinary);
+    for (const canary of canaries) expect(scrubbed).not.toContain(canary);
+  });
+
+  it.each([0, 33, 1.5, Number.NaN])("fails closed for minimum literal length %s", (minimumLiteralLength) => {
+    expect(() =>
+      createMcpResolutionSecretGuard({ url: "https://mcp.example.test/", headers: [], minimumLiteralLength }),
+    ).toThrowError(expect.objectContaining({ code: "secret_guard_failed" }));
+  });
+
   it("recursively scrubs errors and causes without invoking attacker getters", () => {
     const guard = createMcpResolutionSecretGuard({
       url: "https://mcp.example.test/private?token=query-secret",

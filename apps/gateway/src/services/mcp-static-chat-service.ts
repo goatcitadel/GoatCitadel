@@ -88,6 +88,10 @@ interface CapturedCatalog {
   scope: McpRequesterScopeHashInput;
 }
 
+// Matches redactSecretText's literal floor for environment secrets: shorter static values
+// (endpoint segments such as "mcp" or "sse", flags such as "1") occur in ordinary tool text.
+const STATIC_MCP_MINIMUM_LITERAL_SECRET_LENGTH = 12;
+
 /** Static named tools share Chat scope, policy and durable effects; connection material stays private. */
 export class McpStaticChatService implements StaticMcpChatDispatchPort {
   private readonly captured = new WeakMap<StaticMcpCatalogSnapshot, CapturedCatalog>();
@@ -359,8 +363,9 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
     );
     if (token) secrets.push({ name: "Authorization", value: `Bearer ${token}` });
     const guard = createMcpResolutionSecretGuard({
-      url: server.url ?? "https://static-mcp.invalid/",
+      ...(server.url ? { url: server.url } : {}),
       headers: secrets,
+      minimumLiteralLength: STATIC_MCP_MINIMUM_LITERAL_SECRET_LENGTH,
     });
     const transport: McpRuntimeTransportOptions = {
       networkAllowlist: this.options.getNetworkAllowlist(),
