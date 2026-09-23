@@ -499,10 +499,11 @@ export class OrchestrationWorktreeService {
   }
 
   private createManager(worktreesRoot: string): WorktreeManager {
+    const { rootDir, toolPolicy } = this.deps.config;
     return new WorktreeManager({
-      repoRoot: this.deps.config.rootDir,
+      repoRoot: rootDir,
       worktreesRoot,
-      spawnEnvPassthrough: this.deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
+      spawnEnvPassthrough: toolPolicy.sandbox.spawnEnvPassthrough ?? [],
     });
   }
 

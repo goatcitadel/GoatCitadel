@@ -102,9 +102,10 @@ export async function createChatSessionWorkbenchWorktree(
   const baseRef = input.baseRef?.trim() || current.baseRef || "HEAD";
   const worktreesRoot = path.resolve(deps.config.rootDir, deps.config.assistant.worktreesDir);
   const targetPath = path.resolve(worktreesRoot, sessionId);
+  const { writeJailRoots, spawnEnvPassthrough = [] } = deps.config.toolPolicy.sandbox;
 
   await fs.mkdir(worktreesRoot, { recursive: true });
-  assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+  assertWritePathInJail(targetPath, writeJailRoots);
 
   if (fsSync.existsSync(targetPath) && !isWorkbenchPathUsable(targetPath)) {
     throw new ValidationError({
@@ -114,11 +115,7 @@ export async function createChatSessionWorkbenchWorktree(
   }
 
   if (!fsSync.existsSync(targetPath)) {
-    const manager = new WorktreeManager({
-      repoRoot: context.repoRoot,
-      worktreesRoot,
-      spawnEnvPassthrough: deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
-    });
+    const manager = new WorktreeManager({ repoRoot: context.repoRoot, worktreesRoot, spawnEnvPassthrough });
     await manager.create(sessionId, baseRef);
   }
 
@@ -2234,12 +2231,9 @@ function assertWorkbenchMutationScope(
 }
 
 function assertWorkbenchWritableProjectScope(deps: ChatWorkbenchDependencies, projectRoot: string): void {
-  assertExistingPathRealpathAllowed(
-    projectRoot,
-    deps.config.toolPolicy.sandbox.writeJailRoots,
-    deps.config.toolPolicy.sandbox.readOnlyRoots,
-  );
-  assertWritePathInJail(projectRoot, deps.config.toolPolicy.sandbox.writeJailRoots);
+  const { writeJailRoots, readOnlyRoots } = deps.config.toolPolicy.sandbox;
+  assertExistingPathRealpathAllowed(projectRoot, writeJailRoots, readOnlyRoots);
+  assertWritePathInJail(projectRoot, writeJailRoots);
 }
 
 function assertPathInsideRoot(targetPath: string, rootDir: string, label: string): void {
