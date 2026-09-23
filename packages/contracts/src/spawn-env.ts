@@ -11,6 +11,28 @@ export const SECRET_ENV_KEY_PATTERN =
   // commit needs them. AUTHORIZATION, OAUTH, AUTH_TOKEN still match.
   /(?:API[_-]?KEY|ACCESS_KEY|PRIVATE_KEY|SIGNING_KEY|PASSPHRASE|CONNECTION_STRING|AUTH(?!OR_|OR\b)|COOKIE|CREDENTIAL|DATABASE_URL|OPENAI|ANTHROPIC|GOOGLE|GEMINI|MOONSHOT|PERPLEXITY|MISTRAL|OPENROUTER|DEEPSEEK|GLM|GROQ|XAI|POSTGRES|PASSWORD|SECRET|TOKEN)/i;
 
+/**
+ * Variables that point git at a repository other than the one it discovers from its working directory:
+ * `git rev-parse --local-env-vars`, minus the `-c` config carriers that git itself keeps when it runs in
+ * another repository. Git exports some of them to hooks, so a git child aimed at an explicit repository
+ * would otherwise act on whichever repository invoked the gateway or test run.
+ */
+export const GIT_REPOSITORY_ENV_KEYS = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_WORK_TREE",
+] as const;
+
 export interface ScrubbedSpawnEnvOptions {
   /** Merged last with caller intent; not pattern-filtered. */
   readonly extraEnv?: Readonly<Record<string, string>>;
@@ -18,6 +40,11 @@ export interface ScrubbedSpawnEnvOptions {
   readonly passthroughKeys?: readonly string[];
   /** Override for the drop pattern; defaults to {@link SECRET_ENV_KEY_PATTERN}. */
   readonly dropPattern?: RegExp;
+  /**
+   * Exact key names always removed from `baseEnv` (case-insensitive), even when listed in `passthroughKeys`.
+   * `extraEnv` can still set them deliberately.
+   */
+  readonly dropKeys?: readonly string[];
 }
 
 /**
@@ -36,9 +63,10 @@ export function buildScrubbedSpawnEnv(
   const suppliedPattern = options.dropPattern ?? SECRET_ENV_KEY_PATTERN;
   const dropPattern = new RegExp(suppliedPattern.source, suppliedPattern.flags.replace(/[gy]/g, ""));
   const passthrough = new Set((options.passthroughKeys ?? []).map((key) => key.toUpperCase()));
+  const dropKeys = new Set((options.dropKeys ?? []).map((key) => key.toUpperCase()));
   const scrubbed: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
-    if (value === undefined) {
+    if (value === undefined || dropKeys.has(key.toUpperCase())) {
       continue;
     }
     if (dropPattern.test(key) && !passthrough.has(key.toUpperCase())) {

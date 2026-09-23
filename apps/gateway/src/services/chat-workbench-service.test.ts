@@ -224,8 +224,9 @@ describe("chat workbench helpers", () => {
     );
   }, 30_000);
 
-  it("runs workbench commands without inheriting credential-shaped gateway environment", async () => {
+  it("runs workbench commands without inheriting credentials or a repository location", async () => {
     vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_TOKEN", "workbench-parent-secret");
+    vi.stubEnv("GIT_DIR", path.join(os.tmpdir(), "goatcitadel-workbench-invoking-repo", ".git"));
     vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_API_KEY", "workbench-passthrough-secret");
     vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY", "ordinary-value");
     const envPresence = async (deps: ChatWorkbenchDependencies) =>
@@ -237,11 +238,11 @@ describe("chat workbench helpers", () => {
         })
       ).run.stdoutPreview;
     try {
-      expect(await envPresence((await createWorkbenchFixture()).deps)).toBe("false,false,true");
+      expect(await envPresence((await createWorkbenchFixture()).deps)).toBe("false,false,true,false");
       const { deps } = await createWorkbenchFixture({
         spawnEnvPassthrough: ["GOATCITADEL_WORKBENCH_FIXTURE_API_KEY"],
       });
-      expect(await envPresence(deps)).toBe("false,true,true");
+      expect(await envPresence(deps)).toBe("false,true,true,false");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1004,7 +1005,7 @@ async function createWorkbenchFixture(
             "test:timeout": 'node -e "setTimeout(() => {}, 1000);"',
             "test:large-output": "node -e \"process.stdout.write('x'.repeat(70000));\"",
             "test:env":
-              "node -e \"process.stdout.write([process.env.GOATCITADEL_WORKBENCH_FIXTURE_TOKEN, process.env.GOATCITADEL_WORKBENCH_FIXTURE_API_KEY, process.env.GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY].map(Boolean).join(','));\"",
+              "node -e \"process.stdout.write([process.env.GOATCITADEL_WORKBENCH_FIXTURE_TOKEN, process.env.GOATCITADEL_WORKBENCH_FIXTURE_API_KEY, process.env.GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY, process.env.GIT_DIR].map(Boolean).join(','));\"",
           },
         },
         null,

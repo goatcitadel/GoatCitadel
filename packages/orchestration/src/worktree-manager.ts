@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { buildScrubbedSpawnEnv } from "@goatcitadel/contracts";
+import { GIT_REPOSITORY_ENV_KEYS, buildScrubbedSpawnEnv } from "@goatcitadel/contracts";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,12 +21,14 @@ export class WorktreeManager {
 
   /**
    * `git worktree add` checks files out, running repository hooks and filters: they get the ambient
-   * environment minus credential-shaped keys, and git never blocks on a terminal prompt.
+   * environment minus credential-shaped keys, and git never blocks on a terminal prompt. An inherited
+   * repository location (e.g. `GIT_DIR` under a hook) never redirects git away from `repoRoot`.
    */
   private gitEnv(): Record<string, string> {
     return buildScrubbedSpawnEnv(process.env, {
       extraEnv: { GIT_TERMINAL_PROMPT: "0" },
       passthroughKeys: [...GIT_TRANSPORT_PASSTHROUGH_KEYS, ...(this.options.spawnEnvPassthrough ?? [])],
+      dropKeys: GIT_REPOSITORY_ENV_KEYS,
     });
   }
 

@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 /* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import {
+  GIT_REPOSITORY_ENV_KEYS,
   NotFoundError,
   ValidationError,
   buildScrubbedSpawnEnv,
@@ -1626,13 +1627,14 @@ function isGitPathUntracked(worktreePath: string, repoScopedPath: string): boole
 /**
  * Workbench children run repository-controlled scripts, hooks and git-configured programs, so they get the
  * gateway environment minus credential-shaped keys. `sandbox.spawnEnvPassthrough` is the operator opt-out,
- * as for model-driven shell.exec.
+ * as for model-driven shell.exec. They also drop inherited repository locations, so git resolves the
+ * workbench worktree from its working directory.
  */
 function buildWorkbenchChildEnv(
   extraEnv: Readonly<Record<string, string>> = {},
   passthroughKeys: readonly string[] = [],
 ): Record<string, string> {
-  return buildScrubbedSpawnEnv(process.env, { extraEnv, passthroughKeys });
+  return buildScrubbedSpawnEnv(process.env, { extraEnv, passthroughKeys, dropKeys: GIT_REPOSITORY_ENV_KEYS });
 }
 
 function runGit(cwd: string, args: string[]): string {

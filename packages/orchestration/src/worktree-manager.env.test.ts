@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { GIT_REPOSITORY_ENV_KEYS } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorktreeManager } from "./worktree-manager.js";
 
@@ -22,20 +23,44 @@ const HOOK = [
   "",
 ].join("\n");
 
-async function createRepository(): Promise<{ repoRoot: string; worktreesRoot: string; marker: string }> {
+const REPOSITORY_ENV_KEYS = new Set<string>(GIT_REPOSITORY_ENV_KEYS);
+
+// Fixture git must never follow a repository location inherited from a hook that launched the test run.
+function git(cwd: string, ...args: string[]): string {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !REPOSITORY_ENV_KEYS.has(key.toUpperCase())),
+  );
+  return execFileSync("git", args, {
+    cwd,
+    env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  }).trim();
+}
+
+async function initRepository(repoRoot: string, message: string): Promise<void> {
+  await fs.mkdir(repoRoot, { recursive: true });
+  git(repoRoot, "init");
+  git(repoRoot, "config", "user.name", "Worktree Env Fixture");
+  git(repoRoot, "config", "user.email", "worktree-env@example.invalid");
+  git(repoRoot, "commit", "--allow-empty", "-m", message);
+}
+
+async function createRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-worktree-env-"));
   roots.push(root);
+  return root;
+}
+
+async function createRepository(): Promise<{ repoRoot: string; worktreesRoot: string; marker: string }> {
+  const root = await createRoot();
   const repoRoot = path.join(root, "repo");
-  await fs.mkdir(repoRoot);
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: repoRoot, stdio: "ignore", windowsHide: true });
-  git("init");
-  git("config", "user.name", "Worktree Env Fixture");
-  git("config", "user.email", "worktree-env@example.invalid");
+  await initRepository(repoRoot, "Initialize worktree env fixture");
   const hooksDir = path.join(repoRoot, ".git", "hooks");
   await fs.writeFile(path.join(hooksDir, "post-checkout"), HOOK, { mode: 0o755 });
   // Repository-local hooksPath outranks any global core.hooksPath on the test host.
-  git("config", "core.hooksPath", hooksDir.replaceAll("\\", "/"));
-  git("commit", "--allow-empty", "-m", "Initialize worktree env fixture");
+  git(repoRoot, "config", "core.hooksPath", hooksDir.replaceAll("\\", "/"));
   return { repoRoot, worktreesRoot: path.join(root, "worktrees"), marker: path.join(root, "hook-env.txt") };
 }
 
@@ -57,5 +82,22 @@ describe("WorktreeManager child environment", () => {
       spawnEnvPassthrough: ["GOATCITADEL_WT_FIXTURE_API_KEY"],
     }).create("operator-opt-out");
     expect(await fs.readFile(fixture.marker, "utf8")).toBe("absent|present|present|present");
+  }, 30_000);
+
+  it("creates the worktree from repoRoot even when a repository location is inherited", async () => {
+    const root = await createRoot();
+    const repoRoot = path.join(root, "repo");
+    const decoyRoot = path.join(root, "decoy");
+    await initRepository(repoRoot, "Configured repository");
+    await initRepository(decoyRoot, "Decoy repository");
+    vi.stubEnv("GIT_DIR", path.join(decoyRoot, ".git"));
+    vi.stubEnv("GIT_WORK_TREE", decoyRoot);
+
+    const worktreePath = await new WorktreeManager({ repoRoot, worktreesRoot: path.join(root, "worktrees") }).create(
+      "pinned",
+    );
+
+    expect(git(worktreePath, "log", "-1", "--format=%s")).toBe("Configured repository");
+    expect(git(decoyRoot, "worktree", "list", "--porcelain")).not.toContain("pinned");
   }, 30_000);
 });

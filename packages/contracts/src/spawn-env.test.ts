@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SECRET_ENV_KEY_PATTERN, buildScrubbedSpawnEnv } from "./spawn-env.js";
+import { GIT_REPOSITORY_ENV_KEYS, SECRET_ENV_KEY_PATTERN, buildScrubbedSpawnEnv } from "./spawn-env.js";
 
 describe("SECRET_ENV_KEY_PATTERN", () => {
   it("matches secret-shaped key names case-insensitively", () => {
@@ -121,6 +121,20 @@ describe("buildScrubbedSpawnEnv", () => {
       { dropPattern: /CUSTOM_BLOCKED/i },
     );
     expect(env).toEqual({ FAKE_API_KEY: "yes-under-override" });
+  });
+
+  it("always removes dropKeys case-insensitively, even over passthrough", () => {
+    const env = buildScrubbedSpawnEnv(
+      { GIT_DIR: "/elsewhere/.git", git_work_tree: "/elsewhere", GIT_AUTHOR_NAME: "kept", PATH: "/usr/bin" },
+      { dropKeys: GIT_REPOSITORY_ENV_KEYS, passthroughKeys: ["GIT_DIR"] },
+    );
+    expect(env).toEqual({ GIT_AUTHOR_NAME: "kept", PATH: "/usr/bin" });
+  });
+
+  it("keeps the git config carriers out of GIT_REPOSITORY_ENV_KEYS", () => {
+    expect(GIT_REPOSITORY_ENV_KEYS).toContain("GIT_DIR");
+    expect(GIT_REPOSITORY_ENV_KEYS).not.toContain("GIT_CONFIG_PARAMETERS");
+    expect(GIT_REPOSITORY_ENV_KEYS).not.toContain("GIT_CONFIG_COUNT");
   });
 
   it("drops every matching key even when the dropPattern override is global", () => {
