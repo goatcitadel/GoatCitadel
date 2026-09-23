@@ -2556,10 +2556,11 @@ describe("CapabilitySystemService", () => {
   });
 
   it("marks an approved candidate whose reviewed bundle no longer loads as quarantined", async () => {
+    const QUARANTINE_WARNING = /did not load when last checked at \d{4}-\d{2}-\d{2}T[\d:.]+Z \(ENOENT\)/;
     const harness = await createHarness();
     const artifact = (name: string) => ({
       artifactId: `missing-${name}`,
-      relPath: `data/candidate-skills/missing-bundle/${name}`,
+      relPath: `data/capability-candidates/missing-bundle/${name}`,
       sha256: "0".repeat(64),
       bytes: 1,
       mimeType: "text/plain",
@@ -2572,7 +2573,7 @@ describe("CapabilitySystemService", () => {
       lineageStatus: "governed" as const,
       workspaceId: "default",
       title: "Missing bundle",
-      bundleRoot: "data/candidate-skills/missing-bundle",
+      bundleRoot: "data/capability-candidates/missing-bundle",
       lifecycleState: "approved" as const,
       manifestArtifact: artifact("manifest.json"),
       instructionArtifact: artifact("SKILL.md"),
@@ -2588,11 +2589,21 @@ describe("CapabilitySystemService", () => {
         kind: "candidate_skill",
         callable: false,
         trustLabel: "Quarantined",
-        reviewWarning: expect.stringContaining("no longer loads"),
+        reviewWarning: expect.stringMatching(QUARANTINE_WARNING),
       });
       expect(
         inspectable.some((entry) => entry.sourceRef === `candidate:${version.candidateId}:${version.versionId}`),
       ).toBe(false);
+    }
+
+    // Library reads and frozen snapshots are unscoped: they carry the last observation with its check time.
+    const library = await harness.service.listCatalog("inspectable");
+    const snapshot = await harness.service.freezeCatalogSnapshot();
+    for (const entries of [library, snapshot.inspectableEntries]) {
+      expect(entries.find((entry) => entry.candidateId === version.candidateId)).toMatchObject({
+        trustLabel: "Quarantined",
+        reviewWarning: expect.stringMatching(QUARANTINE_WARNING),
+      });
     }
   });
 

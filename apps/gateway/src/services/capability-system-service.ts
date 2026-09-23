@@ -3732,6 +3732,9 @@ export class CapabilitySystemService {
     }
 
     for (const candidate of await this.options.storage.candidateSkillVersions.list(200)) {
+      // The last observation for the candidate's workspace, refreshed by every workspace-scoped build (each
+      // Chat turn). Operator reads are unscoped, so the warning carries the check time instead of implying
+      // the label is current.
       const quarantine = candidate.workspaceId
         ? this.candidateQuarantine.find(candidate.workspaceId, candidate.versionId)
         : undefined;

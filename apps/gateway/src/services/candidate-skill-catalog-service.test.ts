@@ -111,15 +111,19 @@ describe("candidate skill quarantine", () => {
 
   it("logs a new quarantine once, again when its reason changes, and when it clears", () => {
     const quarantine = new CandidateSkillQuarantine();
-    quarantine.record("workspace-a", [entry]);
-    quarantine.record("workspace-a", [entry]);
+    quarantine.record("workspace-a", [entry], "2026-09-23T09:00:00.000Z");
+    quarantine.record("workspace-a", [entry], "2026-09-23T09:05:00.000Z");
     expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Quarantined"), {
       workspaceId: "workspace-a",
       candidateId: "candidate-broken",
       versionId: "version-broken",
       reason: "ENOENT",
     });
-    expect(quarantine.find("workspace-a", "version-broken")).toEqual(entry);
+    // Each check refreshes the observation time without logging again.
+    expect(quarantine.find("workspace-a", "version-broken")).toEqual({
+      ...entry,
+      observedAt: "2026-09-23T09:05:00.000Z",
+    });
     expect(quarantine.find("workspace-b", "version-broken")).toBeUndefined();
 
     quarantine.record("workspace-a", [{ ...entry, reason: "Approved skill bundle changed after artifact review." }]);
@@ -134,11 +138,15 @@ describe("candidate skill quarantine", () => {
     expect(quarantine.find("workspace-a", "version-broken")).toBeUndefined();
   });
 
-  it("describes a quarantine for operators without doubling the review message's full stop", () => {
+  it("describes a quarantine for operators with its check time, without doubling the full stop", () => {
     expect(
-      describeCandidateQuarantine({ ...entry, reason: "Approved skill bundle changed after artifact review." }),
+      describeCandidateQuarantine({
+        ...entry,
+        reason: "Approved skill bundle changed after artifact review.",
+        observedAt: "2026-09-23T09:00:00.000Z",
+      }),
     ).toBe(
-      "This approved bundle no longer loads (Approved skill bundle changed after artifact review), so it is not offered as a skill. Review it again or restore its reviewed files.",
+      "This approved bundle did not load when last checked at 2026-09-23T09:00:00.000Z (Approved skill bundle changed after artifact review), so it is not offered as a skill. Review it again or restore its reviewed files.",
     );
   });
 });

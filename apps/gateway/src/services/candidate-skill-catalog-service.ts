@@ -82,13 +82,23 @@ export async function listWorkspaceCandidateSkills(
   return { skills: all, quarantined };
 }
 
+/** A quarantine as last observed; readers outside that workspace's builds see how old it is. */
+export interface CandidateQuarantineObservation extends QuarantinedCandidateSkill {
+  /** When a workspace-scoped catalog build last found the bundle unloadable (ISO 8601). */
+  readonly observedAt: string;
+}
+
 /** The last observed quarantine per workspace. It logs transitions rather than every catalog build. */
 export class CandidateSkillQuarantine {
-  readonly #byWorkspace = new Map<string, ReadonlyMap<string, QuarantinedCandidateSkill>>();
+  readonly #byWorkspace = new Map<string, ReadonlyMap<string, CandidateQuarantineObservation>>();
 
-  public record(workspaceId: string, quarantined: readonly QuarantinedCandidateSkill[]): void {
+  public record(
+    workspaceId: string,
+    quarantined: readonly QuarantinedCandidateSkill[],
+    observedAt = new Date().toISOString(),
+  ): void {
     const previous = this.#byWorkspace.get(workspaceId);
-    const current = new Map(quarantined.map((entry) => [entry.versionId, entry]));
+    const current = new Map(quarantined.map((entry) => [entry.versionId, { ...entry, observedAt }]));
     for (const entry of current.values()) {
       if (previous?.get(entry.versionId)?.reason === entry.reason) continue;
       logger.warn(
@@ -113,13 +123,13 @@ export class CandidateSkillQuarantine {
     else this.#byWorkspace.set(workspaceId, current);
   }
 
-  public find(workspaceId: string, versionId: string): QuarantinedCandidateSkill | undefined {
+  public find(workspaceId: string, versionId: string): CandidateQuarantineObservation | undefined {
     return this.#byWorkspace.get(workspaceId)?.get(versionId);
   }
 }
 
-export function describeCandidateQuarantine(entry: QuarantinedCandidateSkill): string {
-  return `This approved bundle no longer loads (${entry.reason.replace(/\.$/u, "")}), so it is not offered as a skill. Review it again or restore its reviewed files.`;
+export function describeCandidateQuarantine(entry: CandidateQuarantineObservation): string {
+  return `This approved bundle did not load when last checked at ${entry.observedAt} (${entry.reason.replace(/\.$/u, "")}), so it is not offered as a skill. Review it again or restore its reviewed files.`;
 }
 
 /** Fixed review messages and error codes only: bundle content never reaches the log. */
