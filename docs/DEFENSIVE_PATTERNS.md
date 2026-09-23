@@ -54,7 +54,7 @@ Origin: hook secret custody destroyed `secretRef`s when the OS keychain was mere
 
 ## Never hand a child process the ambient environment
 
-Model-driven spawns (shell, git, test/lint/build runners) receive a scrubbed env — `process.env` minus `SECRET_ENV_KEY_PATTERN` keys (`buildScrubbedSpawnEnv` in `@goatcitadel/contracts`) — so harness and operator credentials cannot leak into tool output, persisted artifacts, or audit rows. `sandbox.spawnEnvPassthrough` is the explicit operator opt-out; results carry `envScrubbed: true`. Fully synthetic envs (Code Mode) remain the stronger posture where workflows allow it.
+Model-driven spawns (shell, git, test/lint/build runners) receive a scrubbed env — `process.env` minus `SECRET_ENV_KEY_PATTERN` keys (`buildScrubbedSpawnEnv` in `@goatcitadel/contracts`) — so harness and operator credentials cannot leak into tool output, persisted artifacts, or audit rows. `sandbox.spawnEnvPassthrough` is the explicit operator opt-out; results carry `envScrubbed: true`. Chat workbench validation commands and git operations use the same scrubbed env, and their commands honor the same opt-out. Fully synthetic envs (Code Mode) remain the stronger posture where workflows allow it.
 
 ## Redact before truncating
 

@@ -224,6 +224,29 @@ describe("chat workbench helpers", () => {
     );
   }, 30_000);
 
+  it("runs workbench commands without inheriting credential-shaped gateway environment", async () => {
+    vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_TOKEN", "workbench-parent-secret");
+    vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_API_KEY", "workbench-passthrough-secret");
+    vi.stubEnv("GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY", "ordinary-value");
+    const envPresence = async (deps: ChatWorkbenchDependencies) =>
+      (
+        await runChatSessionWorkbenchCommand(deps, "sess-1", {
+          command: "npm",
+          args: ["--silent", "run", "test:env"],
+          timeoutMs: 30_000,
+        })
+      ).run.stdoutPreview;
+    try {
+      expect(await envPresence((await createWorkbenchFixture()).deps)).toBe("false,false,true");
+      const { deps } = await createWorkbenchFixture({
+        spawnEnvPassthrough: ["GOATCITADEL_WORKBENCH_FIXTURE_API_KEY"],
+      });
+      expect(await envPresence(deps)).toBe("false,true,true");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 60_000);
+
   it("marks timed out workbench commands as failed validation", async () => {
     const { deps } = await createWorkbenchFixture();
 
@@ -963,7 +986,7 @@ describe("chat workbench package manager hydration", () => {
 });
 
 async function createWorkbenchFixture(
-  options: { worktreeReady?: boolean } = {},
+  options: { worktreeReady?: boolean; spawnEnvPassthrough?: string[] } = {},
 ): Promise<{ deps: ChatWorkbenchDependencies }> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-workbench-command-"));
   tempRoots.push(rootDir);
@@ -980,6 +1003,8 @@ async function createWorkbenchFixture(
             "test:pass": "node -e \"process.stdout.write('ok'); process.stderr.write('warn');\"",
             "test:timeout": 'node -e "setTimeout(() => {}, 1000);"',
             "test:large-output": "node -e \"process.stdout.write('x'.repeat(70000));\"",
+            "test:env":
+              "node -e \"process.stdout.write([process.env.GOATCITADEL_WORKBENCH_FIXTURE_TOKEN, process.env.GOATCITADEL_WORKBENCH_FIXTURE_API_KEY, process.env.GOATCITADEL_WORKBENCH_FIXTURE_ORDINARY].map(Boolean).join(','));\"",
           },
         },
         null,
@@ -1014,6 +1039,7 @@ async function createWorkbenchFixture(
         sandbox: {
           writeJailRoots: [rootDir],
           readOnlyRoots: [],
+          ...(options.spawnEnvPassthrough ? { spawnEnvPassthrough: options.spawnEnvPassthrough } : {}),
         },
       },
     } as ChatWorkbenchDependencies["config"],

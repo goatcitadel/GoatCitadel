@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import {
   NotFoundError,
   ValidationError,
+  buildScrubbedSpawnEnv,
   type AgenticCommandRunRecord,
   type ChatSessionWorkbenchCommandRunRequest,
   type ChatSessionWorkbenchCommandRunResponse,
@@ -539,6 +540,7 @@ export async function runChatSessionWorkbenchCommand(
     executeWorkbenchCommand(command, args, {
       cwd: context.projectRoot,
       timeoutMs,
+      spawnEnvPassthrough: deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
     }),
   );
   const completedAt = new Date().toISOString();
@@ -1302,6 +1304,7 @@ async function runWorkbenchPostWriteValidation(
   const result = await executeWorkbenchCommand(command, args, {
     cwd: context.projectRoot,
     timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    spawnEnvPassthrough: deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
   });
   const stderrPreview = result.spawnError
     ? appendPreviewLine(result.stderrPreview, result.spawnError)
@@ -1622,11 +1625,24 @@ function isGitPathUntracked(worktreePath: string, repoScopedPath: string): boole
     .some((line) => line.startsWith("?? ") && extractChangedFilePath(line) === repoScopedPath.replaceAll("\\", "/"));
 }
 
+/**
+ * Workbench children run repository-controlled scripts, hooks and git-configured programs, so they get the
+ * gateway environment minus credential-shaped keys. `sandbox.spawnEnvPassthrough` is the operator opt-out,
+ * as for model-driven shell.exec.
+ */
+function buildWorkbenchChildEnv(
+  extraEnv: Readonly<Record<string, string>> = {},
+  passthroughKeys: readonly string[] = [],
+): Record<string, string> {
+  return buildScrubbedSpawnEnv(process.env, { extraEnv, passthroughKeys });
+}
+
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
+    env: buildWorkbenchChildEnv(),
   });
 }
 
@@ -1638,10 +1654,7 @@ function runGitWithInput(cwd: string, args: string[], input: string): WorkbenchC
       input,
       windowsHide: true,
       maxBuffer: COMMAND_OUTPUT_CAPTURE_BYTES,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-      },
+      env: buildWorkbenchChildEnv({ GIT_TERMINAL_PROMPT: "0" }),
     });
     stdout.append(output);
     return {
@@ -1716,6 +1729,7 @@ function patchUsesRepoScopedPaths(patch: string, repoScopePath: string): boolean
 interface WorkbenchCommandExecutionOptions {
   cwd: string;
   timeoutMs: number;
+  spawnEnvPassthrough: readonly string[];
 }
 
 interface WorkbenchCommandExecutionResult {
@@ -1745,11 +1759,7 @@ async function executeWorkbenchCommand(
     let forcedSettleHandle: NodeJS.Timeout | undefined;
     const child = spawn(executable.file, executable.args, {
       cwd: options.cwd,
-      env: {
-        ...process.env,
-        CI: process.env.CI ?? "1",
-        GIT_TERMINAL_PROMPT: "0",
-      },
+      env: buildWorkbenchChildEnv({ CI: process.env.CI ?? "1", GIT_TERMINAL_PROMPT: "0" }, options.spawnEnvPassthrough),
       windowsHide: true,
       shell: false,
     });
