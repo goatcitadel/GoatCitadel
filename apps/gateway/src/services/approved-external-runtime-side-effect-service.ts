@@ -48,11 +48,12 @@ export async function executeApprovedExternalRuntimeSideEffect(
 async function executeApprovedExternalRuntimeSideEffectOnce(
   input: ApprovedExternalRuntimeSideEffectInput,
 ): Promise<ToolInvokeResult> {
+  const storage = input.storage;
   let toolDispatchStarted = input.trackToolDispatch ? false : undefined;
   const sideEffect = await runIdempotentExternalSideEffect({
-    mutationStore: input.storage.mutationIdempotency,
-    sideEffectRunStore: input.storage.externalSideEffectRuns,
-    runClaimTransaction: (work) => input.storage.runImmediateTransaction(work),
+    mutationStore: storage.mutationIdempotency,
+    sideEffectRunStore: storage.externalSideEffectRuns,
+    runClaimTransaction: (work) => storage.runImmediateTransaction(work),
     workspaceId: input.request.workspaceId ?? input.request.policyContext?.workspaceId ?? "default",
     boundary: "approved_external_runtime",
     catalogId: input.request.toolName,
@@ -96,7 +97,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
     return sideEffect.value;
   }
 
-  const persisted = await input.storage.pendingApprovalActions.find(input.approvalId);
+  const persisted = await storage.pendingApprovalActions.find(input.approvalId);
   if (persisted?.resolutionStatus && persisted.resolutionStatus !== "pending") {
     return toolInvokeResultFromPendingAction(persisted);
   }
@@ -110,7 +111,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
       ? await resolveManualReconciliationState(input, sideEffect.claim)
       : undefined;
   if (sideEffect.claim.resumeState === "in_progress" && !reconciledResumeState) {
-    const settled = await input.storage.pendingApprovalActions.find(input.approvalId);
+    const settled = await storage.pendingApprovalActions.find(input.approvalId);
     if (settled?.resolutionStatus && settled.resolutionStatus !== "pending") {
       return toolInvokeResultFromPendingAction(settled);
     }
@@ -119,7 +120,7 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
 
   const replayState = reconciledResumeState ?? sideEffect.claim.resumeState;
   const reconciledRun = sideEffect.claim.sideEffectRunId
-    ? await input.storage.externalSideEffectRuns.get(sideEffect.claim.sideEffectRunId)
+    ? await storage.externalSideEffectRuns.get(sideEffect.claim.sideEffectRunId)
     : undefined;
   const externalBoundaryState: ApprovedSideEffectBoundaryState = reconciledRun?.externalCallStartedAt
     ? usesApprovedExternalRuntimeAdapter(input.request)

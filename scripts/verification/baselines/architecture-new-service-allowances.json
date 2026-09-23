@@ -1716,6 +1716,30 @@
       "maxHostCallbacks": 0,
       "reason": "Review one canonical storage access for the approved capture context in the bounded installation RPC. Existing signed-session and capacity owners retain cryptographic, policy and current-authority checks. Four concurrent sessions maximum, absolute 60-second lifetime, bounded pages and monotonic exchanges; no worker-supplied approval or enrollment authority. Original baseline and cross-plan caps remain unchanged.",
       "evidence": ".tmp/worker-rpc-gateway-final.log: 158 tests pass; seven integrated RPC cases cover native proof relay, revoked pins, cancellation, malformed signatures, foreign authority and failed join. Measurement 126c725f reports one dependency access and zero host callbacks. Physical installed acceptance remains separate."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-confirmed-delegation-service.ts",
+      "maxDependencyMemberAccesses": 16,
+      "maxHostCallbacks": 6,
+      "reason": "Operator-approved scope exception (2026-09-22) for C0 gate reconciliation of the chat-delegation change 5a1b7b244, whose existing-owner regressions are fixed by consolidation in the same change. Owns durable delegation confirmation: proposal sealing, exact-plan resume, terminal child reconciliation and waiting-plan catch-up, each rechecking Chat turn control and parent durable-run authority before acting. Storage is read once per operation. No original baseline-owner limit changes.",
+      "evidence": "Measured 16 dependency accesses and 6 host callbacks after consolidation (33/16 before). Focused delegation, durable execution, Chat turn stream/dispatch and approval suites pass on refactor/delegation-owner-extraction; architecture metrics pass with these caps."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/gateway/chat-turn-control-composition.ts",
+      "maxDependencyMemberAccesses": 3,
+      "maxHostCallbacks": 3,
+      "reason": "Operator-approved scope exception (2026-09-22) for C0 gate reconciliation of the chat-delegation change 5a1b7b244, whose existing-owner regressions are fixed by consolidation in the same change. Composes the Chat turn tool-use fences, cancellation settlement and confirmed-delegation wiring once for GatewayService, which previously repeated it inline at seven call sites. It delegates to the existing turn-control, delegation and interruption-recovery owners and returns GatewayService within its original line limit.",
+      "evidence": "Measured 3 dependency accesses and 3 host callbacks. GatewayService drops from 13,179 to 13,124 lines (limit 13,132); Gateway typecheck and the durable-run, fan-out, tool-coordinator and approval suites pass."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/approval-canonical-outcome.ts",
+      "maxDependencyMemberAccesses": 1,
+      "maxHostCallbacks": 0,
+      "reason": "Operator-approved scope exception (2026-09-22) for C0 gate reconciliation of the chat-delegation change 5a1b7b244, whose existing-owner regressions are fixed by consolidation in the same change. Projects the canonical resolution and approved-action outcome recorded in approval events onto approval API records. Moved out of approval-follow-up so that baseline-era owner returns to zero dependency reads.",
+      "evidence": "Measured one dependency access and zero host callbacks. The moved canonical-outcome tests (approval-canonical-outcome.test.ts) and the approval lifecycle suite pass unchanged."
     }
   ]
 }

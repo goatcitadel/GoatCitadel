@@ -579,7 +579,8 @@ async function persistRecoveredAssistantSource(
   now: string,
   interruptedStatus: "partial" | "failed" | "cancelled" = "partial",
 ): Promise<boolean> {
-  const session = await deps.storage.sessions.getBySessionId(trace.sessionId);
+  const storage = deps.storage;
+  const session = await storage.sessions.getBySessionId(trace.sessionId);
   const message: ChatMessageRecord = {
     messageId: source.messageId,
     sessionId: trace.sessionId,
@@ -603,11 +604,11 @@ async function persistRecoveredAssistantSource(
     sourceAuthority: "agent_proposed",
     payload: { message },
   };
-  const wasAlreadyQueued = Boolean(await deps.storage.transcriptOutbox.get(source.messageId));
-  await deps.storage.runImmediateTransaction(async () => {
-    await deps.storage.chatMessages.upsert(message, now);
-    await deps.storage.transcriptOutbox.enqueue(transcriptEvent, now);
-    await deps.storage.chatTurnTraces.patch(trace.turnId, {
+  const wasAlreadyQueued = Boolean(await storage.transcriptOutbox.get(source.messageId));
+  await storage.runImmediateTransaction(async () => {
+    await storage.chatMessages.upsert(message, now);
+    await storage.transcriptOutbox.enqueue(transcriptEvent, now);
+    await storage.chatTurnTraces.patch(trace.turnId, {
       assistantMessageId: source.messageId,
       status: source.final ? "completed" : interruptedStatus,
       failure: source.final || interruptedStatus === "cancelled" ? undefined : buildInterruptedByRestartFailure(true),

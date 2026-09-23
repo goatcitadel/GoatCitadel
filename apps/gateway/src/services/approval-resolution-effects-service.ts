@@ -2632,10 +2632,11 @@ export class ApprovalEffectsService {
     if (await this.deferLinkedChatTurnWakeUntilApprovedActionSettles(effect)) {
       return;
     }
+    const storage = this.ctx.storage;
     const payload = effect.payload;
     const runId = asOptionalString(payload.runId);
     if (!runId) {
-      await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+      await storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Linked chat turn wake effect is missing a durable run id.",
         result: {
           turnId: effect.targetId,
@@ -2647,7 +2648,7 @@ export class ApprovalEffectsService {
     // work is still settling. Reconcile through its owner before entering the
     // wake transaction; a transient wait must not become a permanent failure.
     if (this.deps.reconcileGeneralChatPostCommit) {
-      const waitingRun = await this.ctx.storage.durableRuns.getRun(runId);
+      const waitingRun = await storage.durableRuns.getRun(runId);
       if (
         waitingRun.status === "waiting" &&
         readExactGeneralChatPostCommitPendingMarker(
@@ -2669,7 +2670,7 @@ export class ApprovalEffectsService {
         return;
       }
     }
-    const wake = await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+    const wake = await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, async () => {
       if (await this.deps.shouldDeferRemoteWorkerApprovalWake?.(runId, effect.approvalId)) {
         await this.deferClaimedEffectForRetry(
           effect,
@@ -2702,19 +2703,19 @@ export class ApprovalEffectsService {
         : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, await this.buildAlreadyRunningWakeProof(effect));
       const settled =
         wakeResult.outcome === "woke" || recovered
-          ? await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+          ? await storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
               result: recovered ?? wakeResultRecord,
             })
           : explicitNonWake
-            ? await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+            ? await storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                 result: explicitNonWake,
               })
             : wakeResult.outcome === "failed"
-              ? await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+              ? await storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
                   lastError: wakeResult.detail ?? "Linked chat turn wake failed.",
                   result: wakeResultRecord,
                 })
-              : await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+              : await storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                   result: wakeResultRecord,
                 });
       if (!settled) {

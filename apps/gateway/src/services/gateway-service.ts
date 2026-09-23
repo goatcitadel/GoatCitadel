@@ -9,13 +9,7 @@ export {
 } from "./mcp-requester-runtime-composition.js";
 import { verifyProviderConnection, verifyTemporaryProviderCredential } from "./provider-readiness-service.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
-import { assertChatTurnToolUseOpen } from "./chat-turn-control.js";
-import {
-  resolveConfirmedDelegation,
-  reconcileConfirmedDelegationChild,
-  readConfirmedDelegationParentProfile,
-  reconcileWaitingConfirmedDelegations,
-} from "./chat-confirmed-delegation-service.js";
+import { composeChatTurnControl, type ChatTurnControlComposition } from "./gateway/chat-turn-control-composition.js";
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -625,10 +619,7 @@ import { prepareApprovedPresentationVisuals } from "./presentation-visual-execut
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
-import {
-  preserveCancelledChatTurnOutput,
-  reconcileInterruptedChatTurns,
-} from "./chat-turn-interruption-recovery-service.js";
+import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery-service.js";
 import { recoverInterruptedChatSecureConfigurations } from "./chat-secure-configuration-recovery-service.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
@@ -996,6 +987,7 @@ export class GatewayService {
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
   public readonly turnRuntime: GatewayTurnRuntime;
+  private readonly chatTurnControl: ChatTurnControlComposition;
   /**
    * R3-8 `agent.fanout` session registry. The entry/stream turn services
    * register a turn-scoped executor here; the policy engine's `subagentFanout`
@@ -1666,16 +1658,20 @@ export class GatewayService {
         await this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
+    this.chatTurnControl = composeChatTurnControl({
+      storage: this.storage,
+      runDelegation: (sessionId, request, options) =>
+        this.chatDelegationService.runChatDelegation(sessionId, request, undefined, options),
+      materialize: (input) => this.chatDelegationService.materializeTerminalDurableChild(input),
+      reconcileWaiting: (runId) => this.durableRunService.reconcileGeneralChatPostCommit(runId),
+      wake: (runId, event) => this.wakeDurableRun(runId, event),
+      captureCancelledOutput: (sessionId, turnId) =>
+        this.getChatStreamRuntime().captureCancelledOutput(sessionId, turnId),
+      rejectPendingChatTurnApprovals: (sessionId, turnId, actorId) =>
+        this.approvalRuntime.rejectPendingChatTurnApprovals(sessionId, turnId, actorId),
+    });
     this.turnRuntime = new GatewayTurnRuntime({
-      resolveConfirmedDelegation: (input) =>
-        resolveConfirmedDelegation(
-          {
-            storage: this.storage,
-            runDelegation: (sessionId, request, options) =>
-              this.chatDelegationService.runChatDelegation(sessionId, request, undefined, options),
-          },
-          input,
-        ),
+      resolveConfirmedDelegation: (input) => this.chatTurnControl.resolveConfirmedDelegation(input),
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       listCapabilityCatalog: (scope, workspaceId) =>
@@ -1857,18 +1853,9 @@ export class GatewayService {
     this.chatProjectService = new ChatProjectService(serviceCtx);
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
-      reconcileWaitingChatDelegations: () =>
-        reconcileWaitingConfirmedDelegations({
-          storage: this.storage,
-          materialize: (input) => this.chatDelegationService.materializeTerminalDurableChild(input),
-          reconcileWaiting: (runId) => this.durableRunService.reconcileGeneralChatPostCommit(runId),
-          wake: (runId, event) => this.wakeDurableRun(runId, event),
-        }),
-      onChatTurnCancelled: async (sessionId, turnId, actorId) => {
-        const outputSnapshot = this.getChatStreamRuntime().captureCancelledOutput(sessionId, turnId);
-        await this.approvalRuntime.rejectPendingChatTurnApprovals(sessionId, turnId, actorId);
-        await preserveCancelledChatTurnOutput(this.storage, sessionId, turnId, outputSnapshot);
-      },
+      reconcileWaitingChatDelegations: () => this.chatTurnControl.reconcileWaitingDelegations(),
+      onChatTurnCancelled: (sessionId, turnId, actorId) =>
+        this.chatTurnControl.onChatTurnCancelled(sessionId, turnId, actorId),
       workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
         () => this.durableWorkflowRegistry,
       ),
@@ -2308,13 +2295,8 @@ export class GatewayService {
     });
     this.durableFanout = new ChatDurableFanoutService({
       storage: this.storage,
-      assertParentToolUseOpen: async (parentRunId, sessionId) => {
-        const parent = await this.storage.durableRuns.getRun(parentRunId);
-        if (parent.payload.sessionId !== sessionId || typeof parent.payload.turnId !== "string") {
-          throw new ConflictError({ message: "Automatic fan-out has a mismatched parent turn." });
-        }
-        await assertChatTurnToolUseOpen(this.storage, sessionId, parent.payload.turnId);
-      },
+      assertParentToolUseOpen: (parentRunId, sessionId) =>
+        this.chatTurnControl.assertParentToolUseOpen(parentRunId, sessionId),
       capabilitySystem: this.capabilitySystemService,
       runChatDelegation: this.chatDelegationService.runChatDelegation.bind(this.chatDelegationService),
       materializeTerminalDelegatedChild: this.chatDelegationService.materializeTerminalDurableChild.bind(
@@ -2367,8 +2349,7 @@ export class GatewayService {
         }),
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
-      assertChatToolDispatchAllowed: async (request) =>
-        await assertChatTurnToolUseOpen(this.storage, request.sessionId, request.turnId),
+      assertChatToolDispatchAllowed: (request) => this.chatTurnControl.assertToolDispatchAllowed(request),
       approvalInbox: this.storage.approvalInbox,
       assertMcpServerInScope: async (request) => await this.assertMcpServerInCapabilityScope(request),
       durableTasks: {
@@ -2394,14 +2375,7 @@ export class GatewayService {
       resolveNativeMcpChatToolBinding: (request, context) =>
         resolveNativeMcpChatToolBinding(this.storage, request, context),
       resolveMeshChatToolBinding: (request, context) =>
-        resolveMeshChatToolBinding(
-          {
-            storage: this.storage,
-            activations: this.meshCapabilityActivationService,
-          },
-          request,
-          context,
-        ),
+        resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, context),
       dispatchMeshCapabilityInvocation: (input, options) =>
         this.meshCapabilityInvocationService.dispatch(input, options),
       normalizeToolInvokeRequest: async (request) => {
@@ -7170,10 +7144,7 @@ export class GatewayService {
   public async resolveChatTurnCapabilityProfile(
     input: Parameters<NonNullable<chatTurnPrepService.ChatTurnPrepHost["resolveChatTurnCapabilityProfile"]>>[0],
   ): Promise<ChatTurnCapabilityProfileResolution> {
-    const inheritedProfile = await readConfirmedDelegationParentProfile(
-      this.storage,
-      input.request.parentDelegationStepId,
-    );
+    const inheritedProfile = await this.chatTurnControl.readParentProfile(input.request.parentDelegationStepId);
     const serverOwnedPolicyContext = (
       input.request as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }
     ).policyContext;
@@ -7192,14 +7163,7 @@ export class GatewayService {
         listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope, "ALL", input.workspaceId),
         resolveToolSchema: (runnerInput, nativeTools, meshTools) =>
           this.turnRuntime.resolveCapabilityToolSchema(runnerInput, nativeTools, meshTools),
-        resolveMeshToolSchemas: (hookInput) =>
-          resolveMeshChatToolSchemas(
-            {
-              storage: this.storage,
-              activations: this.meshCapabilityActivationService,
-            },
-            hookInput,
-          ),
+        resolveMeshToolSchemas: (hookInput) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), hookInput),
         resolveToolPolicyContext: async (policyInput) => await this.resolveToolPolicyContext(policyInput),
         resolveToolRuntimeOwnerBinding: (toolName) =>
           this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
@@ -8585,22 +8549,14 @@ export class GatewayService {
       const assistantMessage = trace.assistantMessageId
         ? await this.storage.chatMessages.get(trace.assistantMessageId)
         : undefined;
-      await reconcileConfirmedDelegationChild(
-        {
-          storage: this.storage,
-          materialize: this.chatDelegationService.materializeTerminalDurableChild.bind(this.chatDelegationService),
-          reconcileWaiting: (parentRunId) => this.durableRunService.reconcileGeneralChatPostCommit(parentRunId),
-          wake: (parentRunId, event) => this.wakeDurableRun(parentRunId, event),
-        },
-        {
-          durableRunId: runId,
-          childSessionId: prepared.session.sessionId,
-          childTurnId: prepared.turnId,
-          parentDelegationStepId: prepared.parentDelegationStepId,
-          trace,
-          output: assistantMessage?.content,
-        },
-      );
+      await this.chatTurnControl.reconcileDelegationChild({
+        durableRunId: runId,
+        childSessionId: prepared.session.sessionId,
+        childTurnId: prepared.turnId,
+        parentDelegationStepId: prepared.parentDelegationStepId,
+        trace,
+        output: assistantMessage?.content,
+      });
       await this.durableFanout.reconcileTerminalChild({
         durableRunId: runId,
         childSessionId: prepared.session.sessionId,
@@ -8806,14 +8762,7 @@ export class GatewayService {
       createMcpRequesterTurnContext: (profile) => buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile),
       createMeshTurnContext: createMeshChatTurnContext,
       resolveMeshChatToolBinding: (request, context) =>
-        resolveMeshChatToolBinding(
-          {
-            storage: this.storage,
-            activations: this.meshCapabilityActivationService,
-          },
-          request,
-          context,
-        ),
+        resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, context),
       dispatchOwnerId: `remote-worker:${this.config.assistant.mesh.nodeId}:${randomUUID()}`,
       artifactRoot: path.resolve(this.config.rootDir, this.config.assistant.dataDir, "remote-worker-cas"),
     }));
@@ -9028,14 +8977,7 @@ export class GatewayService {
       {
         storage: this.storage,
         resolveMeshChatToolBinding: (request) =>
-          resolveMeshChatToolBinding(
-            {
-              storage: this.storage,
-              activations: this.meshCapabilityActivationService,
-            },
-            request,
-            meshTurnContext,
-          ),
+          resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, meshTurnContext),
         invokeApprovedMeshRuntime: (request, policyResult, id, markStarted) =>
           this.toolInvocationCoordinator.invokeApprovedMeshRuntime(request, policyResult, {
             meshTurnContext,
@@ -9056,9 +8998,7 @@ export class GatewayService {
         invokeApprovedMcpRuntime: async (input, markStarted, options) => {
           return this.toolInvocationCoordinator.invokeApprovedMcpRuntime(input, markStarted, {
             ...options,
-            executionFence: async () => {
-              await assertChatTurnToolUseOpen(this.storage, approvedRequest.sessionId, approvedRequest.turnId);
-            },
+            executionFence: () => this.chatTurnControl.assertToolDispatchAllowed(approvedRequest),
             mcpRequesterTurnContext,
             ...(isNativeMcpToolName(approvedRequest.toolName)
               ? { nativeCanonicalToolName: approvedRequest.toolName }
@@ -9231,6 +9171,11 @@ export class GatewayService {
           readOnly: tool.readOnly,
         }),
       }));
+  }
+
+  /** The storage and activation owners every mesh Chat binding resolves against. */
+  private meshChatBindingDeps() {
+    return { storage: this.storage, activations: this.meshCapabilityActivationService };
   }
 
   public async evaluateToolAccess(

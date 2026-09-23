@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
-import { withCanonicalApprovalOutcome } from "./approval-follow-up.js";
+import { withCanonicalApprovalOutcome } from "./approval-canonical-outcome.js";
 
 describe("canonical approval outcomes", () => {
   it("preserves approval when the action subsequently fails", async () => {
