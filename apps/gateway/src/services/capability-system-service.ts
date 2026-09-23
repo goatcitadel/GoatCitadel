@@ -126,6 +126,8 @@ import {
 import type { ApprovalResolveResult } from "./approval-types.js";
 import { CodeModeVerificationService } from "./code-mode-verification-service.js";
 import {
+  CandidateSkillQuarantine,
+  describeCandidateQuarantine,
   listWorkspaceCandidateSkills,
   readCandidateCatalogArtifacts,
   skillLifecycleProjectionMatches,
@@ -415,6 +417,7 @@ export class CapabilitySystemService {
   ) => CodeModeSandboxMetadata;
   private readonly autonomousActivationGrants: AutonomousActivationGrantService;
   private readonly codeModeVerification?: CodeModeVerificationService;
+  private readonly candidateQuarantine = new CandidateSkillQuarantine();
   /** HX-402 P2: lazily created write-through to the immutable P0 governed lifecycle owner. */
   private governedLifecycleRepository?: AsyncGovernedLifecycleEventRepository;
   /** HX-402 P2: module-private branded authority for the fail-safe internal revoke path. */
@@ -487,7 +490,9 @@ export class CapabilitySystemService {
       }),
     );
     if (workspaceId) {
-      all.push(...(await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap)));
+      const candidates = await listWorkspaceCandidateSkills(this.options, this.candidateRoot, workspaceId, stateMap);
+      this.candidateQuarantine.record(workspaceId, candidates.quarantined);
+      all.push(...candidates.skills);
     }
     return filterSkillItemsByEffectiveSet(all, effectiveSkills);
   }
@@ -3727,6 +3732,9 @@ export class CapabilitySystemService {
     }
 
     for (const candidate of await this.options.storage.candidateSkillVersions.list(200)) {
+      const quarantine = candidate.workspaceId
+        ? this.candidateQuarantine.find(candidate.workspaceId, candidate.versionId)
+        : undefined;
       entries.push({
         capabilityId: `candidate:${candidate.candidateId}:${candidate.versionId}`,
         kind: "candidate_skill",
@@ -3735,7 +3743,8 @@ export class CapabilitySystemService {
         summary: candidate.summary ?? "Generated candidate skill",
         callable: false,
         lifecycleState: candidate.lifecycleState,
-        trustLabel: "Candidate",
+        trustLabel: quarantine ? "Quarantined" : "Candidate",
+        ...(quarantine ? { reviewWarning: describeCandidateQuarantine(quarantine) } : {}),
         candidateId: candidate.candidateId,
       });
     }

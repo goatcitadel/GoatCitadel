@@ -1,13 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { listWorkspaceCandidateSkills } from "./candidate-skill-catalog-service.js";
+import {
+  CandidateSkillQuarantine,
+  describeCandidateQuarantine,
+  listWorkspaceCandidateSkills,
+} from "./candidate-skill-catalog-service.js";
 
 const load = vi.hoisted(() => vi.fn());
 const warn = vi.hoisted(() => vi.fn());
+const info = vi.hoisted(() => vi.fn());
 vi.mock("./candidate-runtime-skills.js", () => ({ loadApprovedCandidateSkill: load }));
 vi.mock("@goatcitadel/gateway-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@goatcitadel/gateway-core")>();
-  return { ...actual, logger: { ...actual.logger, warn } };
+  return { ...actual, logger: { ...actual.logger, warn, info } };
 });
 
 function fixture() {
@@ -43,14 +48,18 @@ describe("candidate skill catalog projection", () => {
       version: f.version,
       workspaceId: "workspace-a",
     });
-    expect(result).toMatchObject([{ skillId: "candidate-a", revision: 3, callable: true }]);
+    expect(result.skills).toMatchObject([{ skillId: "candidate-a", revision: 3, callable: true }]);
+    expect(result.quarantined).toEqual([]);
     expect(f.storage.skillLifecycle.upsert).not.toHaveBeenCalled();
   });
 
   it("omits rejected artifact loads without projecting lifecycle or revision state", async () => {
     const f = fixture();
     load.mockResolvedValue(undefined);
-    expect(await listWorkspaceCandidateSkills(f.deps, "candidate-root", "workspace-a", new Map())).toEqual([]);
+    expect(await listWorkspaceCandidateSkills(f.deps, "candidate-root", "workspace-a", new Map())).toEqual({
+      skills: [],
+      quarantined: [],
+    });
     expect(f.storage.skillLifecycle.find).not.toHaveBeenCalled();
     expect(f.storage.skillLifecycle.upsert).not.toHaveBeenCalled();
     expect(f.storage.skillAggregateRevisions.ensure).not.toHaveBeenCalled();
@@ -76,14 +85,10 @@ describe("candidate skill catalog projection", () => {
       return f.loaded;
     });
     const result = await listWorkspaceCandidateSkills(f.deps, "candidate-root", "workspace-a", new Map());
-    expect(result).toMatchObject([{ skillId: "candidate-a", callable: true }]);
-    expect(result).toHaveLength(1);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Quarantined"), {
-      workspaceId: "workspace-a",
-      candidateId: "candidate-broken",
-      versionId: "version-broken",
-      reason,
-    });
+    expect(result.skills).toMatchObject([{ skillId: "candidate-a", callable: true }]);
+    expect(result.skills).toHaveLength(1);
+    expect(result.quarantined).toEqual([{ candidateId: "candidate-broken", versionId: "version-broken", reason }]);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("preserves disabled state and its existing revision while repairing stale lifecycle projection", async () => {
@@ -93,8 +98,47 @@ describe("candidate skill catalog projection", () => {
       ["candidate-a", { state: "disabled", revision: 8, pinned: true }],
     ]) as unknown as Parameters<typeof listWorkspaceCandidateSkills>[3];
     const result = await listWorkspaceCandidateSkills(f.deps, "candidate-root", "workspace-a", states);
-    expect(result).toMatchObject([{ state: "disabled", revision: 8, pinned: true, callable: false }]);
+    expect(result.skills).toMatchObject([{ state: "disabled", revision: 8, pinned: true, callable: false }]);
     expect(f.storage.skillLifecycle.upsert).toHaveBeenCalledWith(f.lifecycle);
     expect(f.storage.skillAggregateRevisions.ensure).not.toHaveBeenCalled();
+  });
+});
+
+describe("candidate skill quarantine", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const entry = { candidateId: "candidate-broken", versionId: "version-broken", reason: "ENOENT" };
+
+  it("logs a new quarantine once, again when its reason changes, and when it clears", () => {
+    const quarantine = new CandidateSkillQuarantine();
+    quarantine.record("workspace-a", [entry]);
+    quarantine.record("workspace-a", [entry]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Quarantined"), {
+      workspaceId: "workspace-a",
+      candidateId: "candidate-broken",
+      versionId: "version-broken",
+      reason: "ENOENT",
+    });
+    expect(quarantine.find("workspace-a", "version-broken")).toEqual(entry);
+    expect(quarantine.find("workspace-b", "version-broken")).toBeUndefined();
+
+    quarantine.record("workspace-a", [{ ...entry, reason: "Approved skill bundle changed after artifact review." }]);
+    expect(warn).toHaveBeenCalledTimes(2);
+
+    quarantine.record("workspace-a", []);
+    expect(info).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("no longer quarantined"), {
+      workspaceId: "workspace-a",
+      candidateId: "candidate-broken",
+      versionId: "version-broken",
+    });
+    expect(quarantine.find("workspace-a", "version-broken")).toBeUndefined();
+  });
+
+  it("describes a quarantine for operators without doubling the review message's full stop", () => {
+    expect(
+      describeCandidateQuarantine({ ...entry, reason: "Approved skill bundle changed after artifact review." }),
+    ).toBe(
+      "This approved bundle no longer loads (Approved skill bundle changed after artifact review), so it is not offered as a skill. Review it again or restore its reviewed files.",
+    );
   });
 });
