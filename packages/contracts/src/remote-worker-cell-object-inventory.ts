@@ -1,3 +1,4 @@
+import { hexToBytes } from "@noble/hashes/utils";
 import { readRemoteWorkerCellCapacityObservation, normalizeRemoteWorkerCellCapacitySubmission,
   readRemoteWorkerCellCapacityHistoryObservation, type RemoteWorkerCellCapacityHistoryObservation,
   normalizeRemoteWorkerCellCapacityRecord, type RemoteWorkerCellCapacityRecord, type RemoteWorkerCellCapacityObservation } from "./remote-worker-cell-capacity-observation.js";
@@ -110,7 +111,7 @@ function decodeInventoryPrefix<T extends RemoteWorkerCellCapacityHistoryObservat
     if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string" ||
         !/^[0-9a-f]{2000}$/u.test(descriptor.value)) throw refused();
     const hex = descriptor.value as string;
-    const bytes = Uint8Array.from(hex.match(/../gu)!, (value) => Number.parseInt(value, 16));
+    const bytes = hexToBytes(hex);
     const view = new DataView(bytes.buffer), start = view.getUint32(32, true), size = view.getUint32(36, true);
     if (hex.slice(0, 64) !== summary.connectionNonceHex || start !== entries.length || size !== Math.min(20, total - start) ||
         size === 0 || /[^0]/u.test(hex.slice((40 + size * 48) * 2))) throw refused();
