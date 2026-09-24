@@ -306,7 +306,7 @@ describe("chat-route-resolution", () => {
     expect(route.blockedReason).not.toContain("Configure");
   });
 
-  it("keeps a supported shared bare GPT model on the explicitly selected OpenAI Codex provider", async () => {
+  it("normalizes an unsupported bare GPT model on the explicitly selected OpenAI Codex provider", async () => {
     const route = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
@@ -330,8 +330,9 @@ describe("chat-route-resolution", () => {
     expect(route).toEqual(
       expect.objectContaining({
         effectiveProviderId: "openai-codex",
-        effectiveModel: "gpt-5.4",
+        effectiveModel: "gpt-5.5",
         blockedReason: undefined,
+        normalizationReason: expect.stringContaining("cannot run gpt-5.4"),
       }),
     );
   });

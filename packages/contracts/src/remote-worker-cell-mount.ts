@@ -1,3 +1,4 @@
+import { hexToBytes as fromHex } from "@noble/hashes/utils";
 import { normalizeRemoteWorkerCellProtectionAnchor, readRemoteWorkerCellProtectionCheckpoint,
   assertRemoteWorkerCellProtectionSuccessor, type RemoteWorkerCellProtectionAnchor,
   type RemoteWorkerCellProtectionCheckpoint } from "./remote-worker-cell-protection.js";
@@ -66,9 +67,6 @@ function identity(input: unknown): string {
   const value = hex(input, 24);
   if (/^0+$/u.test(value.slice(0, 16)) || /^0+$/u.test(value.slice(16))) throw invalid();
   return value;
-}
-function fromHex(value: string): Uint8Array {
-  return Uint8Array.from(value.match(/../gu)!, (pair) => Number.parseInt(pair, 16));
 }
 
 /** Independently retained creation identities and complete protection history

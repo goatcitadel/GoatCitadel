@@ -2452,7 +2452,7 @@ export async function* streamPreparedAgentChatTurn(
 
     await assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
-    const settledTrace = await host.storage.chatTurnTraces.get(turnId);
+    const settledTrace = await chatTurnTraces.get(turnId);
     const delegationWaiting =
       deferGeneralPostCommit &&
       Boolean(settledTrace.durable?.runId) &&

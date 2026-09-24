@@ -1949,7 +1949,8 @@ export async function executeDurableChatTurnRun(
       : undefined,
   );
   await host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
-  const userMessage = await host.storage.chatMessages.get(payload.userMessageId);
+  const storage = host.storage;
+  const userMessage = await storage.chatMessages.get(payload.userMessageId);
   if (heartbeatIdentity) {
     if (userMessage) {
       throw new Error(`System heartbeat ${run.runId} cannot execute with a persisted input message.`);
@@ -1995,7 +1996,7 @@ export async function executeDurableChatTurnRun(
     policyRunId: payload.request.policyRunId ?? payload.policyRunIdDerivation?.runId,
     signal: context?.signal,
   };
-  const capabilityProfileStore = host.storage.chatTurnCapabilityProfiles;
+  const capabilityProfileStore = storage.chatTurnCapabilityProfiles;
   if (payload.capabilityProfileId && !capabilityProfileStore) {
     throw new Error(`Durable Chat run ${run.runId} cannot load its bound capability profile.`);
   }
@@ -2004,7 +2005,7 @@ export async function executeDurableChatTurnRun(
     : await capabilityProfileStore?.findByTurn(payload.turnId);
   const prepared = await host.prepareAgentChatTurn(payload.sessionId, request, {
     skipProviderPreparation: Boolean(
-      (await readChatTurnControl(host.storage, payload.sessionId, payload.turnId)).toolClosure,
+      (await readChatTurnControl(storage, payload.sessionId, payload.turnId)).toolClosure,
     ),
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,

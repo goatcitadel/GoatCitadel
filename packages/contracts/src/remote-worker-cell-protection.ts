@@ -1,3 +1,4 @@
+import { hexToBytes as fromHex } from "@noble/hashes/utils";
 import { normalizeRemoteWorkerCellFormatAnchor, readRemoteWorkerCellFormatCheckpoint,
   assertRemoteWorkerCellFormatSuccessor, type RemoteWorkerCellFormatAnchor,
   type RemoteWorkerCellFormatCheckpoint } from "./remote-worker-cell-format.js";
@@ -49,9 +50,6 @@ function object(input: unknown, names: readonly string[]): Record<string, unknow
 function hex(input: unknown, bytes: number): string {
   if (typeof input !== "string" || input.length !== bytes * 2 || !/^[0-9a-f]+$/u.test(input) || /^0+$/u.test(input)) throw invalid();
   return input;
-}
-function fromHex(value: string): Uint8Array {
-  return Uint8Array.from(value.match(/../gu)!, (pair) => Number.parseInt(pair, 16));
 }
 
 /** Versioned policy/SID hash, not SDK descriptor serialization. Native execution

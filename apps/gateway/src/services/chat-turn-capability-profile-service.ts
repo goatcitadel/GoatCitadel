@@ -249,6 +249,7 @@ export async function resolveChatTurnCapabilityProfile(
   input: ChatTurnCapabilityProfileResolveInput,
 ): Promise<ChatTurnCapabilityProfileResolution> {
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const storage = deps.storage;
   // Prefer the Gateway-owned seam so the frozen binding and the coordinator's
   // later recomputation share one code path; the raw-storage fallback exists
   // only for isolated tests that construct deps without a HooksService.
@@ -258,11 +259,7 @@ export async function resolveChatTurnCapabilityProfile(
         (
           await Promise.all(
             TOOL_EFFECT_INTERPOSITION_TRIGGERS.map((trigger) =>
-              deps.storage.workspaceHooks.listByTrigger(
-                input.workspaceId,
-                trigger,
-                TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT,
-              ),
+              storage.workspaceHooks.listByTrigger(input.workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
             ),
           )
         ).flat(),
@@ -512,7 +509,7 @@ export async function resolveChatTurnCapabilityProfile(
       }),
   );
   const modelNameAllowMap = tools.map(({ modelName, canonicalName }) => ({ modelName, canonicalName }));
-  const trustedSkills = buildTrustedSkillSnapshot(callableEntries, await deps.storage.skillLifecycle.list()).filter(
+  const trustedSkills = buildTrustedSkillSnapshot(callableEntries, await storage.skillLifecycle.list()).filter(
     (skill) =>
       !input.inheritedProfile ||
       input.inheritedProfile.selection.trustedSkills.some(
@@ -520,7 +517,7 @@ export async function resolveChatTurnCapabilityProfile(
       ),
   );
   const activatedSkills = (await deps.resolveActivatedSkills?.({ content: input.content, trustedSkills })) ?? [];
-  const activeGrants = (await collectActiveGrants(deps.storage, input)).map(projectGrantAuthority);
+  const activeGrants = (await collectActiveGrants(storage, input)).map(projectGrantAuthority);
   const permissionProfile = policyContext.permissionProfile;
   const permissionProfileHash = digest(
     permissionProfile ?? {
@@ -532,7 +529,7 @@ export async function resolveChatTurnCapabilityProfile(
   if (input.inheritedProfile) {
     const parentProfile = input.inheritedProfile;
     const liveParentSessionGrants = (
-      await deps.storage.toolGrants.listActive("session", parentProfile.identity.sessionId)
+      await storage.toolGrants.listActive("session", parentProfile.identity.sessionId)
     ).map(projectGrantAuthority);
     const changes = {
       permission:

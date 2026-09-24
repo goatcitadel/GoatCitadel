@@ -1868,10 +1868,11 @@ export class ChatTurnAgentRunner {
   }
 
   private async *runStreamInternal(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
+    const storage = this.deps.storage;
     throwIfChatTurnCancelled(input);
-    const turnControl = await readChatTurnControl(this.deps.storage, input.sessionId, input.turnId);
+    const turnControl = await readChatTurnControl(storage, input.sessionId, input.turnId);
     if (turnControl.toolClosure) {
-      const storedTrace = await this.deps.storage.chatTurnTraces.get(input.turnId);
+      const storedTrace = await storage.chatTurnTraces.get(input.turnId);
       if (storedTrace.status === "cancelled") {
         yield { type: "trace_update", sessionId: input.sessionId, turnId: input.turnId, trace: storedTrace };
         return;
@@ -1893,7 +1894,7 @@ export class ChatTurnAgentRunner {
         turnId: input.turnId,
         trace: {
           ...trace,
-          toolRuns: await this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+          toolRuns: await storage.chatToolRuns.listByTurn(input.turnId),
         },
       };
       yield { type: "done", sessionId: input.sessionId, turnId: input.turnId, messageId };
@@ -1904,7 +1905,7 @@ export class ChatTurnAgentRunner {
     const executionIntentContent = workflowSkillCapture ? "" : input.content;
     const readOnlyExplorerScopeRoot = await this.resolveReadOnlyExplorerScopeRoot(input);
     const listProjectedToolRuns = async (): Promise<ChatToolRunRecord[]> => {
-      const rows = await this.deps.storage.chatToolRuns.listByTurn(input.turnId);
+      const rows = await storage.chatToolRuns.listByTurn(input.turnId);
       return readOnlyExplorerScopeRoot ? projectWorkspaceExplorerPathValue(rows, [readOnlyExplorerScopeRoot]) : rows;
     };
     const now = new Date().toISOString();
@@ -1981,7 +1982,7 @@ export class ChatTurnAgentRunner {
     const trace = await this.runCanonicalWrite(
       input,
       async () =>
-        await createOrRefreshAgentStreamTrace(this.deps.storage, {
+        await createOrRefreshAgentStreamTrace(storage, {
           turnId: input.turnId,
           sessionId: input.sessionId,
           userMessageId: input.userMessageId,
@@ -2140,7 +2141,7 @@ export class ChatTurnAgentRunner {
       ? await toolSchemaFromCapabilityProfile(
           input,
           input.capabilityProfile,
-          this.deps.storage,
+          storage,
           liveCallableEntries,
           this.deps.revalidateRequesterTool,
           this.deps.revalidateMeshTool,
@@ -2289,8 +2290,8 @@ export class ChatTurnAgentRunner {
     const usageCostSources = new Set<NonNullable<ChatStreamUsageRecord["costSource"]>>();
     const observedUsageMetrics = new Set<"inputTokens" | "outputTokens" | "cachedInputTokens" | "costUsd">();
     const canonicalUsageEventIds = new Set<string>();
-    const trustedUsageWorkspaceId = (await this.deps.storage.chatSessionMeta?.get(input.sessionId))?.workspaceId;
-    const workerUsageAttribution = await resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+    const trustedUsageWorkspaceId = (await storage.chatSessionMeta?.get(input.sessionId))?.workspaceId;
+    const workerUsageAttribution = await resolveDelegatedWorkerUsageAttribution(storage, input);
     const durableRunId = input.policyRunId ?? workerUsageAttribution?.delegationRunId;
     const completionUsageAttribution = (
       logicalCall: string,
@@ -4150,9 +4151,7 @@ export class ChatTurnAgentRunner {
               toolRunCount < executionBudget.maxToolRunsPerTurn &&
               loop + 1 < executionBudget.maxToolLoops &&
               turnBudgetDeadline - Date.now() > executionBudget.minSynthesisReserveMs &&
-              (await this.runCanonicalWrite(input, () =>
-                claimArtifactRetry(this.deps.storage, input.sessionId, input.turnId),
-              ))
+              (await this.runCanonicalWrite(input, () => claimArtifactRetry(storage, input.sessionId, input.turnId)))
             ) {
               turnControl.artifactRetryIssued = true;
               conversationMessages.push({ role: "assistant", content: extractMessageContent(message) });
@@ -5219,7 +5218,7 @@ export class ChatTurnAgentRunner {
     // provider response get one repair pass ("attempt one repair more often").
     // The live-viewer suppression guard is always respected (never overridden by
     // a tune) so we cannot double-render after partial output.
-    const storedRetryThreshold = await this.deps.storage.systemSettings.get<unknown>(
+    const storedRetryThreshold = await storage.systemSettings.get<unknown>(
       IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold,
     );
     const incompleteRepairThreshold = resolveRetryRepairThreshold(
@@ -5534,7 +5533,7 @@ export class ChatTurnAgentRunner {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { completion: finalizedCompletionWithRuntime }),
       routing: {
         ...routingState,
-        turnControl: await readChatTurnControl(this.deps.storage, input.sessionId, input.turnId),
+        turnControl: await readChatTurnControl(storage, input.sessionId, input.turnId),
         liveDataIntent: intents.liveData,
         effectiveProviderId: routingState.effectiveProviderId ?? input.providerId,
         effectiveModel: routingState.effectiveModel ?? assistantModel,

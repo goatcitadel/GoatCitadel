@@ -395,10 +395,10 @@ const CHECK_GROUPS = Object.freeze({
           "src/services/capability-system-service.test.ts",
         ],
         {
-          // capability-system-service.test.ts passes solo in ~122s but exceeded
-          // a 180s ceiling under full verify:all contention. Budgets bound
-          // hangs, not loaded schedulers, so give this check 2x its solo time.
-          timeoutMs: 360_000,
+          // capability-system-service.test.ts now passes solo in ~250s locally and
+          // ran past 360s on a Release Proof runner (2026-09-22). Budgets bound
+          // hangs, not loaded schedulers, so give this check 2x its CI time.
+          timeoutMs: 720_000,
           expectedStdout: [
             "freezes Code Mode wrapper policy context at run approval time",
             "does not silently swap an explicit Code Mode permission profile during policy resolution",

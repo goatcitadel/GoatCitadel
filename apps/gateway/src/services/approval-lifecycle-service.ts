@@ -56,11 +56,8 @@ import {
   buildApprovalCreatedObservabilityEffects,
   buildApprovalResolutionObservabilityEffects,
 } from "./approval-observability.js";
-import {
-  buildApprovalResolveResult,
-  withApprovalFollowUp,
-  withCanonicalApprovalOutcome,
-} from "./approval-follow-up.js";
+import { withCanonicalApprovalOutcome } from "./approval-canonical-outcome.js";
+import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-follow-up.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import {
   isOfficialResearchSearchInvocation,
@@ -400,12 +397,13 @@ export async function listApprovals(
   limit = 100,
   workspaceId?: string,
 ): Promise<ApprovalRequest[]> {
-  const approvals = await host.storage.approvals.list(status, limit, workspaceId);
+  const storage = host.storage;
+  const approvals = await storage.approvals.list(status, limit, workspaceId);
   return Promise.all(
     approvals.map(async (approval) =>
       withCanonicalApprovalOutcome(
-        host.storage,
-        withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+        storage,
+        withApprovalFollowUp(approval, await storage.approvalEffects.listByApproval(approval.approvalId)),
       ),
     ),
   );
@@ -420,13 +418,14 @@ export async function listApprovalsPage(
     workspaceId?: string;
   },
 ): Promise<ApprovalListResponse> {
-  const page = await host.storage.approvals.listPage(input);
+  const storage = host.storage;
+  const page = await storage.approvals.listPage(input);
   return {
     items: await Promise.all(
       page.items.map(async (approval) =>
         withCanonicalApprovalOutcome(
-          host.storage,
-          withApprovalFollowUp(approval, await host.storage.approvalEffects.listByApproval(approval.approvalId)),
+          storage,
+          withApprovalFollowUp(approval, await storage.approvalEffects.listByApproval(approval.approvalId)),
         ),
       ),
     ),
@@ -515,11 +514,12 @@ export async function getApprovalReplay(
   approvalId: string,
   replayedBy = "operator",
 ): Promise<ApprovalReplayResult> {
-  const storedApproval = await host.storage.approvals.get(approvalId);
-  const effects = await host.storage.approvalEffects.listByApproval(approvalId);
-  const approval = await withCanonicalApprovalOutcome(host.storage, withApprovalFollowUp(storedApproval, effects));
+  const storage = host.storage;
+  const storedApproval = await storage.approvals.get(approvalId);
+  const effects = await storage.approvalEffects.listByApproval(approvalId);
+  const approval = await withCanonicalApprovalOutcome(storage, withApprovalFollowUp(storedApproval, effects));
 
-  await host.storage.approvalEvents.append({
+  await storage.approvalEvents.append({
     approvalId,
     eventType: "replayed",
     actorId: replayedBy,
@@ -530,9 +530,9 @@ export async function getApprovalReplay(
 
   return {
     approval,
-    events: await host.storage.approvalEvents.listByApprovalId(approvalId),
-    pendingAction: await host.storage.pendingApprovalActions.find(approvalId),
-    durableRunId: await host.storage.approvalWaitRuns.getRunId(approvalId),
+    events: await storage.approvalEvents.listByApprovalId(approvalId),
+    pendingAction: await storage.pendingApprovalActions.find(approvalId),
+    durableRunId: await storage.approvalWaitRuns.getRunId(approvalId),
     effects,
   };
 }
@@ -857,14 +857,15 @@ export async function resolveApproval(
 // approval.linkage.durableRunId may identify the approval wait, not the Chat run.
 async function assertLinkedChatTurnActive(host: ApprovalLifecycleHost, linkage?: ApprovalLinkage): Promise<void> {
   if (!linkage?.turnId || !linkage.sessionId) return;
-  const owner = await resolveChatTurnControlOwner(host.storage, linkage.sessionId, linkage.turnId);
+  const storage = host.storage;
+  const owner = await resolveChatTurnControlOwner(storage, linkage.sessionId, linkage.turnId);
   if (owner.turnId !== linkage.turnId) {
-    const rootTrace = await host.storage.chatTurnTraces.get(owner.turnId);
-    if (rootTrace.durable?.runId) await host.storage.durableRuns.getRunForUpdate(rootTrace.durable.runId);
+    const rootTrace = await storage.chatTurnTraces.get(owner.turnId);
+    if (rootTrace.durable?.runId) await storage.durableRuns.getRunForUpdate(rootTrace.durable.runId);
   }
   let trace: ChatTurnTraceRecord;
   try {
-    trace = await host.storage.chatTurnTraces.get(linkage.turnId);
+    trace = await storage.chatTurnTraces.get(linkage.turnId);
   } catch (error) {
     // Legacy/imported approvals may precede their Chat projection. Fence an
     // existing canonical turn without imposing a new trace-creation order.
@@ -872,15 +873,15 @@ async function assertLinkedChatTurnActive(host: ApprovalLifecycleHost, linkage?:
     throw error;
   }
   if (trace.durable?.runId) {
-    await host.storage.durableRuns.getRunForUpdate(trace.durable.runId);
-    trace = await host.storage.chatTurnTraces.get(linkage.turnId);
+    await storage.durableRuns.getRunForUpdate(trace.durable.runId);
+    trace = await storage.chatTurnTraces.get(linkage.turnId);
   }
   if (trace.sessionId !== linkage.sessionId || isChatTurnTerminalStatus(trace.status)) {
     throw new ConflictError({
       message: "This chat turn has already stopped or finished; its action cannot be approved or requested again.",
     });
   }
-  await assertChatTurnToolUseOpen(host.storage, linkage.sessionId, linkage.turnId);
+  await assertChatTurnToolUseOpen(storage, linkage.sessionId, linkage.turnId);
 }
 
 /** Called inside the durable Chat cancellation transaction. Reuse the normal
@@ -893,11 +894,12 @@ export async function rejectPendingChatTurnApprovals(
   actorId: string,
   includeDelegationFamily = false,
 ): Promise<void> {
+  const storage = host.storage;
   const owner = includeDelegationFamily
-    ? await resolveChatTurnControlOwner(host.storage, sessionId, turnId)
+    ? await resolveChatTurnControlOwner(storage, sessionId, turnId)
     : { sessionId, turnId };
-  const inline = await host.storage.chatInlineApprovals.listByTurn(turnId);
-  const toolRuns = await host.storage.chatToolRuns.listByTurn(turnId);
+  const inline = await storage.chatInlineApprovals.listByTurn(turnId);
+  const toolRuns = await storage.chatToolRuns.listByTurn(turnId);
   const approvalIds = new Set([
     ...inline.filter((item) => item.sessionId === sessionId).map((item) => item.approvalId),
     ...toolRuns.filter((item) => item.sessionId === sessionId && item.approvalId).map((item) => item.approvalId!),
@@ -905,11 +907,11 @@ export async function rejectPendingChatTurnApprovals(
   // An approval can be committed before its tool/inline projection arrives.
   let cursor: string | undefined;
   do {
-    const page = await host.storage.approvals.listPage({ status: "pending", limit: 200, cursor, includeExpired: true });
+    const page = await storage.approvals.listPage({ status: "pending", limit: 200, cursor, includeExpired: true });
     for (const approval of page.items) {
       if (!approval.linkage?.sessionId || !approval.linkage.turnId) continue;
       const target = await resolveChatTurnControlOwner(
-        host.storage,
+        storage,
         approval.linkage.sessionId,
         approval.linkage.turnId,
         owner.turnId,
@@ -919,7 +921,7 @@ export async function rejectPendingChatTurnApprovals(
     cursor = page.nextCursor;
   } while (cursor);
   for (const approvalId of approvalIds) {
-    const approval = await host.storage.approvals.get(approvalId);
+    const approval = await storage.approvals.get(approvalId);
     if (approval.status !== "pending") continue;
     await commitStandardApprovalResolution(
       host,

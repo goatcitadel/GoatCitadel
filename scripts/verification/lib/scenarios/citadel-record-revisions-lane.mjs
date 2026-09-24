@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { runCitadelVaultRevisionsScenario } from "./citadel-vault-revisions-lane.mjs";
 import fs from "node:fs/promises";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { runCitadelStructureRevisionsScenario } from "./citadel-structure-revisions-lane.mjs";
 import { runCitadelAccessRevisionsScenario } from "./citadel-access-revisions-lane.mjs";
 
 /** Real profile mutations in a disposable Gateway; no volume provisioning or live provider calls. */
 export async function runCitadelRecordRevisionsLane(context, deps) {
-  const { path, prepareVerificationRuntime, startDeterministicLlmStub, writeDeterministicLlmProviderConfig,
+  const { path, startDeterministicLlmStub,
     startVerificationStack, stopVerificationStack, forceVerificationUiPackage, NEXT_UI_PACKAGE,
     ensureOnboardingComplete, runScenario, requestJson, assertOk, chromium, installMissionControlNextBrowserState,
     attachBrowserLogging, buildVerificationUiUrl, waitForVerificationRouteReady, captureBrowserArtifacts,
@@ -15,9 +16,9 @@ export async function runCitadelRecordRevisionsLane(context, deps) {
   let stack; let llmStub; let runtimeRoot;
   const restoreUi = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   try {
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-citadel-record-revision`);
     llmStub = await startDeterministicLlmStub();
-    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
+    // Clean checkouts have no config/goatcitadel.json (it is gitignored operator state): seed shipped defaults.
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-citadel-record-revision`, llmStub.baseUrl);
     const configPath = path.join(runtimeRoot, "config", "goatcitadel.json");
     const config = JSON.parse(await fs.readFile(configPath, "utf8"));
     config.assistant.dataDir = "./data"; config.assistant.workspaceDir = "./workspace"; config.assistant.worktreesDir = "./.worktrees";

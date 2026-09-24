@@ -753,6 +753,11 @@ export interface ApprovedExternalRuntimeInvocationOptions {
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
   public constructor(private readonly host: ToolInvocationCoordinatorHost) {}
 
+  /** The Chat tool-closure fence, rechecked at every dispatch boundary; absent outside Chat. */
+  private async assertChatToolDispatchAllowed(request: ToolInvokeRequest): Promise<void> {
+    await this.host.assertChatToolDispatchAllowed?.(request);
+  }
+
   /**
    * Rebuilds the deepest-spawn precondition for the canonical approval worker,
    * whose policy replay bypasses invokeTool but must not bypass cwd/Git checks.
@@ -761,7 +766,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     request: ToolInvokeRequest,
     options: { invocationId: string; signal?: AbortSignal; runtimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding },
   ): Promise<((boundary?: ToolProcessSpawnBoundary) => Promise<void>) | undefined> {
-    await this.host.assertChatToolDispatchAllowed?.(request);
+    await this.assertChatToolDispatchAllowed(request);
     const checkOwner = () => {
       if (!options.runtimeOwner) return;
       const owner = this.resolveCurrentToolRuntimeOwnerBinding(request.toolName);
@@ -771,7 +776,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     checkOwner();
     if (!isWorkspacePathBridgeCwdTool(request.toolName)) {
       return async () => {
-        await this.host.assertChatToolDispatchAllowed?.(request);
+        await this.assertChatToolDispatchAllowed(request);
         checkOwner();
       };
     }
@@ -795,7 +800,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       ...(options.signal ? { signal: options.signal } : {}),
     });
     return async (boundary) => {
-      await this.host.assertChatToolDispatchAllowed?.(request);
+      await this.assertChatToolDispatchAllowed(request);
       checkOwner();
       await bridge(boundary);
       checkOwner();
@@ -975,17 +980,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
 
     const normalizedRequest = await this.host.normalizeToolInvokeRequest(request);
-    await this.host.assertChatToolDispatchAllowed?.(normalizedRequest);
+    await this.assertChatToolDispatchAllowed(normalizedRequest);
     const previousExecutionFence = options.executionFence;
     const previousAuxiliaryFence = options.auxiliaryEffectFence ?? previousExecutionFence;
     options = {
       ...options,
       executionFence: async () => {
-        await this.host.assertChatToolDispatchAllowed?.(normalizedRequest);
+        await this.assertChatToolDispatchAllowed(normalizedRequest);
         await previousExecutionFence?.();
       },
       auxiliaryEffectFence: async () => {
-        await this.host.assertChatToolDispatchAllowed?.(normalizedRequest);
+        await this.assertChatToolDispatchAllowed(normalizedRequest);
         await previousAuxiliaryFence?.();
       },
     };
@@ -1609,7 +1614,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     markExternalCallStarted?: () => void | Promise<void>,
     options: ApprovedExternalRuntimeInvocationOptions = {},
   ): Promise<ToolInvokeResult> {
-    await this.host.assertChatToolDispatchAllowed?.(request);
+    await this.assertChatToolDispatchAllowed(request);
     if (!this.host.isValidToolName(request.toolName)) {
       return {
         outcome: "blocked",
@@ -1734,7 +1739,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         ? buildApprovedExternalRuntimeCancelledResult()
         : buildPluginRuntimeOwnerDriftResult();
     }
-    await this.host.assertChatToolDispatchAllowed?.(executionRequest);
+    await this.assertChatToolDispatchAllowed(executionRequest);
     await markExternalCallStarted?.();
     if (
       options.signal?.aborted ||
@@ -1866,12 +1871,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     policyResult: ToolInvokeResult,
     options: MeshChatDispatchOptions,
   ): Promise<ToolInvokeResult> {
-    await this.host.assertChatToolDispatchAllowed?.(request);
+    await this.assertChatToolDispatchAllowed(request);
     const priorFence = options.executionFence;
     options = {
       ...options,
       executionFence: async () => {
-        await this.host.assertChatToolDispatchAllowed?.(request);
+        await this.assertChatToolDispatchAllowed(request);
         await priorFence?.();
       },
     };

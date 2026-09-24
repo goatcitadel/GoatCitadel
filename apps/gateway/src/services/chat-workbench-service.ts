@@ -5,8 +5,10 @@ import { execFileSync, spawn } from "node:child_process";
 /* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import {
+  GIT_REPOSITORY_ENV_KEYS,
   NotFoundError,
   ValidationError,
+  buildScrubbedSpawnEnv,
   type AgenticCommandRunRecord,
   type ChatSessionWorkbenchCommandRunRequest,
   type ChatSessionWorkbenchCommandRunResponse,
@@ -101,9 +103,10 @@ export async function createChatSessionWorkbenchWorktree(
   const baseRef = input.baseRef?.trim() || current.baseRef || "HEAD";
   const worktreesRoot = path.resolve(deps.config.rootDir, deps.config.assistant.worktreesDir);
   const targetPath = path.resolve(worktreesRoot, sessionId);
+  const { writeJailRoots, spawnEnvPassthrough = [] } = deps.config.toolPolicy.sandbox;
 
   await fs.mkdir(worktreesRoot, { recursive: true });
-  assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+  assertWritePathInJail(targetPath, writeJailRoots);
 
   if (fsSync.existsSync(targetPath) && !isWorkbenchPathUsable(targetPath)) {
     throw new ValidationError({
@@ -113,10 +116,7 @@ export async function createChatSessionWorkbenchWorktree(
   }
 
   if (!fsSync.existsSync(targetPath)) {
-    const manager = new WorktreeManager({
-      repoRoot: context.repoRoot,
-      worktreesRoot,
-    });
+    const manager = new WorktreeManager({ repoRoot: context.repoRoot, worktreesRoot, spawnEnvPassthrough });
     await manager.create(sessionId, baseRef);
   }
 
@@ -184,17 +184,29 @@ export async function saveChatSessionWorkbenchFile(
     const snapshot = await withWorkbenchWriteLock(context.projectRoot, async () => {
       const currentState = await syncWorkbenchState(deps, sessionId);
       const currentContext = await resolveWorkbenchContext(deps, sessionId, currentState, true);
-      if (currentContext.project.projectId !== context.project.projectId || currentContext.projectRoot !== context.projectRoot) {
+      if (
+        currentContext.project.projectId !== context.project.projectId ||
+        currentContext.projectRoot !== context.projectRoot
+      ) {
         throw new ValidationError({ message: "The workbench project changed. Reload the file before saving." });
       }
-      return await writeWorkbenchFileSnapshot({
-        sessionId, projectId: context.project.projectId, projectRoot: context.projectRoot, relativePath: normalized,
-        assertAllowed: (filePath) => {
-          assertWorkbenchFileOperationPathAllowed(path.relative(context.projectRoot, filePath).replaceAll("\\", "/"));
-          assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, filePath, "workbench file");
-          assertWritePathInJail(filePath, deps.config.toolPolicy.sandbox.writeJailRoots);
+      return await writeWorkbenchFileSnapshot(
+        {
+          sessionId,
+          projectId: context.project.projectId,
+          projectRoot: context.projectRoot,
+          relativePath: normalized,
+          assertAllowed: (filePath) => {
+            assertWorkbenchFileOperationPathAllowed(path.relative(context.projectRoot, filePath).replaceAll("\\", "/"));
+            assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, filePath, "workbench file");
+            assertWritePathInJail(filePath, deps.config.toolPolicy.sandbox.writeJailRoots);
+          },
         },
-      }, input, () => { writeStarted = true; });
+        input,
+        () => {
+          writeStarted = true;
+        },
+      );
     });
     const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
     const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
@@ -227,9 +239,15 @@ export async function saveChatSessionWorkbenchFile(
     };
   } catch (cause) {
     if (!writeStarted) throw cause;
-    throw Object.assign(new Error("The file write started, but confirmation or follow-up failed. Reload the file before retrying; your draft is preserved.", { cause }), {
-      mutationCommitted: true,
-    });
+    throw Object.assign(
+      new Error(
+        "The file write started, but confirmation or follow-up failed. Reload the file before retrying; your draft is preserved.",
+        { cause },
+      ),
+      {
+        mutationCommitted: true,
+      },
+    );
   }
 }
 
@@ -253,7 +271,9 @@ export async function runChatSessionWorkbenchFileOperation(
 ): Promise<ChatSessionWorkbenchFileOperationResponse> {
   const prepared = await prepareWorkbenchFileOperation(deps, sessionId, input);
   if (!/^[a-f0-9]{64}$/.test(input.expectedRevision ?? "")) {
-    throw new ValidationError({ message: "Review the file action before applying it. An expected revision is required." });
+    throw new ValidationError({
+      message: "Review the file action before applying it. An expected revision is required.",
+    });
   }
   const { context } = prepared;
   const { operation, path: normalized, targetPath: normalizedTarget } = prepared.input;
@@ -262,20 +282,29 @@ export async function runChatSessionWorkbenchFileOperation(
     const { activeFilePath, message } = await withWorkbenchWriteLock(context.projectRoot, async () => {
       const current = await prepareWorkbenchFileOperation(deps, sessionId, input);
       assertSameWorkbenchOperationContext(context, current.context);
-      const review = await readWorkbenchPathRevision(workbenchPathScope(deps, sessionId, context), current.input)
-        .catch((error: unknown) => {
-          if (error instanceof ValidationError || error instanceof NotFoundError
-            || ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw workbenchPathConflict();
+      const review = await readWorkbenchPathRevision(workbenchPathScope(deps, sessionId, context), current.input).catch(
+        (error: unknown) => {
+          if (
+            error instanceof ValidationError ||
+            error instanceof NotFoundError ||
+            ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")
+          )
+            throw workbenchPathConflict();
           throw error;
-        });
+        },
+      );
       if (review.revision !== input.expectedRevision) throw workbenchPathConflict();
       return applyWorkbenchFileOperation(deps, context, {
-        operation, normalized, normalizedTarget,
+        operation,
+        normalized,
+        normalizedTarget,
         targetPath: path.resolve(context.projectRoot, normalized),
         destinationPath: normalizedTarget ? path.resolve(context.projectRoot, normalizedTarget) : undefined,
         content: current.input.content,
         currentActiveFilePath: current.state.activeFilePath,
-        onWriteStarted: () => { writeStarted = true; },
+        onWriteStarted: () => {
+          writeStarted = true;
+        },
       });
     });
 
@@ -324,9 +353,15 @@ export async function runChatSessionWorkbenchFileOperation(
     };
   } catch (cause) {
     if (!writeStarted) throw cause;
-    throw Object.assign(new Error("The file action started, but confirmation or follow-up failed. Inspect the source and destination before retrying.", { cause }), {
-      mutationCommitted: true,
-    });
+    throw Object.assign(
+      new Error(
+        "The file action started, but confirmation or follow-up failed. Inspect the source and destination before retrying.",
+        { cause },
+      ),
+      {
+        mutationCommitted: true,
+      },
+    );
   }
 }
 
@@ -349,9 +384,12 @@ async function prepareWorkbenchFileOperation(
   assertPathInsideRoot(targetPath, context.projectRoot, "workbench file action");
   assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
   const needsTarget = operationRequiresTargetPath(operation);
-  if (needsTarget && !input.targetPath) throw new ValidationError({ message: "This file action requires a target path." });
-  if (!needsTarget && input.targetPath !== undefined) throw new ValidationError({ message: "This file action does not accept a target path." });
-  if (operation !== "create_file" && input.content !== undefined) throw new ValidationError({ message: "Only Create file accepts initial content." });
+  if (needsTarget && !input.targetPath)
+    throw new ValidationError({ message: "This file action requires a target path." });
+  if (!needsTarget && input.targetPath !== undefined)
+    throw new ValidationError({ message: "This file action does not accept a target path." });
+  if (operation !== "create_file" && input.content !== undefined)
+    throw new ValidationError({ message: "Only Create file accepts initial content." });
   const normalizedTarget = needsTarget ? normalizeWorkbenchRelativePath(input.targetPath!) : undefined;
   if (normalizedTarget) {
     assertWorkbenchFileOperationPathAllowed(normalizedTarget);
@@ -371,7 +409,8 @@ function assertSameWorkbenchOperationContext(
   before: { project: { projectId: string }; projectRoot: string },
   current: { project: { projectId: string }; projectRoot: string },
 ): void {
-  if (before.project.projectId !== current.project.projectId || before.projectRoot !== current.projectRoot) throw workbenchPathConflict();
+  if (before.project.projectId !== current.project.projectId || before.projectRoot !== current.projectRoot)
+    throw workbenchPathConflict();
 }
 
 function workbenchPathScope(
@@ -379,7 +418,10 @@ function workbenchPathScope(
   sessionId: string,
   context: { project: { projectId: string }; projectRoot: string },
 ) {
-  return { sessionId, projectId: context.project.projectId, projectRoot: context.projectRoot,
+  return {
+    sessionId,
+    projectId: context.project.projectId,
+    projectRoot: context.projectRoot,
     assertAllowed: (targetPath: string) => {
       assertWorkbenchFileOperationPathAllowed(path.relative(context.projectRoot, targetPath).replaceAll("\\", "/"));
       assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, targetPath, "workbench file action");
@@ -493,10 +535,13 @@ export async function runChatSessionWorkbenchCommand(
     },
   );
 
-  const result = await withWorkbenchWriteLock(context.projectRoot, () => executeWorkbenchCommand(command, args, {
-    cwd: context.projectRoot,
-    timeoutMs,
-  }));
+  const result = await withWorkbenchWriteLock(context.projectRoot, () =>
+    executeWorkbenchCommand(command, args, {
+      cwd: context.projectRoot,
+      timeoutMs,
+      spawnEnvPassthrough: deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
+    }),
+  );
   const completedAt = new Date().toISOString();
   const durationMs = Date.now() - startedAtMs;
   const status = result.timedOut ? "timed_out" : result.exitCode === 0 ? "passed" : "failed";
@@ -596,7 +641,9 @@ export async function applyChatSessionWorkbenchPatch(
   const checkOnly = Boolean(input.checkOnly);
   const startedAt = new Date().toISOString();
   const artifactId = `workbench-patch:${randomUUID()}`;
-  const applyResult = await withWorkbenchWriteLock(context.projectRoot, async () => applyPatchWithScope(context, patch, checkOnly));
+  const applyResult = await withWorkbenchWriteLock(context.projectRoot, async () =>
+    applyPatchWithScope(context, patch, checkOnly),
+  );
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const validation =
     applyResult.exitCode === 0 && !checkOnly
@@ -731,8 +778,16 @@ export async function revertChatSessionWorkbenchChanges(
   assertWorkbenchMutationScope(deps, context);
   const before = listChangedFiles(context.worktreePath, context.repoScopePath);
   await withWorkbenchWriteLock(context.projectRoot, async () => {
-    runGit(context.worktreePath, ["restore", "--source=HEAD", "--staged", "--worktree", "--", context.repoScopePath,
-      `:(exclude)**/${WORKBENCH_WRITE_LOCK}`, `:(exclude)${WORKBENCH_WRITE_LOCK}`]);
+    runGit(context.worktreePath, [
+      "restore",
+      "--source=HEAD",
+      "--staged",
+      "--worktree",
+      "--",
+      context.repoScopePath,
+      `:(exclude)**/${WORKBENCH_WRITE_LOCK}`,
+      `:(exclude)${WORKBENCH_WRITE_LOCK}`,
+    ]);
     const untrackedFiles = listUntrackedFiles(context.worktreePath, context.repoScopePath);
     for (const repoScopedPath of untrackedFiles) {
       const relativePath = fromRepoScopedFilePath(context.repoScopePath, repoScopedPath);
@@ -902,12 +957,11 @@ async function buildWorkbenchFileResponse(
 ): Promise<ChatSessionWorkbenchFileResponse> {
   const normalized = normalizeWorkbenchRelativePath(relativePath);
   const targetPath = path.resolve(context.projectRoot, normalized);
-  const { stat, content: contentBuffer, revision } = savedSnapshot ?? await readWorkbenchFilePayload(
-    deps,
-    sessionId,
-    context,
-    relativePath,
-  );
+  const {
+    stat,
+    content: contentBuffer,
+    revision,
+  } = savedSnapshot ?? (await readWorkbenchFilePayload(deps, sessionId, context, relativePath));
   const content = contentBuffer.toString("utf8");
   const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
   const nextState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
@@ -960,7 +1014,11 @@ async function applyWorkbenchFileOperation(
       }
       const file = await fs.open(input.targetPath, "wx");
       input.onWriteStarted();
-      try { await file.writeFile(content, "utf8"); } finally { await file.close(); }
+      try {
+        await file.writeFile(content, "utf8");
+      } finally {
+        await file.close();
+      }
       return {
         activeFilePath: input.normalized,
         message: `Created file ${input.normalized}.`,
@@ -1029,7 +1087,11 @@ async function applyWorkbenchFileOperation(
       assertWorkbenchFileIsText(content, input.normalized, "editor");
       const file = await fs.open(input.destinationPath, "wx");
       input.onWriteStarted();
-      try { await file.writeFile(content); } finally { await file.close(); }
+      try {
+        await file.writeFile(content);
+      } finally {
+        await file.close();
+      }
       return {
         activeFilePath: input.normalizedTarget,
         message: `Duplicated ${input.normalized} to ${input.normalizedTarget}.`,
@@ -1241,6 +1303,7 @@ async function runWorkbenchPostWriteValidation(
   const result = await executeWorkbenchCommand(command, args, {
     cwd: context.projectRoot,
     timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    spawnEnvPassthrough: deps.config.toolPolicy.sandbox.spawnEnvPassthrough ?? [],
   });
   const stderrPreview = result.spawnError
     ? appendPreviewLine(result.stderrPreview, result.spawnError)
@@ -1486,7 +1549,10 @@ async function readWorkbenchFilePayload(
   }
 
   const snapshot = await readWorkbenchFileSnapshot({
-    sessionId, projectId: context.project.projectId, projectRoot, relativePath: normalized,
+    sessionId,
+    projectId: context.project.projectId,
+    projectRoot,
+    relativePath: normalized,
     assertAllowed: (filePath) => assertExistingWorkbenchRealpathAllowed(deps, projectRoot, filePath, "workbench file"),
   });
   assertWorkbenchFileIsText(snapshot.content, normalized, "viewer");
@@ -1558,11 +1624,25 @@ function isGitPathUntracked(worktreePath: string, repoScopedPath: string): boole
     .some((line) => line.startsWith("?? ") && extractChangedFilePath(line) === repoScopedPath.replaceAll("\\", "/"));
 }
 
+/**
+ * Workbench children run repository-controlled scripts, hooks and git-configured programs, so they get the
+ * gateway environment minus credential-shaped keys. `sandbox.spawnEnvPassthrough` is the operator opt-out,
+ * as for model-driven shell.exec. They also drop inherited repository locations, so git resolves the
+ * workbench worktree from its working directory.
+ */
+function buildWorkbenchChildEnv(
+  extraEnv: Readonly<Record<string, string>> = {},
+  passthroughKeys: readonly string[] = [],
+): Record<string, string> {
+  return buildScrubbedSpawnEnv(process.env, { extraEnv, passthroughKeys, dropKeys: GIT_REPOSITORY_ENV_KEYS });
+}
+
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
+    env: buildWorkbenchChildEnv(),
   });
 }
 
@@ -1574,10 +1654,7 @@ function runGitWithInput(cwd: string, args: string[], input: string): WorkbenchC
       input,
       windowsHide: true,
       maxBuffer: COMMAND_OUTPUT_CAPTURE_BYTES,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-      },
+      env: buildWorkbenchChildEnv({ GIT_TERMINAL_PROMPT: "0" }),
     });
     stdout.append(output);
     return {
@@ -1652,6 +1729,7 @@ function patchUsesRepoScopedPaths(patch: string, repoScopePath: string): boolean
 interface WorkbenchCommandExecutionOptions {
   cwd: string;
   timeoutMs: number;
+  spawnEnvPassthrough: readonly string[];
 }
 
 interface WorkbenchCommandExecutionResult {
@@ -1681,11 +1759,7 @@ async function executeWorkbenchCommand(
     let forcedSettleHandle: NodeJS.Timeout | undefined;
     const child = spawn(executable.file, executable.args, {
       cwd: options.cwd,
-      env: {
-        ...process.env,
-        CI: process.env.CI ?? "1",
-        GIT_TERMINAL_PROMPT: "0",
-      },
+      env: buildWorkbenchChildEnv({ CI: process.env.CI ?? "1", GIT_TERMINAL_PROMPT: "0" }, options.spawnEnvPassthrough),
       windowsHide: true,
       shell: false,
     });
@@ -1824,8 +1898,13 @@ function operationRequiresTargetPath(operation: ChatSessionWorkbenchFileOperatio
 
 function assertWorkbenchFileOperationPathAllowed(normalized: string): void {
   const pathSegments = normalized.split("/").map((segment) => segment.toLowerCase().replace(/[. ]+$/, ""));
-  if (normalized.includes(":") || pathSegments.some((segment) => /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/u.test(segment))) {
-    throw new ValidationError({ message: "Workbench actions cannot use Windows device names or alternate data streams." });
+  if (
+    normalized.includes(":") ||
+    pathSegments.some((segment) => /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/u.test(segment))
+  ) {
+    throw new ValidationError({
+      message: "Workbench actions cannot use Windows device names or alternate data streams.",
+    });
   }
   if (pathSegments.includes(".git")) {
     throw new ValidationError({ message: "Workbench file actions cannot mutate Git metadata." });
@@ -1839,7 +1918,10 @@ function assertWorkbenchFileOperationPathAllowed(normalized: string): void {
 }
 
 function isWorkbenchLockPath(filePath: string): boolean {
-  return filePath.replaceAll("\\", "/").split("/").some((segment) => segment.toLowerCase().replace(/[. ]+$/, "") === WORKBENCH_WRITE_LOCK);
+  return filePath
+    .replaceAll("\\", "/")
+    .split("/")
+    .some((segment) => segment.toLowerCase().replace(/[. ]+$/, "") === WORKBENCH_WRITE_LOCK);
 }
 
 async function assertWorkbenchOperationParentAllowed(
@@ -2150,16 +2232,10 @@ function assertWorkbenchMutationScope(
   assertWritePathInJail(context.worktreePath, deps.config.toolPolicy.sandbox.writeJailRoots);
 }
 
-function assertWorkbenchWritableProjectScope(
-  deps: ChatWorkbenchDependencies,
-  projectRoot: string,
-): void {
-  assertExistingPathRealpathAllowed(
-    projectRoot,
-    deps.config.toolPolicy.sandbox.writeJailRoots,
-    deps.config.toolPolicy.sandbox.readOnlyRoots,
-  );
-  assertWritePathInJail(projectRoot, deps.config.toolPolicy.sandbox.writeJailRoots);
+function assertWorkbenchWritableProjectScope(deps: ChatWorkbenchDependencies, projectRoot: string): void {
+  const { writeJailRoots, readOnlyRoots } = deps.config.toolPolicy.sandbox;
+  assertExistingPathRealpathAllowed(projectRoot, writeJailRoots, readOnlyRoots);
+  assertWritePathInJail(projectRoot, writeJailRoots);
 }
 
 function assertPathInsideRoot(targetPath: string, rootDir: string, label: string): void {

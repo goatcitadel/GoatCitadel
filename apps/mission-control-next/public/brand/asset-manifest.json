@@ -1,12 +1,25 @@
 {
-  "generatedAt": "2026-07-04T02:48:33.864Z",
-  "source": "apps/mission-control-next/public/brand/source/goatcitadel-logo-source.png",
+  "sources": [
+    "apps/mission-control-next/public/brand/source/goatcitadel-logo-source.png",
+    "apps/mission-control-next/public/brand/source/goatcitadel-mark.svg",
+    "apps/mission-control-next/public/brand/source/goatcitadel-mark-tray.svg"
+  ],
   "outputs": [
     "apps/mission-control-next/public/brand/goatcitadel-lockup.png",
-    "apps/mission-control-next/public/brand/goatcitadel-mark.png",
     "apps/mission-control-next/public/brand/goatcitadel-wordmark.png",
+    "apps/mission-control-next/public/brand/goatcitadel-mark.png",
     "apps/mission-control-next/public/brand/apple-touch-icon.png",
     "apps/mission-control-next/public/brand/favicon-32x32.png",
-    "apps/mission-control-next/public/brand/favicon-16x16.png"
+    "apps/mission-control-next/public/brand/favicon-16x16.png",
+    "apps/mission-control-next/public/brand/favicon.svg",
+    "apps/mission-control-desktop/src-tauri/icons/icon.png",
+    "apps/mission-control-desktop/src-tauri/icons/icon.ico",
+    "apps/mission-control-desktop/src-tauri/icons/icon.icns",
+    "apps/mission-control-desktop/src-tauri/icons/tray.png",
+    "apps/mission-control-windows/Assets/app.ico",
+    "apps/mission-control-windows/Assets/tray.ico",
+    "apps/mission-control-windows/Assets/Square44x44Logo.png",
+    "apps/mission-control-windows/Assets/Square150x150Logo.png",
+    "apps/mission-control-windows/Assets/StoreLogo.png"
   ]
 }

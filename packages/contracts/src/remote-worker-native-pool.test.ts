@@ -40,6 +40,18 @@ describe("retained native pool transport", () => {
       expect(() => normalizeRemoteWorkerCellProvisioningHistory({ ...history, ...patch })).toThrow();
     }
   });
+  it("reuses only its own deeply frozen standalone history and revalidates caller-frozen copies", () => {
+    const frozen = (value: unknown): boolean => value === null || typeof value !== "object" ||
+      (Object.isFrozen(value) && Object.values(value).every(frozen));
+    const value = fixture(), normalized = normalizeRemoteWorkerCellProvisioningHistory(value.members[0]!.history);
+    expect(frozen(normalized)).toBe(true);
+    expect(normalizeRemoteWorkerCellProvisioningHistory(normalized)).toBe(normalized);
+    const copy = normalizeRemoteWorkerCellProvisioningHistory(Object.freeze({ ...normalized }));
+    expect(copy).not.toBe(normalized); expect(copy).toEqual(normalized);
+    expect(() => normalizeRemoteWorkerCellProvisioningHistory(Object.freeze({ ...normalized, planSha256: "0".repeat(64) }))).toThrow();
+    const pool = normalizeRemoteWorkerNativePoolSnapshot(value);
+    expect(normalizeRemoteWorkerNativePoolSnapshot(pool).members[0]!.history).toBe(pool.members[0]!.history);
+  });
   it("rejects omitted members, duplicates, noncanonical order, excess and foreign profiles", () => {
     const value = fixture(), first = value.members[0]!;
     const missing = { ...value, members: [] };

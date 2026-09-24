@@ -191,6 +191,7 @@ export async function consumePreparedAgentChatTurn(
   let assistantMessage: ChatMessageRecord | undefined;
   let trace: ChatTurnTraceRecord | undefined;
   let citations: ChatCitationRecord[] = [];
+  const storage = host.storage;
   const useDurableExecution = await shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
   let launchedDurableRunId: string | undefined;
   if (useDurableExecution) {
@@ -206,7 +207,7 @@ export async function consumePreparedAgentChatTurn(
     if (options?.returnAfterDurableAdmission) {
       // A durable parent must park before the same worker can execute its child.
       // The launch callback has already committed the exact child/watcher link.
-      const admitted = await host.storage.chatTurnTraces.get(prepared.turnId);
+      const admitted = await storage.chatTurnTraces.get(prepared.turnId);
       if (
         !launchedDurableRunId ||
         admitted.sessionId !== sessionId ||
@@ -223,7 +224,7 @@ export async function consumePreparedAgentChatTurn(
         model: admitted.model ?? input.model ?? prepared.prefs.model,
         trace: admitted,
         assistantMessage: admitted.assistantMessageId
-          ? await host.storage.chatMessages.get(admitted.assistantMessageId)
+          ? await storage.chatMessages.get(admitted.assistantMessageId)
           : undefined,
         citations: admitted.citations ?? [],
         routing: admitted.routing,
@@ -232,11 +233,11 @@ export async function consumePreparedAgentChatTurn(
   } else {
     await options?.assertDispatchOwnership?.();
     const admit = async () => {
-      await persistPreparedChatCapabilityAdmission(host.storage, prepared);
-      await persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+      await persistPreparedChatCapabilityAdmission(storage, prepared);
+      await persistInitialChatTurnTrace({ chatTurnTraces: storage.chatTurnTraces }, prepared, input);
       await activatePreparedAlternativeBranch(host, prepared);
     };
-    await host.storage.runImmediateTransaction(admit);
+    await storage.runImmediateTransaction(admit);
     options?.mutationLifecycle?.markCommitted();
   }
   // Wire the external abort signal to both the in-process turn controller

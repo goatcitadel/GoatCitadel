@@ -58,6 +58,37 @@ describe("worktree manager coverage", () => {
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(["worktree", "prune"]);
   });
 
+  it("runs every git worktree command with a scrubbed, prompt-free environment", async () => {
+    vi.stubEnv("GOATCITADEL_WT_UNIT_TOKEN", "unit-secret-value");
+    vi.stubEnv("SSH_AUTH_SOCK", "/tmp/agent.sock");
+    vi.stubEnv("GOATCITADEL_WT_UNIT_API_KEY", "operator-opted-in");
+    try {
+      const { WorktreeManager } = await import("./worktree-manager.js");
+      const manager = new WorktreeManager({
+        repoRoot: "/repo/root",
+        worktreesRoot: "/repo/worktrees",
+        spawnEnvPassthrough: ["GOATCITADEL_WT_UNIT_API_KEY"],
+      });
+
+      await manager.remove(await manager.create("wt-env", "main"));
+      await manager.prune();
+
+      expect(execFileMock).toHaveBeenCalledTimes(3);
+      for (const call of execFileMock.mock.calls) {
+        const options = call[2] as { cwd: string; env: Record<string, string> };
+        expect(options.cwd).toBe("/repo/root");
+        expect(options.env.GOATCITADEL_WT_UNIT_TOKEN).toBeUndefined();
+        expect(options.env).toMatchObject({
+          GIT_TERMINAL_PROMPT: "0",
+          SSH_AUTH_SOCK: "/tmp/agent.sock",
+          GOATCITADEL_WT_UNIT_API_KEY: "operator-opted-in",
+        });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects worktree ids that resolve outside the configured root", async () => {
     const { WorktreeManager } = await import("./worktree-manager.js");
     const manager = new WorktreeManager({

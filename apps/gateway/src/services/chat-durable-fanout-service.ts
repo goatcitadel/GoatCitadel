@@ -343,6 +343,7 @@ export class ChatDurableFanoutService {
 
   private async ensureReserved(invocation: ChatFanoutInvocationRecord): Promise<ChatFanoutInvocationRecord> {
     if (invocation.status !== "reserving") return invocation;
+    const invocations = this.host.storage.chatFanoutInvocations;
     try {
       await this.host.capabilitySystem.reserveAutonomousActivationGrantUse({
         ...buildGrantEvaluationInput({
@@ -354,10 +355,10 @@ export class ChatDurableFanoutService {
         requiredActivations: invocation.reservedActivations,
         reservationId: invocation.invocationId,
       });
-      return await this.host.storage.chatFanoutInvocations.patch(invocation.invocationId, { status: "reserved" });
+      return await invocations.patch(invocation.invocationId, { status: "reserved" });
     } catch (error) {
       const reason = `Automatic fan-out reservation was rejected before child dispatch: ${formatError(error)}`;
-      await this.host.storage.chatFanoutInvocations.patch(invocation.invocationId, {
+      await invocations.patch(invocation.invocationId, {
         status: "blocked",
         terminalReason: reason,
       });
@@ -405,11 +406,12 @@ export class ChatDurableFanoutService {
   }
 
   private async resolveActiveProject(sessionId: string, workspaceId: string): Promise<ChatProjectRecord> {
-    const binding = await this.host.storage.chatSessionProjects.get(sessionId);
+    const storage = this.host.storage;
+    const binding = await storage.chatSessionProjects.get(sessionId);
     if (!binding?.projectId) {
       throw new FanoutAuthorityError("Automatic fan-out requires an active project-bound Chat session.");
     }
-    const project = await this.host.storage.chatProjects.find(binding.projectId);
+    const project = await storage.chatProjects.find(binding.projectId);
     if (!project || project.lifecycleStatus !== "active") {
       throw new FanoutAuthorityError("Automatic fan-out requires a non-archived active project.");
     }
