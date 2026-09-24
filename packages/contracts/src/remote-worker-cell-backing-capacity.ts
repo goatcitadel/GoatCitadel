@@ -1,3 +1,4 @@
+import { hexToBytes } from "@noble/hashes/utils";
 import {
   normalizeRemoteWorkerCellProvisioningExchange, readRemoteWorkerCellProvisioningCheckpoint,
   remoteWorkerCellProvisioningHistoryMountedWorkspaceAnchor, normalizeRemoteWorkerCellProvisioningHistory,
@@ -86,7 +87,7 @@ function decodeHistoryObservation(input: unknown, exchange: RemoteWorkerCellProv
   const disk = readRemoteWorkerCellProvisioningCheckpoint(exchange.records[4]);
   const last = readRemoteWorkerCellMountedWorkspaceCheckpoint(remoteWorkerCellProvisioningHistoryMountedWorkspaceAnchor(exchange), exchange.mountedWorkspaceRecords[1]);
   const hex = (start: number, end: number) => input.slice(start * 2, end * 2);
-  const bytes = Uint8Array.from(input.match(/../gu)!, (value) => Number.parseInt(value, 16));
+  const bytes = hexToBytes(input);
   const view = new DataView(bytes.buffer);
   const integer = (offset: number) => {
     const value = Number(view.getBigUint64(offset, true));

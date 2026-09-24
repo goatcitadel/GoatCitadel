@@ -1,3 +1,4 @@
+import { hexToBytes as fromHex } from "@noble/hashes/utils";
 import { canonicalJsonString } from "./canonical-json.js";
 import { sha256BytesHex } from "./sha256.js";
 
@@ -57,9 +58,6 @@ function identity(input: unknown): string {
   const value = hex(input, 24);
   if (/^0+$/u.test(value.slice(0, 16)) || /^0+$/u.test(value.slice(16))) throw invalid();
   return value;
-}
-function fromHex(value: string): Uint8Array {
-  return Uint8Array.from(value.match(/../gu)!, (pair) => Number.parseInt(pair, 16));
 }
 function identifier(seed: RemoteWorkerCellDiskLayoutSeed, role: number): string {
   const prefix = new TextEncoder().encode("goatcitadel.native-cell-gpt.v1\0");

@@ -1,3 +1,4 @@
+import { hexToBytes } from "@noble/hashes/utils";
 import { normalizeRemoteWorkerCellDiskLayoutPlan, readRemoteWorkerCellDiskLayoutCheckpoint,
   assertRemoteWorkerCellDiskLayoutSuccessor, type RemoteWorkerCellDiskLayoutPlan,
   type RemoteWorkerCellDiskLayoutCheckpoint } from "./remote-worker-cell-disk-layout.js";
@@ -44,7 +45,7 @@ export function normalizeRemoteWorkerCellVolumeSubmission(input: unknown): Remot
   if (Reflect.ownKeys(input).length !== keys.length || keys.some((key) => !descriptors[key]?.enumerable || !("value" in descriptors[key]))) throw invalid();
   const value = input as Record<string, unknown>;
   const recordHex = hex(value.recordHex, REMOTE_WORKER_CELL_VOLUME_RECORD_BYTES);
-  const bytes = Uint8Array.from(recordHex.match(/../gu)!, (pair) => Number.parseInt(pair, 16));
+  const bytes = hexToBytes(recordHex);
   const view = new DataView(bytes.buffer), sequence = view.getUint32(8, true);
   if (value.kind !== "cell.volume.checkpoint" || sequence < 1 || sequence > 6 || view.getUint32(12, true) !== sequence ||
       recordHex.slice(0, 16) !== "474343564f4c3031" || value.expectedSequence !== sequence - 1 ||
@@ -71,7 +72,7 @@ export function normalizeRemoteWorkerCellVolumeAnchor(input: unknown): RemoteWor
 export function readRemoteWorkerCellVolumeCheckpoint(expectedAnchor: unknown, input: unknown): RemoteWorkerCellVolumeCheckpoint {
   const anchor = normalizeRemoteWorkerCellVolumeAnchor(expectedAnchor), plan = anchor.layoutPlan;
   const recordHex = hex(input, REMOTE_WORKER_CELL_VOLUME_RECORD_BYTES);
-  const bytes = Uint8Array.from(recordHex.match(/../gu)!, (pair) => Number.parseInt(pair, 16));
+  const bytes = hexToBytes(recordHex);
   const view = new DataView(bytes.buffer);
   const at = (offset: number, size: number) => recordHex.slice(offset * 2, (offset + size) * 2);
   const sequence = view.getUint32(8, true), previousRecordSha256 = at(16, 32), recordSha256 = at(992, 32);

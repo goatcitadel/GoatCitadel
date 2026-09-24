@@ -1,3 +1,4 @@
+import { hexToBytes } from "@noble/hashes/utils";
 import { canonicalJsonString } from "./canonical-json.js";
 import { sha256BytesHex, sha256Hex } from "./sha256.js";
 import { normalizeRemoteWorkerCellSid as sid } from "./remote-worker-cell-sid.js";
@@ -134,7 +135,7 @@ export function remoteWorkerCellProvisioningBindingSha256(input: RemoteWorkerCel
  * metadata consistency only; the native owner must independently verify OS state. */
 export function readRemoteWorkerCellProvisioningCheckpoint(input: unknown): RemoteWorkerCellProvisioningCheckpoint {
   const recordHex = hex(input, REMOTE_WORKER_CELL_PROVISIONING_RECORD_BYTES);
-  const bytes = Uint8Array.from(recordHex.match(/../gu)!, (pair) => Number.parseInt(pair, 16));
+  const bytes = hexToBytes(recordHex);
   const view = new DataView(bytes.buffer);
   const sequence = view.getUint32(8, true);
   if (recordHex.slice(0, 16) !== "474343454c4c5031" || sequence < 1 || sequence > 5 ||
@@ -198,6 +199,7 @@ export type RemoteWorkerCellProvisioningSubmission =
 // Reuse only projections deeply normalized and frozen by this module. Untrusted
 // wire objects, copies and caller-frozen values still undergo every check.
 const verifiedExchanges = new WeakSet<RemoteWorkerCellProvisioningExchange>();
+const verifiedHistories = new WeakSet<RemoteWorkerCellProvisioningHistory>();
 
 /** Private, bounded projection. Provisioning claims and credential fences remain
  * Gateway-owned; only the canonical plan and exact checkpoint bytes cross out. */
@@ -303,6 +305,7 @@ export function normalizeRemoteWorkerCellProvisioningExchange(input: unknown): R
 }
 
 export function normalizeRemoteWorkerCellProvisioningHistory(input: unknown): RemoteWorkerCellProvisioningHistory {
+  if (input && typeof input === "object" && verifiedHistories.has(input as RemoteWorkerCellProvisioningHistory)) return input as RemoteWorkerCellProvisioningHistory;
   const suppliedLayout = input !== null && typeof input === "object" && Object.hasOwn(input, "diskLayoutPlan");
   const suppliedVolume = input !== null && typeof input === "object" && Object.hasOwn(input, "volumeRecords");
   const suppliedFormat = input !== null && typeof input === "object" && Object.hasOwn(input, "formatRecords");
@@ -422,13 +425,15 @@ export function normalizeRemoteWorkerCellProvisioningHistory(input: unknown): Re
       mountedWorkspaceRecords.push(checkpoint.recordHex); priorWorkspace = checkpoint;
     }
   }
-  return Object.freeze({
+  const history: RemoteWorkerCellProvisioningHistory = Object.freeze({
     plan, planSha256, records: Object.freeze(records), ...(diskLayoutPlan ? { diskLayoutPlan } : {}),
     ...(volumeRecords.length ? { volumeRecords: Object.freeze(volumeRecords) } : {}),
     ...(formatRecords.length ? { formatRecords: Object.freeze(formatRecords) } : {}),
     ...(protectionRecords.length ? { protectionRecords: Object.freeze(protectionRecords) } : {}),
     ...(mountRecords.length ? { mountRecords: Object.freeze(mountRecords) } : {}),
     ...(mountedWorkspaceRecords.length ? { mountedWorkspaceRecords: Object.freeze(mountedWorkspaceRecords) } : {}) });
+  verifiedHistories.add(history);
+  return history;
 }
 
 function volumeAnchor(layoutPlan: RemoteWorkerCellDiskLayoutPlan, disk: RemoteWorkerCellProvisioningCheckpoint): RemoteWorkerCellVolumeAnchor {
