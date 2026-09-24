@@ -326,14 +326,56 @@ describe("ThreadedComposer", () => {
     expect(onSendRetainedPromptAsChat).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces route preflight failures before send", () => {
+  it("surfaces route preflight failures once, beside the disabled Send", () => {
     const markup = buildMarkup({
       canSend: false,
       routePreflightError: "No active provider configured.",
     });
 
-    expect(markup).toContain("Route blocked");
-    expect(markup).toContain("No active provider configured.");
+    const visibleText = markup.replace(/<[^>]+>/g, " ");
+    expect(visibleText.split("No active provider configured.")).toHaveLength(2);
+    expect(markup).not.toContain("Route blocked");
+    expect(markup).not.toContain('role="alert"');
+  });
+
+  it("lets the approval panel own a waiting turn and humanizes other recovery states", () => {
+    const waiting = buildMarkup({
+      pendingApproval: {
+        approvalId: "approval-1",
+        toolName: "shell.exec",
+        reason: "Waiting for verification approval.",
+      },
+      selectedTurn: { turnId: "turn-1", trace: { status: "waiting_for_approval" } },
+      selectedTurnRecovery: { summary: "Review the pending approval so the turn can continue.", action: "none" },
+    });
+    expect(waiting).not.toContain("Review the pending approval so the turn can continue.");
+    expect(waiting).not.toContain("waiting_for_approval");
+
+    const interrupted = buildMarkup({
+      selectedTurn: { turnId: "turn-2", trace: { status: "waiting_for_user_input" } },
+      selectedTurnRecovery: { summary: "Answer the pending question to continue.", action: "none" },
+    });
+    expect(interrupted).toContain("Answer the pending question to continue.");
+    expect(interrupted).toContain("Waiting for your answer");
+    expect(interrupted).not.toContain("waiting_for_user_input");
+  });
+
+  it("explains a chat with no connected model without a dead Configure destination", async () => {
+    const renderer = await renderComposer({
+      canSend: false,
+      providerOptions: [{ providerId: "llamacpp", label: "llama.cpp", models: ["gemma-4-local"] }],
+      routePreflight: {
+        selectionSource: "global",
+        blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+      },
+    });
+    const send = renderer.root
+      .findAllByType("button")
+      .find((button) => button.props.className === "mc-next-composer-primary")!;
+    const hint = renderer.root.findByProps({ id: send.props["aria-describedby"] });
+    expect(collectText(hint)).toBe("Sending is unavailable: No model is connected yet.");
+    expect(String(hint.props.className).split(" ")).toContain("mc-next-composer-send-block");
+    expect(collectText(renderer.root)).not.toContain("Configure");
   });
 
   it("renders the composer with the default chat affordances when planning mode is off", () => {
@@ -919,7 +961,9 @@ describe("ThreadedComposer", () => {
     });
     const paletteText = collectText(renderer.root).replace(/\s+/gu, " ");
     expect(renderer.root.findByProps({ role: "dialog", "aria-label": "Command Palette" })).toBeTruthy();
-    expect(paletteText).toContain("Model · Available");
+    expect(findButton(renderer.root, "Close").props["aria-label"]).toBe("Close Chat command palette");
+    expect(paletteText).toContain("Model");
+    expect(paletteText).not.toContain("Model · Available");
     expect(paletteText).toContain("Workspace files unavailable; other sources remain available.");
 
     await act(async () => {
@@ -932,6 +976,184 @@ describe("ThreadedComposer", () => {
     expect(onIndexChange).toHaveBeenCalledWith(0);
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ key: "model-openai-test" }));
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("labels palette rows only with source and availability that add information", async () => {
+    const renderer = await renderComposer({
+      commandSuggestions: [
+        {
+          key: "cmd-model",
+          command: "/model",
+          description: "Override provider/model for this session.",
+          applyValue: "/model ",
+          sourceLabel: "Command",
+          availabilityLabel: "Available",
+        },
+        {
+          key: "model-local",
+          command: "gemma-4-local",
+          description: "Use gemma-4-local from llama.cpp.",
+          applyValue: "/model llamacpp/gemma-4-local",
+          sourceLabel: "Model",
+          availabilityLabel: "Local endpoint",
+        },
+        {
+          key: "agent-reviewer",
+          command: "@reviewer",
+          description: "Code reviewer preset.",
+          applyValue: "@reviewer",
+          sourceLabel: "Agent preset",
+          availabilityLabel: "Available",
+        },
+      ],
+      commandIndex: 0,
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "",
+        loading: false,
+        failures: [],
+        onOpen: vi.fn(),
+        onClose: vi.fn(),
+        onQueryChange: vi.fn(),
+        onIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+      },
+    });
+    const rowMeta = (key: string) => {
+      const row = renderer.root.findAll(
+        (node) => node.props.role === "option" && String(node.props.id).endsWith(key),
+      )[0]!;
+      return row.findAllByType("small").map((node) => collectText(node).replace(/\s+/gu, " ").trim());
+    };
+    expect(rowMeta("cmd-model")).toEqual([]);
+    expect(rowMeta("model-local")).toEqual(["Model · Local endpoint"]);
+    expect(rowMeta("agent-reviewer")).toEqual(["Agent preset"]);
+  });
+
+  it("keeps palette keyboard selection and the active option in sync", async () => {
+    const onIndexChange = vi.fn();
+    const renderer = await renderComposer({
+      commandSuggestions: ["first", "second", "third"].map((key) => ({
+        key,
+        command: `/${key}`,
+        description: `${key} command`,
+        applyValue: `/${key}`,
+      })),
+      commandIndex: 1,
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "",
+        loading: false,
+        failures: [],
+        onOpen: vi.fn(),
+        onClose: vi.fn(),
+        onQueryChange: vi.fn(),
+        onIndexChange,
+        onSelect: vi.fn(),
+      },
+    });
+    const options = renderer.root.findAll((node) => node.props.role === "option");
+    expect(options.map((option) => option.props["aria-selected"])).toEqual([false, true, false]);
+    expect(String(options[1]!.props.className)).toContain("active");
+    const search = renderer.root.findByProps({
+      placeholder: "Commands, models, agents, skills, projects, files, URLs…",
+    });
+    expect(search.props["aria-activedescendant"]).toBe(options[1]!.props.id);
+    await act(async () => {
+      for (const key of ["ArrowUp", "ArrowDown", "Home", "End"])
+        search.props.onKeyDown({ key, preventDefault: vi.fn() });
+    });
+    expect(onIndexChange.mock.calls).toEqual([[0], [2], [0], [2]]);
+  });
+
+  it("keeps drafting enabled while explaining a provider-blocked Send action", async () => {
+    const renderer = await renderComposer({
+      draft: "Keep this draft while setting up a provider.",
+      canSend: false,
+      routePreflightError: "No provider is configured.",
+    });
+    const composer = renderer.root.findByProps({ "aria-label": "Message composer" });
+    const send = renderer.root.findAllByType("button").find((button) => button.props.className === "mc-next-composer-primary")!;
+    expect(composer.props.disabled).not.toBe(true);
+    expect(composer.props.value).toBe("Keep this draft while setting up a provider.");
+    expect(send.props.disabled).toBe(true);
+    expect(send.props["aria-describedby"]).toBeTruthy();
+    expect(collectText(renderer.root)).toContain("Sending is unavailable:");
+    expect(collectText(renderer.root)).toContain("No provider is configured.");
+  });
+
+  it("closes the Chat palette with Escape or its visible control and restores composer focus", async () => {
+    const focus = vi.fn();
+    const onClose = vi.fn();
+    const palette = {
+      enabled: true,
+      globalOpen: true,
+      query: "",
+      loading: false,
+      failures: [],
+      onOpen: vi.fn(),
+      onClose,
+      onQueryChange: vi.fn(),
+      onIndexChange: vi.fn(),
+      onSelect: vi.fn(),
+    };
+    const composerRef = React.createRef<HTMLTextAreaElement>();
+    const props = buildProps({ composerPalette: palette, composerRef });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ThreadedComposer props={props} />);
+    });
+
+    const closeButton = renderer.root.findByProps({ "aria-label": "Close Chat command palette" });
+    await click(closeButton);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    (composerRef as any).current = { focus };
+    await act(async () => {
+      renderer.update(<ThreadedComposer props={{ ...props, composerPalette: { ...palette, globalOpen: false } }} />);
+    });
+    await act(async () => new Promise((resolve) => globalThis.setTimeout(resolve, 0)));
+    expect(focus).toHaveBeenCalled();
+
+    const reopenProps = { ...props, composerPalette: palette };
+    await act(async () => renderer.update(<ThreadedComposer props={reopenProps} />));
+    const dialog = renderer.root.findByProps({ role: "dialog", "aria-label": "Command Palette" });
+    await act(async () => {
+      dialog.props.onKeyDown({ key: "Escape", preventDefault: vi.fn() });
+    });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps Tab navigation within the open Chat command palette", async () => {
+    vi.stubGlobal("document", { activeElement: null });
+    const renderer = await renderComposer({
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "",
+        loading: false,
+        failures: [],
+        onOpen: vi.fn(),
+        onClose: vi.fn(),
+        onQueryChange: vi.fn(),
+        onIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+      },
+    });
+    const first = { focus: vi.fn(), getAttribute: () => null };
+    const last = { focus: vi.fn(), getAttribute: () => null };
+    (document as any).activeElement = last;
+    const preventDefault = vi.fn();
+    const dialog = renderer.root.findByProps({ role: "dialog", "aria-label": "Command Palette" });
+    await act(async () => dialog.props.onKeyDown({
+      key: "Tab",
+      shiftKey: false,
+      preventDefault,
+      currentTarget: { querySelectorAll: () => [first, last], contains: (node: unknown) => node === first || node === last },
+    }));
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(first.focus).toHaveBeenCalledTimes(1);
   });
 
   it("confirms project switches before applying the palette action", async () => {
@@ -1699,33 +1921,43 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     expect(markup).not.toContain("mc-next-composer-external-strip");
   });
 
-  it("renders content-free read-only chips with provenance, no raw JSON, and no full hash", () => {
+  it("keeps an empty source strip hidden until the attach action is opened and closes cleanly", async () => {
+    const controls = externalControls({ attachments: [], candidates: [], candidatesSupported: true });
+    const renderer = await renderComposer({ externalSourceControls: controls });
+    expect(renderer.root.findAllByProps({ className: "mc-next-composer-external-strip" })).toHaveLength(0);
+
+    await click(findButton(renderer.root, "Attach imported item"));
+    expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(1);
+    expect(collectText(renderer.root)).toContain("No read-only sources are attached to this chat yet.");
+    await click(findButton(renderer.root, "Close"));
+
+    expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "mc-next-composer-external-strip" })).toHaveLength(0);
+    renderer.unmount();
+  });
+
+  it("keeps technical source bindings out of the collapsed source summary", () => {
     const markup = buildMarkup({
       externalSourceControls: externalControls({ selectedAttachmentIds: ["attachment-1"] }),
     });
 
-    expect(markup).toContain("External sources");
-    expect(markup).toContain("item-attachment-1");
-    expect(markup).toContain("Read-only");
+    expect(markup).toContain("Sources for this turn");
     expect(markup).toContain("1 selected for the next turn");
-    // Truncated digest only — never the full 64-hex artifact hash.
-    expect(markup).toContain(FULL_SHA.slice(0, 12));
+    expect(markup).not.toContain("item-attachment-1");
     expect(markup).not.toContain(FULL_SHA);
-    // Semantic chips, not a raw JSON dump, and no transcript content.
     expect(markup).not.toContain('"attachmentId"');
     expect(markup).not.toContain('"normalizedArtifactSha256"');
-    // Provenance chain is exposed as an accessible title.
-    expect(markup).toContain("Source source-1 · Import import-1 · Item item-attachment-1");
   });
 
   it("toggles explicit per-turn selection through an accessible checkbox and clears it", async () => {
     const controls = externalControls({ selectedAttachmentIds: ["attachment-1"] });
     const renderer = await renderComposer({ externalSourceControls: controls });
+    await click(findButton(renderer.root, "Choose sources"));
 
     const checkbox = renderer.root.find(
       (node) =>
         node.type === "input" &&
-        node.props["aria-label"] === "Include external source item-attachment-1 in the next turn",
+        node.props["aria-label"] === "Include Read-only source in the next turn",
     );
     expect(checkbox.props.checked).toBe(true);
     await act(async () => {
@@ -1735,28 +1967,32 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
 
     await click(findButton(renderer.root, "Clear selection"));
     expect(controls.onClearSelection).toHaveBeenCalledTimes(1);
+    await click(findButton(renderer.root, "Add to chat"));
+    expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(0);
     renderer.unmount();
   });
 
   it("keeps detach and knowledge-copy disabled while the incarnation is missing, with an honest hint", async () => {
     const controls = externalControls({ canMutate: false });
     const renderer = await renderComposer({ externalSourceControls: controls });
+    await click(findButton(renderer.root, "Choose sources"));
 
     const detach = findButton(renderer.root, "Detach");
     const knowledge = findButton(renderer.root, "Request knowledge copy");
     expect(detach.props.disabled).toBe(true);
     expect(knowledge.props.disabled).toBe(true);
-    const markup = buildMarkup({ externalSourceControls: externalControls({ canMutate: false }) });
-    expect(markup).toContain("stay disabled until the server provides the live session incarnation");
-    // The live posture (C4b activation) renders no disabled-mutation hint at all.
-    const liveMarkup = buildMarkup({ externalSourceControls: externalControls({ canMutate: true }) });
-    expect(liveMarkup).not.toContain("stay disabled until");
+    expect(collectText(renderer.root)).toContain("Chat is still preparing this session");
+    const liveRenderer = await renderComposer({ externalSourceControls: externalControls({ canMutate: true }) });
+    await click(findButton(liveRenderer.root, "Choose sources"));
+    expect(collectText(liveRenderer.root)).not.toContain("Chat is still preparing");
+    liveRenderer.unmount();
     renderer.unmount();
   });
 
   it("routes detach and governed knowledge-copy actions to the host controls", async () => {
     const controls = externalControls();
     const renderer = await renderComposer({ externalSourceControls: controls });
+    await click(findButton(renderer.root, "Choose sources"));
 
     await click(findButton(renderer.root, "Request knowledge copy"));
     expect(controls.onRequestKnowledgeSnapshot).toHaveBeenCalledWith("attachment-1");
@@ -1773,18 +2009,14 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     expect(
       renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
     ).toHaveLength(0);
-    await click(findButton(renderer.root, "Attach imported item"));
-    const attachPicker = findButton(renderer.root, "Close picker");
-    expect(attachPicker.props["aria-expanded"]).toBe(true);
-    expect(attachPicker.props["aria-controls"]).toBeTruthy();
-    expect(renderer.root.findByProps({ id: attachPicker.props["aria-controls"] }).props.className).toBe(
-      "mc-next-composer-external-attach-form",
-    );
-    expect(collectText(renderer.root)).toContain("Choose a verified applied import");
+    await click(findButton(renderer.root, "Choose sources"));
+    const attachDetails = renderer.root.findAll((node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach")[0]!;
+    await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
+    const attachForm = renderer.root.findAll((node) => node.props.className === "mc-next-composer-external-attach-form")[0]!;
+    expect(attachForm.props.id).toContain("-attach-form");
+    expect(collectText(renderer.root)).toContain("First attach a verified import");
     expect(collectText(renderer.root)).toContain("Imported Codex sessions");
-    expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(
-      0,
-    );
+    expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(0);
     await click(findButton(renderer.root, "Attach read-only"));
     expect(controls.onAttach).toHaveBeenCalledWith({
       sourceId: "source-2",
@@ -1799,10 +2031,41 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
   it("shows an honest unavailable picker state and keeps Library as the recovery route", async () => {
     const controls = externalControls({ candidates: [], candidatesSupported: false });
     const renderer = await renderComposer({ externalSourceControls: controls });
-    await click(findButton(renderer.root, "Attach imported item"));
-    expect(collectText(renderer.root)).toContain("does not expose the governed import picker yet");
+    await click(findButton(renderer.root, "Choose sources"));
+    const attachDetails = renderer.root.findAll((node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach")[0]!;
+    await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
+    expect(collectText(renderer.root)).toContain("Verified import selection is unavailable here");
     await click(findButton(renderer.root, "Refresh imports"));
     expect(controls.onReload).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+  });
+
+  it("makes an attached import selectable after the Gateway refresh returns it", async () => {
+    const controls = externalControls({ attachments: [] });
+    const renderer = await renderComposer({ externalSourceControls: controls });
+    await click(findButton(renderer.root, "Choose sources"));
+    const attachDetails = renderer.root.findAll((node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach")[0]!;
+    await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
+    await click(findButton(renderer.root, "Attach read-only"));
+    expect(controls.onAttach).toHaveBeenCalledWith({ sourceId: "source-2", importId: "import-2", itemId: "item-picker-1" });
+
+    const confirmed = externalControls({
+      attachments: [externalAttachment("attachment-confirmed", {
+        sourceId: "source-2",
+        importId: "import-2",
+        itemId: "item-picker-1",
+      })],
+      candidates: [],
+    });
+    await act(async () => {
+      renderer.update(<ThreadedComposer props={buildProps({ externalSourceControls: confirmed })} />);
+    });
+    const sourceCheckbox = renderer.root.find((node) =>
+      node.type === "input" && node.props["aria-label"] === "Include Imported Codex sessions in the next turn",
+    );
+    expect(collectText(renderer.root)).toContain("Imported");
+    await act(async () => sourceCheckbox.props.onChange({ target: { checked: true } }));
+    expect(confirmed.onToggleSelect).toHaveBeenCalledWith("attachment-confirmed");
     renderer.unmount();
   });
 

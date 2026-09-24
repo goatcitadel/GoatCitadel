@@ -45,6 +45,38 @@ describe("FocusedActiveWorkSummary", () => {
       act(() => renderer.unmount());
     },
   );
+  it("defers the approval decision to the composer panel instead of repeating it", () => {
+    const turn = failedFolderTurn();
+    turn.trace.status = "waiting_for_approval";
+    turn.trace.failure = undefined;
+    const state = deriveFocusedActiveWorkState({
+      turn,
+      streamStatus: "idle",
+      pendingApproval: { approvalId: "approval-1", reason: "Waiting for verification approval." },
+    });
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <FocusedActiveWorkSummary
+          state={state}
+          approvalActionsInComposer
+          onFocusComposer={vi.fn()}
+          onFocusPendingInput={vi.fn()}
+          onOpenActivity={vi.fn()}
+          onOpenApprovals={vi.fn()}
+          onRetry={vi.fn()}
+          onStop={vi.fn()}
+        />,
+      );
+    });
+    const text = JSON.stringify(renderer.toJSON());
+    expect(buttonLabels(renderer)).toEqual(["Stop", "View activity"]);
+    expect(text).toContain("Waiting for your approval");
+    expect(text).toContain("Approve or deny it in the approval panel below.");
+    expect(text).not.toContain("Waiting for verification approval.");
+    act(() => renderer.unmount());
+  });
+
   it("turns a missing project folder into a human-first recovery path", () => {
     const state = deriveFocusedActiveWorkState({
       turn: failedFolderTurn(),

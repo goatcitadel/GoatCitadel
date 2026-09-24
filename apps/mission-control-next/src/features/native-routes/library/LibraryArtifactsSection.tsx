@@ -102,8 +102,8 @@ export function LibraryArtifactsSection({
           subtitle="Actual artifact records, not just a folder listing."
           stats={[
             { label: "Visible", value: String(visibleArtifacts.length) },
-            { label: "Citadel", value: activeCitadelId ?? "legacy" },
-            { label: "Workspace", value: activeWorkspaceId },
+            { label: "Citadel", value: activeCitadelId ?? "legacy", technical: true },
+            { label: "Workspace", value: activeWorkspaceId, technical: true },
             { label: "Project", value: route.projectId ? "Scoped" : "All" },
           ]}
         >

@@ -24,6 +24,8 @@ export function ThreadedSurfaceRoute({
   onCopyTrustReport,
   onOpenStartHere,
   onOpenPersonalitiesSettings,
+  onOpenProviderSettings,
+  onOpenLocalAiSettings,
   onOpenLibraryArtifacts,
   onOpenLibraryImports,
   onOpenOpsRuntime,
@@ -46,6 +48,8 @@ export function ThreadedSurfaceRoute({
   onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
+  onOpenProviderSettings?: () => void;
+  onOpenLocalAiSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
   onOpenLibraryImports?: () => void;
   onOpenOpsRuntime?: () => void;
@@ -72,6 +76,8 @@ export function ThreadedSurfaceRoute({
       onOpenApprovals={onOpenApprovals}
       onOpenStartHere={onOpenStartHere}
       onOpenPersonalitiesSettings={onOpenPersonalitiesSettings}
+      onOpenProviderSettings={onOpenProviderSettings}
+      onOpenLocalAiSettings={onOpenLocalAiSettings}
       onOpenLibraryArtifacts={onOpenLibraryArtifacts}
       onOpenLibraryImports={onOpenLibraryImports}
       onOpenOpsRuntime={onOpenOpsRuntime}

@@ -157,9 +157,10 @@ export function WorkspacesSection({ activeCitadelId, activeCitadelName, activeWo
     const submitted = editForm;
     return run(async () => {
       try {
-        const updated = await updateWorkspace(selectedWorkspace.workspaceId, { expectedRevision: workspaceEdit.baseRevision as number, name: submitted.name.trim() || undefined, description: submitted.description.trim() || undefined, slug: submitted.slug.trim() || undefined });
+        const description = submitted.description.trim();
+        const updated = await updateWorkspace(selectedWorkspace.workspaceId, { expectedRevision: workspaceEdit.baseRevision as number, name: submitted.name.trim() || undefined, description, slug: submitted.slug.trim() || undefined });
         const saved = workspaceEdit.acceptSaved(createWorkspaceEditDraft(updated), updated.revision, submitted);
-        setNotice({ tone: "success", message: "Workspace " + updated.name + " updated." }); await reload(); return saved;
+        setNotice({ tone: "success", message: description ? "Workspace " + updated.name + " updated." : "Workspace " + updated.name + " updated. Description cleared." }); await reload(); return saved;
       } catch (cause) {
         if (isApiRequestError(cause) && cause.status === 409) {
           await reload(); setNotice({ tone: "warning", message: "This workspace changed elsewhere. Your draft is preserved. Review the current revision before applying it." }); return false;

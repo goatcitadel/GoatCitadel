@@ -208,7 +208,7 @@ export async function resolveChatRouteDescriptor(
       fallbackPolicy: "off",
       fallbackResult: "not_applicable",
       runtimeClass: "unknown",
-      blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+      blockedReason: "No model provider is configured yet. Connect one in Settings → Providers & models first.",
     };
   }
 

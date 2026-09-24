@@ -20,6 +20,7 @@ import {
   getAssistantPendingLabel,
   getRecoveryStripLabel,
   getTraceTone,
+  humanizeEnum,
   parseTimestamp,
   renderSuggestionSummary,
   summarizeDelegationSteps,
@@ -473,17 +474,26 @@ export function isRoutineTurnOutcome(turn: ChatThreadTurnRecord): boolean {
  * control instead: "can I verify this answer?" and "what happened inside this run?"
  * are different questions and should not share one summary line.
  */
-export function buildTurnActivityChips(turn: ChatThreadTurnRecord, durableRunId?: string): string[] {
+export function buildTurnActivityChips(turn: ChatThreadTurnRecord): string[] {
   const toolCount = turn.toolRuns.length;
   return [
-    isRoutineTurnOutcome(turn) ? null : turn.trace.status,
+    isRoutineTurnOutcome(turn) ? null : humanizeEnum(turn.trace.status).toLowerCase(),
     toolCount > 0 ? `${toolCount} step${toolCount === 1 ? "" : "s"}` : null,
+    turn.trace.orchestration ? "orchestrated" : null,
+  ].filter((chip): chip is string => Boolean(chip));
+}
+
+/**
+ * Opaque identifiers and machine failure codes. They stay in the DOM for the
+ * technical-details preference instead of competing with the plain status.
+ */
+export function buildTurnTechnicalActivityChips(turn: ChatThreadTurnRecord, durableRunId?: string): string[] {
+  return [
     durableRunId ? `Run ${formatCompactEvidenceId(durableRunId)}` : null,
     turn.trace.failure &&
     !(turn.trace.status === "cancelled" && turn.trace.failure.failureClass === "approval_required")
       ? turn.trace.failure.failureClass
       : null,
-    turn.trace.orchestration ? "orchestrated" : null,
   ].filter((chip): chip is string => Boolean(chip));
 }
 
@@ -542,7 +552,8 @@ function TurnEvidenceSummary({
     userToggledRef.current = false;
     setOpen(expandedByDefaultRef.current);
   }, [turn.turnId]);
-  const summaryChips = buildTurnActivityChips(turn, durableRunId);
+  const summaryChips = buildTurnActivityChips(turn);
+  const technicalChips = buildTurnTechnicalActivityChips(turn, durableRunId);
 
   const sourceCount = turn.citations.length;
 
@@ -571,6 +582,11 @@ function TurnEvidenceSummary({
               {chip}
             </span>
           ))}
+          {technicalChips.map((chip, index) => (
+            <span key={`technical-${chip}-${index}`} className="mc-next-turn-evidence-chip mc-next-technical-detail">
+              {chip}
+            </span>
+          ))}
         </summary>
         <div className="mc-next-turn-evidence-body" id={evidenceBodyId}>
           <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
@@ -590,17 +606,21 @@ function TurnEvidenceSummary({
             ) : null}
             {showOperationalDetails ? (
               <>
-                <PrimitiveStatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</PrimitiveStatusChip>
+                <PrimitiveStatusChip tone={getTraceTone(turn.trace)}>
+                  {humanizeEnum(turn.trace.status).toLowerCase()}
+                </PrimitiveStatusChip>
                 {recoveryLabel ? (
                   <span>{recoveryLabel}</span>
                 ) : turn.trace.failure ? (
-                  <span>{turn.trace.failure.failureClass}</span>
+                  <span className="mc-next-technical-detail">{turn.trace.failure.failureClass}</span>
                 ) : null}
                 {routingSummary.map((item, index) => (
                   <span key={index}>{item}</span>
                 ))}
                 {durableRunId ? (
-                  <span className="mc-next-thread-activity-chip">Run {formatCompactEvidenceId(durableRunId)}</span>
+                  <span className="mc-next-thread-activity-chip mc-next-technical-detail">
+                    Run {formatCompactEvidenceId(durableRunId)}
+                  </span>
                 ) : null}
                 {turn.trace.guidance?.truncated ? (
                   <span className="mc-next-thread-activity-chip">context trimmed</span>

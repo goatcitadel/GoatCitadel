@@ -691,7 +691,7 @@ function ProjectsWorkspace({
       metrics={[
         { label: "Projects", value: String(state.projects.length) },
         { label: "Project sessions", value: String(totalProjectSessions) },
-        { label: "Citadel", value: activeCitadelId ?? "legacy" },
+        { label: "Citadel", value: activeCitadelId ?? "legacy", technical: true },
       ]}
       actions={editor ? <NativeButton variant="ghost" onClick={() => leave.request(() => setEditor(null))}>{(editor === "create" ? creation : editing).isDirty ? "Keep draft and close" : "Close editor"}</NativeButton> : routedProject ? <><NativeButton variant="ghost" onClick={() => navigate({ area: "projects", theme: route.theme })}>All projects</NativeButton><NativeButton variant="outline" onClick={() => setEditor("edit")}>{editing.isDirty ? "Resume edit · Unsaved" : "Edit project"}</NativeButton></> : <NativeButton onClick={handleFocusCreateProject}><FolderPlus size={16} />{creation.isDirty ? "Resume new project" : "New project"}</NativeButton>}
     >

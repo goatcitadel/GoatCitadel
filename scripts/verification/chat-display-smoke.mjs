@@ -84,11 +84,12 @@ async function prepare(page, { stub }) {
   await composer.fill("DISPLAY_SMOKE_TOOL: use fs.read to read DISPLAY_SMOKE_MISSING_FILE.txt and explain if it is missing.");
   await send.click();
   // Exercise the fixture's real approval instead of weakening its read policy.
-  await page.getByRole("button", { name: "Review approval", exact: true }).click();
-  await page.getByRole("button", { name: "Approve now", exact: true }).click();
-  await page.getByRole("button", { name: "Approve", exact: true }).click();
-  await page.getByRole("button", { name: "Approve", exact: true }).waitFor({ state: "hidden" });
-  await page.getByRole("link", { name: "Open live session", exact: true }).click();
+  // The composer approval panel is Chat's single decision surface. Deciding
+  // there keeps this page loaded: its record link is a full page load, which
+  // would drop the fixture's blocked-prompt opt-in and live stream state.
+  const allowOnce = page.getByRole("button", { name: "Allow once", exact: true });
+  await allowOnce.click();
+  await allowOnce.waitFor({ state: "hidden" });
   await page.locator(".mc-next-thread-scroll").evaluate(node => { node.scrollTop = node.scrollHeight; });
   try {
     await page.getByText("An approved tool action could not be completed. Open Activity to inspect the recovery details.", { exact: true }).waitFor();
@@ -100,7 +101,12 @@ async function prepare(page, { stub }) {
     throw error;
   }
   await send.waitFor({ state: "visible" });
-  await page.locator(".mc-next-turn-evidence-summary").filter({ hasText: "tool_failed" }).locator("summary").click();
+  // Raw failure codes are technical detail now; find the failed turn by its prompt.
+  await page
+    .locator(".mc-next-thread-turn")
+    .filter({ hasText: "DISPLAY_SMOKE_TOOL:" })
+    .locator(".mc-next-turn-evidence-summary > summary")
+    .click();
   const failureRow = page.getByRole("button", { name: "Open execution detail for fs.read", exact: true });
   await failureRow.waitFor();
   assert.match(await failureRow.innerText(), /failed/i, "failed tool remains visible with its truthful failure answer");
@@ -111,14 +117,12 @@ async function prepare(page, { stub }) {
   ]);
   await composer.fill("DISPLAY_SMOKE_DENY: use fs.read to inspect DISPLAY_SMOKE_DENIED.txt.");
   await send.click();
-  await page.getByRole("button", { name: "Review approval", exact: true }).click();
-  await page.getByRole("button", { name: "Reject", exact: true }).waitFor();
+  const deny = page.getByRole("button", { name: "Deny", exact: true });
+  await deny.waitFor();
   const streamingRequests = () => stub.requestSummaries().filter(request => request.stream === true).length;
   const requestsAtDenial = streamingRequests();
-  await page.getByRole("button", { name: "Reject", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm rejection", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm rejection", exact: true }).waitFor({ state: "hidden" });
-  await page.getByRole("link", { name: "Open live session", exact: true }).click();
+  await deny.click();
+  await deny.waitFor({ state: "hidden" });
   await page.locator(".mc-next-thread-scroll").evaluate(node => { node.scrollTop = node.scrollHeight; });
   await page.getByText("You denied the action. This turn will not start any more tools or request another approval. Send a new message to continue.", { exact: true }).waitFor();
   assert.equal(streamingRequests(), requestsAtDenial, "denial must finalize without another model or alternative tool request");
@@ -180,12 +184,13 @@ async function prepare(page, { stub }) {
   stub.replaceDispatchPlan([{ type: "tool_call", name: "fs_read", arguments: { path: "DISPLAY_SMOKE_STOP_PENDING.txt" } }]);
   await composer.fill("DISPLAY_SMOKE_STOP_PENDING: use fs.read to inspect DISPLAY_SMOKE_STOP_PENDING.txt.");
   await send.click();
-  await page.getByRole("button", { name: "Review approval", exact: true }).waitFor();
+  // The composer approval panel (not a second strip button) marks the wait.
+  await page.getByRole("button", { name: "Allow once", exact: true }).waitFor();
   await reloadFixturePage(page);
-  await page.getByRole("button", { name: "Review approval", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Allow once", exact: true }).waitFor();
   const stoppedWaiting = await stopAndRead("DISPLAY_SMOKE_STOP_PENDING:");
   assert.equal(stoppedWaiting.trace.toolRuns[0].result.approvalOutcome, "withdrawn");
-  await page.getByRole("button", { name: "Review approval", exact: true }).waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Allow once", exact: true }).waitFor({ state: "hidden" });
 
   // Only this freshly created fixture session is changed. Exercise the real
   // user-input prompt and durable delegation service, with one specialist.

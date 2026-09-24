@@ -25,7 +25,10 @@ describe("ChatModelPicker", () => {
   it("disables provider and model controls when no providers are available", () => {
     const renderer = create(<ChatModelPicker providers={[]} onChangeProvider={vi.fn()} onChangeModel={vi.fn()} />);
 
-    expect(findText(renderer.toJSON(), "No provider selected yet. Connect a provider in Configure")).toBe(true);
+    expect(findText(renderer.toJSON(), "No provider selected yet. Connect one in Settings → Providers & models")).toBe(
+      true,
+    );
+    expect(findText(renderer.toJSON(), "Configure")).toBe(false);
     expect(renderer.root.findByType("select").props.disabled).toBe(true);
     expect(renderer.root.findByType("button").props.disabled).toBe(true);
   });

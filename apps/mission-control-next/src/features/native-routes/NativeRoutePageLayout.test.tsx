@@ -133,6 +133,79 @@ describe("NativeRoutePageLayout", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "runtime" });
   });
 
+  it("shows the page description and status metrics inline and keeps technical metrics collapsible", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(
+      <NativePageFrame
+        icon={Server}
+        kicker="Ops"
+        title="Approvals"
+        description="Review pending decisions and recovery evidence."
+        loading={false}
+        error={null}
+        metrics={[
+          { label: "Pending", value: "2" },
+          { label: "History", value: "14" },
+          { label: "Citadel", value: "citadel-7f3a", technical: true },
+        ]}
+      >
+        <div>body</div>
+      </NativePageFrame>,
+    );
+    const description = container.querySelector(".mc-next-directory-description");
+    expect(description?.textContent).toBe("Review pending decisions and recovery evidence.");
+    expect(description?.closest("details")).toBeNull();
+    const inlineMetrics = [...container.querySelectorAll(".mc-next-directory-head-metric")];
+    expect(inlineMetrics.map((node) => node.textContent)).toEqual(["Pending2", "History14"]);
+    expect(inlineMetrics.every((node) => node.closest("details") === null)).toBe(true);
+    const details = container.querySelector("details.mc-next-page-explanation");
+    expect(details?.textContent).toContain("citadel-7f3a");
+    expect(details?.textContent).not.toContain("Review pending decisions");
+  });
+
+  it("omits the page details disclosure when nothing technical is left to hide", () => {
+    const markup = renderToStaticMarkup(
+      <NativePageFrame
+        kicker="Library"
+        title="Memory"
+        description="Saved memory for this workspace."
+        loading={false}
+        error={null}
+        metrics={[{ label: "Visible", value: "3" }]}
+      >
+        <div>body</div>
+      </NativePageFrame>,
+    );
+    expect(markup).not.toContain("<details");
+    expect(markup).toContain("Saved memory for this workspace.");
+    expect(markup).toContain("Visible");
+  });
+
+  it("shows card status stats inline while the explanation and technical stats stay in Details", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(
+      <NativeCard
+        title="Connect a model"
+        subtitle="Choose a provider, connect it securely, then select the model Chat should use."
+        stats={[
+          { label: "Connection", value: "Not verified" },
+          { label: "First response", value: "Not yet verified" },
+          { label: "Workspace", value: "ws-2b91", technical: true },
+        ]}
+      >
+        <p>body</p>
+      </NativeCard>,
+    );
+    const inlineStats = container.querySelector(".mc-next-directory-card-head > .mc-next-directory-stats");
+    expect(inlineStats?.textContent).toContain("Not yet verified");
+    expect(inlineStats?.textContent).toContain("First response");
+    expect(inlineStats?.textContent).not.toContain("ws-2b91");
+    const details = container.querySelector("details.mc-next-card-explanation");
+    expect(details?.textContent).toContain("Choose a provider, connect it securely");
+    expect(details?.textContent).toContain("ws-2b91");
+    expect(details?.textContent).not.toContain("Not yet verified");
+  });
+
   it("renders an on-surface Experimental badge for experimental routes (F-M11)", () => {
     expect(renderToStaticMarkup(<ReleaseScopeBadge status="experimental" />)).toContain("Experimental");
     expect(renderToStaticMarkup(<ReleaseScopeBadge status="experimental" />)).toContain("mc-next-experimental-badge");

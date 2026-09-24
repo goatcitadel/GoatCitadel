@@ -29,6 +29,7 @@ import type {
   EvidenceEnvelope,
   EvidenceEnvelopeListQuery,
   LlmModelDiscoverySource,
+  LlmModelRecord,
   LlmEvalProofRunRequest,
   LlmEvalProofRunResponse,
   LlmEvalProofRunsResponse,
@@ -395,7 +396,7 @@ export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
 }
 
 export async function fetchLlmModels(providerId?: string): Promise<{
-  items: Array<{ id: string; ownedBy?: string; created?: number }>;
+  items: LlmModelRecord[];
   source: LlmModelDiscoverySource;
   warning?: string;
 }> {
@@ -480,7 +481,7 @@ export async function previewLlmModels(
   },
   options?: { signal?: AbortSignal },
 ): Promise<{
-  items: Array<{ id: string; ownedBy?: string; created?: number }>;
+  items: LlmModelRecord[];
   source: LlmModelDiscoverySource;
   warning?: string;
 }> {

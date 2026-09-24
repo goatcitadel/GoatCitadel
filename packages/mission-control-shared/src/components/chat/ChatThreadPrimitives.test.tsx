@@ -1396,6 +1396,59 @@ describe("sources separated from execution detail", () => {
   });
 });
 
+describe("turn activity technical details", () => {
+  const technicalText = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root
+      .findAll(
+        (node) =>
+          typeof node.props.className === "string" &&
+          node.props.className.split(" ").includes("mc-next-technical-detail"),
+      )
+      .map((node) => node.children.join(""))
+      .join(" ");
+
+  it("keeps plain turn status visible while run IDs and failure codes stay technical", () => {
+    const turn = createTurn({
+      trace: {
+        ...createTurn().trace,
+        status: "waiting_for_approval",
+        failure: { failureClass: "approval_required", message: "Approval required.", retryable: false } as never,
+        durable: { runId: "durable-run-2d08e4d8aaaa7e0188", status: "running" } as never,
+      },
+    });
+    const renderer = renderTurn({ turn });
+    const visibleChips = renderer.root
+      .findAllByProps({ className: "mc-next-turn-evidence-chip" })
+      .map((node) => node.children.join(""));
+    expect(visibleChips).toContain("waiting for approval");
+    expect(visibleChips.join(" ")).not.toMatch(/waiting_for_approval|approval_required|durable-/);
+    expect(technicalText(renderer)).toContain("Run durable-...7e0188");
+    expect(technicalText(renderer)).toContain("approval_required");
+  });
+
+  it("does not print raw status codes in the expanded evidence strip", () => {
+    const turn = createTurn({
+      trace: {
+        ...createTurn().trace,
+        status: "failed",
+        failure: { failureClass: "tool_failed", message: "Tool failed.", retryable: true } as never,
+      },
+    });
+    const renderer = renderTurn({ turn });
+    const strip = renderer.root.find((node) => String(node.props.className ?? "").startsWith("mc-next-thread-strip"));
+    const plainStripText = strip
+      .findAll(
+        (node) =>
+          typeof node.props.className !== "string" || !node.props.className.includes("mc-next-technical-detail"),
+      )
+      .filter((node) => node.children.every((child) => typeof child === "string"))
+      .map((node) => node.children.join(""))
+      .join(" ");
+    expect(plainStripText).not.toContain("tool_failed");
+    expect(technicalText(renderer)).toContain("tool_failed");
+  });
+});
+
 describe("turn outcome chips", () => {
   it("stays quiet for a plain successful exchange", () => {
     const turn = createTurn({ trace: { ...createTurn().trace, status: "completed", failure: undefined } });

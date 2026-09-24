@@ -326,7 +326,7 @@ function BrowserSessionsWorkspacePage({ route, activeWorkspaceId, activeWorkspac
             title="Sessions"
             subtitle="Session IDs govern browser state and grants; they are not Chat session or durable run IDs."
             stats={[
-              { label: "Workspace", value: activeWorkspaceId },
+              { label: "Workspace", value: activeWorkspaceId, technical: true },
               { label: "Filter", value: filter },
             ]}
           >

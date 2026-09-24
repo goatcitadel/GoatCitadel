@@ -52,10 +52,9 @@ export function ChatTurnActivityRows({
           diagnostics.engineLabel ??
           run.failureGuidance ??
           getToolRunActivityFallback(run.status);
-        const summary = effectTruth
-          ? effectTruth.tone === "uncertain"
-            ? `${effectTruth.summary} ${operationalSummary}`
-            : `${operationalSummary} ${effectTruth.summary}`
+        // Plain guidance stays visible; the machine effect facts are technical detail.
+        const summary = effectTruth?.plainSummary
+          ? `${effectTruth.plainSummary} ${operationalSummary}`
           : operationalSummary;
         const elapsed = formatToolRunElapsed(run.startedAt, run.finishedAt);
 
@@ -86,6 +85,11 @@ export function ChatTurnActivityRows({
               ) : null}
               {run.approvalId ? <span className="mc-next-thread-tool-activity-badge">approval</span> : null}
               {elapsed ? <span className="mc-next-thread-tool-activity-elapsed">{elapsed}</span> : null}
+              {effectTruth ? (
+                <span className="mc-next-thread-tool-activity-technical mc-next-technical-detail">
+                  {effectTruth.summary}
+                </span>
+              ) : null}
             </button>
             <ChatToolResultPreview run={run} />
           </Fragment>
@@ -293,8 +297,7 @@ function LiveActivityRow({
     diagnostics.engineLabel ??
     run.failureGuidance ??
     getToolRunActivityFallback(run.status);
-  const summary =
-    effectTruth?.tone === "uncertain" ? `${effectTruth.summary} ${operationalSummary}` : operationalSummary;
+  const summary = effectTruth?.plainSummary ? `${effectTruth.plainSummary} ${operationalSummary}` : operationalSummary;
   const elapsed =
     run.status === "started"
       ? formatToolRunElapsedLive(run.startedAt, nowMs)
@@ -315,6 +318,9 @@ function LiveActivityRow({
         {summary}
       </span>
       {elapsed ? <span className="mc-next-live-activity-elapsed">{elapsed}</span> : null}
+      {effectTruth?.tone === "uncertain" ? (
+        <span className="mc-next-live-activity-technical mc-next-technical-detail">{effectTruth.summary}</span>
+      ) : null}
     </button>
   );
 }

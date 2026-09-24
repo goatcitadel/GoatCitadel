@@ -10,6 +10,9 @@
 .mc-next-shell .mc-next-page-explanation dd, .mc-next-shell .mc-next-card-explanation dd { margin: 3px 0 0; color: var(--fg-primary); }
 .mc-next-shell .mc-next-directory-card { box-shadow: none; border: 0; background: transparent; }
 .mc-next-shell .mc-next-directory-card-head { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
+/* Card status stats read as compact chips under the title; a lone stat no longer stretches across the card. */
+.mc-next-shell .mc-next-directory-card-head > .mc-next-directory-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-next-shell .mc-next-directory-card-head > .mc-next-directory-stats > div { flex: 0 1 auto; min-width: 7rem; max-width: 100%; }
 .mc-next-shell .mc-next-directory-card .mc-next-directory-card { padding-inline: 0; }
 .mc-next-shell .mc-next-directory-card-title-row h2, .mc-next-shell .mc-next-directory-card-head h2 { font-size: var(--text-lg); }
 .mc-next-shell .mc-next-disclosure-card { box-shadow: none; border: 0; border-top: 1px solid var(--border-subtle); background: transparent; }

@@ -172,7 +172,7 @@ export function ChatModelPicker({
       ? [{ value: "", label: "Select provider first", disabled: true }]
       : models.map((item) => ({ value: item, label: item }));
   const availabilityMessage = !activeProvider
-    ? "No provider selected yet. Connect a provider in Configure, then choose a model."
+    ? "No provider selected yet. Connect one in Settings → Providers & models, then choose a model."
     : modelLoading
       ? `Loading models for ${activeProvider?.label ?? "provider"}...`
       : (activeProvider.modelProbeWarning ??

@@ -17,12 +17,9 @@ import {
 import {
   ChevronRight,
   Code2,
-  Eye,
-  FileDiff,
   FileText,
   Folder,
   FolderPlus,
-  ListChecks,
   Menu,
   MessageSquareText,
   PanelRight,
@@ -31,7 +28,6 @@ import {
   Settings2,
   Play,
   Search,
-  Terminal,
   Workflow,
   X,
 } from "lucide-react";
@@ -54,6 +50,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { ThreadedComposer } from "./ThreadedComposer";
 import { SidebarChatPortal, useUnifiedSidebar } from "@next/app/UnifiedSidebar";
 import { ChatSessionStatusPanel } from "./ChatSessionStatusPanel";
+import { resolveChatRouteReadiness } from "./chat-route-readiness";
 import { ChatTimerPanel } from "./ChatTimerPanel";
 import { RunVariablePanel } from "./RunVariablePanel";
 import { SessionControlBanner } from "./SessionControlBanner";
@@ -164,22 +161,22 @@ const EMPTY_STATE_GUIDANCE: Record<ChatMode, EmptyStateGuidance> = {
 };
 
 type ThreadedUtilityPanelId = "preview" | "context" | "artifacts" | "session" | "trace" | "assist" | "diff" | "terminal" | "files" | "background" | "plan" | "status";
-type ThreadedUtilityPanelMeta = { id: ThreadedUtilityPanelId; label: string; icon: typeof PanelRight };
+type ThreadedUtilityTabId = "activity" | "context" | "outputs" | "settings";
+type ThreadedUtilityTabMeta = { id: ThreadedUtilityTabId; panel: ThreadedUtilityPanelId; label: string; icon: typeof PanelRight };
 
-const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
-  { id: "preview", label: "Activity", icon: Play },
-  { id: "context", label: "Context", icon: FileText },
-  { id: "artifacts", label: "Artifacts", icon: Folder },
-  { id: "session", label: "Session settings", icon: Settings2 },
-  { id: "status", label: "Session status", icon: Eye },
-  { id: "trace", label: "Trace", icon: Eye },
-  { id: "assist", label: "Assist", icon: ListChecks },
-  { id: "diff", label: "Diff", icon: FileDiff },
-  { id: "terminal", label: "Run log", icon: Terminal },
-  { id: "files", label: "Files", icon: Folder },
-  { id: "background", label: "Background tasks", icon: Eye },
-  { id: "plan", label: "Plan", icon: ListChecks },
+const UTILITY_TAB_ITEMS: ThreadedUtilityTabMeta[] = [
+  { id: "activity", panel: "preview", label: "Activity", icon: Play },
+  { id: "context", panel: "context", label: "Context", icon: FileText },
+  { id: "outputs", panel: "artifacts", label: "Outputs", icon: Folder },
+  { id: "settings", panel: "session", label: "Chat settings", icon: Settings2 },
 ];
+
+function getUtilityTab(panel: ThreadedUtilityPanelId): ThreadedUtilityTabId {
+  if (panel === "context") return "context";
+  if (panel === "artifacts" || panel === "diff" || panel === "files") return "outputs";
+  if (panel === "session" || panel === "assist") return "settings";
+  return "activity";
+}
 
 const PANE_WIDTHS = {
   rail: { initial: 216, min: 184, max: 300 },
@@ -1093,12 +1090,15 @@ function ThreadConversationSurface({
     policySummary: permissionSummary,
     policyOverrideActive: Boolean(permissionState?.localOperatorOverrideId),
   });
+  // Nothing is "pending" when no provider exists; match the start canvas.
+  const headerModelSummary =
+    resolveChatRouteReadiness(props).state === "no_provider" ? "Not connected" : headerStatus.providerModelSummary;
   const routeSelectionSummary = props.routePreflight?.selectionSource
     ? `Selection: ${props.routePreflight.selectionSource}`
     : (props.trust.selectionSourceSummary ?? "Route pending");
-  const composerGateHint = props.pendingApproval
-    ? "Approval is waiting for the next gated step. You can keep drafting a follow-up."
-    : props.pendingUserInput
+  // A pending approval is explained once, by the composer's approval panel.
+  const composerGateHint =
+    !props.pendingApproval && props.pendingUserInput
       ? "This chat needs one answer to continue. You can reply below."
       : null;
 
@@ -1129,7 +1129,7 @@ function ThreadConversationSurface({
 
         <div className="mc-next-threaded-header-actions">
           <CompactModelControl
-            providerModelSummary={headerStatus.providerModelSummary}
+            providerModelSummary={headerModelSummary}
             providers={props.providerOptions}
             providerId={props.selectedProviderId}
             model={props.selectedModel}
@@ -1609,7 +1609,13 @@ function ThreadedUtilityPanel({
   surface: ChatMode;
   workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
 }) {
-  const meta = UTILITY_PANEL_ITEMS.find((item) => item.id === activePanel) ?? UTILITY_PANEL_ITEMS[0]!;
+  const activeTab = getUtilityTab(activePanel);
+  const meta = UTILITY_TAB_ITEMS.find((item) => item.id === activeTab)!;
+  const [executionDetailsOpen, setExecutionDetailsOpen] = useState(activePanel === "trace" || activePanel === "terminal");
+  useEffect(() => {
+    if (activePanel === "trace" || activePanel === "terminal") setExecutionDetailsOpen(true);
+    else setExecutionDetailsOpen(false);
+  }, [activePanel]);
 
   return (
     <div className="mc-next-utility-panel" data-mode={surface} data-panel={activePanel}>
@@ -1622,16 +1628,16 @@ function ThreadedUtilityPanel({
           Close
         </button>
       </div>
-      <div className="mc-next-utility-panel-tabs" role="group" aria-label="Right drawer panels">
-        {UTILITY_PANEL_ITEMS.filter(item=>["preview","context","artifacts","session"].includes(item.id)).map((item) => {
+      <div className="mc-next-utility-panel-tabs" role="group" aria-label="Chat details tabs">
+        {UTILITY_TAB_ITEMS.map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.id}
               type="button"
-              aria-pressed={activePanel === item.id}
-              className={`mc-next-utility-panel-tab${activePanel === item.id ? " active" : ""}`}
-              onClick={() => onSelectPanel(item.id)}
+              aria-pressed={activeTab === item.id}
+              className={`mc-next-utility-panel-tab${activeTab === item.id ? " active" : ""}`}
+              onClick={() => onSelectPanel(item.panel)}
             >
               <Icon size={14} />
               <span>{item.label}</span>
@@ -1639,36 +1645,117 @@ function ThreadedUtilityPanel({
           );
         })}
       </div>
-      <label className="mc-next-chat-specialist-picker">More details<select aria-label="More Chat details" value={["preview","context","artifacts","session"].includes(activePanel)?"":activePanel} onChange={event=>{if(event.target.value)onSelectPanel(event.target.value as ThreadedUtilityPanelId);}}><option value="">Choose a view</option>{UTILITY_PANEL_ITEMS.filter(item=>!["preview","context","artifacts","session"].includes(item.id)).map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-      {activePanel === "preview" ? (
-        <UtilityPreviewPanel
-          activeProps={activeProps}
-          changePlans={changePlans}
-          onOpenBuildEditor={onOpenBuildEditor}
-          onSelectPanel={onSelectPanel}
-        />
-      ) : (["context","artifacts","session","trace","assist"] as ThreadedUtilityPanelId[]).includes(activePanel) ? (
-        <>{activePanel==="artifacts" && activeProps.activeGeneratedArtifact ? <section><h4>{activeProps.activeGeneratedArtifact.title}</h4><GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact}/><button type="button" className="mc-next-panel-button" onClick={activeProps.onCloseGeneratedArtifact}>Close artifact preview</button></section> : null}
-        {contextDockProps?<ThreadedContextDrawer key={activeProps.selectedSessionId+":"+activePanel} surface={surface} props={contextDockProps} focusedTab={activePanel === "artifacts" ? "documents" : activePanel as "context"|"session"|"trace"|"assist"}/>:<p>Context evidence is unavailable.</p>}</>
-      ) : activePanel === "status" ? (
-        activeProps.sessionStatusPanel ? <ChatSessionStatusPanel panel={{...activeProps.sessionStatusPanel, open: true, onClose}}/> : <p>Canonical session status is unavailable in this runtime.</p>
-      ) : activePanel === "diff" ? (
-        <UtilityDiffPanel workflowPanel={workflowPanel} />
-      ) : activePanel === "terminal" ? (
-        <UtilityTerminalPanel workflowPanel={workflowPanel} />
-      ) : activePanel === "files" ? (
-        <UtilityFilesPanel workflowPanel={workflowPanel} />
-      ) : activePanel === "background" ? (
-        <UtilityBackgroundTasksPanel
-          activeProps={activeProps}
-          onOpenUniversalRunDetail={onOpenUniversalRunDetail}
-          onOpenTasks={onOpenTasks}
-          onSelectSession={onSelectSession}
-        />
+      {activeTab === "activity" ? (
+        <div className="mc-next-utility-panel-content" aria-label="Chat activity">
+          <UtilityPreviewPanel
+            activeProps={activeProps}
+            changePlans={changePlans}
+            onOpenBuildEditor={onOpenBuildEditor}
+            onSelectPanel={(panel) => {
+              if (panel === "trace") setExecutionDetailsOpen(true);
+              onSelectPanel(panel);
+            }}
+          />
+          <UtilityApprovalState activeProps={activeProps} />
+          {activeProps.sessionStatusPanel ? (
+            <details className="mc-next-chat-evidence mc-next-utility-session-status">
+              <summary>Gateway session status</summary>
+              <ChatSessionStatusPanel panel={{ ...activeProps.sessionStatusPanel, open: true }} showClose={false} />
+            </details>
+          ) : (
+            <section className="mc-next-utility-card"><h4>Session status</h4><p>Canonical session status is unavailable in this runtime.</p></section>
+          )}
+          {workflowPanel?.kind === "cowork" ? (
+            <Suspense fallback={<p>Loading planning controls…</p>}><LazyThreadedWorkflowPanel panel={workflowPanel} /></Suspense>
+          ) : <UtilityPlanPanel activeProps={activeProps} contextDockProps={contextDockProps} />}
+          <UtilityBackgroundTasksPanel
+            activeProps={activeProps}
+            onOpenUniversalRunDetail={onOpenUniversalRunDetail}
+            onOpenTasks={onOpenTasks}
+            onSelectSession={onSelectSession}
+          />
+          <details
+            className="mc-next-chat-evidence mc-next-utility-execution-details"
+            open={executionDetailsOpen}
+            onToggle={(event) => setExecutionDetailsOpen(event.currentTarget.open)}
+          >
+            <summary>Execution details</summary>
+            {contextDockProps ? (
+              <ThreadedContextDrawer key={`${activeProps.selectedSessionId}:trace`} surface={surface} props={contextDockProps} focusedTab="trace" />
+            ) : <p>Trace details are unavailable.</p>}
+            <UtilityTerminalPanel workflowPanel={workflowPanel} />
+          </details>
+        </div>
+      ) : activeTab === "context" ? (
+        contextDockProps
+          ? <ThreadedContextDrawer key={`${activeProps.selectedSessionId}:context`} surface={surface} props={contextDockProps} focusedTab="context" />
+          : <p>Context evidence is unavailable.</p>
+      ) : activeTab === "outputs" ? (
+        <div className="mc-next-utility-panel-content" aria-label="Chat outputs">
+          {activeProps.activeGeneratedArtifact ? (
+            <section className="mc-next-utility-card">
+              <h4>{activeProps.activeGeneratedArtifact.title}</h4>
+              <GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact} />
+              {activeProps.onCloseGeneratedArtifact ? <button type="button" className="mc-next-panel-button" onClick={activeProps.onCloseGeneratedArtifact}>Close artifact preview</button> : null}
+            </section>
+          ) : null}
+          {contextDockProps ? (
+            <ThreadedContextDrawer key={`${activeProps.selectedSessionId}:documents`} surface={surface} props={contextDockProps} focusedTab="documents" />
+          ) : <p>Documents and artifacts are unavailable.</p>}
+          <UtilityDiffPanel workflowPanel={workflowPanel} />
+          <UtilityFilesPanel workflowPanel={workflowPanel} />
+        </div>
       ) : (
-        workflowPanel?.kind === "cowork" ? <Suspense fallback={<p>Loading planning controls…</p>}><LazyThreadedWorkflowPanel panel={workflowPanel}/></Suspense> : <UtilityPlanPanel activeProps={activeProps} contextDockProps={contextDockProps} />
+        <div className="mc-next-utility-panel-content" aria-label="Chat settings">
+          {contextDockProps ? <>
+            <section><h4>Session settings</h4><ThreadedContextDrawer key={`${activeProps.selectedSessionId}:session`} surface={surface} props={contextDockProps} focusedTab="session" /></section>
+            <section><h4>Assist settings</h4><ThreadedContextDrawer key={`${activeProps.selectedSessionId}:assist`} surface={surface} props={contextDockProps} focusedTab="assist" /></section>
+          </> : <p>Chat settings are unavailable.</p>}
+        </div>
       )}
     </div>
+  );
+}
+
+function pluralApprovals(count: number): string {
+  return `${count} approval${count === 1 ? " is" : "s are"}`;
+}
+
+/**
+ * Activity's single approval entry point. Canonical session status is scoped to
+ * this chat but only loads on request; until then the shell's pending count is
+ * shown for what it is: a workspace-wide figure.
+ */
+function UtilityApprovalState({ activeProps }: { activeProps: MissionThreadedActiveSessionSurfaceProps }) {
+  const panel = activeProps.sessionStatusPanel;
+  const attention = panel?.status?.attention;
+  const chatCount = attention?.availability === "available" ? attention.value.pendingApprovals.length : null;
+  const reviewCount = chatCount ?? activeProps.approvalsCount;
+  const message =
+    chatCount !== null
+      ? chatCount > 0
+        ? `${pluralApprovals(chatCount)} waiting for your review.`
+        : "No approval is waiting for this chat."
+      : attention?.availability === "unavailable"
+        ? `Canonical approval status is unavailable: ${attention.reason}`
+        : panel?.error
+          ? `Canonical approval status is unavailable: ${panel.error}`
+          : panel?.loading
+            ? "Checking canonical approval status…"
+            : activeProps.approvalsCount > 0
+              ? `${pluralApprovals(activeProps.approvalsCount)} waiting in this workspace.`
+              : "No approvals are waiting in this workspace.";
+
+  return (
+    <section className="mc-next-utility-card" aria-label="Approval state">
+      <h4>Approval state</h4>
+      <p role="status">{message}</p>
+      {reviewCount > 0 ? (
+        <button type="button" className="mc-next-panel-button" onClick={() => activeProps.onOpenApprovals()}>
+          Review approvals
+        </button>
+      ) : null}
+    </section>
   );
 }
 
@@ -1836,11 +1923,6 @@ function UtilityPreviewPanel({
               Trace turn
             </button>
           </>
-        ) : null}
-        {activeProps.approvalsCount > 0 ? (
-          <button type="button" className="mc-next-panel-button" onClick={() => activeProps.onOpenApprovals()}>
-            Review approvals
-          </button>
         ) : null}
         {activeProps.onExportRunBundle ? (
           <button type="button" className="mc-next-panel-button" onClick={activeProps.onExportRunBundle}>
@@ -2139,6 +2221,8 @@ function UtilityPlanPanel({
   contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
 }) {
   const planningEnabled = activeProps.planningMode === "advisory";
+  const route = resolveChatRouteReadiness(activeProps);
+  const routeBlocked = route.state === "no_provider" || route.state === "blocked";
 
   return (
     <section className="mc-next-utility-card">
@@ -2146,15 +2230,21 @@ function UtilityPlanPanel({
         <StatusChip tone={planningEnabled ? "success" : "muted"}>
           {planningEnabled ? "Planning on" : "Planning off"}
         </StatusChip>
-        <StatusChip tone="muted">{contextDockProps?.routePreflight?.selectionSource ?? "route pending"}</StatusChip>
-        <StatusChip tone={activeProps.routeBoundaryAckRequired ? "warning" : "muted"}>
-          {activeProps.routeBoundaryAckRequired ? "boundary acknowledgement needed" : "route clear"}
+        <span className="mc-next-technical-detail">
+          <StatusChip tone="muted">{contextDockProps?.routePreflight?.selectionSource ?? "route pending"}</StatusChip>
+        </span>
+        <StatusChip tone={routeBlocked ? "critical" : activeProps.routeBoundaryAckRequired ? "warning" : "muted"}>
+          {routeBlocked
+            ? "Sending blocked"
+            : activeProps.routeBoundaryAckRequired
+              ? "boundary acknowledgement needed"
+              : route.state === "checking"
+                ? "Checking route"
+                : "Route ready"}
         </StatusChip>
       </div>
       <h4>{activeProps.pinnedGoal ?? "Current plan"}</h4>
-      <p>
-        {activeProps.routePreflight?.degradedReason ?? activeProps.routePreflight?.blockedReason ?? activeProps.summary}
-      </p>
+      <p>{routeBlocked ? route.message : (activeProps.routePreflight?.degradedReason ?? activeProps.summary)}</p>
       <div className="mc-next-utility-actions">
         <button type="button" className="mc-next-panel-button" onClick={activeProps.onTogglePlanningMode}>
           {planningEnabled ? "Turn planning off" : "Turn planning on"}

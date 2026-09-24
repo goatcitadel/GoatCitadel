@@ -669,6 +669,26 @@ it("keeps text entered during an acknowledged document save", async () => {
     expect(onExportRunBundle).toHaveBeenCalledTimes(1);
   });
 
+  it("explains a chat with no provider without the nonexistent Configure destination", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            routePreflight: {
+              selectionSource: "global",
+              blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+            },
+          })}
+        />,
+      );
+    });
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Sending a message needs a model.");
+    expect(text).not.toContain("Open Configure");
+  });
+
   it("renders context route controls, route warnings, and generated artifact actions", async () => {
     const onStreamEnabledChange = vi.fn();
     const onPrefPatch = vi.fn();
@@ -684,6 +704,8 @@ it("keeps text entered during an acknowledged document save", async () => {
             planningMode: "off",
             routePreflight: {
               selectionSource: null,
+              // Provider-specific Gateway blocks always name the requested provider.
+              requestedProviderId: "openai",
               degradedReason: "Provider is degraded.",
               blockedReason: "Route requires credentials.",
             },
@@ -1030,6 +1052,30 @@ it("keeps text entered during an acknowledged document save", async () => {
     expect(onPrefPatch).toHaveBeenCalledWith({ thinkingLevel: "deep" });
     expect(onPrefPatch).toHaveBeenCalledWith({ speedMode: "fast" });
     expect(onPrefPatch).toHaveBeenCalledWith({ subagentPolicy: "off" });
+  });
+
+  it("limits OpenAI thinking and Fast controls to the selected model", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    const props = baseProps({
+      selectedProviderId: "openai-codex",
+      selectedModel: "gpt-6-astra",
+      selectedModelReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      selectedModelFastAvailable: false,
+    });
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={props} />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Assist").props.onClick();
+    });
+    const thinking = renderer!.root.findAllByType("select")
+      .find((node) => node.props["aria-label"] === "Thinking level")!;
+    const speed = renderer!.root.findAllByType("select")
+      .find((node) => node.props["aria-label"] === "Speed mode")!;
+    expect(thinking.findAllByType("option").find((node) => node.props.value === "off")?.props.disabled).toBe(true);
+    expect(thinking.findAllByType("option").find((node) => node.props.value === "max")?.props.disabled).toBe(false);
+    expect(thinking.findAllByType("option").find((node) => node.props.value === "ultra")?.props.disabled).toBe(true);
+    expect(speed.findAllByType("option").find((node) => node.props.value === "fast")?.props.disabled).toBe(true);
   });
 
   it("lets users choose smooth or instant visual streaming locally", async () => {

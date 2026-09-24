@@ -928,6 +928,8 @@ export function MissionThreadedControllerHost({
   onOpenApprovals = () => undefined,
   onOpenStartHere = () => undefined,
   onOpenPersonalitiesSettings = () => undefined,
+  onOpenProviderSettings = () => undefined,
+  onOpenLocalAiSettings = () => undefined,
   onOpenLibraryArtifacts = () => undefined,
   onOpenLibraryImports = () => undefined,
   onOpenOpsRuntime = () => undefined,
@@ -959,6 +961,8 @@ export function MissionThreadedControllerHost({
   onOpenApprovals?: (approvalId?: string) => void;
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
+  onOpenProviderSettings?: () => void;
+  onOpenLocalAiSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
   onOpenLibraryImports?: () => void;
   onOpenOpsRuntime?: () => void;
@@ -5167,6 +5171,8 @@ export function MissionThreadedControllerHost({
           }
         },
         onOpenPersonalitiesSettings,
+        onOpenProviderSettings,
+        onOpenLocalAiSettings,
         onOpenLibraryArtifacts,
         onOpenLibraryImports,
         onOpenOpsRuntime,
@@ -5760,6 +5766,12 @@ export function MissionThreadedControllerHost({
           providerOptions,
           selectedProviderId,
           selectedModel,
+          selectedModelReasoningEfforts: runtimeProviderCatalog
+            .find((provider) => provider.providerId === selectedProviderId)
+            ?.reasoningEffortsByModel?.[selectedModel?.replace(`${selectedProviderId}/`, "") ?? ""],
+          selectedModelFastAvailable: runtimeProviderCatalog
+            .find((provider) => provider.providerId === selectedProviderId)
+            ?.fastModeByModel?.[selectedModel?.replace(`${selectedProviderId}/`, "") ?? ""],
           streamEnabled,
           visualStreamMode,
           onStreamEnabledChange: (value) => {

@@ -4,12 +4,14 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import type {
   ChatMode,
+  ChatCompletionReasoningEffort,
   ChatPlanningMode,
   ChatSessionPrefsPatch,
   ChatSpeedMode,
   ChatSubagentPolicy,
   ChatThinkingLevel,
 } from "@goatcitadel/contracts";
+import { supportsOpenAiFastMode } from "@goatcitadel/contracts";
 import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/ChatTraceCard";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { IdentifierChip } from "@goatcitadel/mission-control-shared/components/IdentifierChip";
@@ -17,10 +19,20 @@ import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/com
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { StatusChip } from "../native-routes/primitives";
 import { ChatCapabilityProfileRunDetail } from "./ChatCapabilityProfilePanel";
+import { describeRouteBlockedReason } from "./chat-route-readiness";
 
 type DrawerTab = "context" | "documents" | "trace" | "assist" | "session";
 
 const SUBAGENT_AUTO_ACK_STORAGE_PREFIX = "mc-next:subagent-auto-ack:";
+const THINKING_EFFORT: Record<ChatThinkingLevel, ChatCompletionReasoningEffort> = {
+  off: "none",
+  minimal: "low",
+  standard: "medium",
+  extended: "high",
+  deep: "xhigh",
+  max: "max",
+  ultra: "ultra",
+};
 
 function ContextDisclosure({
   children,
@@ -109,8 +121,9 @@ function formatContextValue(value?: string | null, fallback = "Not set"): string
 }
 
 function getContextBlockerSummary(props: MissionThreadedContextDockProps): string {
-  if (props.routePreflight?.blockedReason) {
-    return props.routePreflight.blockedReason;
+  const blockedReason = describeRouteBlockedReason(props.routePreflight);
+  if (blockedReason) {
+    return blockedReason;
   }
   if (props.routePreflight?.degradedReason) {
     return props.routePreflight.degradedReason;
@@ -405,6 +418,12 @@ export function ThreadedContextDrawer({
   const [pendingSubagentAuto, setPendingSubagentAuto] = useState<ChatSubagentPolicy | null>(null);
   const thinkingLevel: ChatThinkingLevel = props.prefs?.thinkingLevel ?? "standard";
   const speedMode: ChatSpeedMode = props.prefs?.speedMode ?? "standard";
+  const isOpenAiRoute = props.selectedProviderId === "openai" || props.selectedProviderId === "openai-codex";
+  const fastAvailable = !isOpenAiRoute ||
+    (props.selectedModelFastAvailable ?? supportsOpenAiFastMode(props.selectedProviderId, props.selectedModel));
+  const supportsThinking = (level: ChatThinkingLevel) =>
+    (!isOpenAiRoute || level !== "ultra") &&
+    (!props.selectedModelReasoningEfforts?.length || props.selectedModelReasoningEfforts.includes(THINKING_EFFORT[level]));
   const subagentPolicy: ChatSubagentPolicy = props.prefs?.subagentPolicy ?? "ask_when_useful";
   const planningMode: ChatPlanningMode = props.prefs?.planningMode ?? props.planningMode ?? "off";
   const planningEnabled = planningMode === "advisory";
@@ -583,7 +602,7 @@ export function ThreadedContextDrawer({
               </div>
             </ContextDisclosure>
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
-            {props.routePreflight?.blockedReason ? <p>{props.routePreflight.blockedReason}</p> : null}
+            {props.routePreflight?.blockedReason ? <p>{describeRouteBlockedReason(props.routePreflight)}</p> : null}
             {onCopyTrustReport && props.selectedSessionId ? (
               <div className="mc-next-context-actions">
                 <button
@@ -707,15 +726,18 @@ export function ThreadedContextDrawer({
                 onChange={(event) => void props.onPrefPatch({ thinkingLevel: event.target.value as ChatThinkingLevel })}
                 aria-label="Thinking level"
               >
-                <option value="off">No thinking</option>
-                <option value="minimal">Minimal</option>
-                <option value="standard">Standard</option>
-                <option value="extended">Extended</option>
-                <option value="deep">Deep</option>
-                <option value="max">Maximum (supported models only)</option>
-                <option value="ultra">Ultra (supported models only)</option>
+                <option value="off" disabled={!supportsThinking("off")}>No thinking</option>
+                <option value="minimal" disabled={!supportsThinking("minimal")}>Minimal</option>
+                <option value="standard" disabled={!supportsThinking("standard")}>Standard</option>
+                <option value="extended" disabled={!supportsThinking("extended")}>Extended</option>
+                <option value="deep" disabled={!supportsThinking("deep")}>Deep</option>
+                <option value="max" disabled={!supportsThinking("max")}>Maximum (supported models only)</option>
+                <option value="ultra" disabled={!supportsThinking("ultra")}>Ultra (supported models only)</option>
               </select>
             </label>
+            {isOpenAiRoute && !supportsThinking(thinkingLevel) ? (
+              <p role="status">This thinking level is unavailable for the selected OpenAI model. Choose a supported level before sending.</p>
+            ) : null}
             <label className="mc-next-context-field">
               <span>Speed</span>
               <select
@@ -724,9 +746,12 @@ export function ThreadedContextDrawer({
                 aria-label="Speed mode"
               >
                 <option value="standard">Standard</option>
-                <option value="fast">Fast</option>
+                <option value="fast" disabled={!fastAvailable}>Fast</option>
               </select>
             </label>
+            {isOpenAiRoute && !fastAvailable && speedMode === "fast" ? (
+              <p role="status">Fast mode is unavailable for the selected OpenAI model.</p>
+            ) : null}
             <label className="mc-next-context-field">
               <span>Subagents</span>
               <select

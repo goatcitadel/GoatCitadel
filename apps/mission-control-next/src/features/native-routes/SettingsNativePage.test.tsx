@@ -3713,7 +3713,7 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("can add the ChatGPT OAuth provider from Settings when it is not already configured", async () => {
-    mocks.fetchLlmConfig.mockResolvedValueOnce({ revision: 44, activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers: [], providerConfigs: [{ providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", baseUrl: "https://chatgpt.com/backend-api/codex", apiStyle: "openai-codex-responses", authMode: "codex-oauth", defaultModel: "gpt-5.5" }] });
+    mocks.fetchLlmConfig.mockResolvedValueOnce({ revision: 44, activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers: [], providerConfigs: [{ providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", baseUrl: "https://chatgpt.com/backend-api/codex", apiStyle: "openai-codex-responses", authMode: "codex-oauth", defaultModel: "gpt-6-sol" }] });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -3734,7 +3734,7 @@ describe("SettingsNativePage providers", () => {
           baseUrl: "https://chatgpt.com/backend-api/codex",
           apiStyle: "openai-codex-responses",
           authMode: "codex-oauth",
-          defaultModel: "gpt-5.5",
+          defaultModel: "gpt-6-sol",
         },
       },
     });

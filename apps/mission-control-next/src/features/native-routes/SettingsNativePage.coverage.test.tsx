@@ -9,6 +9,7 @@ import { SettingsNativePage } from "./SettingsNativePage";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { __resetFormDirtyRegistryForTests, hasDirtySections } from "./library/use-form-dirty";
+import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 const mountedSettingsRenderers: ReactTestRenderer[] = [];
 function create(...args: Parameters<typeof createRenderer>): ReactTestRenderer {
@@ -1289,8 +1290,8 @@ function installBrowser() {
   });
 }
 
-function renderPage(section: string, extras: Record<string, unknown> = {}) {
-  return create(
+function renderPage(section: string, extras: Record<string, unknown> = {}, withUiPreferences = false) {
+  const page = (
     <SettingsNativePage
       route={{ area: "settings", section, theme: "ops" } as any}
       activeCitadelId="personal"
@@ -1301,14 +1302,15 @@ function renderPage(section: string, extras: Record<string, unknown> = {}) {
       setActiveCitadelId={vi.fn()}
       setActiveWorkspaceId={vi.fn()}
       {...extras}
-    />,
+    />
   );
+  return create(withUiPreferences ? <UiPreferencesProvider>{page}</UiPreferencesProvider> : page);
 }
 
-async function mount(section: string, extras: Record<string, unknown> = {}) {
+async function mount(section: string, extras: Record<string, unknown> = {}, withUiPreferences = false) {
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = renderPage(section, extras);
+    renderer = renderPage(section, extras, withUiPreferences);
   });
   await flush();
   return renderer;
@@ -1411,6 +1413,48 @@ afterEach(() => {
 });
 
 describe("SettingsNativePage broad native sections", () => {
+  it("shows unsupported desktop notification permission separately from the saved preference", async () => {
+    const page = await mount("general");
+    expect(collectText(page.root)).toContain("Unsupported");
+    expect(collectText(page.root)).toMatch(/Saved preference:\s+Off/);
+    expect(findButton(page.root, "Send test notification").props.disabled).toBe(true);
+  });
+
+  it("keeps notification permission prompts user initiated and enables a test only when granted", async () => {
+    const requestPermission = vi.fn(async () => "granted" as NotificationPermission);
+    const notificationConstructor = vi.fn(function MockNotification() {});
+    Object.assign(notificationConstructor, { permission: "default", requestPermission });
+    Object.assign(window as any, { Notification: notificationConstructor });
+    const page = await mount("general", {}, true);
+    const desktopPreference = page.root.findByProps({ "aria-label": "Use system notifications when permission is granted" });
+
+    await change(desktopPreference, "", true);
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(collectText(page.root)).toMatch(/Saved preference:\s+On/);
+    await click(findButton(page.root, "Allow notifications"));
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(collectText(page.root)).toContain("Granted");
+    const sendTest = findButton(page.root, "Send test notification");
+    expect(sendTest.props.disabled).toBe(false);
+    await click(sendTest);
+    expect(notificationConstructor).toHaveBeenCalledWith("GoatCitadel test notification", {
+      body: "System notifications are working in this host.",
+    });
+    expect(collectText(page.root)).toContain("Test notification sent.");
+  });
+
+  it("reports blocked notification permission without retrying an explicit denial", async () => {
+    const requestPermission = vi.fn(async () => "denied" as NotificationPermission);
+    const notificationConstructor = vi.fn(function MockNotification() {});
+    Object.assign(notificationConstructor, { permission: "denied", requestPermission });
+    Object.assign(window as any, { Notification: notificationConstructor });
+    const page = await mount("general");
+    expect(collectText(page.root)).toContain("Blocked");
+    expect(findButton(page.root, "Send test notification").props.disabled).toBe(true);
+    await click(findButton(page.root, "Re-check permission"));
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
   it("retains a Citadel draft on conflict and submits only after explicit review of the winner", async () => {
     const initial = { citadelId: "personal", name: "Personal", slug: "personal", kind: "personal", lifecycleStatus: "active",
       description: "Original description", revision: "a".repeat(64), createdAt: "t", updatedAt: "t" };
@@ -1543,6 +1587,30 @@ describe("SettingsNativePage broad native sections", () => {
       description: "Primary workspace",
       slug: "default",
     });
+  });
+
+  it("saves a cleared workspace description and shows the empty summary after Gateway confirmation", async () => {
+    const page = await mount("workspaces");
+    await click(findButton(page.root, "Default"));
+    await click(findButton(page.root, "Edit workspace"));
+    const description = page.root.findAllByType("textarea").find((node) => node.props.value === "Primary workspace")!;
+    await change(description, "   ");
+
+    const clearedWorkspace = { ...workspaces[0], description: "", revision: 12 };
+    settingsMocks.updateWorkspace.mockResolvedValueOnce(clearedWorkspace);
+    settingsMocks.fetchWorkspaces.mockResolvedValueOnce({ items: [clearedWorkspace, workspaces[1]] });
+    await click(findButton(page.root, "Save changes"));
+
+    expect(settingsMocks.updateWorkspace).toHaveBeenCalledWith("default", {
+      expectedRevision: 11,
+      name: "Default",
+      description: "",
+      slug: "default",
+    });
+    expect(collectText(page.root)).toContain("Description cleared.");
+    await click(findButton(page.root, "Close editor"));
+    await click(findButton(page.root, "Default"));
+    expect(collectText(page.root)).toContain("No description");
   });
 
   it("preserves the access draft and retries with the refreshed settings revision after a 409", async () => {

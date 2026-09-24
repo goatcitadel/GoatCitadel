@@ -152,11 +152,14 @@ export function useChatProviderRoutingController(input: {
     const activeModel = input.runtimeLlmConfig?.activeModel ?? settingsLlm?.activeModel;
     return input.runtimeProviderCatalog.map((provider) => {
       const isLocalRuntime = isLikelyLocalProviderUrl(provider.baseUrl);
+      const hasLiveOAuthCatalog = provider.providerId === "openai-codex" && provider.modelProbeSource === "live";
       return {
         providerId: provider.providerId,
         label: provider.label,
         baseUrl: provider.baseUrl,
-        defaultModel: provider.defaultModel,
+        defaultModel: hasLiveOAuthCatalog
+          ? (provider.models.includes(provider.defaultModel ?? "") ? provider.defaultModel : provider.models[0])
+          : provider.defaultModel,
         isLocalRuntime,
         disabled: !provider.hasApiKey && !isLocalRuntime,
         availabilityLabel: !provider.hasApiKey && !isLocalRuntime ? `${provider.label} · setup required` : undefined,
@@ -165,11 +168,13 @@ export function useChatProviderRoutingController(input: {
             ? `${provider.label} is not configured yet. Add an API key before using it.`
             : undefined,
         capabilities: provider.capabilities,
-        models: dedupeStrings([
-          ...provider.models,
-          provider.providerId === activeProviderId ? activeModel : undefined,
-          input.prefs?.providerId === provider.providerId ? input.prefs.model : undefined,
-        ]),
+        models: hasLiveOAuthCatalog
+          ? provider.models
+          : dedupeStrings([
+              ...provider.models,
+              provider.providerId === activeProviderId ? activeModel : undefined,
+              input.prefs?.providerId === provider.providerId ? input.prefs.model : undefined,
+            ]),
         modelProbeState: provider.modelProbeState,
         modelProbeSource: provider.modelProbeSource,
         modelProbeCheckedAt: provider.modelProbeCheckedAt,
@@ -200,10 +205,15 @@ export function useChatProviderRoutingController(input: {
   );
 
   const selectedProviderSelection = useMemo(() => {
+    const hasLiveOAuthCatalog = selectedProviderOption?.providerId === "openai-codex" &&
+      selectedProviderOption.modelProbeSource === "live";
+    const visibleModels = selectedProviderOption?.models ?? [];
     return resolveProviderModelSelection({
       provider: selectedProviderOption,
-      loadedModels: selectedProviderId ? getCachedModels(selectedProviderId) : [],
-      selectedModel: requestedModelId,
+      loadedModels: hasLiveOAuthCatalog ? visibleModels : selectedProviderId ? getCachedModels(selectedProviderId) : [],
+      selectedModel: hasLiveOAuthCatalog && !visibleModels.includes(requestedModelId ?? "")
+        ? undefined
+        : requestedModelId,
     });
   }, [getCachedModels, requestedModelId, selectedProviderId, selectedProviderOption]);
 

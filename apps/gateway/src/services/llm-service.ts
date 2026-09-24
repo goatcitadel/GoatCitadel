@@ -26,6 +26,7 @@ import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
 import type {
   ChatCompletionRequest,
+  ChatCompletionReasoningEffort,
   ChatCompletionReasoningReceipt,
   ChatCompletionResponse,
   ChatThinkingLevel,
@@ -106,6 +107,8 @@ const MAX_PROVIDER_SSE_EVENTS = 2048;
 // the first visible output chunk. Keep arbitrary provider streams on the tighter
 // default while retaining byte, event, and request-time bounds for this route.
 const MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS = 64 * 1024;
+// The ChatGPT Codex catalog requires a semantic client version to select compatible models.
+const OPENAI_CODEX_CATALOG_CLIENT_VERSION = "1.0.0";
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -292,6 +295,7 @@ export class LlmService {
   private readonly googleCloudAuth: GoogleCloudAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly modelDiscoveryCache = new Map<string, ModelDiscoveryCacheEntry>();
+  private openAICodexModelCatalogGeneration = 0;
   // Per-process opaque tokens that key the in-memory model-discovery cache by credential WITHOUT
   // deriving anything from the API key. A fast unsalted digest of a credential is exactly what CodeQL
   // js/insufficient-password-hash flags, and a slow KDF would be wrong on this hot, in-memory path;
@@ -888,7 +892,9 @@ export class LlmService {
     options: { expectedCredentialAccount?: string } = {},
   ): Promise<OpenAICodexDevicePollResponse> {
     this.assertKnownOpenAICodexProvider();
-    return this.openAICodexOAuth.pollDeviceFlow(flowId, options);
+    const result = await this.openAICodexOAuth.pollDeviceFlow(flowId, options);
+    if (result.status === "connected") this.invalidateOpenAICodexModelCatalog();
+    return result;
   }
 
   /** @internal Plan-scoped OAuth custody. Public provider projections never expose the account name. */
@@ -898,7 +904,9 @@ export class LlmService {
 
   /** @internal Exact Change Plan apply seam; the OAuth service owns the credential move. */
   public promoteOpenAICodexOAuthCredential(credentialAccount: string): OpenAICodexOAuthStatus {
-    return this.openAICodexOAuth.promoteCredential(credentialAccount);
+    const status = this.openAICodexOAuth.promoteCredential(credentialAccount);
+    this.invalidateOpenAICodexModelCatalog();
+    return status;
   }
 
   /** @internal Cancellation/expiry cleanup for a plan-scoped OAuth credential. */
@@ -907,7 +915,19 @@ export class LlmService {
   }
 
   public deleteOpenAICodexOAuthCredential(): OpenAICodexOAuthStatus {
-    return this.openAICodexOAuth.deleteCredential();
+    const status = this.openAICodexOAuth.deleteCredential();
+    this.invalidateOpenAICodexModelCatalog();
+    return status;
+  }
+
+  private invalidateOpenAICodexModelCatalog(): void {
+    this.openAICodexModelCatalogGeneration += 1;
+    for (const key of this.modelDiscoveryCache.keys()) {
+      if (key.startsWith("openai-codex::")) this.modelDiscoveryCache.delete(key);
+    }
+    for (const key of this.modelDiscoveryInFlight.keys()) {
+      if (key.startsWith("openai-codex::")) this.modelDiscoveryInFlight.delete(key);
+    }
   }
 
   public clearInlineProviderApiKey(providerId: string): void {
@@ -979,6 +999,17 @@ export class LlmService {
   public async previewModels(input: LlmModelPreviewRequest): Promise<LlmModelPreviewResponse> {
     const existing = this.providers.get(input.providerId);
     assertPreviewEnvironmentReferencesBound(existing, input);
+    if (isOpenAICodexProvider({ providerId: input.providerId })) {
+      // OAuth credentials may only travel through the saved Codex transport.
+      // Preview inputs can contain caller-chosen proxy and auth settings.
+      return existing
+        ? this.listModelsWithSource(input.providerId)
+        : {
+            items: buildFallbackModelCatalog(input.providerId, defaultModelForProvider(input.providerId)),
+            source: "error_fallback",
+            warning: "Connect OpenAI Codex before loading its account model catalog.",
+          };
+    }
     // SECURITY (codex finding #25a, #30): The preview endpoint accepts an
     // arbitrary `baseUrl` and an existing `providerId`. Previously the code
     // happily fell back to the existing provider's stored apiKey/apiKeyEnv/
@@ -1023,8 +1054,11 @@ export class LlmService {
     try {
       const result = await this.fetchModelsForResolvedProvider(resolved);
       if (result.items.length > 0) {
+        const items = result.source === "live" && isOpenAICodexProvider(provider)
+          ? result.items
+          : mergeModelCatalogs(result.items, fallbackCatalog);
         return {
-          items: mergeModelCatalogs(result.items, fallbackCatalog).map((record) =>
+          items: items.map((record) =>
             this.enrichModelRecord(provider.providerId, record),
           ),
           source: result.source,
@@ -1063,7 +1097,25 @@ export class LlmService {
       ...record,
       contextWindow: record.contextWindow ?? meta.contextWindow,
       outputTokenLimit: record.outputTokenLimit ?? meta.outputTokenLimit,
+      reasoningEfforts: record.reasoningEfforts ?? meta.reasoning?.supportedEfforts,
     };
+  }
+
+  private getCatalogReasoningEfforts(provider: LlmProviderConfig, model: string): ChatCompletionReasoningEffort[] | undefined {
+    return this.getLiveCatalogModel(provider, model)?.reasoningEfforts;
+  }
+
+  private getLiveCatalogModel(provider: LlmProviderConfig, model: string): LlmModelRecord | undefined {
+    const cached = this.modelDiscoveryCache.get(buildPersistedModelDiscoveryCacheKey(provider.providerId, provider.baseUrl));
+    if (cached?.result.source !== "live") return undefined;
+    return cached.result.items.find((item) => item.id === model);
+  }
+
+  private assertFastModeAvailable(provider: LlmProviderConfig, model: string, request: ChatCompletionRequest): void {
+    if (provider.providerId !== "openai-codex" || !["fast", "priority"].includes(request.service_tier ?? "")) return;
+    if (this.getLiveCatalogModel(provider, model)?.fastModeAvailable === false) {
+      throw new Error(`Fast mode is not available for ${model} in the connected ChatGPT account.`);
+    }
   }
 
   private async postTrackedJsonRequest(input: LlmProviderJsonRequestInput): Promise<LlmTrackedJsonDispatch> {
@@ -1632,11 +1684,13 @@ export class LlmService {
     const lease = await this.acquireLocalServiceLease(resolved, "chat_completion", sanitizedRequest.signal);
     try {
       const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
+      this.assertFastModeAvailable(resolved.provider, model, sanitizedRequest);
       const reasoning = resolveLlmReasoningProfile({
         request: sanitizedRequest,
         providerId: resolved.provider.providerId,
         providerCapabilities: inferProviderCapabilities(resolved.provider),
         modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
+        catalogReasoningEfforts: this.getCatalogReasoningEfforts(resolved.provider, model),
         attribution,
       });
       const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
@@ -1786,11 +1840,13 @@ export class LlmService {
     const lease = await this.acquireLocalServiceLease(resolved, "chat_completion", sanitizedRequest.signal);
     try {
       const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
+      this.assertFastModeAvailable(resolved.provider, model, sanitizedRequest);
       const reasoning = resolveLlmReasoningProfile({
         request: sanitizedRequest,
         providerId: resolved.provider.providerId,
         providerCapabilities: inferProviderCapabilities(resolved.provider),
         modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
+        catalogReasoningEfforts: this.getCatalogReasoningEfforts(resolved.provider, model),
         attribution,
       });
       const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
@@ -2868,6 +2924,7 @@ export class LlmService {
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     const keys = this.buildModelDiscoveryCacheKeys(resolved);
+    const codexGeneration = this.openAICodexModelCatalogGeneration;
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(keys.exact) ?? this.modelDiscoveryCache.get(keys.persisted);
     if (cached) {
@@ -2897,7 +2954,8 @@ export class LlmService {
         if (!inFlight) {
           const pending = this.fetchModelsForResolvedProviderUncached(resolved)
             .then((result) => {
-              if (result.source !== "error_fallback") {
+              if (result.source !== "error_fallback" &&
+                  (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)) {
                 this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
               }
               return result;
@@ -2910,7 +2968,7 @@ export class LlmService {
               return cached.result;
             })
             .finally(() => {
-              this.modelDiscoveryInFlight.delete(keys.exact);
+              if (this.modelDiscoveryInFlight.get(keys.exact) === pending) this.modelDiscoveryInFlight.delete(keys.exact);
             });
           this.modelDiscoveryInFlight.set(keys.exact, pending);
         }
@@ -2926,13 +2984,14 @@ export class LlmService {
       .then((result) => {
         // Cache live + template_fallback (successful fetches with known catalog), but
         // skip error_fallback so transient network errors retry on the next call.
-        if (result.source !== "error_fallback") {
+        if (result.source !== "error_fallback" &&
+            (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)) {
           this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
         }
         return result;
       })
       .finally(() => {
-        this.modelDiscoveryInFlight.delete(keys.exact);
+        if (this.modelDiscoveryInFlight.get(keys.exact) === pending) this.modelDiscoveryInFlight.delete(keys.exact);
       });
     this.modelDiscoveryInFlight.set(keys.exact, pending);
     return pending;
@@ -2973,7 +3032,7 @@ export class LlmService {
     }
     for (const snapshot of snapshots) {
       const provider = this.providers.get(snapshot.providerId);
-      if (!provider || provider.baseUrl !== snapshot.baseUrl) {
+      if (!provider || provider.baseUrl !== snapshot.baseUrl || isOpenAICodexProvider(provider)) {
         continue;
       }
       const cachedAt = Date.parse(snapshot.cachedAt);
@@ -2997,7 +3056,8 @@ export class LlmService {
     result: ModelDiscoveryResult,
     cachedAt: number,
   ): void {
-    if (!this.modelCatalogCachePath || result.source === "error_fallback" || result.items.length === 0) {
+    if (!this.modelCatalogCachePath || isOpenAICodexProvider(provider) ||
+        result.source === "error_fallback" || result.items.length === 0) {
       return;
     }
     try {
@@ -3040,20 +3100,19 @@ export class LlmService {
 
   private async fetchModelsForResolvedProviderUncached(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
-    if (isOpenAICodexProvider(resolved.provider)) {
-      return {
-        items: fallback,
-        source: "template_fallback",
-        warning:
-          "OpenAI Codex model catalog is sourced from GoatCitadel's template because ChatGPT OAuth does not expose a stable /models endpoint.",
-      };
-    }
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
     const discoverySignal = AbortSignal.timeout(15_000);
     let lease: LlmLocalServiceLease | undefined;
 
     try {
+      const catalogResolved = isOpenAICodexProvider(resolved.provider)
+        ? { ...resolved, apiKey: resolved.apiKey ?? (await this.openAICodexOAuth.resolveAccessToken()) }
+        : resolved;
+      const catalogUrl = new URL(`${resolved.provider.baseUrl}/models`);
+      if (isOpenAICodexProvider(resolved.provider)) {
+        catalogUrl.searchParams.set("client_version", OPENAI_CODEX_CATALOG_CLIENT_VERSION);
+      }
+      const target = this.buildRequestTarget(catalogResolved, "models", catalogUrl.toString());
       // A local-runtime lease failure (runtime disabled in config, missing
       // binary, busy port) is a discovery outcome, not a caller error: it must
       // reach the same error_fallback path as a provider HTTP failure below
@@ -3090,7 +3149,9 @@ export class LlmService {
       }
 
       const json = await parseProviderJsonResponse<unknown>("model listing", response);
-      const items = normalizeModelRecords(json);
+      const items = isOpenAICodexProvider(resolved.provider)
+        ? normalizeCodexModelRecords(json)
+        : normalizeModelRecords(json);
       if (items.length > 0) {
         return { items, source: "live" };
       }
@@ -3548,7 +3609,7 @@ function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: st
 
 function isOpenAiResponsesPreferredModel(model: string): boolean {
   const normalized = model.trim().toLowerCase();
-  return /^gpt-5(?:$|[.-])/.test(normalized);
+  return /^gpt-(?:5|6)(?:$|[.-])/.test(normalized);
 }
 
 function resolveConfiguredModelForProvider(
@@ -3696,6 +3757,17 @@ function findNearestModelMetadataPath(startDir: string): string | undefined {
   }
 }
 
+function normalizeCodexModelRecords(payload: unknown): LlmModelRecord[] {
+  if (!isPlainRecord(payload) || !Array.isArray(payload.models)) return [];
+  return normalizeModelRecords({
+    models: payload.models.filter(
+      (value): value is Record<string, unknown> =>
+        isPlainRecord(value) &&
+        (value.visibility === undefined || value.visibility === "list"),
+    ),
+  });
+}
+
 function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
   const records = extractModelRecordArray(payload);
   const normalized: LlmModelRecord[] = [];
@@ -3732,9 +3804,36 @@ function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
           // OpenRouter nests the completion cap under top_provider.
           (isPlainRecord(record.top_provider) ? record.top_provider.max_completion_tokens : undefined),
       ),
+      reasoningEfforts: extractCodexReasoningEfforts(record.supported_reasoning_levels),
+      fastModeAvailable: extractCodexFastModeAvailability(record),
     });
   }
   return normalized;
+}
+
+const CODEX_WIRE_REASONING_EFFORTS = new Set<ChatCompletionReasoningEffort>([
+  "none", "low", "medium", "high", "xhigh", "max",
+]);
+
+function extractCodexReasoningEfforts(value: unknown): ChatCompletionReasoningEffort[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const efforts = new Set<ChatCompletionReasoningEffort>();
+  for (const item of value) {
+    const effort = isPlainRecord(item) ? item.effort : undefined;
+    if (typeof effort === "string" && CODEX_WIRE_REASONING_EFFORTS.has(effort as ChatCompletionReasoningEffort)) {
+      efforts.add(effort as ChatCompletionReasoningEffort);
+    }
+  }
+  return efforts.size > 0 ? [...efforts] : undefined;
+}
+
+function extractCodexFastModeAvailability(record: Record<string, unknown>): boolean | undefined {
+  const serviceTiers = record.service_tiers;
+  const legacyTiers = record.additional_speed_tiers;
+  if (!Array.isArray(serviceTiers) && !Array.isArray(legacyTiers)) return undefined;
+  return (Array.isArray(serviceTiers) && serviceTiers.some((tier) =>
+    isPlainRecord(tier) && (tier.id === "priority" || tier.id === "fast"))) ||
+    (Array.isArray(legacyTiers) && (legacyTiers.includes("fast") || legacyTiers.includes("priority")));
 }
 
 function extractModelLabel(record: Record<string, unknown>, id: string): string | undefined {
@@ -3794,7 +3893,7 @@ function extractModelRecordArray(payload: unknown): Array<Record<string, unknown
 }
 
 function extractModelId(record: Record<string, unknown>): string | undefined {
-  const candidates = [record.id, record.name, record.model];
+  const candidates = [record.id, record.slug, record.name, record.model];
   for (const candidate of candidates) {
     if (typeof candidate === "string") {
       const trimmed = candidate.trim();
@@ -4857,7 +4956,13 @@ function buildOpenAiResponsesPayload(
     payload.parallel_tool_calls = request.parallel_tool_calls;
   }
   if (request.metadata !== undefined) payload.metadata = request.metadata;
-  if (request.service_tier && !isOpenAICodexResponsesProvider(provider)) payload.service_tier = request.service_tier;
+  if (isOpenAICodexResponsesProvider(provider)) {
+    if (request.service_tier === "fast" || request.service_tier === "priority") {
+      payload.service_tier = "priority";
+    }
+  } else if (request.service_tier) {
+    payload.service_tier = request.service_tier;
+  }
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
 
   applyOpenAiResponsesProviderDefaults(payload, provider, model);
@@ -4875,7 +4980,7 @@ function applyOpenAiResponsesProviderDefaults(
   }
 
   payload.store = false;
-  if (!isOpenAIGpt5Model(model)) {
+  if (!isOpenAiRecentGptModel(model)) {
     return;
   }
 
@@ -4898,7 +5003,8 @@ function usesOpenAICodexResponsesLite(
   provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
   model: string,
 ): boolean {
-  return isOpenAICodexResponsesProvider(provider) && /^gpt-5\.6-(?:sol|terra|luna)$/iu.test(model.trim());
+  return isOpenAICodexResponsesProvider(provider) &&
+    /^gpt-(?:5\.6-(?:sol|terra|luna)|6-(?:astra|sol|luna))$/iu.test(model.trim());
 }
 
 function resolveProviderSseEventLimit(
@@ -5165,8 +5271,8 @@ function readFiniteNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-function isOpenAIGpt5Model(model: string): boolean {
-  return /^gpt-5(?:[.-]|$)/i.test(model.trim());
+function isOpenAiRecentGptModel(model: string): boolean {
+  return /^gpt-(?:5|6)(?:[.-]|$)/i.test(model.trim());
 }
 
 function hasOwn(value: object, key: string): boolean {

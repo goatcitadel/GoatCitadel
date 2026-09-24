@@ -147,6 +147,46 @@ describe("ChatTurnActivityRows effect truth", () => {
   });
 });
 
+describe("ChatTurnActivityRows effect truth presentation", () => {
+  it("leads with plain guidance and keeps machine effect facts behind technical details", () => {
+    const renderer = TestRenderer.create(
+      <ChatTurnActivityRows
+        mode="chat"
+        toolRuns={[
+          createToolRun({
+            toolRunId: "uncertain-tool",
+            toolName: "shell.exec",
+            status: "approval_required",
+            effectPotential: "unknown",
+            effectDisposition: "unknown",
+            effectOutcomeKind: "uncertain",
+            effectEvidence: {
+              version: "goatcitadel.tool-effect.v1",
+              outcomeKind: "uncertain",
+              reason: "legacy_or_malformed_effect_evidence",
+              refs: [],
+            },
+          }),
+        ]}
+        onOpenRunDetails={vi.fn()}
+      />,
+    );
+    const textOf = (node: TestRenderer.ReactTestInstance): string =>
+      node.children.map((child) => (typeof child === "string" ? child : textOf(child))).join("");
+    const summary = renderer.root.findByProps({ className: "mc-next-thread-tool-activity-summary" });
+    expect(textOf(summary)).toContain("Outcome uncertain. Inspect external or runtime state before retry.");
+    expect(textOf(summary)).not.toContain("disposition unknown");
+    expect(textOf(summary)).not.toContain("legacy_or_malformed_effect_evidence");
+    const technical = renderer.root.findAll(
+      (node) => typeof node.props.className === "string" && node.props.className.split(" ").includes("mc-next-technical-detail"),
+    );
+    expect(technical.map(textOf).join(" ")).toContain(
+      "potential unknown · disposition unknown · outcome uncertain · evidence legacy_or_malformed_effect_evidence",
+    );
+    renderer.unmount();
+  });
+});
+
 describe("deriveLiveActivityPhase", () => {
   it("returns thinking phase when running with no tools yet and no visible text", () => {
     const phase = deriveLiveActivityPhase({

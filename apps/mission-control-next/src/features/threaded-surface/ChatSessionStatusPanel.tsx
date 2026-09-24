@@ -4,7 +4,7 @@ import { StatusChip } from "../native-routes/primitives";
 
 type PanelState = NonNullable<MissionThreadedActiveSessionSurfaceProps["sessionStatusPanel"]>;
 
-export function ChatSessionStatusPanel({ panel }: { panel: PanelState }) {
+export function ChatSessionStatusPanel({ panel, showClose = true }: { panel: PanelState; showClose?: boolean }) {
   if (!panel.open) return null;
   const status = panel.status;
   return (
@@ -23,14 +23,16 @@ export function ChatSessionStatusPanel({ panel }: { panel: PanelState }) {
           >
             {panel.loading ? "Refreshing…" : "Refresh"}
           </button>
-          <button
-            type="button"
-            className="mc-next-threaded-secondary"
-            onClick={panel.onClose}
-            aria-label="Close session status"
-          >
-            Close
-          </button>
+          {showClose ? (
+            <button
+              type="button"
+              className="mc-next-threaded-secondary"
+              onClick={panel.onClose}
+              aria-label="Close session status"
+            >
+              Close
+            </button>
+          ) : null}
         </div>
       </div>
       {panel.error ? <p role="alert">Gateway status unavailable: {panel.error}</p> : null}

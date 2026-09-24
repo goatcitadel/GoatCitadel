@@ -1,5 +1,6 @@
 import type {
   ChatCapabilityUpgradeSuggestion,
+  ChatCompletionReasoningEffort,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
   ChatRoutedContextRef,
@@ -59,6 +60,8 @@ export interface ChatContextDockPanelsProps {
   providerOptions: ChatModelProviderOption[];
   selectedProviderId?: string;
   selectedModel?: string;
+  selectedModelReasoningEfforts?: ChatCompletionReasoningEffort[];
+  selectedModelFastAvailable?: boolean;
   streamEnabled: boolean;
   visualStreamMode: ChatVisualStreamMode;
   onStreamEnabledChange: (checked: boolean) => void;

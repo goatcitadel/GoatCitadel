@@ -73,6 +73,7 @@ import {
   NotFoundError,
   isToolEffectPotentialRecord,
   normalizeToolEffectEvidenceRefs,
+  supportsOpenAiFastMode,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
   TOOL_EFFECT_CLASSIFICATION_VERSION,
   TOOL_EFFECT_RECEIPT_VERSION,
@@ -14494,17 +14495,20 @@ function resolveModelControlOptions(
   hasFunctionTools = false,
 ): Pick<ChatCompletionRequest, "reasoning" | "verbosity" | "service_tier"> {
   const promptLabControls = resolvePromptLabOpenAiControls(input, hasFunctionTools);
+  const serviceTier = input.speedMode === "fast"
+    ? (supportsOpenAiFastMode(input.providerId, input.model) ? "fast" : "auto")
+    : undefined;
   if (Object.keys(promptLabControls).length > 0) {
     return {
       ...promptLabControls,
-      service_tier: input.speedMode === "fast" ? "auto" : undefined,
+      service_tier: serviceTier,
     };
   }
   const reasoning = resolveChatReasoningEffort(input.thinkingLevel);
   return {
     reasoning: reasoning ? { effort: reasoning } : undefined,
     verbosity: input.speedMode === "fast" ? "low" : input.mode === "code" ? "medium" : undefined,
-    service_tier: input.speedMode === "fast" ? "auto" : undefined,
+    service_tier: serviceTier,
   };
 }
 

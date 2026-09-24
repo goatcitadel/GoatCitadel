@@ -127,4 +127,16 @@ describe("InlineApprovalPrompt countdown accessibility", () => {
     expect(findTechnicalDetails().props.open).toBe(true);
     expect(findTechnicalDetails().findByType("summary").props["aria-expanded"]).toBe(true);
   });
+
+  it("keeps the opaque approval ID behind the technical-details preference", () => {
+    renderer = create(
+      <InlineApprovalPrompt approvalId="approval-opaque-1" approvalsHref="/ops/approvals" {...noopCallbacks} />,
+    );
+    const idChip = renderer.root.find(
+      (node) => typeof node.props.className === "string" && node.props.className.includes("gc-identifier-chip"),
+    );
+    expect(idChip.props.className.split(" ")).toContain("mc-next-technical-detail");
+    // The plain-language path to the canonical record stays visible.
+    expect(renderer.root.findByType("a").props.href).toBe("/ops/approvals");
+  });
 });

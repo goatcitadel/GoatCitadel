@@ -16,6 +16,34 @@ function request(effort: NonNullable<ChatCompletionRequest["reasoning"]>["effort
 }
 
 describe("resolveLlmReasoningProfile", () => {
+  it("uses live model efforts and does not invent none or ultra for OpenAI", () => {
+    const modelMetadata = {
+      contextWindow: 1_050_000,
+      outputTokenLimit: 128_000,
+      reasoning: { supportedEfforts: ["low", "medium", "high", "xhigh", "max"] as const },
+    };
+    expect(() => resolveLlmReasoningProfile({
+      request: request("none"),
+      providerId: "openai",
+      providerCapabilities: BASE_CAPABILITIES,
+      modelMetadata: { ...modelMetadata, reasoning: { supportedEfforts: [...modelMetadata.reasoning.supportedEfforts] } },
+    })).toThrowError(expect.objectContaining({ code: "unsupported_reasoning_effort" }));
+    const live = resolveLlmReasoningProfile({
+      request: request("max"),
+      providerId: "openai-codex",
+      providerCapabilities: BASE_CAPABILITIES,
+      modelMetadata: { ...modelMetadata, reasoning: { supportedEfforts: ["low"] } },
+      catalogReasoningEfforts: ["low", "high", "max"],
+    });
+    expect(live.receipt).toMatchObject({ actual: "max", capabilitySource: "provider_catalog" });
+    expect(() => resolveLlmReasoningProfile({
+      request: request("ultra"),
+      providerId: "openai-codex",
+      providerCapabilities: BASE_CAPABILITIES,
+      catalogReasoningEfforts: ["low", "high", "max"],
+    })).toThrowError(expect.objectContaining({ code: "unsupported_reasoning_effort" }));
+  });
+
   it("honors an effort explicitly declared by model metadata", () => {
     const result = resolveLlmReasoningProfile({
       request: request("ultra"),

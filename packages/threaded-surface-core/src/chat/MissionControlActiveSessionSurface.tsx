@@ -206,6 +206,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
   onOpenPersonalitiesSettings?: () => void;
+  onOpenProviderSettings?: () => void;
+  onOpenLocalAiSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
   onOpenLibraryImports?: () => void;
   onOpenOpsRuntime?: () => void;

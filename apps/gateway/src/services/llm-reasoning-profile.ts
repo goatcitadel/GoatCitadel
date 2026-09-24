@@ -21,6 +21,7 @@ export function resolveLlmReasoningProfile(input: {
   providerId?: string;
   providerCapabilities: LlmProviderCapabilities;
   modelMetadata?: LlmModelMetadataEntry;
+  catalogReasoningEfforts?: ChatCompletionReasoningEffort[];
   attribution?: ModelUsageAttributionContext;
 }): LlmReasoningProfileResolution {
   const baseAttribution = input.attribution ?? {};
@@ -53,8 +54,12 @@ export function resolveLlmReasoningProfile(input: {
     }
   }
 
-  const capability = resolveCapability(input.modelMetadata, input.providerCapabilities);
-  const supported = new Set<ChatCompletionReasoningEffort>(["none", ...capability.supportedEfforts]);
+  const capability = resolveCapability(
+    input.catalogReasoningEfforts,
+    input.modelMetadata,
+    input.providerCapabilities,
+  );
+  const supported = new Set<ChatCompletionReasoningEffort>(capability.supportedEfforts);
   let actual = dispatchedRequest;
   let disposition: ChatCompletionReasoningReceipt["disposition"] =
     requested === dispatchedRequest ? "honored" : "downgraded";
@@ -119,6 +124,7 @@ export function resolveLlmReasoningProfile(input: {
 }
 
 function resolveCapability(
+  catalogReasoningEfforts: ChatCompletionReasoningEffort[] | undefined,
   modelMetadata: LlmModelMetadataEntry | undefined,
   providerCapabilities: LlmProviderCapabilities,
 ): {
@@ -126,6 +132,12 @@ function resolveCapability(
   providerEffortMap?: Partial<Record<ChatCompletionReasoningEffort, ChatCompletionReasoningEffort>>;
   source: ChatCompletionReasoningReceipt["capabilitySource"];
 } {
+  if (catalogReasoningEfforts?.length) {
+    return {
+      supportedEfforts: catalogReasoningEfforts,
+      source: "provider_catalog",
+    };
+  }
   if (modelMetadata?.reasoning) {
     return {
       supportedEfforts: modelMetadata.reasoning.supportedEfforts,

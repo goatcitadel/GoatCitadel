@@ -840,6 +840,34 @@ describe("MissionControlNextApp", () => {
     expect(window.location.pathname).toBe("/chat");
   });
 
+  it("guards only the first destination, so starting in Get started can still open Chat (safe demo)", async () => {
+    appMocks.fetchOnboardingState.mockResolvedValue({ completed: false });
+    appMocks.preflightGatewayAccess.mockResolvedValueOnce({
+      status: "ready",
+      message: "Gateway ready",
+      healthDetail: "ok",
+      onboardingState: { completed: false },
+    });
+
+    const renderer = await renderApp("http://localhost:5173/settings/onboarding");
+    expect(window.location.pathname).toBe("/settings/onboarding");
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-rail-area-link") && readNodeText(node).includes("Chat"),
+        )
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(window.location.pathname).toBe("/chat");
+    expect(appMocks.fetchOnboardingState).not.toHaveBeenCalled();
+  });
+
   it("pauses scoped routes when the active Citadel has no workspaces", async () => {
     appMocks.activeCitadelId = "company";
     appMocks.activeWorkspaceId = "default";

@@ -16,17 +16,31 @@ import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
 import { ChatOptionsPopover } from "./ChatOptionsPopover";
 import { buildActiveChatOptionSettings } from "./chat-option-settings";
+import { resolveChatRouteReadiness } from "./chat-route-readiness";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
 import { ChatCapabilityProfilePreflight } from "./ChatCapabilityProfilePanel";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { WorkflowSkillCaptureEvidence } from "@goatcitadel/mission-control-shared/components/chat/WorkflowSkillCaptureEvidence";
+import { humanizeEnum } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 
 /* C7: soft character ceiling for the draft. Not enforced (sending isn't
    blocked); the counter only surfaces once a message gets long. */
 const COMPOSER_SOFT_LIMIT = 8000;
 const COMPOSER_COUNT_VISIBLE_AT = Math.round(COMPOSER_SOFT_LIMIT * 0.7);
+
+function formatRecoveryStatus(status?: string): string {
+  const label = humanizeEnum(status) || "recovery";
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/** Drops the default "Command" source and generic "Available" state, which every row would repeat. */
+function formatPaletteItemMeta(item: { sourceLabel?: string; availabilityLabel?: string }): string | null {
+  const source = item.sourceLabel && item.sourceLabel !== "Command" ? item.sourceLabel : null;
+  const availability = item.availabilityLabel && item.availabilityLabel !== "Available" ? item.availabilityLabel : null;
+  return [source, availability].filter(Boolean).join(" · ") || null;
+}
 
 function getPlaceholder(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): string {
   if (mode === "code") {
@@ -396,42 +410,96 @@ function ComposerCoworkStop({ props }: { props: MissionThreadedActiveSessionSurf
 type ThreadedExternalSourceControls = NonNullable<MissionThreadedActiveSessionSurfaceProps["externalSourceControls"]>;
 
 /**
- * HX-407 C3/C4b read-only external-source strip: content-free chips, explicit
- * per-turn selection, exact-CAS detach, and the governed knowledge-copy
- * request. Rendered only when the runtime composes the capability (the host
- * passes `null` while the Chat attachment routes are absent). Mutations are
- * live exactly when the durable reload carried the session incarnation
- * (`canMutate`); without it they stay disabled with an honest hint. Chips
- * never render transcript content or raw JSON, and no affordance edits the
- * immutable imported evidence.
+ * HX-407 C3/C4b read-only external-source picker. Selection is per-turn; source
+ * evidence remains immutable, and attach/detach/knowledge-copy mutations stay
+ * behind the Gateway's live session-incarnation check.
  */
 function ExternalSourceStrip({
   controls,
   disabled,
   openAttachFormToken = 0,
   onOpenLibrary,
+  onRestoreFocus,
 }: {
   controls: ThreadedExternalSourceControls;
   disabled: boolean;
   openAttachFormToken?: number;
   onOpenLibrary?: () => void;
+  onRestoreFocus?: () => void;
 }) {
   const stripInstanceId = useId();
   const attachFormId = `${stripInstanceId}-attach-form`;
   const stripRef = useRef<HTMLElement | null>(null);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const pickerCloseRef = useRef<HTMLButtonElement | null>(null);
+  const wasPickerOpenRef = useRef(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [attachFormOpen, setAttachFormOpen] = useState(false);
+  const [recentImportMetadata, setRecentImportMetadata] = useState<Map<string, { sourceLabel: string; importedAt: string }>>(() => new Map());
   const selectedCount = controls.selectedAttachmentIds.length;
   const mutationHint = controls.canMutate
     ? null
-    : "Attach, detach, and knowledge-copy actions stay disabled until the server provides the live session incarnation.";
+    : "Chat is still preparing this session. You can review attached sources now; source changes will be available when Chat is ready.";
 
   useEffect(() => {
     if (openAttachFormToken <= 0) return;
+    setPickerOpen(true);
     setAttachFormOpen(true);
     stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [openAttachFormToken]);
 
-  if (!attachFormOpen && controls.attachments.length === 0 && !controls.error) return null;
+  useEffect(() => {
+    if (pickerOpen) pickerCloseRef.current?.focus();
+    else if (wasPickerOpenRef.current) {
+      if (pickerTriggerRef.current) pickerTriggerRef.current.focus();
+      else onRestoreFocus?.();
+    }
+    wasPickerOpenRef.current = pickerOpen;
+  }, [onRestoreFocus, pickerOpen]);
+
+  const closePicker = () => {
+    setPickerOpen(false);
+    setAttachFormOpen(false);
+  };
+  const handlePickerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePicker();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => !element.closest("details:not([open])"));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !event.currentTarget.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  if (
+    !pickerOpen &&
+    !attachFormOpen &&
+    controls.attachments.length === 0 &&
+    controls.candidates.length === 0 &&
+    !controls.loading &&
+    !controls.error &&
+    controls.candidatesSupported !== false
+  ) {
+    return null;
+  }
 
   return (
     <section
@@ -440,11 +508,11 @@ function ExternalSourceStrip({
       aria-label="Read-only external source attachments"
     >
       <div className="mc-next-composer-external-head">
-        <strong>External sources</strong>
+        <strong>Sources for this turn</strong>
         <span aria-live="polite">
           {selectedCount > 0
             ? `${selectedCount} selected for the next turn`
-            : "Select attachments to include in the next turn."}
+            : "Choose read-only sources to include in your next message."}
         </span>
         {selectedCount > 0 ? (
           <button
@@ -457,151 +525,166 @@ function ExternalSourceStrip({
           </button>
         ) : null}
         <button
+          ref={pickerTriggerRef}
           type="button"
           className="mc-next-composer-inline-button"
-          aria-expanded={attachFormOpen}
-          aria-controls={attachFormId}
-          onClick={() => setAttachFormOpen((current) => !current)}
+          aria-haspopup="dialog"
+          aria-expanded={pickerOpen}
+          onClick={() => setPickerOpen(true)}
         >
-          {attachFormOpen ? "Close picker" : "Attach imported item"}
+          Choose sources
         </button>
       </div>
-      {controls.error ? (
-        <p className="mc-next-composer-external-error" role="alert">
-          {controls.error}
-        </p>
-      ) : null}
-      {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
-      <div id={attachFormId} className="mc-next-composer-external-attach-form" hidden={!attachFormOpen}>
-        <p className="mc-next-composer-external-hint">
-          Choose a verified applied import. Chat receives only its immutable binding; external content stays read-only.
-        </p>
-        {controls.loading ? (
-          <p className="mc-next-composer-external-hint" role="status">
-            Refreshing eligible imports…
-          </p>
-        ) : controls.candidatesSupported === false ? (
-          <p className="mc-next-composer-external-hint">
-            This Gateway does not expose the governed import picker yet. Manage imports in Library.
-          </p>
-        ) : controls.candidates.length === 0 ? (
-          <p className="mc-next-composer-external-hint">
-            No unattached verified imports are eligible for this session.
-          </p>
-        ) : (
-          <ul role="list" className="mc-next-composer-external-list" aria-label="Eligible imported items">
-            {controls.candidates.map((candidate) => {
-              const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
-              return (
-                <li
-                  key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`}
-                  className="mc-next-composer-external-chip"
-                >
-                  <div className="mc-next-composer-external-chip-body">
-                    <strong>{candidate.itemId}</strong>
-                    <p
-                      className="mc-next-composer-external-meta"
-                      title={`Immutable source ${candidate.sourceId} · import ${candidate.importId} · item ${candidate.itemId}`}
-                    >
-                      {candidate.sourceLabel} · source rev {candidate.sourceRevision} · verified{" "}
-                      {candidate.artifactsVerifiedAt.slice(0, 10)}
-                    </p>
-                  </div>
-                  <div className="mc-next-composer-external-chip-actions">
-                    <StatusChip tone="muted">Read-only</StatusChip>
-                    <button
-                      type="button"
-                      className="mc-next-composer-inline-button"
-                      disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
-                      onClick={() =>
-                        controls.onAttach({
-                          sourceId: candidate.sourceId,
-                          importId: candidate.importId,
-                          itemId: candidate.itemId,
-                        })
-                      }
-                      aria-label={`Attach ${candidate.itemId} from ${candidate.sourceLabel} read-only`}
-                    >
-                      {busy ? "Attaching…" : "Attach read-only"}
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <button
-          type="button"
-          className="mc-next-composer-inline-button"
-          disabled={disabled || controls.loading}
-          onClick={controls.onReload}
-        >
-          Refresh imports
-        </button>
-        {onOpenLibrary ? (
-          <button type="button" className="mc-next-composer-inline-button" disabled={disabled} onClick={onOpenLibrary}>
-            Manage Library imports
-          </button>
-        ) : null}
-      </div>
-      {controls.attachments.length === 0 ? (
-        <p className="mc-next-composer-external-hint">
-          No external sources are attached to this session. Import them in the Library first.
-        </p>
-      ) : (
-        <ul role="list" className="mc-next-composer-external-list">
-          {controls.attachments.map((attachment) => {
-            const busy = controls.busyAttachmentId !== null;
-            const selected = controls.selectedAttachmentIds.includes(attachment.attachmentId);
-            const checkboxId = `${stripInstanceId}-select-${attachment.attachmentId}`;
-            return (
-              <li key={attachment.attachmentId} className="mc-next-composer-external-chip">
-                <div className="mc-next-composer-external-chip-body">
-                  <label className="mc-next-composer-external-select" htmlFor={checkboxId}>
-                    <input
-                      id={checkboxId}
-                      type="checkbox"
-                      checked={selected}
-                      disabled={disabled}
-                      onChange={() => controls.onToggleSelect(attachment.attachmentId)}
-                      aria-label={`Include external source ${attachment.itemId} in the next turn`}
-                    />
-                    <strong>{attachment.itemId}</strong>
-                  </label>
-                  <p
-                    className="mc-next-composer-external-meta"
-                    title={`Source ${attachment.sourceId} · Import ${attachment.importId} · Item ${attachment.itemId}`}
-                  >
-                    Read-only external · rev {attachment.revision} · sha{" "}
-                    {attachment.normalizedArtifactSha256.slice(0, 12)}…
-                  </p>
-                </div>
+      {pickerOpen ? (
+        <div className="mc-next-source-picker-backdrop">
+          <div
+            ref={pickerRef}
+            className="mc-next-source-picker-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${stripInstanceId}-picker-title`}
+            onKeyDown={handlePickerKeyDown}
+          >
+            <header className="mc-next-source-picker-header">
+              <div>
+                <h2 id={`${stripInstanceId}-picker-title`}>Choose sources for this turn</h2>
+                <p>These sources are read-only. Select the ones you want the next message to use.</p>
+              </div>
+              <button ref={pickerCloseRef} type="button" className="mc-next-composer-inline-button" onClick={closePicker}>
+                Close
+              </button>
+            </header>
+            {controls.error ? <p className="mc-next-composer-external-error" role="alert">{controls.error}</p> : null}
+            {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
+            {controls.loading && controls.attachments.length === 0 ? (
+              <p className="mc-next-composer-external-hint" role="status">Checking attached sources…</p>
+            ) : controls.attachments.length === 0 ? (
+              <p className="mc-next-composer-external-hint">No read-only sources are attached to this chat yet.</p>
+            ) : (
+              <ul role="list" className="mc-next-composer-external-list" aria-label="Attached read-only sources">
+                {controls.attachments.map((attachment) => {
+                  const busy = controls.busyAttachmentId !== null;
+                  const selected = controls.selectedAttachmentIds.includes(attachment.attachmentId);
+                  const checkboxId = `${stripInstanceId}-select-${attachment.attachmentId}`;
+                  const candidate = controls.candidates.find((item) =>
+                    item.sourceId === attachment.sourceId && item.importId === attachment.importId && item.itemId === attachment.itemId,
+                  );
+                  const bindingKey = `${attachment.sourceId}\u001f${attachment.importId}\u001f${attachment.itemId}`;
+                  const recentImport = recentImportMetadata.get(bindingKey);
+                  const sourceName = candidate?.sourceLabel ?? recentImport?.sourceLabel ?? "Read-only source";
+                  const importedAt = candidate?.importedAt ?? recentImport?.importedAt;
+                  const date = importedAt ?? attachment.attachedAt;
+                  const formattedDate = Number.isFinite(Date.parse(date))
+                    ? new Date(date).toLocaleDateString(undefined, { dateStyle: "medium" })
+                    : "date unavailable";
+                  return (
+                    <li key={attachment.attachmentId} className="mc-next-composer-external-chip">
+                      <div className="mc-next-composer-external-chip-body">
+                        <label className="mc-next-composer-external-select" htmlFor={checkboxId}>
+                          <input
+                            id={checkboxId}
+                            type="checkbox"
+                            checked={selected}
+                            disabled={disabled}
+                            onChange={() => controls.onToggleSelect(attachment.attachmentId)}
+                            aria-label={`Include ${sourceName} in the next turn`}
+                          />
+                          <strong>{sourceName}</strong>
+                        </label>
+                        <p className="mc-next-composer-external-meta">Read-only · {importedAt ? "Imported" : "Attached"} {formattedDate}</p>
+                        <details>
+                          <summary>Source details and actions</summary>
+                          <p className="mc-next-composer-external-meta">
+                            Item {attachment.itemId} · source {attachment.sourceId} · import {attachment.importId} · revision {attachment.revision} · sha {attachment.normalizedArtifactSha256.slice(0, 12)}…
+                          </p>
+                          <div className="mc-next-composer-external-chip-actions">
+                            <StatusChip tone="muted">Read-only</StatusChip>
+                            <button
+                              type="button"
+                              className="mc-next-composer-inline-button"
+                              disabled={disabled || busy || !controls.canMutate}
+                              onClick={() => controls.onRequestKnowledgeSnapshot(attachment.attachmentId)}
+                              aria-label="Request a governed knowledge copy of this source"
+                            >Request knowledge copy</button>
+                            <button
+                              type="button"
+                              className="mc-next-composer-inline-button"
+                              disabled={disabled || busy || !controls.canMutate}
+                              onClick={() => controls.onDetach(attachment.attachmentId)}
+                              aria-label="Detach this read-only source"
+                            >Detach</button>
+                          </div>
+                        </details>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <details className="mc-next-source-picker-attach" open={attachFormOpen} onToggle={(event) => setAttachFormOpen(event.currentTarget.open)}>
+              <summary>Attach a verified import</summary>
+              <div id={attachFormId} className="mc-next-composer-external-attach-form">
+                <p className="mc-next-composer-external-hint">
+                  First attach a verified import. After the Gateway confirms it, it will appear above for selection.
+                </p>
+                {controls.loading ? (
+                  <p className="mc-next-composer-external-hint" role="status">Refreshing eligible imports…</p>
+                ) : controls.candidatesSupported === false ? (
+                  <p className="mc-next-composer-external-hint">Verified import selection is unavailable here. Manage imports in Library.</p>
+                ) : controls.candidates.length === 0 ? (
+                  <p className="mc-next-composer-external-hint">No verified imports are ready to attach. Import and verify an item in Library first.</p>
+                ) : (
+                  <ul role="list" className="mc-next-composer-external-list" aria-label="Verified imports ready to attach">
+                    {controls.candidates.map((candidate) => {
+                      const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
+                      const formattedDate = Number.isFinite(Date.parse(candidate.importedAt))
+                        ? new Date(candidate.importedAt).toLocaleDateString(undefined, { dateStyle: "medium" })
+                        : "date unavailable";
+                      return (
+                        <li key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`} className="mc-next-composer-external-chip">
+                          <div className="mc-next-composer-external-chip-body">
+                            <strong>{candidate.sourceLabel}</strong>
+                            <p className="mc-next-composer-external-meta">Imported {formattedDate} · verified {candidate.artifactsVerifiedAt.slice(0, 10)}</p>
+                            <details>
+                              <summary>Import details</summary>
+                              <p className="mc-next-composer-external-meta">Item {candidate.itemId} · source revision {candidate.sourceRevision}</p>
+                            </details>
+                          </div>
+                          <div className="mc-next-composer-external-chip-actions">
+                            <StatusChip tone="muted">Read-only</StatusChip>
+                            <button
+                              type="button"
+                              className="mc-next-composer-inline-button"
+                              disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
+                              onClick={() => {
+                                const bindingKey = `${candidate.sourceId}\u001f${candidate.importId}\u001f${candidate.itemId}`;
+                                setRecentImportMetadata((current) => new Map(current).set(bindingKey, {
+                                  sourceLabel: candidate.sourceLabel,
+                                  importedAt: candidate.importedAt,
+                                }));
+                                controls.onAttach({ sourceId: candidate.sourceId, importId: candidate.importId, itemId: candidate.itemId });
+                              }}
+                              aria-label={`Attach verified import from ${candidate.sourceLabel} read-only`}
+                            >{busy ? "Attaching…" : "Attach read-only"}</button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
                 <div className="mc-next-composer-external-chip-actions">
-                  <StatusChip tone="muted">Read-only</StatusChip>
-                  <button
-                    type="button"
-                    className="mc-next-composer-inline-button"
-                    disabled={disabled || busy || !controls.canMutate}
-                    onClick={() => controls.onRequestKnowledgeSnapshot(attachment.attachmentId)}
-                    aria-label={`Request a governed knowledge copy of ${attachment.itemId}`}
-                  >
-                    Request knowledge copy
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-composer-inline-button"
-                    disabled={disabled || busy || !controls.canMutate}
-                    onClick={() => controls.onDetach(attachment.attachmentId)}
-                    aria-label={`Detach external source ${attachment.itemId}`}
-                  >
-                    Detach
-                  </button>
+                  <button type="button" className="mc-next-composer-inline-button" disabled={disabled || controls.loading} onClick={controls.onReload}>Refresh imports</button>
+                  {onOpenLibrary ? <button type="button" className="mc-next-composer-inline-button" disabled={disabled} onClick={onOpenLibrary}>Manage Library imports</button> : null}
                 </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+              </div>
+            </details>
+            <footer className="mc-next-source-picker-footer">
+              <span aria-live="polite">{selectedCount > 0 ? `${selectedCount} source${selectedCount === 1 ? "" : "s"} selected for the next message` : "No sources selected"}</span>
+              <button type="button" className="mc-next-composer-inline-button" onClick={closePicker}>Add to chat</button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -641,16 +724,21 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       : currentRouteLabel
         ? currentRouteLabel
         : (props.trust?.providerModelSummary ?? "Provider routing pending");
+  // The single composer-level explanation of a blocked route; the start canvas
+  // carries the setup actions, so no separate alert banner repeats it.
+  const routeSendBlockReason = resolveChatRouteReadiness(props).sendHint;
   const sendLabel = getSendLabel(props);
   const usageLabel = formatUsageLabel(props.thread);
   const usageTotals = computeUsageTotals(props.thread);
   const composerV2Enabled = useComposerV2Enabled();
   useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
   const composerInstanceId = useId();
+  const sendBlockReasonId = `${composerInstanceId}-send-block-reason`;
   const commandSuggestionsListboxId = `${composerInstanceId}-command-suggestions`;
   const commandSuggestionsOpen = props.commandSuggestions.length > 0;
   const composerPaletteVisible = commandSuggestionsOpen || Boolean(props.composerPalette?.globalOpen);
   const paletteSearchRef = useRef<HTMLInputElement | null>(null);
+  const wasComposerPaletteOpenRef = useRef(false);
   const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
   const [scopeCandidateId, setScopeCandidateId] = useState("");
   const [projectSwitchCandidate, setProjectSwitchCandidate] = useState<
@@ -676,8 +764,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     return () => eventTarget.removeEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
   }, [props.composerPalette]);
   useEffect(() => {
-    if (props.composerPalette?.globalOpen) paletteSearchRef.current?.focus();
-  }, [props.composerPalette?.globalOpen]);
+    const isOpen = Boolean(props.composerPalette?.globalOpen);
+    if (isOpen) paletteSearchRef.current?.focus();
+    else if (wasComposerPaletteOpenRef.current) props.composerRef.current?.focus();
+    wasComposerPaletteOpenRef.current = isOpen;
+  }, [props.composerPalette?.globalOpen, props.composerRef]);
   useEffect(() => {
     const candidates = props.delegatedScopeControls?.candidates ?? [];
     setScopeCandidateId((current) =>
@@ -704,12 +795,6 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const handlePaletteSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const palette = props.composerPalette;
     if (!palette) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      palette.onClose();
-      props.composerRef.current?.focus();
-      return;
-    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       palette.onIndexChange(Math.min(props.commandIndex + 1, Math.max(0, props.commandSuggestions.length - 1)));
@@ -734,6 +819,34 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       event.preventDefault();
       const selected = props.commandSuggestions[props.commandIndex];
       if (selected) applyComposerPaletteItem(selected);
+    }
+  };
+  const handleComposerPaletteKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!props.composerPalette?.globalOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      props.composerPalette.onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusable = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => element.getAttribute("aria-hidden") !== "true");
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !event.currentTarget.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
     }
   };
   const contextStripMode = toContextStripMode(props.mode);
@@ -967,13 +1080,6 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         <div className="mc-next-composer-banner info mc-next-technical-detail">
           <StatusChip tone="muted">Route</StatusChip>
           <p>Checking the selected provider/model route before send.</p>
-        </div>
-      ) : null}
-
-      {props.routePreflight?.blockedReason || props.routePreflightError ? (
-        <div className="mc-next-composer-banner error" role="alert">
-          <StatusChip tone="critical">Route blocked</StatusChip>
-          <p>{props.routePreflight?.blockedReason ?? props.routePreflightError}</p>
         </div>
       ) : null}
 
@@ -1214,10 +1320,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
         </div>
       ) : null}
-      {props.selectedTurnRecovery ? (
+      {props.selectedTurnRecovery &&
+      // The approval panel above already explains and resolves a turn waiting on approval.
+      !(props.pendingApproval && props.selectedTurn?.trace.status === "waiting_for_approval") ? (
         <div className="mc-next-composer-banner warning">
           <StatusChip tone={props.selectedTurn?.trace.status === "failed" ? "critical" : "warning"}>
-            {props.selectedTurn?.trace.status ?? "recovery"}
+            {formatRecoveryStatus(props.selectedTurn?.trace.status)}
           </StatusChip>
           <p>{props.selectedTurnRecovery.summary}</p>
           <div className="mc-next-composer-action-row">
@@ -1314,22 +1422,33 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           role={props.composerPalette?.globalOpen ? "dialog" : undefined}
           aria-label={props.composerPalette?.globalOpen ? "Command Palette" : undefined}
           aria-modal={props.composerPalette?.globalOpen ? "true" : undefined}
+          onKeyDown={handleComposerPaletteKeyDown}
         >
           {props.composerPalette?.globalOpen ? (
-            <div className="mc-next-composer-palette-search" role="search">
-              <label htmlFor={`${composerInstanceId}-palette-query`}>Search commands and context</label>
-              <input
-                ref={paletteSearchRef}
-                id={`${composerInstanceId}-palette-query`}
-                type="search"
-                value={props.composerPalette.query}
-                onChange={(event) => props.composerPalette?.onQueryChange(event.target.value)}
-                onKeyDown={handlePaletteSearchKeyDown}
-                aria-controls={commandSuggestionsListboxId}
-                aria-activedescendant={commandSuggestionsActiveDescendant}
-                placeholder="Commands, models, agents, skills, projects, files, URLs…"
-              />
-              <span aria-hidden="true">Esc to close</span>
+            <div className="mc-next-composer-palette-header">
+              <div className="mc-next-composer-palette-search" role="search">
+                <label htmlFor={`${composerInstanceId}-palette-query`}>Search commands and context</label>
+                <input
+                  ref={paletteSearchRef}
+                  id={`${composerInstanceId}-palette-query`}
+                  type="search"
+                  value={props.composerPalette.query}
+                  onChange={(event) => props.composerPalette?.onQueryChange(event.target.value)}
+                  onKeyDown={handlePaletteSearchKeyDown}
+                  aria-controls={commandSuggestionsListboxId}
+                  aria-activedescendant={commandSuggestionsActiveDescendant}
+                  placeholder="Commands, models, agents, skills, projects, files, URLs…"
+                />
+                <span aria-hidden="true">Esc to close</span>
+              </div>
+              <button
+                type="button"
+                className="mc-next-composer-palette-close"
+                aria-label="Close Chat command palette"
+                onClick={() => props.composerPalette?.onClose()}
+              >
+                Close
+              </button>
             </div>
           ) : null}
           {props.composerPalette?.loading ? (
@@ -1351,6 +1470,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           >
             {props.commandSuggestions.map((item, index) => {
               const isHighlighted = index === props.commandIndex;
+              const meta = formatPaletteItemMeta(item);
               return (
                 <button
                   key={item.key}
@@ -1364,11 +1484,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                 >
                   <strong>{item.command}</strong>
                   <span>{item.description}</span>
-                  {item.sourceLabel || item.availabilityLabel ? (
-                    <small>
-                      {item.sourceLabel ?? "Command"} · {item.availabilityLabel ?? "Available"}
-                    </small>
-                  ) : null}
+                  {meta ? <small>{meta}</small> : null}
                 </button>
               );
             })}
@@ -1460,6 +1576,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           disabled={composerActionDisabled}
           openAttachFormToken={externalSourceOpenToken}
           onOpenLibrary={props.onOpenLibraryImports}
+          onRestoreFocus={() => props.composerRef.current?.focus()}
         />
       ) : null}
 
@@ -1586,11 +1703,23 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               {props.isStopPending ? "Stopping…" : "Stop turn"}
             </button>
           ) : (
-            <button type="button" className="mc-next-composer-primary" disabled={!props.canSend} onClick={props.onSend}>
+            <button
+              type="button"
+              className="mc-next-composer-primary"
+              disabled={!props.canSend}
+              onClick={props.onSend}
+              aria-describedby={!props.canSend && routeSendBlockReason ? sendBlockReasonId : undefined}
+              title={!props.canSend ? routeSendBlockReason ?? undefined : undefined}
+            >
               {sendLabel}
             </button>
           )}
         </div>
+        {!props.canSend && routeSendBlockReason ? (
+          <p id={sendBlockReasonId} className="mc-next-composer-helper mc-next-composer-send-block" role="status">
+            {`Sending is unavailable: ${routeSendBlockReason}`}
+          </p>
+        ) : null}
       </div>
     </div>
   );

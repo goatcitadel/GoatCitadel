@@ -743,12 +743,14 @@ export function MissionControlNextApp() {
   // cannot produce a useful first turn. Settings remains reachable later, but
   // this initial redirect is intentionally one-way and history-neutral.
   useEffect(() => {
-    if (
-      gatewayAccess.status !== "ready" ||
-      gatewayAccess.onboardingState?.completed !== false ||
-      redirectedIncompleteOnboardingRef.current ||
-      route.area !== "chat"
-    ) {
+    if (gatewayAccess.status !== "ready" || redirectedIncompleteOnboardingRef.current) {
+      return;
+    }
+    if (gatewayAccess.onboardingState?.completed !== false || route.area !== "chat") {
+      // Only the first destination is guarded. Once the operator starts anywhere
+      // else (for example in Get started), a later move into Chat is deliberate,
+      // such as opening the safe demo's sample chat, and must not bounce back.
+      redirectedIncompleteOnboardingRef.current = true;
       return;
     }
     let cancelled = false;
@@ -1057,6 +1059,8 @@ export function renderRouteContent(input: {
   const route = normalizeAppRoute(input.route);
   const openPersonalitiesSettings = () =>
     input.navigate({ area: "settings", section: "personalities", theme: route.theme });
+  const openProviderSettings = () => input.navigate({ area: "settings", section: "providers", theme: route.theme });
+  const openLocalAiSettings = () => input.navigate({ area: "settings", section: "local-ai", theme: route.theme });
   const openLibraryArtifacts = () => input.navigate({ area: "library", section: "artifacts", theme: route.theme });
   const openLibraryImports = () => input.navigate({ area: "library", section: "knowledge", theme: route.theme });
   const openOpsRuntime = () => input.navigate({ area: "ops", section: "runtime", theme: route.theme });
@@ -1078,6 +1082,8 @@ export function renderRouteContent(input: {
         onCopyTrustReport={input.onCopyTrustReport}
         onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenPersonalitiesSettings={openPersonalitiesSettings}
+        onOpenProviderSettings={openProviderSettings}
+        onOpenLocalAiSettings={openLocalAiSettings}
         onOpenLibraryArtifacts={openLibraryArtifacts}
         onOpenLibraryImports={openLibraryImports}
         onOpenOpsRuntime={openOpsRuntime}

@@ -35,8 +35,8 @@ vi.mock("./ThreadedWorkflowPanel", () => ({
 }));
 
 vi.mock("./ThreadedContextDrawer", () => ({
-  ThreadedContextDrawer: ({ surface }: { surface: string }) => (
-    <div className="mock-threaded-context-drawer">{surface}</div>
+  ThreadedContextDrawer: ({ surface, focusedTab }: { surface: string; focusedTab?: string }) => (
+    <div className="mock-threaded-context-drawer" data-focused-tab={focusedTab}>{surface} {focusedTab}</div>
   ),
 }));
 
@@ -1458,15 +1458,173 @@ describe("ThreadedSurfacePage", () => {
     ).toBeDefined();
   });
 
-  it("opens Activity as the single entry point to inspect right-panel work", async () => {
+  it("keeps one approval decision surface plus the header count while a turn waits", async () => {
+    const activeProps = buildActiveSessionProps({
+      approvalsCount: 1,
+      pendingApproval: {
+        approvalId: "approval-1",
+        toolName: "shell.exec",
+        riskLevel: "danger",
+        reason: "Waiting for verification approval.",
+      },
+      selectedTurn: { turnId: "turn-1", trace: { status: "waiting_for_approval" } },
+      selectedTurnRecovery: { summary: "Review the pending approval so the turn can continue.", action: "none" },
+      onOpenApprovals: vi.fn(),
+    });
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedSurfacePage
+          surface="chat"
+          input={{ ...buildInput(), messageMode: "chat", activeSessionSurfaceProps: activeProps } as any}
+        />,
+      );
+    });
+    const text = collectText(renderer!.root);
+    const buttons = renderer!.root
+      .findAll((node) => node.type === "button")
+      .map((node) => normalizeText(collectText(node)));
+    expect(buttons.filter((label) => /^Approvals \( ?1 ?\)$/.test(label))).toHaveLength(1);
+    expect(buttons.filter((label) => label === "Allow once")).toHaveLength(1);
+    expect(buttons).not.toContain("Review approval");
+    expect(text).not.toContain("Approval is waiting for the next gated step");
+    expect(text).not.toContain("Review the pending approval so the turn can continue.");
+    expect(text).not.toContain("waiting_for_approval");
+  });
+
+  it("states unloaded approval status honestly with a single review action in Activity", async () => {
+    const activeProps = buildActiveSessionProps({
+      approvalsCount: 2,
+      sessionStatusPanel: {
+        open: false,
+        loading: false,
+        error: null,
+        status: null,
+        onRefresh: vi.fn(),
+        onClose: vi.fn(),
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedSurfacePage
+          surface="chat"
+          input={{ ...buildInput(), messageMode: "chat", activeSessionSurfaceProps: activeProps } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      findExactButton(renderer!.root, "Activity").props.onClick();
+    });
+    const text = collectText(renderer!.root);
+    expect(text).toContain("2 approvals are waiting in this workspace.");
+    expect(text).not.toContain("Canonical approval status is unavailable in this runtime.");
+    expect(
+      renderer!.root.findAll(
+        (node) => node.type === "button" && normalizeText(collectText(node)) === "Review approvals",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("labels the header model control as not connected when no provider exists", async () => {
+    const activeProps = buildActiveSessionProps({
+      trust: { ...buildActiveSessionProps().trust, providerModelSummary: "Provider routing pending" },
+      providerOptions: [{ providerId: "llamacpp", label: "llama.cpp", models: ["gemma-4-local"] }],
+      routePreflight: {
+        selectionSource: "global",
+        blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedSurfacePage
+          surface="chat"
+          input={{ ...buildInput(), messageMode: "chat", activeSessionSurfaceProps: activeProps } as any}
+        />,
+      );
+    });
+    const modelSummary = renderer!.root.findAll(
+      (node) => node.type === "summary" && node.props.title === "View or change the model for this chat",
+    )[0]!;
+    expect(normalizeText(collectText(modelSummary))).toBe("Model Not connected");
+  });
+
+  it("explains a missing model in Activity without a dead Configure destination or a clear-route chip", async () => {
+    const activeProps = buildActiveSessionProps({
+      providerOptions: [{ providerId: "llamacpp", label: "llama.cpp", models: ["gemma-4-local"] }],
+      routePreflight: {
+        selectionSource: "global",
+        blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedSurfacePage
+          surface="chat"
+          input={
+            {
+              ...buildInput(),
+              messageMode: "chat",
+              activeSessionSurfaceProps: activeProps,
+              contextDockProps: { routePreflight: activeProps.routePreflight },
+            } as any
+          }
+        />,
+      );
+    });
+    await act(async () => {
+      findExactButton(renderer!.root, "Activity").props.onClick();
+    });
+    const plan = renderer!.root
+      .findAll((node) => node.type === "section" && collectText(node).includes("Current plan"))
+      .at(-1)!;
+    expect(collectText(plan)).toContain("Sending a message needs a model.");
+    expect(collectText(plan)).not.toContain("Configure");
+    expect(collectText(plan)).not.toContain("route clear");
+    expect(collectText(plan)).toContain("Sending blocked");
+  });
+
+  it("groups the former drawer views under Activity, Context, Outputs, and Chat settings", async () => {
     const onDockOpenChange = vi.fn();
     const onSelectFile = vi.fn();
     const onOpenTasks = vi.fn();
+    const unavailableStatusSection = { availability: "unavailable", reason: "Fixture omits this section." };
     const activeProps = buildActiveSessionProps({
       mode: "code",
       queueItems: [{ id: "queue-1", action: "retry", label: "Retry latest turn", createdAt: "2026-05-23T10:00:00Z" }],
       queuedCount: 1,
       streamStatus: "queued",
+      sessionStatusPanel: {
+        open: false,
+        loading: false,
+        error: null,
+        status: {
+          schemaVersion: "chat.session-status.v1",
+          sessionId: "session-1",
+          workspaceId: "default",
+          generatedAt: "2026-05-23T10:00:00Z",
+          model: unavailableStatusSection,
+          context: unavailableStatusSection,
+          work: unavailableStatusSection,
+          attention: {
+            availability: "available",
+            value: {
+              pendingApprovals: [{ approvalId: "approval-1", kind: "tool", createdAt: "2026-05-23T10:00:00Z" }],
+              pendingUserInputs: [],
+              backgroundTasks: [],
+              backgroundTaskProjection: { complete: true },
+            },
+          },
+          orchestration: unavailableStatusSection,
+          capabilities: unavailableStatusSection,
+          usage: unavailableStatusSection,
+          build: unavailableStatusSection,
+        },
+        onRefresh: vi.fn(),
+        onClose: vi.fn(),
+      },
     });
     const input = {
       ...buildInput(),
@@ -1518,35 +1676,45 @@ describe("ThreadedSurfacePage", () => {
       findExactButton(renderer!.root, "Activity").props.onClick();
     });
     expect(collectText(renderer!.root)).toContain("Work Record");
+    const activityTab = renderer!.root.findAll((node) =>
+      node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Activity",
+    )[0]!;
+    expect(activityTab.props["aria-pressed"]).toBe(true);
+    expect(collectText(renderer!.root)).toContain("Approval state");
+    expect(collectText(renderer!.root)).toContain("1 approval is waiting for your review.");
+    expect(renderer!.root.findAll((node) => node.type === "button" && collectText(node).trim() === "Review approvals")).toHaveLength(1);
+    expect(renderer!.root.findAll((node) => node.type === "button" && node.props["aria-label"] === "Close session status")).toHaveLength(0);
+    expect(collectText(renderer!.root)).toContain("Background work");
+    expect(renderer!.root.findAll((node) => node.type === "summary" && collectText(node).trim() === "Execution details")).toHaveLength(1);
+    const initialExecutionDetails = renderer!.root.findAll((node) => node.type === "details" && collectText(node).includes("Execution details"))[0]!;
+    expect(initialExecutionDetails.props.open).toBe(false);
 
-    await act(async () => {
-      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "diff" } });
-    });
+    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Outputs")[0]!.props.onClick());
     expect(onDockOpenChange).toHaveBeenCalledWith(true);
     expect(collectText(renderer!.root)).toContain("Repo diff");
     expect(collectText(renderer!.root)).toContain("src/app.ts");
+    expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "documents")).toHaveLength(1);
 
-    await act(async () => {
-      renderer!.root
-        .findByProps({ "aria-label": "More Chat details" })
-        .props.onChange({ target: { value: "terminal" } });
-    });
-    expect(collectText(renderer!.root)).toContain("Run log");
-    expect(collectText(renderer!.root)).toContain("Validation passed.");
-
-    await act(async () => {
-      renderer!.root.findByProps({ "aria-label": "More Chat details" }).props.onChange({ target: { value: "files" } });
-    });
     await act(async () => {
       findButton(renderer!.root, "src/app.ts").props.onClick();
     });
     expect(onSelectFile).toHaveBeenCalledWith("src/app.ts");
 
-    await act(async () => {
-      renderer!.root
-        .findByProps({ "aria-label": "More Chat details" })
-        .props.onChange({ target: { value: "background" } });
-    });
+    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Context")[0]!.props.onClick());
+    expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "context")).toHaveLength(1);
+
+    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Chat settings")[0]!.props.onClick());
+    expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "session")).toHaveLength(1);
+    expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "assist")).toHaveLength(1);
+    expect(renderer!.root.findAll((node) => node.type === "select" && node.props["aria-label"] === "More Chat details")).toHaveLength(0);
+
+    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Activity")[0]!.props.onClick());
+    const executionDetails = renderer!.root.findAll((node) => node.type === "details" && collectText(node).includes("Execution details"))[0]!;
+    await act(async () => executionDetails.props.onToggle({ currentTarget: { open: true } }));
+    expect(executionDetails.props.open).toBe(true);
+    expect(collectText(renderer!.root)).toContain("Run log");
+    expect(collectText(renderer!.root)).toContain("Validation passed.");
+
     await act(async () => {
       findButton(renderer!.root, "Open task board").props.onClick();
     });

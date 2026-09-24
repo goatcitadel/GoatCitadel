@@ -42,7 +42,7 @@ export async function verifyProviderConnection(
     : provider.hasApiKey || provider.oauthStatus?.connected === true || provider.authMode === "google-adc";
   if (!ready) throw new ValidationError({ message: `${provider.label} is not connected.` });
   const catalog = await dependencies.listModelsWithSource(providerId);
-  if (catalog.items.length === 0 || (catalog.source !== "live" && provider.authMode !== "codex-oauth")) {
+  if (catalog.items.length === 0 || catalog.source !== "live") {
     throw new ValidationError({ message: `${provider.label} did not return a verifiable model catalog.` });
   }
   return {

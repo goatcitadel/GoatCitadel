@@ -54,8 +54,8 @@ function createHost(input?: {
     },
     llmService: {
       getRuntimeConfig: vi.fn(() => ({
-        activeProviderId: input?.runtime?.activeProviderId ?? "openai",
-        activeModel: input?.runtime?.activeModel ?? "gpt-5.4-mini",
+        activeProviderId: input?.runtime?.activeProviderId !== undefined ? input.runtime.activeProviderId : "openai",
+        activeModel: input?.runtime?.activeModel !== undefined ? input.runtime.activeModel : "gpt-5.4-mini",
         providers: input?.runtime?.providers ?? [
           {
             providerId: "openai",
@@ -289,6 +289,21 @@ describe("chat-route-resolution", () => {
         blockedReason: "Model claude-sonnet-4-6 belongs to anthropic; choose a openai model first.",
       }),
     );
+  });
+
+  it("points a missing provider at the real Settings destination", async () => {
+    const route = await resolveChatRouteDescriptor(
+      createHost({
+        sessionPrefs: { providerId: undefined, model: undefined },
+        runtime: { activeProviderId: "", activeModel: "", providers: [] },
+      }) as never,
+      "session-1",
+      { action: "send" },
+    );
+
+    expect(route.blockedReason).toContain("Settings → Providers & models");
+    // Mission Control has no "Configure" destination; clients echo this text.
+    expect(route.blockedReason).not.toContain("Configure");
   });
 
   it("keeps a supported shared bare GPT model on the explicitly selected OpenAI Codex provider", async () => {

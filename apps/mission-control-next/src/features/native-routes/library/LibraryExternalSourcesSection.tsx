@@ -488,7 +488,7 @@ export function LibraryExternalSourcesSection({
               title={detail.source.label}
               subtitle="Operator-only source detail: the exact registered root, adapter binding, and sealed scan health."
               stats={[
-                { label: "Revision", value: String(detail.source.revision) },
+                { label: "Revision", value: String(detail.source.revision), technical: true },
                 { label: "Status", value: detail.source.status },
               ]}
               actions={

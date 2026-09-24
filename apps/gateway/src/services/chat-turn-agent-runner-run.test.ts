@@ -1,9 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionResponse } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import { createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner run", () => {
+  it("routes OpenAI Fast mode through the explicit service tier", async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion: vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+        requests.push(request);
+        return { model: "gpt-6-sol", choices: [{ index: 0, message: { role: "assistant", content: "OK" } }] };
+      }),
+      invokeTool: vi.fn(),
+    });
+
+    await orchestrator.run({
+      ...turnInput("Reply OK"),
+      providerId: "openai-codex",
+      model: "gpt-6-sol",
+      speedMode: "fast",
+    });
+
+    expect(requests[0]?.service_tier).toBe("fast");
+  });
+
   it("aggregates stream output, trace, model, and empty approval state", async () => {
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,

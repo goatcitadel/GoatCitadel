@@ -411,7 +411,7 @@
   }
 
   .mc-next-utility-panel-tabs {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-chip-row {
@@ -445,6 +445,11 @@
 
   .mc-next-threaded-surface.unified .mc-next-composer-helper {
     display: none;
+  }
+
+  /* The only visible explanation for a disabled Send stays on phones. */
+  .mc-next-threaded-surface.unified .mc-next-composer-helper.mc-next-composer-send-block {
+    display: block;
   }
 
   .mc-next-threaded-surface.unified .mc-next-composer-controls-end {

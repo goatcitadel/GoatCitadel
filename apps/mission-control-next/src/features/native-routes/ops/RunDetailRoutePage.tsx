@@ -320,7 +320,7 @@ function SelectedRunDetailPage({ route, activeWorkspaceId, activeWorkspaceName, 
                 stats={[
                   { label: "Status", value: data.structuredReview.status },
                   { label: "Findings", value: String(data.structuredReview.findings.length) },
-                  { label: "Reviewed SHA", value: data.structuredReview.reviewedSha.slice(0, 12) },
+                  { label: "Reviewed SHA", value: data.structuredReview.reviewedSha.slice(0, 12), technical: true },
                   {
                     label: "Preflight",
                     value: data.structuredReview.preflight
@@ -356,8 +356,8 @@ function SelectedRunDetailPage({ route, activeWorkspaceId, activeWorkspaceName, 
               title="Request"
               subtitle="The requested work and runtime linkage when the trace projection includes it."
               stats={[
-                { label: "Run", value: detail.runId },
-                { label: "Session", value: detail.sessionId ?? "Unknown" },
+                { label: "Run", value: detail.runId, technical: true },
+                { label: "Session", value: detail.sessionId ?? "Unknown", technical: true },
               ]}
             >
               <RunSummary detail={detail} />

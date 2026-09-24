@@ -10,12 +10,13 @@ import {
 } from "./provider-templates.js";
 
 describe("provider templates", () => {
-  it("uses GPT-5.4 defaults for OpenAI-family templates", () => {
+  it("keeps the API default and lists current GPT-6 models", () => {
     expect(findProviderTemplate("openai")?.defaultModel).toBe("gpt-5.4");
     expect(findProviderTemplate("openai")?.apiStyle).toBe("openai-responses");
     // Assert the anchors that matter (default + routing-critical members), not the exact
     // catalog — pinning the full array churns the test on every model addition.
     const openaiModels = findProviderTemplate("openai")?.knownModels ?? [];
+    expect(openaiModels).toEqual(expect.arrayContaining(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]));
     expect(openaiModels).toContain("gpt-5.6");
     expect(openaiModels).toContain("gpt-5.6-terra");
     expect(openaiModels).toContain("gpt-5.6-luna");
@@ -39,15 +40,17 @@ describe("provider templates", () => {
     expect(findProviderTemplate("openai-codex")).toMatchObject({
       label: "OpenAI Codex (ChatGPT OAuth)",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-      defaultModel: "gpt-5.5",
+      defaultModel: "gpt-6-sol",
       apiStyle: "openai-codex-responses",
     });
     const codexModels = findProviderTemplate("openai-codex")?.knownModels ?? [];
+    expect(codexModels).toEqual(expect.arrayContaining(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]));
     expect(codexModels).not.toContain("gpt-5.6");
     expect(codexModels).toContain("gpt-5.6-sol");
     expect(codexModels).toContain("gpt-5.6-terra");
     expect(codexModels).toContain("gpt-5.6-luna");
     expect(codexModels).toContain("gpt-5.5");
+    expect(codexModels).not.toContain("gpt-5.4");
   });
 
   it("exposes built-in provider profiles without changing template behavior", () => {
@@ -154,9 +157,9 @@ describe("provider templates", () => {
     expect(providerRecognizesModelId("openai-codex", "gpt-5.6-sol")).toBe(true);
     expect(providerRecognizesModelId("openai-codex", "gpt-5.6-terra")).toBe(true);
     expect(providerRecognizesModelId("openai-codex", "gpt-5.6-luna")).toBe(true);
-    expect(providerRecognizesModelId("openai-codex", "gpt-5.4")).toBe(true);
+    expect(providerRecognizesModelId("openai-codex", "gpt-5.4")).toBe(false);
     expect(providerRecognizesModelId("openai-codex", "openai/gpt-5.6")).toBe(false);
-    expect(providerRecognizesModelId("openai-codex", "openai-codex/gpt-5.4")).toBe(true);
+    expect(providerRecognizesModelId("openai-codex", "openai-codex/gpt-6-sol")).toBe(true);
   });
 
   it("marks pass-through providers as capable of foreign model ids", () => {

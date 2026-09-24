@@ -324,6 +324,36 @@ describe("useProviderModelCatalog", () => {
     hook.renderer.unmount();
   });
 
+  it("uses the live OAuth catalog as the picker authority and retains reasoning levels", async () => {
+    apiMocks.fetchLlmConfig.mockResolvedValue({
+      activeProviderId: "openai-codex",
+      activeModel: "gpt-5.4",
+      providers: [{
+        providerId: "openai-codex",
+        label: "OpenAI Codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        defaultModel: "gpt-5.4",
+        apiStyle: "openai-codex-responses",
+        hasApiKey: true,
+      }],
+    });
+    apiMocks.fetchLlmModels.mockResolvedValue({
+      source: "live",
+      items: [{ id: "gpt-6-astra", reasoningEfforts: ["low", "medium", "max"], fastModeAvailable: false }],
+    });
+    const hook = await renderCatalog();
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai-codex");
+    });
+    expect(hook.result.providers[0]).toMatchObject({
+      models: ["gpt-6-astra"],
+      reasoningEffortsByModel: { "gpt-6-astra": ["low", "medium", "max"] },
+      fastModeByModel: { "gpt-6-astra": false },
+      modelProbeSource: "live",
+    });
+    hook.renderer.unmount();
+  });
+
   it("keeps expired model catalog entries visible as stale evidence until refreshed", async () => {
     const hook = await renderCatalog();
 

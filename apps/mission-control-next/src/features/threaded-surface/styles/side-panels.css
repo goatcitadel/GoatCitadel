@@ -194,7 +194,42 @@
 }
 
 .mc-next-utility-panel-tabs {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Four tabs share the drawer width: stack the icon over the label so words
+   wrap at spaces instead of breaking mid-word ("Activit/y"). */
+.mc-next-utility-panel-tabs .mc-next-utility-panel-tab {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  text-align: center;
+  overflow-wrap: normal;
+}
+
+.mc-next-utility-panel-tabs .mc-next-utility-panel-tab span {
+  overflow-wrap: normal;
+}
+
+.mc-next-utility-panel-content {
+  display: grid;
+  gap: 0.72rem;
+  min-width: 0;
+}
+
+.mc-next-utility-execution-details {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.65rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: var(--r-sm);
+}
+
+.mc-next-utility-execution-details > summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
 .mc-next-utility-panel-tab {

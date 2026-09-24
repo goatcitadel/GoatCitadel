@@ -20,13 +20,13 @@ describe("provider connection evidence", () => {
     await expect(verifyProviderConnection(deps as never, "provider")).rejects.toThrow("not connected");
     expect(deps.listModelsWithSource).not.toHaveBeenCalled();
   });
-  it("retains the explicit OAuth catalog exception", async () => {
+  it("requires a live catalog for OAuth and API providers", async () => {
     await expect(verifyProviderConnection(fixture({}, "configured") as never, "provider")).rejects.toThrow(
       "verifiable model catalog",
     );
     await expect(
       verifyProviderConnection(fixture({ authMode: "codex-oauth" }, "configured") as never, "provider"),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow("verifiable model catalog");
   });
 });
 

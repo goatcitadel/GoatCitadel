@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   findProviderTemplate,
+  type ChatCompletionReasoningEffort,
   type LlmModelDiscoverySource,
   type LlmProviderRequestConfig,
 } from "@goatcitadel/contracts";
@@ -32,6 +33,8 @@ export interface ProviderModelCatalogOption {
   hasApiKey?: boolean;
   capabilities?: RuntimeSettingsResponse["llm"]["providers"][number]["capabilities"];
   models: string[];
+  reasoningEffortsByModel?: Record<string, ChatCompletionReasoningEffort[]>;
+  fastModeByModel?: Record<string, boolean>;
   sanitizedEndpointIdentity: string;
   localCostPosture?: "zero_cost_local_runtime" | "unknown";
   contextLimitSource?: "provider_config" | "runtime_active_model" | "template_fallback" | "unknown";
@@ -74,6 +77,8 @@ export interface UniversalModelPickerOption {
 
 export interface ProviderModelCacheEntry {
   items: string[];
+  reasoningEffortsByModel?: Record<string, ChatCompletionReasoningEffort[]>;
+  fastModeByModel?: Record<string, boolean>;
   expiresAt: number;
   state: ProviderModelProbeState;
   source?: ProviderModelProbeSource;
@@ -304,12 +309,16 @@ function buildProviderCatalog(
       apiKeySource: provider.apiKeySource,
       hasApiKey: provider.hasApiKey,
       capabilities: provider.capabilities,
-      models: dedupeProviderModels([
-        provider.defaultModel,
-        provider.providerId === config.activeProviderId ? config.activeModel : undefined,
-        ...(template?.knownModels ?? []),
-        ...(cached?.items ?? []),
-      ]),
+      models: cached?.source === "live" && provider.providerId === "openai-codex"
+        ? cached.items
+        : dedupeProviderModels([
+            provider.defaultModel,
+            provider.providerId === config.activeProviderId ? config.activeModel : undefined,
+            ...(template?.knownModels ?? []),
+            ...(cached?.items ?? []),
+          ]),
+      reasoningEffortsByModel: cached?.reasoningEffortsByModel,
+      fastModeByModel: cached?.fastModeByModel,
       sanitizedEndpointIdentity: sanitizeProviderEndpointIdentity(provider.baseUrl),
       localCostPosture: isLocal ? "zero_cost_local_runtime" : undefined,
       contextLimitSource: providerContext ? "provider_config" : activeContext ? "runtime_active_model" : "unknown",
@@ -393,11 +402,13 @@ export async function previewProviderModels(
   );
   const template = findProviderTemplate(input.providerId);
   return {
-    items: dedupeProviderModels([
-      input.fallbackModel,
-      ...(template?.knownModels ?? []),
-      ...response.items.map((item) => item.id),
-    ]),
+    items: response.source === "live" && input.providerId === "openai-codex"
+      ? dedupeProviderModels(response.items.map((item) => item.id))
+      : dedupeProviderModels([
+          input.fallbackModel,
+          ...(template?.knownModels ?? []),
+          ...response.items.map((item) => item.id),
+        ]),
     source: response.source === "live" ? "remote" : "fallback",
     warning: response.warning,
   };
@@ -462,6 +473,12 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
             items.length === 0 ? "empty" : response.source === "live" ? "ready" : "fallback";
           sharedProviderModelCache.set(normalized, {
             items,
+            reasoningEffortsByModel: Object.fromEntries(response.items
+              .filter((item) => item.reasoningEfforts?.length)
+              .map((item) => [item.id, item.reasoningEfforts!])),
+            fastModeByModel: Object.fromEntries(response.items
+              .filter((item) => item.fastModeAvailable !== undefined)
+              .map((item) => [item.id, item.fastModeAvailable!])),
             expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
             state,
             source: response.source,

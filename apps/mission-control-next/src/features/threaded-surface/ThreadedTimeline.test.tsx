@@ -129,6 +129,13 @@ function buildProps(overrides: Partial<any> = {}): any {
       runtimeSummary: "Runtime ready",
       runtimeTone: "success",
     },
+    providerOptions: [],
+    routePreflight: null,
+    routePreflightLoading: false,
+    routePreflightError: null,
+    onOpenProviderSettings: vi.fn(),
+    onOpenLocalAiSettings: vi.fn(),
+    composerPalette: undefined,
     approvalPending: false,
     approvalsCount: 0,
     userInputPending: false,
@@ -217,6 +224,25 @@ describe("ThreadedTimeline", () => {
       ).toHaveLength(0);
     },
   );
+  it("lets the composer approval panel own the approval decision", () => {
+    const props = buildProps({
+      mode: "chat",
+      streamStatus: "idle",
+      hasActiveStream: false,
+      pendingApproval: {
+        approvalId: "approval-1",
+        toolName: "shell.exec",
+        reason: "Waiting for verification approval.",
+      },
+    });
+    props.thread.turns[0].trace.status = "waiting_for_approval";
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props} />);
+    const buttons = renderer.root.findAllByType("button").map((button) => button.children.join(""));
+    expect(buttons).not.toContain("Review approval");
+    expect(buttons).toContain("Stop");
+    expect(renderedText(renderer)).toContain("Approve or deny it in the approval panel below.");
+  });
+
   it("shows one stopping summary while canonical cancellation is pending", () => {
     const props = buildProps({ mode: "chat", streamStatus: "streaming", hasActiveStream: true, isStopPending: true });
     props.thread.turns[0].trace.status = "running";
@@ -931,6 +957,166 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("Retry");
   });
 
+  it("reports checking, ready, and blocked Chat readiness with recovery actions", () => {
+    const emptyThread = { sessionId: "session-empty", turns: [] };
+    const checking = renderToStaticMarkup(
+      <ThreadedTimeline props={buildProps({
+        mode: "chat",
+        thread: emptyThread,
+        providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
+        routePreflight: null,
+      }) as any} />,
+    );
+    expect(checking).toContain("Checking chat route");
+
+    const ready = renderToStaticMarkup(
+      <ThreadedTimeline props={buildProps({
+        mode: "chat",
+        thread: emptyThread,
+        providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
+        routePreflight: { effectiveProviderId: "openai", effectiveModel: "gpt-test" },
+      }) as any} />,
+    );
+    expect(ready).toContain("Chat ready");
+    expect(ready).not.toContain("Configure providers");
+
+    const blocked = renderToStaticMarkup(
+      <ThreadedTimeline props={buildProps({
+        mode: "chat",
+        thread: emptyThread,
+        providerOptions: [],
+        routePreflight: null,
+        routePreflightError: "No provider is configured.",
+      }) as any} />,
+    );
+    expect(blocked).toContain("Chat sending is blocked");
+    expect(blocked).toContain("Configure providers");
+    expect(blocked).toContain("Set up a local model");
+  });
+
+  it("routes blocked Chat setup to Settings or the in-Chat model palette", async () => {
+    const onOpenProviderSettings = vi.fn();
+    const onOpenLocalAiSettings = vi.fn();
+    let settingsRenderer!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      settingsRenderer = TestRenderer.create(<ThreadedTimeline props={buildProps({
+        mode: "chat",
+        thread: { sessionId: "session-empty", turns: [] },
+        providerOptions: [],
+        routePreflightError: "No provider is configured.",
+        onOpenProviderSettings,
+        onOpenLocalAiSettings,
+      }) as any} />);
+    });
+    const setupButton = (label: string) => settingsRenderer.root.findAll((node) =>
+      node.type === "button" && collectNodeText(node).trim() === label,
+    )[0]!;
+    await act(async () => setupButton("Configure providers").props.onClick());
+    await act(async () => setupButton("Set up a local model").props.onClick());
+    expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenLocalAiSettings).toHaveBeenCalledTimes(1);
+    settingsRenderer.unmount();
+
+    const onOpen = vi.fn();
+    const onQueryChange = vi.fn();
+    let paletteRenderer!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      paletteRenderer = TestRenderer.create(<ThreadedTimeline props={buildProps({
+        mode: "chat",
+        thread: { sessionId: "session-empty", turns: [] },
+        providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
+        // Provider-specific Gateway blocks always name the requested provider.
+        routePreflight: { requestedProviderId: "openai", blockedReason: "The selected route is unavailable." },
+        composerPalette: {
+          enabled: true,
+          globalOpen: false,
+          query: "",
+          loading: false,
+          failures: [],
+          onOpen,
+          onClose: vi.fn(),
+          onQueryChange,
+          onIndexChange: vi.fn(),
+          onSelect: vi.fn(),
+        },
+      }) as any} />);
+    });
+    const chooseModel = paletteRenderer.root.findAll((node) => node.type === "button" && collectNodeText(node).trim() === "Choose a model")[0]!;
+    await act(async () => chooseModel.props.onClick());
+    expect(onQueryChange).toHaveBeenCalledWith("model");
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    paletteRenderer.unmount();
+  });
+
+  it("lands a chat without a connected model in an explained, explorable state", async () => {
+    const onOpenProviderSettings = vi.fn();
+    const onOpenLocalAiSettings = vi.fn();
+    const onOpenLibraryArtifacts = vi.fn();
+    const onOpenOpsRuntime = vi.fn();
+    let renderer!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <ThreadedTimeline
+          props={
+            buildProps({
+              mode: "chat",
+              thread: { sessionId: "demo-session", turns: [] },
+              // Local runtimes stay selectable without credentials, so the palette
+              // still lists models even though nothing is connected.
+              providerOptions: [{ providerId: "llamacpp", label: "llama.cpp", models: ["gemma-4-local"] }],
+              routePreflight: {
+                selectionSource: "global",
+                blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+              },
+              approvalsCount: 1,
+              trust: {
+                ...buildProps().trust,
+                providerModelSummary: "Provider routing pending",
+                approvalsSummary: "1 decision",
+              },
+              composerPalette: {
+                enabled: true,
+                globalOpen: false,
+                query: "",
+                loading: false,
+                failures: [],
+                onOpen: vi.fn(),
+                onClose: vi.fn(),
+                onQueryChange: vi.fn(),
+                onIndexChange: vi.fn(),
+                onSelect: vi.fn(),
+              },
+              onOpenProviderSettings,
+              onOpenLocalAiSettings,
+              onOpenLibraryArtifacts,
+              onOpenOpsRuntime,
+            }) as any
+          }
+        />,
+      );
+    });
+    const text = renderedText(renderer);
+    expect(text).toContain("No model connected yet");
+    expect(text).toContain("Sending a message needs a model.");
+    expect(text).not.toContain("Open Configure");
+    expect(text).not.toContain("Chat sending is blocked");
+    expect(text).toContain("Starter prompts fill in the message box. Send them once a model is connected.");
+    const modelCard = renderer.root.findAll((node) => node.props.className?.includes?.("mc-next-chat-start-card"))[0]!;
+    expect(collectNodeText(modelCard)).toBe("ModelNot connected");
+    const button = (label: string) =>
+      renderer.root.findAll((node) => node.type === "button" && collectNodeText(node).includes(label));
+    expect(button("Choose a model")).toHaveLength(0);
+    expect(button("Approvals")).toHaveLength(0);
+    await act(async () => button("Connect a model")[0]!.props.onClick());
+    await act(async () => button("Set up a local model")[0]!.props.onClick());
+    await act(async () => button("Library")[0]!.props.onClick());
+    await act(async () => button("Runtime health")[0]!.props.onClick());
+    expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenLocalAiSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenLibraryArtifacts).toHaveBeenCalledTimes(1);
+    expect(onOpenOpsRuntime).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps transport errors visible without repeating their raw diagnostic", () => {
     const props = buildProps({ streamStatus: "error", streamError: "Gateway stream dropped: ECONNRESET" });
     props.thread.turns[0].assistantMessage = undefined;
@@ -1138,17 +1324,15 @@ describe("ThreadedTimeline", () => {
 
     findButton("Orient me").props.onClick();
     findButton("Attach files").props.onClick();
-    const clickEvent = { type: "click" };
-    findButton("Approvals").props.onClick(clickEvent);
 
     expect(onDraftChange).toHaveBeenCalledWith(
       "Summarize the current workspace state and suggest the safest next step.",
     );
     expect(onNavigateSurface).not.toHaveBeenCalled();
     expect(onAttachFiles).toHaveBeenCalledTimes(1);
-    expect(onOpenApprovals).toHaveBeenCalledTimes(1);
-    expect(onOpenApprovals).toHaveBeenCalledWith();
-    expect(onOpenApprovals).not.toHaveBeenCalledWith(clickEvent);
+    // The Chat header owns the compact approvals count; the canvas must not repeat it.
+    expect(findButton("Approvals")).toBeUndefined();
+    expect(onOpenApprovals).not.toHaveBeenCalled();
     expect(renderedText(renderer)).toContain("Selected turns · 2 selected");
   });
 

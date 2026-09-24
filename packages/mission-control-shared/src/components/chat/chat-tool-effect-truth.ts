@@ -3,6 +3,8 @@ import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 export interface ChatToolEffectTruthProjection {
   facts: string;
   guidance?: string;
+  /** Operator-facing wording for an uncertain effect; the machine facts stay in `summary`. */
+  plainSummary?: string;
   summary: string;
   tone: "none" | "uncertain" | "concrete";
 }
@@ -38,6 +40,7 @@ export function projectChatToolEffectTruth(
   return {
     facts,
     guidance,
+    ...(guidance ? { plainSummary: `Outcome uncertain. ${guidance}` } : {}),
     summary: [`Effect truth: ${facts}.`, guidance, concreteNote].filter(Boolean).join(" "),
     tone: outcome === "concrete" ? "concrete" : outcome === "uncertain" ? "uncertain" : "none",
   };

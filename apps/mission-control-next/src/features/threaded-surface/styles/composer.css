@@ -1354,6 +1354,10 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
 
 .mc-next-command-item {
   display: grid;
+  /* One full-width column: the shared button reset centers content, which
+     left every row's text at a different indent. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
   justify-items: start;
   gap: 0.2rem;
   padding: 0.75rem 0.9rem;
@@ -1363,6 +1367,13 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
 .mc-next-command-item span {
   color: var(--text-secondary);
   font-size: var(--text-md);
+}
+
+/* The selected row sits on the accent fill, so every line uses the accent text
+   token (AA-guarded by scripts/check-mission-control-next-contrast.mjs). */
+.mc-next-command-item.active span,
+.mc-next-command-item.active small {
+  color: var(--primary-foreground);
 }
 
 .mc-next-command-popover {
@@ -1375,23 +1386,68 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
 }
 
+/* The open palette is a modal dialog: keep it opaque so the conversation
+   behind it cannot bleed through the transparent rows. */
+.mc-next-command-popover.palette-sheet {
+  background: var(--card);
+}
+
+@media (width >= 720px) and (width < 1200px) {
+  .mc-next-command-popover.palette-sheet {
+    position: fixed;
+    z-index: var(--z-modal);
+    bottom: 3rem;
+    left: 50%;
+    box-sizing: border-box;
+    width: min(780px, calc(100vw - 2rem));
+    max-height: min(26rem, calc(100dvh - 5rem));
+    transform: translateX(-50%);
+  }
+}
+
 .mc-next-composer-palette-options {
   display: grid;
   gap: 0.52rem;
 }
 
 .mc-next-composer-palette-search {
-  position: sticky;
-  z-index: 1;
-  top: -0.42rem;
+  flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.28rem 0.6rem;
   align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.mc-next-composer-palette-header {
+  position: sticky;
+  z-index: 1;
+  top: -0.42rem;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
   margin: -0.42rem -0.42rem 0.18rem;
   padding: 0.68rem;
   border-bottom: 1px solid var(--border);
   background: var(--card);
+}
+
+.mc-next-composer-palette-close {
+  flex: 0 0 auto;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.72rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mc-next-composer-palette-close:hover {
+  border-color: var(--accent);
 }
 
 .mc-next-composer-palette-search label {
@@ -1436,9 +1492,9 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
     position: fixed;
     z-index: var(--z-modal);
     right: 0.5rem;
-    bottom: 0.5rem;
+    bottom: 3rem;
     left: 0.5rem;
-    max-height: min(76dvh, 38rem);
+    max-height: min(76dvh, 38rem, calc(100dvh - 4rem));
     padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
     border-radius: var(--r-lg);
     box-shadow: 0 -18px 60px rgba(0, 0, 0, 0.34);
@@ -1446,6 +1502,10 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
 
   .mc-next-composer-palette-search {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-composer-palette-header {
+    align-items: flex-end;
   }
 
   .mc-next-composer-palette-search > span {
@@ -2841,6 +2901,93 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
   gap: 0.42rem;
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   align-items: end;
+}
+
+.mc-next-source-picker-backdrop {
+  position: fixed;
+  z-index: var(--z-modal);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: color-mix(in oklab, #020617 74%, transparent);
+}
+
+.mc-next-source-picker-dialog {
+  display: grid;
+  gap: 0.85rem;
+  width: min(54rem, 100%);
+  max-height: min(88dvh, 58rem);
+  padding: 1rem;
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+.mc-next-source-picker-header,
+.mc-next-source-picker-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.mc-next-source-picker-header h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.mc-next-source-picker-header p {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.mc-next-source-picker-footer {
+  position: sticky;
+  bottom: -1rem;
+  align-items: center;
+  margin: 0 -1rem -1rem;
+  padding: 0.8rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+
+.mc-next-source-picker-footer span {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.mc-next-source-picker-attach {
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.mc-next-source-picker-attach > summary,
+.mc-next-source-picker-dialog .mc-next-composer-external-chip details > summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.mc-next-source-picker-dialog .mc-next-composer-external-chip details {
+  margin-top: 0.45rem;
+}
+
+.mc-next-source-picker-dialog .mc-next-composer-external-chip details > summary {
+  font-size: var(--text-xs);
+}
+
+.mc-next-source-picker-dialog .mc-next-composer-external-attach-form {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  padding-top: 0.7rem;
 }
 
 .mc-next-composer-external-attach-form label {

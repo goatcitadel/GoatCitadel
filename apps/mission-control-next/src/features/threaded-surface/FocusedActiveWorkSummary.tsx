@@ -222,6 +222,11 @@ function humanizeFailureDetail(failureClass?: ChatTurnFailureClass, toolStatus?:
 
 type FocusedActiveWorkSummaryProps = {
   state: FocusedActiveWorkState | null;
+  /**
+   * True while the composer shows the canonical approval panel. That panel is
+   * the single place to decide, so this summary keeps only the paused status.
+   */
+  approvalActionsInComposer?: boolean;
   onFocusComposer: () => void;
   /**
    * Focuses the blocking question's own answer control. Distinct from
@@ -242,6 +247,7 @@ export function FocusedActiveWorkSummary(props: FocusedActiveWorkSummaryProps) {
 
 function FocusedActiveWorkSummaryContents({
   state,
+  approvalActionsInComposer = false,
   onFocusComposer,
   onFocusPendingInput,
   onOpenActivity,
@@ -254,6 +260,8 @@ function FocusedActiveWorkSummaryContents({
   if (!state) {
     return null;
   }
+  const deferApprovalToComposer = state.kind === "approval" && approvalActionsInComposer;
+  const detail = deferApprovalToComposer ? "Approve or deny it in the approval panel below." : state.detail;
 
   const primaryAction =
     state.kind === "approval" ? (
@@ -312,10 +320,10 @@ function FocusedActiveWorkSummaryContents({
     <section className={`mc-next-active-work-summary state-${state.kind}`} aria-label="Current work">
       <div className="mc-next-active-work-copy">
         <strong>{state.title}</strong>
-        <span>{state.detail}</span>
+        <span>{detail}</span>
       </div>
       <div className="mc-next-active-work-actions">
-        {primaryAction}
+        {deferApprovalToComposer ? null : primaryAction}
         {state.canStop ? (
           <button type="button" className="mc-next-thread-inline-button" onClick={onStop}>
             Stop

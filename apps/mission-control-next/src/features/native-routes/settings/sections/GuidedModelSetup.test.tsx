@@ -119,6 +119,108 @@ async function mount(
   };
 }
 
+const LLAMA_CPP = {
+  providerId: "llamacpp",
+  label: "llama.cpp",
+  baseUrl: "http://127.0.0.1:8080/v1",
+  defaultModel: "gemma-4-local",
+  hasApiKey: false,
+  localCostPosture: "zero_cost_local_runtime",
+  capabilities: { reasoning: false },
+};
+
+async function mountFirstRun(providers: object[], activeProviderId = "") {
+  mocks.catalog.mockReturnValue({
+    providers,
+    config: { defaultThinkingLevel: "standard" },
+    loadModelsForProvider: mocks.models,
+    loading: false,
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  await act(async () =>
+    root.render(
+      <GuidedModelSetup
+        workspaceId={`first-run-${activeProviderId || "none"}`}
+        onboarding={{ settings: { llm: { activeProviderId, activeModel: "" } } } as OnboardingState}
+        route={{ area: "settings", section: "onboarding", theme: "dark" }}
+        navigate={vi.fn()}
+        reloadOnboarding={vi.fn(async () => {})}
+        setNotice={vi.fn()}
+      />,
+    ),
+  );
+  const button = (name: string) =>
+    [...host.querySelectorAll("button")].find((element) => element.textContent?.trim() === name);
+  return { host, button };
+}
+
+describe("first-run readiness truth", () => {
+  it("does not silently preselect an unverified local runtime for a new user", async () => {
+    const view = await mountFirstRun([
+      { ...LLAMA_CPP, modelProbeState: "not_checked" },
+      {
+        providerId: "openai",
+        label: "OpenAI",
+        baseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-5.4-mini",
+        hasApiKey: false,
+      },
+    ]);
+    const providerSelect = view.host.querySelector("select")!;
+    expect(providerSelect.value).toBe("");
+    expect(providerSelect.options[0]?.textContent).toBe("Choose a provider or local runtime");
+    expect(view.host.querySelector(".mc-next-settings-wizard-step.complete")).toBeNull();
+    expect(view.host.textContent).toContain("Not chosen");
+    expect(mocks.models).not.toHaveBeenCalled();
+  });
+
+  it("shows an unreachable local runtime as not verified and re-checks its endpoint", async () => {
+    const view = await mountFirstRun(
+      [
+        {
+          ...LLAMA_CPP,
+          modelProbeState: "fallback",
+          modelProbeSource: "error_fallback",
+          modelProbeWarning: "llama.cpp runtime is disabled in assistant config",
+        },
+      ],
+      "llamacpp",
+    );
+    expect(view.host.querySelector(".mc-next-settings-wizard-step.complete")).toBeNull();
+    expect(view.host.textContent).toContain("Not verified");
+    expect(view.host.textContent).toContain("llama.cpp runtime is disabled in assistant config");
+    expect(view.button("Confirm model")).toBeUndefined();
+    await act(async () => view.button("Check connection")!.click());
+    expect(mocks.models).toHaveBeenCalledWith("llamacpp", { force: true });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("marks a local runtime connected only after its endpoint answers a live probe", async () => {
+    mocks.models.mockResolvedValue(["gemma-4-local"]);
+    const view = await mountFirstRun(
+      [{ ...LLAMA_CPP, modelProbeState: "ready", modelProbeSource: "live" }],
+      "llamacpp",
+    );
+    const firstStep = view.host.querySelector(".mc-next-settings-wizard-step");
+    expect(firstStep?.classList.contains("complete")).toBe(true);
+    expect(firstStep?.textContent).toContain("llama.cpp answered at http://127.0.0.1:8080/v1.");
+    await act(async () => view.button("Confirm model")!.click());
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: {
+          kind: "installation_default_model",
+          providerId: "llamacpp",
+          model: "gemma-4-local",
+          thinkingLevel: "off",
+        },
+      }),
+    );
+  });
+});
+
 describe("guided first model setup", () => {
   it("requires connection when a saved default has missing or rejected credentials", async () => {
     const view = await mount("missing");

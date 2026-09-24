@@ -1,4 +1,5 @@
 export * from "./provider-templates.js";
+export * from "./openai-model-controls.js";
 export * from "./activation.js";
 export * from "./autonomy.js";
 export * from "./capabilities.js";

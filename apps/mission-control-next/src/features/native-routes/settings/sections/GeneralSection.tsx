@@ -1,6 +1,6 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Bell, Volume2 } from "lucide-react";
 import {
   fetchInstalledAddons,
@@ -46,6 +46,26 @@ function labelForDensity(value: UiDensity): string {
 
 import { DesktopUpdatesPanel } from "../../../desktop-updates/DesktopUpdatesPanel";
 
+type DesktopPermission = "unsupported" | NotificationPermission;
+
+function readDesktopPermission(): DesktopPermission {
+  if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
+  return window.Notification.permission;
+}
+
+function describeDesktopPermission(permission: DesktopPermission): string {
+  switch (permission) {
+    case "granted":
+      return "Allowed by your browser or host.";
+    case "denied":
+      return "Blocked by your browser or host. Change this site's notification permission in host settings.";
+    case "default":
+      return "Not decided yet. Check permission to allow system notifications.";
+    case "unsupported":
+      return "This browser or host does not support system notifications.";
+  }
+}
+
 export function GeneralSection(props: SettingsSectionProps) {
   const { activeWorkspaceName, route, navigate } = props;
   const {
@@ -57,6 +77,54 @@ export function GeneralSection(props: SettingsSectionProps) {
     setNotificationSoundMode,
     setNotificationToastsEnabled,
   } = useUiPreferences();
+  const [desktopPermission, setDesktopPermission] = useState<DesktopPermission>(readDesktopPermission);
+  const [notificationFeedback, setNotificationFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    const refresh = () => setDesktopPermission(readDesktopPermission());
+    refresh();
+    window.addEventListener?.("focus", refresh);
+    if (typeof document !== "undefined") document.addEventListener?.("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener?.("focus", refresh);
+      if (typeof document !== "undefined") document.removeEventListener?.("visibilitychange", refresh);
+    };
+  }, []);
+
+  const checkDesktopPermission = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setDesktopPermission("unsupported");
+      setNotificationFeedback("System notifications are unavailable in this host.");
+      return;
+    }
+    try {
+      const current = window.Notification.permission;
+      const next = current === "default" ? await window.Notification.requestPermission() : current;
+      setDesktopPermission(next);
+      setNotificationFeedback(
+        next === "granted"
+          ? "System notifications are allowed."
+          : next === "denied"
+            ? "System notifications are blocked by the browser or host."
+            : "Permission was not changed.",
+      );
+    } catch {
+      setDesktopPermission(readDesktopPermission());
+      setNotificationFeedback("The host could not check notification permission.");
+    }
+  };
+
+  const sendTestNotification = () => {
+    if (desktopPermission !== "granted" || typeof window === "undefined" || !("Notification" in window)) return;
+    try {
+      new window.Notification("GoatCitadel test notification", {
+        body: "System notifications are working in this host.",
+      });
+      setNotificationFeedback("Test notification sent.");
+    } catch {
+      setNotificationFeedback("The host could not display a test notification.");
+    }
+  };
 
   return (
     <SettingsStack className="mc-next-preference-stack">
@@ -129,18 +197,20 @@ export function GeneralSection(props: SettingsSectionProps) {
             <label className="mc-next-settings-check">
               <input
                 type="checkbox"
+                aria-label="Use system notifications when permission is granted"
                 checked={notifications.desktopEnabled}
-                onChange={(event) => {
-                  if (event.target.checked) {
-                    void requestBrowserNotificationPermission();
-                  }
-                  setNotificationDesktopEnabled(event.target.checked);
-                }}
+                onChange={(event) => setNotificationDesktopEnabled(event.target.checked)}
               />
               <span>Use system notifications when permission is granted</span>
             </label>
             <p className="mc-next-settings-field-note">
-              Desktop notifications stay permission-aware in browser and native hosts.
+              Saved preference: <strong>{notifications.desktopEnabled ? "On" : "Off"}</strong>. This preference is separate from host permission.
+            </p>
+          </SettingsField>
+          <SettingsField label="Browser or host permission" group>
+            <p className="mc-next-settings-field-note" role="status" aria-live="polite">
+              <strong>{desktopPermission === "granted" ? "Granted" : desktopPermission === "denied" ? "Blocked" : desktopPermission === "unsupported" ? "Unsupported" : "Not requested"}</strong>
+              {" · "}{describeDesktopPermission(desktopPermission)}
             </p>
           </SettingsField>
           <SettingsField label="Attention scope" group>
@@ -158,9 +228,12 @@ export function GeneralSection(props: SettingsSectionProps) {
           </SettingsField>
         </SettingsFieldGrid>
         <SettingsButtonRow>
-          <NativeButton variant="secondary" onClick={() => void requestBrowserNotificationPermission()}>
+          <NativeButton variant="secondary" onClick={() => void checkDesktopPermission()}>
             <Bell size={16} />
-            Check permission
+            {desktopPermission === "default" ? "Allow notifications" : "Re-check permission"}
+          </NativeButton>
+          <NativeButton variant="secondary" disabled={desktopPermission !== "granted"} onClick={sendTestNotification}>
+            Send test notification
           </NativeButton>
           <NativeButton
             variant="secondary"
@@ -170,6 +243,7 @@ export function GeneralSection(props: SettingsSectionProps) {
             {notifications.soundMode === "off" ? "Enable subtle sound" : "Mute sound"}
           </NativeButton>
         </SettingsButtonRow>
+        {notificationFeedback ? <p className="mc-next-settings-field-note" role="status" aria-live="polite">{notificationFeedback}</p> : null}
       </NativeCard>
       <SettingsButtonRow>
         <NativeButton
@@ -397,16 +471,4 @@ function normalizeNotificationSoundMode(value: string): "off" | "subtle" | "norm
     return value;
   }
   return "off";
-}
-
-async function requestBrowserNotificationPermission(): Promise<void> {
-  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "default") {
-    return;
-  }
-  try {
-    await Notification.requestPermission();
-  } catch (error) {
-    void error;
-    // Permission prompts are host/browser controlled and may be unavailable in embedded contexts.
-  }
 }

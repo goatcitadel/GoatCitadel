@@ -243,7 +243,8 @@ export function InlineApprovalPrompt({
           <a href={approvalsHref}>Open persisted approval record</a>
         </p>
       ) : null}
-      <IdentifierChip className="chat-approval-id" value={approvalId} label="Approval" />
+      {/* Opaque ID: shown only with the technical-details preference; the record link above stays visible. */}
+      <IdentifierChip className="chat-approval-id mc-next-technical-detail" value={approvalId} label="Approval" />
     </div>
   );
 }

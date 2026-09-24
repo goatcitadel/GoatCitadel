@@ -227,6 +227,10 @@ export interface LlmModelRecord {
   created?: number;
   contextWindow?: number;
   outputTokenLimit?: number;
+  /** Account catalog levels when the provider exposes them. */
+  reasoningEfforts?: ChatCompletionReasoningEffort[];
+  /** Exact Fast tier availability when the provider catalog advertises service tiers. */
+  fastModeAvailable?: boolean;
 }
 
 export type LlmModelDiscoverySource = "live" | "template_fallback" | "error_fallback";
@@ -541,7 +545,7 @@ export interface ChatCompletionReasoningReceipt {
   providerEffort: ChatCompletionReasoningEffort;
   disposition: "honored" | "downgraded" | "provider_default";
   reasonCode: string;
-  capabilitySource: "model_metadata" | "provider_config" | "legacy_compatibility";
+  capabilitySource: "provider_catalog" | "model_metadata" | "provider_config" | "legacy_compatibility";
 }
 
 export interface ChatCompletionMessage {

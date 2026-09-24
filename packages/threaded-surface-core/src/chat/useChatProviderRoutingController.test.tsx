@@ -103,6 +103,29 @@ describe("useChatProviderRoutingController", () => {
     expect(loadModelsForProvider).toHaveBeenCalledWith("openai");
   });
 
+  it("does not reintroduce retired OAuth selections into a live model picker", async () => {
+    await act(async () => {
+      create(<Harness
+        draft=""
+        catalog={[{
+          providerId: "openai-codex",
+          label: "OpenAI Codex",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          defaultModel: "gpt-5.4",
+          hasApiKey: true,
+          models: ["gpt-6-sol"],
+          modelProbeState: "ready",
+          modelProbeSource: "live",
+        }] as never}
+        runtimeLlmConfig={{ activeProviderId: "openai-codex", activeModel: "gpt-5.4" }}
+        prefs={{ sessionId: "session-1", providerId: "openai-codex", model: "gpt-5.4" }}
+        getCachedModels={() => ["gpt-6-sol"]}
+      />);
+    });
+    expect(latest!.providerOptions[0]?.models).toEqual(["gpt-6-sol"]);
+    expect(latest!.selectedModel).toBe("gpt-6-sol");
+  });
+
   it("resets command index when draft changes and builds command, skill, and MCP suggestions", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {

@@ -1037,7 +1037,7 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
           subtitle="Available providers, probe posture, and current catalog coverage."
           stats={[
             { label: "Configured", value: String(providers.length) },
-            { label: "Active workspace", value: activeWorkspaceId },
+            { label: "Active workspace", value: activeWorkspaceId, technical: true },
           ]}
         >
           <p className="mc-next-settings-copy"><strong>Default model</strong> · {providers.find((item) => item.providerId === config?.activeProviderId)?.label ?? config?.activeProviderId ?? "Unavailable"} · {config?.activeModel || "Not selected"}</p>

@@ -33,6 +33,8 @@ import {
   clampGuidedThinkingLevel,
   GUIDED_THINKING_LEVELS,
   localRuntimeSetupGuide,
+  pickDefaultGuidedProvider,
+  resolveGuidedProviderReadiness,
   supportedGuidedThinkingLevels,
 } from "./guided-model-setup-support";
 
@@ -69,12 +71,7 @@ export function GuidedModelSetup({
   // also the recovery surface when that boundary cannot return a full payload.
   const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
   const activeModel = onboarding.settings?.llm?.activeModel ?? "";
-  const fallbackProvider =
-    catalogProviders.find((provider) => provider.providerId === activeProviderId) ??
-    catalogProviders.find(
-      (provider) => provider.localCostPosture === "zero_cost_local_runtime" || provider.hasApiKey,
-    ) ??
-    catalogProviders[0];
+  const fallbackProvider = pickDefaultGuidedProvider(catalogProviders, activeProviderId);
   const canonicalSelection = {
     providerId: activeProviderId || fallbackProvider?.providerId || "",
     model: activeModel || fallbackProvider?.defaultModel || "",
@@ -121,12 +118,15 @@ export function GuidedModelSetup({
   );
   const effortLimited = supportedThinkingLevels.length < GUIDED_THINKING_LEVELS.length;
   const localGuide = localRuntimeSetupGuide(selectedProvider);
-  const providerReady = Boolean(
-    selectedProvider &&
-    (selectedProvider.authReadiness
-      ? ["configured", "ready"].includes(selectedProvider.authReadiness.status)
-      : selectedProvider.localCostPosture === "zero_cost_local_runtime" || selectedProvider.hasApiKey),
+  const [recheckingEndpoint, setRecheckingEndpoint] = useState(false);
+  const providerReadiness = resolveGuidedProviderReadiness(
+    selectedProvider && recheckingEndpoint ? { ...selectedProvider, modelProbeState: "not_checked" } : selectedProvider,
   );
+  const providerReady = providerReadiness.state === "ready";
+  // Local runtimes need no credential: their readiness comes from the live
+  // endpoint probe, so the next step is re-checking it, not a credential plan.
+  const verifiesLocalEndpoint =
+    selectedProvider?.localCostPosture === "zero_cost_local_runtime" && providerReadiness.state !== "needs_setup";
   const usesChatGptOAuth = selectedProvider?.authMode === "codex-oauth";
   const defaultPlanCompleted =
     providerReady &&
@@ -256,6 +256,20 @@ export function GuidedModelSetup({
     );
   };
 
+  const recheckLocalEndpoint = async () => {
+    if (!providerId || recheckingEndpoint) return;
+    setRecheckingEndpoint(true);
+    setActionError(null);
+    try {
+      // Bypass the catalog cache: a failed probe is cached like a result.
+      await loadModelsForProvider(providerId, { force: true });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    } finally {
+      setRecheckingEndpoint(false);
+    }
+  };
+
   const createDefaultPlan = async () => {
     if (pendingSetupPlan) {
       setDialogPlan(pendingSetupPlan);
@@ -313,8 +327,9 @@ export function GuidedModelSetup({
       title="Connect a model"
       subtitle="Choose a provider, connect it securely, then select the model Chat should use."
       stats={[
-        { label: "Connection", value: providerReady ? "Configured" : "Needs setup" },
-        { label: "Model", value: model || "Choose one" },
+        { label: "Connection", value: providerReadiness.label },
+        // A template default is only a suggestion until the provider is ready.
+        { label: "Model", value: !model ? "Choose one" : providerReady ? model : `Suggested: ${model}` },
         {
           label: "First response",
           value: onboarding.firstTask?.status === "verified" ? "Verified" : "Not yet verified",
@@ -330,9 +345,7 @@ export function GuidedModelSetup({
         steps={[
           {
             label: "Connect a provider",
-            description: providerReady
-              ? `${selectedProvider?.label ?? providerId} has a usable credential or local endpoint.`
-              : "Use the secure Change Plan action to connect a provider or verify a local runtime.",
+            description: providerReadiness.description,
             state: providerReady ? "complete" : "active",
           },
           {
@@ -363,6 +376,11 @@ export function GuidedModelSetup({
               setProviderId(event.currentTarget.value);
             }}
           >
+            {!providerId ? (
+              <option value="" disabled>
+                Choose a provider or local runtime
+              </option>
+            ) : null}
             {providerId && !catalog.providers.some((provider) => provider.providerId === providerId) ? (
               <option value={providerId}>{providerId} · unavailable</option>
             ) : null}
@@ -457,9 +475,20 @@ export function GuidedModelSetup({
       <SettingsButtonRow>
         <NativeButton
           variant="default"
-          disabled={busy || !providerId || (providerReady && !model)}
+          disabled={
+            busy ||
+            !providerId ||
+            (providerReady && !model) ||
+            (!providerReady && verifiesLocalEndpoint && providerReadiness.state === "checking")
+          }
           onClick={() =>
-            void (defaultPlanCompleted ? enterChat() : providerReady ? createDefaultPlan() : createProviderPlan())
+            void (defaultPlanCompleted
+              ? enterChat()
+              : providerReady
+                ? createDefaultPlan()
+                : verifiesLocalEndpoint
+                  ? recheckLocalEndpoint()
+                  : createProviderPlan())
           }
         >
           {defaultPlanCompleted ? <Play size={16} /> : <Save size={16} />}
@@ -467,9 +496,13 @@ export function GuidedModelSetup({
             ? "Enter Chat"
             : providerReady
               ? "Confirm model"
-              : usesChatGptOAuth
-                ? "Connect ChatGPT"
-                : "Connect provider"}
+              : verifiesLocalEndpoint
+                ? providerReadiness.state === "checking"
+                  ? "Checking connection…"
+                  : "Check connection"
+                : usesChatGptOAuth
+                  ? "Connect ChatGPT"
+                  : "Connect provider"}
         </NativeButton>
       </SettingsButtonRow>
       {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}

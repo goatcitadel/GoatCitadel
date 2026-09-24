@@ -322,12 +322,12 @@ describe("LlmService", () => {
     expect(() =>
       service.updateRuntimeConfig({
         activeProviderId: "openai-codex",
-        activeModel: "gpt-5.4",
+        activeModel: "gpt-6-sol",
       }),
     ).not.toThrow();
     expect(service.getRuntimeConfig()).toMatchObject({
       activeProviderId: "openai-codex",
-      activeModel: "gpt-5.4",
+      activeModel: "gpt-6-sol",
     });
     expect(() =>
       service.updateRuntimeConfig({
@@ -2415,6 +2415,7 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore });
 
     expect(service.resolveExecutionApiStyle("openai", "gpt-5.4-mini")).toBe("openai-responses");
+    expect(service.resolveExecutionApiStyle("openai", "gpt-6-sol")).toBe("openai-responses");
     expect(service.resolveExecutionApiStyle("moonshot", "kimi-k2.6")).toBe("openai-chat-completions");
     expect(secretStore.getCalls()).toBe(0);
   });
@@ -2781,7 +2782,11 @@ describe("LlmService", () => {
       expect(result.items.map((item) => item.id)).toEqual([
         "gpt-5.4-mini",
         "gpt-4.1-mini",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6",
+        "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.4",
@@ -2944,7 +2949,11 @@ describe("LlmService", () => {
       const models = await service.listModels("openai");
       expect(models.map((model) => model.id)).toEqual([
         "gpt-5.4-mini",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6",
+        "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.4",
@@ -2990,7 +2999,7 @@ describe("LlmService", () => {
     });
   });
 
-  it("returns local OpenAI Codex models without calling upstream /models", async () => {
+  it("falls back to current OpenAI Codex models when OAuth is unavailable", async () => {
     const service = new LlmService(createCodexConfig(), process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.fn();
@@ -3000,13 +3009,12 @@ describe("LlmService", () => {
       const models = await service.listModels("openai-codex");
       expect(models.map((model) => model.id)).toEqual([
         "gpt-5.5",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.5-pro",
-        "gpt-5.4",
-        "gpt-5.4-pro",
-        "gpt-5.4-mini",
       ]);
       expect(models.map((model) => model.id)).not.toContain("gpt-5.3-codex-spark");
       expect(models.map((model) => model.id)).not.toContain("gpt-5.3-codex");
@@ -3017,17 +3025,100 @@ describe("LlmService", () => {
     }
   });
 
-  it("marks OpenAI Codex model discovery as fallback-only", async () => {
+  it("marks disconnected OpenAI Codex model discovery as an error fallback", async () => {
     const service = new LlmService(createCodexConfig(), process.env, { secretStore: createNoopSecretStore() });
 
     const result = await service.listModelsWithSource("openai-codex");
 
-    expect(result.source).toBe("template_fallback");
-    expect(result.warning).toContain("template");
+    expect(result.source).toBe("error_fallback");
+    expect(result.warning).toBeTruthy();
+    expect(result.items.map((model) => model.id)).toContain("gpt-6-sol");
     expect(result.items.map((model) => model.id)).toContain("gpt-5.6-sol");
     expect(result.items.map((model) => model.id)).toContain("gpt-5.6-terra");
     expect(result.items.map((model) => model.id)).toContain("gpt-5.6-luna");
     expect(result.items.map((model) => model.id)).toContain("gpt-5.5");
+  });
+
+  it("discovers account-visible OAuth models, reasoning levels, and Fast availability", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer codex-access-token");
+      return new Response(JSON.stringify({ models: [
+        { slug: "gpt-6-astra", display_name: "GPT-6 Astra", visibility: "list", supported_in_api: true,
+          context_window: 272000, supported_reasoning_levels: [{ effort: "low" }, { effort: "max" }],
+          service_tiers: [{ id: "priority" }] },
+        { slug: "gpt-6-hidden", visibility: "hide", supported_in_api: true },
+        { slug: "gpt-6-oauth-only", visibility: "list", supported_in_api: false, service_tiers: [] },
+      ] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    try {
+      const result = await service.listModelsWithSource("openai-codex");
+      expect(result.source).toBe("live");
+      expect(result.items).toEqual([
+        expect.objectContaining({
+          id: "gpt-6-astra",
+          label: "GPT-6 Astra",
+          contextWindow: 272000,
+          reasoningEfforts: ["low", "max"],
+          fastModeAvailable: true,
+        }),
+        expect.objectContaining({ id: "gpt-6-oauth-only", fastModeAvailable: false }),
+      ]);
+      await expect(service.chatCompletions({
+        providerId: "openai-codex",
+        model: "gpt-6-oauth-only",
+        messages: [{ role: "user", content: "hello" }],
+        service_tier: "fast",
+      })).rejects.toThrow(/Fast mode is not available/u);
+      service.deleteOpenAICodexOAuthCredential();
+      expect((await service.listModelsWithSource("openai-codex")).source).toBe("error_fallback");
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps OAuth model previews on the saved transport when preview settings are caller supplied", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer codex-access-token");
+      return new Response(JSON.stringify({ models: [{ slug: "gpt-6-sol", visibility: "list" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const result = await service.previewModels({
+        providerId: "openai-codex",
+        baseUrl: "https://attacker.example",
+        request: { proxy: { url: "https://attacker.example" } },
+      });
+      expect(result.source).toBe("live");
+      expect(result.items.map((item) => item.id)).toEqual(["gpt-6-sol"]);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("can report and delete orphan OpenAI Codex OAuth credentials without provider config", async () => {
@@ -3207,6 +3298,7 @@ describe("LlmService", () => {
       const completion = await service.chatCompletions({
         providerId: "openai-codex",
         model: "openai-codex/gpt-5.6-sol",
+        service_tier: "fast",
         messages: [
           { role: "developer", content: "Use the supplied tool." },
           { role: "user", content: "Check status." },
@@ -3237,6 +3329,7 @@ describe("LlmService", () => {
       for await (const chunk of service.chatCompletionsStream({
         providerId: "openai-codex",
         model: "openai-codex/gpt-5.6-sol",
+        service_tier: "fast",
         messages: [
           { role: "developer", content: "Use the supplied tool." },
           { role: "user", content: "Check status." },
@@ -3279,6 +3372,7 @@ describe("LlmService", () => {
     expect(payloadBody?.tools).toBeUndefined();
     expect(payloadBody).toMatchObject({
       model: "gpt-5.6-sol",
+      service_tier: "priority",
       tool_choice: "auto",
       parallel_tool_calls: false,
       reasoning: { context: "all_turns" },

@@ -36,6 +36,15 @@ export type NativePageMetric = {
   value: string;
   delta?: { value: string; tone: "up" | "down" | "neutral" };
   flash?: boolean;
+  /** Opaque identifiers (IDs, hashes, revisions) stay in the collapsible page details. */
+  technical?: boolean;
+};
+
+export type NativeCardStat = {
+  label: string;
+  value: string;
+  /** Opaque identifiers (IDs, hashes, revisions) stay in the card's Details disclosure. */
+  technical?: boolean;
 };
 
 export function NativePageFrame({
@@ -120,10 +129,11 @@ export function NativePageFrame({
     return () => window.cancelAnimationFrame(handle);
   }, [kicker, loading, title]);
 
-  const urgentMetric = (metric: NativePageMetric) => metric.flash || (/approval|blocked|failed|pending|error/i.test(metric.label) && !/^(0|none)$/i.test(metric.value));
-  const essentialMetrics = metrics?.filter(urgentMetric);
-  const supportingMetrics = metrics?.filter((metric) => !urgentMetric(metric));
-  const hasHeadRow = Boolean(essentialMetrics?.length) || Boolean(actions);
+  // Orientation stays visible: the description and status metrics render inline,
+  // and only opaque technical metrics move behind "Page details".
+  const headMetrics = metrics?.filter((metric) => !metric.technical);
+  const technicalMetrics = metrics?.filter((metric) => metric.technical);
+  const hasHeadRow = Boolean(headMetrics?.length) || Boolean(actions);
   const errorPresentation = error ? normalizeNativeRouteError(error, { resourceLabel: title, ...errorContext }) : null;
 
   return (
@@ -140,13 +150,29 @@ export function NativePageFrame({
             <h1>{title}</h1>
             <ReleaseScopeBadge status={releaseStatus} />
           </div>
-          <details className="mc-next-page-explanation"><summary><Info size={14} aria-hidden="true" />Page details</summary><p>{description}</p>{supportingMetrics?.length ? <dl>{supportingMetrics.map((metric) => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}{metric.delta ? ` · ${metric.delta.value}` : ""}</dd></div>)}</dl> : null}</details>
+          {description ? <span className="mc-next-directory-description">{description}</span> : null}
+          {technicalMetrics?.length ? (
+            <details className="mc-next-page-explanation">
+              <summary>
+                <Info size={14} aria-hidden="true" />
+                Page details
+              </summary>
+              <dl>
+                {technicalMetrics.map((metric) => (
+                  <div key={metric.label}>
+                    <dt>{metric.label}</dt>
+                    <dd>{metric.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </details>
+          ) : null}
         </div>
         {hasHeadRow ? (
           <div className="mc-next-directory-head-row">
-            {essentialMetrics?.length ? (
+            {headMetrics?.length ? (
               <div className="mc-next-directory-head-metrics">
-                {essentialMetrics.map((metric) => (
+                {headMetrics.map((metric) => (
                   <div
                     key={metric.label}
                     className="mc-next-directory-head-metric"
@@ -226,7 +252,7 @@ export function NativeCard({
   id?: string;
   title: string;
   subtitle: string;
-  stats?: Array<{ label: string; value: string }>;
+  stats?: NativeCardStat[];
   children: ReactNode;
   actions?: ReactNode;
   /**
@@ -240,6 +266,10 @@ export function NativeCard({
   bodyMaxHeight?: string;
   className?: string;
 }) {
+  // Status stats are orientation, so they stay visible; the explanatory
+  // subtitle and any opaque technical stats remain behind Details.
+  const statusStats = stats?.filter((item) => !item.technical) ?? [];
+  const technicalStats = stats?.filter((item) => item.technical) ?? [];
   return (
     <article
       id={id}
@@ -258,8 +288,37 @@ export function NativeCard({
           ) : (
             <h2>{title}</h2>
           )}
-          {subtitle || stats?.length ? <details className="mc-next-card-explanation"><summary aria-label={`About ${title}`}><Info size={14} aria-hidden="true" /><span>Details</span></summary><p>{subtitle}</p>{stats?.length ? <dl>{stats.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl> : null}</details> : null}
+          {subtitle || technicalStats.length ? (
+            <details className="mc-next-card-explanation">
+              <summary aria-label={`About ${title}`}>
+                <Info size={14} aria-hidden="true" />
+                <span>Details</span>
+              </summary>
+              {subtitle ? <p>{subtitle}</p> : null}
+              {technicalStats.length ? (
+                <dl>
+                  {technicalStats.map((item) => (
+                    <div key={item.label}>
+                      <dt>{item.label}</dt>
+                      <dd>{item.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+            </details>
+          ) : null}
         </div>
+        {statusStats.length ? (
+          <div className="mc-next-directory-stats">
+            {/* Label first so the pair reads "Status: value" in order. */}
+            {statusStats.map((item) => (
+              <div key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {actions ? <div className="mc-next-directory-card-actions">{actions}</div> : null}
       </div>
       <div
