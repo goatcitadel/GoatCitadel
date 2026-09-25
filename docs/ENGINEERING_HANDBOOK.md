@@ -313,9 +313,10 @@ Behavior:
 
 - Plan validation via schema and ownership overlap checks.
 - Run creation with checkpoints and run events.
-- Start transitions to `running` or `paused` based on run mode.
-- Phase approval advances to next phase/wave and increments iteration/cost.
-- Hard limits (`maxIterations`, `maxRuntimeMinutes`, `maxCostUsd`) can terminate run with `stopped_by_limit`.
+- Start transitions to `running`, or to `paused` when the first phase is approval-gated (`requiresApproval`, or every phase in `hitl` mode).
+- An approval-gated phase pauses before it runs. Phase approval records intent and leaves the run paused; the durable worker then runs the approved phase. Approval does not accept an operator-supplied cost.
+- Advancing after a phase executes increments the iteration count and adds the phase's measured cost.
+- Hard limits (`maxIterations`, `maxRuntimeMinutes`, `maxCostUsd`) are checked between phases, not during one. Reaching a limit with phases remaining stops the run with `stopped_by_limit`; a final phase that reaches or passes a limit completes the run, and any cost or runtime overrun is recorded on the completion event.
 
 Current scope:
 

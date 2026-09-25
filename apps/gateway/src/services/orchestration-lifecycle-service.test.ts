@@ -761,17 +761,20 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    const result = await approvePhase(host, "run-1", "phase-1", "operator", 0.5);
+    const result = await approvePhase(host, "run-1", "phase-1", "operator");
 
-    expect(result.run.status).toBe("running");
+    // Approval records intent only; the run stays paused until the durable worker applies it.
+    expect(result.run.status).toBe("paused");
     expect(result.run.executionState).toBe("resume_requested");
     expect(result.run.pendingApprovalPhaseId).toBe("phase-1");
+    expect(result.run.pendingApprovedBy).toBe("operator");
     expect(host.orchestrationEngine.approvePhase).not.toHaveBeenCalled();
     expect(host.storage.orchestration.updateRunIfCurrentState).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "running",
+        status: "paused",
         executionState: "resume_requested",
         pendingApprovalPhaseId: "phase-1",
+        pendingApprovedBy: "operator",
       }),
       { status: "paused", executionState: "paused_for_approval" },
     );
@@ -783,12 +786,8 @@ describe("orchestration-lifecycle-service", () => {
         phaseId: "phase-1",
       }),
     );
-    expect(host.hooksService.enqueueAfterHooks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: "orchestration.phase.after",
-        entityId: "run-1:phase-1",
-      }),
-    );
+    // Nothing has run yet, so the after-phase gate and hooks must not fire at approval time.
+    expect(host.hooksService.enqueueAfterHooks).not.toHaveBeenCalled();
     expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
       "run-1",
       "policy.checked",
@@ -800,16 +799,10 @@ describe("orchestration-lifecycle-service", () => {
         approvalRequired: true,
       }),
     );
-    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+    expect(host.storage.orchestration.appendRunEvent).not.toHaveBeenCalledWith(
       "run-1",
       "policy.checked",
-      expect.objectContaining({
-        gate: "pre_output",
-        trigger: "orchestration.phase.after",
-        phaseId: "phase-1",
-        outcome: "allowed",
-        approvalRequired: true,
-      }),
+      expect.objectContaining({ gate: "pre_output" }),
     );
     expect(host.publishRealtime).toHaveBeenCalledWith(
       "orchestration_event",
@@ -866,7 +859,7 @@ describe("orchestration-lifecycle-service", () => {
       },
     });
 
-    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow(validationError.message);
+    await expect(approvePhase(host, "run-1", "phase-1", "operator")).rejects.toThrow(validationError.message);
 
     expect(host.orchestrationEngine.validate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -894,7 +887,7 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow("not waiting for approval");
+    await expect(approvePhase(host, "run-1", "phase-1", "operator")).rejects.toThrow("not waiting for approval");
   });
 
   it("returns a conflict when approval resume intent loses the state race", async () => {
@@ -916,12 +909,53 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toMatchObject({
+    await expect(approvePhase(host, "run-1", "phase-1", "operator")).rejects.toMatchObject({
       code: "STATE_CONFLICT",
       httpStatus: 409,
     });
     expect(host.resumeDurableRun).not.toHaveBeenCalled();
     expect(host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("refuses a repeated approval while the first one is still waiting for the durable worker", async () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          // Approval keeps the run paused, so the status check alone cannot stop a second approval.
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            status: "paused",
+            executionState: "resume_requested",
+            currentWaveId: "wave-1",
+            currentPhaseId: "phase-1",
+            pendingApprovalPhaseId: "phase-1",
+            pendingApprovedBy: "operator",
+            durableRunId: "durable-run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    await expect(approvePhase(host, "run-1", "phase-1", "operator-2")).rejects.toMatchObject({
+      code: "STATE_CONFLICT",
+      httpStatus: 409,
+    });
+    expect(host.hooksService.runInlineHooks).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRunIfCurrentState).not.toHaveBeenCalled();
+    expect(host.resumeDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses an operator-supplied phase cost because cost is measured from execution", async () => {
+    const host = createHost();
+
+    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toMatchObject({
+      httpStatus: 400,
+      message: expect.stringContaining("costIncrementUsd is no longer accepted"),
+    });
+    expect(host.storage.orchestration.getRun).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRunIfCurrentState).not.toHaveBeenCalled();
   });
 
   it("hides orchestration runs outside the requested workspace scope", async () => {
@@ -1125,7 +1159,7 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
     });
 
-    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow("not approval-gated");
+    await expect(approvePhase(host, "run-1", "phase-1", "operator")).rejects.toThrow("not approval-gated");
   });
 
   it("executes orchestration through the durable workflow path and pauses for approval", async () => {

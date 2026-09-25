@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DurableRunRecord, OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
+import { OrchestrationEngine } from "@goatcitadel/orchestration";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import {
   approvePhase,
@@ -207,13 +208,15 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
         worktreeStatus: "ready",
       },
       engine: {
-        approvePhase: vi.fn((plan: OrchestrationPlan, run: OrchestrationRun) => ({
+        advancePhase: vi.fn((plan: OrchestrationPlan, run: OrchestrationRun) => ({
           ...run,
           status: "completed",
           currentWaveId: undefined,
           currentPhaseId: undefined,
           totalIterations: 1,
-          totalCostUsd: 0.75,
+          totalCostUsd: 0.5,
+          pendingApprovalPhaseId: undefined,
+          pendingApprovedBy: undefined,
         })),
       },
     });
@@ -223,9 +226,26 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
     expect(result.outcome).toBe("completed");
     expect(harness.host.orchestrationEngine.approvePhase).toHaveBeenCalledWith(
       expect.objectContaining({ planId: "plan-1" }),
-      expect.objectContaining({ executionState: "resume_requested" }),
+      expect.objectContaining({ status: "paused", executionState: "resume_requested" }),
       "phase-1",
-      { costIncrementUsd: 0.75 },
+    );
+    // The approved phase runs; approval no longer skips past it.
+    expect(harness.runtime.phaseExecutor.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: expect.objectContaining({ phaseId: "phase-1" }) }),
+    );
+    expect(harness.host.orchestrationEngine.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({ planId: "plan-1" }),
+      expect.objectContaining({ pendingApprovalPhaseId: "phase-1", pendingApprovedBy: "operator" }),
+      "phase-1",
+      { costIncrementUsd: 0.5 },
+    );
+    // The after-phase hook fires once the approved phase has run, not at approval time.
+    expect(harness.host.hooksService.enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "orchestration.phase.after",
+        entityId: "run-1:phase-1",
+        payload: expect.objectContaining({ phaseId: "phase-1", approvedBy: "operator" }),
+      }),
     );
     expect(harness.host.recordDurableTimelineEvent).toHaveBeenCalledWith(
       "durable-run-1",
@@ -1067,6 +1087,155 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
   });
 });
 
+describe("orchestration lifecycle approvals with the real engine", () => {
+  // The rest of this file mocks the engine; these cases run the real one so the
+  // route, durable resume, and engine agree on what approving a phase means.
+  function realEngine(): OrchestrationLifecycleHost["orchestrationEngine"] {
+    const engine = new OrchestrationEngine();
+    return {
+      validate: (plan) => engine.validate(plan),
+      createRun: (plan) => engine.createRun(plan),
+      startRun: (plan, run) => engine.startRun(plan, run),
+      approvePhase: (plan, run, phaseId, options) => engine.approvePhase(plan, run, phaseId, options),
+      advancePhase: (plan, run, phaseId, options) => engine.advancePhase(plan, run, phaseId, options),
+    };
+  }
+
+  function twoPhasePlan(mode: OrchestrationPlan["mode"], secondRequiresApproval: boolean): OrchestrationPlan {
+    const base = buildPlan();
+    const wave = base.waves[0]!;
+    return {
+      ...base,
+      mode,
+      waves: [
+        {
+          ...wave,
+          phases: [
+            { ...wave.phases[0]!, requiresApproval: false },
+            {
+              ...wave.phases[0]!,
+              phaseId: "phase-2",
+              specPath: "phase-2.md",
+              requiresApproval: secondRequiresApproval,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  function createRealEngineHarness(plan: OrchestrationPlan) {
+    return createHarness({
+      plan,
+      run: {
+        ...buildRun(),
+        // The real engine checks runtime limits against the wall clock.
+        startedAt: new Date().toISOString(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreeStatus: "ready",
+      },
+      engine: realEngine(),
+      runtime: {
+        phaseExecutor: {
+          execute: vi.fn(async (input) => ({
+            phaseId: input.phase.phaseId,
+            ownerAgentId: input.phase.ownerAgentId,
+            status: "completed" as const,
+            startedAt: "2026-05-15T12:00:01.000Z",
+            finishedAt: "2026-05-15T12:00:02.000Z",
+            outputSummary: `${input.phase.phaseId} done`,
+            costUsd: 0.5,
+          })),
+        },
+      },
+    });
+  }
+
+  function reclaimDurableRun(harness: ReturnType<typeof createHarness>): DurableRunRecord {
+    // What the durable worker does when it claims the resumed run.
+    harness.setDurableRun({
+      ...harness.getDurableRun(),
+      status: "running",
+      leaseOwnerId: "worker-a",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+    });
+    return harness.getDurableRun();
+  }
+
+  function executedPhaseIds(harness: ReturnType<typeof createHarness>): string[] {
+    return vi.mocked(harness.runtime.phaseExecutor.execute).mock.calls.map(([input]) => input.phase.phaseId);
+  }
+
+  it("runs an approved gated phase instead of failing or skipping it", async () => {
+    const harness = createRealEngineHarness(twoPhasePlan("auto", true));
+
+    const first = await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+    expect(first.outcome).toBe("paused");
+    expect(executedPhaseIds(harness)).toEqual(["phase-1"]);
+    expect(harness.getRun()).toMatchObject({ status: "paused", currentPhaseId: "phase-2" });
+
+    const approval = await approvePhase(harness.host, "run-1", "phase-2", "operator");
+    expect(approval.run).toMatchObject({ status: "paused", executionState: "resume_requested" });
+    expect(harness.host.hooksService.enqueueAfterHooks).not.toHaveBeenCalled();
+
+    const resumed = await executeDurableOrchestrationRun(harness.host, harness.runtime, reclaimDurableRun(harness));
+    expect(resumed.outcome).toBe("completed");
+    expect(executedPhaseIds(harness)).toEqual(["phase-1", "phase-2"]);
+    expect(harness.getRun()).toMatchObject({
+      status: "completed",
+      executionState: "completed",
+      totalIterations: 2,
+      totalCostUsd: 1,
+    });
+    expect(harness.getRun().pendingApprovalPhaseId).toBeUndefined();
+    expect(harness.getRun().pendingApprovedBy).toBeUndefined();
+    expect(harness.host.hooksService.enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "orchestration.phase.after",
+        entityId: "run-1:phase-2",
+        payload: expect.objectContaining({ phaseId: "phase-2", approvedBy: "operator" }),
+      }),
+    );
+  });
+
+  it("runs every hitl phase after its approval, including phases not marked requiresApproval", async () => {
+    const harness = createRealEngineHarness(twoPhasePlan("hitl", false));
+
+    const first = await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+    expect(first.outcome).toBe("paused");
+    expect(executedPhaseIds(harness)).toEqual([]);
+
+    await approvePhase(harness.host, "run-1", "phase-1", "operator");
+    const second = await executeDurableOrchestrationRun(harness.host, harness.runtime, reclaimDurableRun(harness));
+    expect(second.outcome).toBe("paused");
+    expect(executedPhaseIds(harness)).toEqual(["phase-1"]);
+    expect(harness.getRun()).toMatchObject({ status: "paused", currentPhaseId: "phase-2" });
+
+    await approvePhase(harness.host, "run-1", "phase-2", "operator");
+    const third = await executeDurableOrchestrationRun(harness.host, harness.runtime, reclaimDurableRun(harness));
+    expect(third.outcome).toBe("completed");
+    expect(executedPhaseIds(harness)).toEqual(["phase-1", "phase-2"]);
+  });
+
+  it("applies an approval recorded before approvals became intent-only", async () => {
+    const harness = createRealEngineHarness(twoPhasePlan("auto", true));
+    await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+    // Older approvals stored the run as running while the approval waited for the worker.
+    vi.mocked(harness.host.storage.orchestration.updateRun)({
+      ...harness.getRun(),
+      status: "running",
+      executionState: "resume_requested",
+      pendingApprovalPhaseId: "phase-2",
+      pendingApprovedBy: "operator",
+    });
+
+    const resumed = await executeDurableOrchestrationRun(harness.host, harness.runtime, reclaimDurableRun(harness));
+    expect(resumed.outcome).toBe("completed");
+    expect(executedPhaseIds(harness)).toEqual(["phase-1", "phase-2"]);
+  });
+});
+
 type HarnessOptions = {
   plan?: OrchestrationPlan;
   run?: OrchestrationRun;
@@ -1151,13 +1320,11 @@ function createHarness(options: HarnessOptions = {}): {
       currentWaveId: currentPlan.waves[0]?.waveId,
       currentPhaseId: currentPlan.waves[0]?.phases[0]?.phaseId,
     })),
+    // Approval gates entry: the approved phase becomes runnable at the same position.
     approvePhase: vi.fn((currentPlan: OrchestrationPlan, currentRun: OrchestrationRun) => ({
       ...currentRun,
-      status: "completed",
-      currentWaveId: undefined,
-      currentPhaseId: undefined,
-      totalIterations: currentRun.totalIterations + 1,
-      totalCostUsd: currentRun.totalCostUsd,
+      status: "running",
+      pendingApprovalPhaseId: currentRun.currentPhaseId,
     })),
     advancePhase: vi.fn((currentPlan: OrchestrationPlan, currentRun: OrchestrationRun) => ({
       ...currentRun,
