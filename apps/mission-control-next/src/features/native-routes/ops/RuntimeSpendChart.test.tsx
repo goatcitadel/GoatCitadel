@@ -51,5 +51,7 @@ describe("RuntimeSpendChart", () => {
     expect(markup).toContain("$0.00125");
     expect(markup).toContain("$0.0026");
     expect(markup).not.toContain("Total $0.00 across");
+    expect(markup).toContain('role="region" aria-label="Spend history chart" tabindex="0"');
+    expect(markup).toContain("Scroll chart to see recent days");
   });
 });

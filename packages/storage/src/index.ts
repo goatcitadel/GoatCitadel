@@ -49,7 +49,10 @@ import { RemoteWorkerCellCapacityAdmissionRepository } from "./remote-worker-cel
 import { RemoteWorkerNativeCapacityDeliveryRepository } from "./remote-worker-native-capacity-delivery-repo.js";
 import { RemoteWorkerNativeCapacityPagesRepository } from "./remote-worker-native-capacity-pages-repo.js";
 import { RemoteWorkerNativePoolRepository } from "./remote-worker-native-pool-repo.js";
-export { snapshotRemoteWorkerCellCapacityInventoryAdmission, snapshotRemoteWorkerCellCapacityAuthority } from "./remote-worker-cell-capacity-admission-repo.js";
+export {
+  snapshotRemoteWorkerCellCapacityInventoryAdmission,
+  snapshotRemoteWorkerCellCapacityAuthority,
+} from "./remote-worker-cell-capacity-admission-repo.js";
 import { RemoteWorkerRuntimeReadRepository } from "./remote-worker-runtime-read-repo.js";
 import { RemoteWorkerCellProvisioningRepository } from "./remote-worker-cell-provisioning-repo.js";
 import { RemoteWorkerCellCapacityRepository } from "./remote-worker-cell-capacity-repo.js";
@@ -57,16 +60,34 @@ import { RemoteWorkerRuntimeResultRepository } from "./remote-worker-runtime-res
 import { RemoteWorkerNativeFileReceiptRepository } from "./remote-worker-native-file-receipt-repo.js";
 export type { RemoteWorkerNativeFileReceiptRecord } from "./remote-worker-native-file-receipt-repo.js";
 import { RemoteWorkerNativeFileTransferRepository } from "./remote-worker-native-file-transfer-repo.js";
-export type { RemoteWorkerNativeFileTransferRecord, RemoteWorkerNativeFileTransferPageRecord } from "./remote-worker-native-file-transfer-repo.js";
+export type {
+  RemoteWorkerNativeFileTransferRecord,
+  RemoteWorkerNativeFileTransferPageRecord,
+} from "./remote-worker-native-file-transfer-repo.js";
 import { RemoteWorkerRuntimeAdmissionRepository } from "./remote-worker-runtime-admission-repo.js";
 import { RemoteWorkerRuntimeInstallRepository } from "./remote-worker-runtime-install-repo.js";
-export { snapshotRuntimeInstallPoolCapture, type RuntimeInstallPoolCapture } from "./remote-worker-runtime-install-capture.js";
-export type { RemoteWorkerRuntimeInstallRequestInput, RemoteWorkerRuntimeInstallRecord, RemoteWorkerRuntimeInstallExchangeInput, RemoteWorkerRuntimeInstallSelectionInput, RemoteWorkerRuntimeInstallPreparationInput } from "./remote-worker-runtime-install-repo.js";
+export {
+  snapshotRuntimeInstallPoolCapture,
+  type RuntimeInstallPoolCapture,
+} from "./remote-worker-runtime-install-capture.js";
+export type {
+  RemoteWorkerRuntimeInstallRequestInput,
+  RemoteWorkerRuntimeInstallRecord,
+  RemoteWorkerRuntimeInstallExchangeInput,
+  RemoteWorkerRuntimeInstallSelectionInput,
+  RemoteWorkerRuntimeInstallPreparationInput,
+} from "./remote-worker-runtime-install-repo.js";
 import { RemoteWorkerNativePolicyReservationRepository } from "./remote-worker-native-policy-reservation-repo.js";
 export type { NativePolicyReservationLookup } from "./remote-worker-native-policy-reservation-repo.js";
-export type { RemoteWorkerRuntimeAdmissionInput, RemoteWorkerRuntimeAdmissionResult } from "./remote-worker-runtime-admission-repo.js";
+export type {
+  RemoteWorkerRuntimeAdmissionInput,
+  RemoteWorkerRuntimeAdmissionResult,
+} from "./remote-worker-runtime-admission-repo.js";
 export { snapshotRemoteWorkerRuntimeRequestPreparation } from "./remote-worker-runtime-admission-repo.js";
-export type { RemoteWorkerRuntimeRequestPreparationInput, RemoteWorkerRuntimeRequestPreparation } from "./remote-worker-runtime-admission-repo.js";
+export type {
+  RemoteWorkerRuntimeRequestPreparationInput,
+  RemoteWorkerRuntimeRequestPreparation,
+} from "./remote-worker-runtime-admission-repo.js";
 export type { RemoteWorkerRuntimeResultPageAssignmentInput } from "./remote-worker-runtime-result-repo.js";
 import { RemoteWorkerCellBackingCapacityRepository } from "./remote-worker-cell-backing-capacity-repo.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";

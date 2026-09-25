@@ -60,7 +60,7 @@
     "coverage:gate:line100": "node scripts/coverage-gate.mjs --profile=line100",
     "coverage:gate:strict100": "node scripts/coverage-gate.mjs --profile=strict100",
     "docs:check": "node scripts/validate-governance-docs.mjs && node scripts/check-button-types.mjs && node scripts/check-no-inline-sql.mjs && node scripts/check-memory-ownership.mjs && node scripts/check-bounded-response-reads.mjs && node scripts/check-no-empty-catch.mjs && node scripts/check-launcher-ui-target.mjs && node scripts/check-docker-secret-docs.mjs && node scripts/check-release-proof-tag-glob.mjs && pnpm check:docker-secrets",
-    "verify:repo:hygiene": "node scripts/run-with-worktree-output-lock.mjs --label=verify:repo:hygiene:build -- pnpm exec tsc -b apps/remote-worker/tsconfig.json packages/policy-engine/tsconfig.json && node --test \"scripts/**/*.test.mjs\" && node scripts/verify-repo-hygiene.mjs && node scripts/verify-supply-chain-posture.mjs",
+    "verify:repo:hygiene": "node scripts/run-with-worktree-output-lock.mjs --label=verify:repo:hygiene:build -- pnpm exec tsc -b apps/remote-worker/tsconfig.json packages/policy-engine/tsconfig.json && node --test --test-concurrency=2 \"scripts/**/*.test.mjs\" && node scripts/verify-repo-hygiene.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:supply-chain": "node --test scripts/verify-supply-chain-posture.test.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:design:quality": "pnpm tsx scripts/verify-design-quality.ts",
     "verify:skills:catalog": "node scripts/check-skill-catalog.mjs",

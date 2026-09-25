@@ -1,22 +1,22 @@
 import type { ChatQueueItemView } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 
-import {
-  inferProviderForModelId,
-  providerAllowsForeignModelIds,
-} from "@goatcitadel/contracts";
+import { inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
 
 export type ChatOutboundAction = "send" | "edit" | "retry";
 export type ChatStreamOperation = "resume" | "send" | "edit" | "retry";
 
 export interface ProviderSelectionPlanInput {
-  provider: {
-    providerId: string;
-    label: string;
-    disabled?: boolean;
-    availabilityHint?: string;
-    models: string[];
-    defaultModel?: string;
-  } | null | undefined;
+  provider:
+    | {
+        providerId: string;
+        label: string;
+        disabled?: boolean;
+        availabilityHint?: string;
+        models: string[];
+        defaultModel?: string;
+      }
+    | null
+    | undefined;
   loadedModels: string[];
 }
 
@@ -62,9 +62,10 @@ export function buildQueuedOutboundItemView(item: {
   return {
     id: item.id,
     action: item.action,
-    label: item.content.trim().length > 0
-      ? item.content.trim().slice(0, 96)
-      : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
+    label:
+      item.content.trim().length > 0
+        ? item.content.trim().slice(0, 96)
+        : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
     createdAt: item.createdAt,
     paused: item.paused,
   };
@@ -114,8 +115,22 @@ export function resolveProviderSelectionPlan(input: ProviderSelectionPlanInput):
 }
 
 export function isLikelyLocalProviderUrl(baseUrl: string | undefined): boolean {
-  const normalized = (baseUrl ?? "").trim().toLowerCase();
-  return /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(normalized);
+  try {
+    const url = new URL(baseUrl ?? "");
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "[::1]" ||
+      /^10(?:\.\d{1,3}){3}$/.test(host) ||
+      /^192\.168(?:\.\d{1,3}){2}$/.test(host) ||
+      /^172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}$/.test(host)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function resolveProviderModelSelection(input: ProviderModelSelectionInput): ProviderModelSelectionResult {

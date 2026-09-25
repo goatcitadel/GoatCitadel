@@ -80,6 +80,13 @@ function describeRuntimeStatus(provider: ChatModelProviderOption | undefined): {
       tone: "critical",
     };
   }
+  if (provider.modelRefreshStatus === "stale") {
+    return {
+      status: "degraded",
+      summary: appendCheckedAt("Model catalog stale; refresh in progress"),
+      tone: "warning",
+    };
+  }
   switch (provider.modelProbeState) {
     case "ready":
       return {
@@ -129,6 +136,7 @@ export function useChatProviderRoutingController(input: {
       imageEdit?: boolean;
     };
     models: string[];
+    modelRefreshStatus?: "fresh" | "stale" | "not_checked" | "error";
     modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
     modelProbeSource?: "live" | "template_fallback" | "error_fallback";
     modelProbeCheckedAt?: string;
@@ -152,13 +160,18 @@ export function useChatProviderRoutingController(input: {
     const activeModel = input.runtimeLlmConfig?.activeModel ?? settingsLlm?.activeModel;
     return input.runtimeProviderCatalog.map((provider) => {
       const isLocalRuntime = isLikelyLocalProviderUrl(provider.baseUrl);
-      const hasLiveOAuthCatalog = provider.providerId === "openai-codex" && provider.modelProbeSource === "live";
+      const hasLiveOAuthCatalog =
+        provider.providerId === "openai-codex" &&
+        provider.modelProbeSource === "live" &&
+        provider.modelRefreshStatus === "fresh";
       return {
         providerId: provider.providerId,
         label: provider.label,
         baseUrl: provider.baseUrl,
         defaultModel: hasLiveOAuthCatalog
-          ? (provider.models.includes(provider.defaultModel ?? "") ? provider.defaultModel : provider.models[0])
+          ? provider.models.includes(provider.defaultModel ?? "")
+            ? provider.defaultModel
+            : provider.models[0]
           : provider.defaultModel,
         isLocalRuntime,
         disabled: !provider.hasApiKey && !isLocalRuntime,
@@ -178,6 +191,7 @@ export function useChatProviderRoutingController(input: {
         modelProbeState: provider.modelProbeState,
         modelProbeSource: provider.modelProbeSource,
         modelProbeCheckedAt: provider.modelProbeCheckedAt,
+        modelRefreshStatus: provider.modelRefreshStatus,
       };
     });
   }, [
@@ -205,15 +219,16 @@ export function useChatProviderRoutingController(input: {
   );
 
   const selectedProviderSelection = useMemo(() => {
-    const hasLiveOAuthCatalog = selectedProviderOption?.providerId === "openai-codex" &&
-      selectedProviderOption.modelProbeSource === "live";
+    const hasLiveOAuthCatalog =
+      selectedProviderOption?.providerId === "openai-codex" &&
+      selectedProviderOption.modelProbeSource === "live" &&
+      selectedProviderOption.modelRefreshStatus === "fresh";
     const visibleModels = selectedProviderOption?.models ?? [];
     return resolveProviderModelSelection({
       provider: selectedProviderOption,
       loadedModels: hasLiveOAuthCatalog ? visibleModels : selectedProviderId ? getCachedModels(selectedProviderId) : [],
-      selectedModel: hasLiveOAuthCatalog && !visibleModels.includes(requestedModelId ?? "")
-        ? undefined
-        : requestedModelId,
+      selectedModel:
+        hasLiveOAuthCatalog && !visibleModels.includes(requestedModelId ?? "") ? undefined : requestedModelId,
     });
   }, [getCachedModels, requestedModelId, selectedProviderId, selectedProviderOption]);
 

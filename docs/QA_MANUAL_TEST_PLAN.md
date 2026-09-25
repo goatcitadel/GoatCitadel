@@ -1,6 +1,6 @@
 # GoatCitadel Manual QA Test Plan
 
-Last updated: 2026-06-06
+Last updated: 2026-09-25
 Status: manual QA workbook for the current `1.0` repo-visible product surface
 
 ## Purpose
@@ -351,13 +351,14 @@ Result:
 Steps:
 
 1. With the Windows host installed, open `goatcitadel://open?route=/ops/activity`.
-2. Try a valid deep link for `/chat`, `/cowork`, `/code`, and `/settings/providers`.
-3. Try a malformed protocol URL.
-4. Try an external HTTP URL.
+2. Try valid deep links for `/chat`, `/projects`, `/library/citadel`, `/ops/boards`, `/settings/providers`, and `/settings/hooks`.
+3. Try the compatibility URLs `/cowork` and `/code` and confirm they normalize to a current surface.
+4. Try a malformed protocol URL.
+5. Try an external HTTP URL.
 
 Expected:
 
-- Valid routes focus the app and navigate the WebView.
+- Valid routes focus the app and navigate the WebView; compatibility URLs resolve to Chat or Ops Kanban as defined by current routing.
 - Malformed URLs are ignored or reported with operator-visible diagnostics.
 - External URLs are not allowed to navigate the hosted app frame.
 
@@ -393,15 +394,12 @@ Open every current Mission Control Next route directly, then through navigation 
 Routes:
 
 - `/chat`
-- `/cowork`
-- `/cowork/tasks`
-- `/cowork/board`
-- `/code`
 - `/projects`
 - `/library/agents`
 - `/library/skills`
 - `/library/capabilities`
 - `/library/memory`
+- `/library/journey`
 - `/library/knowledge`
 - `/library/notes`
 - `/library/communications`
@@ -409,6 +407,13 @@ Routes:
 - `/library/artifacts`
 - `/library/prompt-packs`
 - `/library/curator`
+- `/library/citadel`
+- `/library/citadel-overview`
+- `/library/citadel-wards`
+- `/library/citadel-council`
+- `/library/citadel-blueprint`
+- `/library/citadel-vault`
+- `/ops/boards`
 - `/ops/activity`
 - `/ops/sessions`
 - `/ops/schedules`
@@ -436,6 +441,7 @@ Routes:
 - `/settings/channels`
 - `/settings/mcp`
 - `/settings/tools`
+- `/settings/hooks`
 
 Expected:
 
@@ -443,7 +449,7 @@ Expected:
 - Page title/label matches route.
 - Route inspector or visible chrome agrees with current route.
 - No page falls back silently to the wrong surface.
-- Experimental pages are labeled experimental: `/library/curator`, `/ops/improvement`, `/ops/kanban`, `/settings/personalities`, `/settings/addons`.
+- Experimental pages are labeled experimental: `/library/journey`, `/library/curator`, `/ops/improvement`, `/ops/kanban`, `/settings/personalities`, `/settings/addons`.
 
 Result:
 
@@ -451,7 +457,7 @@ Result:
 
 Steps:
 
-1. Open legacy URLs such as `/?tab=chat`, `/?surface=code`, and `/?space=observe&page=activity&tab=scheduler`.
+1. Open legacy URLs such as `/?tab=chat`, `/?surface=code`, `/?space=observe&page=activity&tab=scheduler`, `/cowork`, and `/code`.
 2. Compare expected redirect paths in the release-surface manifest.
 
 Expected:
@@ -486,12 +492,12 @@ Viewports:
 
 - desktop: 1440 x 1024
 - laptop: 1280 x 800
-- narrow desktop: 1180 x 900
+- narrow desktop: 1179 x 900
 - mobile: 390 x 844
 
 Steps:
 
-1. Open `/chat`, `/cowork`, `/code`, `/projects`, `/library/capabilities`, `/ops/runtime`, and `/settings/providers`.
+1. Open `/chat`, `/projects`, `/library/capabilities`, `/library/citadel`, `/ops/boards`, `/ops/runtime`, `/settings/providers`, and `/settings/hooks`.
 2. Repeat in light and dark theme.
 3. Test primary navigation and secondary nav at each viewport.
 
@@ -500,7 +506,7 @@ Expected:
 - No clipped primary actions.
 - No overlapping status chips or toolbar controls.
 - Mobile page picker works.
-- Threaded surfaces remain usable.
+- Chat and its agentic and code-capability states remain usable.
 - Light/dark themes keep readable contrast.
 
 Result:
@@ -788,13 +794,13 @@ Expected:
 
 Result:
 
-## Cowork Surface
+## Agentic Work In Chat
 
-### COWORK-01 Start Or Resume Durable Cowork Run
+### COWORK-01 Start Or Resume Durable Chat Run
 
 Steps:
 
-1. Open `/cowork`.
+1. Open `/chat`.
 2. Start a supervised multi-step task.
 3. Inspect plan, next action, blockers, and evidence.
 4. Refresh during the run.
@@ -802,44 +808,41 @@ Steps:
 
 Expected:
 
-- Cowork feels distinct from Chat.
-- Durable run/run detail is visible when present.
+- The supervised workflow is visible within Chat.
+- Durable run detail is visible when present.
 - Current step and checkpoint state survive refresh.
 - Blocked/waiting/running/completed states are not blurred.
 
 Result:
 
-### COWORK-02 Task Board
+### COWORK-02 Task State And Ops Kanban
 
 Steps:
 
-1. Open `/cowork/tasks`.
-2. Create a task.
-3. Edit status, owner/agent, deliverable, and blocker fields if available.
-4. Soft-delete/archive and restore.
-5. Refresh.
+1. Start a multi-step task in `/chat` and inspect its task state.
+2. Open `/ops/kanban` if the experimental page is enabled.
+3. Inspect status, owner/agent, deliverable, and blocker fields that are exposed.
+4. Refresh Chat and the board.
 
 Expected:
 
-- Task state persists.
-- Board counts match visible items.
-- Restore works without duplicating tasks.
+- Task state persists across refresh.
+- Any board counts match visible items and the page remains labeled experimental.
 - Blocker hierarchy is clear.
 
 Result:
 
-### COWORK-03 Agent Board
+### COWORK-03 Agent Posture
 
 Steps:
 
-1. Open `/cowork/board`.
-2. Inspect agent posture.
-3. Trigger or seed a running/blocked/done agent state.
-4. Compare with `/ops/kanban` if relevant.
+1. Open `/library/agents` and inspect available agent profiles.
+2. Start a delegated task in `/chat` and inspect its agent state.
+3. Compare running, blocked, and completed states with `/ops/kanban` if the experimental page is enabled.
 
 Expected:
 
-- Agent board is an inspectable posture surface.
+- Agent posture and delegation lineage are inspectable in Chat.
 - It does not imply autonomous live-control parity.
 - Experimental bulk controls stay labeled when present.
 
@@ -849,10 +852,10 @@ Result:
 
 Steps:
 
-1. Trigger a Cowork action that requires approval.
+1. Trigger a Chat-hosted agentic action that requires approval.
 2. Confirm composer/run state blocks appropriately.
 3. Resolve approval from Ops -> Approvals.
-4. Return to Cowork and resume if required.
+4. Return to Chat and resume if required.
 
 Expected:
 
@@ -862,14 +865,14 @@ Expected:
 
 Result:
 
-### COWORK-05 Gateway Restart During Cowork Run
+### COWORK-05 Gateway Restart During Chat Run
 
 Steps:
 
-1. Start a durable Cowork run.
+1. Start a durable agentic run in `/chat`.
 2. Stop gateway mid-run.
 3. Restart gateway.
-4. Inspect Cowork, Ops -> Sessions, Ops -> Diagnostics, and run detail.
+4. Inspect Chat, Ops -> Sessions, Ops -> Diagnostics, and run detail.
 
 Expected:
 
@@ -923,7 +926,7 @@ Precondition: `GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED=true` if needed.
 
 Steps:
 
-1. Start a simple trusted-code Code Mode run.
+1. From `/chat`, start a simple trusted-code Code Mode run.
 2. Inspect pending approval.
 3. Approve.
 4. Inspect run detail, artifacts, hashes, stdout/stderr, and backend metadata.
@@ -942,7 +945,7 @@ Result:
 
 Steps:
 
-1. Start a Code Mode run.
+1. From `/chat`, start a Code Mode run.
 2. Reject the approval.
 3. Start another run that fails validation or runtime execution safely.
 4. Inspect run ledger.
@@ -1388,7 +1391,42 @@ Expected:
 
 Result:
 
+### LIB-CIT-01 Citadel Setup And Governance
+
+Steps:
+
+1. Open `/library/citadel` and review the Mason setup and Blueprint before activation.
+2. Open `/library/citadel-overview`; inspect Charter, Chambers, Gatehouse, and default Citadels.
+3. Open `/library/citadel-wards` and test a harmless action against a Ward.
+4. Inspect `/library/citadel-council`, `/library/citadel-blueprint`, and `/library/citadel-vault`.
+5. Switch the active Citadel and refresh each route.
+
+Expected:
+
+- The active Citadel and revision-bound state remain consistent across routes and refresh.
+- Setup and activation do not claim accounts or Gates are connected without evidence.
+- Blocked, empty, stale, and permission states give an actionable explanation.
+
+Result:
+
 ## Ops: Activity, Sessions, Runtime, Diagnostics
+
+### OPS-BOARD-01 Saved Ops Boards
+
+Steps:
+
+1. Open `/ops/boards` in a disposable workspace and create a board with two widgets.
+2. Move and resize a widget, save, refresh, and inspect the resulting layout.
+3. Edit the board, archive it, show archived boards, and restore it.
+4. Switch workspaces and return; check an empty board and a failed load if safely reproducible.
+
+Expected:
+
+- The saved layout and revision remain stable across refresh and workspace switches.
+- Archive and restore affect only the selected board.
+- Conflicts, loading, empty, and error states remain clear and usable.
+
+Result:
 
 ### OPS-ACT-01 Activity Feed And Realtime Events
 
@@ -1693,7 +1731,7 @@ Result:
 Steps:
 
 1. Create or find a durable run.
-2. Open run detail from Cowork, Ops -> Diagnostics, or lifecycle links.
+2. Open run detail from Chat, Ops -> Diagnostics, or lifecycle links.
 3. Inspect timeline, checkpoints, retry status, dead-letter state, and evidence.
 
 Expected:
@@ -1886,6 +1924,23 @@ Expected:
 - Tool access state is readable.
 - Grants are scoped and expiring.
 - Risky tool remains approval/policy governed.
+
+Result:
+
+### SET-09 Governed Hooks
+
+Steps:
+
+1. Open `/settings/hooks` in a disposable workspace and inspect the empty state.
+2. Register an observe-mode hook to a sandbox HTTPS endpoint with a test signing secret.
+3. Test the hook and inspect delivery history, status, and retry or redrive controls.
+4. Refresh, switch workspaces, and delete the test hook.
+
+Expected:
+
+- Trigger, mode, data scope, and delivery state match Gateway records.
+- Secret values and full payload text are not exposed in the UI.
+- Failed delivery and redrive states are explicit; deletion affects only the chosen workspace.
 
 Result:
 
@@ -2711,6 +2766,9 @@ Use this as a bridge between manual failures and named proof lanes.
 | Capabilities/tools | `LIB-CAP-*`, `CODE-*`, `SET-08` | `pnpm verify:catalog:parity`, `pnpm verify:agentic:proof`, `pnpm verify:code-mode:sandbox` |
 | Code hostile-sandbox claim metadata | `CODE-*`, `SEC-*` | `pnpm verify:code-mode:hostile-sandbox` |
 | Memory | `LIB-MEM-*` | `pnpm verify:memory:truth` |
+| Citadels | `LIB-CIT-*` | `pnpm verify:citadels:revisions` |
+| Saved Ops boards | `OPS-BOARD-*` | `pnpm verify:ops:saved-boards` |
+| Hooks | `SET-09` | `pnpm verify:hooks` |
 | Backup/restore | `BK-*` | `pnpm verify:backup:roundtrip` |
 | Installer/desktop | `INST-*`, `CLI-*` | `pnpm verify:install`, `pnpm verify:desktop`, `pnpm windows:test` |
 | Mesh/A2A | `A2A-*`, runtime diagnostics | `pnpm verify:mesh:readiness`, `pnpm verify:a2a:full` |

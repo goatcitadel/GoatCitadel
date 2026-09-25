@@ -4,9 +4,21 @@ import { __resetSessionDraftsForTests } from "./library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
 const renderers: ReactTestRenderer[] = [];
-function create(...args: Parameters<typeof createRenderer>) { const renderer = createRenderer(...args); renderers.push(renderer); return renderer; }
-beforeEach(() => { __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests(); });
-afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
+function create(...args: Parameters<typeof createRenderer>) {
+  const renderer = createRenderer(...args);
+  renderers.push(renderer);
+  return renderer;
+}
+beforeEach(() => {
+  __resetSessionDraftsForTests();
+  __resetFormDirtyRegistryForTests();
+  __resetSessionViewStateForTests();
+});
+afterEach(async () => {
+  await act(async () => {
+    for (const renderer of renderers.splice(0)) renderer.unmount();
+  });
+});
 import {
   getErrorMessage,
   NativeRoutePages,
@@ -812,7 +824,9 @@ describe("NativeRoutePages library coverage", () => {
     const knowledge = await mount("library", "knowledge");
     await flush();
     expect(collectText(knowledge.root)).toContain("Knowledge sources");
-    const contextKnowledge = await mount("library", "knowledge", { route: { area: "library", section: "knowledge", view: "context", theme: "ops" } });
+    const contextKnowledge = await mount("library", "knowledge", {
+      route: { area: "library", section: "knowledge", view: "context", theme: "ops" },
+    });
     expect(collectText(contextKnowledge.root)).toContain("Distilled context.");
     await click(findButton(knowledge.root, "memory/workspace.md"));
     expect(collectText(knowledge.root)).toContain("Ingestion health");
@@ -859,12 +873,14 @@ describe("NativeRoutePages library coverage", () => {
         "Turn identifier: turn-1",
       ]),
     );
-    await click(artifacts.root.findAllByType("button").find(node => node.props["aria-label"] === "Close details")!);
+    await click(artifacts.root.findAllByType("button").find((node) => node.props["aria-label"] === "Close details")!);
     await click(findButton(artifacts.root, "Back to list"));
     await click(findButton(artifacts.root, "Plan"));
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
     await click(findButton(artifacts.root, "Release notes"));
-    await act(async () => { await import("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer"); });
+    await act(async () => {
+      await import("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer");
+    });
     await flush();
     expect(collectText(artifacts.root)).toContain("Proof.");
     await click(findButton(artifacts.root, "Back to list"));

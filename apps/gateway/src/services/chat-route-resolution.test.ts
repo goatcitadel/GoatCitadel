@@ -59,8 +59,12 @@ function createHost(input?: {
         const models = input?.liveCatalog?.[providerId];
         return models
           ? models.includes(model)
-            ? input?.catalogStale ? "stale_available" : "available"
-            : input?.catalogStale ? "stale_unavailable" : "unavailable"
+            ? input?.catalogStale
+              ? "stale_available"
+              : "available"
+            : input?.catalogStale
+              ? "stale_unavailable"
+              : "unavailable"
           : "unverified";
       }),
       getRuntimeConfig: vi.fn(() => ({
@@ -199,6 +203,26 @@ describe("chat-route-resolution", () => {
     expect(result.runtimeClass).toBe("local");
     expect(result.runtimeReachability).toBe("unreachable");
     expect(result.blockedReason).toContain("runtime could not be reached");
+  });
+
+  it("does not classify public hosts with private-address prefixes as local", async () => {
+    for (const baseUrl of [
+      "http://localhost.evil.test",
+      "http://10.evil.test",
+      "http://192.168.evil.test",
+      "http://172.20.evil.test",
+    ]) {
+      const host = createHost({
+        runtime: {
+          activeProviderId: "custom",
+          activeModel: "model-1",
+          providers: [{ providerId: "custom", label: "Custom", baseUrl, defaultModel: "model-1", hasApiKey: false }],
+        },
+      });
+      const result = await resolveChatRouteDescriptor(host as never, "session-1", { action: "send" });
+      expect(result.runtimeClass).toBe("cloud");
+      expect(result.blockedReason).toContain("Add an API key");
+    }
   });
 
   it("uses selected turn context validation for retry/edit preflight requests", async () => {
@@ -352,23 +376,29 @@ describe("chat-route-resolution", () => {
       runtime: {
         activeProviderId: "openai-codex",
         activeModel: "gpt-5.4",
-        providers: [{
-          providerId: "openai-codex",
-          label: "OpenAI Codex",
-          defaultModel: "gpt-5.5",
-          hasApiKey: true,
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-        }],
+        providers: [
+          {
+            providerId: "openai-codex",
+            label: "OpenAI Codex",
+            defaultModel: "gpt-5.5",
+            hasApiKey: true,
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
       },
       liveCatalog: { "openai-codex": ["gpt-new"] },
     });
     const added = await resolveChatRouteDescriptor(host as never, "session-1", {
-      action: "send", providerId: "openai-codex", model: "gpt-new",
+      action: "send",
+      providerId: "openai-codex",
+      model: "gpt-new",
     });
     expect(added).toMatchObject({ effectiveModel: "gpt-new", blockedReason: undefined });
 
     const removed = await resolveChatRouteDescriptor(host as never, "session-1", {
-      action: "send", providerId: "openai-codex", model: "gpt-5.4",
+      action: "send",
+      providerId: "openai-codex",
+      model: "gpt-5.4",
     });
     expect(removed).toMatchObject({
       effectiveModel: undefined,
@@ -387,20 +417,29 @@ describe("chat-route-resolution", () => {
       runtime: {
         activeProviderId: "openai-codex",
         activeModel: "gpt-5.4",
-        providers: [{
-          providerId: "openai-codex", label: "OpenAI Codex", defaultModel: "gpt-5.5",
-          hasApiKey: true, baseUrl: "https://chatgpt.com/backend-api/codex",
-        }],
+        providers: [
+          {
+            providerId: "openai-codex",
+            label: "OpenAI Codex",
+            defaultModel: "gpt-5.5",
+            hasApiKey: true,
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
       },
       liveCatalog: { "openai-codex": ["gpt-new"] },
       catalogStale: true,
     });
     const kept = await resolveChatRouteDescriptor(host as never, "session-1", {
-      action: "send", providerId: "openai-codex", model: "gpt-new",
+      action: "send",
+      providerId: "openai-codex",
+      model: "gpt-new",
     });
     expect(kept.effectiveModel).toBe("gpt-new");
     const absent = await resolveChatRouteDescriptor(host as never, "session-1", {
-      action: "send", providerId: "openai-codex", model: "gpt-5.4",
+      action: "send",
+      providerId: "openai-codex",
+      model: "gpt-5.4",
     });
     expect(absent.blockedReason).toContain("last known model list");
     expect(absent.blockedReason).toContain("Refresh the catalog");

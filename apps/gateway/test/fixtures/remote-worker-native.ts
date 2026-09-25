@@ -5,8 +5,12 @@ import { cp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { REMOTE_WORKER_PROTOCOL_VERSION, REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
-  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION, canonicalJsonString } from "@goatcitadel/contracts";
+import {
+  REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_PROTECTED_ADMISSION_SIGNER_PIN_SCHEMA_VERSION,
+  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  canonicalJsonString,
+} from "@goatcitadel/contracts";
 import { RemoteWorkerAdmissionRepository, type DatabaseClient } from "@goatcitadel/storage";
 import type { EnabledRemoteWorkerRuntimeConfig } from "../../src/services/remote-worker-runtime-config.js";
 
@@ -58,7 +62,6 @@ const execFileAsync = promisify(execFile);
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const workerEntry = join(repoRoot, "apps", "remote-worker", "src", "main.ts");
 const tsxCli = join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
-
 
 export function sha256(value: string | Buffer | Uint8Array): string {
   return createHash("sha256")
@@ -232,7 +235,6 @@ export function seedBootstrap(
   };
 }
 
-
 interface WorkerRun {
   readonly report: Record<string, unknown>;
   readonly exitCode: number | null;
@@ -243,12 +245,24 @@ interface WorkerRun {
 export async function prepareStockWorkerWithNativeFiles(root: string): Promise<string> {
   const worker = join(root, "stock-worker");
   await mkdir(worker);
-  await cp(join(repoRoot, "apps", "remote-worker", "dist"), join(worker, "dist"),
-    { recursive: true, errorOnExist: true, force: false });
+  await cp(join(repoRoot, "apps", "remote-worker", "dist"), join(worker, "dist"), {
+    recursive: true,
+    errorOnExist: true,
+    force: false,
+  });
   await writeFile(join(worker, "package.json"), JSON.stringify({ type: "module" }), { flag: "wx" });
   await symlink(join(repoRoot, "apps", "remote-worker", "node_modules"), join(worker, "node_modules"), "junction");
-  await execFileAsync(process.execPath, [join(repoRoot, "scripts", "packaging", "build-remote-worker-windows-tls.mjs"),
-    "--target", "windows-x64", "--output-dir", join(worker, "native")], { windowsHide: true, timeout: 60_000 });
+  await execFileAsync(
+    process.execPath,
+    [
+      join(repoRoot, "scripts", "packaging", "build-remote-worker-windows-tls.mjs"),
+      "--target",
+      "windows-x64",
+      "--output-dir",
+      join(worker, "native"),
+    ],
+    { windowsHide: true, timeout: 180_000 },
+  );
   return join(worker, "dist", "main.js");
 }
 
@@ -273,8 +287,11 @@ export async function runWorkerProcess(input: {
 }): Promise<WorkerRun> {
   const reportFile = join(input.root, `report-${input.runId}.json`);
   const entry = input.meshManifestFile
-    ? fileURLToPath(new URL("./mesh-destination-worker.ts", import.meta.url)) : workerEntry;
-  const launch = input.meshRegistry ? [input.stockWorkerEntrypoint ?? join(repoRoot, "apps", "remote-worker", "dist", "main.js")] : [tsxCli, entry];
+    ? fileURLToPath(new URL("./mesh-destination-worker.ts", import.meta.url))
+    : workerEntry;
+  const launch = input.meshRegistry
+    ? [input.stockWorkerEntrypoint ?? join(repoRoot, "apps", "remote-worker", "dist", "main.js")]
+    : [tsxCli, entry];
   const child = spawn(process.execPath, launch, {
     cwd: repoRoot,
     windowsHide: true,
@@ -293,12 +310,18 @@ export async function runWorkerProcess(input: {
       GOATCITADEL_CONNECTED_WORKER_STOP_AFTER: input.stopAfter,
       GOATCITADEL_CONNECTED_WORKER_EXECUTION_MODE: input.executionMode ?? "protocol_probe",
       GOATCITADEL_CONNECTED_WORKER_RUN_MODE: input.runMode ?? "once",
-      ...(input.meshRegistry ? { GOATCITADEL_CONNECTED_WORKER_MESH_REGISTRY_FILE: input.meshRegistry.file,
-        GOATCITADEL_CONNECTED_WORKER_MESH_REGISTRY_SHA256: input.meshRegistry.sha256 } : {}),
-      ...(input.meshManifestFile ? {
-        GOATCITADEL_TEST_MESH_MANIFEST_FILE: input.meshManifestFile,
-        GOATCITADEL_TEST_MESH_EFFECT_FILE: join(dirname(input.meshManifestFile), "mesh-effect.jsonl"),
-      } : {}),
+      ...(input.meshRegistry
+        ? {
+            GOATCITADEL_CONNECTED_WORKER_MESH_REGISTRY_FILE: input.meshRegistry.file,
+            GOATCITADEL_CONNECTED_WORKER_MESH_REGISTRY_SHA256: input.meshRegistry.sha256,
+          }
+        : {}),
+      ...(input.meshManifestFile
+        ? {
+            GOATCITADEL_TEST_MESH_MANIFEST_FILE: input.meshManifestFile,
+            GOATCITADEL_TEST_MESH_EFFECT_FILE: join(dirname(input.meshManifestFile), "mesh-effect.jsonl"),
+          }
+        : {}),
     },
   });
   let stderr = "";

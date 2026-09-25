@@ -97,6 +97,11 @@ describe("chat-page-helpers", () => {
     expect(isLikelyLocalProviderUrl("http://10.0.0.5")).toBe(true);
     expect(isLikelyLocalProviderUrl("http://172.20.0.5")).toBe(true);
     expect(isLikelyLocalProviderUrl("http://192.168.1.2")).toBe(true);
+    expect(isLikelyLocalProviderUrl("http://[::1]:8080")).toBe(true);
+    expect(isLikelyLocalProviderUrl("http://localhost.evil.test")).toBe(false);
+    expect(isLikelyLocalProviderUrl("http://10.evil.test")).toBe(false);
+    expect(isLikelyLocalProviderUrl("http://192.168.evil.test")).toBe(false);
+    expect(isLikelyLocalProviderUrl("http://172.20.evil.test")).toBe(false);
     expect(isLikelyLocalProviderUrl("https://api.example.test")).toBe(false);
     expect(isLikelyLocalProviderUrl(undefined)).toBe(false);
   });

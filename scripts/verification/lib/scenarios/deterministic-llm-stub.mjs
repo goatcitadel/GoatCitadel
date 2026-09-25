@@ -61,7 +61,7 @@ export async function writeDeterministicLlmProviderConfig(runtimeRoot, baseUrl, 
   metadata.entries[`${providerId}/${model}`] = {
     contextWindow: 128000,
     outputTokenLimit: 16000,
-    reasoning: { supportedEfforts: ["low", "medium", "high"] },
+    reasoning: { supportedEfforts: ["none", "low", "medium", "high"] },
   };
   await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 }

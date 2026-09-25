@@ -143,6 +143,10 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
                 });
               }
               await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
+              const inspectorGeometry =
+                verificationTarget.isNext && route.slug === "ops-boards"
+                  ? await assertOpsBoardInspectorGeometry(page)
+                  : null;
               const browserSanity = assertBrowserConsoleHealthy(
                 browserLog,
                 browserLogCursor,
@@ -191,6 +195,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
                   navigationAttempts: navigationEvidence.attempts,
                   navigationRecoveryReason: navigationEvidence.recoveryReason,
                   navigationRecoveryDisposition: navigationEvidence.recoveryDisposition,
+                  ...(inspectorGeometry ?? {}),
                   ...(degradedStateEvidence ?? {}),
                   ...(nativeScrollEvidence
                     ? {
@@ -449,6 +454,32 @@ async function collectEnabledExperimentalMutations(main, routeSlug) {
     if (name && patterns.some((pattern) => pattern.test(name))) enabled.push(name);
   }
   return enabled;
+}
+
+async function assertOpsBoardInspectorGeometry(page) {
+  const geometry = await page.evaluate(() => {
+    const stage = document.querySelector(".mc-next-stage");
+    const board = document.querySelector(".mc-next-ops-board-view");
+    const inspector = document.querySelector('.mc-next-detail-inspector[data-inspector-owner="shell"]');
+    if (!(stage instanceof HTMLElement) || !(board instanceof HTMLElement) || !(inspector instanceof HTMLElement)) {
+      return null;
+    }
+    return {
+      reservedWidth: Number.parseFloat(getComputedStyle(stage).paddingRight),
+      inspectorWidth: inspector.getBoundingClientRect().width,
+      boardRight: board.getBoundingClientRect().right,
+      inspectorLeft: inspector.getBoundingClientRect().left,
+    };
+  });
+  if (!geometry) throw new Error("Saved boards did not expose its stage, content, and open shell inspector");
+  if (geometry.reservedWidth + 1 < geometry.inspectorWidth || geometry.boardRight > geometry.inspectorLeft - 1) {
+    throw new Error(`Saved boards overlaps the open shell inspector: ${JSON.stringify(geometry)}`);
+  }
+  return {
+    inspectorReservedPx: geometry.reservedWidth,
+    inspectorWidthPx: geometry.inspectorWidth,
+    inspectorContentGapPx: geometry.inspectorLeft - geometry.boardRight,
+  };
 }
 
 function experimentalDegradedApiPath(routeSlug) {

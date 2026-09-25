@@ -153,53 +153,138 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   const codexOAuthProvider = providers.find((item) => item.providerId === "openai-codex") ?? null;
   const selectedProvider = providers.find((item) => item.providerId === selectedProviderId) ?? providers[0] ?? null;
   const selectedProviderConfig = selectedProvider ? providerConfigMap.get(selectedProvider.providerId) : undefined;
-  const providerCanonical = { provider: editorMode === "new" ? createEmptyProviderEditorDraft() : buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider), transport: editorMode === "new" ? createEmptyLlmTransportDraft() : draftFromRequestConfig(selectedProviderConfig?.request) };
-  const providerEditor = useSessionDraft(`provider:system:${editorMode === "new" ? "new" : selectedProviderId}`, providerCanonical, config?.revision, { label: editorMode === "new" ? "New provider" : selectedProvider?.label ?? "Provider", active: detailView === "editor", available: Boolean(config), onSave: (): Promise<boolean> => handleSaveProvider() });
+  const providerCanonical = {
+    provider:
+      editorMode === "new"
+        ? createEmptyProviderEditorDraft()
+        : buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider),
+    transport:
+      editorMode === "new" ? createEmptyLlmTransportDraft() : draftFromRequestConfig(selectedProviderConfig?.request),
+  };
+  const providerEditor = useSessionDraft(
+    `provider:system:${editorMode === "new" ? "new" : selectedProviderId}`,
+    providerCanonical,
+    config?.revision,
+    {
+      label: editorMode === "new" ? "New provider" : (selectedProvider?.label ?? "Provider"),
+      active: detailView === "editor",
+      available: Boolean(config),
+      onSave: (): Promise<boolean> => handleSaveProvider(),
+    },
+  );
   const providerDraft = providerEditor.value.provider;
   const providerTransportDraft = providerEditor.value.transport;
-  const setProviderDraft = (update: SetStateAction<ProviderEditorDraft>) => providerEditor.setValue((value) => ({ ...value, provider: typeof update === "function" ? update(value.provider) : update }));
-  const setProviderTransportDraft = (update: SetStateAction<LlmTransportDraft>) => providerEditor.setValue((value) => ({ ...value, transport: typeof update === "function" ? update(value.transport) : update }));
-  const routingEditor = useSessionDraft("provider-routing:system", { providerId: config?.activeProviderId ?? "", model: config?.activeModel ?? "" }, config?.revision, { label: "Default routing", active: detailView === "routing", available: Boolean(config), onSave: (): Promise<boolean> => handleSaveRouting() });
+  const setProviderDraft = (update: SetStateAction<ProviderEditorDraft>) =>
+    providerEditor.setValue((value) => ({
+      ...value,
+      provider: typeof update === "function" ? update(value.provider) : update,
+    }));
+  const setProviderTransportDraft = (update: SetStateAction<LlmTransportDraft>) =>
+    providerEditor.setValue((value) => ({
+      ...value,
+      transport: typeof update === "function" ? update(value.transport) : update,
+    }));
+  const routingEditor = useSessionDraft(
+    "provider-routing:system",
+    { providerId: config?.activeProviderId ?? "", model: config?.activeModel ?? "" },
+    config?.revision,
+    {
+      label: "Default routing",
+      active: detailView === "routing",
+      available: Boolean(config),
+      onSave: (): Promise<boolean> => handleSaveRouting(),
+    },
+  );
   const routingProviderId = routingEditor.value.providerId;
   const routingModel = routingEditor.value.model;
   const setRoutingProviderId = (providerId: string) => routingEditor.setValue((value) => ({ ...value, providerId }));
   const setRoutingModel = (model: string) => routingEditor.setValue((value) => ({ ...value, model }));
-  const secretEditor = useSessionDraft(`provider-secret:system:${selectedProviderId}`, "", config?.revision, { label: "Provider credential", active: detailView === "trust" && credentialEditorOpen, available: Boolean(config), onSave: (): Promise<boolean> => handleSaveSecret() });
+  const secretEditor = useSessionDraft(`provider-secret:system:${selectedProviderId}`, "", config?.revision, {
+    label: "Provider credential",
+    active: detailView === "trust" && credentialEditorOpen,
+    available: Boolean(config),
+    onSave: (): Promise<boolean> => handleSaveSecret(),
+  });
   const secretValue = secretEditor.value;
   const setSecretValue = secretEditor.setValue;
   const savesInFlight = useRef(new Set<string>());
   const currentEditor = useRef({ key: providerEditor.key, providerId: selectedProviderId, view: detailView });
-  if (currentEditor.current.key !== providerEditor.key || currentEditor.current.providerId !== selectedProviderId || currentEditor.current.view !== detailView) currentEditor.current = { key: providerEditor.key, providerId: selectedProviderId, view: detailView };
-  const routingChange = useSettingsChange({ key: routingEditor.key,
-    matchesPlan: (plan, submitted: typeof routingEditor.value) => plan.request.kind === "installation_default_model" &&
-      plan.target.ownerId === "runtime_settings" && plan.target.resourceId === "llm_defaults" &&
-      plan.request.providerId === submitted.providerId && plan.request.model === submitted.model,
-    matches: (settings, submitted) => settings.llm.activeProviderId === submitted.providerId && settings.llm.activeModel === submitted.model,
-    acceptSaved: routingEditor.acceptSaved, reload,
+  if (
+    currentEditor.current.key !== providerEditor.key ||
+    currentEditor.current.providerId !== selectedProviderId ||
+    currentEditor.current.view !== detailView
+  )
+    currentEditor.current = { key: providerEditor.key, providerId: selectedProviderId, view: detailView };
+  const routingChange = useSettingsChange({
+    key: routingEditor.key,
+    matchesPlan: (plan, submitted: typeof routingEditor.value) =>
+      plan.request.kind === "installation_default_model" &&
+      plan.target.ownerId === "runtime_settings" &&
+      plan.target.resourceId === "llm_defaults" &&
+      plan.request.providerId === submitted.providerId &&
+      plan.request.model === submitted.model,
+    matches: (settings, submitted) =>
+      settings.llm.activeProviderId === submitted.providerId && settings.llm.activeModel === submitted.model,
+    acceptSaved: routingEditor.acceptSaved,
+    reload,
   });
-  const providerChange = useSettingsChange({ key: providerEditor.key, read: fetchLlmConfig,
-    matchesPlan: matchesProviderSavePlan, matches: matchesProviderSave, acceptSaved: providerEditor.acceptSaved, reload,
+  const providerChange = useSettingsChange({
+    key: providerEditor.key,
+    read: fetchLlmConfig,
+    matchesPlan: matchesProviderSavePlan,
+    matches: matchesProviderSave,
+    acceptSaved: providerEditor.acceptSaved,
+    reload,
   });
-  const secretChange = useSettingsChange<string, Awaited<ReturnType<typeof saveProviderSecret>>>({ key: secretEditor.key,
-    matchesPlan: (plan) => plan.request.kind === "provider_connection" && plan.request.providerId === selectedProviderId &&
-      plan.request.credentialAction === "replace_api_key" && plan.target.ownerId === "provider_connection" && plan.target.resourceId === selectedProviderId,
-    read: async () => { const [status, settings] = await Promise.all([fetchProviderSecretStatus(selectedProviderId), fetchSettings()]); return { ...status, revision: settings.revision }; },
+  const secretChange = useSettingsChange<string, Awaited<ReturnType<typeof saveProviderSecret>>>({
+    key: secretEditor.key,
+    matchesPlan: (plan) =>
+      plan.request.kind === "provider_connection" &&
+      plan.request.providerId === selectedProviderId &&
+      plan.request.credentialAction === "replace_api_key" &&
+      plan.target.ownerId === "provider_connection" &&
+      plan.target.resourceId === selectedProviderId,
+    read: async () => {
+      const [status, settings] = await Promise.all([fetchProviderSecretStatus(selectedProviderId), fetchSettings()]);
+      return { ...status, revision: settings.revision };
+    },
     matches: (status) => status.providerId === selectedProviderId && status.hasSecret === true,
-    savedValue: () => "", acceptSaved: secretEditor.acceptSaved, reload,
+    savedValue: () => "",
+    acceptSaved: secretEditor.acceptSaved,
+    reload,
   });
-  const secretRemoval = useSettingsChange<{ providerId: string }, Awaited<ReturnType<typeof deleteProviderSecret>>>({ key: "provider-secret-removal:system:" + selectedProviderId,
-    matchesPlan: (plan, submitted) => plan.request.kind === "provider_connection" && plan.request.providerId === submitted.providerId && plan.request.credentialAction === "remove_api_key" && plan.target.ownerId === "provider_connection" && plan.target.resourceId === submitted.providerId,
-    read: async (submitted) => { const [status, settings] = await Promise.all([fetchProviderSecretStatus(submitted.providerId), fetchSettings()]); return { ...status, revision: settings.revision }; },
+  const secretRemoval = useSettingsChange<{ providerId: string }, Awaited<ReturnType<typeof deleteProviderSecret>>>({
+    key: "provider-secret-removal:system:" + selectedProviderId,
+    matchesPlan: (plan, submitted) =>
+      plan.request.kind === "provider_connection" &&
+      plan.request.providerId === submitted.providerId &&
+      plan.request.credentialAction === "remove_api_key" &&
+      plan.target.ownerId === "provider_connection" &&
+      plan.target.resourceId === submitted.providerId,
+    read: async (submitted) => {
+      const [status, settings] = await Promise.all([fetchProviderSecretStatus(submitted.providerId), fetchSettings()]);
+      return { ...status, revision: settings.revision };
+    },
     matches: (status, submitted) => status.providerId === submitted.providerId && status.hasSecret === false,
-    acceptSaved: () => true, reload,
+    acceptSaved: () => true,
+    reload,
   });
-  const codexSetup = useSettingsChange({ key: "provider-setup:system:openai-codex", read: fetchLlmConfig, matchesPlan: matchesProviderSavePlan, matches: matchesProviderSave, acceptSaved: () => true, reload });
+  const codexSetup = useSettingsChange({
+    key: "provider-setup:system:openai-codex",
+    read: fetchLlmConfig,
+    matchesPlan: matchesProviderSavePlan,
+    matches: matchesProviderSave,
+    acceptSaved: () => true,
+    reload,
+  });
   const routingDirty = routingEditor.isDirty;
   const editorKeys = [providerEditor.key, secretEditor.key];
   const availableModels = selectedProvider?.models ?? [];
   const routingProvider = providers.find((item) => item.providerId === routingProviderId) ?? null;
-  const routingUsesFallbackModels = routingProvider?.modelProbeState === "fallback" && routingProvider.modelProbeSource !== "live";
-  const routingUsesStaleCatalog = routingProvider?.modelProbeSource === "live" && routingProvider.modelRefreshStatus === "stale";
+  const routingUsesFallbackModels =
+    routingProvider?.modelProbeState === "fallback" && routingProvider.modelProbeSource !== "live";
+  const routingUsesStaleCatalog =
+    routingProvider?.modelProbeSource === "live" && routingProvider.modelRefreshStatus === "stale";
   const routingModelUnavailable = isModelUnavailableInFreshCatalog(routingProvider, routingModel);
   const routingModelNeedsRefresh = isModelMissingFromStaleCatalog(routingProvider, routingModel);
   const providerIdsKey = providers.map((provider) => provider.providerId).join("\u0000");
@@ -375,20 +460,38 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   );
 
   const applyProviderTransition = (transition: ProviderEditorTransition) => {
-    setAddProviderOpen(false); setCredentialEditorOpen(false);
-    if (transition.kind === "new") { setEditorMode("new"); setDetailView("editor"); return; }
+    setAddProviderOpen(false);
+    setCredentialEditorOpen(false);
+    if (transition.kind === "new") {
+      setEditorMode("new");
+      setDetailView("editor");
+      return;
+    }
     if (transition.kind === "routing") {
       const next = providers.find((item) => item.providerId === transition.providerId);
-      const suggestedModel = next?.modelProbeSource === "live"
-        ? next.models.includes(next.defaultModel) ? next.defaultModel : ""
-        : next?.defaultModel ?? next?.models?.[0] ?? "";
+      const suggestedModel =
+        next?.modelProbeSource === "live"
+          ? next.models.includes(next.defaultModel)
+            ? next.defaultModel
+            : ""
+          : (next?.defaultModel ?? next?.models?.[0] ?? "");
       routingEditor.setValue({ providerId: transition.providerId, model: transition.model ?? suggestedModel });
-      setDetailView("routing"); return;
+      setDetailView("routing");
+      return;
     }
-    setEditorMode("selected"); setSelectedProviderId(transition.providerId); setDetailView("trust");
+    setEditorMode("selected");
+    setSelectedProviderId(transition.providerId);
+    setDetailView("trust");
   };
-  const providerTransitionGuard = { requestTransition: (transition: ProviderEditorTransition) => leave.request(() => applyProviderTransition(transition), editorKeys) };
-  const openView = (view: string | null) => leave.request(() => { setAddProviderOpen(false); setDetailView(view); });
+  const providerTransitionGuard = {
+    requestTransition: (transition: ProviderEditorTransition) =>
+      leave.request(() => applyProviderTransition(transition), editorKeys),
+  };
+  const openView = (view: string | null) =>
+    leave.request(() => {
+      setAddProviderOpen(false);
+      setDetailView(view);
+    });
   useEffect(() => {
     if (typeof window === "undefined") return;
     const target = (window.location?.hash ?? "").slice(1).replace("providers-", "");
@@ -461,7 +564,12 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
 
   useEffect(() => {
     if (detailView === "models") {
-      void Promise.all(providerIdsKey.split("\u0000").filter(Boolean).map((providerId) => loadModelsForProvider(providerId)));
+      void Promise.all(
+        providerIdsKey
+          .split("\u0000")
+          .filter(Boolean)
+          .map((providerId) => loadModelsForProvider(providerId)),
+      );
     } else if (detailView === "routing" && routingProviderId) {
       void loadModelsForProvider(routingProviderId);
     } else if (detailView && selectedProviderId) {
@@ -472,14 +580,18 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   useEffect(() => {
     if (detailView !== "models" && detailView !== "routing") return;
     const timer = globalThis.setInterval(() => {
-      const providerIds = detailView === "models" ? providerIdsKey.split("\u0000").filter(Boolean) : [routingProviderId];
+      const providerIds =
+        detailView === "models" ? providerIdsKey.split("\u0000").filter(Boolean) : [routingProviderId];
       void Promise.all(providerIds.filter(Boolean).map((providerId) => loadModelsForProvider(providerId)));
     }, 60_000);
     return () => globalThis.clearInterval(timer);
   }, [detailView, loadModelsForProvider, providerIdsKey, routingProviderId]);
 
   const persistRouting = async (providerId: string, model: string) => {
-    if (routingChange.isPending()) { await routingChange.refresh(); return false; }
+    if (routingChange.isPending()) {
+      await routingChange.refresh();
+      return false;
+    }
     if (savesInFlight.current.has(routingEditor.key)) return false;
     const normalizedProviderId = providerId.trim();
     const normalizedModel = model.trim();
@@ -493,11 +605,17 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
     }
     const nextProvider = providers.find((provider) => provider.providerId === normalizedProviderId);
     if (isModelUnavailableInFreshCatalog(nextProvider ?? null, normalizedModel)) {
-      setNotice({ tone: "warning", message: `${normalizedModel} is no longer listed for ${nextProvider?.label ?? "this provider"}. Choose an available model before saving routing.` });
+      setNotice({
+        tone: "warning",
+        message: `${normalizedModel} is no longer listed for ${nextProvider?.label ?? "this provider"}. Choose an available model before saving routing.`,
+      });
       return false;
     }
     if (isModelMissingFromStaleCatalog(nextProvider ?? null, normalizedModel)) {
-      setNotice({ tone: "warning", message: `${normalizedModel} was not in the last known model list for ${nextProvider?.label ?? "this provider"}. Refresh the catalog before saving routing.` });
+      setNotice({
+        tone: "warning",
+        message: `${normalizedModel} was not in the last known model list for ${nextProvider?.label ?? "this provider"}. Refresh the catalog before saving routing.`,
+      });
       return false;
     }
     const usesFallbackModels = nextProvider?.modelProbeState === "fallback" && nextProvider.modelProbeSource !== "live";
@@ -512,8 +630,20 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
           activeModel: normalizedModel,
         },
       });
-      const settled = routingChange.receive(updated, { providerId: normalizedProviderId, model: normalizedModel }, Number(routingEditor.baseRevision ?? config.revision));
-      if (settled) setNotice({ tone: usesFallbackModels || usesStaleCatalog ? "warning" : "success", message: usesFallbackModels ? "Provider routing updated with a suggested model that has not been account-verified." : usesStaleCatalog ? "Provider routing updated using the last known account catalog; refresh has not verified it yet." : "Provider routing updated." });
+      const settled = routingChange.receive(
+        updated,
+        { providerId: normalizedProviderId, model: normalizedModel },
+        Number(routingEditor.baseRevision ?? config.revision),
+      );
+      if (settled)
+        setNotice({
+          tone: usesFallbackModels || usesStaleCatalog ? "warning" : "success",
+          message: usesFallbackModels
+            ? "Provider routing updated with a suggested model that has not been account-verified."
+            : usesStaleCatalog
+              ? "Provider routing updated using the last known account catalog; refresh has not verified it yet."
+              : "Provider routing updated.",
+        });
       await reload();
       return settled;
     } catch (saveError) {
@@ -528,7 +658,10 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
       return false;
-    } finally { savesInFlight.current.delete(routingEditor.key); routingChange.endSave(); }
+    } finally {
+      savesInFlight.current.delete(routingEditor.key);
+      routingChange.endSave();
+    }
   };
 
   const handleSaveRouting = async () => persistRouting(routingProviderId, routingModel);
@@ -562,8 +695,14 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   };
 
   const handleSaveSecret = async (): Promise<boolean> => {
-    if (secretRemoval.isPending()) { await secretRemoval.refresh(); return false; }
-    if (secretChange.isPending()) { await secretChange.refresh(); return false; }
+    if (secretRemoval.isPending()) {
+      await secretRemoval.refresh();
+      return false;
+    }
+    if (secretChange.isPending()) {
+      await secretChange.refresh();
+      return false;
+    }
     if (savesInFlight.current.has(secretEditor.key)) return false;
     if (!selectedProviderId.trim() || !secretValue.trim()) {
       setNotice({ tone: "warning", message: "Enter a provider secret before saving." });
@@ -577,11 +716,19 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
     if (!secretChange.beginSave()) return false;
     savesInFlight.current.add(secretEditor.key);
     try {
-      const next = await saveProviderSecret(selectedProviderId, secretValue.trim(), Number(secretEditor.baseRevision ?? config.revision));
+      const next = await saveProviderSecret(
+        selectedProviderId,
+        secretValue.trim(),
+        Number(secretEditor.baseRevision ?? config.revision),
+      );
       const settled = secretChange.receive(next, secretValue, Number(secretEditor.baseRevision ?? config.revision));
       if (currentEditor.current === editorIdentity) {
         setSecretState({ loading: false, error: null, data: next });
-        if (settled) setNotice({ tone: "success", message: "Provider secret saved. " + formatSecretStorageNotice(next.source, next.hasSecret) });
+        if (settled)
+          setNotice({
+            tone: "success",
+            message: "Provider secret saved. " + formatSecretStorageNotice(next.source, next.hasSecret),
+          });
       }
       await reload();
       return settled;
@@ -597,12 +744,21 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
       return false;
-    } finally { savesInFlight.current.delete(secretEditor.key); secretChange.endSave(); }
+    } finally {
+      savesInFlight.current.delete(secretEditor.key);
+      secretChange.endSave();
+    }
   };
 
   const handleDeleteSecret = async () => {
-    if (secretChange.isPending()) { await secretChange.refresh(); return; }
-    if (secretRemoval.isPending()) { await secretRemoval.refresh(); return; }
+    if (secretChange.isPending()) {
+      await secretChange.refresh();
+      return;
+    }
+    if (secretRemoval.isPending()) {
+      await secretRemoval.refresh();
+      return;
+    }
     if (!pendingDeleteSecret) {
       return;
     }
@@ -618,7 +774,11 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       const settled = secretRemoval.receive(next, { providerId: pendingDeleteSecret.providerId }, config.revision);
       if (currentEditor.current === editorIdentity) {
         setSecretState({ loading: false, error: null, data: next });
-        if (settled) setNotice({ tone: "success", message: "Provider secret removed. " + formatSecretStorageNotice(next.source, next.hasSecret) });
+        if (settled)
+          setNotice({
+            tone: "success",
+            message: "Provider secret removed. " + formatSecretStorageNotice(next.source, next.hasSecret),
+          });
         setPendingDeleteSecret(null);
       }
       await reload();
@@ -702,7 +862,9 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   const handleStartCodexOAuth = async (openVerificationPage = false, suppliedPlan?: ChangePlanRecord) => {
     setCodexOAuthBusy(true);
     try {
-      const context = { workspaceId: suppliedPlan?.origin.workspaceId ?? codexOAuthPlan?.origin.workspaceId ?? activeWorkspaceId };
+      const context = {
+        workspaceId: suppliedPlan?.origin.workspaceId ?? codexOAuthPlan?.origin.workspaceId ?? activeWorkspaceId,
+      };
       let plan = suppliedPlan ?? codexOAuthPlan;
       if (
         !plan ||
@@ -898,7 +1060,10 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   }, [activeWorkspaceId, codexOAuthFlow, codexOAuthPlan, handleCodexOAuthPollResult]);
 
   const handleAddChatGptOAuthProvider = async () => {
-    if (codexSetup.isPending()) { await codexSetup.refresh(); return; }
+    if (codexSetup.isPending()) {
+      await codexSetup.refresh();
+      return;
+    }
     setDetailView("oauth");
     if (hasCodexOAuthProvider) {
       setEditorMode("selected");
@@ -927,13 +1092,19 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
           },
         },
       });
-      const next = updated.changePlanReceipt && !["completed", "applied"].includes(updated.changePlanReceipt.status)
-        ? { ...updated.llm, revision: updated.revision, changePlanReceipt: updated.changePlanReceipt }
-        : { ...await fetchLlmConfig(), changePlanReceipt: updated.changePlanReceipt };
-      const settled = codexSetup.receive(next, { provider: draft, transport: createEmptyLlmTransportDraft() }, config.revision);
+      const next =
+        updated.changePlanReceipt && !["completed", "applied"].includes(updated.changePlanReceipt.status)
+          ? { ...updated.llm, revision: updated.revision, changePlanReceipt: updated.changePlanReceipt }
+          : { ...(await fetchLlmConfig()), changePlanReceipt: updated.changePlanReceipt };
+      const settled = codexSetup.receive(
+        next,
+        { provider: draft, transport: createEmptyLlmTransportDraft() },
+        config.revision,
+      );
       await reload();
       if (settled) {
-        setEditorMode("selected"); setSelectedProviderId(draft.providerId);
+        setEditorMode("selected");
+        setSelectedProviderId(draft.providerId);
         setNotice({ tone: "success", message: "ChatGPT provider added. Start ChatGPT login below." });
         void loadModelsForProvider(draft.providerId, { force: true });
       }
@@ -954,7 +1125,10 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   };
 
   const handleSaveProvider = async (): Promise<boolean> => {
-    if (providerChange.isPending()) { await providerChange.refresh(); return false; }
+    if (providerChange.isPending()) {
+      await providerChange.refresh();
+      return false;
+    }
     if (savesInFlight.current.has(providerEditor.key)) return false;
     if (!providerDraft.providerId.trim() || !providerDraft.baseUrl.trim()) {
       setNotice({ tone: "warning", message: "Provide both a provider id and base URL before saving." });
@@ -980,13 +1154,19 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
           upsertProvider: providerSaveInput(submitted),
         },
       });
-      const next = updated.changePlanReceipt && !["completed", "applied"].includes(updated.changePlanReceipt.status)
-        ? { ...updated.llm, revision: updated.revision, changePlanReceipt: updated.changePlanReceipt }
-        : { ...await fetchLlmConfig(), changePlanReceipt: updated.changePlanReceipt };
+      const next =
+        updated.changePlanReceipt && !["completed", "applied"].includes(updated.changePlanReceipt.status)
+          ? { ...updated.llm, revision: updated.revision, changePlanReceipt: updated.changePlanReceipt }
+          : { ...(await fetchLlmConfig()), changePlanReceipt: updated.changePlanReceipt };
       const clean = providerChange.receive(next, submitted, Number(providerEditor.baseRevision ?? config.revision));
       await reload();
       if (currentEditor.current === editorIdentity) {
-        if (clean) { setEditorMode("selected"); setSelectedProviderId(submitted.provider.providerId.trim()); setDetailView("trust"); setNotice({ tone: "success", message: "Provider saved and confirmed." }); }
+        if (clean) {
+          setEditorMode("selected");
+          setSelectedProviderId(submitted.provider.providerId.trim());
+          setDetailView("trust");
+          setNotice({ tone: "success", message: "Provider saved and confirmed." });
+        }
       }
       if (clean) void loadModelsForProvider(submitted.provider.providerId.trim(), { force: true });
       return clean;
@@ -1003,13 +1183,17 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
       return false;
     } finally {
-      savesInFlight.current.delete(providerEditor.key); providerChange.endSave();
+      savesInFlight.current.delete(providerEditor.key);
+      providerChange.endSave();
       setProviderSaveBusy(false);
     }
   };
 
   const handleStartNewProviderDraft = () => {
-    if (editorMode === "new") { setDetailView("editor"); return; }
+    if (editorMode === "new") {
+      setDetailView("editor");
+      return;
+    }
     providerTransitionGuard.requestTransition({ kind: "new" });
   };
 
@@ -1020,7 +1204,8 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
     openCodexOAuthVerificationUrl(codexOAuthFlow.verificationUrl);
   };
 
-  const handleShowCodexOAuthProviderDetail = () => providerTransitionGuard.requestTransition({ kind: "select", providerId: "openai-codex" });
+  const handleShowCodexOAuthProviderDetail = () =>
+    providerTransitionGuard.requestTransition({ kind: "select", providerId: "openai-codex" });
 
   const handleRefreshModels = async (providerId: string) => {
     const normalized = providerId.trim();
@@ -1035,17 +1220,20 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       const fallbackOnly = probe?.state === "fallback";
       const failedFallback = probe?.source === "error_fallback";
       const failedProbe = probe?.state === "error";
+      const staleLiveCatalog = probe?.source === "live" && probe.expiresAt <= Date.now();
       setNotice({
-        tone: items.length > 0 && !fallbackOnly && !failedProbe ? "success" : "warning",
-        message: failedProbe
-          ? `Model discovery failed for ${normalized}${probe?.warning ? `: ${probe.warning}` : "."}`
-          : fallbackOnly
-            ? failedFallback
-              ? `Loaded ${items.length} fallback models for ${normalized}; live discovery failed${probe?.warning ? `: ${probe.warning}` : "."}`
-              : `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
-            : items.length > 0
-              ? `Refreshed ${items.length} models for ${normalized}.`
-              : `Probe completed for ${normalized}, but no models were returned.`,
+        tone: items.length > 0 && !fallbackOnly && !failedProbe && !staleLiveCatalog ? "success" : "warning",
+        message: staleLiveCatalog
+          ? `Showing ${items.length} last known model${items.length === 1 ? "" : "s"} for ${normalized}; live discovery did not verify this catalog${probe?.warning ? `: ${probe.warning}` : "."}`
+          : failedProbe
+            ? `Model discovery failed for ${normalized}${probe?.warning ? `: ${probe.warning}` : "."}`
+            : fallbackOnly
+              ? failedFallback
+                ? `Loaded ${items.length} fallback models for ${normalized}; live discovery failed${probe?.warning ? `: ${probe.warning}` : "."}`
+                : `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
+              : items.length > 0
+                ? `Refreshed ${items.length} models for ${normalized}.`
+                : `Probe completed for ${normalized}, but no models were returned.`,
       });
       await reload();
     } catch (probeError) {
@@ -1060,220 +1248,298 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       {notice ? <SettingsNotice notice={notice} /> : null}
 
       <SettingsGrid className="mc-next-calm-directory">
-        {detailView !== "editor" ? <NativeCard
-          id="providers-directory"
-          density="compact"
-          className="mc-next-settings-panel mc-next-provider-directory"
-          title="Connected providers"
-          subtitle="Available providers, probe posture, and current catalog coverage."
-          stats={[
-            { label: "Configured", value: String(providers.length) },
-            { label: "Active workspace", value: activeWorkspaceId, technical: true },
-          ]}
-        >
-          <p className="mc-next-settings-copy"><strong>Default model</strong> · {providers.find((item) => item.providerId === config?.activeProviderId)?.label ?? config?.activeProviderId ?? "Unavailable"} · {config?.activeModel || "Not selected"}</p>
-          <SettingsButtonRow><NativeButton aria-expanded={addProviderOpen} aria-controls="provider-creation-options" onClick={() => setAddProviderOpen((open) => !open)}>Add provider{hasSessionDraft("provider:system:new") ? " · Unsaved" : ""}</NativeButton>
-            <NativeButton variant="outline" onClick={() => openView("routing")}>Default routing{routingDirty ? " · Unsaved" : ""}</NativeButton>
-            <NativeButton variant="outline" onClick={() => openView("models")}>Browse models</NativeButton>
-          </SettingsButtonRow>
-          <div id="provider-creation-options" hidden={!addProviderOpen}><SettingsButtonRow>
-            <NativeButton onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}>Guided setup</NativeButton>
-            <NativeButton
-              variant="outline"
-              onClick={() => openView("oauth")}
-              disabled={providerSaveBusy}
-            >
-              <KeyRound size={16} />
-              {hasCodexOAuthProvider ? "ChatGPT setup" : "Add ChatGPT setup"}
-            </NativeButton>
-            <NativeButton variant="secondary" onClick={handleStartNewProviderDraft}>
-              <Plus size={16} />
-              Custom provider{hasSessionDraft("provider:system:new") ? " · Unsaved" : ""}
-            </NativeButton>
-          </SettingsButtonRow></div>
-          <NativeSelectableList
-            items={providers.map((item) => ({
-              id: item.providerId,
-              title: `${item.label}${hasSessionDraft(`provider:system:${item.providerId}`) || hasSessionDraft(`provider-secret:system:${item.providerId}`) ? " · Unsaved" : ""}`,
-              meta: item.providerId,
-              body: [
-                `${item.models.length} models`,
-                formatProviderCredentialLabel(item.providerId, item.hasApiKey, codexOAuthStatus),
-                formatProviderProbeStateLabel(item.modelProbeState),
-              ].join(" · "),
-            }))}
-            selectedId={selectedProviderId}
-            onSelect={(providerId) => {
-              if (editorMode === "selected" && providerId === selectedProviderId && detailView === "trust") return;
-              providerTransitionGuard.requestTransition({ kind: "select", providerId });
-            }}
-            emptyLabel="No providers returned from runtime settings."
-            maxHeight="min(44vh, 25rem)"
-          />
-          <NativeDisclosureCard id="provider-tools" title="Provider tools"><NativeButton variant="ghost" onClick={() => openView("advice")}>Provider advice</NativeButton></NativeDisclosureCard>
-        </NativeCard> : null}
-        <SettingsStack className="mc-next-provider-detail-stack">
-          <DetailInspector open={detailView === "routing"} title="Default routing" onClose={() => openView(null)}><NativeCard
-            id="providers-routing"
+        {detailView !== "editor" ? (
+          <NativeCard
+            id="providers-directory"
             density="compact"
-            className="mc-next-settings-panel mc-next-provider-routing-card"
-            title="Active routing"
-            subtitle="Change the provider/model pair Mission Control uses by default."
-          >
-            <SettingsChangeStatus change={routingChange.change} onRefresh={routingChange.refresh} route={route} navigate={navigate} />
-            {routingEditor.hasRemoteChanges ? <><SettingsNotice notice={{ tone: "warning", message: `Current default is ${config?.activeProviderId ?? "Unavailable"} / ${config?.activeModel ?? "Unavailable"}. Your staged routing has been kept.` }} /><NativeButton variant="outline" onClick={routingEditor.rebaseToCurrent}>Apply routing draft to current settings</NativeButton></> : null}
-            <SettingsFieldGrid>
-              <SettingsField label="Provider">
-                <select
-                  className="mc-next-settings-input"
-                  value={routingProviderId}
-                  onChange={(event) => {
-                    const nextProviderId = event.target.value;
-                    if (nextProviderId === routingProviderId) {
-                      return;
-                    }
-                    providerTransitionGuard.requestTransition({ kind: "routing", providerId: nextProviderId });
-                  }}
-                >
-                  <option value="">Choose a provider</option>
-                  {providers.map((item) => (
-                    <option key={item.providerId} value={item.providerId}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </SettingsField>
-              <SettingsField label="Model">
-                <select
-                  className="mc-next-settings-input"
-                  value={routingModel}
-                  onChange={(event) => setRoutingModel(event.target.value)}
-                  disabled={!routingProviderId}
-                >
-                  <option value="">Choose a model</option>
-                  {routingModelUnavailable ? <option value={routingModel} disabled>{routingModel} · Unavailable</option> : null}
-                  {routingModelNeedsRefresh ? <option value={routingModel} disabled>{routingModel} · Needs refresh</option> : null}
-                  {(routingProvider?.models ?? []).map((modelId) => (
-                    <option key={modelId} value={modelId}>
-                      {modelId}
-                    </option>
-                  ))}
-                </select>
-              </SettingsField>
-            </SettingsFieldGrid>
-            <SettingsConfigSourceLegend />
-            {!config?.activeProviderId || !config.activeModel ? (
-              <SettingsNotice
-                notice={{
-                  tone: routingProviderId && routingModel ? "info" : "warning",
-                  message:
-                    routingProviderId && routingModel
-                      ? "No active Chat route is saved yet. Save this provider and model to enable Chat."
-                      : "No active Chat route is configured. Choose a provider and model, then save routing.",
-                }}
-              />
-            ) : null}
-            {routingUsesFallbackModels ? (
-              <SettingsNotice
-                notice={{
-                  tone: "warning",
-                  message:
-                    "These models are suggested from GoatCitadel's provider template, not verified from your account catalog yet.",
-                }}
-              />
-            ) : null}
-            {routingUsesStaleCatalog ? (
-              <SettingsNotice notice={{ tone: "warning", message: "Showing the last known account model list. Refresh this provider to verify availability before changing routing." }} />
-            ) : null}
-            {routingModelUnavailable ? (
-              <SettingsNotice notice={{ tone: "warning", message: `${routingModel} is no longer listed in ${routingProvider?.label ?? "this provider"}'s live model catalog. Choose an available model to continue.` }} />
-            ) : null}
-            {routingModelNeedsRefresh ? (
-              <SettingsNotice notice={{ tone: "warning", message: `${routingModel} was not in the last known account model list. Refresh the catalog to verify it before saving routing.` }} />
-            ) : null}
-            <SettingsButtonRow>
-              <NativeButton
-                variant="default"
-                disabled={routingChange.hasPending || !routingProviderId.trim() || !routingModel.trim() || routingModelUnavailable || routingModelNeedsRefresh}
-                onClick={() => void handleSaveRouting()}
-              >
-                <Save size={16} />
-                Save routing
-              </NativeButton>
-            </SettingsButtonRow>
-          </NativeCard></DetailInspector>
-          <DetailInspector open={detailView === "models"} title="Model picker" onClose={() => openView(null)}><NativeCard
-            id="providers-models"
-            density="compact"
-            className="mc-next-settings-panel mc-next-provider-model-picker-card"
-            title="Universal model picker"
-            subtitle="Search configured provider catalogs with runtime fallback and availability evidence."
+            className="mc-next-settings-panel mc-next-provider-directory"
+            title="Connected providers"
+            subtitle="Available providers, probe posture, and current catalog coverage."
             stats={[
-              { label: "Matches", value: String(universalModelOptions.length) },
-              {
-                label: "Ready",
-                value: String(universalModelOptions.filter((item) => item.availability === "ready").length),
-              },
-              {
-                label: "Blocked",
-                value: String(universalModelOptions.filter((item) => item.availability === "blocked").length),
-              },
+              { label: "Configured", value: String(providers.length) },
+              { label: "Active workspace", value: activeWorkspaceId, technical: true },
             ]}
           >
-            <SettingsField label="Search provider or model">
-              <input
-                className="mc-next-settings-input"
-                value={modelPickerQuery}
-                onChange={(event) => setModelPickerQuery(event.target.value)}
-                placeholder="gpt, claude, local, fallback, blocked"
-              />
-            </SettingsField>
-            <SettingsActionList
-              ariaLabel="Universal model choices"
-              items={universalModelOptions.map((item) => ({
-                id: item.id,
-                label: item.label,
-                description: item.availabilityReason,
-                meta: [
-                  item.availability,
-                  item.credentialStatus,
-                  item.contextWindowTokens ? `${item.contextWindowTokens.toLocaleString()} tokens` : undefined,
-                  item.contextLimitSource,
-                  item.endpointIdentity,
-                ]
-                  .filter(Boolean)
-                  .join(" · "),
-                actionLabel:
-                  item.availability === "blocked"
-                    ? "Blocked"
-                    : item.providerId === config?.activeProviderId && item.model === config?.activeModel
-                      ? "Active"
-                      : "Select",
-                onClick:
-                  item.availability === "blocked"
-                    ? undefined
-                    : () => {
-                        providerTransitionGuard.requestTransition({
-                          kind: "routing",
-                          providerId: item.providerId,
-                          model: item.model,
-                        });
-                      },
+            <p className="mc-next-settings-copy">
+              <strong>Default model</strong> ·{" "}
+              {providers.find((item) => item.providerId === config?.activeProviderId)?.label ??
+                config?.activeProviderId ??
+                "Unavailable"}{" "}
+              · {config?.activeModel || "Not selected"}
+            </p>
+            <SettingsButtonRow>
+              <NativeButton
+                aria-expanded={addProviderOpen}
+                aria-controls="provider-creation-options"
+                onClick={() => setAddProviderOpen((open) => !open)}
+              >
+                Add provider{hasSessionDraft("provider:system:new") ? " · Unsaved" : ""}
+              </NativeButton>
+              <NativeButton variant="outline" onClick={() => openView("routing")}>
+                Default routing{routingDirty ? " · Unsaved" : ""}
+              </NativeButton>
+              <NativeButton variant="outline" onClick={() => openView("models")}>
+                Browse models
+              </NativeButton>
+            </SettingsButtonRow>
+            <div id="provider-creation-options" hidden={!addProviderOpen}>
+              <SettingsButtonRow>
+                <NativeButton onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme })}>
+                  Guided setup
+                </NativeButton>
+                <NativeButton variant="outline" onClick={() => openView("oauth")} disabled={providerSaveBusy}>
+                  <KeyRound size={16} />
+                  {hasCodexOAuthProvider ? "ChatGPT setup" : "Add ChatGPT setup"}
+                </NativeButton>
+                <NativeButton variant="secondary" onClick={handleStartNewProviderDraft}>
+                  <Plus size={16} />
+                  Custom provider{hasSessionDraft("provider:system:new") ? " · Unsaved" : ""}
+                </NativeButton>
+              </SettingsButtonRow>
+            </div>
+            <NativeSelectableList
+              items={providers.map((item) => ({
+                id: item.providerId,
+                title: `${item.label}${hasSessionDraft(`provider:system:${item.providerId}`) || hasSessionDraft(`provider-secret:system:${item.providerId}`) ? " · Unsaved" : ""}`,
+                meta: item.providerId,
+                body: [
+                  `${item.models.length} models`,
+                  formatProviderCredentialLabel(item.providerId, item.hasApiKey, codexOAuthStatus),
+                  formatProviderProbeStateLabel(item.modelProbeState),
+                ].join(" · "),
               }))}
-              emptyLabel="No provider models match this search."
-              maxHeight="min(42vh, 24rem)"
-            />
-            <SettingsNotice
-              notice={{
-                tone: "info",
-                message:
-                  "Selecting here stages the provider/model in Active routing; Save routing is still required before runtime changes.",
+              selectedId={selectedProviderId}
+              onSelect={(providerId) => {
+                if (editorMode === "selected" && providerId === selectedProviderId && detailView === "trust") return;
+                providerTransitionGuard.requestTransition({ kind: "select", providerId });
               }}
+              emptyLabel="No providers returned from runtime settings."
+              maxHeight="min(44vh, 25rem)"
             />
-          </NativeCard></DetailInspector>
+            <NativeDisclosureCard id="provider-tools" title="Provider tools">
+              <NativeButton variant="ghost" onClick={() => openView("advice")}>
+                Provider advice
+              </NativeButton>
+            </NativeDisclosureCard>
+          </NativeCard>
+        ) : null}
+        <SettingsStack className="mc-next-provider-detail-stack">
+          <DetailInspector open={detailView === "routing"} title="Default routing" onClose={() => openView(null)}>
+            <NativeCard
+              id="providers-routing"
+              density="compact"
+              className="mc-next-settings-panel mc-next-provider-routing-card"
+              title="Active routing"
+              subtitle="Change the provider/model pair Mission Control uses by default."
+            >
+              <SettingsChangeStatus
+                change={routingChange.change}
+                onRefresh={routingChange.refresh}
+                route={route}
+                navigate={navigate}
+              />
+              {routingEditor.hasRemoteChanges ? (
+                <>
+                  <SettingsNotice
+                    notice={{
+                      tone: "warning",
+                      message: `Current default is ${config?.activeProviderId ?? "Unavailable"} / ${config?.activeModel ?? "Unavailable"}. Your staged routing has been kept.`,
+                    }}
+                  />
+                  <NativeButton variant="outline" onClick={routingEditor.rebaseToCurrent}>
+                    Apply routing draft to current settings
+                  </NativeButton>
+                </>
+              ) : null}
+              <SettingsFieldGrid>
+                <SettingsField label="Provider">
+                  <select
+                    className="mc-next-settings-input"
+                    value={routingProviderId}
+                    onChange={(event) => {
+                      const nextProviderId = event.target.value;
+                      if (nextProviderId === routingProviderId) {
+                        return;
+                      }
+                      providerTransitionGuard.requestTransition({ kind: "routing", providerId: nextProviderId });
+                    }}
+                  >
+                    <option value="">Choose a provider</option>
+                    {providers.map((item) => (
+                      <option key={item.providerId} value={item.providerId}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </SettingsField>
+                <SettingsField label="Model">
+                  <select
+                    className="mc-next-settings-input"
+                    value={routingModel}
+                    onChange={(event) => setRoutingModel(event.target.value)}
+                    disabled={!routingProviderId}
+                  >
+                    <option value="">Choose a model</option>
+                    {routingModelUnavailable ? (
+                      <option value={routingModel} disabled>
+                        {routingModel} · Unavailable
+                      </option>
+                    ) : null}
+                    {routingModelNeedsRefresh ? (
+                      <option value={routingModel} disabled>
+                        {routingModel} · Needs refresh
+                      </option>
+                    ) : null}
+                    {(routingProvider?.models ?? []).map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </SettingsField>
+              </SettingsFieldGrid>
+              <SettingsConfigSourceLegend />
+              {!config?.activeProviderId || !config.activeModel ? (
+                <SettingsNotice
+                  notice={{
+                    tone: routingProviderId && routingModel ? "info" : "warning",
+                    message:
+                      routingProviderId && routingModel
+                        ? "No active Chat route is saved yet. Save this provider and model to enable Chat."
+                        : "No active Chat route is configured. Choose a provider and model, then save routing.",
+                  }}
+                />
+              ) : null}
+              {routingUsesFallbackModels ? (
+                <SettingsNotice
+                  notice={{
+                    tone: "warning",
+                    message:
+                      "These models are suggested from GoatCitadel's provider template, not verified from your account catalog yet.",
+                  }}
+                />
+              ) : null}
+              {routingUsesStaleCatalog ? (
+                <SettingsNotice
+                  notice={{
+                    tone: "warning",
+                    message:
+                      "Showing the last known account model list. Refresh this provider to verify availability before changing routing.",
+                  }}
+                />
+              ) : null}
+              {routingModelUnavailable ? (
+                <SettingsNotice
+                  notice={{
+                    tone: "warning",
+                    message: `${routingModel} is no longer listed in ${routingProvider?.label ?? "this provider"}'s live model catalog. Choose an available model to continue.`,
+                  }}
+                />
+              ) : null}
+              {routingModelNeedsRefresh ? (
+                <SettingsNotice
+                  notice={{
+                    tone: "warning",
+                    message: `${routingModel} was not in the last known account model list. Refresh the catalog to verify it before saving routing.`,
+                  }}
+                />
+              ) : null}
+              <SettingsButtonRow>
+                <NativeButton
+                  variant="default"
+                  disabled={
+                    routingChange.hasPending ||
+                    !routingProviderId.trim() ||
+                    !routingModel.trim() ||
+                    routingModelUnavailable ||
+                    routingModelNeedsRefresh
+                  }
+                  onClick={() => void handleSaveRouting()}
+                >
+                  <Save size={16} />
+                  Save routing
+                </NativeButton>
+              </SettingsButtonRow>
+            </NativeCard>
+          </DetailInspector>
+          <DetailInspector open={detailView === "models"} title="Model picker" onClose={() => openView(null)}>
+            <NativeCard
+              id="providers-models"
+              density="compact"
+              className="mc-next-settings-panel mc-next-provider-model-picker-card"
+              title="Universal model picker"
+              subtitle="Search configured provider catalogs with runtime fallback and availability evidence."
+              stats={[
+                { label: "Matches", value: String(universalModelOptions.length) },
+                {
+                  label: "Ready",
+                  value: String(universalModelOptions.filter((item) => item.availability === "ready").length),
+                },
+                {
+                  label: "Blocked",
+                  value: String(universalModelOptions.filter((item) => item.availability === "blocked").length),
+                },
+              ]}
+            >
+              <SettingsField label="Search provider or model">
+                <input
+                  className="mc-next-settings-input"
+                  value={modelPickerQuery}
+                  onChange={(event) => setModelPickerQuery(event.target.value)}
+                  placeholder="gpt, claude, local, fallback, blocked"
+                />
+              </SettingsField>
+              <SettingsActionList
+                ariaLabel="Universal model choices"
+                items={universalModelOptions.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  description: item.availabilityReason,
+                  meta: [
+                    item.availability,
+                    item.credentialStatus,
+                    item.contextWindowTokens ? `${item.contextWindowTokens.toLocaleString()} tokens` : undefined,
+                    item.contextLimitSource,
+                    item.endpointIdentity,
+                  ]
+                    .filter(Boolean)
+                    .join(" · "),
+                  actionLabel:
+                    item.availability === "blocked"
+                      ? "Blocked"
+                      : item.providerId === config?.activeProviderId && item.model === config?.activeModel
+                        ? "Active"
+                        : "Select",
+                  onClick:
+                    item.availability === "blocked"
+                      ? undefined
+                      : () => {
+                          providerTransitionGuard.requestTransition({
+                            kind: "routing",
+                            providerId: item.providerId,
+                            model: item.model,
+                          });
+                        },
+                }))}
+                emptyLabel="No provider models match this search."
+                maxHeight="min(42vh, 24rem)"
+              />
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Selecting here stages the provider/model in Active routing; Save routing is still required before runtime changes.",
+                }}
+              />
+            </NativeCard>
+          </DetailInspector>
           <DetailInspector open={detailView === "advice"} title="Provider advice" onClose={() => openView(null)}>
             <p className="mc-next-settings-field-note">
-              {Array.isArray(providerAdvice.data?.candidates) ? `${providerAdvice.data.candidates.length} advisory candidates · no configuration mutation` : providerAdvice.data ? "Candidate evidence unavailable." : "Advice has not been loaded."}
+              {Array.isArray(providerAdvice.data?.candidates)
+                ? `${providerAdvice.data.candidates.length} advisory candidates · no configuration mutation`
+                : providerAdvice.data
+                  ? "Candidate evidence unavailable."
+                  : "Advice has not been loaded."}
             </p>
             {providerAdvice.error ? <SettingsNotice notice={{ tone: "error", message: providerAdvice.error }} /> : null}
             {providerAdvice.data ? (
@@ -1324,7 +1590,13 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
             </SettingsButtonRow>
           </DetailInspector>
           <DetailInspector open={detailView === "oauth"} title="ChatGPT login" onClose={() => openView(null)}>
-            <SettingsChangeStatus change={codexSetup.change} onRefresh={codexSetup.refresh} route={route} navigate={navigate} onReview={setCodexOAuthPlanDialog} />
+            <SettingsChangeStatus
+              change={codexSetup.change}
+              onRefresh={codexSetup.refresh}
+              route={route}
+              navigate={navigate}
+              onReview={setCodexOAuthPlanDialog}
+            />
             <NativeMetricGrid
               items={[
                 { label: "Provider", value: hasCodexOAuthProvider ? "Ready" : "Missing" },
@@ -1498,483 +1770,584 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
               ) : null}
             </SettingsButtonRow>
           </DetailInspector>
-          <DetailInspector open={detailView === "trust"} title={selectedProvider?.label ?? "Provider details"} onClose={() => openView(null)}><NativeCard
-            id="providers-trust"
-            density="compact"
-            className="mc-next-settings-panel mc-next-provider-detail-card"
-            title="Connection"
-            subtitle=""
+          <DetailInspector
+            open={detailView === "trust"}
+            title={selectedProvider?.label ?? "Provider details"}
+            onClose={() => openView(null)}
           >
-            <SettingsButtonRow><NativeButton onClick={() => openView("editor")}>Edit connection{providerEditor.isDirty ? " · Unsaved" : ""}</NativeButton>{selectedProviderIsCodexOAuth ? <NativeButton variant="outline" onClick={() => openView("oauth")}>ChatGPT login</NativeButton> : null}</SettingsButtonRow>
-            <SettingsChangeStatus change={secretRemoval.change} onRefresh={secretRemoval.refresh} route={route} navigate={navigate} onReview={setCodexOAuthPlanDialog} />
-            <SettingsChangeStatus change={secretChange.change} onRefresh={secretChange.refresh} route={route} navigate={navigate} onReview={setCodexOAuthPlanDialog} />
-            {secretEditor.hasRemoteChanges ? <><SettingsNotice notice={{ tone: "warning", message: "Settings changed while this credential was being entered. Review current credential posture before retrying." }} /><NativeButton variant="outline" onClick={secretEditor.rebaseToCurrent}>Apply credential to current settings</NativeButton></> : null}
-            {selectedProvider ? (
-              <>
-                <p>{selectedProvider.defaultModel || "Default model unavailable"} · {formatProviderCredentialLabel(selectedProvider.providerId, selectedProvider.hasApiKey, codexOAuthStatus)} · {formatProviderProbeStateLabel(selectedProvider.modelProbeState)}</p>
-                <NativeDisclosureCard key={selectedProvider.providerId} id="provider-connection-diagnostics" title="Connection & diagnostics">
-                <NativeMetricGrid
-                  items={[
-                    { label: "Default model", value: selectedProvider.defaultModel, meta: "Configured fallback" },
-                    {
-                      label: "Configured API",
-                      value: selectedProvider.apiStyle,
-                      meta: "Saved provider setting",
-                    },
-                    {
-                      label: "Execution API",
-                      value: selectedProviderExecutionApiStyle ?? selectedProvider.apiStyle,
-                      meta: selectedProviderApiMeta,
-                    },
-                    {
-                      label:
-                        selectedProviderIsCodexOAuth || selectedProviderIsClaudeCodeOAuth
-                          ? "OAuth"
-                          : selectedProviderIsGoogleAdc
-                            ? "Google ADC"
-                            : selectedProviderIsGoogleServiceAccount
-                              ? "Service account"
-                              : "API key",
-                      value: selectedProviderIsCodexOAuth
-                        ? codexOAuthStatus?.connected
-                          ? "Connected"
-                          : codexOAuthStatus?.requiresReauth
-                            ? "Reauth"
-                            : "Missing"
-                        : selectedProviderIsGoogleAdc
-                          ? selectedProvider.hasApiKey
-                            ? "Configured"
-                            : selectedProvider.authReadiness?.status === "invalid"
-                              ? "Invalid"
-                              : selectedProvider.authReadiness?.status === "unavailable"
-                                ? "Unavailable"
-                                : selectedProvider.authReadiness?.status === "missing"
-                                  ? "Missing"
-                                  : "Unknown"
-                          : selectedProviderIsClaudeCodeOAuth
-                            ? secretState.data?.hasSecret || selectedProvider.hasApiKey
-                              ? "Configured"
-                              : "Missing"
-                            : secretState.data?.hasSecret || selectedProvider.hasApiKey
-                              ? "Configured"
-                              : "Missing",
-                      meta: selectedProviderIsCodexOAuth
-                        ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
-                        : selectedProviderIsGoogleAdc
-                          ? formatGoogleAdcReadinessMeta(selectedProvider.authReadiness)
-                          : selectedProviderIsGoogleServiceAccount
-                            ? "Gateway-owned service-account JSON secret"
-                            : selectedProviderIsClaudeCodeOAuth
-                              ? "Claude subscription token"
-                              : formatSecretStatusMeta(
-                                  secretState.data?.source ?? selectedProvider.apiKeySource,
-                                  secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
-                                ),
-                    },
-                    {
-                      label: "Secret source",
-                      value: selectedProviderIsGoogleAdc
-                        ? formatGoogleAuthSourceLabel(selectedProvider.authReadiness?.source)
-                        : formatEffectiveConfigSourceLabel(secretState.data?.source ?? selectedProvider.apiKeySource),
-                      meta: "Effective source label",
-                    },
-                    {
-                      label: "Probe",
-                      value: formatProviderProbeStateLabel(selectedProvider.modelProbeState),
-                      meta:
-                        selectedProvider.modelProbeSource === "error_fallback"
-                          ? "Fallback after probe error; inspect model discovery below"
-                          : selectedProvider.modelProbeState === "error"
-                            ? "Live discovery failed; inspect model discovery below"
-                            : formatProviderProbeSourceMeta(selectedProvider),
-                    },
-                    {
-                      label: "Provider models",
-                      value: String(availableModels.length),
-                      meta: formatProviderModelsMeta(selectedProvider, availableModels.length),
-                    },
-                    {
-                      label: "Runtime posture",
-                      value: selectedProviderRuntimePosture,
-                      meta: selectedProviderIsLocal ? "Local endpoint detected" : "Network endpoint detected",
-                    },
-                  ]}
-                />
-                <SettingsFieldGrid>
-                  <SettingsField label="Base URL">
-                    <input className="mc-next-settings-input" value={selectedProvider.baseUrl} readOnly />
-                  </SettingsField>
-                  <SettingsField label="Capabilities">
-                    <div
-                      className="mc-next-settings-chip-row"
-                      role="list"
-                      aria-label={`${selectedProvider.label} capabilities`}
-                    >
-                      {selectedProviderCapabilities.length > 0 ? (
-                        selectedProviderCapabilities.map((capability) => (
-                          <span key={capability} className="mc-next-settings-chip" role="listitem">
-                            {capability}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="mc-next-settings-chip" role="listitem">
-                          No declared capabilities
-                        </span>
-                      )}
-                    </div>
-                  </SettingsField>
-                </SettingsFieldGrid>
-                <SettingsActionList
-                  ariaLabel={`${selectedProvider.label} smoke evidence`}
-                  items={selectedProviderSmokeEvidenceItems.map((item) => ({
-                    ...item,
-                    onClick:
-                      item.id === "model-discovery" || item.id === "provider-smoke"
-                        ? () => void handleRefreshModels(selectedProvider.providerId)
-                        : item.id === "transport"
-                          ? () => openView("editor")
-                          : undefined,
-                  }))}
-                  maxHeight=""
-                />
-                </NativeDisclosureCard>
+            <NativeCard
+              id="providers-trust"
+              density="compact"
+              className="mc-next-settings-panel mc-next-provider-detail-card"
+              title="Connection"
+              subtitle=""
+            >
+              <SettingsButtonRow>
+                <NativeButton onClick={() => openView("editor")}>
+                  Edit connection{providerEditor.isDirty ? " · Unsaved" : ""}
+                </NativeButton>
                 {selectedProviderIsCodexOAuth ? (
-                  <>
-                    <SettingsNotice
-                      notice={{
-                        tone: codexOAuthConnected ? "success" : "info",
-                        message: codexOAuthConnected
-                          ? `OpenAI Codex OAuth connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`
-                          : codexOAuthFlow
-                            ? "ChatGPT login is currently in progress in the setup card above."
-                            : "No API key goes here. ChatGPT login is managed by the setup card above.",
-                      }}
+                  <NativeButton variant="outline" onClick={() => openView("oauth")}>
+                    ChatGPT login
+                  </NativeButton>
+                ) : null}
+              </SettingsButtonRow>
+              <SettingsChangeStatus
+                change={secretRemoval.change}
+                onRefresh={secretRemoval.refresh}
+                route={route}
+                navigate={navigate}
+                onReview={setCodexOAuthPlanDialog}
+              />
+              <SettingsChangeStatus
+                change={secretChange.change}
+                onRefresh={secretChange.refresh}
+                route={route}
+                navigate={navigate}
+                onReview={setCodexOAuthPlanDialog}
+              />
+              {secretEditor.hasRemoteChanges ? (
+                <>
+                  <SettingsNotice
+                    notice={{
+                      tone: "warning",
+                      message:
+                        "Settings changed while this credential was being entered. Review current credential posture before retrying.",
+                    }}
+                  />
+                  <NativeButton variant="outline" onClick={secretEditor.rebaseToCurrent}>
+                    Apply credential to current settings
+                  </NativeButton>
+                </>
+              ) : null}
+              {selectedProvider ? (
+                <>
+                  <p>
+                    {selectedProvider.defaultModel || "Default model unavailable"} ·{" "}
+                    {formatProviderCredentialLabel(
+                      selectedProvider.providerId,
+                      selectedProvider.hasApiKey,
+                      codexOAuthStatus,
+                    )}{" "}
+                    · {formatProviderProbeStateLabel(selectedProvider.modelProbeState)}
+                  </p>
+                  <NativeDisclosureCard
+                    key={selectedProvider.providerId}
+                    id="provider-connection-diagnostics"
+                    title="Connection & diagnostics"
+                  >
+                    <NativeMetricGrid
+                      items={[
+                        { label: "Default model", value: selectedProvider.defaultModel, meta: "Configured fallback" },
+                        {
+                          label: "Configured API",
+                          value: selectedProvider.apiStyle,
+                          meta: "Saved provider setting",
+                        },
+                        {
+                          label: "Execution API",
+                          value: selectedProviderExecutionApiStyle ?? selectedProvider.apiStyle,
+                          meta: selectedProviderApiMeta,
+                        },
+                        {
+                          label:
+                            selectedProviderIsCodexOAuth || selectedProviderIsClaudeCodeOAuth
+                              ? "OAuth"
+                              : selectedProviderIsGoogleAdc
+                                ? "Google ADC"
+                                : selectedProviderIsGoogleServiceAccount
+                                  ? "Service account"
+                                  : "API key",
+                          value: selectedProviderIsCodexOAuth
+                            ? codexOAuthStatus?.connected
+                              ? "Connected"
+                              : codexOAuthStatus?.requiresReauth
+                                ? "Reauth"
+                                : "Missing"
+                            : selectedProviderIsGoogleAdc
+                              ? selectedProvider.hasApiKey
+                                ? "Configured"
+                                : selectedProvider.authReadiness?.status === "invalid"
+                                  ? "Invalid"
+                                  : selectedProvider.authReadiness?.status === "unavailable"
+                                    ? "Unavailable"
+                                    : selectedProvider.authReadiness?.status === "missing"
+                                      ? "Missing"
+                                      : "Unknown"
+                              : selectedProviderIsClaudeCodeOAuth
+                                ? secretState.data?.hasSecret || selectedProvider.hasApiKey
+                                  ? "Configured"
+                                  : "Missing"
+                                : secretState.data?.hasSecret || selectedProvider.hasApiKey
+                                  ? "Configured"
+                                  : "Missing",
+                          meta: selectedProviderIsCodexOAuth
+                            ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
+                            : selectedProviderIsGoogleAdc
+                              ? formatGoogleAdcReadinessMeta(selectedProvider.authReadiness)
+                              : selectedProviderIsGoogleServiceAccount
+                                ? "Gateway-owned service-account JSON secret"
+                                : selectedProviderIsClaudeCodeOAuth
+                                  ? "Claude subscription token"
+                                  : formatSecretStatusMeta(
+                                      secretState.data?.source ?? selectedProvider.apiKeySource,
+                                      secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+                                    ),
+                        },
+                        {
+                          label: "Secret source",
+                          value: selectedProviderIsGoogleAdc
+                            ? formatGoogleAuthSourceLabel(selectedProvider.authReadiness?.source)
+                            : formatEffectiveConfigSourceLabel(
+                                secretState.data?.source ?? selectedProvider.apiKeySource,
+                              ),
+                          meta: "Effective source label",
+                        },
+                        {
+                          label: "Probe",
+                          value: formatProviderProbeStateLabel(selectedProvider.modelProbeState),
+                          meta:
+                            selectedProvider.modelProbeSource === "error_fallback"
+                              ? "Fallback after probe error; inspect model discovery below"
+                              : selectedProvider.modelProbeState === "error"
+                                ? "Live discovery failed; inspect model discovery below"
+                                : formatProviderProbeSourceMeta(selectedProvider),
+                        },
+                        {
+                          label: "Provider models",
+                          value: String(availableModels.length),
+                          meta: formatProviderModelsMeta(selectedProvider, availableModels.length),
+                        },
+                        {
+                          label: "Runtime posture",
+                          value: selectedProviderRuntimePosture,
+                          meta: selectedProviderIsLocal ? "Local endpoint detected" : "Network endpoint detected",
+                        },
+                      ]}
                     />
-                    <SettingsButtonRow>
-                      <NativeButton
-                        variant="secondary"
-                        onClick={() => void handleRefreshModels(selectedProvider.providerId)}
-                        disabled={providerProbeBusyId === selectedProvider.providerId}
-                      >
-                        <RefreshCw size={16} />
-                        {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
-                      </NativeButton>
-                    </SettingsButtonRow>
-                  </>
-                ) : selectedProviderIsGoogleAdc ? (
-                  <>
-                    <SettingsNotice
-                      notice={{
-                        tone: "info",
-                        message:
-                          "Vertex AI uses Gateway-local Application Default Credentials. Credential files, refresh tokens, access tokens, and metadata tokens never roundtrip to Mission Control.",
-                      }}
+                    <SettingsFieldGrid>
+                      <SettingsField label="Base URL">
+                        <input className="mc-next-settings-input" value={selectedProvider.baseUrl} readOnly />
+                      </SettingsField>
+                      <SettingsField label="Capabilities">
+                        <div
+                          className="mc-next-settings-chip-row"
+                          role="list"
+                          aria-label={`${selectedProvider.label} capabilities`}
+                        >
+                          {selectedProviderCapabilities.length > 0 ? (
+                            selectedProviderCapabilities.map((capability) => (
+                              <span key={capability} className="mc-next-settings-chip" role="listitem">
+                                {capability}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="mc-next-settings-chip" role="listitem">
+                              No declared capabilities
+                            </span>
+                          )}
+                        </div>
+                      </SettingsField>
+                    </SettingsFieldGrid>
+                    <SettingsActionList
+                      ariaLabel={`${selectedProvider.label} smoke evidence`}
+                      items={selectedProviderSmokeEvidenceItems.map((item) => ({
+                        ...item,
+                        onClick:
+                          item.id === "model-discovery" || item.id === "provider-smoke"
+                            ? () => void handleRefreshModels(selectedProvider.providerId)
+                            : item.id === "transport"
+                              ? () => openView("editor")
+                              : undefined,
+                      }))}
+                      maxHeight=""
                     />
-                    <SettingsButtonRow>
+                  </NativeDisclosureCard>
+                  {selectedProviderIsCodexOAuth ? (
+                    <>
+                      <SettingsNotice
+                        notice={{
+                          tone: codexOAuthConnected ? "success" : "info",
+                          message: codexOAuthConnected
+                            ? `OpenAI Codex OAuth connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`
+                            : codexOAuthFlow
+                              ? "ChatGPT login is currently in progress in the setup card above."
+                              : "No API key goes here. ChatGPT login is managed by the setup card above.",
+                        }}
+                      />
+                      <SettingsButtonRow>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                          disabled={providerProbeBusyId === selectedProvider.providerId}
+                        >
+                          <RefreshCw size={16} />
+                          {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
+                        </NativeButton>
+                      </SettingsButtonRow>
+                    </>
+                  ) : selectedProviderIsGoogleAdc ? (
+                    <>
+                      <SettingsNotice
+                        notice={{
+                          tone: "info",
+                          message:
+                            "Vertex AI uses Gateway-local Application Default Credentials. Credential files, refresh tokens, access tokens, and metadata tokens never roundtrip to Mission Control.",
+                        }}
+                      />
+                      <SettingsButtonRow>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                          disabled={providerProbeBusyId === selectedProvider.providerId}
+                        >
+                          <RefreshCw size={16} />
+                          {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Validate ADC & models"}
+                        </NativeButton>
+                      </SettingsButtonRow>
+                    </>
+                  ) : (
+                    <>
                       <NativeButton
-                        variant="secondary"
-                        onClick={() => void handleRefreshModels(selectedProvider.providerId)}
-                        disabled={providerProbeBusyId === selectedProvider.providerId}
+                        variant="outline"
+                        aria-expanded={credentialEditorOpen}
+                        aria-controls="provider-credential-editor"
+                        onClick={() =>
+                          credentialEditorOpen
+                            ? leave.request(() => setCredentialEditorOpen(false), [secretEditor.key])
+                            : setCredentialEditorOpen(true)
+                        }
                       >
-                        <RefreshCw size={16} />
-                        {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Validate ADC & models"}
+                        Provider credential{secretEditor.isDirty ? " · Unsaved" : ""}
                       </NativeButton>
-                    </SettingsButtonRow>
-                  </>
-                ) : (
-                  <>
-                    <NativeButton variant="outline" aria-expanded={credentialEditorOpen} aria-controls="provider-credential-editor" onClick={() => credentialEditorOpen ? leave.request(() => setCredentialEditorOpen(false), [secretEditor.key]) : setCredentialEditorOpen(true)}>Provider credential{secretEditor.isDirty ? " · Unsaved" : ""}</NativeButton>
-                    <div id="provider-credential-editor" hidden={!credentialEditorOpen}>
+                      <div id="provider-credential-editor" hidden={!credentialEditorOpen}>
+                        <SettingsField
+                          label={selectedProviderIsGoogleServiceAccount ? "Service-account JSON" : "Provider secret"}
+                        >
+                          <input
+                            className="mc-next-settings-input"
+                            type="password"
+                            value={secretValue}
+                            placeholder={
+                              selectedProviderIsGoogleServiceAccount
+                                ? "Paste service-account JSON to replace the Gateway-owned secret"
+                                : "Paste a new API key to save"
+                            }
+                            onChange={(event) => setSecretValue(event.target.value)}
+                          />
+                        </SettingsField>
+                        <details>
+                          <summary>Credential storage</summary>
+                          <SettingsNotice
+                            notice={{
+                              tone: "info",
+                              message: selectedProviderIsGoogleServiceAccount
+                                ? "The JSON credential is sent only to the Gateway secret owner and never returned, projected into provider config, or written into public diagnostics. This field only accepts a replacement credential."
+                                : "Key on file status comes from the gateway only. Saved key values do not roundtrip back to the browser; status only reports whether a key exists and whether it is stored in OS keychain, local .env fallback, inline config, or none. This field only accepts a replacement key.",
+                            }}
+                          />
+                        </details>
+                        {secretState.error ? (
+                          <SettingsNotice notice={{ tone: "error", message: secretState.error }} />
+                        ) : null}
+                        <SettingsButtonRow>
+                          <NativeButton
+                            variant="default"
+                            disabled={secretChange.hasPending || secretRemoval.hasPending}
+                            onClick={() => void handleSaveSecret()}
+                          >
+                            <KeyRound size={16} />
+                            Save secret
+                          </NativeButton>
+                          <NativeButton
+                            variant="secondary"
+                            onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                            disabled={providerProbeBusyId === selectedProvider.providerId}
+                          >
+                            <RefreshCw size={16} />
+                            {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
+                          </NativeButton>
+                          <NativeButton
+                            variant="destructive"
+                            onClick={() =>
+                              selectedProviderId.trim()
+                                ? setPendingDeleteSecret({
+                                    providerId: selectedProviderId,
+                                    label: selectedProvider?.label ?? selectedProviderId,
+                                  })
+                                : undefined
+                            }
+                          >
+                            <Trash2 size={16} />
+                            Delete secret
+                          </NativeButton>
+                        </SettingsButtonRow>
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <SettingsEmptyState label="Choose a provider to inspect routing and secret posture." />
+              )}
+            </NativeCard>
+          </DetailInspector>
+          {detailView === "editor" ? (
+            <FocusedDetail
+              title={editorMode === "new" ? "Custom provider" : `Edit ${selectedProvider?.label ?? "provider"}`}
+              onClose={() => openView(null)}
+            >
+              <NativeCard
+                id="providers-editor"
+                density="compact"
+                className="mc-next-settings-panel mc-next-provider-editor-card"
+                title="Provider editor"
+                subtitle={editorHint}
+              >
+                <SettingsChangeStatus
+                  change={providerChange.change}
+                  onRefresh={providerChange.refresh}
+                  route={route}
+                  navigate={navigate}
+                  onReview={setCodexOAuthPlanDialog}
+                />
+                {providerEditor.hasRemoteChanges ? (
+                  <SettingsNotice
+                    notice={{
+                      tone: "warning",
+                      message: "Settings changed after this draft began. Review the current provider before retrying.",
+                    }}
+                  />
+                ) : null}
+                {providerEditor.hasRemoteChanges ? (
+                  <NativeButton variant="outline" onClick={providerEditor.rebaseToCurrent}>
+                    Apply draft to current settings
+                  </NativeButton>
+                ) : null}
+                <SettingsFieldGrid>
+                  <SettingsField label="Provider id">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.providerId}
+                      placeholder="openai-compatible"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({
+                          ...current,
+                          providerId: event.target.value,
+                        }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Label">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.label}
+                      placeholder="OpenAI-compatible"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({
+                          ...current,
+                          label: event.target.value,
+                        }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Base URL">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.baseUrl}
+                      placeholder="https://llm.example.test/v1"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({
+                          ...current,
+                          baseUrl: event.target.value,
+                        }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Provider API style">
+                    <select
+                      className="mc-next-settings-input"
+                      value={providerDraft.apiStyle}
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({
+                          ...current,
+                          apiStyle: event.target.value as ProviderEditorDraft["apiStyle"],
+                        }))
+                      }
+                    >
+                      {PROVIDER_API_STYLE_OPTIONS.map((style) => (
+                        <option key={style} value={style}>
+                          {formatProviderApiStyleLabel(style)}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mc-next-settings-field-note">{describeProviderApiStyle(providerDraft.apiStyle)}</p>
+                    {providerApiStyleWarning ? (
+                      <p className="mc-next-settings-field-note">{providerApiStyleWarning}</p>
+                    ) : null}
+                  </SettingsField>
+                  <SettingsField label="Credential mode">
+                    <select
+                      className="mc-next-settings-input"
+                      value={draftIsCodexOAuth ? "codex-oauth" : providerDraft.authMode}
+                      disabled={draftIsCodexOAuth}
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({
+                          ...current,
+                          authMode: event.target.value as ProviderEditorDraft["authMode"],
+                        }))
+                      }
+                    >
+                      <option value="">Provider default</option>
+                      <option value="api-key">API key</option>
+                      <option value="google-adc">Google ADC</option>
+                      <option value="google-service-account">Google service account</option>
+                      <option value="claude-code-oauth">Claude Code OAuth token</option>
+                      <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+                    </select>
+                    <p className="mc-next-settings-field-note">
+                      Google credential contents remain Gateway-local; this field stores only the auth posture.
+                    </p>
+                  </SettingsField>
+                  <SettingsField label="Default model">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.defaultModel}
+                      placeholder="gpt-5.4-mini"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({
+                          ...current,
+                          defaultModel: event.target.value,
+                        }))
+                      }
+                    />
+                  </SettingsField>
+                  {draftIsCodexOAuth || providerDraft.authMode === "google-adc" ? null : (
                     <SettingsField
-                      label={selectedProviderIsGoogleServiceAccount ? "Service-account JSON" : "Provider secret"}
+                      label={
+                        providerDraft.authMode === "google-service-account" ? "Service-account JSON env" : "API key env"
+                      }
                     >
                       <input
                         className="mc-next-settings-input"
-                        type="password"
-                        value={secretValue}
-                        placeholder={
-                          selectedProviderIsGoogleServiceAccount
-                            ? "Paste service-account JSON to replace the Gateway-owned secret"
-                            : "Paste a new API key to save"
+                        value={providerDraft.apiKeyEnv}
+                        placeholder="OPENAI_API_KEY"
+                        onChange={(event) =>
+                          setProviderDraft((current) => ({
+                            ...current,
+                            apiKeyEnv: event.target.value,
+                          }))
                         }
-                        onChange={(event) => setSecretValue(event.target.value)}
                       />
                     </SettingsField>
-                    <details><summary>Credential storage</summary>
-                    <SettingsNotice
-                      notice={{
-                        tone: "info",
-                        message: selectedProviderIsGoogleServiceAccount
-                          ? "The JSON credential is sent only to the Gateway secret owner and never returned, projected into provider config, or written into public diagnostics. This field only accepts a replacement credential."
-                          : "Key on file status comes from the gateway only. Saved key values do not roundtrip back to the browser; status only reports whether a key exists and whether it is stored in OS keychain, local .env fallback, inline config, or none. This field only accepts a replacement key.",
-                      }}
-                    />
-                    </details>
-                    {secretState.error ? (
-                      <SettingsNotice notice={{ tone: "error", message: secretState.error }} />
-                    ) : null}
-                    <SettingsButtonRow>
-                      <NativeButton variant="default" disabled={secretChange.hasPending || secretRemoval.hasPending} onClick={() => void handleSaveSecret()}>
-                        <KeyRound size={16} />
-                        Save secret
-                      </NativeButton>
-                      <NativeButton
-                        variant="secondary"
-                        onClick={() => void handleRefreshModels(selectedProvider.providerId)}
-                        disabled={providerProbeBusyId === selectedProvider.providerId}
-                      >
-                        <RefreshCw size={16} />
-                        {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
-                      </NativeButton>
-                      <NativeButton
-                        variant="destructive"
-                        onClick={() =>
-                          selectedProviderId.trim()
-                            ? setPendingDeleteSecret({
-                                providerId: selectedProviderId,
-                                label: selectedProvider?.label ?? selectedProviderId,
-                              })
-                            : undefined
-                        }
-                      >
-                        <Trash2 size={16} />
-                        Delete secret
-                      </NativeButton>
-                    </SettingsButtonRow>
-                    </div>
-                  </>
-                )}
-              </>
-            ) : (
-              <SettingsEmptyState label="Choose a provider to inspect routing and secret posture." />
-            )}
-          </NativeCard></DetailInspector>
-          {detailView === "editor" ? <FocusedDetail title={editorMode === "new" ? "Custom provider" : `Edit ${selectedProvider?.label ?? "provider"}`} onClose={() => openView(null)}><NativeCard
-            id="providers-editor"
-            density="compact"
-            className="mc-next-settings-panel mc-next-provider-editor-card"
-            title="Provider editor"
-            subtitle={editorHint}
-          >
-            <SettingsChangeStatus change={providerChange.change} onRefresh={providerChange.refresh} route={route} navigate={navigate} onReview={setCodexOAuthPlanDialog} />
-            {providerEditor.hasRemoteChanges ? <SettingsNotice notice={{ tone: "warning", message: "Settings changed after this draft began. Review the current provider before retrying." }} /> : null}
-            {providerEditor.hasRemoteChanges ? <NativeButton variant="outline" onClick={providerEditor.rebaseToCurrent}>Apply draft to current settings</NativeButton> : null}
-            <SettingsFieldGrid>
-              <SettingsField label="Provider id">
-                <input
-                  className="mc-next-settings-input"
-                  value={providerDraft.providerId}
-                  placeholder="openai-compatible"
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      providerId: event.target.value,
-                    }))
-                  }
-                />
-              </SettingsField>
-              <SettingsField label="Label">
-                <input
-                  className="mc-next-settings-input"
-                  value={providerDraft.label}
-                  placeholder="OpenAI-compatible"
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      label: event.target.value,
-                    }))
-                  }
-                />
-              </SettingsField>
-              <SettingsField label="Base URL">
-                <input
-                  className="mc-next-settings-input"
-                  value={providerDraft.baseUrl}
-                  placeholder="https://llm.example.test/v1"
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      baseUrl: event.target.value,
-                    }))
-                  }
-                />
-              </SettingsField>
-              <SettingsField label="Provider API style">
-                <select
-                  className="mc-next-settings-input"
-                  value={providerDraft.apiStyle}
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      apiStyle: event.target.value as ProviderEditorDraft["apiStyle"],
-                    }))
-                  }
-                >
-                  {PROVIDER_API_STYLE_OPTIONS.map((style) => (
-                    <option key={style} value={style}>
-                      {formatProviderApiStyleLabel(style)}
-                    </option>
-                  ))}
-                </select>
-                <p className="mc-next-settings-field-note">{describeProviderApiStyle(providerDraft.apiStyle)}</p>
-                {providerApiStyleWarning ? (
-                  <p className="mc-next-settings-field-note">{providerApiStyleWarning}</p>
+                  )}
+                  {draftUsesGoogleAuth ? (
+                    <>
+                      <SettingsField label="Google Cloud project">
+                        <input
+                          className="mc-next-settings-input"
+                          value={providerDraft.googleProjectId}
+                          placeholder="my-project"
+                          onChange={(event) =>
+                            setProviderDraft((current) => ({ ...current, googleProjectId: event.target.value }))
+                          }
+                        />
+                      </SettingsField>
+                      <SettingsField label="Project env name">
+                        <input
+                          className="mc-next-settings-input"
+                          value={providerDraft.googleProjectIdEnv}
+                          placeholder="GOOGLE_CLOUD_PROJECT"
+                          onChange={(event) =>
+                            setProviderDraft((current) => ({ ...current, googleProjectIdEnv: event.target.value }))
+                          }
+                        />
+                      </SettingsField>
+                      <SettingsField label="Vertex location">
+                        <input
+                          className="mc-next-settings-input"
+                          value={providerDraft.googleLocation}
+                          placeholder="us-central1"
+                          onChange={(event) =>
+                            setProviderDraft((current) => ({ ...current, googleLocation: event.target.value }))
+                          }
+                        />
+                      </SettingsField>
+                      <SettingsField label="Location env name">
+                        <input
+                          className="mc-next-settings-input"
+                          value={providerDraft.googleLocationEnv}
+                          placeholder="GOOGLE_CLOUD_LOCATION"
+                          onChange={(event) =>
+                            setProviderDraft((current) => ({ ...current, googleLocationEnv: event.target.value }))
+                          }
+                        />
+                      </SettingsField>
+                      <SettingsField label="Vertex endpoint id">
+                        <input
+                          className="mc-next-settings-input"
+                          value={providerDraft.googleEndpointId}
+                          placeholder="openapi"
+                          onChange={(event) =>
+                            setProviderDraft((current) => ({ ...current, googleEndpointId: event.target.value }))
+                          }
+                        />
+                      </SettingsField>
+                    </>
+                  ) : null}
+                </SettingsFieldGrid>
+                {providerRequestValidation.error ? (
+                  <SettingsNotice notice={{ tone: "error", message: providerRequestValidation.error }} />
                 ) : null}
-              </SettingsField>
-              <SettingsField label="Credential mode">
-                <select
-                  className="mc-next-settings-input"
-                  value={draftIsCodexOAuth ? "codex-oauth" : providerDraft.authMode}
-                  disabled={draftIsCodexOAuth}
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      authMode: event.target.value as ProviderEditorDraft["authMode"],
-                    }))
-                  }
-                >
-                  <option value="">Provider default</option>
-                  <option value="api-key">API key</option>
-                  <option value="google-adc">Google ADC</option>
-                  <option value="google-service-account">Google service account</option>
-                  <option value="claude-code-oauth">Claude Code OAuth token</option>
-                  <option value="codex-oauth">ChatGPT/Codex OAuth</option>
-                </select>
-                <p className="mc-next-settings-field-note">
-                  Google credential contents remain Gateway-local; this field stores only the auth posture.
-                </p>
-              </SettingsField>
-              <SettingsField label="Default model">
-                <input
-                  className="mc-next-settings-input"
-                  value={providerDraft.defaultModel}
-                  placeholder="gpt-5.4-mini"
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      defaultModel: event.target.value,
-                    }))
-                  }
+                <LlmTransportFields
+                  draft={providerTransportDraft}
+                  idPrefix={`provider-editor-${providerDraft.providerId || "draft"}`}
+                  onChange={setProviderTransportDraft}
+                  error={providerRequestValidation.error}
                 />
-              </SettingsField>
-              {draftIsCodexOAuth || providerDraft.authMode === "google-adc" ? null : (
-                <SettingsField
-                  label={
-                    providerDraft.authMode === "google-service-account" ? "Service-account JSON env" : "API key env"
-                  }
-                >
-                  <input
-                    className="mc-next-settings-input"
-                    value={providerDraft.apiKeyEnv}
-                    placeholder="OPENAI_API_KEY"
-                    onChange={(event) =>
-                      setProviderDraft((current) => ({
-                        ...current,
-                        apiKeyEnv: event.target.value,
-                      }))
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="default"
+                    disabled={providerSaveBusy || providerChange.hasPending}
+                    onClick={() => void handleSaveProvider()}
+                  >
+                    <Save size={16} />
+                    {providerSaveBusy ? "Saving..." : "Save provider"}
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={() =>
+                      selectedProvider
+                        ? handleRefreshModels(selectedProvider.providerId)
+                        : handleRefreshModels(providerDraft.providerId)
                     }
-                  />
-                </SettingsField>
-              )}
-              {draftUsesGoogleAuth ? (
-                <>
-                  <SettingsField label="Google Cloud project">
-                    <input
-                      className="mc-next-settings-input"
-                      value={providerDraft.googleProjectId}
-                      placeholder="my-project"
-                      onChange={(event) =>
-                        setProviderDraft((current) => ({ ...current, googleProjectId: event.target.value }))
-                      }
-                    />
-                  </SettingsField>
-                  <SettingsField label="Project env name">
-                    <input
-                      className="mc-next-settings-input"
-                      value={providerDraft.googleProjectIdEnv}
-                      placeholder="GOOGLE_CLOUD_PROJECT"
-                      onChange={(event) =>
-                        setProviderDraft((current) => ({ ...current, googleProjectIdEnv: event.target.value }))
-                      }
-                    />
-                  </SettingsField>
-                  <SettingsField label="Vertex location">
-                    <input
-                      className="mc-next-settings-input"
-                      value={providerDraft.googleLocation}
-                      placeholder="us-central1"
-                      onChange={(event) =>
-                        setProviderDraft((current) => ({ ...current, googleLocation: event.target.value }))
-                      }
-                    />
-                  </SettingsField>
-                  <SettingsField label="Location env name">
-                    <input
-                      className="mc-next-settings-input"
-                      value={providerDraft.googleLocationEnv}
-                      placeholder="GOOGLE_CLOUD_LOCATION"
-                      onChange={(event) =>
-                        setProviderDraft((current) => ({ ...current, googleLocationEnv: event.target.value }))
-                      }
-                    />
-                  </SettingsField>
-                  <SettingsField label="Vertex endpoint id">
-                    <input
-                      className="mc-next-settings-input"
-                      value={providerDraft.googleEndpointId}
-                      placeholder="openapi"
-                      onChange={(event) =>
-                        setProviderDraft((current) => ({ ...current, googleEndpointId: event.target.value }))
-                      }
-                    />
-                  </SettingsField>
-                </>
-              ) : null}
-            </SettingsFieldGrid>
-            {providerRequestValidation.error ? (
-              <SettingsNotice notice={{ tone: "error", message: providerRequestValidation.error }} />
-            ) : null}
-            <LlmTransportFields
-              draft={providerTransportDraft}
-              idPrefix={`provider-editor-${providerDraft.providerId || "draft"}`}
-              onChange={setProviderTransportDraft}
-              error={providerRequestValidation.error}
-            />
-            <SettingsButtonRow>
-              <NativeButton variant="default" disabled={providerSaveBusy || providerChange.hasPending} onClick={() => void handleSaveProvider()}>
-                <Save size={16} />
-                {providerSaveBusy ? "Saving..." : "Save provider"}
-              </NativeButton>
-              <NativeButton
-                variant="secondary"
-                onClick={() =>
-                  selectedProvider
-                    ? handleRefreshModels(selectedProvider.providerId)
-                    : handleRefreshModels(providerDraft.providerId)
-                }
-                disabled={
-                  providerProbeBusyId === selectedProvider?.providerId ||
-                  providerProbeBusyId === providerDraft.providerId
-                }
-              >
-                <RefreshCw size={16} />
-                {providerProbeBusyId === selectedProvider?.providerId ||
-                providerProbeBusyId === providerDraft.providerId
-                  ? "Probing..."
-                  : "Probe from editor"}
-              </NativeButton>
-              <NativeButton
-                variant="secondary"
-                onClick={() => {
-                  leave.request(() => { providerEditor.discard(); setEditorMode("selected"); });
-                }}
-                disabled={!selectedProvider}
-              >
-                <RotateCcw size={16} />
-                Reload selected
-              </NativeButton>
-            </SettingsButtonRow>
-          </NativeCard></FocusedDetail> : null}
+                    disabled={
+                      providerProbeBusyId === selectedProvider?.providerId ||
+                      providerProbeBusyId === providerDraft.providerId
+                    }
+                  >
+                    <RefreshCw size={16} />
+                    {providerProbeBusyId === selectedProvider?.providerId ||
+                    providerProbeBusyId === providerDraft.providerId
+                      ? "Probing..."
+                      : "Probe from editor"}
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={() => {
+                      leave.request(() => {
+                        providerEditor.discard();
+                        setEditorMode("selected");
+                      });
+                    }}
+                    disabled={!selectedProvider}
+                  >
+                    <RotateCcw size={16} />
+                    Reload selected
+                  </NativeButton>
+                </SettingsButtonRow>
+              </NativeCard>
+            </FocusedDetail>
+          ) : null}
         </SettingsStack>
       </SettingsGrid>
       {leave.dialog}
@@ -2008,10 +2381,18 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                 actionNonce: action.actionNonce,
               },
             );
-            if (updated.planId !== plan.planId || updated.revision <= plan.revision) throw new Error("The change response did not confirm this plan. Refresh its status before retrying.");
-            if (plan.request.kind === "provider_connection" && plan.request.providerId === "openai-codex") setCodexOAuthPlan(updated);
+            if (updated.planId !== plan.planId || updated.revision <= plan.revision)
+              throw new Error("The change response did not confirm this plan. Refresh its status before retrying.");
+            if (plan.request.kind === "provider_connection" && plan.request.providerId === "openai-codex")
+              setCodexOAuthPlan(updated);
             setCodexOAuthPlanDialog(null);
-            await Promise.all([providerChange.refresh(), secretChange.refresh(), routingChange.refresh(), codexSetup.refresh(), secretRemoval.refresh()]);
+            await Promise.all([
+              providerChange.refresh(),
+              secretChange.refresh(),
+              routingChange.refresh(),
+              codexSetup.refresh(),
+              secretRemoval.refresh(),
+            ]);
             await reload();
             await refreshCodexOAuthStatus();
             setNotice({
@@ -2026,25 +2407,49 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
         }}
         onSubmitPublicForm={() => undefined}
         onSubmitSecureInput={async (plan, values) => {
-          if (plan.request.kind !== "provider_connection" || plan.requiredAction?.kind !== "secure_input" || !values.apiKey?.trim()) {
-            setNotice({ tone: "error", message: "This setup requires current provider credential instructions. Refresh the change status." }); return;
+          if (
+            plan.request.kind !== "provider_connection" ||
+            plan.requiredAction?.kind !== "secure_input" ||
+            !values.apiKey?.trim()
+          ) {
+            setNotice({
+              tone: "error",
+              message: "This setup requires current provider credential instructions. Refresh the change status.",
+            });
+            return;
           }
           setCodexOAuthBusy(true);
           try {
-            const next = await submitChangePlanProviderSecret(plan.planId, { workspaceId: plan.origin.workspaceId }, {
-              expectedRevision: plan.revision, actionId: plan.requiredAction.actionId, actionNonce: plan.requiredAction.actionNonce, apiKey: values.apiKey,
-            });
-            if (next.planId !== plan.planId || next.revision <= plan.revision) throw new Error("The credential response did not confirm this plan. Refresh its status before retrying.");
+            const next = await submitChangePlanProviderSecret(
+              plan.planId,
+              { workspaceId: plan.origin.workspaceId },
+              {
+                expectedRevision: plan.revision,
+                actionId: plan.requiredAction.actionId,
+                actionNonce: plan.requiredAction.actionNonce,
+                apiKey: values.apiKey,
+              },
+            );
+            if (next.planId !== plan.planId || next.revision <= plan.revision)
+              throw new Error("The credential response did not confirm this plan. Refresh its status before retrying.");
             setCodexOAuthPlanDialog(next);
             await Promise.all([providerChange.refresh(), secretChange.refresh(), codexSetup.refresh()]);
-          } catch (cause) { setNotice({ tone: "error", message: getErrorMessage(cause) }); }
-          finally { setCodexOAuthBusy(false); }
+          } catch (cause) {
+            setNotice({ tone: "error", message: getErrorMessage(cause) });
+          } finally {
+            setCodexOAuthBusy(false);
+          }
         }}
         onContinueOAuth={(plan) => handleStartCodexOAuth(true, plan)}
         onOpenApproval={(plan) => {
           if (plan.requiredAction?.kind === "approval" && plan.requiredAction.approvalId) {
             setCodexOAuthPlanDialog(null);
-            navigate({ area: "ops", section: "approvals", approvalId: plan.requiredAction.approvalId, theme: route.theme });
+            navigate({
+              area: "ops",
+              section: "approvals",
+              approvalId: plan.requiredAction.approvalId,
+              theme: route.theme,
+            });
           } else setNotice({ tone: "warning", message: "The canonical approval is not available yet." });
         }}
         onReviewArtifacts={() => undefined}

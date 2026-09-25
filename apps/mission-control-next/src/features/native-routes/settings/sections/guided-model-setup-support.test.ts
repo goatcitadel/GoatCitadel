@@ -39,8 +39,21 @@ describe("guided provider readiness", () => {
 
   it("marks a local runtime ready only from live endpoint evidence", () => {
     expect(
-      resolveGuidedProviderReadiness({ ...LOCAL_RUNTIME, modelProbeState: "ready", modelProbeSource: "live" }),
+      resolveGuidedProviderReadiness({
+        ...LOCAL_RUNTIME,
+        modelProbeState: "ready",
+        modelProbeSource: "live",
+        modelRefreshStatus: "fresh",
+      }),
     ).toMatchObject({ state: "ready", evidence: "local_endpoint" });
+    const stale = resolveGuidedProviderReadiness({
+      ...LOCAL_RUNTIME,
+      modelProbeState: "ready",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+    });
+    expect(stale).toMatchObject({ state: "not_verified", evidence: null });
+    expect(stale.description).toContain("stale");
   });
 
   it("uses the Gateway's credential readiness for cloud providers", () => {
@@ -83,10 +96,22 @@ describe("guided default provider", () => {
     expect(pickDefaultGuidedProvider([LOCAL_RUNTIME, withoutKey], "")).toBeNull();
     expect(
       pickDefaultGuidedProvider(
-        [{ ...LOCAL_RUNTIME, modelProbeState: "ready", modelProbeSource: "live" }, withoutKey],
+        [
+          { ...LOCAL_RUNTIME, modelProbeState: "ready", modelProbeSource: "live", modelRefreshStatus: "fresh" },
+          withoutKey,
+        ],
         "",
       )?.providerId,
     ).toBe("llamacpp");
+    expect(
+      pickDefaultGuidedProvider(
+        [
+          { ...LOCAL_RUNTIME, modelProbeState: "ready", modelProbeSource: "live", modelRefreshStatus: "stale" },
+          withoutKey,
+        ],
+        "",
+      ),
+    ).toBeNull();
   });
 });
 

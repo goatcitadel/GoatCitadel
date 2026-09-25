@@ -173,14 +173,17 @@ function buildUniversalModelPickerOptionsForProvider(
   provider: ProviderModelCatalogOption,
   input: { activeProviderId?: string; activeModel?: string },
 ): UniversalModelPickerOption[] {
-  const models = provider.models.length || provider.modelProbeSource === "live"
-    ? [...provider.models]
-    : dedupeProviderModels([provider.defaultModel]);
-  const missingActiveModel = provider.providerId === input.activeProviderId && input.activeModel &&
+  const models =
+    provider.models.length || provider.modelProbeSource === "live"
+      ? [...provider.models]
+      : dedupeProviderModels([provider.defaultModel]);
+  const missingActiveModel =
+    provider.providerId === input.activeProviderId &&
+    input.activeModel &&
     (isModelUnavailableInFreshCatalog(provider, input.activeModel) ||
       isModelMissingFromStaleCatalog(provider, input.activeModel))
-    ? input.activeModel
-    : undefined;
+      ? input.activeModel
+      : undefined;
   if (missingActiveModel) models.push(missingActiveModel);
   return models.map((model) => {
     const credentialStatus = resolveCredentialStatus(provider);
@@ -362,14 +365,15 @@ function buildProviderCatalog(
       apiKeySource: provider.apiKeySource,
       hasApiKey: provider.hasApiKey,
       capabilities: provider.capabilities,
-      models: cached?.source === "live"
-        ? cached.items
-        : dedupeProviderModels([
-            provider.defaultModel,
-            provider.providerId === config.activeProviderId ? config.activeModel : undefined,
-            ...(template?.knownModels ?? []),
-            ...(cached?.items ?? []),
-          ]),
+      models:
+        cached?.source === "live"
+          ? cached.items
+          : dedupeProviderModels([
+              provider.defaultModel,
+              provider.providerId === config.activeProviderId ? config.activeModel : undefined,
+              ...(template?.knownModels ?? []),
+              ...(cached?.items ?? []),
+            ]),
       reasoningEffortsByModel: cached?.reasoningEffortsByModel,
       fastModeByModel: cached?.fastModeByModel,
       sanitizedEndpointIdentity: sanitizeProviderEndpointIdentity(provider.baseUrl),
@@ -455,13 +459,14 @@ export async function previewProviderModels(
   );
   const template = findProviderTemplate(input.providerId);
   return {
-    items: response.source === "live"
-      ? dedupeProviderModels(response.items.map((item) => item.id))
-      : dedupeProviderModels([
-          input.fallbackModel,
-          ...(template?.knownModels ?? []),
-          ...response.items.map((item) => item.id),
-        ]),
+    items:
+      response.source === "live"
+        ? dedupeProviderModels(response.items.map((item) => item.id))
+        : dedupeProviderModels([
+            input.fallbackModel,
+            ...(template?.knownModels ?? []),
+            ...response.items.map((item) => item.id),
+          ]),
     source: response.source === "live" ? "remote" : "fallback",
     warning: response.warning,
   };
@@ -536,16 +541,25 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
             if (previousItems) return { items: previousItems, source: response.source };
           }
           const state: ProviderModelProbeState =
-            items.length === 0 ? "empty" : response.source === "live" && response.catalogStatus !== "stale" ? "ready" : "fallback";
+            items.length === 0
+              ? "empty"
+              : response.source === "live" && response.catalogStatus !== "stale"
+                ? "ready"
+                : "fallback";
           sharedProviderModelCache.set(normalized, {
             items,
-            reasoningEffortsByModel: Object.fromEntries(response.items
-              .filter((item) => item.reasoningEfforts?.length)
-              .map((item) => [item.id, item.reasoningEfforts!])),
-            fastModeByModel: Object.fromEntries(response.items
-              .filter((item) => item.fastModeAvailable !== undefined)
-              .map((item) => [item.id, item.fastModeAvailable!])),
-            expiresAt: response.catalogStatus === "stale" ? Date.now() - 1 : Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
+            reasoningEffortsByModel: Object.fromEntries(
+              response.items
+                .filter((item) => item.reasoningEfforts?.length)
+                .map((item) => [item.id, item.reasoningEfforts!]),
+            ),
+            fastModeByModel: Object.fromEntries(
+              response.items
+                .filter((item) => item.fastModeAvailable !== undefined)
+                .map((item) => [item.id, item.fastModeAvailable!]),
+            ),
+            expiresAt:
+              response.catalogStatus === "stale" ? Date.now() - 1 : Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
             state,
             source: response.source,
             checkedAt: new Date().toISOString(),
@@ -553,7 +567,8 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
           });
           return { items, source: response.source };
         } catch (err) {
-          if (generation !== sharedProviderModelCacheGeneration) return { items: [], source: "error_fallback" as const };
+          if (generation !== sharedProviderModelCacheGeneration)
+            return { items: [], source: "error_fallback" as const };
           const fallbackSource: LlmModelDiscoverySource = "error_fallback";
           const warning = err instanceof Error && err.message ? err.message : "Model discovery failed.";
           const previousItems = preserveLiveCatalogAfterRefreshFailure(normalized, warning);
@@ -592,7 +607,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     if (!normalized) {
       return undefined;
     }
-    return getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, Date.now());
+    return getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, Date.now(), { allowStale: true });
   }, []);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import { CHAT_TURN_ACTIVE_STATUSES, type ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { canRetryTurn, getTurnPendingLabel, humanizeEnum, toTitleCase } from "./chat-display-helpers";
 
 function failedTrace(failure?: ChatTurnTraceRecord["failure"]): ChatTurnTraceRecord {
@@ -43,6 +43,17 @@ describe("getTurnPendingLabel", () => {
 });
 
 describe("canRetryTurn", () => {
+  it("does not offer a retry while the original turn is still active", () => {
+    for (const status of CHAT_TURN_ACTIVE_STATUSES) {
+      expect(
+        canRetryTurn({
+          assistantMessage: { messageId: "partial" } as never,
+          trace: { ...failedTrace(), status },
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("allows retry when an assistant message exists", () => {
     expect(canRetryTurn({ assistantMessage: { messageId: "m" } as never, trace: failedTrace() })).toBe(true);
   });

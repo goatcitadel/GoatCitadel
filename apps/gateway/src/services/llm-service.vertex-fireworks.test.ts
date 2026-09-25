@@ -102,19 +102,10 @@ describe("LlmService Vertex AI integration", () => {
     expect(response.choices?.[0]?.message).toEqual({ role: "assistant", content: "done" });
   });
 
-  it("treats Chat off as an omitted Vertex reasoning field and never mixes Google thinking config", async () => {
+  it("rejects Chat off when Vertex model metadata does not certify it", async () => {
     const root = createRoot();
     const metadataPath = writeMetadata(root);
-    let payload: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return jsonResponse({
-        id: "vertex-off",
-        model: "google/gemini-2.5-flash",
-        choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 1, completion_tokens: 1 },
-      });
-    });
+    const fetchMock = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchMock);
     const googleCloudAuthService = new GoogleCloudAuthService({ env: {}, fetch: fetchMock as typeof fetch });
     vi.spyOn(googleCloudAuthService, "resolve").mockResolvedValue({
@@ -139,26 +130,17 @@ describe("LlmService Vertex AI integration", () => {
       },
     );
 
-    const response = await service.chatCompletions({
-      messages: [{ role: "user", content: "Do not reason" }],
-      reasoning: { effort: "none" },
-    });
-
-    expect(payload).toEqual({
-      model: "google/gemini-2.5-flash",
-      messages: [{ role: "user", content: "Do not reason" }],
-      stream: false,
-    });
-    expect(payload).not.toHaveProperty("reasoning_effort");
-    expect(payload).not.toHaveProperty("google");
-    expect(payload).not.toHaveProperty("thinking_config");
-    expect(response.routing?.reasoning).toMatchObject({
+    await expect(
+      service.chatCompletions({
+        messages: [{ role: "user", content: "Do not reason" }],
+        reasoning: { effort: "none" },
+      }),
+    ).rejects.toMatchObject({
+      code: "unsupported_reasoning_effort",
       requested: "none",
-      actual: "none",
-      providerEffort: "none",
-      disposition: "honored",
-      capabilitySource: "model_metadata",
+      supported: ["low", "medium", "high"],
     });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not promote missing, malformed, or unprobed metadata ADC as route-ready", () => {

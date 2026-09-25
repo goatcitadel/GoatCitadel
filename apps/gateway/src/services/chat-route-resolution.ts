@@ -59,10 +59,22 @@ export interface ResolvedChatRouteDescriptor {
 }
 
 function isLikelyLocalProviderUrl(baseUrl: string | undefined): boolean {
-  const normalized = (baseUrl ?? "").trim().toLowerCase();
-  return /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(
-    normalized,
-  );
+  try {
+    const url = new URL(baseUrl ?? "");
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "[::1]" ||
+      /^10(?:\.\d{1,3}){3}$/.test(host) ||
+      /^192\.168(?:\.\d{1,3}){2}$/.test(host) ||
+      /^172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}$/.test(host)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -160,7 +172,8 @@ function resolveEffectiveModel(input: {
   }
 
   if (
-    availability !== "available" && availability !== "stale_available" &&
+    availability !== "available" &&
+    availability !== "stale_available" &&
     !providerAllowsForeignModelIds(input.provider.providerId) &&
     !providerRecognizesModelId(input.provider.providerId, normalizedRequested)
   ) {
@@ -186,7 +199,11 @@ function resolveEffectiveModel(input: {
   };
 }
 
-function describeUnavailableModel(model: string, providerLabel: string, availability: "unavailable" | "stale_unavailable"): string {
+function describeUnavailableModel(
+  model: string,
+  providerLabel: string,
+  availability: "unavailable" | "stale_unavailable",
+): string {
   return availability === "unavailable"
     ? `${model} is no longer listed for ${providerLabel}. Choose an available model in Settings → Providers & models.`
     : `${model} was not in the last known model list for ${providerLabel}. Refresh the catalog in Settings → Providers & models before using it.`;

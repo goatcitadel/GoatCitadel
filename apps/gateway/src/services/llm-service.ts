@@ -20,7 +20,13 @@ import {
   readBoundedResponseText,
 } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
-import { LlmDispatchGuardScope, LlmDispatchGuardRejectedError, type LlmDispatchGuard, type LlmDispatchLineage, type LlmDispatchRoute } from "./llm-dispatch-guard.js";
+import {
+  LlmDispatchGuardScope,
+  LlmDispatchGuardRejectedError,
+  type LlmDispatchGuard,
+  type LlmDispatchLineage,
+  type LlmDispatchRoute,
+} from "./llm-dispatch-guard.js";
 import { extractProviderOwnedOutputCapErrorText, resolveOutputCapRecovery } from "./llm-output-cap-recovery.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
@@ -1075,13 +1081,12 @@ export class LlmService {
     try {
       const result = await this.fetchModelsForResolvedProvider(resolved);
       if (result.items.length > 0) {
-        const items = result.source === "live" && isOpenAICodexProvider(provider)
-          ? result.items
-          : mergeModelCatalogs(result.items, fallbackCatalog);
+        const items =
+          result.source === "live" && isOpenAICodexProvider(provider)
+            ? result.items
+            : mergeModelCatalogs(result.items, fallbackCatalog);
         return {
-          items: items.map((record) =>
-            this.enrichModelRecord(provider.providerId, record),
-          ),
+          items: items.map((record) => this.enrichModelRecord(provider.providerId, record)),
           source: result.source,
           warning: result.warning,
         };
@@ -1122,12 +1127,17 @@ export class LlmService {
     };
   }
 
-  private getCatalogReasoningEfforts(provider: LlmProviderConfig, model: string): ChatCompletionReasoningEffort[] | undefined {
+  private getCatalogReasoningEfforts(
+    provider: LlmProviderConfig,
+    model: string,
+  ): ChatCompletionReasoningEffort[] | undefined {
     return this.getLiveCatalogModel(provider, model)?.reasoningEfforts;
   }
 
-  public getCachedModelAvailability(providerId: string, model: string):
-    "available" | "unavailable" | "stale_available" | "stale_unavailable" | "unverified" {
+  public getCachedModelAvailability(
+    providerId: string,
+    model: string,
+  ): "available" | "unavailable" | "stale_available" | "stale_unavailable" | "unverified" {
     const provider = this.providers.get(providerId);
     if (!provider) return "unverified";
     const cached = this.modelDiscoveryCache.get(buildPersistedModelDiscoveryCacheKey(providerId, provider.baseUrl));
@@ -1137,9 +1147,7 @@ export class LlmService {
     const requested = normalizeRequestedModel(providerId, model);
     const listed = cached.result.items.some((item) => item.id === requested);
     const stale = Date.now() - cached.cachedAt >= LlmService.MODEL_DISCOVERY_TTL_MS;
-    return stale
-      ? listed ? "stale_available" : "stale_unavailable"
-      : listed ? "available" : "unavailable";
+    return stale ? (listed ? "stale_available" : "stale_unavailable") : listed ? "available" : "unavailable";
   }
 
   public refreshModelCatalogInBackground(providerId: string): void {
@@ -1156,7 +1164,9 @@ export class LlmService {
   }
 
   private getLiveCatalogModel(provider: LlmProviderConfig, model: string): LlmModelRecord | undefined {
-    const cached = this.modelDiscoveryCache.get(buildPersistedModelDiscoveryCacheKey(provider.providerId, provider.baseUrl));
+    const cached = this.modelDiscoveryCache.get(
+      buildPersistedModelDiscoveryCacheKey(provider.providerId, provider.baseUrl),
+    );
     if (cached?.result.source !== "live") return undefined;
     return cached.result.items.find((item) => item.id === model);
   }
@@ -1236,8 +1246,13 @@ export class LlmService {
     let pending: Promise<Response>;
     try {
       if (guard) {
-        await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution,
-          this.dispatchRoute(input.resolved as ResolvedProvider, input.model), input.transportAttemptIndex, outputCapField?.value);
+        await this.authorizeModelUsageIntent(
+          reservation?.eventId,
+          input.attribution,
+          this.dispatchRoute(input.resolved as ResolvedProvider, input.model),
+          input.transportAttemptIndex,
+          outputCapField?.value,
+        );
         signal.throwIfAborted();
       }
       pending = fetch(input.target.url, requestInit);
@@ -1395,21 +1410,26 @@ export class LlmService {
     signal?: AbortSignal;
   }): Promise<{ response: Response; usage?: ModelUsageAttemptHandle }> {
     return await dispatchTrackedMultipartRequest(input, {
-      prepare: async () => await this.modelUsageAccounting?.prepareDispatch({
-        source: "llm_service",
-        attribution: input.attribution,
-        requestedProviderId: input.requestedProviderId,
-        requestedModelId: input.requestedModelId,
-        effectiveProviderId: input.resolved.provider.providerId,
-        effectiveModelId: input.model,
-        effectiveApiStyle: resolveProviderExecutionApiStyle(input.resolved.provider, input.model),
-        transportAttemptIndex: input.transportAttemptIndex,
-        credential: this.resolveModelUsageCredentialLineage(input.resolved),
-        pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
-      }),
+      prepare: async () =>
+        await this.modelUsageAccounting?.prepareDispatch({
+          source: "llm_service",
+          attribution: input.attribution,
+          requestedProviderId: input.requestedProviderId,
+          requestedModelId: input.requestedModelId,
+          effectiveProviderId: input.resolved.provider.providerId,
+          effectiveModelId: input.model,
+          effectiveApiStyle: resolveProviderExecutionApiStyle(input.resolved.provider, input.model),
+          transportAttemptIndex: input.transportAttemptIndex,
+          credential: this.resolveModelUsageCredentialLineage(input.resolved),
+          pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
+        }),
       authorize: async (reservation) => {
-        await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution,
-          this.dispatchRoute(input.resolved, input.model), input.transportAttemptIndex);
+        await this.authorizeModelUsageIntent(
+          reservation?.eventId,
+          input.attribution,
+          this.dispatchRoute(input.resolved, input.model),
+          input.transportAttemptIndex,
+        );
       },
       retainNoDispatchEvidence: () => this.dispatchGuardScope.get() !== undefined,
       rethrowNetworkError: rethrowIfProviderNetworkBlocked,
@@ -1462,7 +1482,10 @@ export class LlmService {
     if (!prompt) {
       throw new Error("images requires a non-empty prompt");
     }
-    const attribution = normalizeModelUsageAttribution(this.dispatchGuardScope.applyLineage(attributionInput), "image_generation");
+    const attribution = normalizeModelUsageAttribution(
+      this.dispatchGuardScope.applyLineage(attributionInput),
+      "image_generation",
+    );
 
     const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
@@ -1727,7 +1750,10 @@ export class LlmService {
     // never 400 on an orphan tool_result or a tool_use with no matching result.
     // This is the single chokepoint every provider style funnels through.
     const sanitizedRequest = withSanitizedMessages(request);
-    const attribution = normalizeModelUsageAttribution(this.dispatchGuardScope.applyLineage(attributionInput), "chat_initial");
+    const attribution = normalizeModelUsageAttribution(
+      this.dispatchGuardScope.applyLineage(attributionInput),
+      "chat_initial",
+    );
 
     const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
@@ -1804,14 +1830,20 @@ export class LlmService {
     input = { ...input, attribution: this.dispatchGuardScope.applyLineage(input.attribution) };
     const reservation = await this.modelUsageAccounting?.prepareDispatch(input);
     try {
-      await this.authorizeModelUsageIntent(reservation?.eventId, input.attribution, {
-        providerId: input.effectiveProviderId ?? "",
-        modelId: input.effectiveModelId ?? "",
-        apiStyle: input.effectiveApiStyle ?? "",
-        configuredContextWindowTokens: input.outputCap?.configuredContextWindowTokens,
-        credential: input.credential,
-        pricing: input.pricing,
-      }, input.transportAttemptIndex, input.outputCap?.effectiveOutputTokenCap);
+      await this.authorizeModelUsageIntent(
+        reservation?.eventId,
+        input.attribution,
+        {
+          providerId: input.effectiveProviderId ?? "",
+          modelId: input.effectiveModelId ?? "",
+          apiStyle: input.effectiveApiStyle ?? "",
+          configuredContextWindowTokens: input.outputCap?.configuredContextWindowTokens,
+          credential: input.credential,
+          pricing: input.pricing,
+        },
+        input.transportAttemptIndex,
+        input.outputCap?.effectiveOutputTokenCap,
+      );
       return reservation;
     } catch (error) {
       await reservation?.abandon({ retainNoDispatchEvidence: true });
@@ -1819,8 +1851,13 @@ export class LlmService {
     }
   }
 
-  private async authorizeModelUsageIntent(eventId: string | undefined, attribution: ModelUsageAttributionContext,
-    route: LlmDispatchRoute, transportAttemptIndex: number, effectiveOutputTokenCap?: number): Promise<void> {
+  private async authorizeModelUsageIntent(
+    eventId: string | undefined,
+    attribution: ModelUsageAttributionContext,
+    route: LlmDispatchRoute,
+    transportAttemptIndex: number,
+    effectiveOutputTokenCap?: number,
+  ): Promise<void> {
     const guard = this.dispatchGuardScope.get();
     if (!guard) return;
     try {
@@ -1867,9 +1904,7 @@ export class LlmService {
     const operation = () => this.chatCompletionsStreamInternal(input, attributionInput);
     // Async generator bodies start on next(), potentially after a tool returns.
     // Capture any governed creation scope before handing out the iterator.
-    return this.dispatchGuardScope.get()
-      ? this.dispatchGuardScope.stream(async () => {}, operation)
-      : operation();
+    return this.dispatchGuardScope.get() ? this.dispatchGuardScope.stream(async () => {}, operation) : operation();
   }
 
   private async *chatCompletionsStreamInternal(
@@ -1883,7 +1918,10 @@ export class LlmService {
     // See chatCompletions: pair tool calls/results once at the shared chokepoint
     // so every provider style sends an API-valid message list.
     const sanitizedRequest = withSanitizedMessages(request);
-    const attribution = normalizeModelUsageAttribution(this.dispatchGuardScope.applyLineage(attributionInput), "chat_initial");
+    const attribution = normalizeModelUsageAttribution(
+      this.dispatchGuardScope.applyLineage(attributionInput),
+      "chat_initial",
+    );
 
     const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
@@ -2980,7 +3018,7 @@ export class LlmService {
     const cached = this.modelDiscoveryCache.get(keys.exact) ?? this.modelDiscoveryCache.get(keys.persisted);
     if (cached) {
       const ageMs = now - cached.cachedAt;
-      if (ageMs < LlmService.MODEL_DISCOVERY_TTL_MS) {
+      if (cached.origin !== "disk" && ageMs < LlmService.MODEL_DISCOVERY_TTL_MS) {
         log.debug("model catalog cache hit", {
           providerId: resolved.provider.providerId,
           ageMs,
@@ -3005,8 +3043,12 @@ export class LlmService {
         if (!inFlight) {
           const pending = this.fetchModelsForResolvedProviderUncached(resolved)
             .then((result) => {
-              if (result.source !== "error_fallback" && catalogGeneration === this.modelCatalogGeneration &&
-                  (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)) {
+              if (
+                result.source !== "error_fallback" &&
+                catalogGeneration === this.modelCatalogGeneration &&
+                (!isOpenAICodexProvider(resolved.provider) ||
+                  codexGeneration === this.openAICodexModelCatalogGeneration)
+              ) {
                 this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
               }
               return result;
@@ -3019,7 +3061,8 @@ export class LlmService {
               return cached.result;
             })
             .finally(() => {
-              if (this.modelDiscoveryInFlight.get(keys.exact) === pending) this.modelDiscoveryInFlight.delete(keys.exact);
+              if (this.modelDiscoveryInFlight.get(keys.exact) === pending)
+                this.modelDiscoveryInFlight.delete(keys.exact);
             });
           this.modelDiscoveryInFlight.set(keys.exact, pending);
         }
@@ -3035,8 +3078,11 @@ export class LlmService {
       .then((result) => {
         // Cache live + template_fallback (successful fetches with known catalog), but
         // skip error_fallback so transient network errors retry on the next call.
-        if (result.source !== "error_fallback" && catalogGeneration === this.modelCatalogGeneration &&
-            (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)) {
+        if (
+          result.source !== "error_fallback" &&
+          catalogGeneration === this.modelCatalogGeneration &&
+          (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)
+        ) {
           this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
         }
         return result;
@@ -3107,8 +3153,12 @@ export class LlmService {
     result: ModelDiscoveryResult,
     cachedAt: number,
   ): void {
-    if (!this.modelCatalogCachePath || isOpenAICodexProvider(provider) ||
-        result.source === "error_fallback" || result.items.length === 0) {
+    if (
+      !this.modelCatalogCachePath ||
+      isOpenAICodexProvider(provider) ||
+      result.source === "error_fallback" ||
+      result.items.length === 0
+    ) {
       return;
     }
     try {
@@ -3236,7 +3286,8 @@ function markStaleModelDiscoveryResult(result: ModelDiscoveryResult, origin: "me
     ...result,
     catalogStatus: "stale",
     warning:
-      result.warning ?? (origin === "disk"
+      result.warning ??
+      (origin === "disk"
         ? "Loaded from local model catalog cache; remote provider refresh is running in background."
         : "Showing a stale model catalog while remote provider refresh runs in background."),
   };
@@ -3813,8 +3864,7 @@ function normalizeCodexModelRecords(payload: unknown): LlmModelRecord[] {
   return normalizeModelRecords({
     models: payload.models.filter(
       (value): value is Record<string, unknown> =>
-        isPlainRecord(value) &&
-        (value.visibility === undefined || value.visibility === "list"),
+        isPlainRecord(value) && (value.visibility === undefined || value.visibility === "list"),
     ),
   });
 }
@@ -3863,7 +3913,12 @@ function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
 }
 
 const CODEX_WIRE_REASONING_EFFORTS = new Set<ChatCompletionReasoningEffort>([
-  "none", "low", "medium", "high", "xhigh", "max",
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
 ]);
 
 function extractCodexReasoningEfforts(value: unknown): ChatCompletionReasoningEffort[] | undefined {
@@ -3882,9 +3937,11 @@ function extractCodexFastModeAvailability(record: Record<string, unknown>): bool
   const serviceTiers = record.service_tiers;
   const legacyTiers = record.additional_speed_tiers;
   if (!Array.isArray(serviceTiers) && !Array.isArray(legacyTiers)) return undefined;
-  return (Array.isArray(serviceTiers) && serviceTiers.some((tier) =>
-    isPlainRecord(tier) && (tier.id === "priority" || tier.id === "fast"))) ||
-    (Array.isArray(legacyTiers) && (legacyTiers.includes("fast") || legacyTiers.includes("priority")));
+  return (
+    (Array.isArray(serviceTiers) &&
+      serviceTiers.some((tier) => isPlainRecord(tier) && (tier.id === "priority" || tier.id === "fast"))) ||
+    (Array.isArray(legacyTiers) && (legacyTiers.includes("fast") || legacyTiers.includes("priority")))
+  );
 }
 
 function extractModelLabel(record: Record<string, unknown>, id: string): string | undefined {
@@ -5054,8 +5111,10 @@ function usesOpenAICodexResponsesLite(
   provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
   model: string,
 ): boolean {
-  return isOpenAICodexResponsesProvider(provider) &&
-    /^gpt-(?:5\.6-(?:sol|terra|luna)|6-(?:astra|sol|luna))$/iu.test(model.trim());
+  return (
+    isOpenAICodexResponsesProvider(provider) &&
+    /^gpt-(?:5\.6-(?:sol|terra|luna)|6-(?:astra|sol|luna))$/iu.test(model.trim())
+  );
 }
 
 function resolveProviderSseEventLimit(

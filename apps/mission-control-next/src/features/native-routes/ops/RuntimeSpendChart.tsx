@@ -66,7 +66,7 @@ const SVG_VIEW_WIDTH = 700;
 const SVG_VIEW_HEIGHT = 200;
 const CHART_TOP_PADDING = 16;
 const CHART_BOTTOM_PADDING = 32;
-const CHART_LEFT_PADDING = 44;
+const CHART_LEFT_PADDING = 88;
 const CHART_RIGHT_PADDING = 12;
 const PLOT_TOP = CHART_TOP_PADDING;
 const PLOT_BOTTOM = SVG_VIEW_HEIGHT - CHART_BOTTOM_PADDING;
@@ -271,96 +271,101 @@ export function RuntimeSpendChart({
           </span>
         ))}
       </div>
-      <svg
-        className="mc-next-runtime-spend-chart-svg"
-        viewBox={`0 0 ${SVG_VIEW_WIDTH} ${SVG_VIEW_HEIGHT}`}
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label={ariaLabel}
-        focusable="false"
-      >
-        <title>{ariaLabel}</title>
-        <g className="mc-next-runtime-spend-chart-grid">
-          {model.yAxisTicks.map((tick) => {
-            const y = PLOT_BOTTOM - (tick / model.yAxisMax) * PLOT_HEIGHT;
-            return (
-              <line
-                key={`grid-${tick}`}
-                x1={PLOT_LEFT}
-                x2={PLOT_RIGHT}
-                y1={y}
-                y2={y}
-                className="mc-next-runtime-spend-chart-gridline"
-              />
-            );
-          })}
-        </g>
-        <g className="mc-next-runtime-spend-chart-axis">
-          {model.yAxisTicks.map((tick) => {
-            const y = PLOT_BOTTOM - (tick / model.yAxisMax) * PLOT_HEIGHT;
-            return (
-              <text
-                key={`y-${tick}`}
-                x={PLOT_LEFT - 6}
-                y={y + 3}
-                textAnchor="end"
-                className="mc-next-runtime-spend-chart-axis-label"
-              >
-                {formatUsdCompact(tick)}
-              </text>
-            );
-          })}
-        </g>
-        <g className="mc-next-runtime-spend-chart-bars">
-          {model.days.map((day, dayIndex) => {
-            const slotX = PLOT_LEFT + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-            let cursor = PLOT_BOTTOM;
-            const isAnomaly = day.isAnomaly;
-            return (
-              <g
-                key={day.isoDate}
-                className={["mc-next-runtime-spend-chart-bar", isAnomaly ? "is-anomaly" : ""].filter(Boolean).join(" ")}
-              >
-                {day.segments.map((segment) => {
-                  const cost = safePositive(segment.costUsd);
-                  if (cost <= 0 || model.yAxisMax <= 0) {
-                    return null;
-                  }
-                  const height = (cost / model.yAxisMax) * PLOT_HEIGHT;
-                  cursor -= height;
-                  const colorIndex = model.providerOrder.indexOf(segment.providerKey);
-                  const colorToken = SEGMENT_TOKENS[colorIndex >= 0 ? colorIndex % SEGMENT_TOKENS.length : 0];
-                  return (
-                    <rect
-                      key={`${day.isoDate}-${segment.providerKey}`}
-                      x={slotX}
-                      y={cursor}
-                      width={barWidth}
-                      height={height}
-                      className={["mc-next-runtime-spend-chart-segment", isAnomaly ? "is-anomaly" : ""]
-                        .filter(Boolean)
-                        .join(" ")}
-                      fill={isAnomaly ? "var(--gc-risk-caution)" : colorToken}
-                    />
-                  );
-                })}
+      <p className="mc-next-runtime-spend-chart-scroll-hint">Scroll chart to see recent days →</p>
+      <div className="mc-next-runtime-spend-chart-scroll" role="region" aria-label="Spend history chart" tabIndex={0}>
+        <svg
+          className="mc-next-runtime-spend-chart-svg"
+          viewBox={`0 0 ${SVG_VIEW_WIDTH} ${SVG_VIEW_HEIGHT}`}
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label={ariaLabel}
+          focusable="false"
+        >
+          <title>{ariaLabel}</title>
+          <g className="mc-next-runtime-spend-chart-grid">
+            {model.yAxisTicks.map((tick) => {
+              const y = PLOT_BOTTOM - (tick / model.yAxisMax) * PLOT_HEIGHT;
+              return (
+                <line
+                  key={`grid-${tick}`}
+                  x1={PLOT_LEFT}
+                  x2={PLOT_RIGHT}
+                  y1={y}
+                  y2={y}
+                  className="mc-next-runtime-spend-chart-gridline"
+                />
+              );
+            })}
+          </g>
+          <g className="mc-next-runtime-spend-chart-axis">
+            {model.yAxisTicks.map((tick) => {
+              const y = PLOT_BOTTOM - (tick / model.yAxisMax) * PLOT_HEIGHT;
+              return (
                 <text
-                  x={slotX + barWidth / 2}
-                  y={SVG_VIEW_HEIGHT - 12}
-                  textAnchor="middle"
-                  className={
-                    isAnomaly
-                      ? "mc-next-runtime-spend-chart-axis-label is-anomaly"
-                      : "mc-next-runtime-spend-chart-axis-label"
-                  }
+                  key={`y-${tick}`}
+                  x={PLOT_LEFT - 6}
+                  y={y + 3}
+                  textAnchor="end"
+                  className="mc-next-runtime-spend-chart-axis-label"
                 >
-                  {isAnomaly ? `${day.shortLabel} ▲` : day.shortLabel}
+                  {formatUsdCompact(tick)}
                 </text>
-              </g>
-            );
-          })}
-        </g>
-      </svg>
+              );
+            })}
+          </g>
+          <g className="mc-next-runtime-spend-chart-bars">
+            {model.days.map((day, dayIndex) => {
+              const slotX = PLOT_LEFT + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
+              let cursor = PLOT_BOTTOM;
+              const isAnomaly = day.isAnomaly;
+              return (
+                <g
+                  key={day.isoDate}
+                  className={["mc-next-runtime-spend-chart-bar", isAnomaly ? "is-anomaly" : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
+                  {day.segments.map((segment) => {
+                    const cost = safePositive(segment.costUsd);
+                    if (cost <= 0 || model.yAxisMax <= 0) {
+                      return null;
+                    }
+                    const height = (cost / model.yAxisMax) * PLOT_HEIGHT;
+                    cursor -= height;
+                    const colorIndex = model.providerOrder.indexOf(segment.providerKey);
+                    const colorToken = SEGMENT_TOKENS[colorIndex >= 0 ? colorIndex % SEGMENT_TOKENS.length : 0];
+                    return (
+                      <rect
+                        key={`${day.isoDate}-${segment.providerKey}`}
+                        x={slotX}
+                        y={cursor}
+                        width={barWidth}
+                        height={height}
+                        className={["mc-next-runtime-spend-chart-segment", isAnomaly ? "is-anomaly" : ""]
+                          .filter(Boolean)
+                          .join(" ")}
+                        fill={isAnomaly ? "var(--gc-risk-caution)" : colorToken}
+                      />
+                    );
+                  })}
+                  <text
+                    x={slotX + barWidth / 2}
+                    y={SVG_VIEW_HEIGHT - 12}
+                    textAnchor="middle"
+                    className={
+                      isAnomaly
+                        ? "mc-next-runtime-spend-chart-axis-label is-anomaly"
+                        : "mc-next-runtime-spend-chart-axis-label"
+                    }
+                  >
+                    {isAnomaly ? `${day.shortLabel} ▲` : day.shortLabel}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+      </div>
       {model.anomalyDay ? (
         <div className="mc-next-runtime-spend-chart-callout" role="note">
           <span aria-hidden="true">{"▲"}</span>

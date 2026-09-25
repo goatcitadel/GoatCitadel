@@ -54,7 +54,13 @@ type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "
   Partial<
     Pick<
       ProviderModelCatalogOption,
-      "authReadiness" | "hasApiKey" | "localCostPosture" | "modelProbeState" | "modelProbeSource" | "modelProbeWarning"
+      | "authReadiness"
+      | "hasApiKey"
+      | "localCostPosture"
+      | "modelProbeState"
+      | "modelProbeSource"
+      | "modelProbeWarning"
+      | "modelRefreshStatus"
     >
   >;
 
@@ -119,6 +125,12 @@ export function resolveGuidedProviderReadiness(provider: GuidedReadinessProvider
 
 function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): GuidedProviderReadiness {
   const endpoint = provider.baseUrl;
+  if (provider.modelRefreshStatus === "stale") {
+    return readiness(
+      "not_verified",
+      `The last check of ${provider.label} at ${endpoint} is stale. Check the connection again.`,
+    );
+  }
   if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
     return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
   }

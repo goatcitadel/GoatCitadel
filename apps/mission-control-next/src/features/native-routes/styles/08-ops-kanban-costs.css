@@ -507,6 +507,25 @@
   gap: 0.32rem;
 }
 
+.mc-next-runtime-spend-chart-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mc-next-runtime-spend-chart-scroll-hint {
+  display: none;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 840px) {
+  .mc-next-runtime-spend-chart-scroll-hint {
+    display: block;
+  }
+}
+
 .mc-next-runtime-spend-chart-legend-swatch {
   display: inline-block;
   width: 0.62rem;
@@ -518,6 +537,7 @@
 .mc-next-runtime-spend-chart-svg {
   display: block;
   width: 100%;
+  min-width: 640px;
   height: auto;
   aspect-ratio: 700 / 200;
 }

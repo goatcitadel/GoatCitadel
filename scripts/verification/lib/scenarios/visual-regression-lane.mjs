@@ -113,7 +113,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
         }
         try {
           const page = await browserContext.newPage();
-          if (verificationTarget.isNext && visualRoutes.some(route => route.slug === "settings-local-ai")) {
+          if (verificationTarget.isNext && visualRoutes.some((route) => route.slug === "settings-local-ai")) {
             await installVisualLocalAiFixture(page);
           }
           const browserLog = attachBrowserLogging(page);
@@ -193,6 +193,9 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                   );
                   await stabilizeVisualRegressionSnapshot(page);
                   await assertMobileVisualGeometry(page, route, variant);
+                  if (verificationTarget.isNext && route.slug === "ops-costs") {
+                    await assertSpendChartGeometry(page, variant);
+                  }
                   await assertNoFooterStatusCollision(page, { route, variant });
                   artifacts = await captureBrowserArtifacts(context, {
                     slug: artifactSlug,
@@ -222,7 +225,12 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                       : thresholdExceeded
                         ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
                         : undefined,
-                    notes: route.slug === "settings-local-ai" ? ["Successful hardware readiness uses the deterministic visual-only fixture; failed Gateway responses remain unchanged. Real host detection is separate surface/desktop evidence."] : [],
+                    notes:
+                      route.slug === "settings-local-ai"
+                        ? [
+                            "Successful hardware readiness uses the deterministic visual-only fixture; failed Gateway responses remain unchanged. Real host detection is separate surface/desktop evidence.",
+                          ]
+                        : [],
                     metrics: {
                       route: route.href,
                       variant: variant.slug,
@@ -420,6 +428,31 @@ export async function assertMobileVisualGeometry(page, route, variant) {
         `${route.slug} ${variant.slug} clipped ${target.selector} horizontally (left=${target.left}, right=${target.right}, viewport=${geometry.viewportWidth}, ancestors=${JSON.stringify(target.ancestors)})`,
       );
     }
+  }
+}
+
+async function assertSpendChartGeometry(page, variant) {
+  const geometry = await page.evaluate(() => {
+    const scroll = document.querySelector(".mc-next-runtime-spend-chart-scroll");
+    const svg = scroll?.querySelector(".mc-next-runtime-spend-chart-svg");
+    const ticks = Array.from(svg?.querySelectorAll(".mc-next-runtime-spend-chart-axis-label") ?? []);
+    if (!(scroll instanceof HTMLElement) || svg?.tagName.toLowerCase() !== "svg" || ticks.length === 0) return null;
+    return {
+      svgLeft: svg.getBoundingClientRect().left,
+      tickLeft: Math.min(...ticks.map((tick) => tick.getBoundingClientRect().left)),
+      scrollWidth: scroll.scrollWidth,
+      visibleWidth: scroll.clientWidth,
+      keyboardFocusable: scroll.tabIndex >= 0,
+    };
+  });
+  if (!geometry) throw new Error(`Ops Costs ${variant.slug} did not render spend chart geometry`);
+  if (geometry.tickLeft < geometry.svgLeft - 1) {
+    throw new Error(`Ops Costs ${variant.slug} clipped its spend-axis labels: ${JSON.stringify(geometry)}`);
+  }
+  if (variant.viewport.width <= 840 && (geometry.scrollWidth <= geometry.visibleWidth || !geometry.keyboardFocusable)) {
+    throw new Error(
+      `Ops Costs ${variant.slug} did not provide a keyboard-scrollable spend chart: ${JSON.stringify(geometry)}`,
+    );
   }
 }
 

@@ -240,7 +240,9 @@ describe("useProviderModelCatalog", () => {
     expect(isModelUnavailableInFreshCatalog(provider, "gpt-old")).toBe(true);
     expect(isModelUnavailableInFreshCatalog(provider, "gpt-new")).toBe(false);
     expect(isModelUnavailableInFreshCatalog({ ...provider, modelRefreshStatus: "stale" }, "gpt-old")).toBe(false);
-    expect(isModelUnavailableInFreshCatalog({ ...provider, modelProbeSource: "error_fallback" }, "gpt-old")).toBe(false);
+    expect(isModelUnavailableInFreshCatalog({ ...provider, modelProbeSource: "error_fallback" }, "gpt-old")).toBe(
+      false,
+    );
     expect(isModelMissingFromStaleCatalog({ ...provider, modelRefreshStatus: "stale" }, "gpt-old")).toBe(true);
     const options = buildUniversalModelPickerOptions({
       providers: [provider],
@@ -345,9 +347,16 @@ describe("useProviderModelCatalog", () => {
     });
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
 
-    apiMocks.fetchLlmModels.mockResolvedValueOnce({ source: "error_fallback", items: [{ id: "gpt-default" }], warning: "503" });
+    apiMocks.fetchLlmModels.mockResolvedValueOnce({
+      source: "error_fallback",
+      items: [{ id: "gpt-default" }],
+      warning: "503",
+    });
     await act(async () => {
-      await expect(hook.result.loadModelsForProvider("openai", { force: true })).resolves.toEqual(["gpt-remote", "gpt-extra"]);
+      await expect(hook.result.loadModelsForProvider("openai", { force: true })).resolves.toEqual([
+        "gpt-remote",
+        "gpt-extra",
+      ]);
     });
     expect(hook.result.providers[0]).toMatchObject({
       models: ["gpt-remote", "gpt-extra"],
@@ -364,14 +373,16 @@ describe("useProviderModelCatalog", () => {
     apiMocks.fetchLlmConfig.mockResolvedValue({
       activeProviderId: "openai-codex",
       activeModel: "gpt-5.4",
-      providers: [{
-        providerId: "openai-codex",
-        label: "OpenAI Codex",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        defaultModel: "gpt-5.4",
-        apiStyle: "openai-codex-responses",
-        hasApiKey: true,
-      }],
+      providers: [
+        {
+          providerId: "openai-codex",
+          label: "OpenAI Codex",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          defaultModel: "gpt-5.4",
+          apiStyle: "openai-codex-responses",
+          hasApiKey: true,
+        },
+      ],
     });
     apiMocks.fetchLlmModels.mockResolvedValue({
       source: "live",
@@ -431,6 +442,11 @@ describe("useProviderModelCatalog", () => {
       modelRefreshStatus: "stale",
       modelProbeSource: "live",
     });
+    expect(hook.result.getCachedModelProbe("openai")).toMatchObject({
+      items: ["last-known-model"],
+      state: "fallback",
+      source: "live",
+    });
     hook.renderer.unmount();
   });
 
@@ -477,7 +493,7 @@ describe("useProviderModelCatalog", () => {
 
     vi.advanceTimersByTime(31_000);
     expect(hook.result.getCachedModels("custom")).toEqual([]);
-    expect(hook.result.getCachedModelProbe("custom")).toBeUndefined();
+    expect(hook.result.getCachedModelProbe("custom")).toMatchObject({ state: "error", source: "error_fallback" });
 
     hook.renderer.unmount();
   });

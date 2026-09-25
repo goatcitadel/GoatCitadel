@@ -1,7 +1,25 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
+import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./deterministic-llm-stub.mjs";
+
+test("deterministic provider metadata supports Chat thinking off", async () => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-stub-reasoning-"));
+  try {
+    const configRoot = path.join(runtimeRoot, "config");
+    await fs.mkdir(configRoot);
+    await fs.writeFile(path.join(configRoot, "llm-model-metadata.json"), '{"version":1,"entries":{}}\n');
+    await writeDeterministicLlmProviderConfig(runtimeRoot, "http://127.0.0.1:12345/v1");
+    const metadata = JSON.parse(await fs.readFile(path.join(configRoot, "llm-model-metadata.json"), "utf8"));
+    assert.deepEqual(metadata.entries["verification-stub/verification-stub-chat"].reasoning.supportedEfforts,
+      ["none", "low", "medium", "high"]);
+  } finally {
+    await fs.rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
 
 test("stream-only dispatch plans are not consumed by background non-stream requests", async () => {
   const stub = await startDeterministicLlmStub({ replyText: "Background", dispatchPlanStreamOnly: true,

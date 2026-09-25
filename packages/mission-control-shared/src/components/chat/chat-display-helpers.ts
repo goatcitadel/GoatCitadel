@@ -1,6 +1,7 @@
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
+  isChatTurnTerminalStatus,
   type ChatCapabilityUpgradeSuggestion,
   type ChatThreadTurnRecord,
   type ChatTurnTraceRecord,
@@ -52,12 +53,15 @@ export function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): bool
 }
 
 /**
- * A turn is retryable when it produced assistant output, or when it failed
+ * A finished turn is retryable when it produced assistant output, or when it failed
  * with a retryable failure (e.g. interrupted_by_restart) — those turns have no
  * assistant message at all, yet retry is exactly the recovery they need.
  */
 export function canRetryTurn(turn: Pick<ChatThreadTurnRecord, "assistantMessage" | "trace">): boolean {
-  return Boolean(turn.assistantMessage) || turn.trace.failure?.retryable === true;
+  return (
+    isChatTurnTerminalStatus(turn.trace.status) &&
+    (Boolean(turn.assistantMessage) || turn.trace.failure?.retryable === true)
+  );
 }
 
 export function getTraceTone(trace: ChatTurnTraceRecord): ChatTraceTone {

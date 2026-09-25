@@ -3,7 +3,11 @@ import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-st
 import { __resetSessionDraftsForTests } from "./library/session-drafts";
 import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord, PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import type {
+  DeviceAccessGrantListResponse,
+  LocalOperatorOverrideRecord,
+  PersonalityCatalogResponse,
+} from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
@@ -281,10 +285,28 @@ const mocks = vi.hoisted(() => ({
     updatedAt: "2026-05-02T18:10:00.000Z",
   })),
   reviewPermissionProfileSelection: vi.fn(async (input) => ({
-    revision: "d".repeat(64), input, target: { workspaceId: input.workspaceId ?? input.scopeRef }, activeProfiles: [],
-    profile: input.operation === "activate" ? { profileId: input.profileId, label: "Safe", revision: "a".repeat(64),
-      builtin: true, status: "active", scope: "global", approvalMode: "approve_all", toolPatterns: ["*"], allow: [], deny: [],
-      createdBy: "system", createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.000Z" } : undefined,
+    revision: "d".repeat(64),
+    input,
+    target: { workspaceId: input.workspaceId ?? input.scopeRef },
+    activeProfiles: [],
+    profile:
+      input.operation === "activate"
+        ? {
+            profileId: input.profileId,
+            label: "Safe",
+            revision: "a".repeat(64),
+            builtin: true,
+            status: "active",
+            scope: "global",
+            approvalMode: "approve_all",
+            toolPatterns: ["*"],
+            allow: [],
+            deny: [],
+            createdBy: "system",
+            createdAt: "2026-09-13T00:00:00.000Z",
+            updatedAt: "2026-09-13T00:00:00.000Z",
+          }
+        : undefined,
   })),
   activatePermissionProfile: vi.fn(async (input) => ({
     activationId: "activation-1",
@@ -331,46 +353,72 @@ const mocks = vi.hoisted(() => ({
     tokenConfigured: Boolean(input.token),
     basicConfigured: Boolean(input.basicUsername && input.basicPassword),
   })),
-  fetchPersonalities: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({
-    revision: "e".repeat(64),
-    defaultPersonalityId: "operator",
-    items: [
-      {
-        id: "default",
-        label: "Default",
-        category: "core",
-        description: "No personality overlay.",
-        tone: "",
-        style: "",
-        systemOverlay: "",
-        soulFile: "docs/personalities/core/default.md",
-        safetyNotes: ["Personality overlays never override safety policy."],
-        visibility: "builtin",
-        builtin: true,
-        editable: false,
-        modified: false,
-      },
-      {
-        id: "operator",
-        label: "Operator",
-        category: "core",
-        description: "Crisp mission-control style.",
-        tone: "Composed",
-        style: "Operational and compact",
-        systemOverlay: "Use crisp mission-control language.",
-        soulFile: "docs/personalities/core/operator.md",
-        safetyNotes: ["Personality overlays never override safety policy."],
-        visibility: "builtin",
-        builtin: true,
-        editable: true,
-        modified: false,
-      },
-    ],
-  })),
-  createPersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] })),
-  updatePersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] })),
-  deletePersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "default", items: [] })),
-  setDefaultPersonality: vi.fn(async (): Promise<PersonalityCatalogResponse> => ({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] })),
+  fetchPersonalities: vi.fn(
+    async (): Promise<PersonalityCatalogResponse> => ({
+      revision: "e".repeat(64),
+      defaultPersonalityId: "operator",
+      items: [
+        {
+          id: "default",
+          label: "Default",
+          category: "core",
+          description: "No personality overlay.",
+          tone: "",
+          style: "",
+          systemOverlay: "",
+          soulFile: "docs/personalities/core/default.md",
+          safetyNotes: ["Personality overlays never override safety policy."],
+          visibility: "builtin",
+          builtin: true,
+          editable: false,
+          modified: false,
+        },
+        {
+          id: "operator",
+          label: "Operator",
+          category: "core",
+          description: "Crisp mission-control style.",
+          tone: "Composed",
+          style: "Operational and compact",
+          systemOverlay: "Use crisp mission-control language.",
+          soulFile: "docs/personalities/core/operator.md",
+          safetyNotes: ["Personality overlays never override safety policy."],
+          visibility: "builtin",
+          builtin: true,
+          editable: true,
+          modified: false,
+        },
+      ],
+    }),
+  ),
+  createPersonality: vi.fn(
+    async (): Promise<PersonalityCatalogResponse> => ({
+      revision: "e".repeat(64),
+      defaultPersonalityId: "operator",
+      items: [],
+    }),
+  ),
+  updatePersonality: vi.fn(
+    async (): Promise<PersonalityCatalogResponse> => ({
+      revision: "e".repeat(64),
+      defaultPersonalityId: "operator",
+      items: [],
+    }),
+  ),
+  deletePersonality: vi.fn(
+    async (): Promise<PersonalityCatalogResponse> => ({
+      revision: "e".repeat(64),
+      defaultPersonalityId: "default",
+      items: [],
+    }),
+  ),
+  setDefaultPersonality: vi.fn(
+    async (): Promise<PersonalityCatalogResponse> => ({
+      revision: "e".repeat(64),
+      defaultPersonalityId: "operator",
+      items: [],
+    }),
+  ),
   saveProviderSecret: vi.fn(async () => ({
     revision: 44,
     providerId: "openai",
@@ -1224,8 +1272,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchIntegrationPlugins: mocks.fetchIntegrationPlugins,
     fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
-    fetchMcpServers: async () => { const result = await mocks.fetchMcpServers(); return { ...result, items: result.items.map(server => ({ ...server, revision: "a".repeat(64) })) }; },
-    fetchMcpServer: vi.fn(async () => { const result = await mocks.fetchMcpServers(); return { ...result.items[0], revision: "a".repeat(64) }; }),
+    fetchMcpServers: async () => {
+      const result = await mocks.fetchMcpServers();
+      return { ...result, items: result.items.map((server) => ({ ...server, revision: "a".repeat(64) })) };
+    },
+    fetchMcpServer: vi.fn(async () => {
+      const result = await mocks.fetchMcpServers();
+      return { ...result.items[0], revision: "a".repeat(64) };
+    }),
     fetchMcpRemotePreview: mocks.fetchMcpRemotePreview,
     fetchMcpServerModeManifest: mocks.fetchMcpServerModeManifest,
     fetchMcpElicitations: mocks.fetchMcpElicitations,
@@ -1574,7 +1628,11 @@ beforeEach(async () => {
   mocks.createPersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
   mocks.updatePersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
   mocks.deletePersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "default", items: [] });
-  mocks.setDefaultPersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
+  mocks.setDefaultPersonality.mockResolvedValue({
+    revision: "e".repeat(64),
+    defaultPersonalityId: "operator",
+    items: [],
+  });
   mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
   mocks.fetchPermissionProfiles.mockResolvedValue({
     items: [
@@ -1828,62 +1886,117 @@ afterEach(() => {
 });
 
 describe("SettingsNativePage personalities", () => {
-  it.each(["creation", "rename"])("keeps newer typing under the committed personality ID after %s", async (operation) => {
-    const catalog = await mocks.fetchPersonalities();
-    const custom = { ...catalog.items.find((item) => item.id === "operator")!, id: "draft-source", label: "Draft source",
-      builtin: false, visibility: "custom" as const, soulFile: "" };
-    const before = { ...catalog, items: [...catalog.items, custom] };
-    mocks.fetchPersonalities.mockResolvedValue(before);
-    let finish!: (value: PersonalityCatalogResponse) => void;
-    const pending = new Promise<PersonalityCatalogResponse>((resolve) => { finish = resolve; });
-    const owner = operation === "creation" ? mocks.createPersonality : mocks.updatePersonality;
-    owner.mockImplementationOnce(() => pending);
-    let renderer: ReactTestRenderer | undefined;
-    await act(async () => { renderer = renderPage("personalities"); });
-    await flushAsyncUpdates();
-    await act(async () => { findButton(renderer!.root, operation === "creation" ? "Add custom personality" : "Draft source").props.onClick(); });
-    const name = () => findInputByPlaceholder(renderer!.root, "Direct Operator");
-    const id = () => findInputByPlaceholder(renderer!.root, "direct-operator");
-    await act(async () => {
-      name().props.onChange({ target: { value: "Submitted name" } });
-      id().props.onChange({ target: { value: "retained-key" } });
-    });
-    await act(async () => { findButton(renderer!.root, operation === "creation" ? "Create personality" : "Save edits").props.onClick(); });
-    await act(async () => { name().props.onChange({ target: { value: "Newer typing" } }); });
-    const savedPreset = { ...custom, id: "retained-key", label: "Submitted name" };
-    const saved = { ...before, revision: "f".repeat(64), items: [...catalog.items, savedPreset] };
-    mocks.fetchPersonalities.mockResolvedValue(saved);
-    await act(async () => { finish(saved); });
-    await flushAsyncUpdates();
-    expect(name().props.value).toBe("Newer typing");
-    expect(id().props.value).toBe("retained-key");
-    expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(false);
-    const final = { ...saved, revision: "a".repeat(64), items: [...catalog.items, { ...savedPreset, label: "Newer typing" }] };
-    mocks.fetchPersonalities.mockResolvedValue(final);
-    mocks.updatePersonality.mockResolvedValueOnce(final);
-    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
-    await flushAsyncUpdates();
-    expect(mocks.updatePersonality).toHaveBeenLastCalledWith("retained-key", expect.objectContaining({
-      label: "Newer typing", expectedRevision: saved.revision,
-    }));
-    expect(mocks.createPersonality).toHaveBeenCalledTimes(operation === "creation" ? 1 : 0);
-  });
+  it.each(["creation", "rename"])(
+    "keeps newer typing under the committed personality ID after %s",
+    async (operation) => {
+      const catalog = await mocks.fetchPersonalities();
+      const custom = {
+        ...catalog.items.find((item) => item.id === "operator")!,
+        id: "draft-source",
+        label: "Draft source",
+        builtin: false,
+        visibility: "custom" as const,
+        soulFile: "",
+      };
+      const before = { ...catalog, items: [...catalog.items, custom] };
+      mocks.fetchPersonalities.mockResolvedValue(before);
+      let finish!: (value: PersonalityCatalogResponse) => void;
+      const pending = new Promise<PersonalityCatalogResponse>((resolve) => {
+        finish = resolve;
+      });
+      const owner = operation === "creation" ? mocks.createPersonality : mocks.updatePersonality;
+      owner.mockImplementationOnce(() => pending);
+      let renderer: ReactTestRenderer | undefined;
+      await act(async () => {
+        renderer = renderPage("personalities");
+      });
+      await flushAsyncUpdates();
+      await act(async () => {
+        findButton(
+          renderer!.root,
+          operation === "creation" ? "Add custom personality" : "Draft source",
+        ).props.onClick();
+      });
+      const name = () => findInputByPlaceholder(renderer!.root, "Direct Operator");
+      const id = () => findInputByPlaceholder(renderer!.root, "direct-operator");
+      await act(async () => {
+        name().props.onChange({ target: { value: "Submitted name" } });
+        id().props.onChange({ target: { value: "retained-key" } });
+      });
+      await act(async () => {
+        findButton(renderer!.root, operation === "creation" ? "Create personality" : "Save edits").props.onClick();
+      });
+      await act(async () => {
+        name().props.onChange({ target: { value: "Newer typing" } });
+      });
+      const savedPreset = { ...custom, id: "retained-key", label: "Submitted name" };
+      const saved = { ...before, revision: "f".repeat(64), items: [...catalog.items, savedPreset] };
+      mocks.fetchPersonalities.mockResolvedValue(saved);
+      await act(async () => {
+        finish(saved);
+      });
+      await flushAsyncUpdates();
+      expect(name().props.value).toBe("Newer typing");
+      expect(id().props.value).toBe("retained-key");
+      expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(false);
+      const final = {
+        ...saved,
+        revision: "a".repeat(64),
+        items: [...catalog.items, { ...savedPreset, label: "Newer typing" }],
+      };
+      mocks.fetchPersonalities.mockResolvedValue(final);
+      mocks.updatePersonality.mockResolvedValueOnce(final);
+      await act(async () => {
+        findButton(renderer!.root, "Save edits").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(mocks.updatePersonality).toHaveBeenLastCalledWith(
+        "retained-key",
+        expect.objectContaining({
+          label: "Newer typing",
+          expectedRevision: saved.revision,
+        }),
+      );
+      expect(mocks.createPersonality).toHaveBeenCalledTimes(operation === "creation" ? 1 : 0);
+    },
+  );
 
   it("shows the retained draft when another writer removes its personality", async () => {
     const catalog = await mocks.fetchPersonalities();
-    const custom = { ...catalog.items.find((item) => item.id === "operator")!, id: "removed-draft", label: "Removed draft",
-      builtin: false, visibility: "custom" as const, soulFile: "" };
+    const custom = {
+      ...catalog.items.find((item) => item.id === "operator")!,
+      id: "removed-draft",
+      label: "Removed draft",
+      builtin: false,
+      visibility: "custom" as const,
+      soulFile: "",
+    };
     mocks.fetchPersonalities.mockResolvedValue({ ...catalog, items: [...catalog.items, custom] });
     let renderer: ReactTestRenderer | undefined;
-    await act(async () => { renderer = renderPage("personalities"); });
+    await act(async () => {
+      renderer = renderPage("personalities");
+    });
     await flushAsyncUpdates();
-    await act(async () => { findButton(renderer!.root, "Removed draft").props.onClick(); });
-    await act(async () => { findInputByPlaceholder(renderer!.root, "Direct Operator").props.onChange({ target: { value: "Retained removed text" } }); });
-    mocks.updatePersonality.mockRejectedValueOnce(new ApiRequestError("Catalog changed", {
-      kind: "http", method: "PATCH", path: "/api/v1/personalities/removed-draft", status: 409,
-    }));
+    await act(async () => {
+      findButton(renderer!.root, "Removed draft").props.onClick();
+    });
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "Direct Operator").props.onChange({
+        target: { value: "Retained removed text" },
+      });
+    });
+    mocks.updatePersonality.mockRejectedValueOnce(
+      new ApiRequestError("Catalog changed", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/personalities/removed-draft",
+        status: 409,
+      }),
+    );
     mocks.fetchPersonalities.mockResolvedValue({ ...catalog, revision: "f".repeat(64) });
-    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Save edits").props.onClick();
+    });
     await flushAsyncUpdates();
     const text = collectText(renderer!.root);
     expect(text).toContain("The selected personality was removed. Your unsaved draft is retained for review.");
@@ -1895,43 +2008,84 @@ describe("SettingsNativePage personalities", () => {
 
   it("preserves a rejected personality draft until a different catalog revision is explicitly reviewed", async () => {
     const before = await mocks.fetchPersonalities();
-    mocks.updatePersonality.mockRejectedValueOnce(new ApiRequestError("Catalog changed", {
-      kind: "http", method: "PATCH", path: "/api/v1/personalities/operator", status: 409,
-    }));
+    mocks.updatePersonality.mockRejectedValueOnce(
+      new ApiRequestError("Catalog changed", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/personalities/operator",
+        status: 409,
+      }),
+    );
     let renderer: ReactTestRenderer | undefined;
-    await act(async () => { renderer = renderPage("personalities"); });
+    await act(async () => {
+      renderer = renderPage("personalities");
+    });
     await flushAsyncUpdates();
-    await act(async () => { findButton(renderer!.root, "Operator").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Operator").props.onClick();
+    });
     const label = () => findInputByPlaceholder(renderer!.root, "Direct Operator");
-    await act(async () => { label().props.onChange({ target: { value: "Retained personality draft" } }); });
-    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await act(async () => {
+      label().props.onChange({ target: { value: "Retained personality draft" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save edits").props.onClick();
+    });
     await flushAsyncUpdates();
-    expect(mocks.updatePersonality).toHaveBeenCalledWith("operator", expect.objectContaining({
-      label: "Retained personality draft", expectedRevision: before.revision,
-    }));
+    expect(mocks.updatePersonality).toHaveBeenCalledWith(
+      "operator",
+      expect.objectContaining({
+        label: "Retained personality draft",
+        expectedRevision: before.revision,
+      }),
+    );
     expect(label().props.value).toBe("Retained personality draft");
     expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(true);
     expect(findButton(renderer!.root, "Apply draft to current personality").props.disabled).toBe(true);
-    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Save edits").props.onClick();
+    });
     expect(mocks.updatePersonality).toHaveBeenCalledTimes(1);
-    const current = { ...before, revision: "f".repeat(64), items: before.items.map((item) => item.id === "operator"
-      ? { ...item, label: "Competing writer", systemOverlay: "Keep these newly saved instructions." } : item) };
+    const current = {
+      ...before,
+      revision: "f".repeat(64),
+      items: before.items.map((item) =>
+        item.id === "operator"
+          ? { ...item, label: "Competing writer", systemOverlay: "Keep these newly saved instructions." }
+          : item,
+      ),
+    };
     mocks.fetchPersonalities.mockResolvedValue(current);
-    await act(async () => { findButton(renderer!.root, "Reload latest catalog").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Reload latest catalog").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(label().props.value).toBe("Retained personality draft");
     expect(findButton(renderer!.root, "Save edits").props.disabled).toBe(true);
     expect(findButton(renderer!.root, "Apply draft to current personality").props.disabled).toBe(false);
-    await act(async () => { findButton(renderer!.root, "Apply draft to current personality").props.onClick(); });
-    const saved = { ...current, revision: "a".repeat(64), items: current.items.map((item) => item.id === "operator"
-      ? { ...item, label: "Retained personality draft" } : item) };
+    await act(async () => {
+      findButton(renderer!.root, "Apply draft to current personality").props.onClick();
+    });
+    const saved = {
+      ...current,
+      revision: "a".repeat(64),
+      items: current.items.map((item) =>
+        item.id === "operator" ? { ...item, label: "Retained personality draft" } : item,
+      ),
+    };
     mocks.updatePersonality.mockResolvedValueOnce(saved);
     mocks.fetchPersonalities.mockResolvedValue(saved);
-    await act(async () => { findButton(renderer!.root, "Save edits").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Save edits").props.onClick();
+    });
     await flushAsyncUpdates();
-    expect(mocks.updatePersonality).toHaveBeenLastCalledWith("operator", expect.objectContaining({
-      label: "Retained personality draft", expectedRevision: current.revision,
-    }));
+    expect(mocks.updatePersonality).toHaveBeenLastCalledWith(
+      "operator",
+      expect.objectContaining({
+        label: "Retained personality draft",
+        expectedRevision: current.revision,
+      }),
+    );
   });
 
   it("renders the catalog and calls create, save, reset, remove, and default APIs", async () => {
@@ -2015,7 +2169,10 @@ describe("SettingsNativePage personalities", () => {
       });
       expect(mocks.setDefaultPersonality).not.toHaveBeenCalled();
       await act(async () => {
-        renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Change Work default?")!.props.onConfirm();
+        renderer!.root
+          .findAllByType(ConfirmModal)
+          .find((modal) => modal.props.title === "Change Work default?")!
+          .props.onConfirm();
       });
       expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator", "e".repeat(64));
 
@@ -2164,7 +2321,10 @@ describe("SettingsNativePage personalities", () => {
       });
       expect(mocks.setDefaultPersonality).not.toHaveBeenCalled();
       await act(async () => {
-        renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Change Work default?")!.props.onConfirm();
+        renderer!.root
+          .findAllByType(ConfirmModal)
+          .find((modal) => modal.props.title === "Change Work default?")!
+          .props.onConfirm();
       });
       expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("default", "e".repeat(64));
       expect(collectText(renderer!.root)).toContain("Work personality cleared.");
@@ -2246,7 +2406,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(0);
-    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Apply reviewed selection").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "chat" }),
@@ -2257,7 +2419,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(1);
-    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Apply reviewed selection").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "tools" }),
@@ -2268,7 +2432,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(2);
-    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Apply reviewed selection").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "mcp" }),
@@ -2279,7 +2445,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(3);
-    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Apply reviewed selection").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "code" }),
@@ -2290,7 +2458,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledTimes(4);
-    await act(async () => { findButton(renderer!.root, "Apply reviewed selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Apply reviewed selection").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "all" }),
@@ -2358,49 +2528,86 @@ describe("SettingsNativePage permissions", () => {
 
   it("retains a rejected profile draft until a different server revision is explicitly reviewed", async () => {
     const before = {
-      profileId: "revision-profile", label: "Revision profile", description: "Initial profile",
-      scope: "workspace", scopeRef: "default", builtin: false, status: "active",
-      approvalMode: "approve_all", toolPatterns: ["session.status"], deny: ["shell.exec"],
-      defaultForSurfaces: [], createdBy: "operator", createdAt: "2026-09-13T00:00:00.000Z",
-      updatedAt: "2026-09-13T00:00:00.000Z", revision: "a".repeat(64),
+      profileId: "revision-profile",
+      label: "Revision profile",
+      description: "Initial profile",
+      scope: "workspace",
+      scopeRef: "default",
+      builtin: false,
+      status: "active",
+      approvalMode: "approve_all",
+      toolPatterns: ["session.status"],
+      deny: ["shell.exec"],
+      defaultForSurfaces: [],
+      createdBy: "operator",
+      createdAt: "2026-09-13T00:00:00.000Z",
+      updatedAt: "2026-09-13T00:00:00.000Z",
+      revision: "a".repeat(64),
     };
     mocks.fetchPermissionProfiles.mockResolvedValue({ items: [before] } as any);
     mocks.updatePermissionProfile.mockRejectedValueOnce(Object.assign(new Error("Profile changed"), { status: 409 }));
     let renderer: ReactTestRenderer | undefined;
-    await act(async () => { renderer = renderPage("permissions"); });
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
     await flushAsyncUpdates();
-    await act(async () => { findButton(renderer!.root, "Revision profile").props.onClick(); });
-    await act(async () => { findButton(renderer!.root, "Edit profile").props.onClick(); });
-    const name = () => renderer!.root.findAll((node) => node.type === "input" && node.props["aria-label"] === "Edit profile name")[0]!;
-    await act(async () => { name().props.onChange({ target: { value: "Retained draft" } }); });
-    await act(async () => { findButton(renderer!.root, "Save profile").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Revision profile").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Edit profile").props.onClick();
+    });
+    const name = () =>
+      renderer!.root.findAll((node) => node.type === "input" && node.props["aria-label"] === "Edit profile name")[0]!;
+    await act(async () => {
+      name().props.onChange({ target: { value: "Retained draft" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save profile").props.onClick();
+    });
     await flushAsyncUpdates();
-    expect(mocks.updatePermissionProfile).toHaveBeenCalledWith("revision-profile", expect.objectContaining({
-      label: "Retained draft", expectedRevision: before.revision,
-    }));
+    expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(
+      "revision-profile",
+      expect.objectContaining({
+        label: "Retained draft",
+        expectedRevision: before.revision,
+      }),
+    );
     expect(name().props.value).toBe("Retained draft");
     expect(collectText(renderer!.root)).toContain("The saved profile changed. Your draft is preserved.");
     expect(findButton(renderer!.root, "Save profile").props.disabled).toBe(true);
     expect(findButton(renderer!.root, "Apply draft to current profile").props.disabled).toBe(true);
-    await act(async () => { findButton(renderer!.root, "Save profile").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Save profile").props.onClick();
+    });
     expect(mocks.updatePermissionProfile).toHaveBeenCalledTimes(1);
 
     const current = { ...before, label: "Another writer", revision: "b".repeat(64) };
     mocks.fetchPermissionProfiles.mockResolvedValue({ items: [current] } as any);
-    await act(async () => { findButton(renderer!.root, "Reload latest profile").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Reload latest profile").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(name().props.value).toBe("Retained draft");
     expect(findButton(renderer!.root, "Save profile").props.disabled).toBe(true);
     expect(findButton(renderer!.root, "Apply draft to current profile").props.disabled).toBe(false);
-    await act(async () => { findButton(renderer!.root, "Apply draft to current profile").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Apply draft to current profile").props.onClick();
+    });
     const accepted = { ...current, label: "Retained draft", revision: "c".repeat(64) };
     mocks.updatePermissionProfile.mockResolvedValueOnce(accepted as any);
     mocks.fetchPermissionProfiles.mockResolvedValue({ items: [accepted] } as any);
-    await act(async () => { findButton(renderer!.root, "Save profile").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Save profile").props.onClick();
+    });
     await flushAsyncUpdates();
-    expect(mocks.updatePermissionProfile).toHaveBeenLastCalledWith("revision-profile", expect.objectContaining({
-      label: "Retained draft", expectedRevision: current.revision,
-    }));
+    expect(mocks.updatePermissionProfile).toHaveBeenLastCalledWith(
+      "revision-profile",
+      expect.objectContaining({
+        label: "Retained draft",
+        expectedRevision: current.revision,
+      }),
+    );
     expect(mocks.updatePermissionProfile).toHaveBeenCalledTimes(2);
     expect(collectText(renderer!.root)).toContain("Permission profile updated.");
   });
@@ -2473,7 +2680,9 @@ describe("SettingsNativePage permissions", () => {
       findCheckboxByLabel(renderer!.root, "Legacy Code compatibility").props.onChange({ target: { checked: true } });
     });
     expect(findButton(renderer!.root, "Create profile").props.disabled).toBe(true);
-    await act(async () => { findButton(renderer!.root, "Review default selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Review default selection").props.onClick();
+    });
     await flushAsyncUpdates();
     await act(async () => {
       findButton(renderer!.root, "Create profile").props.onClick();
@@ -2538,7 +2747,9 @@ describe("SettingsNativePage permissions", () => {
       findCheckboxByLabel(renderer!.root, "Chat").props.onChange({ target: { checked: true } });
     });
     expect(findButton(renderer!.root, "Save profile").props.disabled).toBe(true);
-    await act(async () => { findButton(renderer!.root, "Review default selection").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Review default selection").props.onClick();
+    });
     await flushAsyncUpdates();
     await act(async () => {
       findButton(renderer!.root, "Save profile").props.onClick();
@@ -3713,7 +3924,22 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("can add the ChatGPT OAuth provider from Settings when it is not already configured", async () => {
-    mocks.fetchLlmConfig.mockResolvedValueOnce({ revision: 44, activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers: [], providerConfigs: [{ providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", baseUrl: "https://chatgpt.com/backend-api/codex", apiStyle: "openai-codex-responses", authMode: "codex-oauth", defaultModel: "gpt-6-sol" }] });
+    mocks.fetchLlmConfig.mockResolvedValueOnce({
+      revision: 44,
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4-mini",
+      providers: [],
+      providerConfigs: [
+        {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+          defaultModel: "gpt-6-sol",
+        },
+      ],
+    });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -4022,10 +4248,13 @@ describe("SettingsNativePage providers", () => {
     });
     await openProviderPanel(renderer!, "routing");
 
-    const routingModel = renderer!.root.findAllByType("select")
+    const routingModel = renderer!.root
+      .findAllByType("select")
       .find((select) => collectText(select).includes("Choose a model"))!;
     expect(routingModel.props.value).toBe("gpt-5.4-mini");
-    expect(routingModel.findAllByType("option").find((option) => option.props.value === "gpt-5.4-mini")?.props.disabled).toBe(true);
+    expect(
+      routingModel.findAllByType("option").find((option) => option.props.value === "gpt-5.4-mini")?.props.disabled,
+    ).toBe(true);
     expect(collectText(renderer!.root)).toContain("Choose an available model to continue.");
     expect(findButton(renderer!.root, "Save routing").props.disabled).toBe(true);
 
@@ -4520,6 +4749,30 @@ describe("SettingsNativePage providers", () => {
 
     text = collectText(renderer!.root);
     expect(text).toContain("not verified against your account");
+  });
+
+  it("warns when model refresh returns only a stale live catalog", async () => {
+    mocks.getCachedModelProbe.mockReturnValue({
+      items: ["gpt-5.4-mini"],
+      expiresAt: Date.now() - 1,
+      state: "fallback",
+      source: "live",
+      warning: "Provider endpoint was unavailable.",
+    });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+    await openProviderPanel(renderer!, "trust");
+    await act(async () => {
+      findButton(renderer!.root, "Refresh models").props.onClick();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Showing 1 last known model for openai; live discovery did not verify this catalog");
+    expect(text).toContain("Provider endpoint was unavailable.");
+    expect(text).not.toContain("Refreshed 1 models for openai.");
   });
 
   it("covers empty provider catalogs, editor guards, and probe failures", async () => {

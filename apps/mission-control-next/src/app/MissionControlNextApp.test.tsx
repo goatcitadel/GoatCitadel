@@ -958,7 +958,9 @@ describe("MissionControlNextApp", () => {
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
     });
-    await act(async () => { renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick(); });
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick();
+    });
     expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
   });
 
@@ -1069,7 +1071,10 @@ describe("MissionControlNextApp", () => {
 
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open navigation" }).props.onClick();
-      renderer.root.findAllByProps({ "aria-label": "Command Palette" }).find((node) => String(node.props.className).includes("rail-command"))?.props.onClick();
+      renderer.root
+        .findAllByProps({ "aria-label": "Command Palette" })
+        .find((node) => String(node.props.className).includes("rail-command"))
+        ?.props.onClick();
     });
     expect(renderer.root.findAllByProps({ className: "modal-card command-palette" })).toHaveLength(1);
   });
