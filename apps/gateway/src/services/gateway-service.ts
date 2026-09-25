@@ -4838,6 +4838,13 @@ export class GatewayService {
       return prefs;
     }
 
+    // Account catalog evidence outranks the built-in template. Keep an unavailable
+    // selection visible so route preflight can explain it instead of changing it.
+    const catalogAvailability = this.llmService.getCachedModelAvailability?.(provider.providerId, prefs.model);
+    if (catalogAvailability && catalogAvailability !== "unverified") {
+      return prefs;
+    }
+
     if (
       providerAllowsForeignModelIds(provider.providerId) ||
       providerRecognizesModelId(provider.providerId, prefs.model)

@@ -56,6 +56,43 @@ describe("LlmService model catalog cache", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("treats only a fresh successful catalog as model availability evidence", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "account-model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ));
+    const svc = buildService();
+    expect(svc.getCachedModelAvailability("openai", "m1")).toBe("unverified");
+    await svc.listModelsWithSource("openai");
+    expect(svc.getCachedModelAvailability("openai", "account-model")).toBe("available");
+    expect(svc.getCachedModelAvailability("openai", "m1")).toBe("unavailable");
+
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+    expect(svc.getCachedModelAvailability("openai", "m1")).toBe("stale_unavailable");
+    expect(svc.getCachedModelAvailability("openai", "account-model")).toBe("stale_available");
+    clock.mockRestore();
+  });
+
+  it("refreshes model availability in the background without duplicate requests", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "new-account-model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = buildService();
+    svc.refreshModelCatalogInBackground("openai");
+    svc.refreshModelCatalogInBackground("openai");
+    await vi.waitFor(() => {
+      expect(svc.getCachedModelAvailability("openai", "new-account-model")).toBe("available");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("caches empty/template-fallback results so we don't hammer plugin metadata", async () => {
     let fetchCount = 0;
     const fetchMock = vi.fn(async () => {
@@ -94,6 +131,29 @@ describe("LlmService model catalog cache", () => {
     await svc.listModels("openai");
 
     expect(count).toBe(2);
+  });
+
+  it("does not cache an old account response after provider configuration changes", async () => {
+    let releaseFirst!: (response: Response) => void;
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { releaseFirst = resolve; }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({ data: [{ id: "new-account-model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = buildService();
+    const first = svc.listModelsWithSource("openai");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    svc.updateRuntimeConfig({ activeProviderId: "openai", activeModel: "m1" });
+    const second = svc.listModelsWithSource("openai");
+    releaseFirst(new Response(JSON.stringify({ data: [{ id: "old-account-model" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    await Promise.all([first, second]);
+    expect(svc.getCachedModelAvailability("openai", "new-account-model")).toBe("available");
+    expect(svc.getCachedModelAvailability("openai", "old-account-model")).toBe("unavailable");
   });
 
   it("does NOT cache error_fallback results — transient errors retry", async () => {
@@ -187,6 +247,8 @@ describe("LlmService model catalog cache", () => {
     ]);
 
     expect(result.items.map((item) => item.id)).toEqual(["cached-startup-model"]);
+    expect(result.catalogStatus).toBe("stale");
+    expect(svc.getCachedModelAvailability("openai", "cached-startup-model")).toBe("unverified");
     expect(result.warning).toContain("local model catalog cache");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 

@@ -19,7 +19,8 @@ const ROUTING_DECISION_TTL_MS = 30_000;
 
 export interface ChatRouteResolutionDependencies {
   readonly storage: Pick<Storage, "chatSessionPrefs">;
-  readonly llmService: Pick<LlmService, "getRuntimeConfig">;
+  readonly llmService: Pick<LlmService, "getRuntimeConfig"> &
+    Partial<Pick<LlmService, "getCachedModelAvailability" | "refreshModelCatalogInBackground">>;
   resolveFallbackTargets(
     runtime: LlmRuntimeConfig,
     primaryProviderId: string,
@@ -128,6 +129,7 @@ function resolveEffectiveModel(input: {
   runtime: LlmRuntimeConfig;
   provider: RuntimeProvider;
   requestedModel?: string;
+  getModelAvailability?(providerId: string, model: string): ReturnType<LlmService["getCachedModelAvailability"]>;
 }): {
   model?: string;
   normalizationReason?: string;
@@ -145,10 +147,20 @@ function resolveEffectiveModel(input: {
         blockedReason: `No model is configured for ${input.provider.label}. Select a model first.`,
       };
     }
+    const availability = input.getModelAvailability?.(input.provider.providerId, model);
+    if (availability === "unavailable" || availability === "stale_unavailable") {
+      return { blockedReason: describeUnavailableModel(model, input.provider.label, availability) };
+    }
     return { model };
   }
 
+  const availability = input.getModelAvailability?.(input.provider.providerId, normalizedRequested);
+  if (availability === "unavailable" || availability === "stale_unavailable") {
+    return { blockedReason: describeUnavailableModel(normalizedRequested, input.provider.label, availability) };
+  }
+
   if (
+    availability !== "available" && availability !== "stale_available" &&
     !providerAllowsForeignModelIds(input.provider.providerId) &&
     !providerRecognizesModelId(input.provider.providerId, normalizedRequested)
   ) {
@@ -172,6 +184,12 @@ function resolveEffectiveModel(input: {
   return {
     model: normalizeRequestedModel(input.provider.providerId, normalizedRequested),
   };
+}
+
+function describeUnavailableModel(model: string, providerLabel: string, availability: "unavailable" | "stale_unavailable"): string {
+  return availability === "unavailable"
+    ? `${model} is no longer listed for ${providerLabel}. Choose an available model in Settings → Providers & models.`
+    : `${model} was not in the last known model list for ${providerLabel}. Refresh the catalog in Settings → Providers & models before using it.`;
 }
 
 function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPreflightResult["runtimeClass"] {
@@ -246,7 +264,11 @@ export async function resolveChatRouteDescriptor(
     runtime,
     provider: requestedProvider,
     requestedModel,
+    getModelAvailability: deps.llmService.getCachedModelAvailability?.bind(deps.llmService),
   });
+  if (runtimeClass === "cloud") {
+    deps.llmService.refreshModelCatalogInBackground?.(requestedProvider.providerId);
+  }
   const effectiveProviderId = requestedProvider.providerId;
   const effectiveModel = effectiveModelResolution.model;
   const requestShape = {

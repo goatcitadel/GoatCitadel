@@ -2343,6 +2343,7 @@ describe("GatewayService low-hanging facade delegation", () => {
           { providerId: "openrouter", defaultModel: "openrouter/auto" },
         ],
       })),
+      getCachedModelAvailability: vi.fn(() => "unverified"),
     };
     gateway.storage = {
       chatSessionPrefs: {
@@ -2387,8 +2388,20 @@ describe("GatewayService low-hanging facade delegation", () => {
       }),
     ).toEqual({
       providerId: "openai-codex",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     });
+    gateway.llmService.getCachedModelAvailability.mockReturnValueOnce("available").mockReturnValueOnce("unavailable");
+    expect(
+      ["available", "unavailable"].map(() =>
+        GatewayService.prototype.ensureChatSessionModelDefaults.call(gateway, "session-1", {
+          providerId: "openai-codex",
+          model: "gpt-5.4",
+        }),
+      ),
+    ).toEqual([
+      { providerId: "openai-codex", model: "gpt-5.4" },
+      { providerId: "openai-codex", model: "gpt-5.4" },
+    ]);
     expect(
       GatewayService.prototype.ensureChatSessionModelDefaults.call(gateway, "session-1", {
         providerId: "openrouter",

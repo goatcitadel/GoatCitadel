@@ -9,11 +9,12 @@ import type { LlmRuntimeConfigResponse, RuntimeSettingsResponse } from "../api/c
 import { fetchLlmConfig, fetchLlmModels, previewLlmModels } from "../api/client";
 import { useRefreshSubscription } from "./useRefreshSubscription";
 
-const PROVIDER_MODELS_POSITIVE_TTL_MS = 5 * 60 * 1000;
+const PROVIDER_MODELS_POSITIVE_TTL_MS = 60 * 1000;
 const PROVIDER_MODELS_NEGATIVE_TTL_MS = 30 * 1000;
 
 const sharedProviderModelCache = new Map<string, ProviderModelCacheEntry>();
 const sharedProviderModelRequests = new Map<string, Promise<ProviderModelLoadResult>>();
+let sharedProviderModelCacheGeneration = 0;
 
 export type ProviderModelProbeState = "not_checked" | "ready" | "fallback" | "empty" | "error";
 export type ProviderModelProbeSource = LlmModelDiscoverySource;
@@ -105,6 +106,24 @@ export function dedupeProviderModels(values: Array<string | undefined | null>): 
   return out;
 }
 
+export function isModelUnavailableInFreshCatalog(provider: ProviderModelCatalogOption | null, model: string): boolean {
+  return Boolean(
+    model &&
+    provider?.modelProbeSource === "live" &&
+    provider.modelRefreshStatus === "fresh" &&
+    !provider.models.includes(model),
+  );
+}
+
+export function isModelMissingFromStaleCatalog(provider: ProviderModelCatalogOption | null, model: string): boolean {
+  return Boolean(
+    model &&
+    provider?.modelProbeSource === "live" &&
+    provider.modelRefreshStatus === "stale" &&
+    !provider.models.includes(model),
+  );
+}
+
 export function buildUniversalModelPickerOptions(input: {
   providers: ProviderModelCatalogOption[];
   query?: string;
@@ -132,21 +151,47 @@ function getValidProviderModelCacheEntry(
     if (options.allowStale) {
       return cached;
     }
-    cache.delete(providerId);
     return undefined;
   }
   return cached;
+}
+
+function preserveLiveCatalogAfterRefreshFailure(providerId: string, warning?: string): string[] | undefined {
+  const previous = sharedProviderModelCache.get(providerId);
+  if (previous?.source !== "live") return undefined;
+  sharedProviderModelCache.set(providerId, {
+    ...previous,
+    expiresAt: Date.now() - 1,
+    state: "fallback",
+    checkedAt: new Date().toISOString(),
+    warning: warning ?? "Live model refresh failed; showing the last known catalog.",
+  });
+  return previous.items;
 }
 
 function buildUniversalModelPickerOptionsForProvider(
   provider: ProviderModelCatalogOption,
   input: { activeProviderId?: string; activeModel?: string },
 ): UniversalModelPickerOption[] {
-  const models = provider.models.length ? provider.models : dedupeProviderModels([provider.defaultModel]);
+  const models = provider.models.length || provider.modelProbeSource === "live"
+    ? [...provider.models]
+    : dedupeProviderModels([provider.defaultModel]);
+  const missingActiveModel = provider.providerId === input.activeProviderId && input.activeModel &&
+    (isModelUnavailableInFreshCatalog(provider, input.activeModel) ||
+      isModelMissingFromStaleCatalog(provider, input.activeModel))
+    ? input.activeModel
+    : undefined;
+  if (missingActiveModel) models.push(missingActiveModel);
   return models.map((model) => {
     const credentialStatus = resolveCredentialStatus(provider);
-    const availability = resolveModelAvailability(provider, credentialStatus);
-    const fallbackReason = resolveModelFallbackReason(provider);
+    const removed = model === missingActiveModel;
+    const needsRefresh = removed && provider.modelRefreshStatus === "stale";
+    const availability = removed ? "blocked" : resolveModelAvailability(provider, credentialStatus);
+    const fallbackReason = removed
+      ? needsRefresh
+        ? "This model was not in the last known account catalog. Refresh to verify before using it."
+        : "This model is no longer listed in the provider's live account catalog. Choose an available model."
+      : resolveModelFallbackReason(provider);
     const policyReason = credentialStatus === "missing" ? "Provider credential is missing." : undefined;
     const availabilityReason = resolveModelAvailabilityReason({
       provider,
@@ -209,6 +254,9 @@ function resolveModelAvailability(
   if (credentialStatus === "missing" || provider.modelProbeState === "error") {
     return "blocked";
   }
+  if (provider.modelProbeSource === "live" && provider.modelRefreshStatus === "stale") {
+    return "suggested";
+  }
   if (provider.modelProbeState === "fallback" || provider.modelProbeSource === "template_fallback") {
     return "suggested";
   }
@@ -219,6 +267,11 @@ function resolveModelAvailability(
 }
 
 function resolveModelFallbackReason(provider: ProviderModelCatalogOption): string | undefined {
+  if (provider.modelProbeSource === "live" && provider.modelRefreshStatus === "stale") {
+    return provider.modelProbeWarning
+      ? `Showing the last known account catalog; refresh has not verified it: ${provider.modelProbeWarning}`
+      : "Showing the last known account catalog; refresh has not verified it.";
+  }
   if (provider.modelProbeSource === "error_fallback") {
     return provider.modelProbeWarning
       ? `Live discovery failed: ${provider.modelProbeWarning}`
@@ -309,7 +362,7 @@ function buildProviderCatalog(
       apiKeySource: provider.apiKeySource,
       hasApiKey: provider.hasApiKey,
       capabilities: provider.capabilities,
-      models: cached?.source === "live" && provider.providerId === "openai-codex"
+      models: cached?.source === "live"
         ? cached.items
         : dedupeProviderModels([
             provider.defaultModel,
@@ -402,7 +455,7 @@ export async function previewProviderModels(
   );
   const template = findProviderTemplate(input.providerId);
   return {
-    items: response.source === "live" && input.providerId === "openai-codex"
+    items: response.source === "live"
       ? dedupeProviderModels(response.items.map((item) => item.id))
       : dedupeProviderModels([
           input.fallbackModel,
@@ -425,6 +478,13 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     const effectiveConfig = nextConfig ?? configRef.current;
     if (!effectiveConfig) {
       return;
+    }
+    const previousRevision = configRef.current ? readOptionalNumber(configRef.current, "revision") : undefined;
+    const nextRevision = nextConfig ? readOptionalNumber(nextConfig, "revision") : undefined;
+    if (previousRevision !== undefined && nextRevision !== undefined && previousRevision !== nextRevision) {
+      sharedProviderModelCache.clear();
+      sharedProviderModelRequests.clear();
+      sharedProviderModelCacheGeneration += 1;
     }
     const now = Date.now();
     configRef.current = effectiveConfig;
@@ -454,9 +514,9 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
 
       const now = Date.now();
       const cached = !options.force
-        ? getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, now)
+        ? getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, now, { allowStale: true })
         : undefined;
-      if (cached) {
+      if (cached && cached.expiresAt > now) {
         return cached.items;
       }
 
@@ -465,12 +525,18 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
         return (await inFlight).items;
       }
 
+      const generation = sharedProviderModelCacheGeneration;
       const request = (async () => {
         try {
           const response = await fetchLlmModels(normalized);
+          if (generation !== sharedProviderModelCacheGeneration) return { items: [], source: response.source };
           const items = dedupeProviderModels(response.items.map((item) => item.id));
+          if (response.source !== "live") {
+            const previousItems = preserveLiveCatalogAfterRefreshFailure(normalized, response.warning);
+            if (previousItems) return { items: previousItems, source: response.source };
+          }
           const state: ProviderModelProbeState =
-            items.length === 0 ? "empty" : response.source === "live" ? "ready" : "fallback";
+            items.length === 0 ? "empty" : response.source === "live" && response.catalogStatus !== "stale" ? "ready" : "fallback";
           sharedProviderModelCache.set(normalized, {
             items,
             reasoningEffortsByModel: Object.fromEntries(response.items
@@ -479,7 +545,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
             fastModeByModel: Object.fromEntries(response.items
               .filter((item) => item.fastModeAvailable !== undefined)
               .map((item) => [item.id, item.fastModeAvailable!])),
-            expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
+            expiresAt: response.catalogStatus === "stale" ? Date.now() - 1 : Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
             state,
             source: response.source,
             checkedAt: new Date().toISOString(),
@@ -487,8 +553,11 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
           });
           return { items, source: response.source };
         } catch (err) {
+          if (generation !== sharedProviderModelCacheGeneration) return { items: [], source: "error_fallback" as const };
           const fallbackSource: LlmModelDiscoverySource = "error_fallback";
           const warning = err instanceof Error && err.message ? err.message : "Model discovery failed.";
+          const previousItems = preserveLiveCatalogAfterRefreshFailure(normalized, warning);
+          if (previousItems) return { items: previousItems, source: fallbackSource };
           sharedProviderModelCache.set(normalized, {
             items: [],
             expiresAt: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
@@ -499,7 +568,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
           });
           return { items: [], source: fallbackSource };
         } finally {
-          sharedProviderModelRequests.delete(normalized);
+          if (generation === sharedProviderModelCacheGeneration) sharedProviderModelRequests.delete(normalized);
           syncProviderState();
         }
       })();
@@ -538,6 +607,9 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
         return;
       }
       await reload();
+      if (signal.eventType === "fallback_poll" && configRef.current?.activeProviderId) {
+        await loadModelsForProvider(configRef.current.activeProviderId);
+      }
     },
     {
       enabled: true,
@@ -562,4 +634,5 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
 export function resetProviderModelCatalogCacheForTests(): void {
   sharedProviderModelCache.clear();
   sharedProviderModelRequests.clear();
+  sharedProviderModelCacheGeneration = 0;
 }

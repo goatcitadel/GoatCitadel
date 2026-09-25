@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildUniversalModelPickerOptions,
   dedupeProviderModels,
+  isModelMissingFromStaleCatalog,
+  isModelUnavailableInFreshCatalog,
   previewProviderModels,
   resetProviderModelCatalogCacheForTests,
   useProviderModelCatalog,
@@ -32,8 +34,9 @@ vi.mock("./useRefreshSubscription", () => ({
 
 type CatalogResult = ReturnType<typeof useProviderModelCatalog>;
 
-function runtimeConfig(activeProviderId = "openai") {
+function runtimeConfig(activeProviderId = "openai", revision = 1) {
   return {
+    revision,
     activeProviderId,
     activeModel: "gpt-active",
     providers: [
@@ -130,7 +133,7 @@ describe("useProviderModelCatalog", () => {
     ).resolves.toMatchObject({
       source: "remote",
       warning: "preview warning",
-      items: expect.arrayContaining(["fallback-model", "preview-remote"]),
+      items: ["preview-remote"],
     });
     expect(apiMocks.previewLlmModels).toHaveBeenCalledWith(
       {
@@ -228,6 +231,35 @@ describe("useProviderModelCatalog", () => {
     });
   });
 
+  it("asks for a replacement only when a fresh live catalog omits the selected model", () => {
+    const provider = {
+      ...optionsFixtureProviders()[0],
+      models: ["gpt-new"],
+      modelRefreshStatus: "fresh",
+    } as never;
+    expect(isModelUnavailableInFreshCatalog(provider, "gpt-old")).toBe(true);
+    expect(isModelUnavailableInFreshCatalog(provider, "gpt-new")).toBe(false);
+    expect(isModelUnavailableInFreshCatalog({ ...provider, modelRefreshStatus: "stale" }, "gpt-old")).toBe(false);
+    expect(isModelUnavailableInFreshCatalog({ ...provider, modelProbeSource: "error_fallback" }, "gpt-old")).toBe(false);
+    expect(isModelMissingFromStaleCatalog({ ...provider, modelRefreshStatus: "stale" }, "gpt-old")).toBe(true);
+    const options = buildUniversalModelPickerOptions({
+      providers: [provider],
+      activeProviderId: "openai",
+      activeModel: "gpt-old",
+    });
+    expect(options.find((item) => item.model === "gpt-old")).toMatchObject({
+      availability: "blocked",
+      availabilityReason: expect.stringContaining("no longer listed"),
+    });
+    expect(options.find((item) => item.model === "gpt-new")?.availability).toBe("ready");
+    const staleOptions = buildUniversalModelPickerOptions({
+      providers: [{ ...provider, modelRefreshStatus: "stale" }],
+      activeProviderId: "openai",
+      activeModel: "gpt-old",
+    });
+    expect(staleOptions.find((item) => item.model === "gpt-old")?.availabilityReason).toContain("Refresh to verify");
+  });
+
   it("loads runtime config and builds provider options with defaults, active models, and cache state", async () => {
     const hook = await renderCatalog();
 
@@ -284,7 +316,7 @@ describe("useProviderModelCatalog", () => {
     hook.renderer.unmount();
   });
 
-  it("loads provider models with in-flight reuse, positive cache, force refresh, and empty-state metadata", async () => {
+  it("uses live models without template additions and retains them as stale after a failed refresh", async () => {
     const hook = await renderCatalog();
 
     await expect(hook.result.loadModelsForProvider("   ")).resolves.toEqual([]);
@@ -299,6 +331,7 @@ describe("useProviderModelCatalog", () => {
     });
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
     expect(hook.result.getCachedModels("openai")).toEqual(["gpt-remote", "gpt-extra"]);
+    expect(hook.result.providers[0]?.models).toEqual(["gpt-remote", "gpt-extra"]);
     expect(hook.result.getCachedModelProbe("openai")).toMatchObject({
       state: "ready",
       source: "live",
@@ -312,13 +345,16 @@ describe("useProviderModelCatalog", () => {
     });
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
 
-    apiMocks.fetchLlmModels.mockResolvedValueOnce({ source: "fallback", items: [] });
+    apiMocks.fetchLlmModels.mockResolvedValueOnce({ source: "error_fallback", items: [{ id: "gpt-default" }], warning: "503" });
     await act(async () => {
-      await expect(hook.result.loadModelsForProvider("openai", { force: true })).resolves.toEqual([]);
+      await expect(hook.result.loadModelsForProvider("openai", { force: true })).resolves.toEqual(["gpt-remote", "gpt-extra"]);
     });
-    expect(hook.result.getCachedModelProbe("openai")).toMatchObject({
-      state: "empty",
-      source: "fallback",
+    expect(hook.result.providers[0]).toMatchObject({
+      models: ["gpt-remote", "gpt-extra"],
+      modelRefreshStatus: "stale",
+      modelProbeState: "fallback",
+      modelProbeSource: "live",
+      modelProbeWarning: "503",
     });
 
     hook.renderer.unmount();
@@ -365,7 +401,7 @@ describe("useProviderModelCatalog", () => {
       modelProbeState: "ready",
     });
 
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    vi.advanceTimersByTime(60 * 1000 + 1);
     await act(async () => {
       await hook.result.reload();
     });
@@ -377,6 +413,42 @@ describe("useProviderModelCatalog", () => {
     });
     expect(hook.result.getCachedModels("openai")).toEqual([]);
 
+    hook.renderer.unmount();
+  });
+
+  it("does not present a Gateway stale live catalog as freshly verified", async () => {
+    apiMocks.fetchLlmModels.mockResolvedValueOnce({
+      source: "live",
+      catalogStatus: "stale",
+      items: [{ id: "last-known-model" }],
+    });
+    const hook = await renderCatalog();
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai");
+    });
+    expect(hook.result.providers[0]).toMatchObject({
+      models: ["last-known-model"],
+      modelRefreshStatus: "stale",
+      modelProbeSource: "live",
+    });
+    hook.renderer.unmount();
+  });
+
+  it("drops account model evidence when the provider configuration revision changes", async () => {
+    const hook = await renderCatalog();
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai");
+    });
+    expect(hook.result.providers[0]?.modelProbeSource).toBe("live");
+
+    apiMocks.fetchLlmConfig.mockResolvedValueOnce(runtimeConfig("openai", 2));
+    await act(async () => {
+      await hook.result.reload();
+    });
+    expect(hook.result.providers[0]).toMatchObject({
+      modelProbeState: "not_checked",
+      models: expect.arrayContaining(["gpt-default", "gpt-active"]),
+    });
     hook.renderer.unmount();
   });
 

@@ -26,6 +26,8 @@ function createHost(input?: {
   };
   fallbacks?: Array<{ providerId: string; model: string }>;
   listModels?: Array<{ id: string }> | Error;
+  liveCatalog?: Record<string, string[]>;
+  catalogStale?: boolean;
 }) {
   return {
     storage: {
@@ -53,6 +55,14 @@ function createHost(input?: {
       },
     },
     llmService: {
+      getCachedModelAvailability: vi.fn((providerId: string, model: string) => {
+        const models = input?.liveCatalog?.[providerId];
+        return models
+          ? models.includes(model)
+            ? input?.catalogStale ? "stale_available" : "available"
+            : input?.catalogStale ? "stale_unavailable" : "unavailable"
+          : "unverified";
+      }),
       getRuntimeConfig: vi.fn(() => ({
         activeProviderId: input?.runtime?.activeProviderId !== undefined ? input.runtime.activeProviderId : "openai",
         activeModel: input?.runtime?.activeModel !== undefined ? input.runtime.activeModel : "gpt-5.4-mini",
@@ -335,6 +345,65 @@ describe("chat-route-resolution", () => {
         normalizationReason: expect.stringContaining("cannot run gpt-5.4"),
       }),
     );
+  });
+
+  it("uses a fresh account catalog for new and removed models", async () => {
+    const host = createHost({
+      runtime: {
+        activeProviderId: "openai-codex",
+        activeModel: "gpt-5.4",
+        providers: [{
+          providerId: "openai-codex",
+          label: "OpenAI Codex",
+          defaultModel: "gpt-5.5",
+          hasApiKey: true,
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        }],
+      },
+      liveCatalog: { "openai-codex": ["gpt-new"] },
+    });
+    const added = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send", providerId: "openai-codex", model: "gpt-new",
+    });
+    expect(added).toMatchObject({ effectiveModel: "gpt-new", blockedReason: undefined });
+
+    const removed = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send", providerId: "openai-codex", model: "gpt-5.4",
+    });
+    expect(removed).toMatchObject({
+      effectiveModel: undefined,
+      blockedReason: expect.stringContaining("no longer listed"),
+    });
+
+    const removedDefault = await resolveChatRouteDescriptor(host as never, "session-1", { action: "send" });
+    expect(removedDefault).toMatchObject({
+      effectiveModel: undefined,
+      blockedReason: expect.stringContaining("Choose an available model"),
+    });
+  });
+
+  it("keeps stale catalog membership distinct from a newly verified removal", async () => {
+    const host = createHost({
+      runtime: {
+        activeProviderId: "openai-codex",
+        activeModel: "gpt-5.4",
+        providers: [{
+          providerId: "openai-codex", label: "OpenAI Codex", defaultModel: "gpt-5.5",
+          hasApiKey: true, baseUrl: "https://chatgpt.com/backend-api/codex",
+        }],
+      },
+      liveCatalog: { "openai-codex": ["gpt-new"] },
+      catalogStale: true,
+    });
+    const kept = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send", providerId: "openai-codex", model: "gpt-new",
+    });
+    expect(kept.effectiveModel).toBe("gpt-new");
+    const absent = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send", providerId: "openai-codex", model: "gpt-5.4",
+    });
+    expect(absent.blockedReason).toContain("last known model list");
+    expect(absent.blockedReason).toContain("Refresh the catalog");
   });
 
   it("normalizes google model ids and reports fallback boundary direction", async () => {

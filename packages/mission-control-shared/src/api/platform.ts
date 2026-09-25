@@ -398,6 +398,7 @@ export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
 export async function fetchLlmModels(providerId?: string): Promise<{
   items: LlmModelRecord[];
   source: LlmModelDiscoverySource;
+  catalogStatus?: "fresh" | "stale";
   warning?: string;
 }> {
   const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";

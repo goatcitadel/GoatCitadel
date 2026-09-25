@@ -340,6 +340,7 @@ export interface ImageGenerationResponse {
 export interface LlmModelPreviewResponse {
   items: LlmModelRecord[];
   source: LlmModelDiscoverySource;
+  catalogStatus?: "fresh" | "stale";
   warning?: string;
 }
 

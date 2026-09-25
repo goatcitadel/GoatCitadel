@@ -49,6 +49,8 @@ import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/
 import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 import {
   buildUniversalModelPickerOptions,
+  isModelMissingFromStaleCatalog,
+  isModelUnavailableInFreshCatalog,
   type ProviderModelCatalogOption,
   useProviderModelCatalog,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
@@ -196,7 +198,11 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   const editorKeys = [providerEditor.key, secretEditor.key];
   const availableModels = selectedProvider?.models ?? [];
   const routingProvider = providers.find((item) => item.providerId === routingProviderId) ?? null;
-  const routingUsesFallbackModels = routingProvider?.modelProbeState === "fallback";
+  const routingUsesFallbackModels = routingProvider?.modelProbeState === "fallback" && routingProvider.modelProbeSource !== "live";
+  const routingUsesStaleCatalog = routingProvider?.modelProbeSource === "live" && routingProvider.modelRefreshStatus === "stale";
+  const routingModelUnavailable = isModelUnavailableInFreshCatalog(routingProvider, routingModel);
+  const routingModelNeedsRefresh = isModelMissingFromStaleCatalog(routingProvider, routingModel);
+  const providerIdsKey = providers.map((provider) => provider.providerId).join("\u0000");
   const providerRequestValidation = useMemo(() => {
     try {
       return {
@@ -373,7 +379,10 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
     if (transition.kind === "new") { setEditorMode("new"); setDetailView("editor"); return; }
     if (transition.kind === "routing") {
       const next = providers.find((item) => item.providerId === transition.providerId);
-      routingEditor.setValue({ providerId: transition.providerId, model: transition.model ?? next?.defaultModel ?? next?.models?.[0] ?? "" });
+      const suggestedModel = next?.modelProbeSource === "live"
+        ? next.models.includes(next.defaultModel) ? next.defaultModel : ""
+        : next?.defaultModel ?? next?.models?.[0] ?? "";
+      routingEditor.setValue({ providerId: transition.providerId, model: transition.model ?? suggestedModel });
       setDetailView("routing"); return;
     }
     setEditorMode("selected"); setSelectedProviderId(transition.providerId); setDetailView("trust");
@@ -451,10 +460,23 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   }, [hasCodexOAuthProvider]);
 
   useEffect(() => {
-    if (detailView && selectedProviderId) {
+    if (detailView === "models") {
+      void Promise.all(providerIdsKey.split("\u0000").filter(Boolean).map((providerId) => loadModelsForProvider(providerId)));
+    } else if (detailView === "routing" && routingProviderId) {
+      void loadModelsForProvider(routingProviderId);
+    } else if (detailView && selectedProviderId) {
       void loadModelsForProvider(selectedProviderId);
     }
-  }, [loadModelsForProvider, selectedProviderId, detailView]);
+  }, [loadModelsForProvider, selectedProviderId, routingProviderId, providerIdsKey, detailView]);
+
+  useEffect(() => {
+    if (detailView !== "models" && detailView !== "routing") return;
+    const timer = globalThis.setInterval(() => {
+      const providerIds = detailView === "models" ? providerIdsKey.split("\u0000").filter(Boolean) : [routingProviderId];
+      void Promise.all(providerIds.filter(Boolean).map((providerId) => loadModelsForProvider(providerId)));
+    }, 60_000);
+    return () => globalThis.clearInterval(timer);
+  }, [detailView, loadModelsForProvider, providerIdsKey, routingProviderId]);
 
   const persistRouting = async (providerId: string, model: string) => {
     if (routingChange.isPending()) { await routingChange.refresh(); return false; }
@@ -470,7 +492,16 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       return false;
     }
     const nextProvider = providers.find((provider) => provider.providerId === normalizedProviderId);
-    const usesFallbackModels = nextProvider?.modelProbeState === "fallback";
+    if (isModelUnavailableInFreshCatalog(nextProvider ?? null, normalizedModel)) {
+      setNotice({ tone: "warning", message: `${normalizedModel} is no longer listed for ${nextProvider?.label ?? "this provider"}. Choose an available model before saving routing.` });
+      return false;
+    }
+    if (isModelMissingFromStaleCatalog(nextProvider ?? null, normalizedModel)) {
+      setNotice({ tone: "warning", message: `${normalizedModel} was not in the last known model list for ${nextProvider?.label ?? "this provider"}. Refresh the catalog before saving routing.` });
+      return false;
+    }
+    const usesFallbackModels = nextProvider?.modelProbeState === "fallback" && nextProvider.modelProbeSource !== "live";
+    const usesStaleCatalog = nextProvider?.modelProbeSource === "live" && nextProvider.modelRefreshStatus === "stale";
     if (!routingChange.beginSave()) return false;
     savesInFlight.current.add(routingEditor.key);
     try {
@@ -482,7 +513,7 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
         },
       });
       const settled = routingChange.receive(updated, { providerId: normalizedProviderId, model: normalizedModel }, Number(routingEditor.baseRevision ?? config.revision));
-      if (settled) setNotice({ tone: usesFallbackModels ? "warning" : "success", message: usesFallbackModels ? "Provider routing updated with a suggested model that has not been account-verified." : "Provider routing updated." });
+      if (settled) setNotice({ tone: usesFallbackModels || usesStaleCatalog ? "warning" : "success", message: usesFallbackModels ? "Provider routing updated with a suggested model that has not been account-verified." : usesStaleCatalog ? "Provider routing updated using the last known account catalog; refresh has not verified it yet." : "Provider routing updated." });
       await reload();
       return settled;
     } catch (saveError) {
@@ -1120,7 +1151,9 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                   disabled={!routingProviderId}
                 >
                   <option value="">Choose a model</option>
-                  {(providers.find((item) => item.providerId === routingProviderId)?.models ?? []).map((modelId) => (
+                  {routingModelUnavailable ? <option value={routingModel} disabled>{routingModel} · Unavailable</option> : null}
+                  {routingModelNeedsRefresh ? <option value={routingModel} disabled>{routingModel} · Needs refresh</option> : null}
+                  {(routingProvider?.models ?? []).map((modelId) => (
                     <option key={modelId} value={modelId}>
                       {modelId}
                     </option>
@@ -1149,10 +1182,19 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                 }}
               />
             ) : null}
+            {routingUsesStaleCatalog ? (
+              <SettingsNotice notice={{ tone: "warning", message: "Showing the last known account model list. Refresh this provider to verify availability before changing routing." }} />
+            ) : null}
+            {routingModelUnavailable ? (
+              <SettingsNotice notice={{ tone: "warning", message: `${routingModel} is no longer listed in ${routingProvider?.label ?? "this provider"}'s live model catalog. Choose an available model to continue.` }} />
+            ) : null}
+            {routingModelNeedsRefresh ? (
+              <SettingsNotice notice={{ tone: "warning", message: `${routingModel} was not in the last known account model list. Refresh the catalog to verify it before saving routing.` }} />
+            ) : null}
             <SettingsButtonRow>
               <NativeButton
                 variant="default"
-                disabled={routingChange.hasPending || !routingProviderId.trim() || !routingModel.trim()}
+                disabled={routingChange.hasPending || !routingProviderId.trim() || !routingModel.trim() || routingModelUnavailable || routingModelNeedsRefresh}
                 onClick={() => void handleSaveRouting()}
               >
                 <Save size={16} />
@@ -1202,10 +1244,10 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                   .filter(Boolean)
                   .join(" · "),
                 actionLabel:
-                  item.providerId === config?.activeProviderId && item.model === config?.activeModel
-                    ? "Active"
-                    : item.availability === "blocked"
-                      ? "Blocked"
+                  item.availability === "blocked"
+                    ? "Blocked"
+                    : item.providerId === config?.activeProviderId && item.model === config?.activeModel
+                      ? "Active"
                       : "Select",
                 onClick:
                   item.availability === "blocked"

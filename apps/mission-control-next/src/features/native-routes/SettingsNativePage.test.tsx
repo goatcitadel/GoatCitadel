@@ -4009,6 +4009,32 @@ describe("SettingsNativePage providers", () => {
     expect(findButton(renderer!.root, "Save routing").props.disabled).toBe(false);
   });
 
+  it("keeps a removed active model visible and asks for a replacement", async () => {
+    mocks.providerCatalogState.providers[0] = {
+      ...mocks.providerCatalogState.providers[0],
+      models: ["gpt-new"],
+      modelProbeSource: "live",
+      modelRefreshStatus: "fresh",
+    };
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+    await openProviderPanel(renderer!, "routing");
+
+    const routingModel = renderer!.root.findAllByType("select")
+      .find((select) => collectText(select).includes("Choose a model"))!;
+    expect(routingModel.props.value).toBe("gpt-5.4-mini");
+    expect(routingModel.findAllByType("option").find((option) => option.props.value === "gpt-5.4-mini")?.props.disabled).toBe(true);
+    expect(collectText(renderer!.root)).toContain("Choose an available model to continue.");
+    expect(findButton(renderer!.root, "Save routing").props.disabled).toBe(true);
+
+    await act(async () => {
+      routingModel.props.onChange({ target: { value: "gpt-new" } });
+    });
+    expect(findButton(renderer!.root, "Save routing").props.disabled).toBe(false);
+  });
+
   it("activates a connected ChatGPT provider with one explicit action", async () => {
     setCodexProviderCatalogState({ hasApiKey: false });
     mocks.providerCatalogState.config = {

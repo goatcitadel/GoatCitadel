@@ -146,6 +146,7 @@ interface ProviderRequestTarget {
 interface ModelDiscoveryResult {
   items: LlmModelRecord[];
   source: LlmModelDiscoverySource;
+  catalogStatus?: "fresh" | "stale";
   warning?: string;
 }
 
@@ -295,6 +296,8 @@ export class LlmService {
   private readonly googleCloudAuth: GoogleCloudAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly modelDiscoveryCache = new Map<string, ModelDiscoveryCacheEntry>();
+  private readonly modelCatalogRefreshAttemptAt = new Map<string, number>();
+  private modelCatalogGeneration = 0;
   private openAICodexModelCatalogGeneration = 0;
   // Per-process opaque tokens that key the in-memory model-discovery cache by credential WITHOUT
   // deriving anything from the API key. A fast unsalted digest of a credential is exactly what CodeQL
@@ -538,7 +541,9 @@ export class LlmService {
   }
 
   public updateRuntimeConfig(input: LlmRuntimeUpdateInput): LlmRuntimeConfig {
+    this.modelCatalogGeneration += 1;
     this.modelDiscoveryCache.clear();
+    this.modelCatalogRefreshAttemptAt.clear();
     this.modelDiscoveryInFlight.clear();
     this.modelDiscoveryAuthTokens.clear();
     if (input.defaultThinkingLevel !== undefined) {
@@ -702,7 +707,9 @@ export class LlmService {
     this.utilityProviderId = nextUtilityProviderId;
     this.utilityModel = nextUtilityModel;
     this.secretStatusCache.clear();
+    this.modelCatalogGeneration += 1;
     this.modelDiscoveryCache.clear();
+    this.modelCatalogRefreshAttemptAt.clear();
     this.modelDiscoveryInFlight.clear();
     this.modelDiscoveryAuthTokens.clear();
     this.clearRequestDispatcherCache();
@@ -802,6 +809,11 @@ export class LlmService {
       apiKeyRef: `keychain:goatcitadel:provider:${providerId}`,
     });
     this.googleCloudAuth.invalidate(providerId);
+    this.modelCatalogGeneration += 1;
+    this.modelDiscoveryCache.clear();
+    this.modelCatalogRefreshAttemptAt.clear();
+    this.modelDiscoveryInFlight.clear();
+    this.modelDiscoveryAuthTokens.clear();
   }
 
   /** @internal Secret-owner seam. Never expose the returned value through a route or projection. */
@@ -848,7 +860,9 @@ export class LlmService {
     }
     this.secretStatusCache.delete(providerId);
     this.googleCloudAuth.invalidate(providerId);
+    this.modelCatalogGeneration += 1;
     this.modelDiscoveryCache.clear();
+    this.modelCatalogRefreshAttemptAt.clear();
     this.modelDiscoveryInFlight.clear();
     this.modelDiscoveryAuthTokens.clear();
   }
@@ -871,6 +885,11 @@ export class LlmService {
     }
     this.setCachedSecretStatus(this.buildQuickSecretStatus(provider));
     this.googleCloudAuth.invalidate(providerId);
+    this.modelCatalogGeneration += 1;
+    this.modelDiscoveryCache.clear();
+    this.modelCatalogRefreshAttemptAt.clear();
+    this.modelDiscoveryInFlight.clear();
+    this.modelDiscoveryAuthTokens.clear();
   }
 
   public getOpenAICodexOAuthStatus(): OpenAICodexOAuthStatus {
@@ -921,6 +940,7 @@ export class LlmService {
   }
 
   private invalidateOpenAICodexModelCatalog(): void {
+    this.modelCatalogGeneration += 1;
     this.openAICodexModelCatalogGeneration += 1;
     for (const key of this.modelDiscoveryCache.keys()) {
       if (key.startsWith("openai-codex::")) this.modelDiscoveryCache.delete(key);
@@ -928,6 +948,7 @@ export class LlmService {
     for (const key of this.modelDiscoveryInFlight.keys()) {
       if (key.startsWith("openai-codex::")) this.modelDiscoveryInFlight.delete(key);
     }
+    this.modelCatalogRefreshAttemptAt.delete("openai-codex");
   }
 
   public clearInlineProviderApiKey(providerId: string): void {
@@ -1103,6 +1124,35 @@ export class LlmService {
 
   private getCatalogReasoningEfforts(provider: LlmProviderConfig, model: string): ChatCompletionReasoningEffort[] | undefined {
     return this.getLiveCatalogModel(provider, model)?.reasoningEfforts;
+  }
+
+  public getCachedModelAvailability(providerId: string, model: string):
+    "available" | "unavailable" | "stale_available" | "stale_unavailable" | "unverified" {
+    const provider = this.providers.get(providerId);
+    if (!provider) return "unverified";
+    const cached = this.modelDiscoveryCache.get(buildPersistedModelDiscoveryCacheKey(providerId, provider.baseUrl));
+    if (cached?.result.source !== "live" || cached.origin === "disk") {
+      return "unverified";
+    }
+    const requested = normalizeRequestedModel(providerId, model);
+    const listed = cached.result.items.some((item) => item.id === requested);
+    const stale = Date.now() - cached.cachedAt >= LlmService.MODEL_DISCOVERY_TTL_MS;
+    return stale
+      ? listed ? "stale_available" : "stale_unavailable"
+      : listed ? "available" : "unavailable";
+  }
+
+  public refreshModelCatalogInBackground(providerId: string): void {
+    const now = Date.now();
+    const lastAttempt = this.modelCatalogRefreshAttemptAt.get(providerId);
+    if (lastAttempt !== undefined && now - lastAttempt < LlmService.MODEL_DISCOVERY_TTL_MS) return;
+    this.modelCatalogRefreshAttemptAt.set(providerId, now);
+    void this.listModelsWithSource(providerId).catch((error: unknown) => {
+      log.warn("model catalog refresh failed", {
+        providerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private getLiveCatalogModel(provider: LlmProviderConfig, model: string): LlmModelRecord | undefined {
@@ -2924,6 +2974,7 @@ export class LlmService {
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     const keys = this.buildModelDiscoveryCacheKeys(resolved);
+    const catalogGeneration = this.modelCatalogGeneration;
     const codexGeneration = this.openAICodexModelCatalogGeneration;
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(keys.exact) ?? this.modelDiscoveryCache.get(keys.persisted);
@@ -2954,7 +3005,7 @@ export class LlmService {
         if (!inFlight) {
           const pending = this.fetchModelsForResolvedProviderUncached(resolved)
             .then((result) => {
-              if (result.source !== "error_fallback" &&
+              if (result.source !== "error_fallback" && catalogGeneration === this.modelCatalogGeneration &&
                   (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)) {
                 this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
               }
@@ -2984,7 +3035,7 @@ export class LlmService {
       .then((result) => {
         // Cache live + template_fallback (successful fetches with known catalog), but
         // skip error_fallback so transient network errors retry on the next call.
-        if (result.source !== "error_fallback" &&
+        if (result.source !== "error_fallback" && catalogGeneration === this.modelCatalogGeneration &&
             (!isOpenAICodexProvider(resolved.provider) || codexGeneration === this.openAICodexModelCatalogGeneration)) {
           this.setModelDiscoveryCacheEntry(keys, result, Date.now(), resolved, { persist: true });
         }
@@ -3181,13 +3232,13 @@ function buildPersistedModelDiscoveryCacheKey(providerId: string, baseUrl: strin
 }
 
 function markStaleModelDiscoveryResult(result: ModelDiscoveryResult, origin: "memory" | "disk"): ModelDiscoveryResult {
-  if (origin !== "disk") {
-    return result;
-  }
   return {
     ...result,
+    catalogStatus: "stale",
     warning:
-      result.warning ?? "Loaded from local model catalog cache; remote provider refresh is running in background.",
+      result.warning ?? (origin === "disk"
+        ? "Loaded from local model catalog cache; remote provider refresh is running in background."
+        : "Showing a stale model catalog while remote provider refresh runs in background."),
   };
 }
 
