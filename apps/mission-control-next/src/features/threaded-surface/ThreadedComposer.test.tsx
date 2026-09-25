@@ -1075,7 +1075,9 @@ describe("ThreadedComposer", () => {
       routePreflightError: "No provider is configured.",
     });
     const composer = renderer.root.findByProps({ "aria-label": "Message composer" });
-    const send = renderer.root.findAllByType("button").find((button) => button.props.className === "mc-next-composer-primary")!;
+    const send = renderer.root
+      .findAllByType("button")
+      .find((button) => button.props.className === "mc-next-composer-primary")!;
     expect(composer.props.disabled).not.toBe(true);
     expect(composer.props.value).toBe("Keep this draft while setting up a provider.");
     expect(send.props.disabled).toBe(true);
@@ -1146,12 +1148,17 @@ describe("ThreadedComposer", () => {
     (document as any).activeElement = last;
     const preventDefault = vi.fn();
     const dialog = renderer.root.findByProps({ role: "dialog", "aria-label": "Command Palette" });
-    await act(async () => dialog.props.onKeyDown({
-      key: "Tab",
-      shiftKey: false,
-      preventDefault,
-      currentTarget: { querySelectorAll: () => [first, last], contains: (node: unknown) => node === first || node === last },
-    }));
+    await act(async () =>
+      dialog.props.onKeyDown({
+        key: "Tab",
+        shiftKey: false,
+        preventDefault,
+        currentTarget: {
+          querySelectorAll: () => [first, last],
+          contains: (node: unknown) => node === first || node === last,
+        },
+      }),
+    );
     expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(first.focus).toHaveBeenCalledTimes(1);
   });
@@ -1955,9 +1962,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     await click(findButton(renderer.root, "Choose sources"));
 
     const checkbox = renderer.root.find(
-      (node) =>
-        node.type === "input" &&
-        node.props["aria-label"] === "Include Read-only source in the next turn",
+      (node) => node.type === "input" && node.props["aria-label"] === "Include Read-only source in the next turn",
     );
     expect(checkbox.props.checked).toBe(true);
     await act(async () => {
@@ -2010,13 +2015,19 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
       renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
     ).toHaveLength(0);
     await click(findButton(renderer.root, "Choose sources"));
-    const attachDetails = renderer.root.findAll((node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach")[0]!;
+    const attachDetails = renderer.root.findAll(
+      (node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach",
+    )[0]!;
     await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
-    const attachForm = renderer.root.findAll((node) => node.props.className === "mc-next-composer-external-attach-form")[0]!;
+    const attachForm = renderer.root.findAll(
+      (node) => node.props.className === "mc-next-composer-external-attach-form",
+    )[0]!;
     expect(attachForm.props.id).toContain("-attach-form");
     expect(collectText(renderer.root)).toContain("First attach a verified import");
     expect(collectText(renderer.root)).toContain("Imported Codex sessions");
-    expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(0);
+    expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(
+      0,
+    );
     await click(findButton(renderer.root, "Attach read-only"));
     expect(controls.onAttach).toHaveBeenCalledWith({
       sourceId: "source-2",
@@ -2032,7 +2043,9 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     const controls = externalControls({ candidates: [], candidatesSupported: false });
     const renderer = await renderComposer({ externalSourceControls: controls });
     await click(findButton(renderer.root, "Choose sources"));
-    const attachDetails = renderer.root.findAll((node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach")[0]!;
+    const attachDetails = renderer.root.findAll(
+      (node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach",
+    )[0]!;
     await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
     expect(collectText(renderer.root)).toContain("Verified import selection is unavailable here");
     await click(findButton(renderer.root, "Refresh imports"));
@@ -2044,24 +2057,33 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     const controls = externalControls({ attachments: [] });
     const renderer = await renderComposer({ externalSourceControls: controls });
     await click(findButton(renderer.root, "Choose sources"));
-    const attachDetails = renderer.root.findAll((node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach")[0]!;
+    const attachDetails = renderer.root.findAll(
+      (node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach",
+    )[0]!;
     await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
     await click(findButton(renderer.root, "Attach read-only"));
-    expect(controls.onAttach).toHaveBeenCalledWith({ sourceId: "source-2", importId: "import-2", itemId: "item-picker-1" });
+    expect(controls.onAttach).toHaveBeenCalledWith({
+      sourceId: "source-2",
+      importId: "import-2",
+      itemId: "item-picker-1",
+    });
 
     const confirmed = externalControls({
-      attachments: [externalAttachment("attachment-confirmed", {
-        sourceId: "source-2",
-        importId: "import-2",
-        itemId: "item-picker-1",
-      })],
+      attachments: [
+        externalAttachment("attachment-confirmed", {
+          sourceId: "source-2",
+          importId: "import-2",
+          itemId: "item-picker-1",
+        }),
+      ],
       candidates: [],
     });
     await act(async () => {
       renderer.update(<ThreadedComposer props={buildProps({ externalSourceControls: confirmed })} />);
     });
-    const sourceCheckbox = renderer.root.find((node) =>
-      node.type === "input" && node.props["aria-label"] === "Include Imported Codex sessions in the next turn",
+    const sourceCheckbox = renderer.root.find(
+      (node) =>
+        node.type === "input" && node.props["aria-label"] === "Include Imported Codex sessions in the next turn",
     );
     expect(collectText(renderer.root)).toContain("Imported");
     await act(async () => sourceCheckbox.props.onChange({ target: { checked: true } }));

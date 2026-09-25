@@ -960,34 +960,46 @@ describe("ThreadedTimeline", () => {
   it("reports checking, ready, and blocked Chat readiness with recovery actions", () => {
     const emptyThread = { sessionId: "session-empty", turns: [] };
     const checking = renderToStaticMarkup(
-      <ThreadedTimeline props={buildProps({
-        mode: "chat",
-        thread: emptyThread,
-        providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
-        routePreflight: null,
-      }) as any} />,
+      <ThreadedTimeline
+        props={
+          buildProps({
+            mode: "chat",
+            thread: emptyThread,
+            providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
+            routePreflight: null,
+          }) as any
+        }
+      />,
     );
     expect(checking).toContain("Checking chat route");
 
     const ready = renderToStaticMarkup(
-      <ThreadedTimeline props={buildProps({
-        mode: "chat",
-        thread: emptyThread,
-        providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
-        routePreflight: { effectiveProviderId: "openai", effectiveModel: "gpt-test" },
-      }) as any} />,
+      <ThreadedTimeline
+        props={
+          buildProps({
+            mode: "chat",
+            thread: emptyThread,
+            providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
+            routePreflight: { effectiveProviderId: "openai", effectiveModel: "gpt-test" },
+          }) as any
+        }
+      />,
     );
     expect(ready).toContain("Chat ready");
     expect(ready).not.toContain("Configure providers");
 
     const blocked = renderToStaticMarkup(
-      <ThreadedTimeline props={buildProps({
-        mode: "chat",
-        thread: emptyThread,
-        providerOptions: [],
-        routePreflight: null,
-        routePreflightError: "No provider is configured.",
-      }) as any} />,
+      <ThreadedTimeline
+        props={
+          buildProps({
+            mode: "chat",
+            thread: emptyThread,
+            providerOptions: [],
+            routePreflight: null,
+            routePreflightError: "No provider is configured.",
+          }) as any
+        }
+      />,
     );
     expect(blocked).toContain("Chat sending is blocked");
     expect(blocked).toContain("Configure providers");
@@ -999,18 +1011,23 @@ describe("ThreadedTimeline", () => {
     const onOpenLocalAiSettings = vi.fn();
     let settingsRenderer!: TestRenderer.ReactTestRenderer;
     await act(async () => {
-      settingsRenderer = TestRenderer.create(<ThreadedTimeline props={buildProps({
-        mode: "chat",
-        thread: { sessionId: "session-empty", turns: [] },
-        providerOptions: [],
-        routePreflightError: "No provider is configured.",
-        onOpenProviderSettings,
-        onOpenLocalAiSettings,
-      }) as any} />);
+      settingsRenderer = TestRenderer.create(
+        <ThreadedTimeline
+          props={
+            buildProps({
+              mode: "chat",
+              thread: { sessionId: "session-empty", turns: [] },
+              providerOptions: [],
+              routePreflightError: "No provider is configured.",
+              onOpenProviderSettings,
+              onOpenLocalAiSettings,
+            }) as any
+          }
+        />,
+      );
     });
-    const setupButton = (label: string) => settingsRenderer.root.findAll((node) =>
-      node.type === "button" && collectNodeText(node).trim() === label,
-    )[0]!;
+    const setupButton = (label: string) =>
+      settingsRenderer.root.findAll((node) => node.type === "button" && collectNodeText(node).trim() === label)[0]!;
     await act(async () => setupButton("Configure providers").props.onClick());
     await act(async () => setupButton("Set up a local model").props.onClick());
     expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
@@ -1021,27 +1038,35 @@ describe("ThreadedTimeline", () => {
     const onQueryChange = vi.fn();
     let paletteRenderer!: TestRenderer.ReactTestRenderer;
     await act(async () => {
-      paletteRenderer = TestRenderer.create(<ThreadedTimeline props={buildProps({
-        mode: "chat",
-        thread: { sessionId: "session-empty", turns: [] },
-        providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
-        // Provider-specific Gateway blocks always name the requested provider.
-        routePreflight: { requestedProviderId: "openai", blockedReason: "The selected route is unavailable." },
-        composerPalette: {
-          enabled: true,
-          globalOpen: false,
-          query: "",
-          loading: false,
-          failures: [],
-          onOpen,
-          onClose: vi.fn(),
-          onQueryChange,
-          onIndexChange: vi.fn(),
-          onSelect: vi.fn(),
-        },
-      }) as any} />);
+      paletteRenderer = TestRenderer.create(
+        <ThreadedTimeline
+          props={
+            buildProps({
+              mode: "chat",
+              thread: { sessionId: "session-empty", turns: [] },
+              providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-test"] }],
+              // Provider-specific Gateway blocks always name the requested provider.
+              routePreflight: { requestedProviderId: "openai", blockedReason: "The selected route is unavailable." },
+              composerPalette: {
+                enabled: true,
+                globalOpen: false,
+                query: "",
+                loading: false,
+                failures: [],
+                onOpen,
+                onClose: vi.fn(),
+                onQueryChange,
+                onIndexChange: vi.fn(),
+                onSelect: vi.fn(),
+              },
+            }) as any
+          }
+        />,
+      );
     });
-    const chooseModel = paletteRenderer.root.findAll((node) => node.type === "button" && collectNodeText(node).trim() === "Choose a model")[0]!;
+    const chooseModel = paletteRenderer.root.findAll(
+      (node) => node.type === "button" && collectNodeText(node).trim() === "Choose a model",
+    )[0]!;
     await act(async () => chooseModel.props.onClick());
     expect(onQueryChange).toHaveBeenCalledWith("model");
     expect(onOpen).toHaveBeenCalledTimes(1);

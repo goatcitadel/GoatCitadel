@@ -242,7 +242,9 @@ const CHAT_STARTER_PROMPTS = [
 function ChatFirstMessageCanvas({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const readiness = resolveChatRouteReadiness(props);
   const readinessCards = buildChatReadinessCards(props, readiness);
-  const hasConfiguredModelChoices = (props.providerOptions ?? []).some((provider) => !provider.disabled && provider.models.length > 0);
+  const hasConfiguredModelChoices = (props.providerOptions ?? []).some(
+    (provider) => !provider.disabled && provider.models.length > 0,
+  );
   const canOpenModelPalette = hasConfiguredModelChoices && Boolean(props.composerPalette?.enabled);
   const applyStarterPrompt = (prompt: string) => {
     props.onDraftChange(prompt);
@@ -288,7 +290,11 @@ function ChatFirstMessageCanvas({ props }: { props: MissionThreadedActiveSession
               </button>
             ) : (
               <>
-                <button type="button" className="mc-next-thread-inline-button primary" onClick={props.onOpenProviderSettings}>
+                <button
+                  type="button"
+                  className="mc-next-thread-inline-button primary"
+                  onClick={props.onOpenProviderSettings}
+                >
                   Configure providers
                 </button>
                 <button type="button" className="mc-next-thread-inline-button" onClick={props.onOpenLocalAiSettings}>

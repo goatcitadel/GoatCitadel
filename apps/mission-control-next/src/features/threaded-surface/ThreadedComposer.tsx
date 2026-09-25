@@ -436,7 +436,9 @@ function ExternalSourceStrip({
   const wasPickerOpenRef = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachFormOpen, setAttachFormOpen] = useState(false);
-  const [recentImportMetadata, setRecentImportMetadata] = useState<Map<string, { sourceLabel: string; importedAt: string }>>(() => new Map());
+  const [recentImportMetadata, setRecentImportMetadata] = useState<
+    Map<string, { sourceLabel: string; importedAt: string }>
+  >(() => new Map());
   const selectedCount = controls.selectedAttachmentIds.length;
   const mutationHint = controls.canMutate
     ? null
@@ -483,7 +485,10 @@ function ExternalSourceStrip({
     if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && (document.activeElement === last || !event.currentTarget.contains(document.activeElement))) {
+    } else if (
+      !event.shiftKey &&
+      (document.activeElement === last || !event.currentTarget.contains(document.activeElement))
+    ) {
       event.preventDefault();
       first.focus();
     }
@@ -550,14 +555,25 @@ function ExternalSourceStrip({
                 <h2 id={`${stripInstanceId}-picker-title`}>Choose sources for this turn</h2>
                 <p>These sources are read-only. Select the ones you want the next message to use.</p>
               </div>
-              <button ref={pickerCloseRef} type="button" className="mc-next-composer-inline-button" onClick={closePicker}>
+              <button
+                ref={pickerCloseRef}
+                type="button"
+                className="mc-next-composer-inline-button"
+                onClick={closePicker}
+              >
                 Close
               </button>
             </header>
-            {controls.error ? <p className="mc-next-composer-external-error" role="alert">{controls.error}</p> : null}
+            {controls.error ? (
+              <p className="mc-next-composer-external-error" role="alert">
+                {controls.error}
+              </p>
+            ) : null}
             {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
             {controls.loading && controls.attachments.length === 0 ? (
-              <p className="mc-next-composer-external-hint" role="status">Checking attached sources…</p>
+              <p className="mc-next-composer-external-hint" role="status">
+                Checking attached sources…
+              </p>
             ) : controls.attachments.length === 0 ? (
               <p className="mc-next-composer-external-hint">No read-only sources are attached to this chat yet.</p>
             ) : (
@@ -566,8 +582,11 @@ function ExternalSourceStrip({
                   const busy = controls.busyAttachmentId !== null;
                   const selected = controls.selectedAttachmentIds.includes(attachment.attachmentId);
                   const checkboxId = `${stripInstanceId}-select-${attachment.attachmentId}`;
-                  const candidate = controls.candidates.find((item) =>
-                    item.sourceId === attachment.sourceId && item.importId === attachment.importId && item.itemId === attachment.itemId,
+                  const candidate = controls.candidates.find(
+                    (item) =>
+                      item.sourceId === attachment.sourceId &&
+                      item.importId === attachment.importId &&
+                      item.itemId === attachment.itemId,
                   );
                   const bindingKey = `${attachment.sourceId}\u001f${attachment.importId}\u001f${attachment.itemId}`;
                   const recentImport = recentImportMetadata.get(bindingKey);
@@ -591,11 +610,14 @@ function ExternalSourceStrip({
                           />
                           <strong>{sourceName}</strong>
                         </label>
-                        <p className="mc-next-composer-external-meta">Read-only · {importedAt ? "Imported" : "Attached"} {formattedDate}</p>
+                        <p className="mc-next-composer-external-meta">
+                          Read-only · {importedAt ? "Imported" : "Attached"} {formattedDate}
+                        </p>
                         <details>
                           <summary>Source details and actions</summary>
                           <p className="mc-next-composer-external-meta">
-                            Item {attachment.itemId} · source {attachment.sourceId} · import {attachment.importId} · revision {attachment.revision} · sha {attachment.normalizedArtifactSha256.slice(0, 12)}…
+                            Item {attachment.itemId} · source {attachment.sourceId} · import {attachment.importId} ·
+                            revision {attachment.revision} · sha {attachment.normalizedArtifactSha256.slice(0, 12)}…
                           </p>
                           <div className="mc-next-composer-external-chip-actions">
                             <StatusChip tone="muted">Read-only</StatusChip>
@@ -605,14 +627,18 @@ function ExternalSourceStrip({
                               disabled={disabled || busy || !controls.canMutate}
                               onClick={() => controls.onRequestKnowledgeSnapshot(attachment.attachmentId)}
                               aria-label="Request a governed knowledge copy of this source"
-                            >Request knowledge copy</button>
+                            >
+                              Request knowledge copy
+                            </button>
                             <button
                               type="button"
                               className="mc-next-composer-inline-button"
                               disabled={disabled || busy || !controls.canMutate}
                               onClick={() => controls.onDetach(attachment.attachmentId)}
                               aria-label="Detach this read-only source"
-                            >Detach</button>
+                            >
+                              Detach
+                            </button>
                           </div>
                         </details>
                       </div>
@@ -621,33 +647,54 @@ function ExternalSourceStrip({
                 })}
               </ul>
             )}
-            <details className="mc-next-source-picker-attach" open={attachFormOpen} onToggle={(event) => setAttachFormOpen(event.currentTarget.open)}>
+            <details
+              className="mc-next-source-picker-attach"
+              open={attachFormOpen}
+              onToggle={(event) => setAttachFormOpen(event.currentTarget.open)}
+            >
               <summary>Attach a verified import</summary>
               <div id={attachFormId} className="mc-next-composer-external-attach-form">
                 <p className="mc-next-composer-external-hint">
                   First attach a verified import. After the Gateway confirms it, it will appear above for selection.
                 </p>
                 {controls.loading ? (
-                  <p className="mc-next-composer-external-hint" role="status">Refreshing eligible imports…</p>
+                  <p className="mc-next-composer-external-hint" role="status">
+                    Refreshing eligible imports…
+                  </p>
                 ) : controls.candidatesSupported === false ? (
-                  <p className="mc-next-composer-external-hint">Verified import selection is unavailable here. Manage imports in Library.</p>
+                  <p className="mc-next-composer-external-hint">
+                    Verified import selection is unavailable here. Manage imports in Library.
+                  </p>
                 ) : controls.candidates.length === 0 ? (
-                  <p className="mc-next-composer-external-hint">No verified imports are ready to attach. Import and verify an item in Library first.</p>
+                  <p className="mc-next-composer-external-hint">
+                    No verified imports are ready to attach. Import and verify an item in Library first.
+                  </p>
                 ) : (
-                  <ul role="list" className="mc-next-composer-external-list" aria-label="Verified imports ready to attach">
+                  <ul
+                    role="list"
+                    className="mc-next-composer-external-list"
+                    aria-label="Verified imports ready to attach"
+                  >
                     {controls.candidates.map((candidate) => {
                       const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
                       const formattedDate = Number.isFinite(Date.parse(candidate.importedAt))
                         ? new Date(candidate.importedAt).toLocaleDateString(undefined, { dateStyle: "medium" })
                         : "date unavailable";
                       return (
-                        <li key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`} className="mc-next-composer-external-chip">
+                        <li
+                          key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`}
+                          className="mc-next-composer-external-chip"
+                        >
                           <div className="mc-next-composer-external-chip-body">
                             <strong>{candidate.sourceLabel}</strong>
-                            <p className="mc-next-composer-external-meta">Imported {formattedDate} · verified {candidate.artifactsVerifiedAt.slice(0, 10)}</p>
+                            <p className="mc-next-composer-external-meta">
+                              Imported {formattedDate} · verified {candidate.artifactsVerifiedAt.slice(0, 10)}
+                            </p>
                             <details>
                               <summary>Import details</summary>
-                              <p className="mc-next-composer-external-meta">Item {candidate.itemId} · source revision {candidate.sourceRevision}</p>
+                              <p className="mc-next-composer-external-meta">
+                                Item {candidate.itemId} · source revision {candidate.sourceRevision}
+                              </p>
                             </details>
                           </div>
                           <div className="mc-next-composer-external-chip-actions">
@@ -658,14 +705,22 @@ function ExternalSourceStrip({
                               disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
                               onClick={() => {
                                 const bindingKey = `${candidate.sourceId}\u001f${candidate.importId}\u001f${candidate.itemId}`;
-                                setRecentImportMetadata((current) => new Map(current).set(bindingKey, {
-                                  sourceLabel: candidate.sourceLabel,
-                                  importedAt: candidate.importedAt,
-                                }));
-                                controls.onAttach({ sourceId: candidate.sourceId, importId: candidate.importId, itemId: candidate.itemId });
+                                setRecentImportMetadata((current) =>
+                                  new Map(current).set(bindingKey, {
+                                    sourceLabel: candidate.sourceLabel,
+                                    importedAt: candidate.importedAt,
+                                  }),
+                                );
+                                controls.onAttach({
+                                  sourceId: candidate.sourceId,
+                                  importId: candidate.importId,
+                                  itemId: candidate.itemId,
+                                });
                               }}
                               aria-label={`Attach verified import from ${candidate.sourceLabel} read-only`}
-                            >{busy ? "Attaching…" : "Attach read-only"}</button>
+                            >
+                              {busy ? "Attaching…" : "Attach read-only"}
+                            </button>
                           </div>
                         </li>
                       );
@@ -673,14 +728,36 @@ function ExternalSourceStrip({
                   </ul>
                 )}
                 <div className="mc-next-composer-external-chip-actions">
-                  <button type="button" className="mc-next-composer-inline-button" disabled={disabled || controls.loading} onClick={controls.onReload}>Refresh imports</button>
-                  {onOpenLibrary ? <button type="button" className="mc-next-composer-inline-button" disabled={disabled} onClick={onOpenLibrary}>Manage Library imports</button> : null}
+                  <button
+                    type="button"
+                    className="mc-next-composer-inline-button"
+                    disabled={disabled || controls.loading}
+                    onClick={controls.onReload}
+                  >
+                    Refresh imports
+                  </button>
+                  {onOpenLibrary ? (
+                    <button
+                      type="button"
+                      className="mc-next-composer-inline-button"
+                      disabled={disabled}
+                      onClick={onOpenLibrary}
+                    >
+                      Manage Library imports
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </details>
             <footer className="mc-next-source-picker-footer">
-              <span aria-live="polite">{selectedCount > 0 ? `${selectedCount} source${selectedCount === 1 ? "" : "s"} selected for the next message` : "No sources selected"}</span>
-              <button type="button" className="mc-next-composer-inline-button" onClick={closePicker}>Add to chat</button>
+              <span aria-live="polite">
+                {selectedCount > 0
+                  ? `${selectedCount} source${selectedCount === 1 ? "" : "s"} selected for the next message`
+                  : "No sources selected"}
+              </span>
+              <button type="button" className="mc-next-composer-inline-button" onClick={closePicker}>
+                Add to chat
+              </button>
             </footer>
           </div>
         </div>
@@ -844,7 +921,10 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && (document.activeElement === last || !event.currentTarget.contains(document.activeElement))) {
+    } else if (
+      !event.shiftKey &&
+      (document.activeElement === last || !event.currentTarget.contains(document.activeElement))
+    ) {
       event.preventDefault();
       first.focus();
     }
@@ -1709,7 +1789,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               disabled={!props.canSend}
               onClick={props.onSend}
               aria-describedby={!props.canSend && routeSendBlockReason ? sendBlockReasonId : undefined}
-              title={!props.canSend ? routeSendBlockReason ?? undefined : undefined}
+              title={!props.canSend ? (routeSendBlockReason ?? undefined) : undefined}
             >
               {sendLabel}
             </button>

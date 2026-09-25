@@ -36,7 +36,9 @@ vi.mock("./ThreadedWorkflowPanel", () => ({
 
 vi.mock("./ThreadedContextDrawer", () => ({
   ThreadedContextDrawer: ({ surface, focusedTab }: { surface: string; focusedTab?: string }) => (
-    <div className="mock-threaded-context-drawer" data-focused-tab={focusedTab}>{surface} {focusedTab}</div>
+    <div className="mock-threaded-context-drawer" data-focused-tab={focusedTab}>
+      {surface} {focusedTab}
+    </div>
   ),
 }));
 
@@ -1676,20 +1678,40 @@ describe("ThreadedSurfacePage", () => {
       findExactButton(renderer!.root, "Activity").props.onClick();
     });
     expect(collectText(renderer!.root)).toContain("Work Record");
-    const activityTab = renderer!.root.findAll((node) =>
-      node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Activity",
+    const activityTab = renderer!.root.findAll(
+      (node) =>
+        node.type === "button" &&
+        node.props.className?.includes("mc-next-utility-panel-tab") &&
+        collectText(node).trim() === "Activity",
     )[0]!;
     expect(activityTab.props["aria-pressed"]).toBe(true);
     expect(collectText(renderer!.root)).toContain("Approval state");
     expect(collectText(renderer!.root)).toContain("1 approval is waiting for your review.");
-    expect(renderer!.root.findAll((node) => node.type === "button" && collectText(node).trim() === "Review approvals")).toHaveLength(1);
-    expect(renderer!.root.findAll((node) => node.type === "button" && node.props["aria-label"] === "Close session status")).toHaveLength(0);
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && collectText(node).trim() === "Review approvals"),
+    ).toHaveLength(1);
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && node.props["aria-label"] === "Close session status"),
+    ).toHaveLength(0);
     expect(collectText(renderer!.root)).toContain("Background work");
-    expect(renderer!.root.findAll((node) => node.type === "summary" && collectText(node).trim() === "Execution details")).toHaveLength(1);
-    const initialExecutionDetails = renderer!.root.findAll((node) => node.type === "details" && collectText(node).includes("Execution details"))[0]!;
+    expect(
+      renderer!.root.findAll((node) => node.type === "summary" && collectText(node).trim() === "Execution details"),
+    ).toHaveLength(1);
+    const initialExecutionDetails = renderer!.root.findAll(
+      (node) => node.type === "details" && collectText(node).includes("Execution details"),
+    )[0]!;
     expect(initialExecutionDetails.props.open).toBe(false);
 
-    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Outputs")[0]!.props.onClick());
+    await act(async () =>
+      renderer!.root
+        .findAll(
+          (node) =>
+            node.type === "button" &&
+            node.props.className?.includes("mc-next-utility-panel-tab") &&
+            collectText(node).trim() === "Outputs",
+        )[0]!
+        .props.onClick(),
+    );
     expect(onDockOpenChange).toHaveBeenCalledWith(true);
     expect(collectText(renderer!.root)).toContain("Repo diff");
     expect(collectText(renderer!.root)).toContain("src/app.ts");
@@ -1700,16 +1722,47 @@ describe("ThreadedSurfacePage", () => {
     });
     expect(onSelectFile).toHaveBeenCalledWith("src/app.ts");
 
-    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Context")[0]!.props.onClick());
+    await act(async () =>
+      renderer!.root
+        .findAll(
+          (node) =>
+            node.type === "button" &&
+            node.props.className?.includes("mc-next-utility-panel-tab") &&
+            collectText(node).trim() === "Context",
+        )[0]!
+        .props.onClick(),
+    );
     expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "context")).toHaveLength(1);
 
-    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Chat settings")[0]!.props.onClick());
+    await act(async () =>
+      renderer!.root
+        .findAll(
+          (node) =>
+            node.type === "button" &&
+            node.props.className?.includes("mc-next-utility-panel-tab") &&
+            collectText(node).trim() === "Chat settings",
+        )[0]!
+        .props.onClick(),
+    );
     expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "session")).toHaveLength(1);
     expect(renderer!.root.findAll((node) => node.props["data-focused-tab"] === "assist")).toHaveLength(1);
-    expect(renderer!.root.findAll((node) => node.type === "select" && node.props["aria-label"] === "More Chat details")).toHaveLength(0);
+    expect(
+      renderer!.root.findAll((node) => node.type === "select" && node.props["aria-label"] === "More Chat details"),
+    ).toHaveLength(0);
 
-    await act(async () => renderer!.root.findAll((node) => node.type === "button" && node.props.className?.includes("mc-next-utility-panel-tab") && collectText(node).trim() === "Activity")[0]!.props.onClick());
-    const executionDetails = renderer!.root.findAll((node) => node.type === "details" && collectText(node).includes("Execution details"))[0]!;
+    await act(async () =>
+      renderer!.root
+        .findAll(
+          (node) =>
+            node.type === "button" &&
+            node.props.className?.includes("mc-next-utility-panel-tab") &&
+            collectText(node).trim() === "Activity",
+        )[0]!
+        .props.onClick(),
+    );
+    const executionDetails = renderer!.root.findAll(
+      (node) => node.type === "details" && collectText(node).includes("Execution details"),
+    )[0]!;
     await act(async () => executionDetails.props.onToggle({ currentTarget: { open: true } }));
     expect(executionDetails.props.open).toBe(true);
     expect(collectText(renderer!.root)).toContain("Run log");
