@@ -223,8 +223,8 @@ function createCapabilityProfileForRoute(
   } as never;
 }
 
-describe("prepareAgentChatTurn frozen route admission", () => {
-  it("resolves once and passes the same descriptor to history and capability resolution", async () => {
+describe("prepareAgentChatTurn route admission", () => {
+  it("resolves the provider route once without creating a capability profile", async () => {
     const harness = createHost("chat");
     const routeA = {
       requestedProviderId: "provider-a",
@@ -274,14 +274,12 @@ describe("prepareAgentChatTurn frozen route admission", () => {
       expect.objectContaining({ providerId: "provider-a", model: "model-a" }),
       expect.any(Object),
     );
-    expect(capabilityResolver).toHaveBeenCalledWith(expect.objectContaining({ routeResolution: routeA }));
-    expect(prepared.capabilityProfile?.selection).toEqual(
-      expect.objectContaining({ effectiveProviderId: "provider-a", effectiveModel: "model-a" }),
-    );
-    expect(prepared.history.at(-1)?.content).toContain("chat-capability-profile-turn-route-freeze");
+    expect(capabilityResolver).not.toHaveBeenCalled();
+    expect(prepared.capabilityProfile).toBeUndefined();
+    expect(prepared.history.some((message) => String(message.content).includes("Server-owned capability profile:"))).toBe(false);
   });
 
-  it("rejects a profile route mismatch before any provider boundary", async () => {
+  it("does not consult the retired profile resolver before provider execution", async () => {
     const harness = createHost("chat");
     harness.host.resolveChatTurnEffectiveRoute = vi.fn(() => ({
       requestedProviderId: "provider-a",
@@ -299,13 +297,18 @@ describe("prepareAgentChatTurn frozen route admission", () => {
       preview: {} as never,
     }));
 
-    await expect(
-      prepareAgentChatTurn(harness.host, "session-1", { content: "do not cross providers" }),
-    ).rejects.toThrow("did not match the provider/model route frozen for prompt preparation");
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "do not cross providers",
+      subagentPolicy: "auto_when_useful",
+    });
+    expect(prepared.capabilityProfile).toBeUndefined();
+    expect(prepared.normalized.subagentPolicy).toBe("off");
+    expect(prepared.prefs.subagentPolicy).toBe("off");
+    expect(harness.host.resolveChatTurnCapabilityProfile).not.toHaveBeenCalled();
     expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
   });
 
-  it("seals a direct-send profile against the exact compacted history used for execution", async () => {
+  it("uses the direct-send history without profile selection passes", async () => {
     const harness = createHost("chat");
     const route = {
       requestedProviderId: "provider-a",
@@ -327,16 +330,12 @@ describe("prepareAgentChatTurn frozen route admission", () => {
       activeLeafTurnId: "prior-turn",
       turnLineageById: new Map([["prior-turn", { turnId: "prior-turn" }]]),
     });
-    const provisionalHistory = [
-      { role: "system" as const, content: "uncompacted provisional history" },
-      { role: "user" as const, content: "ship the direct send" },
-    ];
     const compactedHistory = [
       { role: "system" as const, content: "authoritative compacted history" },
       { role: "user" as const, content: "ship the direct send" },
     ];
     harness.host.buildLlmMessagesFromBranchPath = vi.fn(async (_sessionId, _pathTurnIds, _userMessage, options) =>
-      options?.compactionDimension?.persistState === false ? provisionalHistory : compactedHistory,
+      options?.compactionDimension?.persistState === true ? compactedHistory : [],
     );
     const historiesSeenByResolver: ChatCompletionRequest["messages"][] = [];
     harness.host.resolveChatTurnCapabilityProfile = vi.fn(async (input) => {
@@ -352,14 +351,11 @@ describe("prepareAgentChatTurn frozen route admission", () => {
       content: "ship the direct send",
     });
 
-    expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledTimes(2);
+    expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledOnce();
     expect(
       vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[0]?.[3]?.compactionDimension?.persistState,
-    ).toBe(false);
-    expect(
-      vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[1]?.[3]?.compactionDimension?.persistState,
     ).toBe(true);
-    expect(historiesSeenByResolver).toEqual([provisionalHistory, compactedHistory]);
+    expect(historiesSeenByResolver).toEqual([]);
     expect(
       prepared.history.filter(
         (message) =>
@@ -427,9 +423,9 @@ describe("prepareAgentChatTurn frozen route admission", () => {
       sealedDimensionHash: expect.any(String),
       actorId: "token:operator-1",
     });
-    expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledTimes(3);
+    expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledTimes(2);
     expect(
-      vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[2]?.[3]?.compactionDimension,
+      vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[1]?.[3]?.compactionDimension,
     ).toMatchObject({
       dimensionHash: vi.mocked(resolveForce).mock.calls[0]?.[0].sealedDimensionHash,
       forceAction: {
@@ -494,7 +490,7 @@ describe("prepareAgentChatTurn frozen route admission", () => {
     expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledOnce();
   });
 
-  it("rejects a direct send when compacted history changes the capability dimension", async () => {
+  it("does not rerun retired capability selection after direct history preparation", async () => {
     const harness = createHost("chat");
     const route = {
       requestedProviderId: "provider-a",
@@ -542,10 +538,9 @@ describe("prepareAgentChatTurn frozen route admission", () => {
       };
     });
 
-    await expect(
-      prepareAgentChatTurn(harness.host, "session-1", { content: "reject selection drift" }),
-    ).rejects.toThrow("capability selection changed after history compaction");
-    expect(harness.host.resolveChatTurnCapabilityProfile).toHaveBeenCalledTimes(2);
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", { content: "reject selection drift" });
+    expect(prepared.capabilityProfile).toBeUndefined();
+    expect(harness.host.resolveChatTurnCapabilityProfile).not.toHaveBeenCalled();
   });
 
   it("replays a bound profile without inheriting changed session selections", async () => {
@@ -782,7 +777,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
 
     expect(resolve).toHaveBeenCalledTimes(1);
     const guidance = harness.readGuidance();
-    expect(guidance).toContain("## Tools available this turn");
+    expect(guidance).toContain("## Tool catalog (current policy still applies)");
     expect(guidance).toContain("browser.search");
     expect(guidance).toContain("memory.write");
     expect(guidance).toContain("## Skills you can draw on");

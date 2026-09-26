@@ -33,6 +33,7 @@ import type {
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   ChatTurnCapabilityProfileRecord,
+  ChatTurnExecutionProfile,
   ModelUsageAttributionContext,
   RuntimeDecisionTraceAppendInput,
   SessionMeta,
@@ -43,7 +44,10 @@ import {
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
-import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
+import {
+  executionProfileFromNormalizationProfile,
+  resolveSustainedLocalCodingProfile,
+} from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
@@ -240,6 +244,7 @@ export interface ChatTurnPrepHost {
   ): Promise<ChatCompletionResponse>;
   recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): Promise<void>;
   isFeatureEnabled(flag: string): Promise<boolean>;
+  isDurableChatExecutionEnabled?(): Promise<boolean>;
   /**
    * Frozen cross-session operator-profile digest (P2-S4b), composed once per
    * session and byte-stable per workspace+revision (cached). Fed to the base
@@ -303,6 +308,7 @@ export interface PreparedAgentChatTurn {
   autonomy: SessionAutonomyPrefsRecord;
   normalized: NormalizedAgentInputFromSend;
   effectiveMode: ChatSessionPrefsRecord["mode"];
+  executionProfile?: ChatTurnExecutionProfile;
   modelRouterDecision: NonNullable<ChatTurnTraceRecord["routing"]["modelRouter"]>;
   retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
   threadKnowledgeCitations: ChatCitationRecord[];
@@ -404,11 +410,8 @@ export function advanceGoalForTurn(input: { turnsUsed: number; turnBudget: numbe
 }
 
 /**
- * Builds the compaction route dimension from the sealed capability selection,
- * deliberately excluding per-turn identity/content fields. The admission
- * fingerprint itself includes contentHash, so using it directly would reset
- * hysteresis on every turn even when the available provider/tool profile was
- * unchanged.
+ * Builds a stable compaction route dimension from the provider/model and an
+ * optional historical capability selection, excluding per-turn content.
  */
 export function buildChatCompactionDimension(input: {
   providerId?: string;
@@ -573,19 +576,6 @@ export async function prepareAgentChatTurn(
   if (!content) {
     throw new Error("content is required");
   }
-  if (!systemHeartbeatPosture) {
-    const promptHook = await host.runPromptSubmitBeforeHook?.({
-      workspaceId,
-      sessionId,
-      turnId,
-      contentLength: content.length,
-      mode: input.mode,
-      attachmentCount: input.attachments?.length ?? 0,
-    });
-    if (promptHook?.blocked) {
-      throw new ConflictError({ message: promptHook.blocked.reason });
-    }
-  }
   if (options?.turnAdmission) {
     const identity = options.turnAdmission.identity;
     if (identity.sessionId !== sessionId || identity.turnId !== turnId) {
@@ -607,6 +597,39 @@ export async function prepareAgentChatTurn(
       turnId,
     });
   }
+  if (!boundCapabilityProfile && (input.contextRefs?.length ?? 0) > 0) {
+    throw new ConflictError({
+      message: "Routed context is temporarily unavailable while new Chat turns use live capabilities.",
+    });
+  }
+  if (!boundCapabilityProfile && input.workspaceSnapshot !== undefined) {
+    throw new ConflictError({
+      message: "Workspace snapshots are temporarily unavailable while new Chat turns use live capabilities.",
+    });
+  }
+  if (!boundCapabilityProfile && input.modelCouncil?.enabled) {
+    throw new ConflictError({
+      message: "Model council is temporarily unavailable while new Chat turns use live capabilities.",
+    });
+  }
+  if (!boundCapabilityProfile && input.parentDelegationStepId) {
+    throw new ConflictError({
+      message: "Delegated Chat turns are temporarily unavailable while new Chat turns use live capabilities.",
+    });
+  }
+  if (!systemHeartbeatPosture) {
+    const promptHook = await host.runPromptSubmitBeforeHook?.({
+      workspaceId,
+      sessionId,
+      turnId,
+      contentLength: content.length,
+      mode: input.mode,
+      attachmentCount: input.attachments?.length ?? 0,
+    });
+    if (promptHook?.blocked) {
+      throw new ConflictError({ message: promptHook.blocked.reason });
+    }
+  }
   const capabilityProfileContent = boundCapabilityProfile
     ? (options?.capabilityProfileContent ?? content).trim()
     : undefined;
@@ -627,7 +650,7 @@ export async function prepareAgentChatTurn(
         speedMode: boundCapabilityProfile.selection.speedMode,
         subagentPolicy: boundCapabilityProfile.selection.subagentPolicy,
       }
-    : normalizedCandidate;
+    : { ...normalizedCandidate, subagentPolicy: "off" };
   const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
   const quickWebTurn = executionProfile === "quick_web";
   if (!options?.skipProviderPreparation && !systemHeartbeatPosture && branchKind !== "retry") {
@@ -813,7 +836,7 @@ export async function prepareAgentChatTurn(
         subagentPolicy: boundCapabilityProfile.selection.subagentPolicy,
         toolAutonomy: boundCapabilityProfile.selection.toolAutonomy,
       }
-    : persistedPrefs;
+    : { ...persistedPrefs, subagentPolicy: "off" };
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined
     : await host.resolveChatTurnEffectiveRoute?.(sessionId, input);
@@ -827,6 +850,13 @@ export async function prepareAgentChatTurn(
     effectiveProviderRoute?.effectiveModel ??
     input.model ??
     prefs.model;
+  const sustainedExecutionProfile = resolveSustainedLocalCodingProfile({
+    content: capabilityProfileContent ?? content,
+    providerId: effectiveProviderId,
+    durableEnabled: (await host.isDurableChatExecutionEnabled?.()) ?? false,
+    normalizationProfile: normalized.normalizationProfile,
+    serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
+  });
   const persistedAutonomy = systemHeartbeatPosture
     ? await host.storage.sessionAutonomyPrefs.get(sessionId)
     : await host.getSessionAutonomyPrefs(sessionId);
@@ -898,7 +928,7 @@ export async function prepareAgentChatTurn(
     // (in-memory callable catalog, no per-tool policy eval). Quick-web turns use
     // a stub prefix that ignores the toolset, so skip the lookup for them.
     let promptCapabilityCatalog: BaseAgentPromptToolset = { toolNames: [] };
-    if (!quickWebTurn && !host.resolveChatTurnCapabilityProfile && host.resolveBasePromptCapabilityCatalog) {
+    if (!quickWebTurn && host.resolveBasePromptCapabilityCatalog) {
       try {
         promptCapabilityCatalog = await host.resolveBasePromptCapabilityCatalog();
       } catch {
@@ -943,6 +973,9 @@ export async function prepareAgentChatTurn(
     personalityOverlay,
     sideChatSystemInstruction,
     buildPlanningModeSystemInstruction(prefs.planningMode),
+    sustainedExecutionProfile === "sustained_local_coding"
+      ? "This is a sustained coding task. Inspect the target files and actual failures, make focused changes, run requested tests after the last edit, and independently check results when asked. After the final command, use fs.stat or a file read to confirm each required file still exists. Keep constraints and the next repair step in view. State only outcomes supported by tool evidence. A shell working directory alone does not prove that writes were confined to it."
+      : undefined,
     missingRequiredProjectBinding
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
       : undefined,
@@ -973,15 +1006,14 @@ export async function prepareAgentChatTurn(
   });
   conversationMessages.push(userMessage);
   const agenticStateCapsule = await buildAgenticStateCapsule(host.storage, sessionId, sessionState);
-  const hasRoutedContextRefs = input.contextRefs !== undefined;
+  const hasRoutedContextRefs = (input.contextRefs?.length ?? 0) > 0;
   if (hasRoutedContextRefs && boundCapabilityProfile) {
     throw new ConflictError({
       message: "Durable routed-context replay requires its persisted snapshot binding.",
     });
   }
-  // Routed bytes are data, never capability-selection instructions. Preserve
-  // the preflight capability/compaction binding and freeze the complete profile
-  // before any routed source is read.
+  // Routed bytes are data, never capability-selection instructions. Historical
+  // profile-bound turns retain their original compaction binding.
   const preflightCompactionDimensionHash = input.routeDecision?.capabilityCompactionDimensionHash;
   let compactionDimension = boundCapabilityProfile
     ? buildChatCompactionDimension({
@@ -1000,9 +1032,6 @@ export async function prepareAgentChatTurn(
       : buildChatCompactionDimension({
           providerId: effectiveProviderId,
           model: effectiveModel,
-          // A direct send without capability preflight must use one exact,
-          // non-mutating history for both profile selection and execution.
-          persistState: false,
         });
   if (systemHeartbeatPosture || options?.skipProviderPreparation) {
     compactionDimension = { ...compactionDimension, persistState: false };
@@ -1025,66 +1054,8 @@ export async function prepareAgentChatTurn(
     history = upsertChatRoutedContextSystemInstruction(history, "");
   }
 
-  let capabilityResolution: ChatTurnCapabilityProfileResolution | undefined;
-  let capabilityProfile = boundCapabilityProfile;
+  const capabilityProfile = boundCapabilityProfile;
   let routedContextSnapshot: ChatRoutedContextSnapshotRecord | undefined;
-  if (!capabilityProfile && host.resolveChatTurnCapabilityProfile) {
-    if (!effectiveProviderRoute) {
-      throw new ConflictError({
-        message: "The server could not freeze a provider/model route for this capability-bound turn.",
-      });
-    }
-    const resolveCapabilityProfile = (historyMessages: ChatCompletionRequest["messages"]) =>
-      host.resolveChatTurnCapabilityProfile!({
-        sessionId,
-        turnId,
-        workspaceId,
-        citadelId,
-        route,
-        content,
-        prefs,
-        autonomy,
-        normalized,
-        effectiveMode,
-        effectiveToolAutonomy,
-        routedContextRequested: hasRoutedContextRefs,
-        routeResolution: effectiveProviderRoute,
-        historyMessages,
-        request: input,
-      });
-    if (!preflightCompactionDimensionHash && contextPathTurnIds.length > 0) {
-      const tentativeResolution = await resolveCapabilityProfile(history);
-      assertCapabilityProfileMatchesFrozenRoute(tentativeResolution.profile, effectiveProviderRoute);
-      compactionDimension = buildChatCompactionDimension({
-        providerId: effectiveProviderId,
-        model: effectiveModel,
-        profile: tentativeResolution.profile,
-      });
-      if (systemHeartbeatPosture) {
-        compactionDimension = { ...compactionDimension, persistState: false };
-      }
-      history = await host.buildLlmMessagesFromBranchPath(
-        sessionId,
-        contextPathTurnIds,
-        userMessage,
-        {
-          providerId: effectiveProviderId,
-          model: effectiveModel,
-          guidanceSystemInstruction,
-          compactionDimension,
-          agenticStateCapsule: agenticStateCapsule.instruction,
-          protectedTurnIds: agenticStateCapsule.protectedTurnIds,
-        },
-        sessionState,
-      );
-      if (hasRoutedContextRefs) {
-        history = upsertChatRoutedContextSystemInstruction(history, "");
-      }
-    }
-    capabilityResolution = await resolveCapabilityProfile(history);
-    capabilityProfile = capabilityResolution.profile;
-    assertCapabilityProfileMatchesFrozenRoute(capabilityProfile, effectiveProviderRoute);
-  }
   if (capabilityProfile) {
     assertCapabilityProfileMatchesCurrentScope(capabilityProfile, {
       sessionId,
@@ -1247,6 +1218,7 @@ export async function prepareAgentChatTurn(
     autonomy,
     normalized,
     effectiveMode,
+    executionProfile: sustainedExecutionProfile,
     modelRouterDecision,
     retrievalTrace,
     threadKnowledgeCitations: threadKnowledgeContext.citations,
@@ -1266,7 +1238,6 @@ export async function prepareAgentChatTurn(
     compactionDimensionHash: compactionDimension.dimensionHash,
     ...(capabilityProfile ? { capabilityProfile } : {}),
     ...(capabilityProfileContent ? { capabilityProfileContent } : {}),
-    ...(capabilityResolution ? { capabilityCatalogSnapshot: capabilityResolution.catalogSnapshot } : {}),
     ...(routedContextSnapshot ? { routedContextSnapshot } : {}),
   };
   if (!systemHeartbeatPosture) {
@@ -1520,20 +1491,6 @@ export function upsertChatRoutedContextSystemInstruction(
   const next = [...withoutPriorBinding];
   next.splice(insertionIndex < 0 ? next.length : insertionIndex, 0, { role: "system", content: contextText });
   return next;
-}
-
-function assertCapabilityProfileMatchesFrozenRoute(
-  profile: ChatTurnCapabilityProfileRecord,
-  route: ResolvedChatRouteDescriptor,
-): void {
-  if (
-    profile.selection.effectiveProviderId !== route.effectiveProviderId ||
-    profile.selection.effectiveModel !== route.effectiveModel
-  ) {
-    throw new ConflictError({
-      message: "The capability profile route did not match the provider/model route frozen for prompt preparation.",
-    });
-  }
 }
 
 function assertCapabilityProfileMatchesCurrentScope(

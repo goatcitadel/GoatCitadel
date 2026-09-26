@@ -214,7 +214,7 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   if (toolNames.length > 0) {
     const overflow = toolset.toolNames.length - toolNames.length;
     const suffix = overflow > 0 ? `, and ${overflow} more` : "";
-    tailSections.push(`## Tools available this turn\n${toolNames.join(", ")}${suffix}`);
+    tailSections.push(`## Tool catalog (current policy still applies)\n${toolNames.join(", ")}${suffix}`);
   }
 
   const skills = [...(toolset.skills ?? [])]

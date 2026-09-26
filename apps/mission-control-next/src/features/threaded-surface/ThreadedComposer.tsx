@@ -134,14 +134,6 @@ export function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProp
   return `${formatTokenLabel(totals.tokens)}${totals.partialTokens && totals.tokens !== null ? " recorded" : ""} / ${formatCostLabel(totals.costUsd)}${totals.partialCost && totals.costUsd !== null ? " recorded" : ""}`;
 }
 
-function formatDelegationMode(mode: string): string {
-  return mode
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function formatDelegationConfidence(confidence?: number): string | null {
   if (typeof confidence !== "number" || !Number.isFinite(confidence)) {
     return null;
@@ -271,8 +263,6 @@ function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSes
     return null;
   }
 
-  const roleCount = suggestion.roles.length;
-  const roleSummary = roleCount === 1 ? "1 subagent" : `${roleCount} subagents`;
   const confidenceLabel = formatDelegationConfidence(suggestion.confidence);
   const reason = suggestion.reason?.trim();
 
@@ -280,12 +270,10 @@ function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSes
     <section className="mc-next-composer-delegation-approval" role="alert" aria-live="assertive">
       <div className="mc-next-composer-delegation-head">
         <StatusChip tone="warning">Subagent approval</StatusChip>
-        <strong>Approve subagents for this run?</strong>
+        <strong>Subagents unavailable</strong>
         {confidenceLabel ? <span>{confidenceLabel}</span> : null}
       </div>
-      <p>
-        Chat can split this into {roleSummary} with {formatDelegationMode(suggestion.mode)} execution.
-      </p>
+      <p>Subagent delegation is temporarily unavailable. This saved suggestion can be dismissed.</p>
       <p className="mc-next-composer-delegation-objective">{suggestion.objective}</p>
       {reason ? <p className="mc-next-composer-delegation-reason">{reason}</p> : null}
       {suggestion.roles.length > 0 ? (
@@ -301,10 +289,10 @@ function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSes
         <button
           type="button"
           className="mc-next-composer-inline-button primary"
-          disabled={props.sending}
+          disabled
           onClick={() => void props.onAcceptDelegation()}
         >
-          Approve subagents
+          Subagents unavailable
         </button>
         <button
           type="button"
@@ -516,8 +504,8 @@ function ExternalSourceStrip({
         <strong>Sources for this turn</strong>
         <span aria-live="polite">
           {selectedCount > 0
-            ? `${selectedCount} selected for the next turn`
-            : "Choose read-only sources to include in your next message."}
+            ? `${selectedCount} selected; clear the selection before sending.`
+            : "Adding external sources to a turn is temporarily unavailable."}
         </span>
         {selectedCount > 0 ? (
           <button
@@ -552,8 +540,8 @@ function ExternalSourceStrip({
           >
             <header className="mc-next-source-picker-header">
               <div>
-                <h2 id={`${stripInstanceId}-picker-title`}>Choose sources for this turn</h2>
-                <p>These sources are read-only. Select the ones you want the next message to use.</p>
+                <h2 id={`${stripInstanceId}-picker-title`}>Attached sources</h2>
+                <p>You can manage attached sources here. Including one in a turn is temporarily unavailable.</p>
               </div>
               <button
                 ref={pickerCloseRef}
@@ -604,9 +592,9 @@ function ExternalSourceStrip({
                             id={checkboxId}
                             type="checkbox"
                             checked={selected}
-                            disabled={disabled}
+                            disabled={disabled || !selected}
                             onChange={() => controls.onToggleSelect(attachment.attachmentId)}
-                            aria-label={`Include ${sourceName} in the next turn`}
+                            aria-label={`Remove ${sourceName} from the next turn`}
                           />
                           <strong>{sourceName}</strong>
                         </label>
@@ -803,7 +791,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         : (props.trust?.providerModelSummary ?? "Provider routing pending");
   // The single composer-level explanation of a blocked route; the start canvas
   // carries the setup actions, so no separate alert banner repeats it.
-  const routeSendBlockReason = resolveChatRouteReadiness(props).sendHint;
+  const routeSendBlockReason = props.profileDependentAdmissionBlockReason ?? resolveChatRouteReadiness(props).sendHint;
   const sendLabel = getSendLabel(props);
   const usageLabel = formatUsageLabel(props.thread);
   const usageTotals = computeUsageTotals(props.thread);
@@ -1079,8 +1067,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       onSelect: props.onRunQuickResearch,
     },
     {
-      label: "Workspace snapshot for next turn",
-      disabled: composerActionDisabled,
+      label: workspaceSnapshotArmed ? "Remove workspace snapshot" : "Workspace snapshots temporarily unavailable",
+      disabled: composerActionDisabled || !workspaceSnapshotArmed,
       active: workspaceSnapshotArmed,
       onSelect: props.onToggleWorkspaceSnapshot,
     },
@@ -1182,22 +1170,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       ) : null}
 
       {props.workspaceSnapshotRequest ? (
-        <div className="mc-next-composer-banner info" aria-label="Workspace snapshot for next turn">
-          <StatusChip tone="muted">Point-in-time</StatusChip>
+        <div className="mc-next-composer-banner info" aria-label="Workspace snapshot unavailable">
+          <StatusChip tone="warning">Unavailable</StatusChip>
           <p>
-            <strong>Workspace snapshot for next turn.</strong> The Gateway captures verified workspace and project
-            identity plus a bounded Git summary during capability preflight, then freezes that point-in-time record for
-            this turn. It grants no folder access.
+            <strong>Workspace snapshot is temporarily unavailable.</strong> Remove this saved request before sending.
           </p>
           <div className="mc-next-composer-action-row">
-            <button
-              type="button"
-              className="mc-next-composer-inline-button"
-              disabled={composerActionDisabled}
-              onClick={props.onRefreshWorkspaceSnapshot}
-            >
-              Refresh snapshot
-            </button>
             <button
               type="button"
               className="mc-next-composer-inline-button"
@@ -1366,12 +1344,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               type="button"
               className="mc-next-composer-suggestion"
               aria-pressed={Boolean(props.modelCouncilEnabled)}
-              disabled={composerActionDisabled || !props.onToggleModelCouncil}
+              disabled={composerActionDisabled || !props.onToggleModelCouncil || !props.modelCouncilEnabled}
               onClick={props.onToggleModelCouncil}
               title={
                 props.modelCouncilEnabled
-                  ? "Read-only model council is armed for Send"
-                  : "Ask a governed read-only model council, then return one Chat answer"
+                  ? "Model council is temporarily unavailable; click to turn it off"
+                  : "Model council is temporarily unavailable"
               }
             >
               Council

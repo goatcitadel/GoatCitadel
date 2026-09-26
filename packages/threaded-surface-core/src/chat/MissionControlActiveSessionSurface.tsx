@@ -294,6 +294,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   routeBoundaryAcknowledged: boolean;
   sending: boolean;
   canSend: boolean;
+  profileDependentAdmissionBlockReason?: string;
   hasActiveStream: boolean;
   activeStreamTurnAssigned: boolean;
   composerRef: RefObject<HTMLTextAreaElement | null>;

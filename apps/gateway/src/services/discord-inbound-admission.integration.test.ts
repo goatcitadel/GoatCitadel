@@ -48,7 +48,7 @@ describe("Discord durable inbound turn admission", { timeout: 120_000 }, () => {
     }
   });
 
-  it("binds a real system turn admission to the durable capability profile and replays without redelivery", async () => {
+  it("binds a profile-free system turn admission to the durable run and replays without redelivery", async () => {
     fakeProvider = await startFakeOpenAiCompatibleServer(successfulProviderResponse);
     fakeDiscord = await startFakeDiscordWebhookServer();
     const root = createIsolatedConfigRoot(fakeProvider.baseUrl);
@@ -157,39 +157,12 @@ describe("Discord durable inbound turn admission", { timeout: 120_000 }, () => {
       terminalDurableRunStatus: "completed",
     });
 
+    expect(run.payload.capabilityProfileId).toBeUndefined();
+    expect(run.metadata?.capabilityProfileId).toBeUndefined();
+    const trace = await gateway.storage.chatTurnTraces.get(completed.turnId!);
+    expect(trace.capabilityProfileId).toBeUndefined();
     const profileEnvelope = await gateway.storage.chatTurnCapabilityProfiles.inspectByTurn(completed.turnId!);
-    expect(profileEnvelope.state, profileEnvelope.error).toBe("available");
-    const profile = profileEnvelope.profile;
-    expect(profile).toBeDefined();
-    expect(profile).toMatchObject({
-      identity: {
-        sessionId: completed.sessionId,
-        turnId: completed.turnId,
-        durableRunId: completed.durableRunId,
-      },
-      source: {
-        channel: "discord",
-        account: connection.connectionId,
-      },
-    });
-    const bindingProof = await gateway.storage.sessionMutationAdmissions.requireCapabilityProfileBinding({
-      admissionId,
-      sessionIncarnationId: admission.sessionIncarnationId,
-      workspaceId: admission.workspaceId,
-      sessionId: completed.sessionId!,
-      turnId: completed.turnId!,
-      profileId: profile!.profileId,
-      profileHash: profile!.hashes.profileHash,
-      createdAt: profile!.createdAt,
-    });
-    expect(bindingProof).toMatchObject({
-      admission: { admissionId },
-      binding: {
-        profileId: profile!.profileId,
-        turnId: completed.turnId,
-        profileHash: profile!.hashes.profileHash,
-      },
-    });
+    expect(profileEnvelope.state, profileEnvelope.error).toBe("legacy_missing");
 
     const delivery = await pollFor(
       async () =>

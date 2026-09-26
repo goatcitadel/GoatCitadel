@@ -3726,7 +3726,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(handleSend).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps Plan, Research, Review, and Council sends on the normal Chat path", async () => {
+  it("keeps Plan, Research, and Review sends on the normal Chat path while Council is unavailable", async () => {
     const cases = [
       { planningMode: "advisory" as const },
       { webMode: "quick" as const },
@@ -3787,8 +3787,9 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(8);
     });
 
-    expect(handleGenerateImage).not.toHaveBeenCalled();
-    expect(handleSend).toHaveBeenCalledTimes(1);
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.modelCouncilEnabled).toBe(false);
+    expect(handleGenerateImage).toHaveBeenCalledTimes(1);
+    expect(handleSend).not.toHaveBeenCalled();
   });
 
   it("removes failed auto-image recovery after the retained draft changes", async () => {

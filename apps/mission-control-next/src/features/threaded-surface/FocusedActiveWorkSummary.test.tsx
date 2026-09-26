@@ -4,6 +4,45 @@ import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { FocusedActiveWorkSummary, deriveFocusedActiveWorkState } from "./FocusedActiveWorkSummary";
 
 describe("FocusedActiveWorkSummary", () => {
+  it("shows coding progress and keeps Stop available while the run is active", () => {
+    const turn = failedFolderTurn();
+    turn.trace.status = "running";
+    turn.trace.failure = undefined;
+    turn.trace.routing.codingRun = {
+      activeLimitMs: 5_400_000,
+      activeUsedMs: 600_000,
+      toolRunLimit: 120,
+      toolRunsUsed: 8,
+      windowIndex: 1,
+      nextAction: "Rerun tests after the patch.",
+      latestTest: { passed: false, summary: "median mismatch" },
+    };
+    const state = deriveFocusedActiveWorkState({ turn, streamStatus: "streaming" });
+    expect(state).toMatchObject({ kind: "running", canStop: true });
+    expect(state?.detail).toContain("Rerun tests after the patch.");
+    expect(state?.detail).toContain("Latest test: failed");
+    turn.trace.routing.codingRun.latestTest = { passed: true, evidenceLabel: "27/27 tests passed" };
+    expect(deriveFocusedActiveWorkState({ turn, streamStatus: "streaming" })?.detail).toContain("27/27 tests passed");
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<FocusedActiveWorkSummary state={state} onFocusComposer={vi.fn()}
+        onFocusPendingInput={vi.fn()} onOpenActivity={vi.fn()} onOpenApprovals={vi.fn()}
+        onRetry={vi.fn()} onStop={vi.fn()} />);
+    });
+    expect(buttonLabels(renderer)).toContain("Stop");
+    act(() => renderer.unmount());
+  });
+
+  it("keeps Stop available during a persisted tool wait", () => {
+    const turn = failedFolderTurn();
+    turn.trace.status = "waiting_for_tool";
+    turn.trace.failure = undefined;
+    expect(deriveFocusedActiveWorkState({ turn, streamStatus: "idle" })).toMatchObject({
+      kind: "running",
+      canStop: true,
+    });
+  });
+
   it("lets canonical cancellation override stale approval and streaming snapshots", () => {
     const turn = failedFolderTurn();
     turn.trace.status = "cancelled";

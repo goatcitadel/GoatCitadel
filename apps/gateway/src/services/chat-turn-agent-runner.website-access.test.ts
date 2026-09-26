@@ -29,10 +29,10 @@ function input(overrides: Partial<ChatTurnAgentRunnerInput> = {}): ChatTurnAgent
   };
 }
 
-function runner(allowed = true) {
+function runner(allowed = true, toolNames = WEB_TOOLS) {
   return new ChatTurnAgentRunner({
     storage: createMockStorage() as never,
-    listToolCatalog: () => createToolCatalog(WEB_TOOLS),
+    listToolCatalog: () => createToolCatalog(toolNames),
     createChatCompletion: vi.fn(),
     invokeTool: vi.fn(),
     inspectToolAccess: vi.fn(async () => ({
@@ -43,11 +43,19 @@ function runner(allowed = true) {
   });
 }
 
-describe("website tool selection before capability profile freeze", () => {
+describe("website tool selection with live policy", () => {
   it("includes the approved web tools for the supplied website", async () => {
     const schema = await runner().resolveCapabilityToolSchema(input());
     expect([...schema.canonicalToModel.keys()]).toEqual(expect.arrayContaining(WEB_TOOLS));
     expect(schema.policyDecisions).toHaveLength(WEB_TOOLS.length);
+  });
+
+  it("exposes approved web tools for the deep research request", async () => {
+    const content = "Please do some deep research into the best things to include in an agentic harness.";
+    const schema = await runner(true, [...WEB_TOOLS, "citations.build"]).resolveCapabilityToolSchema(
+      input({ content, webMode: "deep", historyMessages: [{ role: "user", content }] }),
+    );
+    expect([...schema.canonicalToModel.keys()]).toEqual(expect.arrayContaining([...WEB_TOOLS, "citations.build"]));
   });
 
   it.each(["browser.navigate", "http.get"])("normalizes the supplied website for %s arguments", async (toolName) => {
@@ -59,6 +67,7 @@ describe("website tool selection before capability profile freeze", () => {
       invokeTool,
       invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
       toolNames: [toolName],
+      evaluateToolAccess: vi.fn(async () => ({ allowed: true, requiresApproval: false, reasonCodes: ["allowed"] })),
     });
     const result = await execute({ input: input(), turnId: "website-turn", toolName, rawArgs: {} });
     expect(result.record.status).toBe("executed");
@@ -73,10 +82,14 @@ describe("website tool selection before capability profile freeze", () => {
   it.each([
     { webMode: "off" as const },
     { toolAutonomy: "manual" as const },
-    { content: "Tell me about Peaky Blinders." },
-  ])("keeps full web access subordinate to turn settings and intent: %j", async (overrides) => {
+  ])("keeps full web access subordinate to turn settings: %j", async (overrides) => {
     const schema = await runner().resolveCapabilityToolSchema(input(overrides));
     expect(schema.tools).toEqual([]);
+  });
+
+  it("keeps policy-approved web tools available when intent detection misses a request", async () => {
+    const schema = await runner().resolveCapabilityToolSchema(input({ content: "Tell me about Peaky Blinders." }));
+    expect([...schema.canonicalToModel.keys()]).toEqual(expect.arrayContaining(WEB_TOOLS));
   });
 
   it("does not expose policy-denied tools when full web access is enabled", async () => {

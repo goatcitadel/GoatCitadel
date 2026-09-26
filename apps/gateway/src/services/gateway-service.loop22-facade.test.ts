@@ -276,7 +276,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.scheduleProviderCatalogPrewarm).toHaveBeenCalled();
   });
 
-  it("recovers occurrences before every advisory heartbeat sweep", async () => {
+  it("recovers existing heartbeat occurrences while new admission is paused", async () => {
     const order: string[] = [];
     const gateway = createGatewayHarness({
       heartbeatOccurrenceService: {
@@ -292,7 +292,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
 
     await (GatewayService.prototype as any).runHeartbeatSweep.call(gateway);
 
-    expect(order).toEqual(["recover", "advisory-sweep"]);
+    expect(order).toEqual(["recover"]);
   });
 
   it("reconciles a committed cron generation before clearing the startup marker", async () => {

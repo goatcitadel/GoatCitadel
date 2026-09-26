@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
@@ -12,6 +13,7 @@ export const FILESYSTEM_TOOL_NAMES = new Set([
   "code.search",
   "code.search_files",
   "fs.write",
+  "fs.patch",
   "fs.list",
   "fs.stat",
   "fs.copy",
@@ -56,6 +58,8 @@ export async function executeFilesystemTool(
       return codeSearchFiles(request, config, storage, deps);
     case "fs.write":
       return fsWrite(request.args, config);
+    case "fs.patch":
+      return fsPatch(request.args, config);
     case "fs.list":
       return fsList(request, config, storage, deps);
     case "fs.stat":
@@ -81,8 +85,8 @@ async function fsRead(
   const p = required(args.path, "path");
   await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
-  const { content, bytes } = await readUtf8FileBounded(full, FILESYSTEM_READ_MAX_BYTES);
-  return { path: full, bytes, content };
+  const { content, bytes, sha256 } = await readUtf8FileBounded(full, FILESYSTEM_READ_MAX_BYTES);
+  return { path: full, bytes, content, sha256 };
 }
 
 async function fileReadRange(
@@ -95,13 +99,14 @@ async function fileReadRange(
   const p = required(args.path, "path");
   await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
-  const { content } = await readUtf8FileBounded(full, FILE_READ_RANGE_MAX_BYTES);
+  const { content, sha256 } = await readUtf8FileBounded(full, FILE_READ_RANGE_MAX_BYTES);
   const selected = selectLineRange(content, args.startLine, args.endLine);
   if (Buffer.byteLength(selected.content, "utf8") > FILE_READ_RANGE_MAX_OUTPUT_BYTES) {
     throw new Error(`Filesystem line range exceeds the ${FILE_READ_RANGE_MAX_OUTPUT_BYTES} byte output limit: ${full}`);
   }
   return {
     path: full,
+    sha256,
     startLine: selected.startLine,
     endLine: selected.endLine,
     lineCount: selected.lineCount,
@@ -227,6 +232,57 @@ async function fsWrite(args: Record<string, unknown>, config: ToolPolicyConfig) 
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, content, "utf8");
   return { path: full, bytesWritten: content.length };
+}
+
+async function fsPatch(args: Record<string, unknown>, config: ToolPolicyConfig) {
+  const p = required(args.path, "path");
+  const expectedSha256 = required(args.expectedSha256, "expectedSha256").toLowerCase();
+  const oldText = args.oldText;
+  const newText = args.newText;
+  if (!/^[a-f0-9]{64}$/u.test(expectedSha256) || typeof oldText !== "string" || !oldText ||
+      typeof newText !== "string" || oldText === newText) {
+    throw new Error("fs.patch requires a valid SHA-256 and one non-empty changed text replacement.");
+  }
+  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  const full = path.resolve(p);
+  if ((await fs.lstat(full)).isSymbolicLink()) {
+    throw new Error(`fs.patch does not replace symbolic links: ${full}.`);
+  }
+  const { content, sha256: actualSha256 } = await readUtf8FileBounded(full, FILE_READ_RANGE_MAX_BYTES, true);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`fs.patch rejected changed file ${full}: expected SHA-256 does not match.`);
+  }
+  const firstMatch = content.indexOf(oldText);
+  if (firstMatch < 0 || content.indexOf(oldText, firstMatch + 1) >= 0) {
+    throw new Error(`fs.patch requires exactly one matching occurrence in ${full}.`);
+  }
+  const updated = content.slice(0, firstMatch) + newText + content.slice(firstMatch + oldText.length);
+  const temporary = `${full}.goatcitadel-patch-${randomUUID()}`;
+  const stat = await fs.stat(full);
+  await fs.writeFile(temporary, updated, { encoding: "utf8", flag: "wx", mode: stat.mode });
+  try {
+    assertWritePathInJail(full, config.sandbox.writeJailRoots);
+    if ((await fs.lstat(full)).isSymbolicLink()) {
+      throw new Error(`fs.patch rejected symbolic link at ${full} before replacement.`);
+    }
+    const latest = await readUtf8FileBounded(full, FILE_READ_RANGE_MAX_BYTES, true);
+    if (latest.sha256 !== expectedSha256) {
+      throw new Error(`fs.patch rejected changed file ${full} before replacement.`);
+    }
+    await fs.rename(temporary, full);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+  return {
+    path: full,
+    beforeSha256: actualSha256,
+    afterSha256: hashText(updated),
+    bytesWritten: Buffer.byteLength(updated, "utf8"),
+  };
+}
+
+function hashText(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 async function readExistingUtf8File(full: string): Promise<string | undefined> {
@@ -419,7 +475,7 @@ async function searchFileContents(input: {
   };
 }
 
-async function readUtf8FileBounded(fullPath: string, maxBytes: number): Promise<{ content: string; bytes: number }> {
+async function readUtf8FileBounded(fullPath: string, maxBytes: number, strict = false): Promise<{ content: string; bytes: number; sha256: string }> {
   const handle = await fs.open(fullPath, "r");
   try {
     const stat = await handle.stat();
@@ -446,10 +502,12 @@ async function readUtf8FileBounded(fullPath: string, maxBytes: number): Promise<
     if (bytes > maxBytes) {
       throw filesystemReadLimitError(fullPath, maxBytes);
     }
-    return {
-      content: Buffer.concat(chunks, bytes).toString("utf8"),
-      bytes,
-    };
+    const raw = Buffer.concat(chunks, bytes);
+    const content = raw.toString("utf8");
+    if (strict && (!Buffer.from(content, "utf8").equals(raw) || content.includes("\u0000"))) {
+      throw new Error(`fs.patch requires a UTF-8 text file without NUL bytes: ${fullPath}.`);
+    }
+    return { content, bytes, sha256: createHash("sha256").update(raw).digest("hex") };
   } finally {
     await handle.close();
   }

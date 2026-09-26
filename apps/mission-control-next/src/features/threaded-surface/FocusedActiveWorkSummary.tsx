@@ -169,16 +169,20 @@ export function deriveFocusedActiveWorkState({
     return null;
   }
 
+  const coding = turn.trace.routing.codingRun;
+
   return {
     kind: "running",
     title:
       streamStatus === "queued" || turn.trace.status === "queued"
         ? "Your request is queued"
         : "Working on your request",
-    detail: "I’ll keep the result here when it’s ready.",
+    detail: coding
+      ? `${coding.nextAction} · Latest test: ${coding.latestTest ? (coding.latestTest.evidenceLabel ?? (coding.latestTest.passed ? "passed" : "failed")) : "not run"} · ${Math.max(0, Math.ceil((coding.activeLimitMs - coding.activeUsedMs) / 60_000))} active min remaining.`
+      : "I’ll keep the result here when it’s ready.",
     turnId: turn.turnId,
     canRetry: false,
-    canStop: streamStatus === "streaming" || turn.trace.status === "running",
+    canStop: streamStatus === "streaming" || ["queued", "running", "waiting_for_tool"].includes(turn.trace.status),
   };
 }
 

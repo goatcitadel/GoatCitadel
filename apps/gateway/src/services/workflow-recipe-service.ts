@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  OrchestrationPhase,
   OrchestrationPlan,
   OrchestrationRun,
   OrchestrationRunPolicyContext,
@@ -26,6 +27,7 @@ import type {
   WorkflowRecipeTemplateRecord,
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
+import { OrchestrationEngine } from "@goatcitadel/orchestration";
 import { buildN8nWorkflowTemplate, validateN8nTemplateExport } from "./workflow-recipe-n8n-template.js";
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set([
@@ -69,10 +71,14 @@ export class WorkflowRecipeService {
     const missingTools = detectMissingTools(recipe, this.host.listToolNames?.() ?? []);
     const estimatedLimits = normalizeLimits(recipe.limits);
     const requiredApprovals = normalizeRequiredApprovals(recipe);
+    const plan = buildOrchestrationPlan(recipe, estimatedLimits, requiredApprovals);
+    // Exports reuse preview for recipes that are still being fixed, so preview
+    // reports an unrunnable plan instead of throwing; plan creation refuses it.
+    const planIssue = describeUnrunnableRecipePlan(plan);
     return {
       recipe,
-      plan: buildOrchestrationPlan(recipe, estimatedLimits, requiredApprovals),
-      warnings,
+      plan,
+      warnings: planIssue ? [...warnings, `Run creation would reject this plan: ${planIssue}`] : warnings,
       requiredApprovals,
       missingTools,
       missingSkills,
@@ -85,6 +91,10 @@ export class WorkflowRecipeService {
     policyContext?: OrchestrationRunPolicyContext,
   ): Promise<WorkflowRecipePlanCreateResponse> {
     const preview = await this.previewRecipe(input);
+    const planIssue = describeUnrunnableRecipePlan(preview.plan);
+    if (planIssue) {
+      throw new ValidationError({ message: `Recipe does not produce a runnable orchestration plan: ${planIssue}` });
+    }
     const run = policyContext
       ? await this.host.createOrchestrationPlan(preview.plan, policyContext)
       : await this.host.createOrchestrationPlan(preview.plan);
@@ -611,59 +621,74 @@ function normalizeLimits(raw: unknown): Required<WorkflowRecipeLimits> {
   };
 }
 
+const recipePlanEngine = new OrchestrationEngine();
+
+/** Why run creation would reject this plan, or undefined when it is runnable. */
+function describeUnrunnableRecipePlan(plan: OrchestrationPlan): string | undefined {
+  try {
+    recipePlanEngine.validate(plan);
+    return undefined;
+  } catch (error) {
+    const issues = (error as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) {
+      return issues
+        .map((issue) => (issue && typeof issue === "object" ? String((issue as { message?: unknown }).message) : ""))
+        .filter(Boolean)
+        .join("; ");
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 function buildOrchestrationPlan(
   recipe: WorkflowRecipeRecord,
   limits: Required<WorkflowRecipeLimits>,
   requiredApprovals: string[],
 ): OrchestrationPlan {
   const slug = slugify(recipe.name);
-  const phases = recipe.steps.map((step, index) => ({
+  const stepPhases: OrchestrationPhase[] = recipe.steps.map((step, index) => ({
     phaseId: step.id,
     ownerAgentId: step.agent,
     specPath: `recipe://${slug}/steps/${index + 1}-${slugify(step.title)}`,
-    loopMode: "fresh-context" as const,
+    loopMode: "fresh-context",
     requiresApproval: requiredApprovals.includes(step.id),
   }));
-  const ownership = recipe.agents.map((agent) => ({
-    agentId: agent.id,
-    paths: ["workspace"],
-  }));
-  const baseWave = {
-    waveId: "wave-1",
-    verify: [],
-    budgetUsd: limits.maxCostUsd,
-    ownership,
-    phases,
-  };
-  const waves =
+  const phases: OrchestrationPhase[] =
     recipe.process === "hierarchical"
       ? [
           {
-            ...baseWave,
-            phases: [
-              {
-                phaseId: "coordinator-brief",
-                ownerAgentId: recipe.agents[0]!.id,
-                specPath: `recipe://${slug}/coordinator-brief`,
-                loopMode: "fresh-context" as const,
-                requiresApproval: requiredApprovals.includes("coordinator-brief"),
-              },
-              ...phases,
-              {
-                phaseId: "coordinator-synthesis",
-                ownerAgentId: recipe.agents[0]!.id,
-                specPath: `recipe://${slug}/coordinator-synthesis`,
-                loopMode: "compaction" as const,
-                requiresApproval: false,
-              },
-            ],
+            phaseId: "coordinator-brief",
+            ownerAgentId: recipe.agents[0]!.id,
+            specPath: `recipe://${slug}/coordinator-brief`,
+            loopMode: "fresh-context",
+            requiresApproval: requiredApprovals.includes("coordinator-brief"),
+          },
+          ...stepPhases,
+          {
+            phaseId: "coordinator-synthesis",
+            ownerAgentId: recipe.agents[0]!.id,
+            specPath: `recipe://${slug}/coordinator-synthesis`,
+            loopMode: "compaction",
+            requiresApproval: false,
           },
         ]
-      : [baseWave];
+      : stepPhases;
+  // Recipe steps run one after another, so each gets its own wave owned by its
+  // agent. Sharing one wave would give every agent the same "workspace" path,
+  // which the engine rejects as an ownership conflict. Wave budgets stay
+  // unbounded (0); the plan-level cost cap governs recipe spend.
+  const waves = phases.map((phase, index) => ({
+    waveId: `wave-${index + 1}`,
+    verify: [],
+    budgetUsd: 0,
+    ownership: [{ agentId: phase.ownerAgentId, paths: ["workspace"] }],
+    phases: [phase],
+  }));
   return {
     planId: `recipe-${slug}-${hashRecipe(recipe).slice(0, 8)}`,
     goal: recipe.goal,
-    mode: requiredApprovals.length > 0 ? "hitl" : "auto",
+    // Only the steps the recipe names wait for approval; "hitl" would gate every phase.
+    mode: "auto",
     maxIterations: limits.maxIterations,
     maxRuntimeMinutes: limits.maxRuntimeMinutes,
     maxCostUsd: limits.maxCostUsd,
@@ -721,7 +746,7 @@ function buildWarnings(recipe: WorkflowRecipeRecord): string[] {
     ...(recipe.scheduleIntent ? ["scheduleIntent is recorded for review but does not auto-create an automation."] : []),
     ...(recipe.channelIntent ? ["channelIntent is recorded for review but does not auto-send messages."] : []),
     ...(recipe.process === "parallel"
-      ? ["Parallel mode maps steps into one orchestration wave; durable run lifecycle remains unchanged."]
+      ? ["Parallel process is recorded for review; orchestration runs recipe steps one at a time."]
       : []),
   ];
 }

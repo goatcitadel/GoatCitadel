@@ -1,3 +1,4 @@
+import { OrchestrationEngine } from "@goatcitadel/orchestration";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowRecipeService } from "./workflow-recipe-service.js";
 
@@ -35,10 +36,91 @@ limits:
     });
 
     expect(preview.recipe.process).toBe("sequential");
-    expect(preview.plan.mode).toBe("hitl");
-    expect(preview.plan.waves[0]?.phases).toHaveLength(2);
+    // Only the listed step waits for approval; hitl would gate every step.
+    expect(preview.plan.mode).toBe("auto");
+    expect(preview.plan.waves.flatMap((wave) => wave.phases)).toEqual([
+      expect.objectContaining({ phaseId: "gather", ownerAgentId: "analyst", requiresApproval: false }),
+      expect.objectContaining({ phaseId: "synthesize", ownerAgentId: "coordinator", requiresApproval: true }),
+    ]);
+    // Each step gets its own wave owned by its agent, so two agents never collide on the shared path.
+    expect(preview.plan.waves.map((wave) => wave.ownership)).toEqual([
+      [{ agentId: "analyst", paths: ["workspace"] }],
+      [{ agentId: "coordinator", paths: ["workspace"] }],
+    ]);
+    expect(() => new OrchestrationEngine().validate(preview.plan)).not.toThrow();
     expect(preview.requiredApprovals).toEqual(["synthesize"]);
     expect(preview.estimatedLimits).toMatchObject({ maxIterations: 2, maxRuntimeMinutes: 20, maxCostUsd: 1.5 });
+  });
+
+  it("builds runnable plans for every shipped template and the automation draft", async () => {
+    const service = createService();
+    const engine = new OrchestrationEngine();
+
+    const templates = service.listTemplates();
+    expect(templates.length).toBeGreaterThan(0);
+    for (const template of templates) {
+      const preview = await service.previewRecipe({ recipe: template.recipe });
+      expect(() => engine.validate(preview.plan), template.templateId).not.toThrow();
+      expect(preview.warnings.some((warning) => warning.startsWith("Run creation would reject"))).toBe(false);
+    }
+
+    const draft = await service.draftAutomationRecipe({
+      taskDescription: "Summarize open support tickets every Monday",
+    });
+    expect(draft.recipe.agents.length).toBeGreaterThan(1);
+    expect(() => engine.validate(draft.plan)).not.toThrow();
+  });
+
+  it("keeps hierarchical coordinator phases in their own waves around the steps", async () => {
+    const service = createService();
+
+    const preview = await service.previewRecipe({
+      recipe: {
+        name: "Hierarchical review",
+        goal: "Coordinate a review.",
+        process: "hierarchical",
+        agents: [
+          { id: "coordinator", role: "Coordinator" },
+          { id: "analyst", role: "Analyst" },
+        ],
+        steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review evidence." }],
+      },
+    });
+
+    expect(preview.plan.waves.map((wave) => wave.phases.map((phase) => phase.phaseId))).toEqual([
+      ["coordinator-brief"],
+      ["review"],
+      ["coordinator-synthesis"],
+    ]);
+    expect(() => new OrchestrationEngine().validate(preview.plan)).not.toThrow();
+  });
+
+  it("reports an unrunnable recipe plan in preview and refuses to create it", async () => {
+    const createOrchestrationPlan = vi.fn();
+    const service = createService(createOrchestrationPlan);
+    const recipe = {
+      name: "Duplicate steps",
+      goal: "Show an unrunnable plan.",
+      process: "sequential" as const,
+      agents: [{ id: "analyst", role: "Analyst" }],
+      steps: [
+        { id: "review", title: "Review", agent: "analyst", prompt: "Review evidence." },
+        { id: "review", title: "Summarize", agent: "analyst", prompt: "Summarize evidence." },
+      ],
+    };
+
+    const preview = await service.previewRecipe({ recipe });
+    expect(preview.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Run creation would reject this plan: Duplicate phaseId review."),
+      ]),
+    );
+
+    await expect(service.createPlanFromRecipe({ recipe })).rejects.toMatchObject({
+      httpStatus: 400,
+      message: expect.stringContaining("Recipe does not produce a runnable orchestration plan"),
+    });
+    expect(createOrchestrationPlan).not.toHaveBeenCalled();
   });
 
   it("rejects unknown top-level keys and arbitrary Python-style tools", async () => {

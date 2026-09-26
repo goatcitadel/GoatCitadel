@@ -139,12 +139,12 @@ describe("chat-route-resolution", () => {
     });
 
     expect(result.selectionSource).toBe("global");
-    expect(result.fallbackPolicy).toBe("armed");
-    expect(result.fallbackResult).toBe("local_to_cloud");
-    expect(result.degradedReason).toContain("local to cloud");
+    expect(result.fallbackPolicy).toBe("off");
+    expect(result.fallbackResult).toBe("not_applicable");
+    expect(result.degradedReason).toBeUndefined();
   });
 
-  it("freezes cross-provider fallback off when capability admission is resolved", async () => {
+  it("keeps sends on the preflight route without resolving a capability profile", async () => {
     const host = createHost({
       runtime: { activeProviderId: "ollama", activeModel: "llama3.2" },
       fallbacks: [{ providerId: "openai", model: "gpt-5.4-mini" }],
@@ -183,8 +183,21 @@ describe("chat-route-resolution", () => {
 
     expect(result.fallbackPolicy).toBe("off");
     expect(result.fallbackResult).toBe("not_applicable");
-    expect(result.capabilityProfile?.fallbackCount).toBe(0);
-    expect(result.decision.capabilityFingerprint).toBe("a".repeat(64));
+    expect(result.degradedReason).toBeUndefined();
+    expect(result.capabilityProfile).toBeUndefined();
+    expect(result.decision.capabilityFingerprint).toBeUndefined();
+    expect(host.resolveCapabilityPreflight).not.toHaveBeenCalled();
+  });
+
+  it.each(["retry", "edit"] as const)("keeps a content-free %s preflight on its selected provider", async (action) => {
+    const host = createHost({
+      runtime: { activeProviderId: "ollama", activeModel: "llama3.2" },
+      fallbacks: [{ providerId: "openai", model: "gpt-5.4-mini" }],
+    });
+    const result = await preflightChatRoute(host as never, "session-1", { action, turnId: "source-turn" });
+    expect(result.fallbackPolicy).toBe("off");
+    expect(result.fallbackResult).toBe("not_applicable");
+    expect(result.degradedReason).toBeUndefined();
   });
 
   it("blocks when a local runtime is unreachable during preflight", async () => {
@@ -445,7 +458,7 @@ describe("chat-route-resolution", () => {
     expect(absent.blockedReason).toContain("Refresh the catalog");
   });
 
-  it("normalizes google model ids and reports fallback boundary direction", async () => {
+  it("normalizes google model ids and keeps cross-provider fallback off", async () => {
     const google = await resolveChatRouteDescriptor(
       createHost({
         runtime: {
@@ -587,9 +600,9 @@ describe("chat-route-resolution", () => {
     );
     expect(sameBoundary).toEqual(
       expect.objectContaining({
-        fallbackPolicy: "armed",
-        fallbackResult: "same_boundary",
-        degradedReason: "Fallback is armed if the primary route fails.",
+        fallbackPolicy: "off",
+        fallbackResult: "not_applicable",
+        degradedReason: undefined,
       }),
     );
 
@@ -622,9 +635,9 @@ describe("chat-route-resolution", () => {
     );
     expect(cloudToLocal).toEqual(
       expect.objectContaining({
-        fallbackPolicy: "armed",
-        fallbackResult: "cloud_to_local",
-        degradedReason: expect.stringContaining("cloud to local"),
+        fallbackPolicy: "off",
+        fallbackResult: "not_applicable",
+        degradedReason: undefined,
       }),
     );
   });

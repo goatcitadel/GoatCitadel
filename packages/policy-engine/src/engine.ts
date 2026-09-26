@@ -2759,6 +2759,7 @@ function extractWritePathCandidates(request: ToolAccessEvaluateRequest): string[
     typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   switch (request.toolName) {
     case "fs.write":
+    case "fs.patch":
     case "artifacts.create":
     case "documents.create":
     case "presentations.create":

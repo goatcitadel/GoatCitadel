@@ -325,7 +325,9 @@ function routedRequest(extra: Record<string, unknown> = {}) {
   };
 }
 
-describe("prepareAgentChatTurn routed context", () => {
+// Retained for the historical frozen-profile path while new routed-context
+// admission is paused. Re-enable when routed context has a live authority path.
+describe.skip("prepareAgentChatTurn routed context with frozen profiles", () => {
   it("freezes a stable pre-context profile and never feeds adversarial routed bytes into selection", async () => {
     const harness = createHarness({ withPriorTurn: true });
 
@@ -638,5 +640,41 @@ describe("prepareAgentChatTurn routed context", () => {
       ),
     ).toEqual(harness.baseHistory);
     expect(prepared.routedContextSnapshot).toBeUndefined();
+  });
+});
+
+describe("profile-free routed-context admission", () => {
+  it.each([
+    [{ workspaceSnapshot: { capture: true, requestId: "snapshot-disabled" } }, "Workspace snapshots are temporarily unavailable"],
+    [{ modelCouncil: { enabled: true } }, "Model council is temporarily unavailable"],
+    [{ parentDelegationStepId: "step-disabled" }, "Delegated Chat turns are temporarily unavailable"],
+  ] as const)("rejects %s before user ingestion", async (requestPatch, reason) => {
+    const harness = createHarness();
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, { content: "Research this", ...requestPatch }),
+    ).rejects.toThrow(reason);
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
+    expect(harness.resolveCapability).not.toHaveBeenCalled();
+  });
+
+  it("rejects requested refs before user ingestion or source reads", async () => {
+    const harness = createHarness();
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), { turnId: "turn-routed-disabled" }),
+    ).rejects.toThrow("Routed context is temporarily unavailable");
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
+    expect(harness.resolveSources).not.toHaveBeenCalled();
+    expect(harness.resolveCapability).not.toHaveBeenCalled();
+  });
+
+  it("prepares ordinary history without a new capability profile", async () => {
+    const harness = createHarness();
+    const prepared = await prepareAgentChatTurn(harness.host, SESSION_ID, {
+      content: "Use the routed context.",
+      contextRefs: [],
+    });
+    expect(prepared.capabilityProfile).toBeUndefined();
+    expect(prepared.history).toEqual(harness.baseHistory);
+    expect(harness.resolveCapability).not.toHaveBeenCalled();
   });
 });

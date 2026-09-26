@@ -852,6 +852,7 @@ async function runAgentSendChatMessageLlmPath(
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
       sessionId,
+      workspaceId: prepared.workspaceId,
       turnId,
       userMessageId: prepared.userEventId,
       ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
@@ -880,6 +881,7 @@ async function runAgentSendChatMessageLlmPath(
         prepared.normalized.subagentPolicy ??
         prepared.prefs.subagentPolicy,
       normalizationProfile: prepared.normalized.normalizationProfile,
+      executionProfile: prepared.executionProfile,
       toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
       operatorId: prepared.capabilityProfile ? prepared.capabilityProfile.identity.operatorId : input.operatorId,
       authActorId: prepared.capabilityProfile ? prepared.capabilityProfile.identity.authActorId : input.authActorId,
@@ -952,6 +954,7 @@ async function runAgentSendChatMessageLlmPath(
       }
       const retryResult = await host.turnRuntime.run({
         sessionId,
+        workspaceId: prepared.workspaceId,
         turnId: retryTurnId,
         userMessageId: prepared.userEventId,
         ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
@@ -969,6 +972,7 @@ async function runAgentSendChatMessageLlmPath(
         speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
         subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
         normalizationProfile: prepared.normalized.normalizationProfile,
+        executionProfile: prepared.executionProfile,
         toolAutonomy: prepared.effectiveToolAutonomy,
         operatorId: input.operatorId,
         authActorId: input.authActorId,

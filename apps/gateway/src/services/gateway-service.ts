@@ -8,6 +8,7 @@ export {
   type McpRequesterScopedComposedRuntime,
 } from "./mcp-requester-runtime-composition.js";
 import { verifyProviderConnection, verifyTemporaryProviderCredential } from "./provider-readiness-service.js";
+import { resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 import { composeChatTurnControl, type ChatTurnControlComposition } from "./gateway/chat-turn-control-composition.js";
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
@@ -476,6 +477,7 @@ import {
   type ChatAutonomousTurnDeps,
   enqueueAutonomousChatTurn,
   isHeartbeatEligibleSession,
+  isNewAutonomousChatTurnAdmissionPaused,
   runCommitmentSweep,
   runCronAgentTurn,
   runHeartbeatSweep,
@@ -1674,6 +1676,7 @@ export class GatewayService {
       resolveConfirmedDelegation: (input) => this.chatTurnControl.resolveConfirmedDelegation(input),
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
+      getModelOutputTokenLimit: (providerId, model) => this.llmService.getModelOutputTokenLimit(providerId, model),
       listCapabilityCatalog: (scope, workspaceId) =>
         this.capabilitySystemService.listCatalog(scope, "ALL", workspaceId),
       revalidateRequesterTool: (profile, canonicalName) => this.revalidateNativeMcpChatTool(profile, canonicalName),
@@ -1934,7 +1937,9 @@ export class GatewayService {
       storage: this.storage,
       sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
       canEnqueueHeartbeat: async () =>
-        !(await this.isFeatureEnabled("autonomyV1Disabled")) && (await this.isFeatureEnabled("durableKernelV1Enabled")),
+        !isNewAutonomousChatTurnAdmissionPaused() &&
+        !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
+        (await this.isFeatureEnabled("durableKernelV1Enabled")),
       enqueuePreclaimedHeartbeat: async (input) => {
         const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
           sessionId: input.occurrence.sessionId,
@@ -7158,6 +7163,16 @@ export class GatewayService {
       input.request as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }
     ).policyContext;
     const routeResolution = input.routeResolution;
+    const executionProfile = resolveSustainedLocalCodingProfile({
+      content: input.content,
+      providerId: routeResolution.effectiveProviderId,
+      durableEnabled:
+        this.config.assistant.durable.enabled &&
+        this.config.assistant.durable.executionEnabled &&
+        (await this.isFeatureEnabled("durableKernelV1Enabled")),
+      normalizationProfile: input.normalized.normalizationProfile,
+      serverOnlyTurn: Boolean(input.request.parentDelegationStepId),
+    });
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -7229,6 +7244,7 @@ export class GatewayService {
         speedMode: input.normalized.speedMode ?? input.prefs.speedMode,
         subagentPolicy: input.normalized.subagentPolicy ?? input.prefs.subagentPolicy,
         normalizationProfile: input.normalized.normalizationProfile,
+        executionProfile,
         toolAutonomy: input.effectiveToolAutonomy,
         routedContextRequested: input.routedContextRequested,
         historyMessages: input.historyMessages,
@@ -7254,6 +7270,14 @@ export class GatewayService {
         workspaceSnapshotRequest: input.request.workspaceSnapshot,
         ...(serverOwnedPolicyContext ? { policyContext: serverOwnedPolicyContext } : {}),
       },
+    );
+  }
+
+  public async isDurableChatExecutionEnabled(): Promise<boolean> {
+    return (
+      this.config.assistant.durable.enabled &&
+      this.config.assistant.durable.executionEnabled &&
+      (await this.isFeatureEnabled("durableKernelV1Enabled"))
     );
   }
 
@@ -8351,11 +8375,13 @@ export class GatewayService {
   }
 
   private async runCommitmentSweep(): Promise<void> {
+    if (isNewAutonomousChatTurnAdmissionPaused()) return;
     await runCommitmentSweep(this.chatAutonomousTurnDeps());
   }
 
   private async runHeartbeatSweep(): Promise<void> {
     await this.heartbeatOccurrenceService.recoverAll();
+    if (isNewAutonomousChatTurnAdmissionPaused()) return;
     await runHeartbeatSweep(this.chatAutonomousTurnDeps());
   }
 

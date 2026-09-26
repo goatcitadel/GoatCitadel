@@ -1234,6 +1234,28 @@ describe("createChatCompletion", () => {
     );
   });
 
+  it("rejects a hook that redirects a pinned coding run to a hosted provider", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "never",
+        choices: [{ index: 0, message: { role: "assistant", content: "never" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "llm.model.select.before"
+        ? { runs: [], patch: { providerId: "openai", model: "hosted-model" } }
+        : { runs: [] },
+    ) as never;
+
+    await expect(createChatCompletion(host, {
+      ...createRequest(),
+      providerId: "llamacpp",
+      model: "Orinth-1.5-35B-Q4_K_M.gguf",
+      requiredRuntimeTarget: { providerId: "llamacpp", model: "Orinth-1.5-35B-Q4_K_M.gguf" },
+    })).rejects.toThrow("selected local model route changed");
+    expect(host.llmService.chatCompletions).not.toHaveBeenCalled();
+  });
+
   it("stops before persistence when a model-selection hook blocks the request", async () => {
     const host = createCompletionHost({
       completion: async () => ({

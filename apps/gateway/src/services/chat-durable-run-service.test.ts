@@ -91,7 +91,7 @@ describe("chat-durable-run-service", () => {
 
   it("creates and schedules a durable chat run", async () => {
     const prepared = createPreparedTurn();
-    const input = createSendRequest();
+    const input = { ...createSendRequest(), contextRefs: [] };
     const streamChunks: Array<{ chunk: ChatStreamChunkDraft; durableRunId?: string }> = [];
     const requestedRunIds: string[] = [];
     const createInputs: DurableRunCreateRequest[] = [];
@@ -167,7 +167,7 @@ describe("chat-durable-run-service", () => {
     expect(requestedRunIds).toEqual(["run-1"]);
   });
 
-  it("binds task-scoped durable Chat to the immutable remote-worker parent context without widening ordinary Chat", async () => {
+  it("keeps task-linked profile-free Chat admissible without a remote worker context", async () => {
     const createInputs: DurableRunCreateRequest[] = [];
     const prepared = createPreparedTurn({
       workspaceId: "stale-projection",
@@ -206,6 +206,7 @@ describe("chat-durable-run-service", () => {
       remoteWorkerAssignmentParentContext: buildRemoteWorkerAssignmentParentContext(parentInput),
       remoteWorkerAssignmentParentContextSha256: remoteWorkerAssignmentParentContextSha256(parentInput),
     });
+    expect(createInputs[0]?.metadata).not.toHaveProperty("remoteWorkerChatContextSha256");
     expect(createInputs[0]?.metadata).not.toHaveProperty("remoteWorkerAssignmentLeaseToken");
   });
 
@@ -965,6 +966,21 @@ describe("chat-durable-run-service", () => {
         },
       },
     ]);
+  });
+
+  it("does not mark a partial coding trace as a completed durable run", async () => {
+    const state = createFinalizeState();
+    const prepared = createPreparedTurn({ content: "Repair and test the project" });
+    const trace = createTrace({
+      status: "partial",
+      failure: { failureClass: "tool_run_budget_exceeded", message: "Coding limit reached", retryable: false },
+      completion: { status: "complete", finishReason: "stop", repaired: false },
+    });
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    expect(state.runs.get("run-complete")?.status).toBe("failed");
+    expect(state.checkpoints.at(-1)?.checkpointKind).toBe("run_failed");
+    expect(state.tracePatches.at(-1)?.patch).toMatchObject({ durable: { status: "failed", checkpointKind: "run_failed" } });
+    expect(state.tracePatches.at(-1)?.patch.status).toBeUndefined();
   });
 
   it("rolls back terminal state when result materialization fails and replays only verified completion", async () => {

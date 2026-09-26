@@ -315,11 +315,6 @@ function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
-function createWorkspaceSnapshotRequest(): ChatWorkspaceSnapshotRequest {
-  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-  return { capture: true, requestId: `workspace-snapshot-${suffix}` };
-}
-
 function parseHydratedWorkspaceSnapshotRequest(value: unknown, action: unknown): ChatWorkspaceSnapshotRequest | null {
   if (
     action !== "send" ||
@@ -1037,11 +1032,6 @@ export function MissionThreadedControllerHost({
   }, []);
   const [workspaceSnapshotRequest, setWorkspaceSnapshotRequest] = useState<ChatWorkspaceSnapshotRequest>();
   const workspaceSnapshotRequestRef = useRef<ChatWorkspaceSnapshotRequest | undefined>(undefined);
-  const replaceWorkspaceSnapshotRequest = useCallback(() => {
-    const next = createWorkspaceSnapshotRequest();
-    workspaceSnapshotRequestRef.current = next;
-    setWorkspaceSnapshotRequest(next);
-  }, []);
   const consumeWorkspaceSnapshotRequest = useCallback(() => {
     const request = workspaceSnapshotRequestRef.current;
     workspaceSnapshotRequestRef.current = undefined;
@@ -2015,9 +2005,7 @@ export function MissionThreadedControllerHost({
   const toggleDocumentContext = useCallback((ref: ChatRoutedContextRef) => {
     setPendingDocumentContextRefs((current) => {
       const key = `${ref.kind}:${ref.ref}`;
-      return current.some((item) => `${item.kind}:${item.ref}` === key)
-        ? current.filter((item) => `${item.kind}:${item.ref}` !== key)
-        : [...current, ref];
+      return current.filter((item) => `${item.kind}:${item.ref}` !== key);
     });
   }, []);
 
@@ -2407,10 +2395,6 @@ export function MissionThreadedControllerHost({
     proactivePolicyConflict,
     handleProactivePolicyPatch,
     handleTriggerProactive,
-    handleSuggestDelegation,
-    handleAcceptDelegation,
-    handleRunCodeDelegation,
-    handleExploreWorkspace,
     continueActiveExplorerInBackground,
     rehydrateBackgroundExplorerReport,
     handleMemoryStatusUpdate,
@@ -3133,7 +3117,20 @@ export function MissionThreadedControllerHost({
     !historicalModeActive &&
     // HX-411: external control owns the mutation generation → operator send fails closed.
     !sessionControlSendLocked &&
+    !modelCouncilEnabled &&
+    !workspaceSnapshotRequest &&
+    externalSourceAttachments.selectedAttachmentIds.length === 0 &&
+    pendingDocumentContextRefs.length === 0 &&
     (!routeBoundaryAckRequired || currentRouteBoundaryAcknowledged);
+  const profileDependentAdmissionBlockReason = modelCouncilEnabled
+    ? "Model council is temporarily unavailable. Turn Council off to send."
+    : workspaceSnapshotRequest
+      ? "Workspace snapshots are temporarily unavailable. Remove the snapshot to send."
+    : externalSourceAttachments.selectedAttachmentIds.length > 0
+      ? "Routed external sources are temporarily unavailable. Clear the source selection to send."
+      : pendingDocumentContextRefs.length > 0
+        ? "Routed documents are temporarily unavailable. Remove the document selection to send."
+        : undefined;
   const blockHistoricalMutation = useCallback(() => {
     if (!historicalModeActive) return false;
     pushLocalNotice("Return to the latest conversation before changing or sending anything.", "warning");
@@ -4360,12 +4357,7 @@ export function MissionThreadedControllerHost({
             pushLocalNotice("This knowledge attachment is available to the next turn.", "success");
             break;
           case "attach_document":
-            toggleDocumentContext({
-              kind: item.action.documentKind,
-              ref: item.action.documentId,
-              label: item.action.label,
-            });
-            pushLocalNotice(`Included ${item.action.label} in the next turn.`, "success");
+            pushLocalNotice("Including documents in a turn is temporarily unavailable.", "warning");
             break;
           case "attach_url":
             await handleAttachKnowledgeUrlValue(item.action.url);
@@ -4374,7 +4366,7 @@ export function MissionThreadedControllerHost({
             pushLocalNotice("Opened the governed external-source attachment flow.");
             break;
           case "explore_workspace":
-            await handleExploreWorkspace();
+            pushLocalNotice("Explore workspace delegation is temporarily unavailable.", "warning");
             break;
           case "open_template_form": {
             const initial = validateRunVariableBindings(item.action.schema, item.action.defaults ?? {}, {
@@ -4400,11 +4392,9 @@ export function MissionThreadedControllerHost({
       handleAssignProject,
       handleAttachKnowledgeUrlValue,
       handleAttachPaletteFile,
-      handleExploreWorkspace,
       pushLocalNotice,
       requestThreadModelPatch,
       setUiError,
-      toggleDocumentContext,
     ],
   );
   const handleRunVariableValueChange = useCallback((fieldId: string, value: RunVariableValue | undefined) => {
@@ -4688,6 +4678,10 @@ export function MissionThreadedControllerHost({
   );
 
   const sendDraftAsChat = useCallback(async () => {
+    if (profileDependentAdmissionBlockReason) {
+      pushLocalNotice(profileDependentAdmissionBlockReason, "warning");
+      return;
+    }
     try {
       // Sending a message is an explicit "show me the answer" intent: re-arm
       // auto-follow so the new turn and its streamed response stay in view
@@ -4701,7 +4695,7 @@ export function MissionThreadedControllerHost({
     } catch (cause) {
       setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
     }
-  }, [attachPendingKnowledgeSources, handleSend, requiresThreadKnowledge, setFollowThreadOutput, setUiError]);
+  }, [attachPendingKnowledgeSources, handleSend, profileDependentAdmissionBlockReason, pushLocalNotice, requiresThreadKnowledge, setFollowThreadOutput, setUiError]);
 
   const handleSendWithKnowledge = useCallback(async () => {
     const queueCommand = parseQueueCommand(draft);
@@ -4727,6 +4721,10 @@ export function MissionThreadedControllerHost({
         setDraft("");
         return;
       }
+    }
+    if (profileDependentAdmissionBlockReason) {
+      pushLocalNotice(profileDependentAdmissionBlockReason, "warning");
+      return;
     }
     if (queueCommand?.kind === "followup" || queueCommand?.kind === "collect") {
       if (!queueCommand.text) {
@@ -4816,6 +4814,7 @@ export function MissionThreadedControllerHost({
     pendingDocumentContextRefs.length,
     pendingTemplateInvocation,
     planningMode,
+    profileDependentAdmissionBlockReason,
     prefs?.orchestrationReviewDepth,
     prefs?.webMode,
     pushLocalNotice,
@@ -5177,7 +5176,7 @@ export function MissionThreadedControllerHost({
         onOpenLibraryImports,
         onOpenOpsRuntime,
         onAcceptDelegation: async () => {
-          if (!blockHistoricalMutation()) await handleAcceptDelegation();
+          if (!blockHistoricalMutation()) pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
         },
         onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
         // Historical transcript reads are mutation-locked. Only stop/cancel
@@ -5237,7 +5236,11 @@ export function MissionThreadedControllerHost({
                 busyAttachmentId: externalSourceAttachments.busyAttachmentId,
                 canMutate: externalSourceAttachments.canMutate && !historicalModeActive,
                 error: externalSourceAttachments.error,
-                onToggleSelect: externalSourceAttachments.toggleSelection,
+                onToggleSelect: (attachmentId) => {
+                  if (externalSourceAttachments.selectedAttachmentIds.includes(attachmentId)) {
+                    externalSourceAttachments.toggleSelection(attachmentId);
+                  }
+                },
                 onClearSelection: externalSourceAttachments.clearSelection,
                 onAttach: (seed) => {
                   if (!blockHistoricalMutation()) void externalSourceAttachments.attach(seed);
@@ -5286,6 +5289,7 @@ export function MissionThreadedControllerHost({
         routeBoundaryAcknowledged: currentRouteBoundaryAcknowledged,
         sending,
         canSend,
+        profileDependentAdmissionBlockReason,
         sessionControlBanner: sessionControlBannerModel.externalControlActive
           ? {
               model: sessionControlBannerModel,
@@ -5337,9 +5341,8 @@ export function MissionThreadedControllerHost({
         },
         onToggleModelCouncil: () => {
           if (!blockHistoricalMutation()) {
-            const next = !modelCouncilEnabledRef.current;
-            modelCouncilEnabledRef.current = next;
-            setModelCouncilEnabled(next);
+            modelCouncilEnabledRef.current = false;
+            setModelCouncilEnabled(false);
           }
         },
         onToggleWorkspaceSnapshot: () => {
@@ -5347,13 +5350,9 @@ export function MissionThreadedControllerHost({
           if (workspaceSnapshotRequestRef.current) {
             workspaceSnapshotRequestRef.current = undefined;
             setWorkspaceSnapshotRequest(undefined);
-          } else {
-            replaceWorkspaceSnapshotRequest();
           }
         },
-        onRefreshWorkspaceSnapshot: () => {
-          if (!blockHistoricalMutation()) replaceWorkspaceSnapshotRequest();
-        },
+        onRefreshWorkspaceSnapshot: () => {},
         onSetDeepMode: () => {
           if (!blockHistoricalMutation()) handleSetDeepMode();
         },
@@ -5896,7 +5895,7 @@ export function MissionThreadedControllerHost({
             await handlePrefPatch(patch);
           },
           onSuggestDelegation: async () => {
-            if (!blockHistoricalMutation()) await handleSuggestDelegation();
+            if (!blockHistoricalMutation()) pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
           },
           onTriggerProactive: async () => {
             if (!blockHistoricalMutation()) await handleTriggerProactive();
@@ -5904,8 +5903,8 @@ export function MissionThreadedControllerHost({
           onProactivePolicyPatch: async (patch) => {
             if (!blockHistoricalMutation()) await handleProactivePolicyPatch(patch);
           },
-          onRunCodeDelegation: async (presetKey) => {
-            if (!blockHistoricalMutation()) await handleRunCodeDelegation(presetKey);
+          onRunCodeDelegation: async () => {
+            if (!blockHistoricalMutation()) pushLocalNotice("Code delegation is temporarily unavailable.", "warning");
           },
           onCapabilitySuggestionAction: (suggestion) => {
             if (!blockHistoricalMutation()) handleCapabilitySuggestionAction(suggestion);
@@ -5920,7 +5919,7 @@ export function MissionThreadedControllerHost({
             if (!blockHistoricalMutation()) await handleSpecialistCandidatePatch(candidateId, patch, notice);
           },
           onAcceptDelegation: async () => {
-            if (!blockHistoricalMutation()) await handleAcceptDelegation();
+            if (!blockHistoricalMutation()) pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
           },
           onRebuildLearnedMemory: async () => {
             if (!blockHistoricalMutation()) await handleRebuildLearnedMemory();

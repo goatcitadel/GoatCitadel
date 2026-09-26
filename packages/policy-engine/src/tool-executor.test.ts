@@ -5965,6 +5965,73 @@ describe("executeTool", () => {
     ).rejects.toThrow(/fs\.write made no changes/);
   });
 
+  it("patches one exact match against a file hash and rejects conflicts or paths outside the write jail", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    const filePath = path.join(testWorkspaceRoot, "exact-patch.txt");
+    await fs.writeFile(filePath, "alpha\nbeta\n", "utf8");
+    const before = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
+    expect(before.sha256).toMatch(/^[a-f0-9]{64}$/);
+    const patched = await executeTool(toolRequest("fs.patch", {
+      path: filePath, expectedSha256: before.sha256, oldText: "beta", newText: "gamma",
+    }), policyConfig, storageStub);
+    expect(patched).toMatchObject({ path: filePath, beforeSha256: before.sha256, afterSha256: expect.any(String) });
+    expect(await fs.readFile(filePath, "utf8")).toBe("alpha\ngamma\n");
+    await expect(executeTool(toolRequest("fs.patch", {
+      path: filePath, expectedSha256: before.sha256, oldText: "gamma", newText: "delta",
+    }), policyConfig, storageStub)).rejects.toThrow(/changed file/);
+    await fs.writeFile(filePath, "x\nx\n", "utf8");
+    const duplicate = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
+    await expect(executeTool(toolRequest("fs.patch", {
+      path: filePath, expectedSha256: duplicate.sha256, oldText: "x", newText: "y",
+    }), policyConfig, storageStub)).rejects.toThrow(/exactly one matching occurrence/);
+    await fs.writeFile(filePath, "aaa", "utf8");
+    const overlap = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
+    await expect(executeTool(toolRequest("fs.patch", {
+      path: filePath, expectedSha256: overlap.sha256, oldText: "aa", newText: "b",
+    }), policyConfig, storageStub)).rejects.toThrow(/exactly one matching occurrence/);
+    await expect(executeTool(toolRequest("fs.patch", {
+      path: path.join(os.tmpdir(), "outside.txt"), expectedSha256: duplicate.sha256, oldText: "x", newText: "y",
+    }), policyConfig, storageStub)).rejects.toThrow();
+  });
+
+  it("rejects non-UTF-8 and UTF-16 files without changing their bytes", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    for (const [name, bytes] of [
+      ["invalid-utf8.txt", Buffer.from([0x61, 0xff, 0x62])],
+      ["utf16.txt", Buffer.from("alpha beta", "utf16le")],
+    ] as const) {
+      const filePath = path.join(testWorkspaceRoot, name);
+      await fs.writeFile(filePath, bytes);
+      const before = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
+      await expect(executeTool(toolRequest("fs.patch", {
+        path: filePath, expectedSha256: before.sha256, oldText: "alpha", newText: "gamma",
+      }), policyConfig, storageStub)).rejects.toThrow(/UTF-8 text file without NUL bytes/);
+      expect(await fs.readFile(filePath)).toEqual(bytes);
+    }
+  });
+
+  it("does not replace a symbolic link when patching its in-jail target", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    const targetPath = path.join(testWorkspaceRoot, "patch-target.txt");
+    const linkPath = path.join(testWorkspaceRoot, "patch-link.txt");
+    await fs.writeFile(targetPath, "alpha beta", "utf8");
+    try {
+      await fs.symlink(targetPath, linkPath, "file");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    const before = await executeTool(toolRequest("fs.read", { path: linkPath }), policyConfig, storageStub);
+    await expect(executeTool(toolRequest("fs.patch", {
+      path: linkPath, expectedSha256: before.sha256, oldText: "beta", newText: "gamma",
+    }), policyConfig, storageStub)).rejects.toThrow(/symbolic link/i);
+    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(targetPath, "utf8")).toBe("alpha beta");
+  });
+
   it("covers HTTP POST execution and sanitizes leaked tool output", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const beforeExternalSideEffect = vi.fn();

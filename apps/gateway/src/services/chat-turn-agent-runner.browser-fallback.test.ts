@@ -1897,16 +1897,16 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.turnTrace.routing?.liveDataIntent).toBe(false);
   });
 
-  it("does not expose web tools for stable conceptual chat prompts in auto mode", async () => {
+  it("offers web tools without forcing lookup for stable conceptual chat prompts", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockImplementationOnce(async (request) => {
         const toolNames = (request.tools ?? [])
           .map((tool) => (tool.function as { name?: string } | undefined)?.name)
           .filter((name): name is string => Boolean(name));
-        expect(toolNames).not.toContain("browser_search");
-        expect(toolNames).not.toContain("browser_navigate");
-        expect(toolNames).not.toContain("http_get");
+        expect(toolNames).toContain("browser_search");
+        expect(toolNames).toContain("browser_navigate");
+        expect(toolNames).toContain("http_get");
         expect(toolNames).toContain("time_now");
         return {
           model: "glm-5",
@@ -6470,8 +6470,8 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
       const tools = JSON.stringify(request.tools ?? []);
       expect(tools).toContain("memory_search");
-      expect(tools).not.toContain("code_search_files");
-      expect(tools).not.toContain("file_read_range");
+      expect(tools).toContain("code_search_files");
+      expect(tools).toContain("file_read_range");
       return {
         model: "gpt-5.4",
         choices: [

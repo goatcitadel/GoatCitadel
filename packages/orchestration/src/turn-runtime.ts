@@ -8,6 +8,7 @@ import type {
   ChatStreamChunkDraft,
   ChatThinkingLevel,
   ChatTurnCapabilityProfileRecord,
+  ChatTurnExecutionProfile,
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   ChatWebMode,
@@ -16,6 +17,8 @@ import type {
 
 export interface TurnRuntimeRequest {
   sessionId: string;
+  /** Canonical workspace scope for policy when a new turn has no frozen profile. */
+  workspaceId?: string;
   turnId: string;
   userMessageId: string;
   /** Canonical persisted delegation step for a server-created worker turn. */
@@ -35,6 +38,7 @@ export interface TurnRuntimeRequest {
   subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy: "safe_auto" | "manual";
   normalizationProfile?: ChatNormalizationProfile;
+  executionProfile?: ChatTurnExecutionProfile;
   operatorId?: string;
   authActorId?: string;
   authActorSource?: ToolPolicyActorContext["authActorSource"];

@@ -240,6 +240,8 @@ import {
   minimumRemainingBudgetForToolStart,
   CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
   resolveChatExecutionBudget,
+  SUSTAINED_LOCAL_CODING_ACTIVE_BUDGET_MS,
+  SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT,
   shouldUseConstrainedLocalAgentProfile,
   toolRunBudgetCostForToolCall,
 } from "./chat-agent-budget.js";
@@ -247,7 +249,18 @@ import {
   buildPromptContextBudgetReceipt,
   shouldCapturePromptContextBudgetReceipt,
 } from "./chat-agent-prompt-budget-receipt.js";
-import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
+import {
+  resolveSustainedLocalCodingProfile,
+} from "./chat-turn-execution-profile.js";
+import {
+  advanceCodingWindow,
+  applyCodingToolReceipts,
+  buildCodingCheckpoint,
+  chargeCodingActiveTime,
+  evaluateCodingCompletion,
+  recoverCodingCheckpoint,
+  type CodingRunCheckpoint,
+} from "./chat-sustained-coding-state.js";
 import { isDurableControlError } from "./durable-control-error.js";
 import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
 import type { ToolCallBeforeHookInterpositionBinding } from "./tool-runtime-interposition.js";
@@ -520,6 +533,7 @@ const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "fs.stat": ["path"],
   "fs.copy": ["from", "to"],
   "fs.write": ["path", "content"],
+  "fs.patch": ["path", "expectedSha256", "oldText", "newText"],
   "fs.move": ["from", "to"],
   "fs.delete": ["path"],
   "file.read_range": ["path", "startLine", "endLine"],
@@ -564,6 +578,8 @@ interface CoworkContinuationProgressSnapshot {
 
 export interface ChatTurnAgentRunnerInput {
   sessionId: string;
+  /** Canonical workspace scope, independent of historical capability profiles. */
+  workspaceId?: string;
   turnId: string;
   userMessageId: string;
   /** Canonical persisted delegation step for a server-created worker turn. */
@@ -582,6 +598,8 @@ export interface ChatTurnAgentRunnerInput {
   speedMode?: "standard" | "fast";
   subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
   normalizationProfile?: ChatNormalizationProfile;
+  /** Server-owned profile chosen before the capability catalog is frozen. */
+  executionProfile?: ChatTurnExecutionProfile;
   toolAutonomy: "safe_auto" | "manual";
   /** Server-authored intent signal; attached bytes are resolved only after capability freeze. */
   routedContextRequested?: boolean;
@@ -796,6 +814,7 @@ export interface ChatTurnAgentRunnerDeps {
   ) => Promise<import("./chat-confirmed-delegation-service.js").ConfirmedDelegationResult | undefined>;
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
+  getModelOutputTokenLimit?: (providerId: string, model: string) => number | undefined;
   /** Live callable catalog used only to enforce stricter removals or drift. */
   listCapabilityCatalog?: (scope: "callable", workspaceId?: string) => Promise<CapabilityCatalogEntry[]>;
   revalidateRequesterTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>;
@@ -1055,6 +1074,7 @@ export function buildTurnToolPolicyContext(
 ): ToolPolicyActorContext {
   return {
     ...(input.policyContext ?? {}),
+    workspaceId: input.workspaceId ?? input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
     operatorId: input.operatorId ?? input.policyContext?.operatorId,
     authActorId: input.authActorId ?? input.policyContext?.authActorId,
     authActorSource: input.authActorSource ?? input.policyContext?.authActorSource,
@@ -1100,7 +1120,13 @@ export class ChatTurnAgentRunner {
       return { tools: [], modelToCanonical: new Map(), canonicalToModel: new Map(), policyDecisions: [] };
     }
     const normalizationProfile = input.normalizationProfile ?? "live";
-    const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
+    const executionProfile = input.executionProfile ?? resolveSustainedLocalCodingProfile({
+      content: input.capabilityProfileContent ?? input.content,
+      providerId: input.capabilityProfile?.selection.effectiveProviderId ?? input.providerId,
+      durableEnabled: Boolean(input.policyRunId),
+      normalizationProfile,
+      serverOnlyTurn: Boolean(input.serverOnlyPosture),
+    });
     const quickWebProfile = executionProfile === "quick_web";
     const promptLabContract = parsePromptLabRunContract(input.content);
     const promptLabHarnessTurnForIntent =
@@ -1126,6 +1152,7 @@ export class ChatTurnAgentRunner {
       presentationArtifact: presentationArtifactIntent,
       documentArtifact:
         !suppressPromptLabCodeArtifactTools &&
+        executionProfile !== "sustained_local_coding" &&
         !presentationArtifactIntent &&
         detectDocumentArtifactIntent(input.content),
     };
@@ -1137,7 +1164,7 @@ export class ChatTurnAgentRunner {
         policyDecisions: [],
       };
     }
-    return await this.buildToolSchema(input, intents, nativeTools, meshTools);
+    return await this.buildToolSchema({ ...input, executionProfile }, intents, nativeTools, meshTools);
   }
 
   private async filterSystemHeartbeatCapabilityToolSchema(
@@ -1910,7 +1937,16 @@ export class ChatTurnAgentRunner {
     };
     const now = new Date().toISOString();
     const normalizationProfile = input.normalizationProfile ?? "live";
-    const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
+    const executionProfile = input.executionProfile ?? resolveSustainedLocalCodingProfile({
+      content: input.capabilityProfileContent ?? input.content,
+      providerId: input.capabilityProfile?.selection.effectiveProviderId ?? input.providerId,
+      durableEnabled: Boolean(input.policyRunId),
+      normalizationProfile,
+      serverOnlyTurn: Boolean(input.serverOnlyPosture),
+    });
+    if (executionProfile === "sustained_local_coding" && !input.policyRunId) {
+      throw new Error("Sustained local coding requires a durable run binding before execution.");
+    }
     const quickWebProfile = executionProfile === "quick_web";
     const capturePromptContextBudgetReceipt = shouldCapturePromptContextBudgetReceipt({
       debugEnabled: Boolean(await this.deps.promptContextBudgetReceiptEnabled?.()),
@@ -1949,6 +1985,7 @@ export class ChatTurnAgentRunner {
       presentationArtifact: presentationArtifactIntent,
       documentArtifact:
         !suppressPromptLabCodeArtifactTools &&
+        executionProfile !== "sustained_local_coding" &&
         !presentationArtifactIntent &&
         detectDocumentArtifactIntent(executionIntentContent),
       missingLogPayload: detectMissingLogPayloadIntent(executionIntentContent),
@@ -1967,6 +2004,9 @@ export class ChatTurnAgentRunner {
       providerId: input.providerId,
       model: input.model,
       executionProfile,
+      modelOutputTokenLimit: input.providerId && input.model
+        ? this.deps.getModelOutputTokenLimit?.(input.providerId, input.model)
+        : undefined,
     });
     const executionBudgetTrace = {
       profile: executionBudget.profile ?? "default",
@@ -2179,12 +2219,63 @@ export class ChatTurnAgentRunner {
     const canUseFilesystemListTool = toolSchema.canonicalToModel.has("fs.list");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
-    const persistedSettledToolRuns = (await listProjectedToolRuns()).filter(isSettledToolRunContinuationEvidence);
+    const allPersistedToolRuns = await listProjectedToolRuns();
+    const persistedSettledToolRuns = allPersistedToolRuns.filter(isSettledToolRunContinuationEvidence);
+    const persistedUnsettledToolRuns = allPersistedToolRuns.filter((run) => !isSettledToolRunContinuationEvidence(run));
     const toolRuns: ChatToolRunRecord[] = [...persistedSettledToolRuns];
-    let toolRunCount = persistedSettledToolRuns.reduce(
+    const sustainedCoding = executionProfile === "sustained_local_coding";
+    const uncertainCodingMutations = sustainedCoding
+      ? allPersistedToolRuns.filter((run) =>
+          (run.status === "started" || run.effectOutcomeKind === "uncertain") && run.effectPotential !== "none")
+      : [];
+    const initialCodingState = sustainedCoding
+      ? buildCodingCheckpoint({
+          turnId: input.turnId,
+          userMessageId: input.userMessageId,
+          request: input.capabilityProfileContent ?? input.content,
+          webOff: input.webMode === "off",
+        })
+      : undefined;
+    const codingCheckpoint = sustainedCoding && input.policyRunId
+      ? await storage.durableRuns.getLatestCheckpointByKind(input.policyRunId, "coding_progress")
+      : undefined;
+    const recoveredCodingState = initialCodingState && codingCheckpoint
+      ? recoverCodingCheckpoint(codingCheckpoint.state, initialCodingState)
+      : undefined;
+    if (codingCheckpoint && !recoveredCodingState) {
+      throw new Error("Sustained coding checkpoint is corrupt or does not match the admitted request; budget cannot be reset.");
+    }
+    let codingState: CodingRunCheckpoint | undefined = recoveredCodingState
+      ? chargeCodingActiveTime(
+          recoveredCodingState,
+          new Date(Math.min(Date.now(), Date.parse(recoveredCodingState.activeSegmentStartedAt) + 6 * 60_000)),
+          recoveredCodingState.nextAction.startsWith("Waiting for"),
+        )
+      : initialCodingState;
+    if (codingState && recoveredCodingState) {
+      codingState = { ...codingState, activeSegmentStartedAt: new Date().toISOString() };
+    }
+    if (codingState) codingState = applyCodingToolReceipts(codingState, toolRuns);
+    const persistedUnsettledToolCost = persistedUnsettledToolRuns.reduce(
+      (count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0,
+    );
+    const countConsumedCodingTools = (): number => Math.max(
+      codingState?.toolCallsConsumed ?? 0,
+      persistedUnsettledToolCost + toolRuns.reduce(
+        (count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0,
+      ),
+    );
+    let codingTotalToolRuns = sustainedCoding ? countConsumedCodingTools() : persistedSettledToolRuns.reduce(
+      (count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0,
+    );
+    let toolRunCount = (sustainedCoding
+      ? persistedSettledToolRuns.slice(codingState?.windowToolCursor ?? 0)
+      : persistedSettledToolRuns).reduce(
       (count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}),
       0,
-    );
+    ) + (sustainedCoding ? persistedUnsettledToolRuns
+      .filter((run) => Date.parse(run.startedAt) >= Date.parse(codingState?.windowStartedAt ?? ""))
+      .reduce((count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0) : 0);
     for (const persistedRun of persistedSettledToolRuns) {
       const toolCallId = buildPersistedToolContinuationCallId(persistedRun);
       let persistedContinuationResult = buildPersistedToolContinuationResult(persistedRun);
@@ -2235,6 +2326,21 @@ export class ChatTurnAgentRunner {
         }
       }
     }
+    if (codingState && recoveredCodingState) {
+      conversationMessages.push({
+        role: "system",
+        content: [
+          `Resume the original coding request from durable checkpoint ${codingCheckpoint?.checkpointId ?? "unknown"}.`,
+          `Active time used ${codingState.activeUsedMs} ms; tool calls ${codingTotalToolRuns}/${SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT}; window ${codingState.windowIndex + 1}.`,
+          `Constraints: ${JSON.stringify(codingState.constraints)}. Acceptance checklist: ${JSON.stringify(codingState.acceptance)}.`,
+          `Latest test: ${codingState.latestTest ? `${codingState.latestTest.passed ? "passed" : "failed"} (${codingState.latestTest.command})` : "none"}.`,
+          `Latest failure: ${codingState.latestFailure ?? "none"}. Repairs: ${codingState.repairCount}.`,
+          `Changed file hashes: ${JSON.stringify(codingState.changedFileHashes)}.`,
+          `Next action: ${codingState.nextAction}`,
+          "Reconcile any uncertain earlier mutation with a fresh read before repeating it. Do not claim a shell command was confined solely by its working directory.",
+        ].join("\n"),
+      } as ChatCompletionMessage);
+    }
     const hasPersistedExecutedSearchEvidence = persistedSettledToolRuns.some(
       (run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined,
     );
@@ -2251,6 +2357,37 @@ export class ChatTurnAgentRunner {
       effectiveModel: input.model,
       ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
     };
+    let lastCodingCheckpointAt = codingCheckpoint?.createdAt;
+    const persistCodingProgress = async (nextAction: string): Promise<void> => {
+      if (!codingState || !input.policyRunId) return;
+      codingTotalToolRuns = countConsumedCodingTools();
+      codingState = applyCodingToolReceipts(chargeCodingActiveTime(codingState), toolRuns);
+      codingState = { ...codingState, toolCallsConsumed: codingTotalToolRuns, nextAction };
+      const priorCheckpointMs = Date.parse(lastCodingCheckpointAt ?? "");
+      const checkpointAt = new Date(Math.max(Date.now(), Number.isFinite(priorCheckpointMs) ? priorCheckpointMs + 1 : 0)).toISOString();
+      const checkpoint = await this.runCanonicalWrite(input, () => storage.durableRuns.createCheckpoint({
+        runId: input.policyRunId!,
+        checkpointKind: "coding_progress",
+        state: codingState as unknown as Record<string, unknown>,
+        createdAt: checkpointAt,
+      }));
+      lastCodingCheckpointAt = checkpoint.createdAt;
+      routingState = {
+        ...routingState,
+        codingRun: {
+          activeLimitMs: SUSTAINED_LOCAL_CODING_ACTIVE_BUDGET_MS,
+          activeUsedMs: codingState.activeUsedMs,
+          toolRunLimit: SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT,
+          toolRunsUsed: codingTotalToolRuns,
+          windowIndex: codingState.windowIndex,
+          nextAction: codingState.nextAction,
+          ...(codingState.latestTest ? { latestTest: { passed: codingState.latestTest.passed, summary: codingState.latestTest.summary, evidenceLabel: codingState.latestTest.evidenceLabel } } : {}),
+          ...(codingState.latestFailure ? { latestFailure: codingState.latestFailure } : {}),
+        },
+      };
+      await this.patchTurnTrace(input, input.turnId, { routing: routingState });
+    };
+    if (codingState) await persistCodingProgress(codingState.nextAction);
     let finalStatus: ChatTurnTraceRecord["status"] = "completed";
     let finalFailure: ChatTurnFailureRecord | undefined;
     let completionState: NonNullable<ChatTurnTraceRecord["completion"]> = {
@@ -2434,12 +2571,15 @@ export class ChatTurnAgentRunner {
       }
     };
     const outputMessageId = input.outputMessageId ?? `assistant-${input.turnId}`;
+    if (codingState) codingState = chargeCodingActiveTime(codingState);
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
-    let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+    let turnBudgetDeadline = codingState
+      ? Date.now() + Math.max(0, effectiveTurnBudgetMs - (codingState.activeUsedMs - codingState.windowStartActiveMs))
+      : createTurnBudgetDeadline(effectiveTurnBudgetMs);
     const checkpointContinuation = executionBudget.loopLimitBehavior === "checkpoint_continue";
-    let continuationWindowIndex = 0;
-    let noProgressWindowCount = 0;
+    let continuationWindowIndex = codingState?.windowIndex ?? 0;
+    let noProgressWindowCount = codingState?.noProgressWindows ?? 0;
     let continuationProgressSnapshot = captureCoworkContinuationProgress({
       citations,
       localBusinessResearchExpected,
@@ -2572,6 +2712,13 @@ export class ChatTurnAgentRunner {
         assistantContent = clarificationPrompt;
       }
     }
+    if (codingState && uncertainCodingMutations.length > 0) {
+      finalStatus = "partial";
+      finalFailure = buildChatTurnFailureRecord("tool_failed", "An earlier mutation has an uncertain outcome and must be reconciled before retry.");
+      assistantContent = `Partial: ${uncertainCodingMutations.length} earlier mutation(s) have uncertain outcomes. Inspect the target files and tool receipts before repeating a write or shell command.`;
+      await persistCodingProgress("Reconcile uncertain mutation effects before retrying.");
+    }
+
     if (!assistantContent && !approvalPayload && !pendingUserInput) {
       const settingsConflict = buildLiveDataSettingsConflictMessage({
         mode: input.mode,
@@ -3496,6 +3643,14 @@ export class ChatTurnAgentRunner {
 
     const promptLabCoworkPromptSpecificWebLookup =
       promptLabHarnessTurn && input.mode === "cowork" && Boolean(derivePromptSpecificWebQuery(input.content));
+    const controllerWebLookupRequested =
+      detectExplicitWebLookupIntent(input.content) ||
+      hasLiveDataIntent(input.content) ||
+      Boolean(extractExternalResearchSubject(input.content)) ||
+      Boolean(derivePromptSpecificWebQuery(input.content)) ||
+      (detectDirectUrlIntent(input.content) &&
+        /\b(?:help me|increase|improve|audit|compare|research|analy[sz]e)\b/i.test(input.content)) ||
+      (input.webMode === "deep" && intents.webLookup);
     if (
       !assistantContent &&
       !approvalPayload &&
@@ -3505,6 +3660,7 @@ export class ChatTurnAgentRunner {
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
       intents.webLookup &&
+      controllerWebLookupRequested &&
       !promptLabContract.toolUseSuppressed &&
       !(promptLabHarnessTurn && promptLabContract.explicitTools && input.mode === "chat") &&
       (!localFileIntent || promptLabCoworkPromptSpecificWebLookup) &&
@@ -3746,6 +3902,39 @@ export class ChatTurnAgentRunner {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
           throwIfChatTurnCancelled(input);
+          if (codingState) {
+            codingTotalToolRuns = countConsumedCodingTools();
+            codingState = chargeCodingActiveTime(codingState);
+            const toolCeilingNeedsMoreEvidence = codingTotalToolRuns >= SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT &&
+              evaluateCodingCompletion(codingState, toolRuns, "").length > 0;
+            if (codingState.activeUsedMs >= SUSTAINED_LOCAL_CODING_ACTIVE_BUDGET_MS ||
+                toolCeilingNeedsMoreEvidence) {
+              finalStatus = "partial";
+              finalFailure = buildChatTurnFailureRecord(
+                toolCeilingNeedsMoreEvidence ? "tool_run_budget_exceeded" : "turn_budget_exceeded",
+                "Sustained coding run reached its active-time or tool-call ceiling before verification completed.",
+              );
+              assistantContent = "I stopped at the sustained coding limit. The work and test evidence remain in the run trace; completion is unverified.";
+              await persistCodingProgress("Stopped at the sustained coding limit.");
+              break;
+            }
+            if (Date.now() >= turnBudgetDeadline - 60_000) {
+              codingState = advanceCodingWindow(applyCodingToolReceipts(codingState, toolRuns));
+              continuationWindowIndex = codingState.windowIndex;
+              noProgressWindowCount = codingState.noProgressWindows;
+              await persistCodingProgress(codingState.nextAction);
+              if (noProgressWindowCount >= 2) {
+                finalStatus = "partial";
+                finalFailure = buildChatTurnFailureRecord("tool_loop_guard", "Two coding windows produced no new diagnostic, file change, or test progress.");
+                assistantContent = "I stopped after two coding windows without new diagnostic, file, or test progress. The last failure is in the run trace.";
+                break;
+              }
+              turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+              toolRunCount = 0;
+              loop = -1;
+              continue;
+            }
+          }
           await this.patchTurnTrace(input, input.turnId, {
             status: "running",
           });
@@ -3778,12 +3967,15 @@ export class ChatTurnAgentRunner {
           );
           const completionTimeoutMs = Math.min(
             effectiveCompletionTimeoutMs,
+            ...(codingState ? [Math.max(1000, remainingTurnBudgetMs - 60_000)] : []),
             promptLabEvalIntegrityTurn
               ? Math.max(remainingTurnBudgetMs, executionBudget.minSynthesisReserveMs)
               : remainingTurnBudgetMs,
           );
           const modelControls = resolveModelControlOptions(input, toolSchema.tools.length > 0);
-          const rawToolsForCompletion = promptLabSynthesisOnly || quickWebSynthesisOnly ? [] : toolSchema.tools;
+          const rawToolsForCompletion = promptLabSynthesisOnly || quickWebSynthesisOnly ||
+            (codingState && codingTotalToolRuns >= SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT)
+            ? [] : toolSchema.tools;
           const toolsForCompletion =
             normalizationProfile === "prompt_pack_harness" &&
             input.mode !== "code" &&
@@ -3812,6 +4004,9 @@ export class ChatTurnAgentRunner {
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,
             model: input.model,
+            ...(codingState && input.providerId
+              ? { requiredRuntimeTarget: { providerId: input.providerId, ...(input.model ? { model: input.model } : {}) } }
+              : {}),
             messages: conversationMessages,
             stream: false,
             max_tokens: executionBudget.maxTokens,
@@ -4290,6 +4485,34 @@ export class ChatTurnAgentRunner {
                 status: "complete",
               };
             }
+            if (codingState && finalStatus === "completed" && completionOutcome.status === "complete") {
+              const unmet = evaluateCodingCompletion(codingState, toolRuns, assistantContent);
+              if (unmet.length > 0) {
+                conversationMessages.push({ role: "assistant", content: assistantContent });
+                conversationMessages.push({
+                  role: "system",
+                  content: `The recorded coding evidence is incomplete: ${unmet.join("; ")}. Continue the task with the available tools. Run the missing checks, then answer only from settled receipts. If policy or a hard limit prevents the checks, explain the blocker instead of claiming completion.`,
+                } as ChatCompletionMessage);
+                assistantContent = "";
+                await persistCodingProgress(`Resolve missing evidence: ${unmet.join("; ")}`);
+                if (loop + 1 >= executionBudget.maxToolLoops) {
+                  codingState = advanceCodingWindow(applyCodingToolReceipts(chargeCodingActiveTime(codingState), toolRuns));
+                  continuationWindowIndex = codingState.windowIndex;
+                  noProgressWindowCount = codingState.noProgressWindows;
+                  await persistCodingProgress(codingState.nextAction);
+                  if (noProgressWindowCount >= 2) {
+                    finalStatus = "partial";
+                    finalFailure = buildChatTurnFailureRecord("tool_loop_guard", "Two coding windows produced no new diagnostic, file change, or test progress.");
+                    assistantContent = "I stopped after two coding windows without new diagnostic, file, or test progress. The missing checks remain in the run trace.";
+                    break;
+                  }
+                  turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+                  toolRunCount = 0;
+                  loop = -1;
+                }
+                continue;
+              }
+            }
             conversationMessages.push({
               role: "assistant",
               content: assistantContent,
@@ -4623,6 +4846,15 @@ export class ChatTurnAgentRunner {
               continue;
             }
             const toolRunBudgetCost = toolRunBudgetCostForToolCall(toolCall.toolName, toolCall.args);
+            if (codingState && codingTotalToolRuns + toolRunBudgetCost > SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT) {
+              finalStatus = "partial";
+              finalFailure = buildChatTurnFailureRecord("tool_run_budget_exceeded", "Sustained coding run reached 120 tool calls before verification completed.");
+              assistantContent = "I stopped at the 120 tool-call limit. Completion remains unverified; inspect the recorded tests and files.";
+              shortCircuitedOnBudget = true;
+              flushSkippedToolCallResults("Sustained coding run reached its 120 tool-call limit.");
+              await persistCodingProgress("Stopped at the 120 tool-call limit.");
+              break;
+            }
             if (toolRunCount + toolRunBudgetCost > executionBudget.maxToolRunsPerTurn) {
               if (checkpointContinuation) {
                 coworkToolRunBudgetCheckpoint = true;
@@ -4668,7 +4900,7 @@ export class ChatTurnAgentRunner {
                   buildDeterministicToolSynthesisFallback,
                 },
               });
-              finalStatus = "completed";
+              finalStatus = "partial";
               noteDegradedOutcome("tool_run_budget_exceeded");
               shortCircuitedOnBudget = true;
               break;
@@ -4713,6 +4945,11 @@ export class ChatTurnAgentRunner {
               );
               const minimumRemainingBeforeTool = minimumRemainingBudgetForToolStart(toolCall.toolName, executionBudget);
               if (remainingBeforeTool <= minimumRemainingBeforeTool) {
+                if (codingState) {
+                  coworkToolRunBudgetCheckpoint = true;
+                  flushSkippedToolCallResults("Coding window is nearly exhausted; continue from the checkpoint.");
+                  break;
+                }
                 assistantContent = buildTurnBudgetExceededFallbackMessage({
                   turnInput: input,
                   toolRuns: projectToolRunsForModel(toolRuns),
@@ -4723,7 +4960,7 @@ export class ChatTurnAgentRunner {
                     buildDeterministicToolSynthesisFallback,
                   },
                 });
-                finalStatus = "completed";
+                finalStatus = "partial";
                 finalFailure = buildChatTurnFailureRecord(
                   "turn_budget_exceeded",
                   buildTurnBudgetExceededReason(input.webMode, effectiveTurnBudgetMs),
@@ -4738,6 +4975,7 @@ export class ChatTurnAgentRunner {
               });
             }
             toolRunCount += toolRunBudgetCost;
+            if (codingState) codingTotalToolRuns += toolRunBudgetCost;
             if (preExecuted && !preExecuted.executed) {
               // A pre-executed call that threw aborts the turn exactly where
               // the serial call would have thrown.
@@ -4756,6 +4994,15 @@ export class ChatTurnAgentRunner {
                 turnBudgetDeadline,
               }));
             toolRuns.push(executed.record);
+            if (codingState) {
+              await persistCodingProgress(
+                executed.record.status === "approval_required"
+                  ? `Waiting for approval of ${executed.record.toolName}.`
+                  : executed.userInputPrompt
+                    ? "Waiting for operator input."
+                    : `Inspect ${executed.record.toolName} result and continue the coding checklist.`,
+              );
+            }
             rememberToolLoopHistory(loopGuardState, executed.record);
             ({ turnBudgetDeadline, effectiveTurnBudgetMs, effectiveCompletionTimeoutMs } =
               extendTurnBudgetForExecutedBrowserTool({
@@ -4981,6 +5228,30 @@ export class ChatTurnAgentRunner {
           }
 
           if (checkpointContinuation && (coworkToolRunBudgetCheckpoint || loop + 1 >= executionBudget.maxToolLoops)) {
+            if (codingState) {
+              codingState = advanceCodingWindow(applyCodingToolReceipts(chargeCodingActiveTime(codingState), toolRuns));
+              continuationWindowIndex = codingState.windowIndex;
+              noProgressWindowCount = codingState.noProgressWindows;
+              await persistCodingProgress(codingState.nextAction);
+              if (noProgressWindowCount >= 2) {
+                finalStatus = "partial";
+                finalFailure = buildChatTurnFailureRecord("tool_loop_guard", "Two coding windows produced no new diagnostic, file change, or test progress.");
+                assistantContent = "I stopped after two coding windows without new diagnostic, file, or test progress. The last failure is in the run trace.";
+                break;
+              }
+              conversationMessages.push({
+                role: "system",
+                content: [
+                  `Coding window ${codingState.windowIndex + 1}. Active time used ${codingState.activeUsedMs}/${SUSTAINED_LOCAL_CODING_ACTIVE_BUDGET_MS} ms; tool calls ${codingTotalToolRuns}/${SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT}.`,
+                  `Latest test: ${codingState.latestTest ? (codingState.latestTest.passed ? "passed" : "failed") : "none"}. Latest failure: ${codingState.latestFailure ?? "none"}.`,
+                  `Next action: ${codingState.nextAction} Continue the inspect, edit, test, repair loop; verify all acceptance criteria before claiming completion.`,
+                ].join("\n"),
+              } as ChatCompletionMessage);
+              turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+              toolRunCount = 0;
+              loop = -1;
+              continue;
+            }
             const nextSnapshot = captureCoworkContinuationProgress({
               citations,
               localBusinessResearchExpected,
@@ -5470,6 +5741,36 @@ export class ChatTurnAgentRunner {
     completionState = completionFailureClearing.completion;
     finalFailure = completionFailureClearing.failure;
 
+    if (codingState && finalStatus !== "cancelled") {
+      const waiting = Boolean(approvalPayload || pendingUserInput);
+      await persistCodingProgress(waiting
+        ? approvalPayload ? "Waiting for approval." : "Waiting for operator input."
+        : "Checking completion against tool receipts.");
+      if (finalStatus === "completed" &&
+          [finalFailure?.failureClass, completionState.failureCleared?.failureClass].some((failureClass) =>
+            failureClass === "turn_budget_exceeded" || failureClass === "tool_run_budget_exceeded")) {
+        finalStatus = "partial";
+        finalFailure ??= buildChatTurnFailureRecord("turn_budget_exceeded", "Sustained coding budget was exhausted before a verified final answer.");
+      }
+      if (finalStatus === "completed") {
+        const unmet = evaluateCodingCompletion(codingState, toolRuns, assistantContent);
+        if (unmet.length > 0) {
+          finalStatus = "partial";
+          finalFailure = buildChatTurnFailureRecord("tool_failed", `Coding completion lacks required evidence: ${unmet.join("; ")}`);
+          assistantContent = [
+            "Partial: I cannot verify that the coding task is complete from the recorded tool results.",
+            ...unmet.map((item) => `- ${item}`),
+            codingState.latestTest
+              ? `Latest test: ${codingState.latestTest.passed ? "passed" : "failed"}; ${codingState.latestTest.summary ?? codingState.latestTest.command}`
+              : "Latest test: no test receipt.",
+            "Inspect the run trace and continue from the saved checkpoint.",
+          ].join("\n");
+          await persistCodingProgress("Resolve unmet completion criteria and rerun tests.");
+          routingState = { ...routingState, codingRun: { ...routingState.codingRun!, unmetCriteria: unmet } };
+        }
+      }
+    }
+
     if (readOnlyExplorerScopeRoot) {
       assistantContent = projectWorkspaceExplorerPathValue(assistantContent, [readOnlyExplorerScopeRoot]);
       const projectedCitations = projectWorkspaceExplorerPathValue(citations, [readOnlyExplorerScopeRoot]);
@@ -5606,12 +5907,14 @@ export class ChatTurnAgentRunner {
     input: Pick<
       ChatTurnAgentRunnerInput,
       | "sessionId"
+      | "workspaceId"
       | "turnId"
       | "webMode"
       | "mode"
       | "content"
       | "historyMessages"
       | "normalizationProfile"
+      | "executionProfile"
       | "operatorId"
       | "authActorId"
       | "authActorSource"
@@ -5688,6 +5991,7 @@ export class ChatTurnAgentRunner {
     const promptLabHarnessTurn =
       input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
     const quickWebProfile = input.normalizationProfile === "quick_web";
+    const sustainedCoding = input.executionProfile === "sustained_local_coding";
     const suppressPromptLabCodeArtifactTools =
       input.mode === "code" && promptLabHarnessTurn && !promptLabContractRequiresArtifactTools(promptLabContract);
     const promptLabTask = promptLabContract.userTask || extractPrimaryUserTaskContent(input.content);
@@ -5768,7 +6072,7 @@ export class ChatTurnAgentRunner {
       this.deps.durableChatFanoutV1Enabled?.() ?? Promise.resolve(false),
       this.deps.isDurableFanoutAvailable?.({
         sessionId: input.sessionId,
-        workspaceId: input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
+        workspaceId: input.workspaceId ?? input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
       }) ?? Promise.resolve(false),
       this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
       this.deps.delegationScopeExpansionV1Enabled?.() ?? Promise.resolve(false),
@@ -5830,7 +6134,7 @@ export class ChatTurnAgentRunner {
       ) {
         continue;
       }
-      if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(tool.toolName)) {
+      if (input.capabilityProfile && suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(tool.toolName)) {
         continue;
       }
       if (
@@ -5868,6 +6172,7 @@ export class ChatTurnAgentRunner {
       }
       if (
         !quickWebProfile &&
+        input.capabilityProfile &&
         !shouldExposeWebToolForTurn({
           toolName: tool.toolName,
           mode: input.mode,
@@ -5969,6 +6274,7 @@ export class ChatTurnAgentRunner {
       .sort((left, right) => right.score - left.score);
     const essentialToolNames = buildEssentialToolSet({
       mode: input.mode,
+      sustainedCoding,
       webMode: input.webMode,
       quickWebProfile,
       liveDataIntent: intents.liveData,
@@ -6005,8 +6311,14 @@ export class ChatTurnAgentRunner {
       selectedCatalog.push(candidate);
       selectedNames.add(candidate.toolName);
     }
-    const toolCountCap = quickWebProfile ? 1 : MAX_EXPOSED_TOOLS_PER_TURN[input.mode];
-    let schemaTokenBudget = quickWebProfile ? 600 : TOOL_SCHEMA_TOKEN_BUDGET[input.mode];
+    const toolCountCap = sustainedCoding
+      ? selectedCatalog.length
+      : input.capabilityProfile
+      ? (quickWebProfile ? 1 : MAX_EXPOSED_TOOLS_PER_TURN[input.mode])
+      : scoredCatalog.length;
+    let schemaTokenBudget = input.capabilityProfile
+      ? (quickWebProfile ? 600 : TOOL_SCHEMA_TOKEN_BUDGET[input.mode])
+      : Number.POSITIVE_INFINITY;
     for (const tool of selectedCatalog) {
       schemaTokenBudget -= cachedEstimateToolTokens(JSON.stringify(tool), tool.toolName);
     }
@@ -6074,7 +6386,37 @@ export class ChatTurnAgentRunner {
     tool: { toolName: string; args: Record<string, unknown> },
   ): Promise<{ blockedReason?: string; reasonCodes: string[] }> {
     if (!input.capabilityProfile) {
-      return { reasonCodes: [] };
+      if (!this.toolAccessProbe) {
+        // The Gateway executor still owns deny-wins policy at invocation.
+        // This preserves embedded runtimes without a separate policy probe.
+        return { reasonCodes: [] };
+      }
+      try {
+        const current = await this.toolAccessProbe({
+          toolName: tool.toolName,
+          sessionId: input.sessionId,
+          agentId: "assistant",
+          taskId: input.policyTaskId,
+          runId: input.policyRunId,
+          args: tool.args,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: input.mode,
+          policyContext: buildTurnToolPolicyContext(input),
+        });
+        if (!current.allowed) {
+          return {
+            blockedReason: `Current deny-wins policy blocks ${tool.toolName}.`,
+            reasonCodes: [...current.reasonCodes],
+          };
+        }
+        return { reasonCodes: [...current.reasonCodes] };
+      } catch {
+        return {
+          blockedReason: "Current tool policy evaluation failed before execution.",
+          reasonCodes: ["policy_evaluation_failed"],
+        };
+      }
     }
     const frozen = input.capabilityProfile.governance.policyDecisions.find(
       (decision) => decision.toolName === tool.toolName,
@@ -6947,7 +7289,7 @@ export class ChatTurnAgentRunner {
           sessionId: input.input.sessionId,
           turnId: input.turnId,
           toolRunId: created.toolRunId,
-          workspaceId: input.input.capabilityProfile?.identity.workspaceId,
+          workspaceId: input.input.workspaceId ?? input.input.capabilityProfile?.identity.workspaceId,
           routedContextSnapshotId: input.input.serverContextUsageAttribution?.contextSnapshotId,
           routedContextSnapshotHash: input.input.serverContextUsageAttribution?.contextResolutionHash,
           taskId: input.input.policyTaskId,
@@ -8599,6 +8941,7 @@ function looksLikePromptLabDelegatedNonCodeTurn(content: string, taskContent = "
 
 function buildEssentialToolSet(input: {
   mode: ChatMode;
+  sustainedCoding?: boolean;
   webMode: ChatWebMode;
   quickWebProfile?: boolean;
   liveDataIntent: boolean;
@@ -8617,6 +8960,22 @@ function buildEssentialToolSet(input: {
 }): string[] {
   if (input.quickWebProfile) {
     return input.webMode === "off" ? [] : ["browser.search"];
+  }
+  if (input.sustainedCoding) {
+    return [
+      "fs.list",
+      "fs.stat",
+      "code.search_files",
+      "code.search",
+      "file.read_range",
+      "fs.read",
+      "fs.write",
+      "fs.patch",
+      "shell.exec",
+      "tests.run",
+      "lint.run",
+      ...(input.webMode !== "off" && input.webLookupIntent ? ["browser.search", "browser.navigate"] : []),
+    ];
   }
   const tools = new Set<string>(["time.now"]);
   if (input.subagentFanoutEligible) {
@@ -8708,6 +9067,14 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
     return {
       path: buildSafeWritePath("tool-access-probe.txt", safeWriteFallbackDir),
       content: "Tool access probe",
+    };
+  }
+  if (toolName === "fs.patch") {
+    return {
+      path: buildSafeWritePath("tool-access-probe.txt", safeWriteFallbackDir),
+      expectedSha256: "0".repeat(64),
+      oldText: "old",
+      newText: "new",
     };
   }
   if (toolName === "fs.copy" || toolName === "fs.move") {
@@ -15529,10 +15896,11 @@ async function createOrRefreshAgentStreamTrace(
       status: "running",
       model: input.model,
       effectiveToolAutonomy: input.effectiveToolAutonomy,
-      routing:
-        existingReceipt && input.routing && !input.routing.routedContext
-          ? { ...input.routing, routedContext: existingReceipt }
-          : input.routing,
+      routing: {
+        ...input.routing,
+        ...(existingReceipt && !input.routing?.routedContext ? { routedContext: existingReceipt } : {}),
+        ...(existing.routing.codingRun && !input.routing?.codingRun ? { codingRun: existing.routing.codingRun } : {}),
+      },
       loopGuard: input.loopGuard,
     });
   } catch (error) {

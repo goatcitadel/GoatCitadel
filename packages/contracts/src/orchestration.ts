@@ -145,8 +145,16 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   worktreeLeaseGeneration?: number;
   /** Advisory expiry for the current worktree owner lease. */
   worktreeLeaseExpiresAt?: string;
+  /**
+   * The approval-gated phase an operator approved. Set by the approve action
+   * (run stays `paused`, `executionState: "resume_requested"`), kept while the
+   * durable worker runs that phase, and cleared when the phase advances. An
+   * approval-gated phase can only advance while this names it.
+   */
   pendingApprovalPhaseId?: string;
+  /** Actor that approved `pendingApprovalPhaseId`; cleared with it. */
   pendingApprovedBy?: string;
+  /** Retired: approval no longer carries a cost (phase cost is measured from execution); always cleared. */
   pendingCostIncrementUsd?: number;
   lastError?: string;
 }

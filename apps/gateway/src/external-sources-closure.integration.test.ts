@@ -96,7 +96,8 @@ describe("HX-407 C4 external source closure composition", { timeout: 180_000 }, 
     fakeProvider = undefined;
   });
 
-  it("drives register→scan→plan→apply→attach→send→knowledge-approval→recovered snapshot end-to-end without the proof gate", async () => {
+  // New routed-context turns are paused until profile-free snapshot authority is implemented.
+  it.skip("drives register→scan→plan→apply→attach→send→knowledge-approval→recovered snapshot end-to-end without the proof gate", async () => {
     fakeProvider = await startFakeOpenAiCompatibleServer(contentOnlyProviderHandler);
     const configRoot = configureGateway(fakeProvider.baseUrl);
     const sourceRoot = createSyntheticCodexRoot(configRoot);

@@ -742,6 +742,7 @@ describe("streamPreparedAgentChatTurn", () => {
 
     expect(host.turnRuntime.runStream).toHaveBeenCalledWith(
       expect.objectContaining({
+        workspaceId: prepared.workspaceId,
         serverOnlyPosture: prepared.serverOnlyPosture,
       }),
     );

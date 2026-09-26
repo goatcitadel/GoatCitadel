@@ -190,8 +190,9 @@ describe("ThreadedContextDrawer", () => {
 
     const select = renderer!.root.findByProps({ "aria-label": "Subagent policy" });
     expect(select.props.value).toBe("ask_when_useful");
+    expect(select.props.disabled).toBe(true);
     expect(select.findByProps({ value: "auto_when_useful" }).props.disabled).toBe(true);
-    expect(collectText(renderer!.root)).toContain("saved Auto when useful preference is not authority");
+    expect(collectText(renderer!.root)).toContain("Temporarily unavailable for new Chat turns");
     expect(onPrefPatch).not.toHaveBeenCalled();
   });
 
@@ -924,7 +925,7 @@ it("keeps text entered during an acknowledged document save", async () => {
     });
     await act(async () => {
       findButton(renderer!.root, "Review suggestion").props.onClick();
-      findButton(renderer!.root, "Use subagents").props.onClick();
+      expect(findButton(renderer!.root, "Subagents unavailable").props.disabled).toBe(true);
       findButton(renderer!.root, "Draft").props.onClick();
       findButton(renderer!.root, "Activate").props.onClick();
       findButton(renderer!.root, "Keep active").props.onClick();
@@ -933,7 +934,7 @@ it("keeps text entered during an acknowledged document save", async () => {
     });
 
     expect(onCapabilitySuggestionAction).toHaveBeenCalledWith(capability);
-    expect(onAcceptDelegation).toHaveBeenCalledTimes(1);
+    expect(onAcceptDelegation).not.toHaveBeenCalled();
     expect(onCreateSpecialistDraft).toHaveBeenCalledWith(specialist);
     expect(onActivateCatalogSpecialist).toHaveBeenCalledWith(specialist);
     expect(onUpdateMemoryStatus).toHaveBeenCalledWith("memory-1", "active");

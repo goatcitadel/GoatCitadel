@@ -2315,6 +2315,7 @@ export async function* streamPreparedAgentChatTurn(
             () => {
               const runnerInput: ChatTurnAgentRunnerInput = {
                 sessionId,
+                workspaceId: prepared.workspaceId,
                 turnId,
                 userMessageId: prepared.userEventId,
                 ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
@@ -2352,6 +2353,7 @@ export async function* streamPreparedAgentChatTurn(
                   prepared.normalized.subagentPolicy ??
                   prepared.prefs.subagentPolicy,
                 normalizationProfile: prepared.normalized.normalizationProfile,
+                executionProfile: prepared.executionProfile,
                 toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
                 routedContextRequested: Boolean(prepared.routedContextSnapshot),
                 operatorId: prepared.capabilityProfile

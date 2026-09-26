@@ -188,7 +188,8 @@ export interface DurableCheckpointRecord {
     | "run_lease_expired"
     | "run_reclaimed"
     | "run_incomplete_worker_exit"
-    | "run_retry_budget_exhausted";
+    | "run_retry_budget_exhausted"
+    | "coding_progress";
   state: Record<string, unknown>;
   createdAt: string;
 }
