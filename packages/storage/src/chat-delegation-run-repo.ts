@@ -41,6 +41,7 @@ export class ChatDelegationRunRepository {
   private readonly patchStmt;
   private readonly listBySessionStmt;
   private readonly findLatestBySessionAndWorkflowTemplateStmt;
+  private readonly findLatestBySessionAndTaskStmt;
   private readonly findLatestBySessionParentAndWorkflowTemplateStmt;
   private readonly listRecentStmt;
   private readonly activeStepCountStmt;
@@ -87,6 +88,12 @@ export class ChatDelegationRunRepository {
     this.findLatestBySessionAndWorkflowTemplateStmt = db.prepare(`
       SELECT * FROM chat_delegation_runs
       WHERE session_id = @sessionId AND workflow_template = @workflowTemplate
+      ORDER BY started_at DESC, run_id DESC
+      LIMIT 1
+    `);
+    this.findLatestBySessionAndTaskStmt = db.prepare(`
+      SELECT * FROM chat_delegation_runs
+      WHERE session_id = @sessionId AND task_id = @taskId
       ORDER BY started_at DESC, run_id DESC
       LIMIT 1
     `);
@@ -264,6 +271,22 @@ export class ChatDelegationRunRepository {
       throw new Error(
         `Latest ${normalizedWorkflowTemplate} delegation run for session ${normalizedSessionId} is corrupt`,
       );
+    }
+    return mapRow(row);
+  }
+
+  public findLatestBySessionAndTask(sessionId: string, taskId: string): ChatDelegationRunRecord | undefined {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedTaskId = taskId.trim();
+    if (!normalizedSessionId || !normalizedTaskId) return undefined;
+    const raw = this.findLatestBySessionAndTaskStmt.get({
+      sessionId: normalizedSessionId,
+      taskId: normalizedTaskId,
+    });
+    if (!raw) return undefined;
+    const row = toChatDelegationRunRow(raw);
+    if (!row) {
+      throw new Error(`Delegation run for session ${normalizedSessionId} and task ${normalizedTaskId} is corrupt`);
     }
     return mapRow(row);
   }

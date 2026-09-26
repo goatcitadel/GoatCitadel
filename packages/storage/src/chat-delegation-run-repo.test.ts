@@ -294,6 +294,41 @@ describe("ChatDelegationRunRepository", () => {
     assert.equal(repo.findLatestBySessionAndWorkflowTemplate("session-a", "missing"), undefined);
   });
 
+  it("finds the latest run of a session and task beyond the session list window", () => {
+    const { repo } = createStore();
+    const run = (runId: string, sessionId: string, taskId: string, startedAt: string) =>
+      repo.create({
+        runId,
+        sessionId,
+        taskId,
+        objective: "Delegation",
+        roles: ["qa"],
+        mode: "sequential",
+        startedAt,
+      });
+    run("task-run-old", "session-a", "task-a", "2026-08-12T00:00:00.000Z");
+    run("task-run-new", "session-a", "task-a", "2026-08-12T00:00:05.000Z");
+    run("task-run-other-session", "session-b", "task-b", "2026-08-12T00:00:06.000Z");
+    for (let index = 0; index < 101; index += 1) {
+      run(
+        `filler-${String(index).padStart(3, "0")}`,
+        "session-a",
+        `task-filler-${index}`,
+        new Date(Date.parse("2026-08-12T01:00:00.000Z") + index * 1000).toISOString(),
+      );
+    }
+
+    assert.equal(
+      repo.listBySession("session-a", 100).some((listed) => listed.taskId === "task-a"),
+      false,
+    );
+    assert.equal(repo.findLatestBySessionAndTask("session-a", "task-a")?.runId, "task-run-new");
+    assert.equal(repo.findLatestBySessionAndTask(" session-a ", " task-a ")?.runId, "task-run-new");
+    assert.equal(repo.findLatestBySessionAndTask("session-b", "task-a"), undefined);
+    assert.equal(repo.findLatestBySessionAndTask("session-a", "task-b"), undefined);
+    assert.equal(repo.findLatestBySessionAndTask("", "task-a"), undefined);
+  });
+
   it("filters malformed persisted rows and coerces malformed JSON payloads", () => {
     const { db, repo } = createStore();
     repo.create({
