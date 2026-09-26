@@ -494,6 +494,12 @@ export class LlmService {
     return Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 0 ? contextWindow : undefined;
   }
 
+  /** Exact configured output ceiling for a selected route, when known. */
+  public getModelOutputTokenLimit(providerId: string, model: string): number | undefined {
+    const limit = lookupModelMetadata(this.modelMetadata, providerId, model)?.outputTokenLimit;
+    return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : undefined;
+  }
+
   /** Exact server-owned reasoning metadata used by Change Plan validation. */
   public getModelReasoningMetadata(providerId: string, model: string): LlmModelReasoningMetadata | undefined {
     const reasoning = lookupExactModelMetadata(this.modelMetadata, providerId, model)?.reasoning;

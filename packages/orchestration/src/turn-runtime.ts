@@ -8,6 +8,7 @@ import type {
   ChatStreamChunkDraft,
   ChatThinkingLevel,
   ChatTurnCapabilityProfileRecord,
+  ChatTurnExecutionProfile,
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   ChatWebMode,
@@ -37,6 +38,7 @@ export interface TurnRuntimeRequest {
   subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy: "safe_auto" | "manual";
   normalizationProfile?: ChatNormalizationProfile;
+  executionProfile?: ChatTurnExecutionProfile;
   operatorId?: string;
   authActorId?: string;
   authActorSource?: ToolPolicyActorContext["authActorSource"];

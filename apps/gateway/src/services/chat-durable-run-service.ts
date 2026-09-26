@@ -1164,9 +1164,9 @@ export async function finalizeDurableChatRun(
     return;
   }
   const completionFailed = trace.completion ? trace.completion.status !== "complete" : false;
-  const failed = trace.status === "failed" || completionFailed;
+  const failed = trace.status === "failed" || trace.status === "partial" || completionFailed;
   const nextStatus: DurableRunStatus = failed ? "failed" : "completed";
-  const terminalTraceStatus: ChatTurnTraceRecord["status"] = failed ? "failed" : trace.status;
+  const terminalTraceStatus: ChatTurnTraceRecord["status"] = trace.status === "partial" ? "partial" : failed ? "failed" : trace.status;
   const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
   if (heartbeatIdentity && nextStatus !== "completed") assertNoSystemHeartbeatDecisionEvidence(currentRun!);
   if (

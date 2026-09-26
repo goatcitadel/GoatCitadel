@@ -189,6 +189,7 @@ export async function createChatCompletion(
   if (llmRequestHook.patch) {
     hookableRequest = applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
   }
+  assertRequiredRuntimeTarget(request, hookableRequest);
   await host.persistContextManifestForCompletionRequest({
     request: hookableRequest,
     memoryContext,
@@ -725,6 +726,7 @@ export async function* createChatCompletionStream(
     includeKeychainForActiveProvider: true,
     useCache: true,
   });
+  assertRequiredRuntimeTarget(request, withContext);
   const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
   const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
   const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
@@ -1503,6 +1505,15 @@ function resolveChatCompletionRequestAbortError(
 function throwIfChatCompletionRequestAborted(signal: AbortSignal | undefined, turnId: string | undefined): void {
   const error = resolveChatCompletionRequestAbortError(signal, turnId);
   if (error) throw error;
+}
+
+function assertRequiredRuntimeTarget(original: ChatCompletionRequest, dispatched: ChatCompletionRequest): void {
+  const required = original.requiredRuntimeTarget;
+  if (!required) return;
+  if (dispatched.providerId !== required.providerId ||
+      (required.model && dispatched.model !== required.model)) {
+    throw new Error(`The selected local model route changed before dispatch; coding run requires ${required.providerId}/${required.model ?? "selected model"}.`);
+  }
 }
 
 function filterCrossProviderFallbackTargets(

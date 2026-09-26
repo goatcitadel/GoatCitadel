@@ -1016,6 +1016,25 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
+    name: "fs.patch",
+    category: "fs",
+    riskLevel: "danger",
+    requiresApproval: true,
+    description: "Replace one exact text occurrence in a file inside write jail roots when its SHA-256 still matches.",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1 },
+        expectedSha256: { type: "string", pattern: "^[a-fA-F0-9]{64}$" },
+        oldText: { type: "string", minLength: 1 },
+        newText: { type: "string" },
+      },
+      required: ["path", "expectedSha256", "oldText", "newText"],
+      additionalProperties: false,
+    },
+    pack: "core",
+  },
+  {
     name: "fs.list",
     category: "fs",
     riskLevel: "safe",

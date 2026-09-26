@@ -88,6 +88,7 @@ const RESTRICTED_PROFILE_CREATED_AT = "2026-06-21T00:00:00.000Z";
 export const SCHEDULED_RESTRICTED_DENY: readonly string[] = [
   "shell.*",
   "fs.write",
+  "fs.patch",
   "fs.move",
   "fs.delete",
   "git.commit",

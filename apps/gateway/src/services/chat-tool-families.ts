@@ -4,6 +4,7 @@ export const LOCAL_PATH_TOOL_NAME_LIST = [
   "fs.stat",
   "fs.copy",
   "fs.write",
+  "fs.patch",
   "fs.move",
   "fs.delete",
   "file.read_range",
@@ -74,6 +75,7 @@ export const PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAME_LIST = [
 
 export const PROMPT_PACK_GATED_EXPLICIT_TOOL_NAME_LIST = [
   "fs.write",
+  "fs.patch",
   "artifacts.create",
   "documents.create",
   "presentations.create",

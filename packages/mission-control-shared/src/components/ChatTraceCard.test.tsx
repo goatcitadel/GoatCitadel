@@ -147,6 +147,37 @@ function makeTrace(): ChatTurnTraceRecord {
 }
 
 describe("ChatTraceCard", () => {
+  it("shows the sustained coding limits, test state, and unmet criteria", async () => {
+    const trace = makeTrace();
+    trace.status = "partial";
+    trace.routing.executionProfile = "sustained_local_coding";
+    trace.routing.executionBudget = {
+      profile: "sustained_local_coding", turnBudgetMs: 720_000, completionTimeoutMs: 360_000,
+      maxToolLoops: 8, maxToolRunsPerTurn: 12, searchMaxResults: 0, maxTokens: 4096,
+    };
+    trace.routing.codingRun = {
+      activeLimitMs: 5_400_000, activeUsedMs: 600_000,
+      toolRunLimit: 120, toolRunsUsed: 17, windowIndex: 1,
+      nextAction: "Repair median calculation.",
+      latestTest: { passed: false, summary: "median mismatch" },
+      latestFailure: "median mismatch",
+      unmetCriteria: ["No passing test receipt after the last source edit"],
+    };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ");
+    expect(text).toContain("Sustained local coding");
+    expect(text).toContain("Coding progress");
+    expect(text).toContain("Window: 12 min, up to 8 model loops and 12 tool calls");
+    expect(text).toContain("Active time remaining: 80 min");
+    expect(text).toContain("Tool calls: 17 / 120");
+    expect(text).toContain("Latest test: failed");
+    expect(text).toContain("No passing test receipt after the last source edit");
+    act(() => renderer.unmount());
+  });
+
   it("renders routing and browser diagnostics", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {

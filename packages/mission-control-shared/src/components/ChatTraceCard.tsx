@@ -194,6 +194,12 @@ export function ChatTraceCard({
             {trace.status} · {routingSummary.effectiveLabel ?? "model n/a"} · {formatTime(trace.startedAt)}
           </p>
           {routingSummary.mismatchLabel ? <p className="chat-trace-meta">{routingSummary.mismatchLabel}</p> : null}
+          {trace.routing.executionProfile === "sustained_local_coding" ? (
+            <p className="chat-trace-meta">
+              Sustained local coding · up to 90 active minutes · 120 tool calls
+              {trace.routing.codingRun ? ` · window ${trace.routing.codingRun.windowIndex + 1}` : ""}
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
@@ -220,6 +226,20 @@ export function ChatTraceCard({
             <span>Fallback used: {trace.routing.fallbackUsed ? "yes" : "no"}</span>
             <span>Fallback tiers attempted: {fallbackAttemptCount || "none"}</span>
           </div>
+          {trace.routing.codingRun ? (
+            <div className="chat-trace-section" aria-label="Coding run progress">
+              <strong>Coding progress</strong>
+              {trace.routing.executionBudget?.profile === "sustained_local_coding" ? (
+                <p>Window: {Math.round(trace.routing.executionBudget.turnBudgetMs / 60_000)} min, up to {trace.routing.executionBudget.maxToolLoops} model loops and {trace.routing.executionBudget.maxToolRunsPerTurn} tool calls · model call up to {Math.round(trace.routing.executionBudget.completionTimeoutMs / 60_000)} min · output up to {trace.routing.executionBudget.maxTokens ?? 4096} tokens</p>
+              ) : null}
+              <p>Current step: {trace.routing.codingRun.nextAction}</p>
+              <p>Active time remaining: {Math.max(0, Math.ceil((trace.routing.codingRun.activeLimitMs - trace.routing.codingRun.activeUsedMs) / 60_000))} min</p>
+              <p>Tool calls: {trace.routing.codingRun.toolRunsUsed}/{trace.routing.codingRun.toolRunLimit}</p>
+              <p>Latest test: {trace.routing.codingRun.latestTest ? (trace.routing.codingRun.latestTest.evidenceLabel ?? (trace.routing.codingRun.latestTest.passed ? "passed" : "failed")) : "not run"}</p>
+              {trace.routing.codingRun.latestFailure ? <p>Latest failure: {trace.routing.codingRun.latestFailure}</p> : null}
+              {trace.routing.codingRun.unmetCriteria?.length ? <p>Unmet criteria: {trace.routing.codingRun.unmetCriteria.join("; ")}</p> : null}
+            </div>
+          ) : null}
           {trace.failure ? (
             <div className="chat-trace-section">
               <strong>Recovery state</strong>

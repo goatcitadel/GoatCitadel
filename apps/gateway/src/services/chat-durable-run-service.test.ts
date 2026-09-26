@@ -968,6 +968,21 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("does not mark a partial coding trace as a completed durable run", async () => {
+    const state = createFinalizeState();
+    const prepared = createPreparedTurn({ content: "Repair and test the project" });
+    const trace = createTrace({
+      status: "partial",
+      failure: { failureClass: "tool_run_budget_exceeded", message: "Coding limit reached", retryable: false },
+      completion: { status: "complete", finishReason: "stop", repaired: false },
+    });
+    await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    expect(state.runs.get("run-complete")?.status).toBe("failed");
+    expect(state.checkpoints.at(-1)?.checkpointKind).toBe("run_failed");
+    expect(state.tracePatches.at(-1)?.patch).toMatchObject({ durable: { status: "failed", checkpointKind: "run_failed" } });
+    expect(state.tracePatches.at(-1)?.patch.status).toBeUndefined();
+  });
+
   it("rolls back terminal state when result materialization fails and replays only verified completion", async () => {
     const state = createFinalizeState();
     const prepared = createPreparedTurn();

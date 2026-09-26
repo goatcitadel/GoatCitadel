@@ -193,6 +193,14 @@ describe("Chat durable runtime authority", () => {
     expect(() =>
       buildChatTurnRuntimeAuthoritySeal({
         ...base,
+        durableStatus: "failed",
+        traceStatus: "partial",
+        requiredFinalizers: ["general"],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      buildChatTurnRuntimeAuthoritySeal({
+        ...base,
         durableStatus: "completed",
         traceStatus: "failed",
         terminalOutput: {
