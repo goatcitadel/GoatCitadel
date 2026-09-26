@@ -1370,6 +1370,18 @@ describe("ChatDelegationService loop 20 coverage", () => {
           };
         }
         expect(request).toEqual(frozenRequest);
+        const active = [...steps.values()].find((step) => step.childSessionId === childSessionId)!;
+        steps.set(active.stepId, {
+          ...active,
+          workResult: {
+            disposition: "completed",
+            summary: "Workspace evidence recovered.",
+            changedFiles: [],
+            evidenceRefs: ["apps/gateway/src/services/chat-delegation-service.ts"],
+            scopeHash: active.scopeControl!.scopeHash,
+            dispatchGeneration: active.scopeControl!.dispatchGeneration,
+          },
+        });
         const completed = createIdentifiedChatResponse(childSessionId, identity);
         return {
           ...completed,
@@ -1400,13 +1412,29 @@ describe("ChatDelegationService loop 20 coverage", () => {
 
     steps.set(interruptedStep.stepId, {
       ...interruptedStep,
+      scopeControl: {
+        ...interruptedStep.scopeControl!,
+        approvedPaths: ["apps/gateway", "packages/storage"],
+        scopeHash: "scope-explorer-expanded",
+        dispatchGeneration: "dispatch-explorer-expanded",
+        updatedAt: "2026-08-12T00:00:02.000Z",
+      },
       workResult: {
-        disposition: "completed",
-        summary: "Workspace evidence recovered.",
+        disposition: "scope_expansion",
+        summary: "Workspace scope expansion approved.",
         changedFiles: [],
         evidenceRefs: ["apps/gateway/src/services/chat-delegation-service.ts"],
         scopeHash: "scope-explorer-crash",
         dispatchGeneration: "dispatch-explorer-crash",
+        scopeExpansion: {
+          requestedPaths: ["packages/storage"],
+          reason: "Inspect the related storage code.",
+          scopeHash: "scope-explorer-crash",
+          approvalId: "approval-explorer-crash",
+          requestedAt: "2026-08-12T00:00:01.000Z",
+          decision: "approved",
+          resolvedAt: "2026-08-12T00:00:02.000Z",
+        },
       },
     });
     durableRuns.set(
@@ -1873,6 +1901,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
     steps.set(running.stepId, {
       ...running,
       instructionSnapshot: undefined,
+      output: "Delegate is waiting for approval.",
       workResult: {
         disposition: "scope_expansion",
         summary: "Need test scope.",
@@ -1932,8 +1961,11 @@ describe("ChatDelegationService loop 20 coverage", () => {
     await expect(persistedService.resumePersistedChatDelegation(resume))
       .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
     expect((await durableStorage.chatDelegationSteps.get(running.stepId)).status).toBe("completed");
+    expect((await durableStorage.chatDelegationSteps.get(running.stepId)).output).toBeUndefined();
     expect((await durableStorage.chatDelegationSteps.get(waiting.steps[1]!.stepId)).status).toBe("failed");
-    expect((await durableStorage.chatDelegationRuns.get(waiting.runId)).status).toBe("partial");
+    const settledRun = await durableStorage.chatDelegationRuns.get(waiting.runId);
+    expect(settledRun.status).toBe("partial");
+    expect(settledRun.stitchedOutput).not.toContain("Delegate is waiting for approval.");
     expect(tasks.get(waiting.taskId)?.status).toBe("blocked");
     expect(deps.taskLifecycleService.appendTaskActivity).toHaveBeenCalledWith(
       waiting.taskId,
@@ -2927,6 +2959,32 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects unverifiable terminal legacy POST replay without changing its historical result", async () => {
+    const { deps, runs, service, steps } = createHarness();
+    const request = {
+      objective: "Patch the retry queue",
+      roles: ["coder"],
+      mode: "sequential" as const,
+      policyRunId: "durable-parent-terminal-legacy",
+      steps: [{ stepId: "implementation", role: "coder", objective: "Patch the retry queue" }],
+    };
+    const completed = await service.runChatDelegation("sess-1", request);
+    expect(completed.status).toBe("completed");
+    const step = steps.get(completed.steps[0]!.stepId)!;
+    steps.set(step.stepId, { ...step, instructionSnapshot: undefined });
+
+    const replayService = new ChatDelegationService(deps);
+    await expect(replayService.runChatDelegation("sess-1", request))
+      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(replayService.runChatDelegation("sess-1", {
+      ...request,
+      steps: [{ ...request.steps[0]!, objective: "Do unrelated work" }],
+    })).rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    expect(runs.get(completed.runId)?.status).toBe("completed");
+    expect(steps.get(step.stepId)?.output).toBe(step.output);
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers legacy fan-out instructions only from the exactly bound frozen invocation", async () => {
     const { deps, fanoutInvocations, runs, service, steps } = createHarness();
     deps.agentSendChatMessage = vi.fn(async (childSessionId: string): Promise<ChatSendMessageResponse> => {
@@ -2990,6 +3048,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
 
     const recovered = await new ChatDelegationService(deps).runChatDelegation("sess-1", request, undefined, options);
     expect(recovered.runId).toBe(waiting.runId);
+    const storageFailure = new Error("fan-out lookup unavailable");
+    deps.storage.chatFanoutInvocations.get.mockImplementationOnce(() => { throw storageFailure; });
+    await expect(service.runChatDelegation("sess-1", request, undefined, options)).rejects.toBe(storageFailure);
+    fanoutInvocations.delete(invocationId);
+    await expect(service.runChatDelegation("sess-1", request, undefined, options))
+      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    fanoutInvocations.set(invocationId, invocation);
     await expect(service.runChatDelegation("sess-1", {
       ...request,
       steps: [{ ...request.steps[0]!, objective: "Do something different" }],

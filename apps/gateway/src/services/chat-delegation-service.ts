@@ -929,6 +929,9 @@ export class ChatDelegationService {
           delegationRunId: persisted.runId,
           stepId: observedStep.stepId,
           durableRunId,
+          approvalId: observedStep.workResult?.scopeExpansion?.decision === "approved"
+            ? observedStep.workResult.scopeExpansion.approvalId
+            : undefined,
         });
         reentered ||= resumed.reenteredPersistedStep;
       }
@@ -1240,7 +1243,7 @@ export class ChatDelegationService {
     const normalizedRequestedSteps = stablePolicyRunId
       ? stabilizeDelegationPlan(runId, requestedDelegationSteps)
       : requestedDelegationSteps;
-    if (stableParentRun) {
+    if (stableParentRun?.status === "running") {
       existingSteps = await recoverLegacyFanoutInstructions(
         deps,
         stableParentRun,
@@ -1249,7 +1252,9 @@ export class ChatDelegationService {
         sessionWorkspaceId,
       );
     }
-    let delegationSteps = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
+    let delegationSteps = stableParentRun && stableParentRun.status !== "running"
+      ? [...normalizedRequestedSteps]
+      : rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
     let frozenExplorerScope = explorerProfile ? existingSteps[0]?.scopeControl : undefined;
     if (explorerProfile && stableParentRun && !frozenExplorerScope) {
       throw new Error(`Workspace Explorer ${stableParentRun.runId} has no frozen filesystem scope.`);
@@ -3004,7 +3009,6 @@ async function settleUnverifiableLegacyDelegation(
       expectedChildTurnId: current.childTurnId!,
       expectedDurableRunId: input.durableRunId,
       status: childStatus,
-      ...(current.output ? { output: current.output } : {}),
       summary: childStatus === "completed" ? "Delegated child completed." : "Delegated child ended.",
       ...(childStatus !== "completed"
         ? {
@@ -3117,6 +3121,9 @@ async function resolveStableTerminalDelegationReplay(
 ): Promise<StableTerminalDelegationReplay> {
   return await deps.storage.runImmediateTransaction(async () => {
     const locks = await lockDelegationAggregateTruth(deps, runId, taskId);
+    const projection = deriveDelegationAggregate(locks.persistedSteps);
+    // Terminal POST replays still require bound step instructions. Historical
+    // generic legacy results remain readable by run ID when that proof is absent.
     const verifiedSteps = await recoverLegacyFanoutInstructions(
       deps,
       locks.parent,
@@ -3125,10 +3132,7 @@ async function resolveStableTerminalDelegationReplay(
       workspaceId,
     );
     rebuildResumableDelegationPlan(verifiedSteps, requestedSteps);
-    const projection = deriveDelegationAggregate(locks.persistedSteps);
-    if (projection.status === "running") {
-      return { kind: "resume" };
-    }
+    if (projection.status === "running") return { kind: "resume" };
     const observedAt = await deps.storage.chatDelegationSteps.readDatabaseNow();
     if (hasDelegationAggregateDrift(locks, projection)) {
       const committedAggregate = await persistDelegationAggregateFromLockedTruth(
@@ -4069,8 +4073,9 @@ async function recoverLegacyFanoutInstructions(
   let invocation: ChatFanoutInvocationRecord;
   try {
     invocation = await deps.storage.chatFanoutInvocations.get(run.executionPlanId);
-  } catch {
-    throw new UnverifiableDelegationInstructionsError();
+  } catch (error) {
+    if (error instanceof NotFoundError) throw new UnverifiableDelegationInstructionsError();
+    throw error;
   }
   if (
     invocation.invocationId !== run.executionPlanId ||

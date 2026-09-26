@@ -115,7 +115,7 @@ describe("remote-worker canonical bounds forward migration", () => {
       // at the historical migration under test.
       assert.equal(
         db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get<{ version: number }>()!.version,
-        250,
+        251,
       );
       assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
       assert.equal(db.prepare("PRAGMA foreign_keys").get<{ foreign_keys: number }>()!.foreign_keys, 1);
