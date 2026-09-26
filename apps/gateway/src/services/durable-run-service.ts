@@ -3339,7 +3339,7 @@ export class DurableRunService {
 
   async createDurableRun(
     input: DurableRunCreateRequest,
-    options: { publishRealtime?: boolean; idempotentIfExists?: boolean } = {},
+    options: { publishRealtime?: boolean; idempotentIfExists?: boolean; initialStatus?: "paused" } = {},
   ): Promise<DurableRunRecord> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(input);
@@ -3355,6 +3355,9 @@ export class DurableRunService {
     if (!workflowKey) {
       throw new Error("workflowKey is required");
     }
+    if (options.initialStatus === "paused" && (workflowKey !== "orchestration.plan.execute" || input.waitForEvent)) {
+      throw new Error("Only orchestration ownership setup may create a paused durable run.");
+    }
     const retryPolicy = this.normalizeDurableRetryPolicy(input.retryPolicy);
     if (
       workflowKey === "chat.turn.execute" &&
@@ -3364,7 +3367,7 @@ export class DurableRunService {
       throw new Error("Admitted v2 Chat runs require the exact canonical retry policy.");
     }
     const now = new Date().toISOString();
-    const status: DurableRunRecord["status"] = input.waitForEvent ? "waiting" : "queued";
+    const status: DurableRunRecord["status"] = options.initialStatus ?? (input.waitForEvent ? "waiting" : "queued");
     const metadata = {
       ...(input.metadata ?? {}),
       retryPolicy,
@@ -3390,7 +3393,7 @@ export class DurableRunService {
           maxAttempts: retryPolicy.maxAttempts,
           payload: input.payload ?? {},
           metadata,
-          startedAt: status === "queued" ? undefined : now,
+          startedAt: status === "waiting" ? now : undefined,
           now,
         });
         await this.createDurableCheckpoint({

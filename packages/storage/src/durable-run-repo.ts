@@ -51,6 +51,7 @@ export class DurableRunRepository {
   private readonly updateRunStmt;
   private readonly listRunsStmt;
   private readonly listRunIdsByStatusStmt;
+  private readonly listUnstartedOrchestrationRunIdsStmt;
   private readonly listPendingLinkedFinalizationRunIdsStmt;
   private readonly listPendingAutonomousChatPostCommitRunIdsStmt;
   private readonly listPendingGeneralChatPostCommitRunIdsStmt;
@@ -314,6 +315,15 @@ export class DurableRunRepository {
       WHERE status = ?
       ORDER BY created_at ASC
       LIMIT ?
+    `);
+    this.listUnstartedOrchestrationRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status IN ('queued', 'paused')
+        AND workflow_key = 'orchestration.plan.execute'
+        AND (${optionalAfterRunId} IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
     `);
     this.listPendingLinkedFinalizationRunIdsStmt = db.prepare(`
       SELECT run_id
@@ -880,6 +890,16 @@ export class DurableRunRepository {
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
     const rows = this.listRunIdsByStatusStmt.all(status, safeLimit) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  /** A bounded, resumable scan for unstarted orchestration runs needing ownership checks. */
+  public listUnstartedOrchestrationRunIds(limit = 200, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
+    const rows = this.listUnstartedOrchestrationRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
     return rows.map((row) => row.run_id);
   }
 

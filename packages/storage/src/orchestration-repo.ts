@@ -96,6 +96,7 @@ export class OrchestrationRepository {
   private readonly getLatestRunByPlanStmt;
   private readonly findActiveRunByPlanStmt;
   private readonly listActiveRunsWithEndedDurableRunStmt;
+  private readonly listUnlinkedCreatedRunsStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly listCheckpointsAfterStmt;
@@ -105,6 +106,7 @@ export class OrchestrationRepository {
   public constructor(private readonly db: DatabaseClient) {
     const optionalExpectedExecutionState =
       db.dialect === "postgres" ? "CAST(@expectedExecutionState AS TEXT)" : "@expectedExecutionState";
+    const optionalAfterRunId = db.dialect === "postgres" ? "CAST(@afterRunId AS TEXT)" : "@afterRunId";
     // Postgres cannot infer a parameter's type from an IS [NOT] NULL test alone
     // ("could not determine data type of parameter"), and these two tests are the
     // only places the lease generation appears without a column to infer from —
@@ -350,6 +352,15 @@ export class OrchestrationRepository {
       ORDER BY o.started_at ASC, o.run_id ASC
       LIMIT @limit
     `);
+    this.listUnlinkedCreatedRunsStmt = db.prepare(`
+      SELECT * FROM orchestration_runs
+      WHERE status IN ('queued', 'running', 'paused')
+        AND execution_state = 'created'
+        AND durable_run_id IS NULL
+        AND (${optionalAfterRunId} IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
 
     this.insertCheckpointStmt = db.prepare(`
       INSERT INTO orchestration_checkpoints (
@@ -587,6 +598,14 @@ export class OrchestrationRepository {
   public listActiveRunsWithEndedDurableRun(limit = 200): OrchestrationRun[] {
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
     return toOrchestrationRunRows(this.listActiveRunsWithEndedDurableRunStmt.all({ limit: safeLimit })).map(mapRunRow);
+  }
+
+  /** Unlinked ownership setups, paged so recovery can inspect every candidate. */
+  public listUnlinkedCreatedRuns(limit = 200, afterRunId?: string): OrchestrationRun[] {
+    const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
+    return toOrchestrationRunRows(
+      this.listUnlinkedCreatedRunsStmt.all({ afterRunId: afterRunId ?? null, limit: safeLimit }),
+    ).map(mapRunRow);
   }
 
   public listRuns(limit = 1000): OrchestrationRun[] {

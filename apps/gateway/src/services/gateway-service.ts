@@ -6958,7 +6958,13 @@ export class GatewayService {
     return await this.durableOperatorService.listRunCheckpoints(runId, limit);
   }
 
-  public async createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
+  public async createDurableRun(
+    input: DurableRunCreateRequest,
+    internalOptions?: { initialStatus: "paused" },
+  ): Promise<DurableRunRecord> {
+    if (internalOptions?.initialStatus === "paused") {
+      return await this.durableRunService.createDurableRun(input, { initialStatus: "paused" });
+    }
     return await this.durableOperatorService.createRun(input);
   }
 

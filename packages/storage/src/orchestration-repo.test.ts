@@ -521,6 +521,36 @@ describe("OrchestrationRepository", () => {
     );
   });
 
+  it("pages active ownership setups that never linked a durable run", () => {
+    const repo = createRepo();
+    repo.upsertPlan(plan);
+    const base: OrchestrationRun = {
+      runId: "run-a",
+      planId: "plan-1",
+      status: "queued",
+      executionState: "created",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      workspaceId: "default",
+    };
+    repo.createRun(base);
+    repo.createRun({ ...base, runId: "run-b" });
+    repo.createRun({ ...base, runId: "run-c", durableRunId: "durable-c" });
+    repo.createRun({ ...base, runId: "run-d", executionState: "worktree_allocating" });
+    repo.createRun({ ...base, runId: "run-e", status: "cancelled" });
+
+    assert.deepEqual(
+      repo.listUnlinkedCreatedRuns(1).map((run) => run.runId),
+      ["run-a"],
+    );
+    assert.deepEqual(
+      repo.listUnlinkedCreatedRuns(1, "run-a").map((run) => run.runId),
+      ["run-b"],
+    );
+    assert.deepEqual(repo.listUnlinkedCreatedRuns(1, "run-b"), []);
+  });
+
   it("handles missing lookups, corrupted JSON fallbacks, cursors, and run events", () => {
     const { db, repo } = createRepoWithDb();
 

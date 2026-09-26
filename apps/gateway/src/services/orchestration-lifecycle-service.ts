@@ -152,7 +152,8 @@ export interface OrchestrationLifecycleHost {
   };
   readonly storage: {
     runImmediateTransaction<T>(callback: () => T | Promise<T>): Promise<Awaited<T>>;
-    durableRuns: Pick<Storage["durableRuns"], "lockFreshActiveLeaseForUpdate">;
+    durableRuns: Pick<Storage["durableRuns"], "lockFreshActiveLeaseForUpdate"> &
+      Partial<Pick<Storage["durableRuns"], "listUnstartedOrchestrationRunIds">>;
     orchestration: {
       upsertPlan(plan: OrchestrationPlan, workspaceId?: string): Promise<void>;
       getPlan(planId: string, workspaceId?: string): Promise<OrchestrationPlan>;
@@ -170,6 +171,8 @@ export interface OrchestrationLifecycleHost {
       getRun(runId: string): Promise<OrchestrationRun>;
       /** Active runs whose linked durable run has already ended, oldest first. */
       listActiveRunsWithEndedDurableRun?(limit?: number): Promise<OrchestrationRun[]>;
+      /** Active ownership setups with no durable link, paged by run id. */
+      listUnlinkedCreatedRuns?(limit?: number, afterRunId?: string): Promise<OrchestrationRun[]>;
     };
     runtimeDecisionTraces?: {
       append(input: RuntimeDecisionTraceAppendInput): Promise<RuntimeDecisionTraceRecord>;
@@ -208,7 +211,10 @@ export interface OrchestrationLifecycleHost {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): Promise<unknown>;
   scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): Promise<unknown>;
-  createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord>;
+  createDurableRun(
+    input: DurableRunCreateRequest,
+    internalOptions?: { initialStatus: "paused" },
+  ): Promise<DurableRunRecord>;
   getDurableRun(runId: string): Promise<DurableRunRecord>;
   requestDurableRunProcessing(runId: string): Promise<unknown>;
   pauseDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord>;
@@ -273,6 +279,9 @@ function isDurableRunTerminal(run: DurableRunRecord): boolean {
 }
 
 const RUN_ERROR_MAX_CHARACTERS = 2000;
+const OWNERSHIP_SETUP_GRACE_MS = 5 * 60_000;
+const OWNERSHIP_RECOVERY_INTERVAL_MS = 30_000;
+const ownershipRecoveryLastScanByStorage = new WeakMap<OrchestrationLifecycleHost["storage"], number>();
 
 /** Redacts secrets from, and bounds, error text copied into run state, events, and realtime payloads. */
 function boundRunError(message: string): string {
@@ -917,25 +926,31 @@ async function allocateOrchestrationOwnership(
   run: OrchestrationRun,
 ): Promise<OrchestrationRun> {
   const workspaceId = run.workspaceId ?? DEFAULT_WORKSPACE_ID;
-  const durable = await host.createDurableRun({
-    workflowKey: "orchestration.plan.execute",
-    payload: {
-      version: "orchestration.plan.execute.v1",
-      orchestrationRunId: run.runId,
-      planId: plan.planId,
-      workspaceId,
-      operatorId: run.operatorId,
-      authActorId: run.authActorId,
-      authActorSource: run.authActorSource,
-      permissionProfileId: run.permissionProfileId,
-      localOperatorOverrideId: run.localOperatorOverrideId,
-      requestedAt: new Date().toISOString(),
+  const durable = await host.createDurableRun(
+    {
+      workflowKey: "orchestration.plan.execute",
+      payload: {
+        version: "orchestration.plan.execute.v1",
+        orchestrationRunId: run.runId,
+        planId: plan.planId,
+        workspaceId,
+        operatorId: run.operatorId,
+        authActorId: run.authActorId,
+        authActorSource: run.authActorSource,
+        permissionProfileId: run.permissionProfileId,
+        localOperatorOverrideId: run.localOperatorOverrideId,
+        requestedAt: new Date().toISOString(),
+      },
+      metadata: buildDurableMetadata(plan, run, {
+        lifecycleState: "ownership_setup",
+      }),
     },
-    metadata: buildDurableMetadata(plan, run, {
-      lifecycleState: "linked",
-    }),
-  });
-  await host.pauseDurableRun(durable.runId, "orchestration");
+    { initialStatus: "paused" },
+  );
+  if (durable.status !== "paused") {
+    await cancelUnusedDurableRun(host, run, durable.runId);
+    throw new Error("Orchestration ownership durable run was not created paused.");
+  }
   const link = await commitRunIfUnchanged(host, run, {
     ...run,
     workspaceId,
@@ -1094,19 +1109,34 @@ async function commitRunIfUnchanged(
     : { run: await host.storage.orchestration.getRun(current.runId), committed: false };
 }
 
-/** Cancels a paused durable run that its orchestration run will never use. */
+/** Cancels an unstarted durable run that its orchestration run will never use. */
 async function cancelUnusedDurableRun(
   host: OrchestrationLifecycleHost,
   run: OrchestrationRun,
   durableRunId: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await host.cancelDurableRun(durableRunId, "orchestration");
+    return true;
   } catch (error) {
+    // Operator cancellation can commit and then fail while publishing its
+    // after-commit event. The durable row, not the thrown error, is authority.
+    let durableStatus: DurableRunRecord["status"] | undefined;
+    try {
+      const current = await host.getDurableRun(durableRunId);
+      durableStatus = current.status;
+      if (current.status === "cancelled") {
+        return true;
+      }
+    } catch {
+      // Keep the original failure as the diagnostic if the reread also fails.
+    }
     await persistRunEvent(host, run, "run.durable_cleanup_failed", {
       durableRunId,
-      error: error instanceof Error ? error.message : String(error),
+      durableStatus,
+      error: boundRunError(error instanceof Error ? error.message : String(error)),
     });
+    return false;
   }
 }
 
@@ -1568,8 +1598,123 @@ export async function reconcileTerminalOrchestrationRuns(
       failures.push(error);
     }
   }
+  // Ownership setup has two crash gaps: a created run before its durable is
+  // linked, and a paused durable before its owner is linked. A complete sweep
+  // per recovery pass avoids losing a volatile page cursor on gateway restart.
+  // Throttle the sweep because this reconciler also runs on the worker poll.
+  const now = Date.now();
+  const lastScan = ownershipRecoveryLastScanByStorage.get(host.storage);
+  if (lastScan !== undefined && now >= lastScan && now - lastScan < OWNERSHIP_RECOVERY_INTERVAL_MS) {
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Orchestration recovery could not settle every run.");
+    }
+    return;
+  }
+  ownershipRecoveryLastScanByStorage.set(host.storage, now);
+  const pageSize = Math.max(1, Math.min(200, Math.floor(limit)));
+  const listUnlinked = host.storage.orchestration.listUnlinkedCreatedRuns;
+  if (!listUnlinked) {
+    failures.push(new Error("Unlinked orchestration ownership recovery is unavailable."));
+  } else {
+    let afterRunId: string | undefined;
+    try {
+      for (;;) {
+        const page = await listUnlinked.call(host.storage.orchestration, pageSize, afterRunId);
+        for (const run of page) {
+          try {
+            const startedAt = Date.parse(run.startedAt);
+            if (!Number.isFinite(startedAt) || now - startedAt < OWNERSHIP_SETUP_GRACE_MS) {
+              continue;
+            }
+            const message = "Orchestration ownership setup was interrupted before its durable run was linked.";
+            const stopped = await commitRunIfUnchanged(host, run, {
+              ...run,
+              status: "failed",
+              executionState: "failed",
+              worktreeStatus: "blocked",
+              endedAt: new Date(now).toISOString(),
+              lastError: message,
+            });
+            if (!stopped.committed) {
+              continue;
+            }
+            const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+            await persistCheckpoint(
+              host,
+              plan,
+              stopped.run,
+              "run_failed",
+              buildCheckpointDetails(plan, stopped.run, undefined, {
+                error: message,
+                reason: "ownership_setup_interrupted",
+              }),
+            );
+            await persistRunEvent(host, stopped.run, "run.failed", {
+              error: message,
+              reason: "ownership_setup_interrupted",
+            });
+            await publishRunRealtime(host, plan, stopped.run, { event: "run_failed", error: message });
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (page.length < pageSize) {
+          break;
+        }
+        afterRunId = page[page.length - 1]!.runId;
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+
+  const listUnstarted = host.storage.durableRuns.listUnstartedOrchestrationRunIds;
+  if (!listUnstarted) {
+    failures.push(new Error("Unstarted orchestration durable-run recovery is unavailable."));
+  } else {
+    let afterRunId: string | undefined;
+    try {
+      for (;;) {
+        const page = await listUnstarted.call(host.storage.durableRuns, pageSize, afterRunId);
+        for (const durableRunId of page) {
+          try {
+            const durable = await getDurableRunIfAvailable(host, durableRunId);
+            const payload =
+              (durable?.status === "queued" || durable?.status === "paused") &&
+              durable.workflowKey === "orchestration.plan.execute"
+                ? parseOrchestrationWorkflowPayload(durable)
+                : undefined;
+            if (!payload) {
+              continue;
+            }
+            const owner = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
+            if (
+              !owner ||
+              (owner.status !== "cancelled" && owner.status !== "failed") ||
+              owner.planId !== payload.planId ||
+              (owner.workspaceId ?? DEFAULT_WORKSPACE_ID) !== payload.workspaceId ||
+              (owner.durableRunId && owner.durableRunId !== durableRunId)
+            ) {
+              continue;
+            }
+            if (!(await cancelUnusedDurableRun(host, owner, durableRunId))) {
+              failures.push(new Error(`Unstarted orchestration durable run ${durableRunId} still needs cleanup.`));
+            }
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (page.length < pageSize) {
+          break;
+        }
+        afterRunId = page[page.length - 1]!;
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
   if (failures.length > 0) {
-    throw new AggregateError(failures, "Orchestration terminal reconciliation could not settle every active run.");
+    throw new AggregateError(failures, "Orchestration recovery could not settle every run.");
   }
 }
 

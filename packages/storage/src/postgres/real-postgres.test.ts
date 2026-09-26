@@ -4458,6 +4458,17 @@ test(
       assert.deepEqual(durableRuns.listPendingAutonomousChatPostCommitRunIds(), [autonomousRunId]);
       assert.deepEqual(durableRuns.listPendingGeneralChatPostCommitRunIds(), [generalRunId]);
       assert.deepEqual(durableRuns.listPendingGeneralChatPostCommitRunIds(500, generalRunId), []);
+      const pausedFirstId = `d-paused-${suffix}`;
+      const pausedSecondId = `e-paused-${suffix}`;
+      durableRuns.createRun({ runId: pausedFirstId, workflowKey: "orchestration.plan.execute", status: "paused" });
+      durableRuns.createRun({ runId: pausedSecondId, workflowKey: "orchestration.plan.execute", status: "paused" });
+      durableRuns.createRun({ runId: `f-other-${suffix}`, workflowKey: "chat.turn.execute", status: "paused" });
+      const queuedId = `g-queued-${suffix}`;
+      durableRuns.createRun({ runId: queuedId, workflowKey: "orchestration.plan.execute", status: "queued" });
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1), [pausedFirstId]);
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, pausedFirstId), [pausedSecondId]);
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, pausedSecondId), [queuedId]);
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, queuedId), []);
 
       const mutationIdempotency = new MutationIdempotencyRepository(syncClient);
       const mutationIdentity = {
@@ -4579,6 +4590,17 @@ test(
         totalIterations: 0,
         workspaceId: "default",
       });
+      const unlinkedSetupId = `orchestration-setup-${suffix}`;
+      orchestration.createRun({
+        ...orchestrationRun,
+        runId: unlinkedSetupId,
+        executionState: "created",
+      });
+      assert.deepEqual(
+        orchestration.listUnlinkedCreatedRuns(1).map((run) => run.runId),
+        [unlinkedSetupId],
+      );
+      assert.deepEqual(orchestration.listUnlinkedCreatedRuns(1, unlinkedSetupId), []);
       assert.equal(
         orchestration.updateRunIfCurrentState(
           { ...orchestrationRun, status: "running", executionState: "queued" },

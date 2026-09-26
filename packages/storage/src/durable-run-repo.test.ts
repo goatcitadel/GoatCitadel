@@ -694,6 +694,20 @@ describe("DurableRunRepository", () => {
     assert.deepEqual(repo.getDeadLetterById(deadLetter.deadLetterId), resolved);
   });
 
+  it("pages queued and paused orchestration durables without a fixed oldest-row cap", () => {
+    const repo = createRepo();
+    for (const runId of ["durable-a", "durable-b", "durable-c"]) {
+      repo.createRun({ runId, workflowKey: "orchestration.plan.execute", status: "paused" });
+    }
+    repo.createRun({ runId: "durable-other", workflowKey: "chat.turn.execute", status: "paused" });
+    repo.createRun({ runId: "durable-queued", workflowKey: "orchestration.plan.execute", status: "queued" });
+    repo.createRun({ runId: "durable-running", workflowKey: "orchestration.plan.execute", status: "running" });
+
+    assert.deepEqual(repo.listUnstartedOrchestrationRunIds(2), ["durable-a", "durable-b"]);
+    assert.deepEqual(repo.listUnstartedOrchestrationRunIds(2, "durable-b"), ["durable-c", "durable-queued"]);
+    assert.deepEqual(repo.listUnstartedOrchestrationRunIds(2, "durable-queued"), []);
+  });
+
   it("lists only failed runs with pending linked-state finalization", () => {
     const repo = createRepo();
     const pending = repo.createRun({
