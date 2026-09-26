@@ -4586,6 +4586,11 @@ test(
         )?.status,
         "running",
       );
+      orchestration.updateRun({ ...orchestration.getRun(orchestrationRunId), durableRunId: `durable-${suffix}` });
+      assert.ok(
+        orchestration.listActiveLinkedRuns(1000).some((run) => run.runId === orchestrationRunId),
+        "an active durable-linked orchestration run is listed",
+      );
       const generationOwner = orchestration.updateRun({
         ...orchestration.getRun(orchestrationRunId),
         worktreePath: "/tmp/worktree",

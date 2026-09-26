@@ -233,12 +233,15 @@ describe("DurableRunService child watchers", () => {
     expect(catchUpSpy).toHaveBeenCalledWith({ watcherLimit: 100, eventLimitPerWatcher: 100 });
   });
 
-  it("catches up parked orchestration phases even when delegation catch-up fails", async () => {
+  it("runs every orchestration catch-up even when an earlier one fails", async () => {
     const { context } = createHarness();
     const reconcileWaitingChatDelegations = vi.fn(async () => {
       throw new Error("delegation owner unavailable");
     });
-    const reconcileWaitingOrchestrationPhases = vi.fn(async () => undefined);
+    const reconcileWaitingOrchestrationPhases = vi.fn(async () => {
+      throw new Error("phase wake scan failed");
+    });
+    const reconcileTerminalOrchestrationRuns = vi.fn(async () => undefined);
     const backgroundTasks = new Set<Promise<void>>();
     const restarted = new DurableRunService(context, {
       backgroundTasks,
@@ -249,6 +252,7 @@ describe("DurableRunService child watchers", () => {
       },
       reconcileWaitingChatDelegations,
       reconcileWaitingOrchestrationPhases,
+      reconcileTerminalOrchestrationRuns,
     });
     restarted.startWorker();
     await Promise.all([...backgroundTasks]);
@@ -256,5 +260,6 @@ describe("DurableRunService child watchers", () => {
 
     expect(reconcileWaitingChatDelegations).toHaveBeenCalled();
     expect(reconcileWaitingOrchestrationPhases).toHaveBeenCalled();
+    expect(reconcileTerminalOrchestrationRuns).toHaveBeenCalled();
   });
 });

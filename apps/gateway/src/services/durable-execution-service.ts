@@ -101,6 +101,7 @@ import { reconstructAdmittedChatTurnRequest } from "./session-control-service.js
 import type { CuratorService } from "./curator-service.js";
 import type { ChatPostCommitEffectAuthorityContext } from "./chat-post-commit-effect-receipt.js";
 import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
+import { isDurableControlError } from "./durable-control-error.js";
 import { DurableWorkerInterruptionError, type DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
@@ -203,6 +204,8 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     run: DurableRunRecord,
     context?: DurableWorkflowExecutionContext,
   ): Promise<{ outcome: "paused" | "completed" | "failed" | "cancelled"; checkpointState: Record<string, unknown> }>;
+  /** Fails the linked orchestration run of an orchestration workflow that threw. */
+  failOrchestrationRunForWorkflowError?(run: DurableRunRecord, error: unknown): Promise<void>;
   prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -374,7 +377,10 @@ type DurableHookDeliveryWorkflowHost = DurableWorkflowCompletionHost &
   Pick<DurableExecutionHost, "hooksService" | "durableRunService" | "computeDurableRetryDelayMs">;
 
 type DurableOrchestrationWorkflowHost = DurableWorkflowCompletionHost &
-  Pick<DurableExecutionHost, "executeDurableOrchestrationRun" | "durableRunService">;
+  Pick<
+    DurableExecutionHost,
+    "executeDurableOrchestrationRun" | "failOrchestrationRunForWorkflowError" | "durableRunService"
+  >;
 
 type DurableExternalSideEffectReplayWorkflowHost = DurableWorkflowCompletionHost & {
   storage: Pick<Storage, "durableRuns" | "externalSideEffectRuns">;
@@ -1028,7 +1034,18 @@ export function buildDurableWorkflowExecutors(
     },
     "orchestration.plan.execute": {
       execute: async (run, context) => {
-        const result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
+        let result: Awaited<ReturnType<DurableOrchestrationWorkflowHost["executeDurableOrchestrationRun"]>>;
+        try {
+          result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
+        } catch (error) {
+          // The worker fails the durable run for this error; fail the linked
+          // orchestration run first so the two agree. An interrupted worker
+          // leaves both to the run's next lease owner.
+          if (!isDurableWorkerInterruption(error)) {
+            await hosts.orchestration.failOrchestrationRunForWorkflowError?.(run, error);
+          }
+          throw error;
+        }
         if (result.outcome === "failed") {
           await failDurableWorkflowRun(hosts.orchestration, run, result.checkpointState);
           return;
@@ -3945,6 +3962,18 @@ export async function markDurableWorkflowUnrecoverable(
 ): Promise<void> {
   const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutorsFromExecutionHost(host));
   await registry.markWorkflowUnrecoverable(run, reason, context);
+}
+
+/**
+ * Lease loss, recovery, and operator pause or cancel interruptions. Whoever
+ * interrupted the run owns its next state; only a timeout or a real error
+ * fails it.
+ */
+function isDurableWorkerInterruption(error: unknown): boolean {
+  return (
+    error instanceof DurableWorkerInterruptionError ||
+    (isDurableControlError(error) && error.name !== "DurableWorkflowTimeoutError")
+  );
 }
 
 function throwIfDurableWorkflowAborted(context?: DurableWorkflowExecutionContext): void {

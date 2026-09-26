@@ -101,6 +101,28 @@ describe("orchestration plans run end to end on the durable worker", () => {
     });
   }, 120_000);
 
+  it("settles a run whose durable run is cancelled outside orchestration", async () => {
+    await withGateway(async (app) => {
+      const planId = `plan-durable-cancel-${randomUUID().slice(0, 8)}`;
+      const run = await startPlan(app, twoPhasePlan(planId, { mode: "auto", gatePhaseB: true }));
+      await waitForRun(app, run.runId, (view) => view.status === "paused", "the phase-b gate");
+      const paused = await app.inject({ method: "GET", url: `/api/v1/orchestration/runs/${run.runId}`, headers: AUTH });
+      const durableRunId = (readRun(paused.json()) as RunView & { durableRunId?: string }).durableRunId;
+      expect(durableRunId).toBeTruthy();
+
+      const cancelled = await app.inject({
+        method: "POST",
+        url: `/api/v1/durable/runs/${durableRunId}/cancel`,
+        headers: { ...AUTH, "idempotency-key": randomUUID() },
+        payload: {},
+      });
+      expect(cancelled.statusCode, cancelled.body).toBeLessThan(300);
+
+      const settled = await waitForRun(app, run.runId, (view) => view.status === "cancelled", "cancellation");
+      expect(settled).toMatchObject({ status: "cancelled", executionState: "cancelled" });
+    });
+  }, 120_000);
+
   it("runs each phase of a hitl plan once after its approval", async () => {
     await withGateway(async (app) => {
       const planId = `plan-hitl-${randomUUID().slice(0, 8)}`;

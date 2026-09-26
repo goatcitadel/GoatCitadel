@@ -95,6 +95,7 @@ export class OrchestrationRepository {
   private readonly listRunsStmt;
   private readonly getLatestRunByPlanStmt;
   private readonly findActiveRunByPlanStmt;
+  private readonly listActiveLinkedRunsStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly listCheckpointsAfterStmt;
@@ -341,6 +342,14 @@ export class OrchestrationRepository {
       LIMIT 1
     `);
 
+    this.listActiveLinkedRunsStmt = db.prepare(`
+      SELECT * FROM orchestration_runs
+      WHERE status IN ('queued', 'running', 'paused')
+        AND durable_run_id IS NOT NULL
+      ORDER BY started_at ASC, run_id ASC
+      LIMIT @limit
+    `);
+
     this.insertCheckpointStmt = db.prepare(`
       INSERT INTO orchestration_checkpoints (
         checkpoint_id, run_id, plan_id, wave_id, phase_id,
@@ -567,6 +576,12 @@ export class OrchestrationRepository {
       return undefined;
     }
     return mapRunRow(row);
+  }
+
+  /** Active (queued, running, or paused) runs linked to a durable run, oldest first. */
+  public listActiveLinkedRuns(limit = 200): OrchestrationRun[] {
+    const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+    return toOrchestrationRunRows(this.listActiveLinkedRunsStmt.all({ limit: safeLimit })).map(mapRunRow);
   }
 
   public listRuns(limit = 1000): OrchestrationRun[] {

@@ -1859,6 +1859,11 @@ export class GatewayService {
       reconcileWaitingChatDelegations: () => this.chatTurnControl.reconcileWaitingDelegations(),
       reconcileWaitingOrchestrationPhases: () =>
         orchestrationLifecycleService.reconcileWaitingOrchestrationPhases(this),
+      reconcileTerminalOrchestrationRuns: () =>
+        orchestrationLifecycleService.reconcileTerminalOrchestrationRuns(
+          this,
+          this.getOrchestrationLifecycleRuntimeDeps(),
+        ),
       onChatTurnCancelled: (sessionId, turnId, actorId) =>
         this.chatTurnControl.onChatTurnCancelled(sessionId, turnId, actorId),
       workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
@@ -2928,6 +2933,13 @@ export class GatewayService {
             this.recordImprovementDurableRunCompletion(run, checkpointState),
           executeDurableOrchestrationRun: async (run, context) =>
             await this.executeDurableOrchestrationRun(run, context),
+          failOrchestrationRunForWorkflowError: async (run, error) =>
+            await orchestrationLifecycleService.failOrchestrationRunForWorkflowError(
+              this,
+              this.getOrchestrationLifecycleRuntimeDeps(),
+              run,
+              error,
+            ),
         },
         curatorTick: {
           storage: this.storage,

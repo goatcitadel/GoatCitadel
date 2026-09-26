@@ -713,6 +713,8 @@ export class DurableRunService {
       reconcileWaitingChatDelegations?: () => Promise<void>;
       /** Wakes orchestration runs parked on a phase child that has already settled. */
       reconcileWaitingOrchestrationPhases?: () => Promise<void>;
+      /** Settles active orchestration runs whose linked durable run already ended. */
+      reconcileTerminalOrchestrationRuns?: () => Promise<void>;
       onBackgroundAttentionRequired?: (
         input: DurableBackgroundAttentionNotificationInput,
       ) => Promise<boolean | void> | boolean | void;
@@ -4442,6 +4444,16 @@ export class DurableRunService {
           error: error instanceof Error ? error.message : String(error),
         },
         "orchestration phase wake reconciliation deferred",
+      );
+    }
+    try {
+      await this.deps?.reconcileTerminalOrchestrationRuns?.();
+    } catch (error) {
+      this.resolveLogger().warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "orchestration terminal reconciliation deferred",
       );
     }
   }

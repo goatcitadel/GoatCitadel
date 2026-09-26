@@ -166,6 +166,8 @@ export interface OrchestrationLifecycleHost {
       listCheckpoints(runId: string): Promise<OrchestrationCheckpoint[]>;
       listRunEvents?(runId: string): Promise<OrchestrationRunEventRecord[]>;
       getRun(runId: string): Promise<OrchestrationRun>;
+      /** Active runs linked to a durable run, oldest first. */
+      listActiveLinkedRuns?(limit?: number): Promise<OrchestrationRun[]>;
     };
     runtimeDecisionTraces?: {
       append(input: RuntimeDecisionTraceAppendInput): Promise<RuntimeDecisionTraceRecord>;
@@ -388,83 +390,10 @@ async function markOrchestrationRunCancelled(
       },
     });
   };
-  const commitLinkedDurableTerminalWinner = async (linked: DurableRunRecord): Promise<OrchestrationRun> => {
-    const durableOrchestration =
-      linked.metadata?.orchestration && typeof linked.metadata.orchestration === "object"
-        ? (linked.metadata.orchestration as Record<string, unknown>)
-        : undefined;
-    const stoppedByLimit = linked.status === "completed" && durableOrchestration?.executionState === "stopped_by_limit";
-    const winnerStatus: "stopped_by_limit" | "completed" | "failed" = stoppedByLimit
-      ? "stopped_by_limit"
-      : linked.status === "completed"
-        ? "completed"
-        : "failed";
-    const winnerExecutionState: "stopped_by_limit" | "completed" | "failed" = stoppedByLimit
-      ? "stopped_by_limit"
-      : winnerStatus === "completed"
-        ? "completed"
-        : "failed";
-    const winner: OrchestrationRun = {
-      ...run,
-      status: winnerStatus,
-      executionState: winnerExecutionState,
-      endedAt: linked.finishedAt ?? new Date().toISOString(),
-      lastError:
-        winnerStatus === "failed"
-          ? (linked.lastError ?? `Linked durable run ${linked.runId} finished as ${linked.status}.`)
-          : undefined,
-      pendingApprovalPhaseId: undefined,
-      pendingApprovedBy: undefined,
-      pendingCostIncrementUsd: undefined,
-    };
-    let terminal!: { run: OrchestrationRun; transitioned: boolean };
-    await storage.runImmediateTransaction(async () => {
-      terminal = await commitRunCandidate(winner);
-      if (!terminal.transitioned) {
-        return;
-      }
-      await persistCheckpoint(
-        host,
-        plan,
-        terminal.run,
-        winnerStatus === "stopped_by_limit"
-          ? "run_stopped"
-          : winnerStatus === "completed"
-            ? "run_completed"
-            : "run_failed",
-        buildCheckpointDetails(plan, terminal.run, linked.runId, {
-          actorId,
-          requestedCancellationReason: reason,
-          durableTerminalStatus: linked.status,
-          terminalWinner: "durable_run",
-        }),
-      );
-    });
-    if (!terminal.transitioned) {
-      return terminal.run;
-    }
-    const event =
-      winnerStatus === "stopped_by_limit"
-        ? "run.stopped"
-        : winnerStatus === "completed"
-          ? "run.completed"
-          : "run.failed";
-    await persistRunEvent(host, terminal.run, event, {
-      actorId,
-      requestedCancellationReason: reason,
-      durableTerminalStatus: linked.status,
-      terminalWinner: "durable_run",
-    });
-    await publishRunRealtime(host, plan, terminal.run, {
-      event: event.replace("run.", "run_"),
-      ...(winnerStatus === "failed" ? { error: terminal.run.lastError } : {}),
-    });
-    await releaseOrchestrationWorktreeIfAvailable(runtime, host, terminal.run, winnerStatus);
-    return terminal.run;
-  };
   const linkedDurable = run.durableRunId ? await host.getDurableRun(run.durableRunId) : undefined;
+  const durableWinnerDetails = { actorId, requestedCancellationReason: reason };
   if (linkedDurable && isDurableRunTerminal(linkedDurable) && linkedDurable.status !== "cancelled") {
-    return commitLinkedDurableTerminalWinner(linkedDurable);
+    return commitLinkedDurableTerminalWinner(host, runtime, plan, run, linkedDurable, durableWinnerDetails);
   }
   const cancellationCandidate: OrchestrationRun = {
     ...run,
@@ -516,7 +445,7 @@ async function markOrchestrationRunCancelled(
     } catch (error) {
       const raced = await host.getDurableRun(linkedDurable.runId);
       if (isDurableRunTerminal(raced) && raced.status !== "cancelled") {
-        return commitLinkedDurableTerminalWinner(raced);
+        return commitLinkedDurableTerminalWinner(host, runtime, plan, run, raced, durableWinnerDetails);
       }
       throw error;
     }
@@ -556,6 +485,110 @@ async function markOrchestrationRunCancelled(
   });
   await releaseOrchestrationWorktreeIfAvailable(runtime, host, cancelled, "cancelled");
   return cancelled;
+}
+
+/**
+ * Settles an active orchestration run to the outcome of its linked durable
+ * run, which has already ended. The write is a compare-and-set on the run's
+ * current status and execution state: when the run already reached a terminal
+ * state, that state stands. A phase child that has not finished is cancelled,
+ * since nothing will harvest it.
+ */
+async function commitLinkedDurableTerminalWinner(
+  host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
+  plan: OrchestrationPlan,
+  run: OrchestrationRun,
+  linked: DurableRunRecord,
+  details: Record<string, unknown>,
+): Promise<OrchestrationRun> {
+  const durableOrchestration = asRecord(linked.metadata?.orchestration);
+  const winnerStatus: "stopped_by_limit" | "completed" | "cancelled" | "failed" =
+    linked.status === "completed"
+      ? durableOrchestration?.executionState === "stopped_by_limit"
+        ? "stopped_by_limit"
+        : "completed"
+      : linked.status === "cancelled"
+        ? "cancelled"
+        : "failed";
+  const winner: OrchestrationRun = {
+    ...run,
+    status: winnerStatus,
+    executionState: winnerStatus,
+    endedAt: linked.finishedAt ?? new Date().toISOString(),
+    lastError:
+      winnerStatus === "failed" || winnerStatus === "cancelled"
+        ? (linked.lastError ?? `Linked durable run ${linked.runId} finished as ${linked.status}.`)
+        : undefined,
+    pendingApprovalPhaseId: undefined,
+    pendingApprovedBy: undefined,
+    pendingCostIncrementUsd: undefined,
+  };
+  const winnerDetails = { ...details, durableTerminalStatus: linked.status, terminalWinner: "durable_run" };
+  let terminal!: { run: OrchestrationRun; transitioned: boolean };
+  await host.storage.runImmediateTransaction(async () => {
+    const updated = await host.storage.orchestration.updateRunIfCurrentState(winner, {
+      status: run.status,
+      executionState: run.executionState,
+    });
+    if (!updated) {
+      const current = await host.storage.orchestration.getRun(run.runId);
+      if (!isOrchestrationRunTerminal(current)) {
+        throw new ConflictError({
+          message: `Orchestration run ${run.runId} changed before its terminal state could commit.`,
+          details: {
+            runId: run.runId,
+            expectedStatus: run.status,
+            expectedExecutionState: run.executionState,
+            actualStatus: current.status,
+            actualExecutionState: current.executionState,
+          },
+        });
+      }
+      terminal = { run: current, transitioned: false };
+      return;
+    }
+    terminal = { run: updated, transitioned: true };
+    await persistCheckpoint(
+      host,
+      plan,
+      updated,
+      winnerStatus === "stopped_by_limit"
+        ? "run_stopped"
+        : winnerStatus === "completed"
+          ? "run_completed"
+          : winnerStatus === "cancelled"
+            ? "run_cancelled"
+            : "run_failed",
+      buildCheckpointDetails(plan, updated, linked.runId, winnerDetails),
+    );
+  });
+  if (!terminal.transitioned) {
+    return terminal.run;
+  }
+  const event =
+    winnerStatus === "stopped_by_limit"
+      ? "run.stopped"
+      : winnerStatus === "completed"
+        ? "run.completed"
+        : winnerStatus === "cancelled"
+          ? "run.cancelled"
+          : "run.failed";
+  await persistRunEvent(host, terminal.run, event, winnerDetails);
+  await publishRunRealtime(host, plan, terminal.run, {
+    event: event.replace("run.", "run_"),
+    ...(winnerStatus === "failed" || winnerStatus === "cancelled" ? { error: terminal.run.lastError } : {}),
+  });
+  if ((winnerStatus === "failed" || winnerStatus === "cancelled") && run.currentPhaseId) {
+    await cancelOrphanedPhaseChild(
+      host,
+      terminal.run,
+      readRecoverableChildPhase(linked, run.currentPhaseId)?.childRunId,
+      "orchestration",
+    );
+  }
+  await releaseOrchestrationWorktreeIfAvailable(runtime, host, terminal.run, winnerStatus);
+  return terminal.run;
 }
 
 /**
@@ -871,7 +904,7 @@ async function allocateOrchestrationOwnership(
     }),
   });
   await host.pauseDurableRun(durable.runId, "orchestration");
-  let linked = await host.storage.orchestration.updateRun({
+  const link = await commitRunIfUnchanged(host, run, {
     ...run,
     workspaceId,
     durableRunId: durable.runId,
@@ -879,6 +912,13 @@ async function allocateOrchestrationOwnership(
     worktreeStatus: "allocating",
     worktreeBaseRef: run.worktreeBaseRef ?? DEFAULT_WORKTREE_BASE_REF,
   });
+  if (!link.committed) {
+    // The run changed before it was linked (for example it was cancelled);
+    // cancel the durable run created for it rather than leave it paused.
+    await cancelUnusedDurableRun(host, link.run, durable.runId);
+    return link.run;
+  }
+  let linked = link.run;
 
   await persistCheckpoint(
     host,
@@ -901,16 +941,31 @@ async function allocateOrchestrationOwnership(
       workspaceId,
       baseRef: linked.worktreeBaseRef ?? DEFAULT_WORKTREE_BASE_REF,
     });
-    linked = await host.storage.orchestration.updateRun({
-      ...linked,
+    const allocatedWorktree = {
       worktreePath: worktree.worktreePath,
       worktreeStatus: worktree.worktreeStatus,
       worktreeBaseRef: worktree.worktreeBaseRef,
       worktreeLeaseOwnerId: worktree.worktreeLeaseOwnerId,
       worktreeLeaseGeneration: worktree.worktreeLeaseGeneration,
       worktreeLeaseExpiresAt: worktree.worktreeLeaseExpiresAt,
+    };
+    const ready = await commitRunIfUnchanged(host, linked, {
+      ...linked,
+      ...allocatedWorktree,
       executionState: "worktree_ready",
     });
+    if (!ready.committed) {
+      // Cancelled while the worktree was being allocated: give the worktree
+      // back instead of recording it on a run that will never use it.
+      await releaseOrchestrationWorktreeIfAvailable(
+        runtime,
+        host,
+        { ...ready.run, ...allocatedWorktree },
+        releaseReasonFor(ready.run),
+      );
+      return ready.run;
+    }
+    linked = ready.run;
     await host.updateDurableRunState({
       runId: durable.runId,
       metadata: buildDurableMetadata(plan, linked, {
@@ -937,8 +992,9 @@ async function allocateOrchestrationOwnership(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to allocate orchestration worktree.";
     let failed!: OrchestrationRun;
+    let transitioned = false;
     await host.storage.runImmediateTransaction(async () => {
-      failed = await host.storage.orchestration.updateRun({
+      const committed = await commitRunIfUnchanged(host, linked, {
         ...linked,
         status: "failed",
         executionState: "failed",
@@ -946,6 +1002,12 @@ async function allocateOrchestrationOwnership(
         lastError: message,
         endedAt: new Date().toISOString(),
       });
+      failed = committed.run;
+      if (!committed.committed) {
+        // The run already moved on (for example it was cancelled); leave it.
+        return;
+      }
+      transitioned = true;
       await host.updateDurableRunState({
         runId: durable.runId,
         status: "failed",
@@ -969,6 +1031,9 @@ async function allocateOrchestrationOwnership(
         }),
       );
     });
+    if (!transitioned) {
+      return failed;
+    }
     await persistRunEvent(host, failed, "run.failed", {
       error: message,
       phase: "worktree_allocation",
@@ -976,6 +1041,47 @@ async function allocateOrchestrationOwnership(
     await publishRunRealtime(host, plan, failed, { event: "run_failed", error: message });
     return failed;
   }
+}
+
+/**
+ * Commits `next` only while the run still has `current`'s status and
+ * execution state, so a concurrent cancel is never overwritten. Returns the
+ * committed run, or the run as it is now when it changed underneath.
+ */
+async function commitRunIfUnchanged(
+  host: OrchestrationLifecycleHost,
+  current: OrchestrationRun,
+  next: OrchestrationRun,
+): Promise<{ run: OrchestrationRun; committed: boolean }> {
+  const updated = await host.storage.orchestration.updateRunIfCurrentState(next, {
+    status: current.status,
+    executionState: current.executionState,
+  });
+  return updated
+    ? { run: updated, committed: true }
+    : { run: await host.storage.orchestration.getRun(current.runId), committed: false };
+}
+
+/** Cancels a paused durable run that its orchestration run will never use. */
+async function cancelUnusedDurableRun(
+  host: OrchestrationLifecycleHost,
+  run: OrchestrationRun,
+  durableRunId: string,
+): Promise<void> {
+  try {
+    await host.cancelDurableRun(durableRunId, "orchestration");
+  } catch (error) {
+    await persistRunEvent(host, run, "run.durable_cleanup_failed", {
+      durableRunId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function releaseReasonFor(run: OrchestrationRun): "completed" | "failed" | "stopped_by_limit" | "cancelled" {
+  return run.status === "completed" || run.status === "failed" || run.status === "stopped_by_limit"
+    ? run.status
+    : "cancelled";
 }
 
 /**
@@ -1049,22 +1155,23 @@ export async function runOrchestrationPlan(
   host.orchestrationEngine.validate(plan);
   const activeRun = await host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
   if (activeRun) {
-    return resumeExistingActiveRun(host, plan, activeRun);
+    return resumeExistingActiveRun(host, runtime, plan, activeRun);
   }
 
   const { created, run } = await createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
   if (!created) {
     // Lost the create race to a concurrent start: adopt the active run the
     // winner inserted instead of queueing a second durable run.
-    return resumeExistingActiveRun(host, plan, run);
+    return resumeExistingActiveRun(host, runtime, plan, run);
   }
 
   const allocated = await finishOrchestrationRunCreation(host, runtime, plan, run);
-  if (allocated.status === "failed") {
+  // Allocation can end the run (failed, or cancelled while allocating).
+  if (isOrchestrationRunTerminal(allocated) || allocated.executionState !== "worktree_ready") {
     return allocated;
   }
 
-  return queueOrchestrationRun(host, plan, allocated);
+  return queueOrchestrationRun(host, runtime, plan, allocated);
 }
 
 /**
@@ -1096,6 +1203,7 @@ async function finishOrchestrationRunCreation(
  */
 async function resumeExistingActiveRun(
   host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
   plan: OrchestrationPlan,
   activeRun: OrchestrationRun,
 ): Promise<OrchestrationRun> {
@@ -1103,16 +1211,20 @@ async function resumeExistingActiveRun(
     await host.requestDurableRunProcessing(activeRun.durableRunId);
   }
   if (activeRun.durableRunId && activeRun.executionState === "worktree_ready") {
-    return await queueOrchestrationRun(host, plan, activeRun);
+    return await queueOrchestrationRun(host, runtime, plan, activeRun);
   }
   return activeRun;
 }
 
 async function queueOrchestrationRun(
   host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
   planInput: OrchestrationPlan,
   run: OrchestrationRun,
 ): Promise<OrchestrationRun> {
+  if (isOrchestrationRunTerminal(run)) {
+    return run;
+  }
   let plan = planInput;
   const runBeforeHook = await host.hooksService.runInlineHooks<OrchestrationRunHookPatch>({
     workspaceId: run.workspaceId ?? DEFAULT_WORKSPACE_ID,
@@ -1142,7 +1254,7 @@ async function queueOrchestrationRun(
     patch: runBeforeHook.patch,
   });
   if (runBeforeHook.blockedBy) {
-    throw new Error(runBeforeHook.blockedBy.reason);
+    return await failRunBlockedByHook(host, runtime, plan, run, runBeforeHook.blockedBy.reason);
   }
   if (runBeforeHook.patch) {
     plan = {
@@ -1157,11 +1269,26 @@ async function queueOrchestrationRun(
     await host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
-  const queued = await host.storage.orchestration.updateRun({
+  const queuedCommit = await commitRunIfUnchanged(host, run, {
     ...run,
     executionState: "queued",
   });
-  await host.resumeDurableRun(queued.durableRunId!, "orchestration");
+  if (!queuedCommit.committed) {
+    // The run moved on before it was queued (for example it was cancelled);
+    // never resume its durable run.
+    return queuedCommit.run;
+  }
+  const queued = queuedCommit.run;
+  try {
+    await host.resumeDurableRun(queued.durableRunId!, "orchestration");
+  } catch (error) {
+    // A cancel that lands between queueing and resuming wins.
+    const current = await host.storage.orchestration.getRun(queued.runId);
+    if (isOrchestrationRunTerminal(current)) {
+      return current;
+    }
+    throw error;
+  }
   await host.updateDurableRunState({
     runId: queued.durableRunId!,
     metadata: buildDurableMetadata(plan, queued, {
@@ -1184,6 +1311,45 @@ async function queueOrchestrationRun(
   }
 
   return queued;
+}
+
+/**
+ * Ends a run that an `orchestration.run.before` hook refused to start: the run
+ * fails with the hook's reason, its paused durable run is cancelled, and its
+ * worktree is released. Throws a conflict that carries the reason.
+ */
+async function failRunBlockedByHook(
+  host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
+  plan: OrchestrationPlan,
+  run: OrchestrationRun,
+  reason: string,
+): Promise<never> {
+  const message = `Blocked by orchestration.run.before hook: ${reason}`;
+  const blocked = await commitRunIfUnchanged(host, run, {
+    ...run,
+    status: "failed",
+    executionState: "failed",
+    endedAt: new Date().toISOString(),
+    lastError: message,
+  });
+  if (blocked.committed) {
+    const failed = blocked.run;
+    if (failed.durableRunId) {
+      await cancelUnusedDurableRun(host, failed, failed.durableRunId);
+    }
+    await persistCheckpoint(
+      host,
+      plan,
+      failed,
+      "run_failed",
+      buildCheckpointDetails(plan, failed, failed.durableRunId, { error: message, reason: "run_before_hook_blocked" }),
+    );
+    await persistRunEvent(host, failed, "run.failed", { error: message, reason: "run_before_hook_blocked" });
+    await publishRunRealtime(host, plan, failed, { event: "run_failed", error: message });
+    await releaseOrchestrationWorktreeIfAvailable(runtime, host, failed, "failed");
+  }
+  throw new ConflictError({ message, details: { runId: run.runId, planId: plan.planId } });
 }
 
 export async function approvePhase(
@@ -1342,6 +1508,119 @@ export async function cancelOrchestrationRun(
   };
 }
 
+/**
+ * Settles active orchestration runs whose linked durable run already ended
+ * without the run being told: a workflow error that could not settle it, an
+ * operator cancel through the durable API, a continuation gate, or a dead
+ * letter. Without this their rows stay queued, running or paused.
+ */
+export async function reconcileTerminalOrchestrationRuns(
+  host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
+  limit = 200,
+): Promise<void> {
+  const activeRuns = (await host.storage.orchestration.listActiveLinkedRuns?.(limit)) ?? [];
+  const failures: unknown[] = [];
+  for (const run of activeRuns) {
+    try {
+      const linked = run.durableRunId ? await getDurableRunIfAvailable(host, run.durableRunId) : undefined;
+      if (!linked || !isDurableRunTerminal(linked)) {
+        continue;
+      }
+      const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+      await commitLinkedDurableTerminalWinner(host, runtime, plan, run, linked, {
+        reconciledBy: "orchestration_terminal_reconciler",
+      });
+    } catch (error) {
+      // One unreadable run must not starve the others; report after the scan.
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Orchestration terminal reconciliation could not settle every active run.");
+  }
+}
+
+/**
+ * Fails the orchestration run of a durable workflow that threw, just before
+ * the durable worker fails the durable run, so the two agree. The write is
+ * fenced by the durable lease: a worker that lost the lease leaves the run to
+ * its new owner, or to the terminal reconciler.
+ */
+export async function failOrchestrationRunForWorkflowError(
+  host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
+  durableRun: DurableRunRecord,
+  error: unknown,
+): Promise<void> {
+  const payload = parseOrchestrationWorkflowPayload(durableRun);
+  const leaseOwnerId = durableRun.leaseOwnerId?.trim();
+  if (!payload || !leaseOwnerId) {
+    return;
+  }
+  const run = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
+  if (!run || run.durableRunId !== durableRun.runId || isOrchestrationRunTerminal(run)) {
+    return;
+  }
+  // The plan may be what failed to load; the run still fails without it.
+  let plan: OrchestrationPlan | undefined;
+  try {
+    plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  } catch {
+    plan = undefined;
+  }
+  const message = `Durable orchestration workflow failed: ${error instanceof Error ? error.message : String(error)}`;
+  let failed: OrchestrationRun | undefined;
+  await host.storage.runImmediateTransaction(async () => {
+    if (!(await host.storage.durableRuns.lockFreshActiveLeaseForUpdate(durableRun.runId, leaseOwnerId))) {
+      return;
+    }
+    failed = await host.storage.orchestration.updateRunIfCurrentState(
+      {
+        ...run,
+        status: "failed",
+        executionState: "failed",
+        endedAt: new Date().toISOString(),
+        lastError: message,
+        pendingApprovalPhaseId: undefined,
+        pendingApprovedBy: undefined,
+        pendingCostIncrementUsd: undefined,
+      },
+      { status: run.status, executionState: run.executionState },
+    );
+    if (failed && plan) {
+      await persistCheckpoint(
+        host,
+        plan,
+        failed,
+        "run_failed",
+        buildCheckpointDetails(plan, failed, durableRun.runId, { error: message, reason: "workflow_error" }),
+      );
+    }
+  });
+  if (!failed) {
+    return;
+  }
+  await persistRunEvent(host, failed, "run.failed", {
+    error: message,
+    reason: "workflow_error",
+    durableRunId: durableRun.runId,
+  });
+  if (plan) {
+    await publishRunRealtime(host, plan, failed, { event: "run_failed", error: message });
+  }
+  if (failed.currentPhaseId) {
+    const current = await getDurableRunIfAvailable(host, durableRun.runId);
+    await cancelOrphanedPhaseChild(
+      host,
+      failed,
+      current ? readRecoverableChildPhase(current, failed.currentPhaseId)?.childRunId : undefined,
+      "orchestration",
+    );
+  }
+  await releaseOrchestrationWorktreeIfAvailable(runtime, host, failed, "failed");
+}
+
 /** Server-owned records read to decide whether a parked phase's child has settled. */
 export interface OrchestrationPhaseChildWakeHost {
   readonly storage: {
@@ -1478,7 +1757,7 @@ function readPhaseChildWaitCorrelation(run: DurableRunRecord): string | undefine
 }
 
 async function getOrchestrationRunIfAvailable(
-  host: Pick<OrchestrationPhaseChildWakeHost, "storage">,
+  host: { readonly storage: { orchestration: { getRun(runId: string): Promise<OrchestrationRun> } } },
   runId: string,
 ): Promise<OrchestrationRun | undefined> {
   try {

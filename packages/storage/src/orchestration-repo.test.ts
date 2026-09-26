@@ -470,6 +470,41 @@ describe("OrchestrationRepository", () => {
     assert.equal(repo.getRun("run-cas").pendingApprovedBy, undefined);
   });
 
+  it("lists active runs linked to a durable run, oldest first", () => {
+    const repo = createRepo();
+    repo.upsertPlan(plan);
+    const base: OrchestrationRun = {
+      runId: "run-base",
+      planId: "plan-1",
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      workspaceId: "default",
+    };
+    repo.createRun({ ...base, runId: "run-late", startedAt: "2026-02-27T00:00:03.000Z", durableRunId: "d-late" });
+    repo.createRun({ ...base, runId: "run-early", status: "paused", durableRunId: "d-early" });
+    repo.createRun({
+      ...base,
+      runId: "run-queued",
+      status: "queued",
+      startedAt: "2026-02-27T00:00:02.000Z",
+      durableRunId: "d-q",
+    });
+    repo.createRun({ ...base, runId: "run-unlinked", startedAt: "2026-02-27T00:00:01.000Z" });
+    repo.createRun({ ...base, runId: "run-done", status: "completed", durableRunId: "d-done" });
+    repo.createRun({ ...base, runId: "run-cancelled", status: "cancelled", durableRunId: "d-cancelled" });
+
+    assert.deepEqual(
+      repo.listActiveLinkedRuns().map((run) => run.runId),
+      ["run-early", "run-queued", "run-late"],
+    );
+    assert.deepEqual(
+      repo.listActiveLinkedRuns(1).map((run) => run.runId),
+      ["run-early"],
+    );
+  });
+
   it("handles missing lookups, corrupted JSON fallbacks, cursors, and run events", () => {
     const { db, repo } = createRepoWithDb();
 

@@ -63,6 +63,7 @@ import {
   HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
 } from "./chat-durable-runtime-authority.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import { DurableWorkerInterruptionError } from "./durable-run-service.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -4569,6 +4570,53 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(executeDurableOrchestrationRun).toHaveBeenCalledWith(run, undefined);
     expect(durableRuns.updateRun).not.toHaveBeenCalled();
     expect(durableRuns.createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("fails the linked orchestration run before rethrowing an orchestration workflow error", async () => {
+    const { hosts, executeDurableOrchestrationRun } = createHosts("completed");
+    const failure = new Error("plan storage unavailable");
+    executeDurableOrchestrationRun.mockRejectedValueOnce(failure);
+    const failOrchestrationRunForWorkflowError = vi.fn(async () => undefined);
+    (hosts.orchestration as { failOrchestrationRunForWorkflowError?: unknown }).failOrchestrationRunForWorkflowError =
+      failOrchestrationRunForWorkflowError;
+    const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
+    const run = buildRun();
+
+    await expect(registry.executeWorkflow(run)).rejects.toBe(failure);
+
+    expect(failOrchestrationRunForWorkflowError).toHaveBeenCalledWith(run, failure);
+  });
+
+  it.each([
+    ["a lease loss", new DurableWorkerInterruptionError("lease_lost", "lease moved")],
+    ["an operator pause", Object.assign(new Error("paused"), { name: "DurableRunPausedError" })],
+    ["an operator cancel", Object.assign(new Error("cancelled"), { name: "DurableRunCancelledError" })],
+  ])("leaves the orchestration run alone after %s", async (_label, interruption) => {
+    const { hosts, executeDurableOrchestrationRun } = createHosts("completed");
+    executeDurableOrchestrationRun.mockRejectedValueOnce(interruption);
+    const failOrchestrationRunForWorkflowError = vi.fn(async () => undefined);
+    (hosts.orchestration as { failOrchestrationRunForWorkflowError?: unknown }).failOrchestrationRunForWorkflowError =
+      failOrchestrationRunForWorkflowError;
+    const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
+
+    await expect(registry.executeWorkflow(buildRun())).rejects.toBe(interruption);
+
+    expect(failOrchestrationRunForWorkflowError).not.toHaveBeenCalled();
+  });
+
+  it("fails the linked orchestration run when its workflow times out", async () => {
+    const { hosts, executeDurableOrchestrationRun } = createHosts("completed");
+    const timeout = Object.assign(new Error("timed out"), { name: "DurableWorkflowTimeoutError" });
+    executeDurableOrchestrationRun.mockRejectedValueOnce(timeout);
+    const failOrchestrationRunForWorkflowError = vi.fn(async () => undefined);
+    (hosts.orchestration as { failOrchestrationRunForWorkflowError?: unknown }).failOrchestrationRunForWorkflowError =
+      failOrchestrationRunForWorkflowError;
+    const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
+    const run = buildRun();
+
+    await expect(registry.executeWorkflow(run)).rejects.toBe(timeout);
+
+    expect(failOrchestrationRunForWorkflowError).toHaveBeenCalledWith(run, timeout);
   });
 
   it("leaves cancelled orchestration.plan.execute runs terminal without completing them again", async () => {
