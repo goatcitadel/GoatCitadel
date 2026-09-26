@@ -258,7 +258,7 @@ describe("ChatDurableFanoutService", () => {
     );
     expect(runChatDelegation).toHaveBeenCalledWith(
       "session-1",
-      expect.objectContaining({ parentSubagentDepth: 0, policyRunId: "parent-run-1" }),
+      expect.objectContaining({ policyRunId: "parent-run-1" }),
       expect.anything(),
       expect.objectContaining({
         workflowTemplate: CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE,
@@ -266,6 +266,9 @@ describe("ChatDurableFanoutService", () => {
         requireChildWatchers: true,
       }),
     );
+    // No depth override: the delegation infers the parent's depth from its session,
+    // so a fan-out launched inside a delegated child still counts toward maxDepth.
+    expect(runChatDelegation.mock.calls[0]?.[1]).not.toHaveProperty("parentSubagentDepth");
     expect(result).toMatchObject({ status: "completed", completedCount: 3 });
   });
 

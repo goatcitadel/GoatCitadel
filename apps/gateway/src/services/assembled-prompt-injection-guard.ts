@@ -61,7 +61,8 @@ export type PromptwareScanSource =
   | "scheduled_prompt"
   | "imported_skill"
   | "memory_context"
-  | "tool_output";
+  | "tool_output"
+  | "delegated_output";
 
 export interface PromptwareScanFinding {
   source: PromptwareScanSource;
