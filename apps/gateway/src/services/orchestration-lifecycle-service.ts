@@ -1859,22 +1859,33 @@ export async function executeDurableOrchestrationRun(
         phaseId: previousPhaseId,
         approvalRequired: true,
       });
-      await host.hooksService.enqueueAfterHooks({
-        workspaceId: run.workspaceId ?? DEFAULT_WORKSPACE_ID,
-        trigger: "orchestration.phase.after",
-        entityType: "orchestration_phase",
-        entityId: `${run.runId}:${previousPhaseId}`,
-        payload: {
-          runId: run.runId,
-          planId: plan.planId,
+      try {
+        await host.hooksService.enqueueAfterHooks({
+          workspaceId: run.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          trigger: "orchestration.phase.after",
+          entityType: "orchestration_phase",
+          entityId: `${run.runId}:${previousPhaseId}`,
+          payload: {
+            runId: run.runId,
+            planId: plan.planId,
+            phaseId: previousPhaseId,
+            approvedBy,
+            status: run.status,
+            currentWaveId: run.currentWaveId,
+            currentPhaseId: run.currentPhaseId,
+            executionState: run.executionState,
+          },
+        });
+      } catch (error) {
+        // The phase advance is already committed. Failing the durable run here
+        // would split it from the orchestration record, so record the missed
+        // after-phase hooks where operators can see them and carry on.
+        await persistRunEvent(host, run, "phase.after_hooks_failed", {
           phaseId: previousPhaseId,
-          approvedBy,
-          status: run.status,
-          currentWaveId: run.currentWaveId,
-          currentPhaseId: run.currentPhaseId,
-          executionState: run.executionState,
-        },
-      });
+          trigger: "orchestration.phase.after",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     await publishRunRealtime(host, plan, run, {
       event: "phase_executed",

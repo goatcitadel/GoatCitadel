@@ -1199,6 +1199,27 @@ describe("orchestration lifecycle approvals with the real engine", () => {
     );
   });
 
+  it("records after-phase hooks that cannot be enqueued without failing the advanced run", async () => {
+    const harness = createRealEngineHarness(twoPhasePlan("auto", true));
+    await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+    await approvePhase(harness.host, "run-1", "phase-2", "operator");
+    vi.mocked(harness.host.hooksService.enqueueAfterHooks).mockRejectedValueOnce(new Error("hook store unavailable"));
+
+    const resumed = await executeDurableOrchestrationRun(harness.host, harness.runtime, reclaimDurableRun(harness));
+
+    expect(resumed.outcome).toBe("completed");
+    expect(harness.getRun()).toMatchObject({ status: "completed", executionState: "completed", totalIterations: 2 });
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.after_hooks_failed",
+      expect.objectContaining({
+        phaseId: "phase-2",
+        trigger: "orchestration.phase.after",
+        error: "hook store unavailable",
+      }),
+    );
+  });
+
   it("runs every hitl phase after its approval, including phases not marked requiresApproval", async () => {
     const harness = createRealEngineHarness(twoPhasePlan("hitl", false));
 
