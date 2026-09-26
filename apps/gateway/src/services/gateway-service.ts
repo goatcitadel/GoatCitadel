@@ -5205,11 +5205,13 @@ export class GatewayService {
       return;
     }
     const result = await this.orchestrationWorktreeService.reapOrphaned({ dryRun: false });
-    if (result.removed.length > 0) {
+    if (result.removed.length > 0 || result.skippedDirty.length > 0 || result.skippedUnverified.length > 0) {
       log.info("reaped orphaned orchestration worktrees", {
         scanned: result.scanned,
         removed: result.removed.length,
         skippedActive: result.skippedActive.length,
+        skippedDirty: result.skippedDirty.length,
+        skippedUnverified: result.skippedUnverified.length,
       });
     }
   }

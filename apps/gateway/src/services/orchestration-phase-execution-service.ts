@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -21,6 +22,7 @@ import {
 import { renderVersionedTextPrompt } from "../orchestration/prompt-registry.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
+const PHASE_SPEC_MAX_CHARACTERS = 24000;
 
 const UNSUPPORTED_USER_INPUT_WAIT =
   "Phase child turn is waiting for user input, but durable orchestration can only pause/resume approval waits. Refactor this phase to: (1) detect where input is needed, (2) emit an approval-required tool/action and return waiting_for_approval, and (3) resume the run after approval to continue execution.";
@@ -290,15 +292,56 @@ export class OrchestrationPhaseExecutionService {
   }
 
   private async readPhaseSpec(run: OrchestrationRun, phase: OrchestrationPhase): Promise<string> {
+    const outsideWorkspace = `Spec path ${phase.specPath} resolves outside the orchestration workspace and was not read.`;
     const basePath = path.resolve(run.worktreePath ?? this.deps.rootDir);
     const targetPath = path.resolve(basePath, phase.specPath);
-    const relative = path.relative(basePath, targetPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      return `Spec path ${phase.specPath} resolves outside the orchestration workspace and was not read.`;
+    if (!isStrictlyWithin(basePath, targetPath)) {
+      return outsideWorkspace;
     }
     try {
-      const text = await fs.readFile(targetPath, "utf8");
-      return text.length > 24000 ? `${text.slice(0, 24000)}\n\n[Spec truncated after 24000 characters.]` : text;
+      // Check containment again after resolving symlinks, so a link inside the
+      // workspace cannot pull a file from outside it into the phase prompt.
+      const [realBase, realTarget] = await Promise.all([fs.realpath(basePath), fs.realpath(targetPath)]);
+      if (!isStrictlyWithin(realBase, realTarget)) {
+        return outsideWorkspace;
+      }
+      // Non-blocking, so a FIFO is rejected below instead of stalling the open.
+      const posixFlags =
+        process.platform === "win32" ? 0 : (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+      const handle = await fs.open(realTarget, fsConstants.O_RDONLY | posixFlags);
+      try {
+        const opened = await handle.stat({ bigint: true });
+        // A directory swapped for a symlink between the check and the open could
+        // have redirected it; prove the path still resolves inside the workspace,
+        // to the file that was opened.
+        const reresolved = await fs.realpath(realTarget);
+        if (!isStrictlyWithin(realBase, reresolved)) {
+          return outsideWorkspace;
+        }
+        const current = await fs.stat(reresolved, { bigint: true });
+        if (current.dev !== opened.dev || current.ino !== opened.ino) {
+          return outsideWorkspace;
+        }
+        if (!opened.isFile()) {
+          return `Unable to read ${phase.specPath}: not a regular file.`;
+        }
+        // Read at most what the prompt can use (4 bytes per character covers UTF-8).
+        const buffer = Buffer.alloc(PHASE_SPEC_MAX_CHARACTERS * 4 + 4);
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+          if (chunk.bytesRead === 0) {
+            break;
+          }
+          bytesRead += chunk.bytesRead;
+        }
+        const text = buffer.subarray(0, bytesRead).toString("utf8");
+        return text.length > PHASE_SPEC_MAX_CHARACTERS
+          ? `${text.slice(0, PHASE_SPEC_MAX_CHARACTERS)}\n\n[Spec truncated after ${PHASE_SPEC_MAX_CHARACTERS} characters.]`
+          : text;
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       return `Unable to read ${phase.specPath}: ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -390,6 +433,12 @@ function settledChildResponseResult(
     prompt,
     error,
   };
+}
+
+/** True when `target` is inside `base` (and not `base` itself). */
+function isStrictlyWithin(base: string, target: string): boolean {
+  const relative = path.relative(base, target);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function throwIfPhaseAborted(signal?: AbortSignal): void {
